@@ -217,8 +217,8 @@
       "id": "b4",
       "title": "The installed hook binary is 3.1.0, built from other hook and policy sources than the line",
       "who": "you",
-      "rec": "install the line's own build as the hook binary, or put the worktree's own build first on PATH for the lane, until 4.0.0 publishes; never set CODEFLOW_HOOK_BINARY (Director security order, 2026-11-02).",
-      "why": "every commit in this worktree printed `codeflow judge: warning: built from different hook or policy sources; rebuild before trusting this judgment` (12:33 today), so each lane's gate judgment stands only on a human's say-so.",
+      "rec": "install the line's own build as the hook binary, or put the worktree's own build first on PATH for the lane, until 4.0.0 publishes; do not set CODEFLOW_HOOK_BINARY, per the Director's security order, 2026-11-02.",
+      "why": "every commit in this worktree printed `codeflow judge: warning: built from different hook or policy sources; rebuild before trusting this judgment` (12:33 today), which says the installed binary was built from other hook or policy sources than this worktree.",
       "alt": "keep 3.1.0 and put the worktree build first on PATH lane by lane, which repeats the workaround in every brief.",
       "state": "unchanged since 2026-11-01",
       "source": "the commit-msg hook output in this worktree, 12:33; previous report blocker b4"

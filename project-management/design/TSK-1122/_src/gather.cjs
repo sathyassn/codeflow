@@ -63,9 +63,10 @@ for (const ln of git('log', '--format=%x01%ci', '--name-only', LINE, '--', 'proj
 let gh = { read: false };
 if (useGh) {
   const open = JSON.parse(run('gh', ['pr', 'list', '-R', 'sathyassn/codeflow', '--state', 'open', '--base', LINE.replace('origin/', ''), '--json', 'number,isDraft,mergeable,title,headRefName,updatedAt', '--limit', '100']));
+  const openToMain = JSON.parse(run('gh', ['pr', 'list', '-R', 'sathyassn/codeflow', '--state', 'open', '--base', 'main', '--json', 'number,isDraft,title,headRefName', '--limit', '100']));
   const mergedToday = JSON.parse(run('gh', ['pr', 'list', '-R', 'sathyassn/codeflow', '--state', 'merged', '--search', `merged:>=${est(started).slice(0, 10)}`, '--json', 'number,title,baseRefName,mergedAt,headRefName', '--limit', '100']));
   const cmp = JSON.parse(run('gh', ['api', `repos/sathyassn/codeflow/compare/main...${LINE.replace('origin/', '')}`, '--jq', '{ahead_by,behind_by}']));
-  gh = { read: true, at: est(new Date()), open, mergedToday, ahead: cmp.ahead_by, behind: cmp.behind_by };
+  gh = { read: true, at: est(new Date()), open, openToMain, mergedToday, ahead: cmp.ahead_by, behind: cmp.behind_by };
 }
 
 // 5. codeflow work next from this worktree (ready, waiting and blocked tasks with reasons)
@@ -87,7 +88,7 @@ for (const e of EPICS) {
   for (const i of ids) {
     const t = line[i]; const onMain = t.status === 'complete' && main[i] && main[i].status === 'complete';
     const prs = prByTask[i] || []; const inPr = t.status === 'todo' && prs.length > 0;
-    const location = onMain ? 'main' : t.status === 'complete' ? 'line' : inPr ? 'pull request' : 'not started';
+    const location = onMain ? 'main' : t.status === 'complete' ? 'line' : inPr ? 'pull request' : t.status === 'cancelled' ? 'cancelled' : (t.status || 'todo').replace(/_/g, ' ') + ', no open PR';
     const theme = ep.themeOf[i] || 'Original scope (no introducing section)';
     tasks[i] = { ...t, onMain, prs, location, theme, lastMoved: lastMoved[i] ? est(lastMoved[i]) : 'not recorded', next: null };
     const c = ep.counts; if (t.status === 'cancelled') { c.cancelled++; continue; } c.total++;

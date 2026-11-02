@@ -1,18 +1,18 @@
 {
  "read": {
-  "started": "2026-11-02 12:59 EST",
-  "finished": "2026-11-02 13:00 EST",
+  "started": "2026-11-02 13:40 EST",
+  "finished": "2026-11-02 13:41 EST",
   "lineRef": "origin/integration/EPC-022-the-3-2-0-milestone-fixes",
-  "lineTip": "dd1913165",
+  "lineTip": "aa84d8544",
   "mainTip": "b2bb61af3",
   "repo": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1122",
-  "codeflow": "codeflow 3.1.0"
+  "codeflow": "codeflow 4.0.0"
  },
  "scope": {
   "total": 246,
-  "complete": 78,
+  "complete": 79,
   "onMain": 63,
-  "inPr": 16,
+  "inPr": 15,
   "todo": 152,
   "blocked": 0,
   "cancelled": 2
@@ -632,9 +632,9 @@
    ],
    "counts": {
     "total": 220,
-    "complete": 77,
+    "complete": 78,
     "onMain": 62,
-    "inPr": 16,
+    "inPr": 15,
     "todo": 127,
     "blocked": 0,
     "cancelled": 2
@@ -1181,7 +1181,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-30 11:56 EST",
    "next": null
@@ -1379,7 +1379,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-12 01:58 EST",
    "next": null
@@ -1399,7 +1399,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-12 01:58 EST",
    "next": null
@@ -1461,7 +1461,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-28 20:30 EST",
    "next": null
@@ -1693,7 +1693,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Open issues and project-management amendment (2026-10-22)",
    "lastMoved": "2026-10-30 21:29 EST",
    "next": {
@@ -1718,7 +1718,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "cancelled",
    "theme": "Open issues and project-management amendment (2026-10-22)",
    "lastMoved": "2026-10-30 21:01 EST",
    "next": {
@@ -1793,7 +1793,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Test integrity amendment (2026-10-17)",
    "lastMoved": "2026-10-28 20:30 EST",
    "next": {
@@ -1820,7 +1820,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-28 20:30 EST",
    "next": {
@@ -1845,7 +1845,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-15 14:09 EST",
    "next": {
@@ -1871,7 +1871,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Gate efficiency amendment (2026-10-17)",
    "lastMoved": "2026-10-15 14:09 EST",
    "next": {
@@ -2017,7 +2017,7 @@
    "serves": [],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-17 16:54 EST",
    "next": {
@@ -2060,7 +2060,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-11-02 00:33 EST",
    "next": {
@@ -2169,7 +2169,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-26 14:30 EST",
    "next": {
@@ -2192,7 +2192,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-17 16:54 EST",
    "next": {
@@ -2215,7 +2215,7 @@
    "serves": [],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-17 16:54 EST",
    "next": {
@@ -2238,7 +2238,7 @@
    "serves": [],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-17 16:54 EST",
    "next": {
@@ -2261,7 +2261,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-29 14:00 EST",
    "next": {
@@ -2332,7 +2332,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Gate efficiency amendment (2026-10-17)",
    "lastMoved": "2026-10-28 01:24 EST",
    "next": {
@@ -2427,7 +2427,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Gate efficiency amendment (2026-10-17)",
    "lastMoved": "2026-10-17 16:42 EST",
    "next": {
@@ -2539,7 +2539,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Test integrity amendment (2026-10-17)",
    "lastMoved": "2026-10-18 13:36 EST",
    "next": {
@@ -2562,7 +2562,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Gate efficiency amendment (2026-10-17)",
    "lastMoved": "2026-10-17 16:37 EST",
    "next": {
@@ -2585,7 +2585,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Release scope amendment (2026-10-18)",
    "lastMoved": "2026-10-28 20:30 EST",
    "next": {
@@ -2688,7 +2688,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Release scope amendment (2026-10-18)",
    "lastMoved": "2026-10-18 14:11 EST",
    "next": {
@@ -2713,7 +2713,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Release scope amendment (2026-10-18)",
    "lastMoved": "2026-10-27 17:33 EST",
    "next": null
@@ -2815,7 +2815,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Release scope amendment (2026-10-18)",
    "lastMoved": "2026-10-18 14:11 EST",
    "next": {
@@ -2838,7 +2838,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Release scope amendment (2026-10-18)",
    "lastMoved": "2026-10-18 14:11 EST",
    "next": {
@@ -2863,7 +2863,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Release scope amendment (2026-10-18)",
    "lastMoved": "2026-10-18 14:28 EST",
    "next": {
@@ -2886,7 +2886,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Release scope amendment (2026-10-18)",
    "lastMoved": "2026-10-18 14:11 EST",
    "next": {
@@ -2909,7 +2909,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Release scope amendment (2026-10-18)",
    "lastMoved": "2026-10-30 04:12 EST",
    "next": {
@@ -2972,7 +2972,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Release scope amendment (2026-10-18)",
    "lastMoved": "2026-10-29 14:00 EST",
    "next": {
@@ -2997,7 +2997,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Release scope amendment (2026-10-18)",
    "lastMoved": "2026-10-18 14:38 EST",
    "next": {
@@ -3020,7 +3020,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-29 14:00 EST",
    "next": {
@@ -3045,7 +3045,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Release scope amendment (2026-10-18)",
    "lastMoved": "2026-10-18 14:28 EST",
    "next": {
@@ -3068,7 +3068,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Release scope amendment (2026-10-18)",
    "lastMoved": "2026-10-18 14:28 EST",
    "next": {
@@ -3154,7 +3154,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Release scope amendment (2026-10-18)",
    "lastMoved": "2026-10-30 03:49 EST",
    "next": {
@@ -3179,7 +3179,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Release scope amendment (2026-10-18)",
    "lastMoved": "2026-10-20 14:03 EST",
    "next": {
@@ -3244,7 +3244,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Open issues and project-management amendment (2026-10-22)",
    "lastMoved": "2026-10-22 21:05 EST",
    "next": {
@@ -3289,7 +3289,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Open issues and project-management amendment (2026-10-22)",
    "lastMoved": "2026-10-30 03:17 EST",
    "next": {
@@ -3312,7 +3312,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Open issues and project-management amendment (2026-10-22)",
    "lastMoved": "2026-10-22 17:22 EST",
    "next": {
@@ -3337,7 +3337,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Open issues and project-management amendment (2026-10-22)",
    "lastMoved": "2026-10-30 03:17 EST",
    "next": {
@@ -3362,7 +3362,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Open issues and project-management amendment (2026-10-22)",
    "lastMoved": "2026-10-22 21:05 EST",
    "next": {
@@ -3388,7 +3388,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Open issues and project-management amendment (2026-10-22)",
    "lastMoved": "2026-10-22 21:05 EST",
    "next": {
@@ -3435,7 +3435,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Open issues and project-management amendment (2026-10-22)",
    "lastMoved": "2026-10-22 17:22 EST",
    "next": {
@@ -3481,7 +3481,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Open issues and project-management amendment (2026-10-22)",
    "lastMoved": "2026-10-22 17:39 EST",
    "next": null
@@ -3523,7 +3523,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Open issues and project-management amendment (2026-10-22)",
    "lastMoved": "2026-10-22 22:32 EST",
    "next": {
@@ -3546,7 +3546,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Open issues and project-management amendment (2026-10-22)",
    "lastMoved": "2026-10-29 14:00 EST",
    "next": {
@@ -3662,12 +3662,12 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Open issues and project-management amendment (2026-10-22)",
    "lastMoved": "2026-11-01 21:31 EST",
    "next": {
     "state": "waiting",
-    "reason": "task TSK-446 depends on TSK-445, whose anchored status is 'todo', not complete task TSK-002-001 belongs to epic EPC-002, which is complete task TSK-002-002 belongs to epic EPC-002, which is complete task TSK-002-003 belongs to epic EPC-002, which is complete task TSK-002-004 belongs to epic EPC-002, which is complete task TSK-002-005 belongs to epic EPC-002, which is complete task TSK-003-001 belongs to epic EPC-003, which is complete task TSK-003-002 belongs to epic EPC-003, which is complete task TSK-003-003 belongs to epic EPC-003, which is complete task TSK-003-004 belongs to epic EPC-003, which is complete task TSK-004-001 belongs to epic EPC-004, which is complete task TSK-004-002 belongs to epic EPC-004, which is complete"
+    "reason": "task TSK-446 depends on TSK-445, whose anchored status is 'todo', not complete"
    }
   },
   "TSK-449": {
@@ -3707,7 +3707,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Process cuts amendment (2026-10-23)",
    "lastMoved": "2026-10-23 22:51 EST",
    "next": {
@@ -3794,7 +3794,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Untracked issues amendment (2026-10-26)",
    "lastMoved": "2026-11-01 23:55 EST",
    "next": {
@@ -3817,7 +3817,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Untracked issues amendment (2026-10-26)",
    "lastMoved": "2026-11-01 23:55 EST",
    "next": {
@@ -3840,7 +3840,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Untracked issues amendment (2026-10-26)",
    "lastMoved": "2026-10-31 12:38 EST",
    "next": {
@@ -3861,7 +3861,7 @@
    "serves": [],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "cancelled",
    "theme": "Quality follow-up amendment (2026-10-28)",
    "lastMoved": "2026-10-27 00:05 EST",
    "next": null
@@ -3881,7 +3881,7 @@
    "serves": [],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality asks amendment (2026-10-27)",
    "lastMoved": "2026-11-01 11:19 EST",
    "next": {
@@ -3926,7 +3926,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Issues 351 to 358 amendment (2026-10-27)",
    "lastMoved": "2026-10-30 04:38 EST",
    "next": {
@@ -3949,7 +3949,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Issues 351 to 358 amendment (2026-10-27)",
    "lastMoved": "2026-10-27 17:33 EST",
    "next": {
@@ -3976,7 +3976,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Issues 351 to 358 amendment (2026-10-27)",
    "lastMoved": "2026-10-31 12:38 EST",
    "next": {
@@ -4001,7 +4001,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Issues 351 to 358 amendment (2026-10-27)",
    "lastMoved": "2026-10-27 17:33 EST",
    "next": {
@@ -4088,7 +4088,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality asks amendment (2026-10-27)",
    "lastMoved": "2026-10-28 20:30 EST",
    "next": {
@@ -4157,7 +4157,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality asks amendment (2026-10-27)",
    "lastMoved": "2026-10-28 20:30 EST",
    "next": {
@@ -4182,7 +4182,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality asks amendment (2026-10-27)",
    "lastMoved": "2026-11-01 11:19 EST",
    "next": {
@@ -4318,7 +4318,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Away session amendment (2026-10-28)",
    "lastMoved": "2026-10-30 00:10 EST",
    "next": {
@@ -4346,7 +4346,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Away session amendment (2026-10-28)",
    "lastMoved": "2026-10-31 12:38 EST",
    "next": {
@@ -4369,7 +4369,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Away session amendment (2026-10-28)",
    "lastMoved": "2026-10-29 18:12 EST",
    "next": {
@@ -4392,7 +4392,7 @@
    "serves": [],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Printed project values amendment (2026-10-28)",
    "lastMoved": "2026-10-28 17:54 EST",
    "next": {
@@ -4418,7 +4418,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Guard scope follow-ups amendment (2026-10-28)",
    "lastMoved": "2026-11-01 11:19 EST",
    "next": {
@@ -4443,7 +4443,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Guard scope follow-ups amendment (2026-10-28)",
    "lastMoved": "2026-11-01 11:19 EST",
    "next": {
@@ -4464,7 +4464,7 @@
    "serves": [],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Report, Windows test, runner operand and checkpoint amendment (2026-10-28)",
    "lastMoved": "2026-10-29 02:36 EST",
    "next": {
@@ -4523,7 +4523,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Report, Windows test, runner operand and checkpoint amendment (2026-10-28)",
    "lastMoved": "2026-10-29 14:00 EST",
    "next": {
@@ -4564,7 +4564,7 @@
    "serves": [],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Issue 394 and awk write amendment (2026-10-29)",
    "lastMoved": "2026-10-30 05:04 EST",
    "next": {
@@ -4611,7 +4611,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Status line fields and coverage shard drift amendment (2026-10-29)",
    "lastMoved": "2026-10-29 14:00 EST",
    "next": {
@@ -4636,7 +4636,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Issue 404 amendment (2026-10-29)",
    "lastMoved": "2026-10-29 18:11 EST",
    "next": {
@@ -4665,7 +4665,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Issue 404 amendment (2026-10-29)",
    "lastMoved": "2026-10-29 18:11 EST",
    "next": {
@@ -4710,7 +4710,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Content policy amendment (2026-10-29)",
    "lastMoved": "2026-10-29 18:17 EST",
    "next": {
@@ -4773,7 +4773,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "After TSK-1002 amendment (2026-10-30)",
    "lastMoved": "2026-10-30 09:06 EST",
    "next": {
@@ -4814,7 +4814,7 @@
    "serves": [],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Baseline replacement amendment (2026-10-30)",
    "lastMoved": "2026-10-30 16:06 EST",
    "next": null
@@ -4836,7 +4836,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Baseline replacement amendment (2026-10-30)",
    "lastMoved": "2026-10-30 11:56 EST",
    "next": {
@@ -4864,7 +4864,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-30 11:56 EST",
    "next": {
@@ -4889,7 +4889,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Baseline replacement amendment (2026-10-30)",
    "lastMoved": "2026-10-30 11:34 EST",
    "next": {
@@ -4912,7 +4912,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Issue and review follow-ups amendment (2026-10-30)",
    "lastMoved": "2026-10-30 17:03 EST",
    "next": {
@@ -4935,7 +4935,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Issue and review follow-ups amendment (2026-10-30)",
    "lastMoved": "2026-10-30 16:24 EST",
    "next": {
@@ -4958,7 +4958,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Issue and review follow-ups amendment (2026-10-30)",
    "lastMoved": "2026-10-30 16:36 EST",
    "next": {
@@ -4981,7 +4981,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Issue and review follow-ups amendment (2026-10-30)",
    "lastMoved": "2026-10-30 16:53 EST",
    "next": {
@@ -5006,7 +5006,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Issue and review follow-ups amendment (2026-10-30)",
    "lastMoved": "2026-11-01 23:34 EST",
    "next": {
@@ -5055,7 +5055,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-11-02 00:42 EST",
    "next": {
@@ -5082,7 +5082,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-11-01 21:37 EST",
    "next": {
@@ -5113,7 +5113,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Progress report amendment (2026-10-31)",
    "lastMoved": "2026-10-31 19:25 EST",
    "next": {
@@ -5139,7 +5139,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Progress report amendment (2026-10-31)",
    "lastMoved": "2026-10-31 18:56 EST",
    "next": {
@@ -5164,7 +5164,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 18:56 EST",
    "next": {
@@ -5187,7 +5187,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 18:56 EST",
    "next": null
@@ -5209,7 +5209,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 12:58 EST",
    "next": {
@@ -5235,7 +5235,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-11-02 00:22 EST",
    "next": {
@@ -5279,7 +5279,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-11-02 00:33 EST",
    "next": {
@@ -5302,7 +5302,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 12:38 EST",
    "next": {
@@ -5327,7 +5327,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 12:38 EST",
    "next": {
@@ -5352,7 +5352,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 17:56 EST",
    "next": {
@@ -5375,7 +5375,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 13:13 EST",
    "next": {
@@ -5398,7 +5398,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 13:13 EST",
    "next": {
@@ -5424,7 +5424,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 13:13 EST",
    "next": {
@@ -5449,7 +5449,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 13:13 EST",
    "next": {
@@ -5474,7 +5474,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 13:13 EST",
    "next": {
@@ -5501,7 +5501,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-11-01 00:05 EST",
    "next": {
@@ -5526,7 +5526,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Quality enforcement into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 13:13 EST",
    "next": {
@@ -5555,7 +5555,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Dashboard shell and reuse amendment (2026-10-31)",
    "lastMoved": "2026-11-01 21:31 EST",
    "next": {
@@ -5580,7 +5580,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Dashboard shell and reuse amendment (2026-10-31)",
    "lastMoved": "2026-11-01 00:05 EST",
    "next": {
@@ -5603,7 +5603,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Dashboard shell and reuse amendment (2026-10-31)",
    "lastMoved": "2026-11-01 11:44 EST",
    "next": null
@@ -5626,7 +5626,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "CI merged completions amendment (2026-10-31)",
    "lastMoved": "2026-10-31 20:07 EST",
    "next": {
@@ -5671,7 +5671,7 @@
    "serves": [],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Pin check amendment (2026-10-31)",
    "lastMoved": "2026-10-31 22:45 EST",
    "next": {
@@ -5701,7 +5701,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Report and portal samples amendment (2026-10-31)",
    "lastMoved": "2026-11-01 21:31 EST",
    "next": {
@@ -5724,7 +5724,7 @@
    "serves": [],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Status updates ride with the work amendment (2026-11-01)",
    "lastMoved": "2026-11-01 14:55 EST",
    "next": {
@@ -5749,7 +5749,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Landing candidate admission amendment (2026-11-01)",
    "lastMoved": "2026-11-01 16:46 EST",
    "next": {
@@ -5760,7 +5760,7 @@
   "TSK-1155": {
    "id": "TSK-1155",
    "epic": "EPC-022",
-   "status": "todo",
+   "status": "complete",
    "work_type": "fix",
    "title": "codeflow ci refuses a direct commit on an integration line before the gate runs",
    "created": "2026-11-01",
@@ -5768,13 +5768,10 @@
    "about": "After this merges, a maintainer sees a direct commit on a landing candidate in `codeflow ci` before the full gate runs, so the candidate is rebuilt without a wasted gate.",
    "criteria": 7,
    "serves": [],
-   "onMain": false,
-   "prs": [
-    519
-   ],
-   "location": "pull request",
+   "prs": [],
+   "location": "line",
    "theme": "Landing candidate admission amendment (2026-11-01)",
-   "lastMoved": "2026-11-01 16:39 EST",
+   "lastMoved": "2026-11-02 12:42 EST",
    "next": null
   },
   "TSK-1156": {
@@ -5790,7 +5787,7 @@
    "serves": [],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Codex builder seat gates amendment (2026-11-01)",
    "lastMoved": "2026-11-01 17:30 EST",
    "next": null
@@ -5808,7 +5805,7 @@
    "serves": [],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Moved criterion close amendment (2026-11-01)",
    "lastMoved": "2026-11-01 18:18 EST",
    "next": {
@@ -5833,7 +5830,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Text and navigation rule amendment (2026-11-01)",
    "lastMoved": "2026-11-01 21:44 EST",
    "next": {
@@ -5858,7 +5855,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Push judging split amendment (2026-11-01)",
    "lastMoved": "2026-11-01 20:09 EST",
    "next": {
@@ -5881,7 +5878,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Text and navigation rule amendment (2026-11-01)",
    "lastMoved": "2026-11-02 00:42 EST",
    "next": null
@@ -5904,7 +5901,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Text and navigation rule amendment (2026-11-01)",
    "lastMoved": "2026-11-01 21:31 EST",
    "next": {
@@ -5929,7 +5926,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Text and navigation rule amendment (2026-11-01)",
    "lastMoved": "2026-11-01 21:44 EST",
    "next": {
@@ -5954,7 +5951,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Estimation cut, TSK-336 split and issue 502 amendment (2026-11-01)",
    "lastMoved": "2026-11-02 00:07 EST",
    "next": {
@@ -5980,7 +5977,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Estimation cut, TSK-336 split and issue 502 amendment (2026-11-01)",
    "lastMoved": "2026-11-01 23:34 EST",
    "next": {
@@ -6003,7 +6000,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Estimation cut, TSK-336 split and issue 502 amendment (2026-11-01)",
    "lastMoved": "2026-11-01 23:34 EST",
    "next": {
@@ -6026,7 +6023,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Estimation cut, TSK-336 split and issue 502 amendment (2026-11-01)",
    "lastMoved": "2026-11-01 23:34 EST",
    "next": {
@@ -6049,7 +6046,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Estimation cut, TSK-336 split and issue 502 amendment (2026-11-01)",
    "lastMoved": "2026-11-01 23:55 EST",
    "next": {
@@ -6074,7 +6071,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Estimation cut, TSK-336 split and issue 502 amendment (2026-11-01)",
    "lastMoved": "2026-11-02 00:07 EST",
    "next": {
@@ -6099,7 +6096,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Estimation cut, TSK-336 split and issue 502 amendment (2026-11-01)",
    "lastMoved": "2026-11-02 00:22 EST",
    "next": {
@@ -6127,7 +6124,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Estimation cut, TSK-336 split and issue 502 amendment (2026-11-01)",
    "lastMoved": "2026-11-01 23:55 EST",
    "next": {
@@ -6150,7 +6147,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Estimation cut, TSK-336 split and issue 502 amendment (2026-11-01)",
    "lastMoved": "2026-11-02 00:22 EST",
    "next": {
@@ -6175,12 +6172,12 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Estimation cut, TSK-336 split and issue 502 amendment (2026-11-01)",
    "lastMoved": "2026-11-02 00:33 EST",
    "next": {
     "state": "waiting",
-    "reason": "task TSK-1180 depends on TSK-1179, whose anchored status is 'todo', not complete"
+    "reason": "task TSK-1180 depends on TSK-1179, whose anchored status is 'todo', not complete task TSK-002-001 belongs to epic EPC-002, which is complete task TSK-002-002 belongs to epic EPC-002, which is complete task TSK-002-003 belongs to epic EPC-002, which is complete task TSK-002-004 belongs to epic EPC-002, which is complete task TSK-002-005 belongs to epic EPC-002, which is complete task TSK-003-001 belongs to epic EPC-003, which is complete task TSK-003-002 belongs to epic EPC-003, which is complete task TSK-003-003 belongs to epic EPC-003, which is complete task TSK-003-004 belongs to epic EPC-003, which is complete task TSK-004-001 belongs to epic EPC-004, which is complete task TSK-004-002 belongs to epic EPC-004, which is complete"
    }
   },
   "TSK-1181": {
@@ -6198,7 +6195,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Estimation cut, TSK-336 split and issue 502 amendment (2026-11-01)",
    "lastMoved": "2026-11-02 00:33 EST",
    "next": {
@@ -6223,12 +6220,12 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Estimation cut, TSK-336 split and issue 502 amendment (2026-11-01)",
    "lastMoved": "2026-11-02 00:33 EST",
    "next": {
-    "state": "waiting",
-    "reason": "task TSK-1182 depends on TSK-1155, whose anchored status is 'todo', not complete"
+    "state": "ready",
+    "reason": ""
    }
   },
   "TSK-424": {
@@ -6248,7 +6245,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Strict evidence defaults amendment (2026-10-26)",
    "lastMoved": "2026-10-31 18:14 EST",
    "next": {
@@ -6273,7 +6270,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-31 17:56 EST",
    "next": {
@@ -6298,7 +6295,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-31 17:56 EST",
    "next": {
@@ -6323,7 +6320,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-31 17:56 EST",
    "next": {
@@ -6350,7 +6347,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-31 17:56 EST",
    "next": {
@@ -6375,7 +6372,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-31 18:14 EST",
    "next": {
@@ -6400,7 +6397,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-31 18:14 EST",
    "next": {
@@ -6423,7 +6420,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-31 17:56 EST",
    "next": null
@@ -6445,7 +6442,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-31 17:56 EST",
    "next": {
@@ -6470,7 +6467,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Line start amendment (2026-10-30)",
    "lastMoved": "2026-10-31 17:56 EST",
    "next": {
@@ -6495,7 +6492,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Strict evidence defaults amendment (2026-10-26)",
    "lastMoved": "2026-10-31 17:56 EST",
    "next": {
@@ -6522,7 +6519,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Strict evidence defaults amendment (2026-10-26)",
    "lastMoved": "2026-10-31 18:14 EST",
    "next": {
@@ -6547,7 +6544,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Strict evidence defaults amendment (2026-10-26)",
    "lastMoved": "2026-10-31 17:56 EST",
    "next": {
@@ -6573,7 +6570,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Strict evidence defaults amendment (2026-10-26)",
    "lastMoved": "2026-10-31 19:18 EST",
    "next": {
@@ -6599,7 +6596,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Strict evidence defaults amendment (2026-10-26)",
    "lastMoved": "2026-10-31 17:56 EST",
    "next": {
@@ -6625,7 +6622,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Issue 372 amendment (2026-10-28)",
    "lastMoved": "2026-10-31 17:56 EST",
    "next": {
@@ -6650,7 +6647,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Content policy amendment (2026-10-29)",
    "lastMoved": "2026-10-31 17:56 EST",
    "next": {
@@ -6677,7 +6674,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-11-02 00:22 EST",
    "next": null
@@ -6700,7 +6697,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 13:13 EST",
    "next": null
@@ -6722,7 +6719,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 13:13 EST",
    "next": null
@@ -6745,7 +6742,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Into 4.0.0 amendment (2026-10-31)",
    "lastMoved": "2026-10-31 13:13 EST",
    "next": null
@@ -6792,7 +6789,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-11-01 00:14 EST",
    "next": {
@@ -6818,7 +6815,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-31 23:52 EST",
    "next": {
@@ -6846,7 +6843,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-11-01 00:14 EST",
    "next": {
@@ -6871,7 +6868,7 @@
    ],
    "onMain": false,
    "prs": [],
-   "location": "not started",
+   "location": "todo, no open PR",
    "theme": "Original plan (Planning notes)",
    "lastMoved": "2026-10-31 23:52 EST",
    "next": null
@@ -6879,20 +6876,12 @@
  },
  "gh": {
   "read": true,
-  "at": "2026-11-02 13:00 EST",
+  "at": "2026-11-02 13:40 EST",
   "open": [
-   {
-    "headRefName": "task/TSK-1155-codeflow-ci-judges-a-direct-commit-on-an-epic-line",
-    "isDraft": false,
-    "mergeable": "MERGEABLE",
-    "number": 519,
-    "title": "fix(ci): refuse a landing candidate that holds a direct commit on an epic line",
-    "updatedAt": "2026-11-02T17:19:32Z"
-   },
    {
     "headRefName": "task/TSK-1039-a-quick-gate-with-no-comparison-base-explains-it",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 518,
     "title": "A quick gate with no comparison base explains its full run",
     "updatedAt": "2026-11-02T17:09:31Z"
@@ -6900,7 +6889,7 @@
    {
     "headRefName": "task/TSK-350-own-task-criteria-use-the-judged-head-in-every-c",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 501,
     "title": "Judge a task's own criteria at its head and bound line",
     "updatedAt": "2026-11-02T02:03:20Z"
@@ -6908,7 +6897,7 @@
    {
     "headRefName": "task/TSK-1124-a-sync-that-takes-a-main-tasks-record-unchanged",
     "isDraft": true,
-    "mergeable": "CONFLICTING",
+    "mergeable": "UNKNOWN",
     "number": 499,
     "title": "fix(acceptance): pass a sync of main's reopened task",
     "updatedAt": "2026-11-02T01:24:02Z"
@@ -6916,7 +6905,7 @@
    {
     "headRefName": "plan/tsk-350-r52-exception",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 493,
     "title": "Write the issue 380 exception into the criteria rule",
     "updatedAt": "2026-11-01T23:07:11Z"
@@ -6924,7 +6913,7 @@
    {
     "headRefName": "plan/local-coverage-shards",
     "isDraft": true,
-    "mergeable": "CONFLICTING",
+    "mergeable": "UNKNOWN",
     "number": 491,
     "title": "Plan the sharded local coverage task",
     "updatedAt": "2026-11-01T23:02:52Z"
@@ -6932,7 +6921,7 @@
    {
     "headRefName": "task/TSK-355-unchanged-deterministic-gate-results-are-reused",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 487,
     "title": "Same-tree gate runs execute every target while reuse stays off",
     "updatedAt": "2026-11-01T21:14:57Z"
@@ -6940,7 +6929,7 @@
    {
     "headRefName": "task/TSK-1151-records-only-landing-candidates-use-record-check",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 486,
     "title": "Records-only landing candidates land on their record checks",
     "updatedAt": "2026-11-02T00:02:01Z"
@@ -6948,7 +6937,7 @@
    {
     "headRefName": "task/TSK-1153-hosted-line-ci-reaches-its-verdicts-in-about-13",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 485,
     "title": "ci(gates): balance Windows partitions, shard coverage in four",
     "updatedAt": "2026-11-01T23:45:29Z"
@@ -6956,7 +6945,7 @@
    {
     "headRefName": "task/TSK-1150-generated-workflow-jobs-declare-a-timeout",
     "isDraft": false,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 484,
     "title": "Generated workflow jobs declare explicit timeouts",
     "updatedAt": "2026-11-02T01:24:25Z"
@@ -6964,7 +6953,7 @@
    {
     "headRefName": "task/TSK-1145-heavy-test-runs-share-the-host-by-capacity-inste",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 483,
     "title": "Heavy test runs share the host by capacity",
     "updatedAt": "2026-11-02T14:33:26Z"
@@ -6972,7 +6961,7 @@
    {
     "headRefName": "task/TSK-359-an-integration-push-reuses-the-hosted-verdict-of",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 482,
     "title": "CI: an integration push reuses the verdict of its own pull request run",
     "updatedAt": "2026-11-02T00:16:48Z"
@@ -6980,7 +6969,7 @@
    {
     "headRefName": "task/TSK-1131-default-reasoning-effort-follows-each-vendor-s-r",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 480,
     "title": "Sessions start at each model's recommended effort",
     "updatedAt": "2026-11-02T01:35:17Z"
@@ -6988,7 +6977,7 @@
    {
     "headRefName": "task/TSK-1129-a-task-waiver-accepts-its-own-planning-amendment",
     "isDraft": false,
-    "mergeable": "CONFLICTING",
+    "mergeable": "UNKNOWN",
     "number": 478,
     "title": "A task waiver accepts its own planning amendment that also updates the plan",
     "updatedAt": "2026-11-02T00:08:44Z"
@@ -6996,7 +6985,7 @@
    {
     "headRefName": "task/TSK-1147-guidance-and-seat-config-describe-capacity-admis",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 475,
     "title": "Guidance describes capacity admission, not one gate at a time",
     "updatedAt": "2026-11-01T21:54:36Z"
@@ -7004,7 +6993,7 @@
    {
     "headRefName": "task/TSK-1130-git-guard-judges-an-inherited-hooks-path",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 474,
     "title": "git-guard judges a hooks path inherited from the environment",
     "updatedAt": "2026-11-02T00:59:57Z"
@@ -7012,7 +7001,7 @@
    {
     "headRefName": "task/TSK-1095-codeflow-status-json-gives-percent-complete-loca",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 468,
     "title": "Status reports progress for a task, an epic or a line",
     "updatedAt": "2026-11-02T01:24:22Z"
@@ -7020,7 +7009,7 @@
    {
     "headRefName": "task/TSK-1040-a-pull-request-body-edit-never-cancels-the-requi",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 466,
     "title": "A pull request body edit no longer cancels the policy check",
     "updatedAt": "2026-11-02T17:56:01Z"
@@ -7028,7 +7017,7 @@
    {
     "headRefName": "plan/epc-022-owed-sources",
     "isDraft": true,
-    "mergeable": "CONFLICTING",
+    "mergeable": "UNKNOWN",
     "number": 463,
     "title": "Owed-item sources of the status report move to their owning tasks",
     "updatedAt": "2026-11-01T04:59:24Z"
@@ -7036,7 +7025,7 @@
    {
     "headRefName": "task/TSK-1070-claude-settings-status-line-and-bypass-mode",
     "isDraft": true,
-    "mergeable": "CONFLICTING",
+    "mergeable": "UNKNOWN",
     "number": 458,
     "title": "Claude settings: strict sandbox, session launcher and status line",
     "updatedAt": "2026-11-01T22:48:24Z"
@@ -7044,7 +7033,7 @@
    {
     "headRefName": "task/TSK-330-hooks-stay-usable-during-settings-conflicts",
     "isDraft": true,
-    "mergeable": "CONFLICTING",
+    "mergeable": "UNKNOWN",
     "number": 448,
     "title": "fix(hooks): keep hooks usable during a settings file merge conflict",
     "updatedAt": "2026-10-31T15:54:45Z"
@@ -7052,7 +7041,7 @@
    {
     "headRefName": "task/TSK-1032-typed-code-and-boundaries",
     "isDraft": true,
-    "mergeable": "CONFLICTING",
+    "mergeable": "UNKNOWN",
     "number": 429,
     "title": "The shipped instructions require typed code and typed data at every boundary",
     "updatedAt": "2026-10-31T12:48:58Z"
@@ -7060,7 +7049,7 @@
    {
     "headRefName": "task/TSK-1033-declare-values-once",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 428,
     "title": "The shipped instructions declare each value once and reviews ask about copies",
     "updatedAt": "2026-10-31T05:28:54Z"
@@ -7068,7 +7057,7 @@
    {
     "headRefName": "task/TSK-286-deletion-guard-native-proof",
     "isDraft": true,
-    "mergeable": "CONFLICTING",
+    "mergeable": "UNKNOWN",
     "number": 425,
     "title": "The deletion guard is proven against the native tools",
     "updatedAt": "2026-10-31T21:14:34Z"
@@ -7076,7 +7065,7 @@
    {
     "headRefName": "task/TSK-1030-repository-content-rule",
     "isDraft": true,
-    "mergeable": "CONFLICTING",
+    "mergeable": "UNKNOWN",
     "number": 376,
     "title": "The shipped instructions say what belongs in a repository",
     "updatedAt": "2026-10-28T08:37:53Z"
@@ -7084,7 +7073,7 @@
    {
     "headRefName": "task/TSK-445-the-cf-present-skill-teaches-anchored-figure-led",
     "isDraft": true,
-    "mergeable": "MERGEABLE",
+    "mergeable": "UNKNOWN",
     "number": 344,
     "title": "The cf-present skill teaches anchored, figure-led documents",
     "updatedAt": "2026-10-27T05:41:51Z"
@@ -7092,7 +7081,7 @@
    {
     "headRefName": "task/TSK-1001-merge-admission-and-pr-checks-refuse-what-the-re",
     "isDraft": false,
-    "mergeable": "CONFLICTING",
+    "mergeable": "UNKNOWN",
     "number": 337,
     "title": "Merge admission and PR checks refuse what the retro review found",
     "updatedAt": "2026-10-31T16:54:18Z"
@@ -7100,13 +7089,28 @@
    {
     "headRefName": "task/TSK-356-slow-test-fixtures-run-once-and-exhaustive-matri",
     "isDraft": true,
-    "mergeable": "CONFLICTING",
+    "mergeable": "UNKNOWN",
     "number": 317,
     "title": "test: reuse fixtures and place exhaustive matrices",
     "updatedAt": "2026-10-24T04:14:16Z"
    }
   ],
+  "openToMain": [
+   {
+    "headRefName": "task/TSK-258-the-installed-manifest-records-no-file-digests",
+    "isDraft": true,
+    "number": 125,
+    "title": "The installed manifest records no file digests"
+   }
+  ],
   "mergedToday": [
+   {
+    "baseRefName": "integration/EPC-022-the-3-2-0-milestone-fixes",
+    "headRefName": "task/TSK-1155-codeflow-ci-judges-a-direct-commit-on-an-epic-line",
+    "mergedAt": "2026-11-02T18:27:38Z",
+    "number": 519,
+    "title": "fix(ci): refuse a landing candidate that holds a direct commit on an epic line"
+   },
    {
     "baseRefName": "integration/EPC-022-the-3-2-0-milestone-fixes",
     "headRefName": "task/TSK-1183-bump-pulldown-cmark-to-0-13-6",
@@ -7178,16 +7182,16 @@
     "title": "Plan the capabilities catalog epic and its tasks"
    }
   ],
-  "ahead": 535,
+  "ahead": 553,
   "behind": 0
  },
  "next": {
   "read": true,
-  "at": "2026-11-02 13:00 EST",
+  "at": "2026-11-02 13:41 EST",
   "head": "snapshot: integration/EPC-005-presentation-system (not found), integration/EPC-006-agentic-estimation (not found), integration/EPC-010-release-automation (not found), integration/EPC-012-responsible-autonomy (not found), integration/EPC-013-release-guides@896b7a2ef, integration/EPC-014-public-docs@b",
   "counts": {
-   "ready": 101,
-   "waiting": 97,
+   "ready": 102,
+   "waiting": 96,
    "blocked": 8
   }
  }
