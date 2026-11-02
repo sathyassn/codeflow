@@ -70,10 +70,11 @@ of ADR-0056 and all of ADR-0087 stand.
   which keeps high, and `xhigh-reasoning`, which keeps xhigh; a design
   OPERATOR_OVERRIDE has no separate floor. A high trigger raises a
   seat-targeted participant on that lane as it already raised a
-  line-targeted one. A seat at medium resolves only to a line that supports
-  medium, so the Claude seat at medium resolves to Opus, and Fable is
-  reached only through high-effort review, reasoning and consultation
-  routes.
+  line-targeted one. A seat route other than `orchestrate` keeps a seat line
+  that lacks the route's effort by raising that line to its lowest higher
+  effort, so the Claude seat at medium chooses Opus at medium and keeps
+  Fable at high as a fallback. The orchestrating session is not raised, so
+  Fable never hosts or backs it.
 - **Project bindings.** A binding in `.codeflow/model-selection.json` pins
   the model and its qualified effort. It accepts a request at or below that
   effort, the vendor-default request included, and resolves at the bound
