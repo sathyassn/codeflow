@@ -39,4 +39,3 @@ export function renderCountChart(host: HTMLElement, counts: Partial<Record<Stage
   for (const [stage, count] of entries) { const item = document.createElement('li'); item.textContent = `${stage}: ${count}`; key.append(item); }
   host.replaceChildren(svg, key);
 }
-

@@ -24,9 +24,9 @@
 test at ../../../../../../../../../private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/stage/validate.test.ts:31:1
 ✖ near-identical dark stage inks fail normal and all simulated floors (2.943625ms)
   AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
-  
+
     assert.ok(failures.some(f => f.rule === 'stage separation' && f.context.endsWith('/' + name)))
-  
+
       at TestContext.<anonymous> (file:///private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/stage/validate.test.ts:33:71)
       at Test.runInAsyncScope (node:async_hooks:226:14)
       at Test.run (node:internal/test_runner/test:1382:25)
@@ -45,9 +45,9 @@ test at ../../../../../../../../../private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrq
 test at ../../../../../../../../../private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/stage/validate.test.ts:36:1
 ✖ missed stage surface floor fails, with a clean palette control (0.277917ms)
   AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
-  
+
     assert.ok(validateStages({ first: '#fafafa' }, { surface: '#ffffff' }, floors).some(f => f.rule === 'stage contrast'))
-  
+
       at TestContext.<anonymous> (file:///private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/stage/validate.test.ts:37:10)
       at Test.runInAsyncScope (node:async_hooks:226:14)
       at Test.run (node:internal/test_runner/test:1382:25)

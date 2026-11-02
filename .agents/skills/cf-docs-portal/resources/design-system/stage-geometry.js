@@ -1,7 +1,7 @@
 /** Allocate visible positive marks without changing the count labels.
  * Tiny marks consume their floor first; remaining space retains count ratios.
  * Refuse impossible layouts rather than overlapping or hiding positive marks. */
-                                                                                                     
+
 export function segments(counts                   , extent        , minimum        )            {
   if (!Number.isFinite(extent) || extent <= 0 || !Number.isFinite(minimum) || minimum <= 0)
     throw new Error('Chart extent and minimum must be positive finite numbers');

@@ -10,6 +10,9 @@ import { validateColours, validateCompanions, validateStages } from './validate.
 import type { Colours, Floors } from './validate.ts';
 interface TokenBlock { selector: string; media?: string; values: Record<string, string>; }
 const here = new URL('./', import.meta.url);
+function javascript(source: string): string {
+  return stripTypeScriptTypes(source).split('\n').map(line => line.trimEnd()).join('\n').trimEnd() + '\n';
+}
 async function json<T>(name: string): Promise<T> { return JSON.parse(await readFile(new URL(name, here), 'utf8')) as T; }
 function declarations(values: Record<string, string>): string {
   return Object.entries(values).map(([name, value]) => `  --cf-${name}: ${value};`).join('\n');
@@ -66,14 +69,15 @@ export async function generate(): Promise<Map<string, string>> {
     }
   }
   const settings = { themes: colours.themes, modes: ['system', 'light', 'dark'], sizes: ['compact', 'default', 'large'], defaultTheme: 'graphite', defaultAccent: colours.defaultAccent };
-  const runtime = { paper: layout['print-paper'], ink: colours.palettes['graphite-light']!.text, compactQuery: `(max-width: ${layout['length-879-98px']})` };
+  const lengths = Object.fromEntries([2, 4, 8, 10, 12, 16, 20, 24, 26, 40, 46, 48, 64, 240, 280, 360].map(n => [`px${n}`, Number.parseFloat(layout[`length-${n}px`]!)]));
+  const runtime = { lengths, minimumMarkerRem: Number.parseFloat(layout['length-2-25rem']!), paper: layout['print-paper'], ink: colours.palettes['graphite-light']!.text, compactQuery: `(max-width: ${layout['length-879-98px']})`, tocQuery: `(max-width: ${layout['length-1119-98px']})`, phoneQuery: `(max-width: ${layout['length-599-98px']})`, cardQuery: `(max-width: ${layout['length-639-98px']})` };
   const typed = `// Generated from source/*.json. Do not edit.\nexport const runtime = ${JSON.stringify(runtime)} as const;\nexport const tokenBlocks = ${JSON.stringify(blocks, null, 2)} as const;\nexport const layout = ${JSON.stringify(layout, null, 2)} as const;\nexport const settings = ${JSON.stringify(settings, null, 2)} as const;\nexport const palettes = ${JSON.stringify(resolved, null, 2)} as const;\nexport const floors = ${JSON.stringify(floors, null, 2)} as const;\nexport const geometry = ${JSON.stringify(geometry, null, 2)} as const;\nexport const stageNames = ${JSON.stringify(Object.keys(stages))} as const;\nexport type Theme = keyof typeof settings.themes;\nexport type Mode = typeof settings.modes[number];\nexport type Accent = typeof settings.themes[Theme][number];\n`;
   const outputs = new Map([['tokens.css', css], ['tokens.json', JSON.stringify(resolved, null, 2) + '\n'], ['tokens.ts', typed]]);
   const chartSource = await readFile(new URL('count-charts.ts', here), 'utf8');
-  outputs.set('count-charts.js', stripTypeScriptTypes(chartSource).replace("../tokens.ts", "./tokens.js").replace("./stage-geometry.ts", "./stage-geometry.js"));
-  outputs.set('settings.js', `// Generated display choices.\nglobalThis.CF_DISPLAY_SETTINGS = ${JSON.stringify(settings)};\n`);
-  outputs.set('tokens.js', stripTypeScriptTypes(typed));
-  outputs.set('stage-geometry.js', stripTypeScriptTypes(await readFile(new URL('stage-geometry.ts', here), 'utf8')));
+  outputs.set('count-charts.js', javascript(chartSource).replace("../tokens.ts", "./tokens.js").replace("./stage-geometry.ts", "./stage-geometry.js"));
+  outputs.set('settings.js', `// Generated display choices.\nglobalThis.CF_DISPLAY_SETTINGS = ${JSON.stringify(settings)};\nglobalThis.CF_RUNTIME_LAYOUT = ${JSON.stringify(runtime)};\n`);
+  outputs.set('tokens.js', javascript(typed));
+  outputs.set('stage-geometry.js', javascript(await readFile(new URL('stage-geometry.ts', here), 'utf8')));
   for (const name of ['chrome', 'figure', 'present', 'export-fallback', 'portal', 'utility-tokens', 'figure-roles']) {
     const template = await readFile(new URL(`styles/${name}.css.in`, here), 'utf8');
     const literals = styleLiterals(template);

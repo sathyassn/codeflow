@@ -100,6 +100,7 @@
   --cf-print-ink: #000000;
   --cf-forced-highlight: Highlight;
   --cf-forced-button-text: ButtonText;
+  --cf-comment-empty-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='1.5' stroke-linejoin='round'%3E%3Cpath d='M21 12a8 8 0 0 1-8 8H7l-4 3V12a8 8 0 1 1 18 0Z'/%3E%3C/svg%3E");
 }
 :root {
   --cf-font-sans: "Inter", "Archivo", "IBM Plex Sans", ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
@@ -382,7 +383,7 @@
   --cf-stage-active: #c38ac2;
 }
 [data-cfp-skin="slate"][data-theme="light"] {
-  --cf-canvas: #eef1f5;
+  --cf-canvas: #eaeef3;
   --cf-surface: #f6f8fb;
   --cf-surface-raised: #fbfcfd;
   --cf-surface-subtle: #e3e8ee;

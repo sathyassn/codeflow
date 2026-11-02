@@ -1256,5 +1256,17 @@
       }
     ],
     "findings": []
-  }
+  },
+  "surfaceChanges": [
+    {
+      "pair": "slate-light",
+      "role": "canvas",
+      "old": "#eef1f5",
+      "new": "#eaeef3",
+      "delta": 0.8734153828861516,
+      "beforeGraphiteSeparation": 2.302296159897814,
+      "afterGraphiteSeparation": 3.0734734089778053,
+      "floor": 3
+    }
+  ]
 }

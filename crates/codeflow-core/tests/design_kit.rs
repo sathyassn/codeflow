@@ -261,7 +261,8 @@ fn skins_stay_apart_in_each_mode_and_graphite_stays_neutral() {
         let canvas = delta_e_2000(&a["canvas"], &b["canvas"]);
         let surface = delta_e_2000(&a["surface"], &b["surface"]);
         assert!(
-            canvas >= 3.0 && surface >= 1.5,
+            canvas >= colour::floor("skinCanvasSeparation")
+                && surface >= colour::floor("skinSurfaceSeparation"),
             "{mode} {first} vs {second} are too close: canvas {canvas:.2}, surface {surface:.2}"
         );
     }
@@ -580,9 +581,9 @@ fn reference_pages_stand_alone_in_the_kit_folder() {
     }
     for file in KIT_FILES {
         let text = read_kit(file);
-        let is_sheet = Path::new(file)
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("css"));
+        // Only these sheets are loaded by the standalone kit pages.
+        // Product adapters use their products' bundled font resources.
+        let is_sheet = matches!(file, "tokens.css" | "chrome.css" | "figure.css");
         let urls: Vec<&str> = remote
             .find_iter(&text)
             .filter(|found| {
@@ -593,11 +594,16 @@ fn reference_pages_stand_alone_in_the_kit_folder() {
             .map(|found| found.as_str())
             .collect();
         assert!(urls.is_empty(), "{file} names remote URLs: {urls:?}");
-        for sheet in ["@import", "url("] {
-            assert!(
-                !is_sheet || !text.contains(sheet),
-                "{file} loads a resource through {sheet}"
-            );
+        if is_sheet {
+            assert!(!text.contains("@import"), "{file} imports another sheet");
+            let urls = Regex::new(r#"url\(\s*["']?([^"')]+)"#).unwrap();
+            for value in urls.captures_iter(&text) {
+                assert!(
+                    value[1].starts_with("data:"),
+                    "{file} loads an external resource: {}",
+                    &value[1]
+                );
+            }
         }
     }
 }
@@ -676,7 +682,10 @@ fn product_sheets_match_every_kit_role_and_measured_floor() {
                 let canvas = delta_e_2000(&a["canvas"], &b["canvas"]);
                 let surface = delta_e_2000(&a["surface"], &b["surface"]);
                 println!("{path} | {mode} | {first}/{second} | canvas {canvas:.2} | surface {surface:.2}");
-                assert!(canvas >= 3.0 && surface >= 1.5);
+                assert!(
+                    canvas >= colour::floor("skinCanvasSeparation")
+                        && surface >= colour::floor("skinSurfaceSeparation")
+                );
             }
         }
     }

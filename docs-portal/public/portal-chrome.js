@@ -20,9 +20,9 @@
   const mq = q => window.matchMedia(q);
   const mqDark = mq('(prefers-color-scheme: dark)');
   const mqReduce = mq('(prefers-reduced-motion: reduce)');
-  const mqNavSheet = mq('(max-width: 879.98px)');
-  const mqTocSheet = mq('(max-width: 1119.98px)');
-  const mqPhone = mq('(max-width: 599.98px)');
+  const mqNavSheet = mq(globalThis.CF_RUNTIME_LAYOUT.compactQuery);
+  const mqTocSheet = mq(globalThis.CF_RUNTIME_LAYOUT.tocQuery);
+  const mqPhone = mq(globalThis.CF_RUNTIME_LAYOUT.phoneQuery);
   const editable = el => !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const mk = (tag, cls) => { const el = d.createElement(tag); if (cls) el.className = cls; return el; };

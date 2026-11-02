@@ -5,45 +5,45 @@
   "components": [
     {
       "type": "file",
-      "bom-ref": "service/app-2JDPM4FS.js.br",
-      "name": "service/app-2JDPM4FS.js.br",
+      "bom-ref": "service/app-SGZ73XM3.css.br",
+      "name": "service/app-SGZ73XM3.css.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "61332ae73f03e967f3c2d7ada414f8663fbf4a981385590b4806fb27d1caac73"
+          "content": "a9353f7ed1763df53cd33265f6dc14a97214f5570380bf47ea8c0bfb18cc39d4"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-2JDPM4FS.js.gz",
-      "name": "service/app-2JDPM4FS.js.gz",
+      "bom-ref": "service/app-SGZ73XM3.css.gz",
+      "name": "service/app-SGZ73XM3.css.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "5225a456534e3af96ab0a3c0d8ad2ba916c7989f1e74dc3decf0c931e1f08d23"
+          "content": "7579eac5b998e209a3486acf745bc76fefd060624a03ef6bf28cb06e6f5a87ed"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-R5NULHM2.css.br",
-      "name": "service/app-R5NULHM2.css.br",
+      "bom-ref": "service/app-ZNZHKD3E.js.br",
+      "name": "service/app-ZNZHKD3E.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "599016fe7b833943a3729a25bb7267828f0aad11924f496bddcdfb8302841c64"
+          "content": "492e861a9c620c6f4a81399ff91af7bacdc749990a9514eed093e2b64aa616ff"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-R5NULHM2.css.gz",
-      "name": "service/app-R5NULHM2.css.gz",
+      "bom-ref": "service/app-ZNZHKD3E.js.gz",
+      "name": "service/app-ZNZHKD3E.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "8d512327eb2c022e29ba2ed03b38122026884ebf660a935a2d0253205e26d5f5"
+          "content": "45a1767765f412b910deaa2c083513c4f5ac74b63fee05bb7199c533c7499646"
         }
       ]
     },

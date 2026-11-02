@@ -1,5 +1,5 @@
 // Generated from source/*.json. Do not edit.
-export const runtime = {"paper":"#ffffff","ink":"#1c1c1c","compactQuery":"(max-width: 879.98px)"} as const;
+export const runtime = {"lengths":{"px2":2,"px4":4,"px8":8,"px10":10,"px12":12,"px16":16,"px20":20,"px24":24,"px26":26,"px40":40,"px46":46,"px48":48,"px64":64,"px240":240,"px280":280,"px360":360},"minimumMarkerRem":2.25,"paper":"#ffffff","ink":"#1c1c1c","compactQuery":"(max-width: 879.98px)","tocQuery":"(max-width: 1119.98px)","phoneQuery":"(max-width: 599.98px)","cardQuery":"(max-width: 639.98px)"} as const;
 export const tokenBlocks = [
   {
     "selector": ":root",
@@ -500,7 +500,11 @@ export const layout = {
   "print-paper": "#ffffff",
   "print-ink": "#000000",
   "forced-highlight": "Highlight",
-  "forced-button-text": "ButtonText"
+  "forced-button-text": "ButtonText",
+  "comment-empty-image": "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='1.5' stroke-linejoin='round'%3E%3Cpath d='M21 12a8 8 0 0 1-8 8H7l-4 3V12a8 8 0 1 1 18 0Z'/%3E%3C/svg%3E\")",
+  "length-46px": "46px",
+  "length-48px": "48px",
+  "length-360px": "360px"
 } as const;
 export const settings = {
   "themes": {
@@ -616,7 +620,7 @@ export const palettes = {
     "stage-blocked": "#f28b83"
   },
   "slate-light": {
-    "canvas": "#eef1f5",
+    "canvas": "#eaeef3",
     "surface": "#f6f8fb",
     "surface-raised": "#fbfcfd",
     "surface-subtle": "#e3e8ee",
@@ -804,7 +808,9 @@ export const floors = {
   "companionSeparation": 20,
   "companionStopSeparation": 10,
   "minimumSegmentPx": 3,
-  "minimumArcDegrees": 3
+  "minimumArcDegrees": 3,
+  "skinCanvasSeparation": 3,
+  "skinSurfaceSeparation": 1.5
 } as const;
 export const geometry = {
   "ringRadius": 40,

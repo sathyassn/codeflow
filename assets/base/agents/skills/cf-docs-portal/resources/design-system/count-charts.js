@@ -1,6 +1,6 @@
 import { floors, geometry, stageNames } from './tokens.js';
 import { segments, ringPath } from './stage-geometry.js';
-                                              
+
 const namespace = 'http://www.w3.org/2000/svg';
 
 /** Shared kit primitive. Counts remain exact in the accessible title and key;
@@ -39,4 +39,3 @@ export function renderCountChart(host             , counts                      
   for (const [stage, count] of entries) { const item = document.createElement('li'); item.textContent = `${stage}: ${count}`; key.append(item); }
   host.replaceChildren(svg, key);
 }
-

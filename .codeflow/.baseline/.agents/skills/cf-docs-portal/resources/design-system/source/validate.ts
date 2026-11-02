@@ -12,6 +12,7 @@ export interface Floors {
   textContrast: number; uiContrast: number; stageContrast: number;
   stageSeparation: number; simulatedSeparation: number; accentStatusHueGap: number;
   companionSeparation: number; companionStopSeparation: number;
+  skinCanvasSeparation: number; skinSurfaceSeparation: number;
   minimumSegmentPx: number; minimumArcDegrees: number;
 }
 export interface Finding { context: string; rule: string; measured?: number; floor?: number; }
@@ -47,6 +48,13 @@ export function validateColours(source: Colours, floors: Floors): Finding[] {
         below(`${context}/${option}/accent-wash`, 'contrast', contrast(base, family['accent-soft']!), floors.textContrast);
         for (const role of ['positive', 'warning', 'danger']) below(`${context}/${option}/${role}`, 'hue', hueGap(base, roles[role]!), floors.accentStatusHueGap);
       }
+    }
+  }
+  const themes = Object.keys(source.themes).filter(theme => ['graphite', 'slate', 'sage'].includes(theme));
+  for (const mode of ['light', 'dark']) for (let i = 0; i < themes.length; i++) for (const other of themes.slice(i + 1)) {
+    for (const [role, floor] of [['canvas', floors.skinCanvasSeparation], ['surface', floors.skinSurfaceSeparation]] as const) {
+      const first = source.palettes[`${themes[i]}-${mode}`]?.[role], second = source.palettes[`${other}-${mode}`]?.[role];
+      if (first && second) below(`${mode}/${themes[i]}/${other}/${role}`, 'skin separation', separation(first, second), floor);
     }
   }
   return findings;

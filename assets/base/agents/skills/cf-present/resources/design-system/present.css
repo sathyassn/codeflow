@@ -100,6 +100,7 @@
   --cf-print-ink: #000000;
   --cf-forced-highlight: Highlight;
   --cf-forced-button-text: ButtonText;
+  --cf-comment-empty-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='1.5' stroke-linejoin='round'%3E%3Cpath d='M21 12a8 8 0 0 1-8 8H7l-4 3V12a8 8 0 1 1 18 0Z'/%3E%3C/svg%3E");
 }
 :root {
   --cf-font-sans: "Inter", "Archivo", "IBM Plex Sans", ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
@@ -382,7 +383,7 @@
   --cf-stage-active: #c38ac2;
 }
 [data-cf-theme="slate"][data-cf-mode-resolved="light"] {
-  --cf-canvas: #eef1f5;
+  --cf-canvas: #eaeef3;
   --cf-surface: #f6f8fb;
   --cf-surface-raised: #fbfcfd;
   --cf-surface-subtle: #e3e8ee;
@@ -1162,9 +1163,9 @@ code { font-family: var(--cf-font-mono); }
 .figure-block__caption { margin: var(--cf-space-2) 0 0; color: var(--cf-text-muted); }
 [data-cf-figure-status] { color: var(--cf-danger); font-size: 0.86rem; }
 
-/* ═══ Utility presentation system — Comment chrome ═══ */
+/* ═══ Utility presentation system , Comment chrome ═══ */
 
-/* Comment control — unmistakable armed state */
+/* Comment control , unmistakable armed state */
 .cf-comment-btn {
   display: inline-flex !important;
   align-items: center;
@@ -1214,13 +1215,13 @@ code { font-family: var(--cf-font-mono); }
 }
 .cf-feedback-close { display: none; }
 
-/* Mode strip — toolbelt in the document column, never over the left nav */
+/* Mode strip , toolbelt in the document column, never over the left nav */
 .cf-hint {
   display: none;
   position: fixed;
   z-index: 50;
   top: calc(var(--cf-chrome-h) + 0.65rem);
-  /* Align with the document column start — clear of the fixed left TOC. */
+  /* Align with the document column start , clear of the fixed left TOC. */
   left: max(var(--cf-left-rail), calc((100vw - var(--cf-doc-max)) / 2 + var(--cf-left-rail)));
   margin: 0;
   width: fit-content;
@@ -1245,7 +1246,7 @@ code { font-family: var(--cf-font-mono); }
   border: 1px dashed color-mix(in srgb, var(--cf-accent) 55%, transparent);
   background: color-mix(in srgb, var(--cf-accent) 5%, transparent);
 }
-/* Region marquee — document coordinates inside the marker layer, so the
+/* Region marquee , document coordinates inside the marker layer, so the
    persistent rectangle scrolls with the content it covers */
 .cf-region-draft {
   position: absolute;
@@ -1391,7 +1392,7 @@ code { font-family: var(--cf-font-mono); }
   border-color: color-mix(in srgb, var(--cf-danger) 40%, var(--cf-border));
 }
 
-/* Speech markers — parked in the document gutter beside their anchor.
+/* Speech markers , parked in the document gutter beside their anchor.
    Absolutely positioned inside the in-document marker layer so they scroll
    with the content they annotate; re-measured on resize and type-scale. */
 .cf-marker-layer {
@@ -1426,7 +1427,7 @@ code { font-family: var(--cf-font-mono); }
   color: var(--cf-colour-fff);
 }
 
-/* Notes rail — full-height fixed dock */
+/* Notes rail , full-height fixed dock */
 .cf-dock {
   position: fixed;
   z-index: 45;
@@ -1497,7 +1498,7 @@ code { font-family: var(--cf-font-mono); }
   margin-bottom: 4px;
   background: var(--cf-surface-raised);
   border: 1px solid var(--cf-border);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='1.5' stroke-linejoin='round'%3E%3Cpath d='M21 12a8 8 0 0 1-8 8H7l-4 3V12a8 8 0 1 1 18 0Z'/%3E%3C/svg%3E");
+  background-image: var(--cf-comment-empty-image);
   background-repeat: no-repeat;
   background-position: center;
   background-size: 20px;
@@ -1622,7 +1623,7 @@ code { font-family: var(--cf-font-mono); }
   color: var(--cf-text-muted);
 }
 
-/* Toast — confirmations and session notices outside the rail */
+/* Toast , confirmations and session notices outside the rail */
 .cf-toast {
   position: fixed;
   bottom: 22px;
@@ -1647,7 +1648,7 @@ code { font-family: var(--cf-font-mono); }
   #cf-feedback-panel[data-open="true"] ~ .cf-toast { left: 12px; right: 12px; bottom: calc(min(46vh, 440px) + 12px); }
 }
 
-/* Tools (secondary — not the primary Comment path) */
+/* Tools (secondary , not the primary Comment path) */
 .cf-tools {
   flex-shrink: 0;
   border-top: 1px solid var(--cf-border);
@@ -1684,7 +1685,7 @@ code { font-family: var(--cf-font-mono); }
   background: color-mix(in srgb, var(--cf-focus) 12%, var(--cf-surface));
 }
 
-/* Feedback history — collapsed by default so it never looks like live notes */
+/* Feedback history , collapsed by default so it never looks like live notes */
 .cf-feedback-history {
   flex-shrink: 0;
   margin: 0;
