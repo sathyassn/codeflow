@@ -82,7 +82,11 @@ for (const layout of ["legacy", "folder", "mixed"]) {
         schema_version: 1, title: "Catalog fixture", description: "Catalog compatibility", theme: "signal",
         repository_url: null, repository_root: "..", release_version: null, primitive_tokens: null,
         source_roots: ["docs"], exclude: [], base: "/",
-        layers: [{ id: "reference", label: "Reference", description: "Catalog", fallback: true }],
+        layers: [
+          { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
+          { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
+          { id: "reference", label: "Reference", description: "Catalog", fallback: true },
+        ],
         page_classes: [{ source: "docs/capabilities.md", class: "derived-lookup", derive: "capability-registry" }],
         figures: [],
       };

@@ -3168,18 +3168,29 @@ fn resolve_source_link(source_path: &str, target: &str) -> Option<String> {
 }
 
 fn markdown_body(value: &str) -> &str {
+    frontmatter_parts(value)
+        .ok()
+        .flatten()
+        .map_or(value, |(_, body)| body)
+}
+
+fn frontmatter_parts(value: &str) -> Result<Option<(&str, &str)>, &'static str> {
     let mut lines = value.split_inclusive('\n');
-    let Some(first) = lines.next().filter(|line| line.trim_end() == "---") else {
-        return value;
+    let Some(first) = lines
+        .next()
+        .filter(|line| line.ends_with('\n') && line.trim_end() == "---")
+    else {
+        return Ok(None);
     };
-    let mut offset = first.len();
+    let start = first.len();
+    let mut offset = start;
     for line in lines {
-        offset += line.len();
         if line.trim_end() == "---" {
-            return &value[offset..];
+            return Ok(Some((&value[start..offset], &value[offset + line.len()..])));
         }
+        offset += line.len();
     }
-    value
+    Err("unclosed YAML frontmatter")
 }
 
 fn decode_percent(value: &str) -> Option<String> {
@@ -4054,14 +4065,10 @@ fn collect_capability_authority(text: &str, source_path: &str, authority: &mut A
 }
 
 fn parse_frontmatter_mapping(text: &str) -> Result<serde_yaml::Mapping, String> {
-    if !text.starts_with("---\n") {
+    let Some((yaml, _)) = frontmatter_parts(text)? else {
         return Ok(serde_yaml::Mapping::new());
-    }
-    let Some(end) = text[4..].find("\n---\n").map(|index| index + 4) else {
-        return Err("unclosed YAML frontmatter".into());
     };
-    let value: serde_yaml::Value =
-        serde_yaml::from_str(&text[4..end]).map_err(|error| error.to_string())?;
+    let value: serde_yaml::Value = serde_yaml::from_str(yaml).map_err(|error| error.to_string())?;
     value
         .as_mapping()
         .cloned()
