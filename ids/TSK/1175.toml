@@ -1,0 +1,11 @@
+id = "TSK-1175"
+uid = "8e4828a8-0a2e-4c94-a045-7446ed41074a"
+kind = "TSK"
+title = "Checkout credentials are unavailable to repository code"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T04:27:57Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
