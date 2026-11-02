@@ -1,0 +1,9 @@
+Base e00c01ed7, stored starlight-theme=system, light system preference.
+Executed its pre_paint_template, then the installed Starlight provider after
+verifying the provider SHA-256 against that base's runtime-scripts.json.
+
+base e00c01ed7 prepaint: light
+base e00c01ed7 after verified Starlight provider: dark
+provider hash: 556a395a9e1aa928fa9d280ca5e029f5c2a279aa087f015402e9c056e808e600
+
+This is a Node VM reproduction of script order, not a browser run.

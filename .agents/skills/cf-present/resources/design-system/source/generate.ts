@@ -72,6 +72,20 @@ export async function generate(): Promise<Map<string, string>> {
       for (const selector of selectors(theme, mode)) css += `${selector}[data-cf-accent="${option}"] {\n${declarations(accent)}\n}\n`;
     }
   }
+  const exportTokens = ['light', 'dark'].map(mode => {
+    const rules = Object.entries(resolved).filter(([pair]) => pair.endsWith('-' + mode)).map(([pair, roles]) => {
+      const theme = pair.slice(0, -mode.length - 1);
+      const selector = `:root[data-cf-mode="system"][data-cf-theme="${theme}"]`;
+      let rule = `${selector} {\n${declarations(roles)}\n}\n`;
+      for (const option of colours.themes[theme]!) {
+        const family = accentFamily(colours.accents[option]![mode]!, mode, roles.surface!, floors.textContrast);
+        for (const [stage, role] of Object.entries(stages)) if (role in family) family[`stage-${stage}`] = family[role]!;
+        rule += `${selector}[data-cf-accent="${option}"] {\n${declarations(family)}\n}\n`;
+      }
+      return rule;
+    }).join('');
+    return mode === 'dark' ? `@media (prefers-color-scheme: dark) {\n${rules}}\n` : rules;
+  }).join('');
   const settings = { themes: colours.themes, modes: ['system', 'light', 'dark'], sizes: ['compact', 'default', 'large'], defaultTheme: 'graphite', defaultAccent: colours.defaultAccent };
   const lengths = Object.fromEntries([2, 4, 8, 10, 12, 16, 20, 24, 26, 40, 46, 48, 64, 240, 280, 360].map(n => [`px${n}`, Number.parseFloat(layout[`length-${n}px`]!)]));
   const runtime = { lengths, minimumMarkerRem: Number.parseFloat(layout['length-2-25rem']!), paper: layout['print-paper'], ink: colours.palettes['graphite-light']!.text, compactQuery: `(max-width: ${layout['length-879-98px']})`, tocQuery: `(max-width: ${layout['length-1119-98px']})`, phoneQuery: `(max-width: ${layout['length-599-98px']})`, cardQuery: `(max-width: ${layout['length-639-98px']})` };
@@ -87,6 +101,7 @@ export async function generate(): Promise<Map<string, string>> {
     const literals = styleLiterals(template);
     if (literals.length) throw new Error(`${name} has authored style literals: ${literals.join(', ')}`);
     let output = template.replace(/\{\{([\w-]+)\}\}/g, (_match, key: string) => {
+      if (key === 'export-tokens') return exportTokens.trimEnd();
       if (key === 'tokens') return consumerTokens(css, name);
       if (!(key in layout)) throw new Error(`Unknown layout token ${key}`);
       return layout[key]!;

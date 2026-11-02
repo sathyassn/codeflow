@@ -5,45 +5,45 @@
   "components": [
     {
       "type": "file",
-      "bom-ref": "service/app-F5ZI2KRS.css.br",
-      "name": "service/app-F5ZI2KRS.css.br",
+      "bom-ref": "service/app-TULQWPVR.js.br",
+      "name": "service/app-TULQWPVR.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "45f0270f46c681f4714060c0d5cba37a9dfa5502adc8033367e5fb03eebeab13"
+          "content": "340806e8393d10c0a4426c2693c8cf5baccc96aec202db4c9bad693402e589c6"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-F5ZI2KRS.css.gz",
-      "name": "service/app-F5ZI2KRS.css.gz",
+      "bom-ref": "service/app-TULQWPVR.js.gz",
+      "name": "service/app-TULQWPVR.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "9e8fd834264397b4f44b6fa0d80f3c3cab78fac31dee4aa533c1db8fce181cab"
+          "content": "c9e7b27dbc30d735c479bc42afedf2024523f9fd4a93d9ca15dfd33bb13d440c"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-ZNZHKD3E.js.br",
-      "name": "service/app-ZNZHKD3E.js.br",
+      "bom-ref": "service/app-USBKNT3E.css.br",
+      "name": "service/app-USBKNT3E.css.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "492e861a9c620c6f4a81399ff91af7bacdc749990a9514eed093e2b64aa616ff"
+          "content": "0779d528d009bf7ee3f852e66f234156e84acec2a8a4e8677ef9c62068b7f99b"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-ZNZHKD3E.js.gz",
-      "name": "service/app-ZNZHKD3E.js.gz",
+      "bom-ref": "service/app-USBKNT3E.css.gz",
+      "name": "service/app-USBKNT3E.css.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "45a1767765f412b910deaa2c083513c4f5ac74b63fee05bb7199c533c7499646"
+          "content": "7a719d5ac8955140b6965404e0818b7f4e90ac639dd3f7328a93a79a7d42512f"
         }
       ]
     },

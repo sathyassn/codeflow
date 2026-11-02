@@ -5,7 +5,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { portalSkinOrder, validatePortalConfig } from "../scripts/lib.mjs";
 import { buildFixture, commitFixture, configureFixture, runLocalAdapter, selfContainedPortalFixture } from "./portal-fixture.mjs";
-import { inlineScripts } from "../scripts/runtime-scripts.mjs";
+import { inlineScripts, allowedInlineScripts, scriptSha256 } from "../scripts/runtime-scripts.mjs";
 import { prePaintScript } from "../scripts/runtime-scripts.mjs";
 
 function paint(theme, stored = {}) {
@@ -93,4 +93,61 @@ test('nested navigation and breadcrumbs share readable labels without recasing c
     }
     assert.doesNotMatch(nav, /class="cf-kicker"[^>]*>(?:architecture|release_notes|Api Docs) /);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('built page resolves system mode before deferred runtime', { timeout: 120_000 }, async () => {
+  const root = await selfContainedPortalFixture();
+  try {
+    runLocalAdapter(root);
+    buildFixture(root);
+    const html = await readFile(path.join(root, 'dist/reference/seed/index.html'), 'utf8');
+    const config = JSON.parse(await readFile(path.join(root, 'portal.config.json'), 'utf8'));
+    const allowed = allowedInlineScripts(config.theme);
+    for (const script of inlineScripts(html)) assert.ok(allowed.has(scriptSha256(script)), 'built inline script is in the committed allowlist');
+    const scripts = inlineScripts(html).filter(script => script.includes('document.documentElement'));
+    assert.ok(scripts.length > 0, 'page emits its pre-paint theme owner');
+    for (const dark of [false, true]) {
+      for (const stored of ['system', 'auto', 'light', 'dark', null, 'invalid']) {
+        const attributes = {};
+        const element = {
+          dataset: new Proxy({}, {
+            get: (_, key) => attributes['data-' + key.replace(/[A-Z]/g, c => '-' + c.toLowerCase())],
+            set: (_, key, value) => { attributes['data-' + key.replace(/[A-Z]/g, c => '-' + c.toLowerCase())] = value; return true; }
+          }),
+          style: { setProperty() {} },
+          setAttribute(key, value) { attributes[key] = value; }
+        };
+        const matchMedia = query => ({ matches: query.includes('dark') ? dark : !dark });
+        const context = vm.createContext({ document: { documentElement: element }, localStorage: { getItem: key => key === 'starlight-theme' ? stored : null }, window: { matchMedia }, matchMedia });
+        for (const script of scripts) vm.runInContext(script, context);
+        const expected = stored === 'light' || stored === 'dark' ? stored : dark ? 'dark' : 'light';
+        assert.equal(attributes['data-theme'], expected, `stored ${stored}, system ${dark ? 'dark' : 'light'}`);
+      }
+    }
+    assert.equal(scripts.length, 1, 'one owner resolves mode before first paint');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('portal mode stores auto and reads legacy system while following media changes', async () => {
+  const runtime = await readFile(new URL('../public/portal-chrome.js', import.meta.url), 'utf8');
+  const { settings: choices } = await import('../public/tokens.js');
+  const stored = new Map([['starlight-theme', 'system']]);
+  const attributes = {};
+  const media = { matches: false, addEventListener(_, handler) { this.change = handler; } };
+  const CF = {};
+  const context = vm.createContext({ choices, CF, accentLabel: value => value,
+    store: { get: key => stored.get(key) ?? null, set: (key, value) => stored.set(key, value) },
+    root: { getAttribute: key => attributes[key], setAttribute: (key, value) => { attributes[key] = value; } },
+    mqDark: media, syncDisplay() {}, d: { dispatchEvent() {} }, CustomEvent: class {} });
+  vm.runInContext(runtime.slice(runtime.indexOf('const PREFS ='), runtime.indexOf('let displayEl =')), context);
+  assert.equal(CF.getPref('theme'), 'system');
+  CF.setPref('theme', 'system');
+  assert.equal(stored.get('starlight-theme'), 'auto');
+  assert.equal(CF.getPref('theme'), 'system');
+  assert.equal(attributes['data-theme'], 'light');
+  media.matches = true; media.change();
+  assert.equal(attributes['data-theme'], 'dark');
+  CF.setPref('theme', 'light');
+  media.change();
+  assert.equal(attributes['data-theme'], 'light', 'explicit mode ignores system changes');
 });

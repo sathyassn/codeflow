@@ -1,9 +1,11 @@
 /** Synchronize generated consumers, skill mirrors and manifest entries. */
 import { cp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { styleLiterals } from '../assets/base/agents/skills/cf-present/resources/design-system/source/lint.ts';
 import { generate } from '../assets/base/agents/skills/cf-present/resources/design-system/source/generate.ts';
+process.chdir(fileURLToPath(new URL('..', import.meta.url)));
 const canonical = 'assets/base/agents/skills/cf-present/resources/design-system';
 const check = process.argv.includes('--check');
 async function put(path: string, bytes: string | Buffer): Promise<void> {

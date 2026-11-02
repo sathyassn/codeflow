@@ -55,13 +55,32 @@ try {
             await page.reload();
             await page.screenshot({ path: join(evidence, `${surface}-graphite-${mode}.png`), fullPage: true });
         }
-        await page.evaluate(keys => localStorage.setItem(keys[1], 'system'), keys);
-        await page.reload();
-        for (const colorScheme of ['light', 'dark']) {
-            await page.emulateMedia({ colorScheme });
-            await page.waitForFunction(value => getComputedStyle(document.documentElement).getPropertyValue('--cf-accent').trim().toLowerCase() === value, source.accents.green[colorScheme]);
+        for (const storedMode of surface === 'portal' ? ['system', 'auto'] : ['system']) {
+            await page.evaluate(({ keys, storedMode }) => localStorage.setItem(keys[1], storedMode), { keys, storedMode });
+            await page.emulateMedia({ colorScheme: 'light' });
+            await page.reload();
+            for (const colorScheme of ['light', 'dark']) {
+                await page.emulateMedia({ colorScheme });
+                await page.waitForFunction(value => getComputedStyle(document.documentElement).getPropertyValue('--cf-accent').trim().toLowerCase() === value, source.accents.green[colorScheme]);
+            }
         }
         await page.close();
+    }
+    for (const theme of Object.keys(settings.themes)) {
+        const exported = join(scratch, `${theme}-system.html`);
+        run(['present', 'export', session, '--out', exported, '--theme', theme, '--mode', 'system']);
+        for (const javaScriptEnabled of [false, true]) {
+            const exportedPage = await browser.newPage({ javaScriptEnabled });
+            await exportedPage.emulateMedia({ colorScheme: 'light' });
+            await exportedPage.goto(pathToFileURL(exported).href);
+            for (const colorScheme of ['light', 'dark']) {
+                await exportedPage.emulateMedia({ colorScheme });
+                const accent = await exportedPage.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--cf-accent').trim().toLowerCase());
+                assert.equal(accent, source.accents.green[colorScheme], `${theme}/${colorScheme} system export, JavaScript ${javaScriptEnabled}`);
+                if (theme === 'slate' && javaScriptEnabled) await exportedPage.screenshot({ path: join(evidence, `export-slate-${colorScheme}.png`), fullPage: true });
+            }
+            await exportedPage.close();
+        }
     }
     const page = await browser.newPage();
     for (const width of [1280, 390]) {
@@ -75,7 +94,7 @@ try {
         assert.match(await page.locator('#ring title').textContent(), /review: 1/);
         await page.screenshot({ path: join(evidence, `positive-counts-${width}.png`), fullPage: true });
     }
-    console.log('PASS: all theme/mode/accent stored settings, system mode, four default captures, positive bar/ring at 1280 and 390 px');
+    console.log('PASS: all theme/mode/accent stored settings, system and legacy modes, all-theme system exports with and without JavaScript, four default captures, positive bar/ring at 1280 and 390 px');
 }
 finally {
     await browser?.close();

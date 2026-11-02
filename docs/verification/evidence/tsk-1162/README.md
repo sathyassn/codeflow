@@ -22,3 +22,11 @@ fixture now run in `web/scripts/token-lint.test.mjs` as part of the web check.
 
 `literal-fallback-before.txt` records the named-colour fallback fixture failing
 before the guard was corrected. The passing source suite includes that case.
+
+Fable repair evidence: `fable-tokens-before.txt` and `fable-tokens-after.txt`
+show the export-palette and value-named-colour failures and passing source
+suite. `portal-system-before.txt` and `portal-system-after.txt` show the
+built-page script-order failure and the passing portal suite. This executes
+inline scripts in a VM, not a browser. The primary browser script additionally
+checks legacy system/auto mode and actual system exports with JavaScript both
+enabled and disabled, including Slate light/dark captures.

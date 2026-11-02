@@ -23,3 +23,10 @@ test("new consumer stylesheets reject planted literals and accept tokens", async
     await rm(fixture, { recursive: true, force: true });
   }
 });
+
+test("token synchronization resolves its repository from the script location", () => {
+  const result = spawnSync(process.execPath, [join(repo, "scripts/design-tokens-sync.ts"), "--check"], {
+    cwd: join(repo, "crates"), encoding: "utf8", timeout: 30_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+});

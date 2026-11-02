@@ -143,7 +143,7 @@
     ".agents/skills/cf-docs-portal/resources/design-system/README.md": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/README.md",
       "ownership": "managed",
-      "sha256": "5e16832e00a9799f750d79b9ccd4fb905cba257e6ebb872aee81c2587862812d",
+      "sha256": "04fbe21a8df7452d9778671236342df5504b13c379c18070b177669e6215232b",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/chrome.css": {
@@ -173,7 +173,7 @@
     ".agents/skills/cf-docs-portal/resources/design-system/export-fallback.css": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/export-fallback.css",
       "ownership": "managed",
-      "sha256": "c78b563bc2fb2bac432aa04fe62e7b0744a864a0d820eaa05593e06d9e01b0c1",
+      "sha256": "f2c79d9fa091445a4f2eb6fa8b7f4ea27966111d4abfc8c743266fb1fb91a082",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/figure-roles.css": {
@@ -191,7 +191,7 @@
     ".agents/skills/cf-docs-portal/resources/design-system/portal.css": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/portal.css",
       "ownership": "managed",
-      "sha256": "977f2a42d45094969efcb12897192b6f5811dc90ff0e3fe8cb877e405b3a9aa9",
+      "sha256": "fdbefc97b3f441f8d4b818b1c43df9e631ae8eb33df8bd6c5024da4eae3b0094",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/portal.reference.html": {
@@ -203,7 +203,7 @@
     ".agents/skills/cf-docs-portal/resources/design-system/present.css": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/present.css",
       "ownership": "managed",
-      "sha256": "dfca8b8eab8ca2baafeef1a9f667a9868f12ebec2115ce12f998ec718db3bef0",
+      "sha256": "30c9f20666e7e5ee53dbb2f1724113f97dc521be908529a08f38c920c50bfaa8",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/present.reference.html": {
@@ -260,10 +260,16 @@
       "sha256": "045cbb750fe461d9b51ed3474d7ab79fae912ed1038128298426e4e69807559d",
       "exec": false
     },
+    ".agents/skills/cf-docs-portal/resources/design-system/source/generate.test.ts": {
+      "src": "agents/skills/cf-docs-portal/resources/design-system/source/generate.test.ts",
+      "ownership": "managed",
+      "sha256": "5baa9272ceacd5a699677dae80ee3d44f48b23904102670413d61a8ceabfc134",
+      "exec": false
+    },
     ".agents/skills/cf-docs-portal/resources/design-system/source/generate.ts": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/generate.ts",
       "ownership": "managed",
-      "sha256": "40ebd521883fcdbafa47daab86559824aabe6d677a2c020bdd3335d710c1f9e3",
+      "sha256": "34b75e844a8f18a76a4131411984783874af224f0f032424e108627894f4dde7",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/source/geometry.json": {
@@ -275,19 +281,19 @@
     ".agents/skills/cf-docs-portal/resources/design-system/source/layout.json": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/layout.json",
       "ownership": "managed",
-      "sha256": "bd22f0dde18e85f8387ac2ac6a8d4e22a51c4f9ad956d03f329c62ae707f2126",
+      "sha256": "2fad1f1a5c170b128d8e25f730aa0221e434af904a9f0ef9484099800e876001",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/source/lint.test.ts": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/lint.test.ts",
       "ownership": "managed",
-      "sha256": "b0efeb16378be7890bbebe43b492a14fe51870bdab7b091d81c4b04c4d53e08a",
+      "sha256": "e53a95fa5c5811436f539b27302465041a253cdc7a9b0e9768ce370eb05bb038",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/source/lint.ts": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/lint.ts",
       "ownership": "managed",
-      "sha256": "076525bb0baadf2ec0b2681e2670a1956747a80d0f2bf6de4594d7cddd32b02d",
+      "sha256": "1eeeb8c7bb1ed80547db8d775858b1ecb5703da4a7c8ce5e11d693c0c4065f86",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/source/matrices.json": {
@@ -353,7 +359,7 @@
     ".agents/skills/cf-docs-portal/resources/design-system/source/styles/export-fallback.css.in": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/styles/export-fallback.css.in",
       "ownership": "managed",
-      "sha256": "835963db7bf61bcb8bf60588527cfc6d663dab2863a5116f9730bb42dcd9931e",
+      "sha256": "a67c0556dbddc03c875b3585d74b20e346618d9450853e4a5f1b19e7f5802771",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/source/styles/figure-roles.css.in": {
@@ -371,13 +377,13 @@
     ".agents/skills/cf-docs-portal/resources/design-system/source/styles/portal.css.in": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/styles/portal.css.in",
       "ownership": "managed",
-      "sha256": "90ac29ff75f217ebb630f727c778e26c2061da281fc7526d68fb021521d500c1",
+      "sha256": "aac4535e3ee8a7621e86b9d5eb6b4f2ea6eeaaa7c72a96d744c6707668c2c5fb",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/source/styles/present.css.in": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/styles/present.css.in",
       "ownership": "managed",
-      "sha256": "59425f9348e4cbbcd0a2d7ceacf47d4f628b9dff58ce6951a1261de24c553784",
+      "sha256": "99d9e987bcdc1f41586a3939e269da85264ff49a6b5c9c9635691c3fb91f15c0",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/source/styles/utility-tokens.css.in": {
@@ -413,13 +419,13 @@
     ".agents/skills/cf-docs-portal/resources/design-system/tokens.css": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/tokens.css",
       "ownership": "managed",
-      "sha256": "89f9c924cc1a0e014f6663d8b5319c367e5b0d4752c6e3da5a4ef415b3751e5c",
+      "sha256": "50d0ebbaa3368273fc7accb6f9d881679e8c6f9fdba03d10001dc63195180bae",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/tokens.js": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/tokens.js",
       "ownership": "managed",
-      "sha256": "0db5cab077a0a40cfd7b31bc28eba0918418b8ef734a5b33a548672248c740b1",
+      "sha256": "dd8b92feec0fecde2fc4815036a16e30907801126ce2238c233f2b2145fc589c",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/tokens.json": {
@@ -431,13 +437,13 @@
     ".agents/skills/cf-docs-portal/resources/design-system/tokens.ts": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/tokens.ts",
       "ownership": "managed",
-      "sha256": "6b00afd62ca0b25742aa4740742287ddd6c07e7ae59cc6e0cb442b81be5032cb",
+      "sha256": "c8a09c7721a0a3796038bb7a1362cd65436a0870862b40a7c87356b6500dee7c",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/utility-tokens.css": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/utility-tokens.css",
       "ownership": "managed",
-      "sha256": "81a658edc92008d28bba47945042ccf9f6bfb388a76f5af16a6f6bc6f5009410",
+      "sha256": "152f3298b0cdd1fc1d2540df50f45289a3a41e756ad3197c7ebdb54b8130079e",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/explanation-method.md": {
@@ -965,7 +971,7 @@
     ".agents/skills/cf-present/resources/design-system/README.md": {
       "src": "agents/skills/cf-present/resources/design-system/README.md",
       "ownership": "managed",
-      "sha256": "5e16832e00a9799f750d79b9ccd4fb905cba257e6ebb872aee81c2587862812d",
+      "sha256": "04fbe21a8df7452d9778671236342df5504b13c379c18070b177669e6215232b",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/chrome.css": {
@@ -995,7 +1001,7 @@
     ".agents/skills/cf-present/resources/design-system/export-fallback.css": {
       "src": "agents/skills/cf-present/resources/design-system/export-fallback.css",
       "ownership": "managed",
-      "sha256": "c78b563bc2fb2bac432aa04fe62e7b0744a864a0d820eaa05593e06d9e01b0c1",
+      "sha256": "f2c79d9fa091445a4f2eb6fa8b7f4ea27966111d4abfc8c743266fb1fb91a082",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/figure-roles.css": {
@@ -1013,7 +1019,7 @@
     ".agents/skills/cf-present/resources/design-system/portal.css": {
       "src": "agents/skills/cf-present/resources/design-system/portal.css",
       "ownership": "managed",
-      "sha256": "977f2a42d45094969efcb12897192b6f5811dc90ff0e3fe8cb877e405b3a9aa9",
+      "sha256": "fdbefc97b3f441f8d4b818b1c43df9e631ae8eb33df8bd6c5024da4eae3b0094",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/portal.reference.html": {
@@ -1025,7 +1031,7 @@
     ".agents/skills/cf-present/resources/design-system/present.css": {
       "src": "agents/skills/cf-present/resources/design-system/present.css",
       "ownership": "managed",
-      "sha256": "dfca8b8eab8ca2baafeef1a9f667a9868f12ebec2115ce12f998ec718db3bef0",
+      "sha256": "30c9f20666e7e5ee53dbb2f1724113f97dc521be908529a08f38c920c50bfaa8",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/present.reference.html": {
@@ -1082,10 +1088,16 @@
       "sha256": "045cbb750fe461d9b51ed3474d7ab79fae912ed1038128298426e4e69807559d",
       "exec": false
     },
+    ".agents/skills/cf-present/resources/design-system/source/generate.test.ts": {
+      "src": "agents/skills/cf-present/resources/design-system/source/generate.test.ts",
+      "ownership": "managed",
+      "sha256": "5baa9272ceacd5a699677dae80ee3d44f48b23904102670413d61a8ceabfc134",
+      "exec": false
+    },
     ".agents/skills/cf-present/resources/design-system/source/generate.ts": {
       "src": "agents/skills/cf-present/resources/design-system/source/generate.ts",
       "ownership": "managed",
-      "sha256": "40ebd521883fcdbafa47daab86559824aabe6d677a2c020bdd3335d710c1f9e3",
+      "sha256": "34b75e844a8f18a76a4131411984783874af224f0f032424e108627894f4dde7",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/source/geometry.json": {
@@ -1097,19 +1109,19 @@
     ".agents/skills/cf-present/resources/design-system/source/layout.json": {
       "src": "agents/skills/cf-present/resources/design-system/source/layout.json",
       "ownership": "managed",
-      "sha256": "bd22f0dde18e85f8387ac2ac6a8d4e22a51c4f9ad956d03f329c62ae707f2126",
+      "sha256": "2fad1f1a5c170b128d8e25f730aa0221e434af904a9f0ef9484099800e876001",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/source/lint.test.ts": {
       "src": "agents/skills/cf-present/resources/design-system/source/lint.test.ts",
       "ownership": "managed",
-      "sha256": "b0efeb16378be7890bbebe43b492a14fe51870bdab7b091d81c4b04c4d53e08a",
+      "sha256": "e53a95fa5c5811436f539b27302465041a253cdc7a9b0e9768ce370eb05bb038",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/source/lint.ts": {
       "src": "agents/skills/cf-present/resources/design-system/source/lint.ts",
       "ownership": "managed",
-      "sha256": "076525bb0baadf2ec0b2681e2670a1956747a80d0f2bf6de4594d7cddd32b02d",
+      "sha256": "1eeeb8c7bb1ed80547db8d775858b1ecb5703da4a7c8ce5e11d693c0c4065f86",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/source/matrices.json": {
@@ -1175,7 +1187,7 @@
     ".agents/skills/cf-present/resources/design-system/source/styles/export-fallback.css.in": {
       "src": "agents/skills/cf-present/resources/design-system/source/styles/export-fallback.css.in",
       "ownership": "managed",
-      "sha256": "835963db7bf61bcb8bf60588527cfc6d663dab2863a5116f9730bb42dcd9931e",
+      "sha256": "a67c0556dbddc03c875b3585d74b20e346618d9450853e4a5f1b19e7f5802771",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/source/styles/figure-roles.css.in": {
@@ -1193,13 +1205,13 @@
     ".agents/skills/cf-present/resources/design-system/source/styles/portal.css.in": {
       "src": "agents/skills/cf-present/resources/design-system/source/styles/portal.css.in",
       "ownership": "managed",
-      "sha256": "90ac29ff75f217ebb630f727c778e26c2061da281fc7526d68fb021521d500c1",
+      "sha256": "aac4535e3ee8a7621e86b9d5eb6b4f2ea6eeaaa7c72a96d744c6707668c2c5fb",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/source/styles/present.css.in": {
       "src": "agents/skills/cf-present/resources/design-system/source/styles/present.css.in",
       "ownership": "managed",
-      "sha256": "59425f9348e4cbbcd0a2d7ceacf47d4f628b9dff58ce6951a1261de24c553784",
+      "sha256": "99d9e987bcdc1f41586a3939e269da85264ff49a6b5c9c9635691c3fb91f15c0",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/source/styles/utility-tokens.css.in": {
@@ -1235,13 +1247,13 @@
     ".agents/skills/cf-present/resources/design-system/tokens.css": {
       "src": "agents/skills/cf-present/resources/design-system/tokens.css",
       "ownership": "managed",
-      "sha256": "89f9c924cc1a0e014f6663d8b5319c367e5b0d4752c6e3da5a4ef415b3751e5c",
+      "sha256": "50d0ebbaa3368273fc7accb6f9d881679e8c6f9fdba03d10001dc63195180bae",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/tokens.js": {
       "src": "agents/skills/cf-present/resources/design-system/tokens.js",
       "ownership": "managed",
-      "sha256": "0db5cab077a0a40cfd7b31bc28eba0918418b8ef734a5b33a548672248c740b1",
+      "sha256": "dd8b92feec0fecde2fc4815036a16e30907801126ce2238c233f2b2145fc589c",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/tokens.json": {
@@ -1253,13 +1265,13 @@
     ".agents/skills/cf-present/resources/design-system/tokens.ts": {
       "src": "agents/skills/cf-present/resources/design-system/tokens.ts",
       "ownership": "managed",
-      "sha256": "6b00afd62ca0b25742aa4740742287ddd6c07e7ae59cc6e0cb442b81be5032cb",
+      "sha256": "c8a09c7721a0a3796038bb7a1362cd65436a0870862b40a7c87356b6500dee7c",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/utility-tokens.css": {
       "src": "agents/skills/cf-present/resources/design-system/utility-tokens.css",
       "ownership": "managed",
-      "sha256": "81a658edc92008d28bba47945042ccf9f6bfb388a76f5af16a6f6bc6f5009410",
+      "sha256": "152f3298b0cdd1fc1d2540df50f45289a3a41e756ad3197c7ebdb54b8130079e",
       "exec": false
     },
     ".agents/skills/cf-present/resources/explanation-method.md": {
@@ -1493,7 +1505,7 @@
     ".claude/skills/cf-docs-portal/resources/design-system/README.md": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/README.md",
       "ownership": "managed",
-      "sha256": "5e16832e00a9799f750d79b9ccd4fb905cba257e6ebb872aee81c2587862812d",
+      "sha256": "04fbe21a8df7452d9778671236342df5504b13c379c18070b177669e6215232b",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/chrome.css": {
@@ -1523,7 +1535,7 @@
     ".claude/skills/cf-docs-portal/resources/design-system/export-fallback.css": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/export-fallback.css",
       "ownership": "managed",
-      "sha256": "c78b563bc2fb2bac432aa04fe62e7b0744a864a0d820eaa05593e06d9e01b0c1",
+      "sha256": "f2c79d9fa091445a4f2eb6fa8b7f4ea27966111d4abfc8c743266fb1fb91a082",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/figure-roles.css": {
@@ -1541,7 +1553,7 @@
     ".claude/skills/cf-docs-portal/resources/design-system/portal.css": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/portal.css",
       "ownership": "managed",
-      "sha256": "977f2a42d45094969efcb12897192b6f5811dc90ff0e3fe8cb877e405b3a9aa9",
+      "sha256": "fdbefc97b3f441f8d4b818b1c43df9e631ae8eb33df8bd6c5024da4eae3b0094",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/portal.reference.html": {
@@ -1553,7 +1565,7 @@
     ".claude/skills/cf-docs-portal/resources/design-system/present.css": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/present.css",
       "ownership": "managed",
-      "sha256": "dfca8b8eab8ca2baafeef1a9f667a9868f12ebec2115ce12f998ec718db3bef0",
+      "sha256": "30c9f20666e7e5ee53dbb2f1724113f97dc521be908529a08f38c920c50bfaa8",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/present.reference.html": {
@@ -1610,10 +1622,16 @@
       "sha256": "045cbb750fe461d9b51ed3474d7ab79fae912ed1038128298426e4e69807559d",
       "exec": false
     },
+    ".claude/skills/cf-docs-portal/resources/design-system/source/generate.test.ts": {
+      "src": "agents/skills/cf-docs-portal/resources/design-system/source/generate.test.ts",
+      "ownership": "managed",
+      "sha256": "5baa9272ceacd5a699677dae80ee3d44f48b23904102670413d61a8ceabfc134",
+      "exec": false
+    },
     ".claude/skills/cf-docs-portal/resources/design-system/source/generate.ts": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/generate.ts",
       "ownership": "managed",
-      "sha256": "40ebd521883fcdbafa47daab86559824aabe6d677a2c020bdd3335d710c1f9e3",
+      "sha256": "34b75e844a8f18a76a4131411984783874af224f0f032424e108627894f4dde7",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/source/geometry.json": {
@@ -1625,19 +1643,19 @@
     ".claude/skills/cf-docs-portal/resources/design-system/source/layout.json": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/layout.json",
       "ownership": "managed",
-      "sha256": "bd22f0dde18e85f8387ac2ac6a8d4e22a51c4f9ad956d03f329c62ae707f2126",
+      "sha256": "2fad1f1a5c170b128d8e25f730aa0221e434af904a9f0ef9484099800e876001",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/source/lint.test.ts": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/lint.test.ts",
       "ownership": "managed",
-      "sha256": "b0efeb16378be7890bbebe43b492a14fe51870bdab7b091d81c4b04c4d53e08a",
+      "sha256": "e53a95fa5c5811436f539b27302465041a253cdc7a9b0e9768ce370eb05bb038",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/source/lint.ts": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/lint.ts",
       "ownership": "managed",
-      "sha256": "076525bb0baadf2ec0b2681e2670a1956747a80d0f2bf6de4594d7cddd32b02d",
+      "sha256": "1eeeb8c7bb1ed80547db8d775858b1ecb5703da4a7c8ce5e11d693c0c4065f86",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/source/matrices.json": {
@@ -1703,7 +1721,7 @@
     ".claude/skills/cf-docs-portal/resources/design-system/source/styles/export-fallback.css.in": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/styles/export-fallback.css.in",
       "ownership": "managed",
-      "sha256": "835963db7bf61bcb8bf60588527cfc6d663dab2863a5116f9730bb42dcd9931e",
+      "sha256": "a67c0556dbddc03c875b3585d74b20e346618d9450853e4a5f1b19e7f5802771",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/source/styles/figure-roles.css.in": {
@@ -1721,13 +1739,13 @@
     ".claude/skills/cf-docs-portal/resources/design-system/source/styles/portal.css.in": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/styles/portal.css.in",
       "ownership": "managed",
-      "sha256": "90ac29ff75f217ebb630f727c778e26c2061da281fc7526d68fb021521d500c1",
+      "sha256": "aac4535e3ee8a7621e86b9d5eb6b4f2ea6eeaaa7c72a96d744c6707668c2c5fb",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/source/styles/present.css.in": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/styles/present.css.in",
       "ownership": "managed",
-      "sha256": "59425f9348e4cbbcd0a2d7ceacf47d4f628b9dff58ce6951a1261de24c553784",
+      "sha256": "99d9e987bcdc1f41586a3939e269da85264ff49a6b5c9c9635691c3fb91f15c0",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/source/styles/utility-tokens.css.in": {
@@ -1763,13 +1781,13 @@
     ".claude/skills/cf-docs-portal/resources/design-system/tokens.css": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/tokens.css",
       "ownership": "managed",
-      "sha256": "89f9c924cc1a0e014f6663d8b5319c367e5b0d4752c6e3da5a4ef415b3751e5c",
+      "sha256": "50d0ebbaa3368273fc7accb6f9d881679e8c6f9fdba03d10001dc63195180bae",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/tokens.js": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/tokens.js",
       "ownership": "managed",
-      "sha256": "0db5cab077a0a40cfd7b31bc28eba0918418b8ef734a5b33a548672248c740b1",
+      "sha256": "dd8b92feec0fecde2fc4815036a16e30907801126ce2238c233f2b2145fc589c",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/tokens.json": {
@@ -1781,13 +1799,13 @@
     ".claude/skills/cf-docs-portal/resources/design-system/tokens.ts": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/tokens.ts",
       "ownership": "managed",
-      "sha256": "6b00afd62ca0b25742aa4740742287ddd6c07e7ae59cc6e0cb442b81be5032cb",
+      "sha256": "c8a09c7721a0a3796038bb7a1362cd65436a0870862b40a7c87356b6500dee7c",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/utility-tokens.css": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/utility-tokens.css",
       "ownership": "managed",
-      "sha256": "81a658edc92008d28bba47945042ccf9f6bfb388a76f5af16a6f6bc6f5009410",
+      "sha256": "152f3298b0cdd1fc1d2540df50f45289a3a41e756ad3197c7ebdb54b8130079e",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/explanation-method.md": {
@@ -2315,7 +2333,7 @@
     ".claude/skills/cf-present/resources/design-system/README.md": {
       "src": "agents/skills/cf-present/resources/design-system/README.md",
       "ownership": "managed",
-      "sha256": "5e16832e00a9799f750d79b9ccd4fb905cba257e6ebb872aee81c2587862812d",
+      "sha256": "04fbe21a8df7452d9778671236342df5504b13c379c18070b177669e6215232b",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/chrome.css": {
@@ -2345,7 +2363,7 @@
     ".claude/skills/cf-present/resources/design-system/export-fallback.css": {
       "src": "agents/skills/cf-present/resources/design-system/export-fallback.css",
       "ownership": "managed",
-      "sha256": "c78b563bc2fb2bac432aa04fe62e7b0744a864a0d820eaa05593e06d9e01b0c1",
+      "sha256": "f2c79d9fa091445a4f2eb6fa8b7f4ea27966111d4abfc8c743266fb1fb91a082",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/figure-roles.css": {
@@ -2363,7 +2381,7 @@
     ".claude/skills/cf-present/resources/design-system/portal.css": {
       "src": "agents/skills/cf-present/resources/design-system/portal.css",
       "ownership": "managed",
-      "sha256": "977f2a42d45094969efcb12897192b6f5811dc90ff0e3fe8cb877e405b3a9aa9",
+      "sha256": "fdbefc97b3f441f8d4b818b1c43df9e631ae8eb33df8bd6c5024da4eae3b0094",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/portal.reference.html": {
@@ -2375,7 +2393,7 @@
     ".claude/skills/cf-present/resources/design-system/present.css": {
       "src": "agents/skills/cf-present/resources/design-system/present.css",
       "ownership": "managed",
-      "sha256": "dfca8b8eab8ca2baafeef1a9f667a9868f12ebec2115ce12f998ec718db3bef0",
+      "sha256": "30c9f20666e7e5ee53dbb2f1724113f97dc521be908529a08f38c920c50bfaa8",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/present.reference.html": {
@@ -2432,10 +2450,16 @@
       "sha256": "045cbb750fe461d9b51ed3474d7ab79fae912ed1038128298426e4e69807559d",
       "exec": false
     },
+    ".claude/skills/cf-present/resources/design-system/source/generate.test.ts": {
+      "src": "agents/skills/cf-present/resources/design-system/source/generate.test.ts",
+      "ownership": "managed",
+      "sha256": "5baa9272ceacd5a699677dae80ee3d44f48b23904102670413d61a8ceabfc134",
+      "exec": false
+    },
     ".claude/skills/cf-present/resources/design-system/source/generate.ts": {
       "src": "agents/skills/cf-present/resources/design-system/source/generate.ts",
       "ownership": "managed",
-      "sha256": "40ebd521883fcdbafa47daab86559824aabe6d677a2c020bdd3335d710c1f9e3",
+      "sha256": "34b75e844a8f18a76a4131411984783874af224f0f032424e108627894f4dde7",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/source/geometry.json": {
@@ -2447,19 +2471,19 @@
     ".claude/skills/cf-present/resources/design-system/source/layout.json": {
       "src": "agents/skills/cf-present/resources/design-system/source/layout.json",
       "ownership": "managed",
-      "sha256": "bd22f0dde18e85f8387ac2ac6a8d4e22a51c4f9ad956d03f329c62ae707f2126",
+      "sha256": "2fad1f1a5c170b128d8e25f730aa0221e434af904a9f0ef9484099800e876001",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/source/lint.test.ts": {
       "src": "agents/skills/cf-present/resources/design-system/source/lint.test.ts",
       "ownership": "managed",
-      "sha256": "b0efeb16378be7890bbebe43b492a14fe51870bdab7b091d81c4b04c4d53e08a",
+      "sha256": "e53a95fa5c5811436f539b27302465041a253cdc7a9b0e9768ce370eb05bb038",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/source/lint.ts": {
       "src": "agents/skills/cf-present/resources/design-system/source/lint.ts",
       "ownership": "managed",
-      "sha256": "076525bb0baadf2ec0b2681e2670a1956747a80d0f2bf6de4594d7cddd32b02d",
+      "sha256": "1eeeb8c7bb1ed80547db8d775858b1ecb5703da4a7c8ce5e11d693c0c4065f86",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/source/matrices.json": {
@@ -2525,7 +2549,7 @@
     ".claude/skills/cf-present/resources/design-system/source/styles/export-fallback.css.in": {
       "src": "agents/skills/cf-present/resources/design-system/source/styles/export-fallback.css.in",
       "ownership": "managed",
-      "sha256": "835963db7bf61bcb8bf60588527cfc6d663dab2863a5116f9730bb42dcd9931e",
+      "sha256": "a67c0556dbddc03c875b3585d74b20e346618d9450853e4a5f1b19e7f5802771",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/source/styles/figure-roles.css.in": {
@@ -2543,13 +2567,13 @@
     ".claude/skills/cf-present/resources/design-system/source/styles/portal.css.in": {
       "src": "agents/skills/cf-present/resources/design-system/source/styles/portal.css.in",
       "ownership": "managed",
-      "sha256": "90ac29ff75f217ebb630f727c778e26c2061da281fc7526d68fb021521d500c1",
+      "sha256": "aac4535e3ee8a7621e86b9d5eb6b4f2ea6eeaaa7c72a96d744c6707668c2c5fb",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/source/styles/present.css.in": {
       "src": "agents/skills/cf-present/resources/design-system/source/styles/present.css.in",
       "ownership": "managed",
-      "sha256": "59425f9348e4cbbcd0a2d7ceacf47d4f628b9dff58ce6951a1261de24c553784",
+      "sha256": "99d9e987bcdc1f41586a3939e269da85264ff49a6b5c9c9635691c3fb91f15c0",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/source/styles/utility-tokens.css.in": {
@@ -2585,13 +2609,13 @@
     ".claude/skills/cf-present/resources/design-system/tokens.css": {
       "src": "agents/skills/cf-present/resources/design-system/tokens.css",
       "ownership": "managed",
-      "sha256": "89f9c924cc1a0e014f6663d8b5319c367e5b0d4752c6e3da5a4ef415b3751e5c",
+      "sha256": "50d0ebbaa3368273fc7accb6f9d881679e8c6f9fdba03d10001dc63195180bae",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/tokens.js": {
       "src": "agents/skills/cf-present/resources/design-system/tokens.js",
       "ownership": "managed",
-      "sha256": "0db5cab077a0a40cfd7b31bc28eba0918418b8ef734a5b33a548672248c740b1",
+      "sha256": "dd8b92feec0fecde2fc4815036a16e30907801126ce2238c233f2b2145fc589c",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/tokens.json": {
@@ -2603,13 +2627,13 @@
     ".claude/skills/cf-present/resources/design-system/tokens.ts": {
       "src": "agents/skills/cf-present/resources/design-system/tokens.ts",
       "ownership": "managed",
-      "sha256": "6b00afd62ca0b25742aa4740742287ddd6c07e7ae59cc6e0cb442b81be5032cb",
+      "sha256": "c8a09c7721a0a3796038bb7a1362cd65436a0870862b40a7c87356b6500dee7c",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/utility-tokens.css": {
       "src": "agents/skills/cf-present/resources/design-system/utility-tokens.css",
       "ownership": "managed",
-      "sha256": "81a658edc92008d28bba47945042ccf9f6bfb388a76f5af16a6f6bc6f5009410",
+      "sha256": "152f3298b0cdd1fc1d2540df50f45289a3a41e756ad3197c7ebdb54b8130079e",
       "exec": false
     },
     ".claude/skills/cf-present/resources/explanation-method.md": {

@@ -1,0 +1,26 @@
+with-node: Node 24.18.0 from /Users/sathya/.asdf/installs/nodejs/24.18.0/bin
+✔ configured graphite paints graphite with independent Inter before runtime (2.861834ms)
+✔ configured slate paints slate with independent Inter before runtime (1.093375ms)
+✔ configured sage paints sage with independent Inter before runtime (1.006708ms)
+✔ configured signal paints graphite with independent Inter before runtime (1.789958ms)
+✔ configured folio paints sage with independent Inter before runtime (1.042125ms)
+✔ pre-paint restores bounded panel preferences and ignores malformed values (0.8365ms)
+✔ canonical and compatibility portal themes build the same skin order (22381.018ms)
+✔ saved instrument skin normalizes before paint without selecting a font (3.49825ms)
+✔ saved editorial skin normalizes before paint without selecting a font (0.94675ms)
+✔ saved ink skin normalizes before paint without selecting a font (1.413459ms)
+✔ saved technical skin normalizes before paint without selecting a font (0.973125ms)
+✔ saved instrument font normalizes before paint without selecting a skin (0.326875ms)
+✔ saved editorial font normalizes before paint without selecting a skin (0.2865ms)
+✔ saved plex font normalizes before paint without selecting a skin (0.277375ms)
+✔ nested navigation and breadcrumbs share readable labels without recasing custom labels (2931.446875ms)
+✔ built page resolves system mode before deferred runtime (2828.004083ms)
+✔ portal mode stores auto and reads legacy system while following media changes (1.347958ms)
+ℹ tests 17
+ℹ suites 0
+ℹ pass 17
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 28389.909375

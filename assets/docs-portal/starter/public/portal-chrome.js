@@ -43,7 +43,7 @@
   };
   function getPref(name) {
     const p = PREFS[name], saved = store.get(p.key);
-    const aliases = name === 'skin' ? {instrument: 'graphite', technical: 'graphite', editorial: 'slate', ink: 'sage'} : name === 'typeface' ? {instrument: 'archivo', editorial: 'inter'} : {};
+    const aliases = name === 'skin' ? {instrument: 'graphite', technical: 'graphite', editorial: 'slate', ink: 'sage'} : name === 'typeface' ? {instrument: 'archivo', editorial: 'inter'} : name === 'theme' ? {auto: 'system'} : {};
     const v = Object.hasOwn(aliases, saved) ? aliases[saved] : saved;
     return p.options.some(o => o[0] === v) ? v : (p.attr && root.getAttribute(p.attr)) || p.def;
   }
@@ -52,7 +52,7 @@
     root.setAttribute('data-theme', pref === 'system' ? (mqDark.matches ? 'dark' : 'light') : pref);
   }
   function setPref(name, value) {
-    store.set(PREFS[name].key, value);
+    store.set(PREFS[name].key, name === 'theme' && value === 'system' ? 'auto' : value);
     if (name === 'theme') applyTheme(); else root.setAttribute(PREFS[name].attr, value);
     const allowed = choices.themes[getPref('skin')];
     if (!allowed.includes(getPref('accent'))) store.set(PREFS.accent.key, choices.defaultAccent);

@@ -126,3 +126,10 @@ The opt-in count renderer in `count-charts.js` is consumed by
 counts, retains exact count labels and rejects impossible allocations. It does
 not add a new present document block type. Serve the kit with a local static
 server for this ES-module example.
+
+The `length-*` entries in the layout module are a resolved-literal table,
+not semantic design tokens. Generation substitutes their values to avoid
+repeating long custom-property names within the current asset budget. Shared
+spacing and breakpoint roles will replace recurring entries when the bar or
+navigation work next edits these sheets. Value-named colour properties are
+forbidden; authored colours must use semantic roles.

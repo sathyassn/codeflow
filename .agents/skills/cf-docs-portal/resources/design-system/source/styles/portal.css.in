@@ -522,7 +522,7 @@ html[data-cfp-tabs="on"] .sl-markdown-content .portal-altitude > :is(.sl-heading
 .portal-stage-node[data-role="positive"] .k { color: var(--cf-positive); }
 .portal-stage-node[data-role="warn"] { border-color: var(--cf-warning); }
 /* The raw warning hue misses AA at label size on light surfaces; pull the
-   label toward ink (pass10's accent-label approach) , the border keeps the
+   label toward ink (pass10's accent-label approach), the border keeps the
    pure role colour. */
 .portal-stage-node[data-role="warn"] .k { color: color-mix(in srgb, var(--cf-warning) var(--cf-length-55), var(--cf-text)); }
 .portal-stage-node[data-role="danger"] { border-color: var(--cf-danger); }

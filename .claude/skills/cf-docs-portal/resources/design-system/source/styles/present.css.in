@@ -777,7 +777,7 @@ code { font-family: var(--cf-font-mono); }
   padding: 0 var(--cf-length-6px) 0 var(--cf-length-5px);
   border-radius: var(--cf-length-8px) var(--cf-length-8px) var(--cf-length-3px) var(--cf-length-8px);
   background: var(--cf-accent);
-  color: var(--cf-colour-fff);
+  color: var(--cf-on-accent);
   border: var(--cf-length-2px) solid var(--cf-surface);
   box-shadow: 0 var(--cf-length-2px) var(--cf-length-10px) color-mix(in srgb, var(--cf-text) var(--cf-length-22), transparent);
   cursor: pointer;
@@ -788,11 +788,11 @@ code { font-family: var(--cf-font-mono); }
   gap: var(--cf-length-3px);
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
-.cf-marker svg { width: var(--cf-length-13px); height: var(--cf-length-13px); display: block; flex-shrink: 0; fill: var(--cf-colour-fff); }
+.cf-marker svg { width: var(--cf-length-13px); height: var(--cf-length-13px); display: block; flex-shrink: 0; fill: var(--cf-on-accent); }
 .cf-marker:hover { box-shadow: 0 var(--cf-length-2px) var(--cf-length-10px) color-mix(in srgb, var(--cf-text) var(--cf-length-40), transparent); }
 .cf-marker .n {
   font: 700 var(--cf-length-11px)/1 var(--cf-font-mono);
-  color: var(--cf-colour-fff);
+  color: var(--cf-on-accent);
 }
 
 /* Notes rail , full-height fixed dock */
@@ -1242,7 +1242,7 @@ html:has(.cf-chrome-frame[data-rail="open"]) .cf-hint {
 }
 
 @media print {
-  :root { --cf-canvas: var(--cf-print-paper); --cf-surface: var(--cf-print-paper); --cf-text: var(--cf-print-ink); --cf-text-muted: var(--cf-colour-333); --cf-border: var(--cf-colour-777); }
+  :root { --cf-canvas: var(--cf-print-paper); --cf-surface: var(--cf-print-paper); --cf-text: var(--cf-print-ink); --cf-text-muted: var(--cf-print-muted); --cf-border: var(--cf-print-rule); }
   .cf-chrome-frame { display: none !important; }
   #cf-present-document { inline-size: auto; margin: 0; padding: 0; }
   .cf-local-scroll, pre { overflow: visible; white-space: pre-wrap; }
@@ -1406,9 +1406,9 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 .cf-restore button, .cf-withdraw-confirm button, .cf-sent-meta { font: inherit; color: var(--cf-text); background: var(--cf-surface-raised); border: var(--cf-length-1px) solid var(--cf-border-strong); border-radius: var(--cf-radius-ctl); padding: var(--cf-length-4px) var(--cf-length-8px); cursor: pointer; }
 .cf-withdraw-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--cf-length-6px); font-size: var(--cf-fs-caption); color: var(--cf-text); }
 .cf-sent-meta { font-size: var(--cf-fs-caption); color: var(--cf-accent-strong); white-space: nowrap; }
-.cf-field-error { display: block; margin-top: var(--cf-length-4px); color: var(--cf-danger, var(--cf-colour-b42318)); font-size: var(--cf-fs-caption); font-weight: 600; }
+.cf-field-error { display: block; margin-top: var(--cf-length-4px); color: var(--cf-danger); font-size: var(--cf-fs-caption); font-weight: 600; }
 .cf-field-hint { display: block; margin: var(--cf-length-2px) 0 var(--cf-length-4px); color: var(--cf-text-muted); font-size: var(--cf-fs-caption); }
-.cf-verdict select[aria-invalid="true"], .cf-verdict textarea[aria-invalid="true"] { border-color: var(--cf-danger, var(--cf-colour-b42318)); box-shadow: 0 0 0 var(--cf-length-1px) var(--cf-danger, var(--cf-colour-b42318)); }
+.cf-verdict select[aria-invalid="true"], .cf-verdict textarea[aria-invalid="true"] { border-color: var(--cf-danger); box-shadow: 0 0 0 var(--cf-length-1px) var(--cf-danger); }
 .cf-pending-part { outline-style: dashed; }
 /* Submit with no notes stays pressable, so a missing verdict can be named;
    it keeps a readable outline style on hover and focus. */

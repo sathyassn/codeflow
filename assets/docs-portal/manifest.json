@@ -159,6 +159,10 @@
       "ownership": "managed"
     },
     {
+      "path": "src/components/PortalThemeProvider.astro",
+      "ownership": "managed"
+    },
+    {
       "path": "src/components/PortalTitle.astro",
       "ownership": "managed"
     },

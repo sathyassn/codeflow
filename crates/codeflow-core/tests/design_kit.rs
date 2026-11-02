@@ -112,6 +112,8 @@ fn tokens() -> BTreeMap<String, BTreeMap<String, String>> {
     serde_json::from_str(&read_kit("tokens.json")).expect("tokens.json is pair -> role -> hex")
 }
 
+// Compile the pure private maths directly to avoid exposing a public API or
+// adding the present server dependency graph solely for this palette test.
 #[path = "../../codeflow-present/src/colour.rs"]
 mod colour;
 use colour::{contrast, delta_e_2000, rgb};

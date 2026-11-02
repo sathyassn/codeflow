@@ -1,0 +1,120 @@
+with-node: Node 26.4.0 from /Users/sathya/.asdf/installs/nodejs/26.4.0/bin
+✔ assets/base/agents/skills/cf-present/resources/design-system/source/colour.test.ts (160.986833ms)
+(node:87523) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✖ system export fallback matches every resolved theme and mode palette (39.36925ms)
+✖ value-named colour properties cannot disguise palette literals (14.507916ms)
+✔ assets/base/agents/skills/cf-present/resources/design-system/source/stage-geometry.test.ts (152.138625ms)
+✔ assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts (151.873917ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 3
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 215.438416
+
+✖ failing tests:
+
+test at assets/base/agents/skills/cf-present/resources/design-system/source/generate.test.ts:5:1
+✖ system export fallback matches every resolved theme and mode palette (39.36925ms)
+  AssertionError [ERR_ASSERTION]: graphite-light
+  + actual - expected
+  
+    {
+  +   'accent-soft': 'var(--cf-colour-dcefec)',
+  +   'accent-strong': 'var(--cf-colour-0d5d57)',
+  +   'border-strong': 'var(--cf-colour-c6c6c6)',
+  +   'diagram-line': 'var(--cf-colour-343434)',
+  +   'fig-accent': 'var(--cf-colour-12766e)',
+  +   'fig-accent-soft': 'var(--cf-colour-dcefec)',
+  +   'fig-fill': 'var(--cf-colour-ececec)',
+  +   'fig-hatch': 'var(--cf-colour-c6c6c6)',
+  +   'fig-line': 'var(--cf-colour-343434)',
+  +   'fig-line-mid': 'var(--cf-colour-5e5e5e)',
+  +   'fig-line-soft': 'var(--cf-colour-9a9a9a)',
+  +   'fig-stop': 'var(--cf-colour-b93636)',
+  +   'fig-warn': 'var(--cf-colour-8f5f00)',
+  +   'fig-warn-soft': 'var(--cf-colour-f3e6cc)',
+  +   'on-accent': 'var(--cf-colour-ffffff)',
+  +   'surface-raised': 'var(--cf-colour-ffffff)',
+  +   'surface-subtle': 'var(--cf-colour-ececec)',
+  +   'text-muted': 'var(--cf-colour-5e5e5e)',
+  +   accent: 'var(--cf-colour-12766e)',
+  +   border: 'var(--cf-colour-e3e3e3)',
+  +   canvas: 'var(--cf-colour-f6f6f6)',
+  +   danger: 'var(--cf-colour-b93636)',
+  +   focus: 'var(--cf-colour-12766e)',
+  +   positive: 'var(--cf-colour-2b7f4f)',
+  +   surface: 'var(--cf-colour-ffffff)',
+  +   text: 'var(--cf-colour-1b1b1b)',
+  +   warning: 'var(--cf-colour-8f5f00)'
+  -   'accent-soft': '#e3edec',
+  -   'accent-strong': '#0e5e58',
+  -   'border-strong': '#c4c4c4',
+  -   'diagram-line': '#343434',
+  -   'fig-accent': '#12766e',
+  -   'fig-accent-soft': '#e3edec',
+  -   'fig-cat1': '#3860ac',
+  -   'fig-cat1-soft': '#e4edfe',
+  -   'fig-cat2': '#5e052c',
+  -   'fig-cat2-soft': '#f0d5e3',
+  -   'fig-fill': '#ececec',
+  -   'fig-hatch': '#c6c6c6',
+  -   'fig-line': '#343434',
+  -   'fig-line-mid': '#5e5e5e',
+  -   'fig-line-soft': '#9a9a9a',
+  -   'fig-stop': '#b93636',
+  -   'fig-warn': '#8f5f00',
+  -   'fig-warn-soft': '#f3e6cc',
+  -   'on-accent': '#ffffff',
+  -   'stage-active': '#12766e',
+  -   'stage-blocked': '#b93636',
+  -   'stage-done': '#343434',
+  -   'stage-planned': '#5e052c',
+  -   'stage-review': '#3860ac',
+  -   'stage-warning': '#8f5f00',
+  -   'surface-raised': '#fdfdfd',
+  -   'surface-subtle': '#ececec',
+  -   'text-muted': '#545454',
+  -   accent: '#12766e',
+  -   border: '#e1e1e1',
+  -   canvas: '#f4f4f4',
+  -   chrome: '#ececec',
+  -   danger: '#b93636',
+  -   focus: '#12766e',
+  -   panel: '#f4f4f4',
+  -   paper: '#fdfdfd',
+  -   positive: '#2b7f4f',
+  -   surface: '#fafafa',
+  -   text: '#1c1c1c',
+  -   warning: '#8f5f00'
+    }
+  
+      at TestContext.<anonymous> (file:///Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1162/assets/base/agents/skills/cf-present/resources/design-system/source/generate.test.ts:16:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { canvas: 'var(--cf-colour-f6f6f6)', surface: 'var(--cf-colour-ffffff)', 'surface-raised': 'var(--cf-colour-ffffff)', 'surface-subtle': 'var(--cf-colour-ececec)', text: 'var(--cf-colour-1b1b1b)', 'text-muted': 'var(--cf-colour-5e5e5e)', border: 'var(--cf-colour-e3e3e3)', 'border-strong': 'var(--cf-colour-c6c6c6)', accent: 'var(--cf-colour-12766e)', 'accent-strong': 'var(--cf-colour-0d5d57)', 'accent-soft': 'var(--cf-colour-dcefec)', focus: 'var(--cf-colour-12766e)', positive: 'var(--cf-colour-2b7f4f)', warning: 'var(--cf-colour-8f5f00)', danger: 'var(--cf-colour-b93636)', 'diagram-line': 'var(--cf-colour-343434)', 'on-accent': 'var(--cf-colour-ffffff)', 'fig-line': 'var(--cf-colour-343434)', 'fig-line-mid': 'var(--cf-colour-5e5e5e)', 'fig-line-soft': 'var(--cf-colour-9a9a9a)', 'fig-fill': 'var(--cf-colour-ececec)', 'fig-hatch': 'var(--cf-colour-c6c6c6)', 'fig-accent': 'var(--cf-colour-12766e)', 'fig-accent-soft': 'var(--cf-colour-dcefec)', 'fig-warn': 'var(--cf-colour-8f5f00)', 'fig-warn-soft': 'var(--cf-colour-f3e6cc)', 'fig-stop': 'var(--cf-colour-b93636)' },
+    expected: { canvas: '#f4f4f4', surface: '#fafafa', 'surface-raised': '#fdfdfd', 'surface-subtle': '#ececec', text: '#1c1c1c', 'text-muted': '#545454', border: '#e1e1e1', 'border-strong': '#c4c4c4', positive: '#2b7f4f', warning: '#8f5f00', danger: '#b93636', 'diagram-line': '#343434', 'fig-line': '#343434', 'fig-line-mid': '#5e5e5e', 'fig-line-soft': '#9a9a9a', 'fig-fill': '#ececec', 'fig-hatch': '#c6c6c6', 'fig-warn': '#8f5f00', 'fig-warn-soft': '#f3e6cc', 'fig-stop': '#b93636', 'fig-cat1': '#3860ac', 'fig-cat1-soft': '#e4edfe', 'fig-cat2': '#5e052c', 'fig-cat2-soft': '#f0d5e3', paper: '#fdfdfd', panel: '#f4f4f4', chrome: '#ececec', accent: '#12766e', 'accent-strong': '#0e5e58', 'accent-soft': '#e3edec', focus: '#12766e', 'on-accent': '#ffffff', 'fig-accent': '#12766e', 'fig-accent-soft': '#e3edec', 'stage-done': '#343434', 'stage-active': '#12766e', 'stage-review': '#3860ac', 'stage-planned': '#5e052c', 'stage-warning': '#8f5f00', 'stage-blocked': '#b93636' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at assets/base/agents/skills/cf-present/resources/design-system/source/lint.test.ts:19:1
+✖ value-named colour properties cannot disguise palette literals (14.507916ms)
+  AssertionError [ERR_ASSERTION]: a{color:var(--cf-colour-fff)}
+      at TestContext.<anonymous> (file:///Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1162/assets/base/agents/skills/cf-present/resources/design-system/source/lint.test.ts:21:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

@@ -15,3 +15,8 @@ test('every authored style template is free of colour, size and radius literals'
 });
 
 test('pseudo-highlight selectors are not named colour declarations', () => assert.deepEqual(styleLiterals('::highlight(notes){color:var(--ink)}'), []));
+
+test('value-named colour properties cannot disguise palette literals', () => {
+  for (const css of ['a{color:var(--cf-colour-fff)}', ':root{--cf-colour-aabbcc:var(--cf-text)}'])
+    assert.ok(styleLiterals(css).length, css);
+});
