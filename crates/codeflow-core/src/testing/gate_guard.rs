@@ -378,9 +378,10 @@ fn probe_lock_dir(dir: &Path) -> std::io::Result<()> {
 pub fn probe_git_config_write(project_dir: &Path) -> (PathBuf, std::io::Result<()>) {
     // The shared root comes from a validated registration, found without
     // opening the repository (which would read the config file, and block on
-    // a pipe in its place).
-    let common = match crate::hooks::repo::shared_git_dir(project_dir) {
-        Ok(common) => common,
+    // a pipe in its place). The probe works through the handle validation
+    // opened and never resolves the path again.
+    let tree = match crate::hooks::repo::shared_git_tree(project_dir) {
+        Ok(tree) => tree,
         Err(error) => {
             return (
                 project_dir.to_path_buf(),
@@ -390,25 +391,26 @@ pub fn probe_git_config_write(project_dir: &Path) -> (PathBuf, std::io::Result<(
             )
         }
     };
-    let config = common.join("config");
-    let result = crate::contained::Tree::open(&common).and_then(|tree| {
-        tree.create_new("config.lock", b"")?;
-        // An anchored append open of the existing regular file: it neither
-        // creates, truncates nor writes, follows no link, and never blocks
-        // on a special file. It asks the system whether this process may
-        // write the file, and changes nothing.
-        let opened = tree.open_regular_for_append("config").map(drop);
-        let released = tree.remove("config.lock");
-        match (opened, released) {
-            (Ok(()), released) => released,
-            (Err(opened), Ok(())) => Err(opened),
-            (Err(opened), Err(released)) => Err(std::io::Error::new(
-                opened.kind(),
-                format!("{opened}; the lock file was also not removed: {released}"),
-            )),
-        }
-    });
-    (config, result)
+    (tree.path().join("config"), probe_config_in(&tree))
+}
+
+/// The probe steps on the validated shared root `tree`.
+fn probe_config_in(tree: &crate::contained::Tree) -> std::io::Result<()> {
+    tree.create_new("config.lock", b"")?;
+    // An anchored append open of the existing regular file: it neither
+    // creates, truncates nor writes, follows no link, and never blocks on a
+    // special file. It asks the system whether this process may write the
+    // file, and changes nothing.
+    let opened = tree.open_regular_for_append("config").map(drop);
+    let released = tree.remove("config.lock");
+    match (opened, released) {
+        (Ok(()), released) => released,
+        (Err(opened), Ok(())) => Err(opened),
+        (Err(opened), Err(released)) => Err(std::io::Error::new(
+            opened.kind(),
+            format!("{opened}; the lock file was also not removed: {released}"),
+        )),
+    }
 }
 
 /// What a builder seat has to write outside its worktree (TSK-337), each
@@ -2423,6 +2425,102 @@ mod tests {
             assert!(result.is_err(), "{forged} mismatch was accepted");
             assert_eq!(listing(tmp.path()), before, "{forged}");
             assert_eq!(listing(other.path()), other_before, "{forged}");
+        }
+    }
+
+    /// A common directory reached through an alias of the registrations
+    /// folder is not the physical parent of the registration: refused with
+    /// the disagreement named, and no lock is left in either place.
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_refuses_a_common_directory_reached_through_an_alias() {
+        let (real, linked) = linked_fixture();
+        let alias_root = tempfile::tempdir().unwrap();
+        let common = alias_root.path().join("b");
+        std::fs::create_dir_all(common.join("objects")).unwrap();
+        std::fs::create_dir_all(common.join("refs")).unwrap();
+        std::os::unix::fs::symlink(
+            real.path().join(".git").join("worktrees"),
+            common.join("worktrees"),
+        )
+        .unwrap();
+        let admin = real.path().join(".git").join("worktrees").join("linked");
+        std::fs::write(admin.join("commondir"), format!("{}\n", common.display())).unwrap();
+        let before = listing(alias_root.path());
+        let real_before = listing(real.path());
+        let (_, result) = probe_git_config_write(&linked);
+        let error = result.expect_err("an alias was accepted as the common directory");
+        assert!(
+            error
+                .to_string()
+                .contains("disagrees with its registration"),
+            "{error}"
+        );
+        assert_eq!(listing(alias_root.path()), before);
+        assert_eq!(listing(real.path()), real_before);
+    }
+
+    /// The probe works through the directory validation opened: a path
+    /// swapped for a link after validation moves nothing.
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_keeps_the_directory_it_validated() {
+        let (tmp, git_dir) = config_fixture();
+        let other = tempfile::tempdir().unwrap();
+        std::fs::write(other.path().join("config"), "other").unwrap();
+        let tree = crate::hooks::repo::shared_git_tree(tmp.path()).unwrap();
+        // Between validation and the probe the git folder is renamed away
+        // and its old name becomes a link to an unrelated folder.
+        let moved = tmp.path().join("moved-git");
+        std::fs::rename(&git_dir, &moved).unwrap();
+        std::os::unix::fs::symlink(other.path(), &git_dir).unwrap();
+        // A fresh resolution of the validated path lands in the other folder:
+        // the race is real for any caller that re-resolves it.
+        assert!(crate::contained::Tree::open(tree.path())
+            .unwrap()
+            .metadata("config")
+            .is_ok_and(|m| m.len() == 5));
+        let before = listing(other.path());
+        probe_config_in(&tree).unwrap();
+        assert_eq!(
+            listing(other.path()),
+            before,
+            "the probe left the validated folder"
+        );
+        assert_eq!(
+            std::fs::read_to_string(other.path().join("config")).unwrap(),
+            "other"
+        );
+        assert!(!moved.join("config.lock").exists());
+        assert!(moved.join("config").is_file());
+    }
+
+    /// A marker that is a pipe or a link when the probe reads it is refused
+    /// without blocking: the read is one open that follows nothing.
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_refuses_a_marker_that_is_a_pipe_or_a_link() {
+        for kind in ["pipe", "link"] {
+            for marker in ["commondir", "gitdir"] {
+                let (tmp, linked) = linked_fixture();
+                let admin = tmp.path().join(".git").join("worktrees").join("linked");
+                let original = std::fs::read(admin.join(marker)).unwrap();
+                std::fs::remove_file(admin.join(marker)).unwrap();
+                if kind == "pipe" {
+                    let path =
+                        std::ffi::CString::new(admin.join(marker).to_str().unwrap()).unwrap();
+                    // SAFETY: a valid NUL-terminated path.
+                    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+                } else {
+                    let target = tmp.path().join("real-marker");
+                    std::fs::write(&target, original).unwrap();
+                    std::os::unix::fs::symlink(&target, admin.join(marker)).unwrap();
+                }
+                let before = listing(tmp.path());
+                let result = probe_with_deadline(&linked);
+                assert!(result.is_err(), "{kind} {marker} was accepted");
+                assert_eq!(listing(tmp.path()), before, "{kind} {marker}");
+            }
         }
     }
 

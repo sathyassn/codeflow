@@ -512,19 +512,17 @@ fn judge(
     violations
 }
 
+/// The path of this lint, which quotes URLs to explain itself and to test the
+/// reader. Exactly this file under `crates/` is not scanned.
+const SELF: &str = "codeflow-core/tests/test_remotes_contract.rs";
+
 /// The Rust sources under `dir`, found without following a link. Every
-/// failure to list a folder and every link is added to `problems`, so a
-/// source cannot hide behind an unreadable folder or an alias. A missing
-/// `dir` is an error unless `may_be_missing` (a crate with no `tests`).
-fn rust_files(
-    dir: &Path,
-    may_be_missing: bool,
-    out: &mut Vec<PathBuf>,
-    problems: &mut Vec<String>,
-) {
+/// failure to list a folder, every link and every source that is not a
+/// regular file is added to `problems`, so a source cannot hide behind an
+/// unreadable folder or an alias.
+fn rust_files(dir: &Path, out: &mut Vec<PathBuf>, problems: &mut Vec<String>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
-        Err(error) if may_be_missing && error.kind() == std::io::ErrorKind::NotFound => return,
         Err(error) => {
             problems.push(format!("{}: cannot list folder ({error})", dir.display()));
             return;
@@ -545,11 +543,37 @@ fn rust_files(
                 "{}: a link in the source tree is refused, never followed",
                 path.display()
             )),
-            Ok(kind) if kind.is_dir() => rust_files(&path, false, out, problems),
-            Ok(_) if path.extension().is_some_and(|ext| ext == "rs") => out.push(path),
-            Ok(_) => {}
+            Ok(kind) if kind.is_dir() => rust_files(&path, out, problems),
+            Ok(kind) if kind.is_file() => {
+                if path.extension().is_some_and(|ext| ext == "rs") {
+                    out.push(path);
+                }
+            }
+            Ok(_) => problems.push(format!(
+                "{}: neither a folder nor a regular file",
+                path.display()
+            )),
             Err(error) => problems.push(format!("{}: cannot inspect ({error})", path.display())),
         }
+    }
+}
+
+/// One source root of a crate (`src` or `tests`), inspected without
+/// following a link first. Only a genuinely absent root is skipped; a link
+/// (dangling or not), a file or an uninspectable root is a problem.
+fn source_root(root: &Path, out: &mut Vec<PathBuf>, problems: &mut Vec<String>) {
+    match std::fs::symlink_metadata(root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => problems.push(format!("{}: cannot inspect ({error})", root.display())),
+        Ok(metadata) if metadata.file_type().is_symlink() => problems.push(format!(
+            "{}: a link in the source tree is refused, never followed",
+            root.display()
+        )),
+        Ok(metadata) if metadata.is_dir() => rust_files(root, out, problems),
+        Ok(_) => problems.push(format!(
+            "{}: a source root must be a folder",
+            root.display()
+        )),
     }
 }
 
@@ -566,8 +590,8 @@ fn collect_sources(crates: &Path) -> (Vec<PathBuf>, Vec<String>) {
                         let krate = entry.path();
                         match entry.file_type() {
                             Ok(kind) if kind.is_dir() => {
-                                rust_files(&krate.join("src"), true, &mut files, &mut problems);
-                                rust_files(&krate.join("tests"), true, &mut files, &mut problems);
+                                source_root(&krate.join("src"), &mut files, &mut problems);
+                                source_root(&krate.join("tests"), &mut files, &mut problems);
                             }
                             Ok(kind) if kind.is_symlink() => problems.push(format!(
                                 "{}: a link in the source tree is refused, never followed",
@@ -595,16 +619,14 @@ fn collect_sources(crates: &Path) -> (Vec<PathBuf>, Vec<String>) {
     (files, problems)
 }
 
-#[test]
-fn no_test_registers_a_remote_on_the_network() {
-    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let (files, mut unexpected) = collect_sources(&crates);
-    assert!(files.len() > 100, "the lint found {} sources", files.len());
+/// The sources under `crates` and the violations the lint reports for them.
+fn lint_tree(crates: &Path) -> (usize, Vec<String>) {
+    let (files, mut unexpected) = collect_sources(crates);
     let mut found: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut skipped = Vec::new();
     for file in &files {
         let shown = file
-            .strip_prefix(&crates)
+            .strip_prefix(crates)
             .unwrap_or(file)
             .to_string_lossy()
             .replace('\\', "/");
@@ -616,6 +638,9 @@ fn no_test_registers_a_remote_on_the_network() {
             unexpected.push(format!("{shown}: a secret-named file not in UNREAD"));
             continue;
         }
+        if shown == SELF {
+            continue;
+        }
         let bytes = match std::fs::read(file) {
             Ok(bytes) => bytes,
             Err(error) => {
@@ -623,10 +648,6 @@ fn no_test_registers_a_remote_on_the_network() {
                 continue;
             }
         };
-        // This file quotes URLs to explain itself and to test the reader.
-        if shown.ends_with("tests/test_remotes_contract.rs") {
-            continue;
-        }
         for (_, host, _) in scan_text(&String::from_utf8_lossy(&bytes)) {
             *found
                 .entry(shown.clone())
@@ -644,6 +665,14 @@ fn no_test_registers_a_remote_on_the_network() {
             violations.push(format!("UNREAD entry {path} matches no source; remove it"));
         }
     }
+    (files.len(), violations)
+}
+
+#[test]
+fn no_test_registers_a_remote_on_the_network() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let (sources, violations) = lint_tree(&crates);
+    assert!(sources > 100, "the lint found {sources} sources");
     assert!(
         violations.is_empty(),
         "a test registers a remote on the network, which a Codex builder seat blocks and aborts on; \
@@ -836,5 +865,86 @@ fn the_walk_refuses_an_unreadable_folder_and_a_link() {
             .iter()
             .any(|p| p.contains("folder") && p.contains("link")),
         "{problems:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_walk_refuses_a_linked_or_dangling_source_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("elsewhere");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::write(real.join("lib.rs"), "fn a() {}").unwrap();
+    let krate = tmp.path().join("crates").join("one");
+    std::fs::create_dir_all(&krate).unwrap();
+    let crates = tmp.path().join("crates");
+    // A crate with neither root is fine: the roots are genuinely absent.
+    let (files, problems) = collect_sources(&crates);
+    assert!(
+        files.is_empty() && problems.is_empty(),
+        "{files:?} {problems:?}"
+    );
+    // A linked root is refused and its target is not walked.
+    std::os::unix::fs::symlink(&real, krate.join("src")).unwrap();
+    let (files, problems) = collect_sources(&crates);
+    assert!(files.is_empty(), "the link was followed: {files:?}");
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.ends_with("one/src: a link in the source tree is refused, never followed")),
+        "{problems:?}"
+    );
+    // A dangling link is not an absent root.
+    std::os::unix::fs::symlink(tmp.path().join("nowhere"), krate.join("tests")).unwrap();
+    let (_, problems) = collect_sources(&crates);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("one/tests") && p.contains("link")),
+        "{problems:?}"
+    );
+    // A file where a root belongs is refused too.
+    std::fs::remove_file(krate.join("tests")).unwrap();
+    std::fs::write(krate.join("tests"), "x").unwrap();
+    let (_, problems) = collect_sources(&crates);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("one/tests") && p.contains("must be a folder")),
+        "{problems:?}"
+    );
+}
+
+#[test]
+fn only_this_exact_file_is_exempt_from_the_scan() {
+    let tmp = tempfile::tempdir().unwrap();
+    let crates = tmp.path();
+    // The same file name in another crate registers a network remote.
+    let other = crates.join("another-crate").join("tests");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(
+        other.join("test_remotes_contract.rs"),
+        "fn t() { Fixture::new(\"https://outside.invalid/x.git\"); }",
+    )
+    .unwrap();
+    // This lint's own path is exempt.
+    let own = crates.join("codeflow-core").join("tests");
+    std::fs::create_dir_all(&own).unwrap();
+    std::fs::write(
+        own.join("test_remotes_contract.rs"),
+        "fn t() { Fixture::new(\"https://quoted.invalid/x.git\"); }",
+    )
+    .unwrap();
+    let (_, violations) = lint_tree(crates);
+    assert!(
+        violations.iter().any(
+            |v| v.contains("another-crate/tests/test_remotes_contract.rs")
+                && v.contains("outside.invalid")
+        ),
+        "{violations:?}"
+    );
+    assert!(
+        !violations.iter().any(|v| v.contains("quoted.invalid")),
+        "{violations:?}"
     );
 }

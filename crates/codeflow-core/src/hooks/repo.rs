@@ -893,84 +893,103 @@ fn check_common_directory(repo: &Repository) -> Result<(), String> {
     Ok(())
 }
 
-/// The text of a small regular marker file, never through a link and never
-/// more than 4 KiB.
-fn small_marker(path: &Path, what: &str) -> Result<String, String> {
-    use std::io::Read;
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|error| format!("cannot inspect {what}: {error}"))?;
-    if !metadata.file_type().is_file() || metadata.len() > 4096 {
-        return Err(format!("{what} must be a small regular file"));
-    }
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .and_then(|file| file.take(4096).read_to_end(&mut bytes))
+/// The text of a small marker file in `tree`, read through the held handle:
+/// at most 4 KiB, never through a link, never blocking on a special file, and
+/// the type checked on the opened descriptor.
+fn small_marker(tree: &crate::contained::Tree, name: &str, what: &str) -> Result<String, String> {
+    let bytes = tree
+        .read(name, 4096)
         .map_err(|error| format!("cannot read {what}: {error}"))?;
     String::from_utf8(bytes.trim_ascii_end().to_vec())
         .map_err(|_| format!("{what} is not valid text"))
 }
 
-/// The git directory that holds the shared config for the checkout holding
+/// The tree that holds the shared config for the checkout holding
 /// `project_dir`, found without opening the repository (opening reads its
 /// config, which can block on a pipe in its place).
 ///
 /// An ordinary git directory is its own shared root. A linked worktree's
 /// administrative directory is accepted only when its registration is real:
-/// its `commondir` file names a common directory that physically contains
-/// `worktrees/<name>`, its `gitdir` file names the checkout's `.git` marker,
-/// and that checkout's marker names this administrative directory. Any
-/// disagreement refuses before a caller creates a file.
+///
+/// - its `commondir` file names a common directory that is physically the
+///   grandparent of the administrative directory (`<common>/worktrees/<name>`
+///   with the middle folder named `worktrees`), so an alias cannot stand in;
+/// - its `gitdir` file names the checkout's `.git` marker;
+/// - that checkout's marker names this administrative directory.
+///
+/// The returned tree is the handle opened here: the caller works through it
+/// and never re-resolves a path, so a rename or link swapped in afterwards
+/// cannot move the work to another directory. Every marker is read through a
+/// held handle, bounded, without following a link or blocking on a pipe.
+/// Any disagreement refuses before a caller creates a file.
 ///
 /// # Errors
 ///
 /// When no git directory is found, a marker is not a small regular file, or
 /// the registration, common directory and checkout disagree.
-pub fn shared_git_dir(project_dir: &Path) -> Result<PathBuf, String> {
+pub(crate) fn shared_git_tree(project_dir: &Path) -> Result<crate::contained::Tree, String> {
+    use crate::contained::Tree;
     let found = Repository::discover_path(project_dir, [] as [&Path; 0])
         .map_err(|error| error.message().to_string())?;
-    let admin = canonical(&found, "git directory")?;
-    let commondir = admin.join("commondir");
-    if crate::absence::proven_absent(&commondir)
-        .map_err(|error| format!("cannot inspect commondir: {error}"))?
-    {
-        return Ok(admin);
+    let admin =
+        Tree::open(&found).map_err(|error| format!("cannot open git directory: {error}"))?;
+    match admin.metadata("commondir") {
+        Ok(_) => {}
+        // No commondir in the held directory: an ordinary git directory.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(admin),
+        Err(error) => return Err(format!("cannot inspect commondir: {error}")),
     }
-    let named = small_marker(&commondir, "commondir")?;
+    let named = small_marker(&admin, "commondir", "commondir")?;
     if named.is_empty() {
         return Err("commondir is empty".into());
     }
-    let common = canonical(&admin.join(&named), "common directory")?;
     let registrations = admin
+        .path()
         .parent()
-        .ok_or("worktree has no registration directory")?;
-    if canonical(&common.join("worktrees"), "registration directory")? != registrations
-        || !common.join("objects").is_dir()
-        || !common.join("refs").is_dir()
-    {
+        .filter(|parent| parent.file_name().is_some_and(|name| name == "worktrees"))
+        .ok_or("worktree administrative directory is not under `worktrees`")?;
+    let physical = registrations
+        .parent()
+        .ok_or("worktree registration has no common directory")?;
+    let common = Tree::open(&admin.path().join(&named))
+        .map_err(|error| format!("cannot open common directory: {error}"))?;
+    if common.path() != physical {
         return Err("worktree common directory disagrees with its registration".into());
+    }
+    for folder in ["objects", "refs"] {
+        if !common.metadata(folder).is_ok_and(|m| m.is_dir()) {
+            return Err(format!("common directory has no `{folder}` folder"));
+        }
     }
     // The registration names the checkout's marker, and that marker names
     // this administrative directory.
-    let registered = registered_marker(&admin)?;
+    let registered = registered_marker_from(
+        admin.path(),
+        small_marker(&admin, "gitdir", "worktree registration")?.as_bytes(),
+    )?;
     let mut checkout = None;
     for dir in project_dir.ancestors() {
         if std::fs::symlink_metadata(dir.join(".git")).is_ok() {
-            checkout = Some(canonical(dir, "checkout")?);
+            checkout = Some(
+                Tree::open(dir).map_err(|error| format!("cannot open the checkout: {error}"))?,
+            );
             break;
         }
     }
     let checkout = checkout.ok_or("no checkout marker above the project")?;
-    let marker = checkout.join(".git");
-    if canonical(&registered, "registered checkout marker")? != marker {
+    if registered != checkout.path().join(".git") {
         return Err("worktree registration names a different checkout".into());
     }
-    let text = small_marker(&marker, "checkout marker")?;
+    let text = small_marker(&checkout, ".git", "checkout marker")?;
     let target = text
         .strip_prefix("gitdir:")
         .map(str::trim_ascii)
         .filter(|target| !target.is_empty())
         .ok_or("checkout marker does not name a git directory")?;
-    if canonical(&checkout.join(target), "checkout git directory")? != admin {
+    let named = checkout.path().join(target);
+    let named = Tree::open(&named)
+        .map_err(|error| format!("cannot open checkout git directory: {error}"))?;
+    if named.path() != admin.path() {
         return Err("checkout marker names a different git directory".into());
     }
     Ok(common)
@@ -995,14 +1014,17 @@ pub(super) fn registrations(repo: &Repository) -> Result<Vec<PathBuf>, String> {
 
 /// The normalized marker named by a regular registration file.
 pub(super) fn registered_marker(admin: &Path) -> Result<PathBuf, String> {
-    let file = admin.join("gitdir");
-    let metadata = std::fs::symlink_metadata(&file)
-        .map_err(|error| format!("cannot inspect worktree registration: {error}"))?;
-    if !metadata.file_type().is_file() {
-        return Err("worktree registration must be a regular file".into());
-    }
-    let text = std::fs::read(&file)
+    // One bounded read: no link followed, no wait on a pipe, the type checked
+    // on the opened descriptor (a path inspected and then reopened could be
+    // swapped in between).
+    let text = crate::bounded_file::read_bounded_regular(&admin.join("gitdir"), 4096)
         .map_err(|error| format!("cannot read worktree registration: {error}"))?;
+    registered_marker_from(admin, &text)
+}
+
+/// The normalized marker a registration's text names, relative to `admin`
+/// when the text is relative.
+fn registered_marker_from(admin: &Path, text: &[u8]) -> Result<PathBuf, String> {
     let text = text.trim_ascii_end();
     let root = text
         .strip_suffix(b"/.git")
