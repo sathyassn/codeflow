@@ -1,0 +1,11 @@
+id = "TSK-1253"
+uid = "17e15e2d-0409-4fa9-9ab4-91faf686023b"
+kind = "TSK"
+title = "Tests that wait on a fake remote or child process tolerate a loaded runner"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T22:01:23Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
