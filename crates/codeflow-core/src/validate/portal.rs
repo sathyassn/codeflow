@@ -855,6 +855,7 @@ pub fn validate_portal_with(
                 source_blobs: &source_blobs,
                 rendered: &rendered_by_route,
                 lookup_inputs,
+                has_capability_records: expected.has_capability_records,
             },
             &mut report,
         );
@@ -1838,6 +1839,10 @@ fn expected_portal_pages(
     Some(ExpectedPortalContent {
         pages: derive_expected_routes(&selected, contract, report),
         record_ids: pointed_record_ids(&records, contract),
+        has_capability_records: records.iter().any(|record| {
+            record.path.starts_with("docs/capabilities/")
+                && record.path != "docs/capabilities/vocabulary.yaml"
+        }),
     })
 }
 
@@ -1887,6 +1892,7 @@ fn digits(value: &str, minimum: usize) -> bool {
 
 #[derive(Default)]
 struct ExpectedPortalContent {
+    has_capability_records: bool,
     pages: BTreeMap<String, String>,
     record_ids: BTreeSet<String>,
 }
