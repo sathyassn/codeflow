@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Controls for scripts/ci-reuse.py (TSK-265 AC-4).
+"""Controls for scripts/ci-reuse.py (TSK-265 AC-4, TSK-359 AC-2 and AC-3).
 
-A push reuses a pull request run's verdict only on an exact match: one
-merged pull request, the same tree, main before the merge inside the head,
-no cache input changed, and the head's newest codeflow-ci pull_request run
-green in every job. Each other case runs every job.
+A push to main or an integration line reuses a pull request run's verdict
+only on an exact match: one merged pull request into that line, the same
+tree, the line before the merge inside the head, no cache input changed, the
+newest codeflow-ci pull_request run of that pull request into that line green
+in every job, and that run's own provenance record naming the same pull
+request, line, head, tree, workflow blob and runner image. Each other case
+runs every job.
 """
 
 import importlib.util
@@ -14,6 +17,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -29,10 +33,33 @@ PUSH_ONLY = {"reuse a pull request verdict"}
 MAIN_REF = "refs/heads/main"
 APT_KEY = "playwright-apt-ubuntu24-20261005.1-1.56.1"
 REQUIRED = {"codeflow gates", "windows"}
+LINE = "integration/EPC-022-the-3-2-0-milestone-fixes"
+LINE_REF = f"refs/heads/{LINE}"
+IMAGE = ("ubuntu24", "20261005.1")
+WIN_IMAGE = ("win25", "20261001.2")
+IMAGES = {reuse.PROVENANCE: IMAGE, reuse.PROVENANCE_WINDOWS: WIN_IMAGE}
+BLOB = "d" * 40
+BASE = "e" * 40
+RELEASE_JOB = "codeflow gates (release ${{ matrix.part }})"
+WORKFLOW_TEXT = """name: codeflow-ci
+on:
+  push:
+jobs:
+  reuse:
+    name: reuse a pull request verdict
+    if: github.event_name == 'push'
+  gates-verdict:
+    if: ${{ always() && !(github.event_name == 'pull_request') }}
+    name: codeflow gates
+  windows-verdict:
+    if: ${{ always() }}
+    name: windows
+"""
 
 
 class FakeGit:
-    def __init__(self, trees=None, parents=None, contains=True, changed=()):
+    def __init__(self, trees=None, parents=None, contains=True, changed=(), blob=BLOB):
+        self.blob_id = blob
         self.trees = trees or {PUSHED: "t1", HEAD: "t1"}
         self.parent_list = parents if parents is not None else [MAIN, HEAD]
         self.contains = contains
@@ -40,6 +67,9 @@ class FakeGit:
 
     def tree(self, commit):
         return self.trees[commit]
+
+    def blob(self, commit, path):
+        return self.blob_id
 
     def parents(self, commit):
         return self.parent_list
@@ -59,21 +89,60 @@ GREEN_JOBS = [job("codeflow gates (coverage)"), job("codeflow gates"), job("wind
               job("windows"), job("secret scan"), job("reuse a pull request verdict", "skipped")]
 
 
-def run(**changes):
+def run(base="main", **changes):
     record = {"id": 77, "run_number": 5, "run_attempt": 1, "event": "pull_request", "head_sha": HEAD,
               "path": WORKFLOW, "status": "completed", "conclusion": "success",
-              "pull_requests": [{"number": 95, "base": {"ref": "main"}}]}
+              "pull_requests": [{"number": 95, "base": {"ref": base}}]}
+    record.update(changes)
+    return record
+
+
+def provenance(base="main", windows=False, **changes):
+    record = {"schema": 1, "pull": 95, "base_ref": base, "base_commit": BASE, "head_commit": HEAD,
+              "merge_commit": "f" * 40, "merge_tree": "t1", "workflow": WORKFLOW, "workflow_blob": BLOB,
+              "image_os": (WIN_IMAGE if windows else IMAGE)[0],
+              "image_version": (WIN_IMAGE if windows else IMAGE)[1]}
+    record.update(changes)
+    return record
+
+
+def archive(record, name="provenance.json", extra=()):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as handle:
+        handle.writestr(name, json.dumps(record))
+        for other in extra:
+            handle.writestr(other, "{}")
+    return buffer.getvalue()
+
+
+def artifact(run_id=77, head=HEAD, windows=False, **changes):
+    record = {"id": (1900 if windows else 900) + run_id,
+              "name": reuse.PROVENANCE_WINDOWS if windows else reuse.PROVENANCE, "expired": False, "size_in_bytes": 400,
+              "workflow_run": {"id": run_id, "head_sha": head}}
     record.update(changes)
     return record
 
 
 class FakeApi:
-    def __init__(self, pulls=None, runs=None, jobs=None, caches=None):
+    def __init__(self, pulls=None, runs=None, jobs=None, caches=None, base="main", artifacts=None, zips=None):
         self.cache_list = caches if caches is not None else [{"key": APT_KEY, "ref": MAIN_REF}]
         self.pull_list = pulls if pulls is not None else [
-            {"number": 95, "merged_at": "2026-10-11T00:43:00Z", "merge_commit_sha": PUSHED, "head": {"sha": HEAD}}]
-        self.run_list = runs if runs is not None else [run()]
+            {"number": 95, "merged_at": "2026-10-11T00:43:00Z", "merge_commit_sha": PUSHED, "head": {"sha": HEAD},
+             "base": {"ref": base}}]
+        self.run_list = runs if runs is not None else [run(base)]
         self.job_lists = jobs if jobs is not None else {77: GREEN_JOBS}
+        self.artifact_lists = artifacts if artifacts is not None else {77: [artifact(), artifact(windows=True)]}
+        self.zips = zips if zips is not None else {977: archive(provenance(base)),
+                                                   1977: archive(provenance(base, windows=True))}
+
+    def artifacts(self, run_id):
+        result = self.artifact_lists.get(run_id, [])
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def artifact_zip(self, artifact_id):
+        return self.zips[artifact_id]
 
     def pulls(self, sha):
         return self.pull_list
@@ -90,9 +159,10 @@ class FakeApi:
         return self.cache_list
 
 
-def decide(event="push", git=None, api=None, ref=MAIN_REF):
+def decide(event="push", git=None, api=None, ref=MAIN_REF, images=None, text=WORKFLOW_TEXT, line_skips=None):
+    skips = frozenset({RELEASE_JOB}) if line_skips is None else line_skips
     return reuse.decide(event, PUSHED, WORKFLOW, PUSH_ONLY, REQUIRED, git or FakeGit(), api or FakeApi(),
-                        APT_KEY, ref)
+                        APT_KEY, ref, images or IMAGES, text, skips)
 
 
 class DecisionTests(unittest.TestCase):
@@ -107,12 +177,23 @@ class DecisionTests(unittest.TestCase):
     def test_a_pull_request_run_never_reuses(self):
         self.assertIn("pull_request run never reuses", self.skipped(event="pull_request"))
 
-    def test_a_push_to_any_ref_but_main_runs_everything(self):
+    def test_a_push_to_any_ref_but_main_or_a_line_runs_everything(self):
         # Every other input matches, the cache included, so only the ref refuses.
-        for ref in ("refs/heads/integration/EPC-1", "refs/heads/master", "refs/heads/main-old", "main"):
+        for ref in ("refs/heads/integration/", "refs/heads/master", "refs/heads/main-old", "main",
+                    "refs/heads/feature/integration/x", "refs/tags/integration/x"):
             with self.subTest(ref=ref):
                 api = FakeApi(caches=[{"key": APT_KEY, "ref": ref}])
-                self.assertIn("only a push to refs/heads/main", self.skipped(api=api, ref=ref))
+                self.assertIn("only a push to refs/heads/main or", self.skipped(api=api, ref=ref))
+
+    def test_an_integration_line_push_reuses_the_run_of_its_own_pull_request(self):
+        api = FakeApi(base=LINE)
+        self.assertEqual(decide(api=api, ref=LINE_REF), 77)
+
+    def test_a_line_may_rely_on_the_cache_main_holds(self):
+        # A pull request restores caches from its base and from main.
+        self.assertEqual(decide(api=FakeApi(base=LINE), ref=LINE_REF), 77)
+        api = FakeApi(base=LINE, caches=[{"key": APT_KEY, "ref": "refs/heads/other"}])
+        self.assertIn("holds apt cache", self.skipped(api=api, ref=LINE_REF))
 
     def test_a_different_tree_runs_everything(self):
         self.assertIn("differs", self.skipped(git=FakeGit(trees={PUSHED: "t1", HEAD: "t2"})))
@@ -126,13 +207,30 @@ class DecisionTests(unittest.TestCase):
                      ".github/workflows/codeflow-ci.yml"):
             with self.subTest(path=path):
                 self.assertIn("cache inputs", self.skipped(git=FakeGit(changed=["README.md", path])))
-        self.assertEqual(decide(git=FakeGit(changed=["README.md", "scripts/ci-reuse.py"])), 77)
+        self.assertEqual(decide(git=FakeGit(changed=["README.md", "scripts/test_ci_reuse.py"])), 77)
+
+    def test_a_push_that_changes_the_decider_runs_everything(self):
+        # The workflow also pins the decider's hash; either alone refuses.
+        self.assertIn("scripts/ci-reuse.py", self.skipped(git=FakeGit(changed=["README.md", "scripts/ci-reuse.py"])))
+        self.assertTrue(reuse.cache_input("scripts/ci-reuse.py"))
 
     def test_no_pull_request_or_an_unmerged_or_other_one_runs_everything(self):
         for pulls in ([], [{"number": 1, "merged_at": None, "merge_commit_sha": PUSHED, "head": {"sha": HEAD}}],
                       [{"number": 1, "merged_at": "x", "merge_commit_sha": MAIN, "head": {"sha": HEAD}}]):
             with self.subTest(pulls=pulls):
                 self.assertIn("reuse needs exactly one", self.skipped(api=FakeApi(pulls=pulls)))
+
+    def test_two_merged_pull_requests_for_one_commit_run_everything(self):
+        merged = {"number": 95, "merged_at": "x", "merge_commit_sha": PUSHED, "head": {"sha": HEAD},
+                  "base": {"ref": "main"}}
+        self.assertIn("2 merged pull requests", self.skipped(api=FakeApi(pulls=[merged, {**merged, "number": 96}])))
+
+    def test_a_draft_run_whose_verdicts_were_skipped_runs_everything(self):
+        # A draft pull request run ends its verdicts neutral (skipped), and
+        # skips the gate jobs; it must never stand in for a ready run.
+        draft = [job("secret scan"), job("codeflow gates", "skipped"), job("windows", "skipped"),
+                 job("reuse a pull request verdict", "skipped")]
+        self.assertIn("'codeflow gates'", self.skipped(api=FakeApi(jobs={77: draft})))
 
     def test_a_failed_cancelled_running_or_missing_run_runs_everything(self):
         for runs in ([run(conclusion="failure")], [run(conclusion="cancelled")],
@@ -144,23 +242,146 @@ class DecisionTests(unittest.TestCase):
         runs = [run(), run(id=78, run_number=6, conclusion="failure")]
         self.assertIn("run 78", self.skipped(api=FakeApi(runs=runs)))
 
-    def test_a_newer_success_for_another_pull_request_is_not_reused(self):
-        runs = [run(), run(id=78, run_number=6,
-                           pull_requests=[{"number": 96, "base": {"ref": "main"}}])]
-        self.assertIn("merged pull request #95 into main",
-                      self.skipped(api=FakeApi(runs=runs, jobs={77: GREEN_JOBS, 78: GREEN_JOBS})))
+    def test_a_newer_success_for_another_pull_request_is_ignored(self):
+        # The same head, another pull request: the newer run cannot stand in.
+        runs = [run(), run(id=78, run_number=6, pull_requests=[{"number": 96, "base": {"ref": "main"}}],
+                           conclusion="failure")]
+        self.assertEqual(decide(api=FakeApi(runs=runs, jobs={77: GREEN_JOBS, 78: GREEN_JOBS})), 77)
 
-    def test_a_newer_success_into_integration_is_not_reused(self):
-        runs = [run(), run(id=78, run_number=6,
-                           pull_requests=[{"number": 95, "base": {"ref": "integration/epic"}}])]
-        self.assertIn("merged pull request #95 into main",
-                      self.skipped(api=FakeApi(runs=runs, jobs={77: GREEN_JOBS, 78: GREEN_JOBS})))
+    def test_two_pull_requests_with_one_head_and_different_bases_are_told_apart(self):
+        # Head H into line A landed; a newer green run for H into line B exists
+        # with a tree that holds changes absent from H (TSK-359 counterexample).
+        newer = run(LINE, id=78, run_number=6)
+        api = FakeApi(runs=[run(), newer], jobs={77: GREEN_JOBS, 78: GREEN_JOBS},
+                      artifacts={77: [artifact(), artifact(windows=True)], 78: [artifact(78), artifact(78, windows=True)]},
+                      zips={977: archive(provenance()), 1977: archive(provenance(windows=True)),
+                            978: archive(provenance(LINE, merge_tree="t-other"))})
+        self.assertEqual(decide(api=api), 77)
+        only_other = FakeApi(runs=[newer], jobs={78: GREEN_JOBS}, artifacts={78: [artifact(78)]},
+                             zips={978: archive(provenance(LINE, merge_tree="t-other"))})
+        self.assertIn("into main exists", self.skipped(api=only_other))
+
+    def test_a_retargeted_pull_request_does_not_reuse_the_run_for_its_old_base(self):
+        # The run tested the pull request into the old base; it merged into the line.
+        api = FakeApi(base=LINE, runs=[run("main")])
+        self.assertIn(f"into {LINE} exists", self.skipped(api=api, ref=LINE_REF))
+
+    def test_a_pull_request_merged_into_another_line_runs_everything(self):
+        self.assertIn("not 'main'", self.skipped(api=FakeApi(base=LINE)))
+        self.assertIn(f"not {LINE!r}", self.skipped(api=FakeApi(base="main"), ref=LINE_REF))
 
     def test_a_run_without_pull_request_associations_is_not_reused(self):
         for associations in ([], None):
             with self.subTest(associations=associations):
-                self.assertIn("merged pull request #95 into main",
+                self.assertIn("pull_request run of #95 into main",
                               self.skipped(api=FakeApi(runs=[run(pull_requests=associations)])))
+
+    def test_the_skipped_release_job_name_is_the_workflow_text_unexpanded(self):
+        # The script, not a shell argument, holds the name, so Actions never
+        # evaluates the `${{ }}`. GitHub records the skipped matrix job under
+        # its `name:` text as written (run 41335856425).
+        workflow = (ROOT / ".github" / "workflows" / "codeflow-ci.yml").read_text()
+        self.assertIn(f"    name: {RELEASE_JOB}\n", workflow)
+        self.assertEqual(reuse.LINE_SKIPS, frozenset({RELEASE_JOB}))
+        self.assertNotIn("--line-skip", workflow)
+
+    def test_the_release_parts_may_be_skipped_on_a_line_only(self):
+        jobs = [*GREEN_JOBS, job(RELEASE_JOB, "skipped")]
+        default = reuse.decide("push", PUSHED, WORKFLOW, PUSH_ONLY, REQUIRED, FakeGit(), FakeApi(base=LINE, jobs={77: jobs}),
+                               APT_KEY, LINE_REF, IMAGES, WORKFLOW_TEXT)
+        self.assertEqual(default, 77)
+        self.assertEqual(decide(api=FakeApi(base=LINE, jobs={77: jobs}), ref=LINE_REF), 77)
+        self.assertIn("release", self.skipped(api=FakeApi(jobs={77: jobs})))
+        self.assertIn("release", self.skipped(api=FakeApi(base=LINE, jobs={77: jobs}), ref=LINE_REF, line_skips=frozenset()))
+
+
+class ProvenanceTests(unittest.TestCase):
+    def skipped(self, api, **kwargs):
+        with self.assertRaises(reuse.Skip) as caught:
+            decide(api=api, **kwargs)
+        return str(caught.exception)
+
+    def test_a_run_without_a_provenance_artifact_runs_everything(self):
+        self.assertIn("0 ci-provenance artifacts", self.skipped(FakeApi(artifacts={77: []})))
+
+    def test_a_run_without_the_windows_record_runs_everything(self):
+        api = FakeApi(artifacts={77: [artifact()]})
+        self.assertIn("0 ci-provenance-windows", self.skipped(api))
+
+    def test_a_windows_image_other_than_the_push_windows_image_runs_everything(self):
+        for changed in ({"image_os": "win22"}, {"image_version": "20260101.1"}):
+            with self.subTest(changed=changed):
+                api = FakeApi(zips={977: archive(provenance()), 1977: archive(provenance(windows=True, **changed))})
+                self.assertIn("image_", self.skipped(api))
+        self.assertIn("image_", self.skipped(FakeApi(), images={reuse.PROVENANCE: IMAGE}))
+
+    def test_two_provenance_artifacts_or_another_name_run_everything(self):
+        self.assertIn("2 ci-provenance", self.skipped(FakeApi(artifacts={77: [artifact(), artifact(id=5)]})))
+        self.assertIn("0 ci-provenance", self.skipped(FakeApi(artifacts={77: [artifact(name="other")]})))
+
+    def test_an_expired_or_foreign_artifact_runs_everything(self):
+        for changed in ({"expired": True}, {"workflow_run": {"id": 12, "head_sha": HEAD}},
+                        {"workflow_run": {"id": 77, "head_sha": MAIN}}, {"size_in_bytes": 10 ** 9}):
+            with self.subTest(changed=changed):
+                self.skipped(FakeApi(artifacts={77: [artifact(**changed)]}))
+
+    def test_a_record_for_any_other_value_runs_everything(self):
+        for key, value in (("pull", 96), ("base_ref", LINE), ("head_commit", MAIN), ("merge_tree", "t-other"),
+                           ("workflow", ".github/workflows/other.yml"), ("workflow_blob", "0" * 40),
+                           ("image_os", "ubuntu22"), ("image_version", "20260101.1"), ("base_commit", "nope")):
+            with self.subTest(key=key):
+                api = FakeApi(zips={977: archive(provenance(**{key: value}))})
+                self.skipped(api)
+
+    def test_a_record_with_a_missing_or_extra_field_or_schema_runs_everything(self):
+        full = provenance()
+        for record in ({k: v for k, v in full.items() if k != "merge_tree"}, {**full, "extra": 1},
+                       {**full, "schema": 2}, [], "text"):
+            with self.subTest(record=record):
+                self.skipped(FakeApi(zips={977: archive(record)}))
+
+    def test_a_blank_image_runs_everything(self):
+        self.skipped(FakeApi(zips={977: archive(provenance(image_os="", image_version="")),
+                                   1977: archive(provenance(windows=True))}),
+                     images={reuse.PROVENANCE: ("", ""), reuse.PROVENANCE_WINDOWS: WIN_IMAGE})
+
+    def test_a_base_the_head_does_not_contain_runs_everything(self):
+        self.assertIn("does not contain the base", self.skipped(FakeApi(), git=NoRecordedBase()))
+
+    def test_a_bad_archive_runs_everything(self):
+        for blob in (b"not a zip", archive(provenance(), name="other.json"),
+                     archive(provenance(), extra=("more.txt",))):
+            with self.subTest(blob=blob[:10]):
+                self.skipped(FakeApi(zips={977: blob}))
+
+    def test_an_artifact_listing_or_download_error_runs_everything(self):
+        with self.assertRaises(OSError):
+            decide(api=FakeApi(artifacts={77: OSError("HTTP 500")}))
+
+        class Failing(FakeApi):
+            def artifact_zip(self, artifact_id):
+                raise OSError("HTTP 404")
+        self.assertIn("unreadable", self.skipped(Failing()))
+
+    def test_the_verdict_jobs_come_from_the_pushed_workflow(self):
+        self.assertEqual(reuse.verdict_jobs(WORKFLOW_TEXT), {"codeflow gates", "windows"})
+        added = WORKFLOW_TEXT + "  native:\n    name: native platforms\n    if: ${{ always() }}\n"
+        self.assertEqual(reuse.verdict_jobs(added), {"codeflow gates", "windows", "native platforms"})
+        # A verdict the run lacks is not frozen out: the run must hold the new job too.
+        self.assertIn("native platforms", self.skipped(FakeApi(), text=added))
+        # A pushed workflow that lost a required verdict is refused.
+        self.assertIn("no longer has", self.skipped(FakeApi(), text=WORKFLOW_TEXT.replace("windows", "w2")))
+
+    def test_the_gates_never_reused_are_not_verdict_jobs(self):
+        names = reuse.verdict_jobs((ROOT / ".github" / "workflows" / "codeflow-ci.yml").read_text())
+        self.assertTrue({"codeflow gates", "windows"} <= names)
+        for never in ("secret scan", "gitleaks allowlist canary", "security review"):
+            self.assertNotIn(never, names)
+
+
+class NoRecordedBase(FakeGit):
+    def is_ancestor(self, ancestor, commit):
+        return ancestor != BASE
 
     def test_another_workflow_another_event_or_another_head_runs_everything(self):
         for other in (run(path=".github/workflows/codeflow-policy.yml"), run(event="push"),
@@ -184,7 +405,7 @@ class DecisionTests(unittest.TestCase):
                                                     {"key": APT_KEY, "ref": MAIN_REF}])), 77)
 
     def test_a_missing_apt_cache_runs_everything(self):
-        self.assertIn("holds no apt cache", self.skipped(api=FakeApi(caches=[])))
+        self.assertIn("holds apt cache", self.skipped(api=FakeApi(caches=[])))
 
     def test_a_failed_apt_cache_lookup_runs_everything(self):
         self.assertIn("lookup failed", self.skipped(api=FakeApi(caches=OSError("HTTP 403"))))
@@ -194,7 +415,7 @@ class DecisionTests(unittest.TestCase):
                       {"key": APT_KEY + "0", "ref": MAIN_REF},
                       {"key": APT_KEY, "ref": "refs/pull/135/merge"}):
             with self.subTest(cache=cache):
-                self.assertIn("holds no apt cache", self.skipped(api=FakeApi(caches=[cache])))
+                self.assertIn("holds apt cache", self.skipped(api=FakeApi(caches=[cache])))
 
     def test_the_apt_key_is_built_as_the_workflow_builds_it(self):
         self.assertEqual(reuse.apt_cache_key("ubuntu24", "20261005.1", "1.56.1"), APT_KEY)
