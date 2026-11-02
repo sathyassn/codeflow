@@ -12,40 +12,49 @@ it ships.
 Open it from disk in any browser; it needs no server. The hash names a
 view (`prototype.html#blockers`) and the page routes on it when it loads.
 
-Round 2 (2026-11-02, 16:10 to 17:05 EST) folded in the operator's
-feedback (names in words before every identifier, full context on every
-epic card and page, a banner that says what the page is, wall-clock times
-with a zone), the accent decision (deep green in every theme) and the
-independent Codex read's findings M1 to M8, N1 and N2.
+## The rules this build follows
+
+Rebuilt fresh on 2026-11-02 (17:40 to 18:40 EST) after the operator
+rejected the previous build for walls of text. The old build and
+`report.json` were data sources only; no layout was kept.
+
+- No text block over two lines at desktop width outside a closed
+  disclosure (`_src/textlines.cjs` measures every rendered block at 1440
+  and 1280 px; its count must be 0).
+- One point per bullet; a figure is the main view of every flow,
+  comparison and status; every number carries its unit; names come
+  before identifiers; every time is wall clock with a zone.
+- An epic is one line, a strip of three short phrases (delivers, for
+  whom, why now), a figure for progress, and sources in a collapsed
+  disclosure. A task is one line, a stage figure, a strip of eight facts,
+  and the whole Outcome in a disclosure.
 
 ## What to click, in order
 
-1. Overview: the hero opens with what the release delivers and what done
-   means, then the percent with its delta, the three outcome cards (each
-   with what it delivers, for whom and why now), Figure 1 (where the 246
-   tasks are, with its data table), the four streams, the pull requests
-   and a Terms list.
-2. An outcome card opens its topic view: the "What it is" card first
-   (the epic's whole summary, never cut), the context strip, the
-   capability chips, then the tabs Progress (partition, themes), Order
-   (ready, then waiting with the predecessor each waits on) and Issues
-   (blocked tasks and open pull requests). Arrow keys move between tabs.
-3. A theme row opens the theme view; a task row opens the task view with
-   the whole Outcome first, then the eight-fact strip, criteria,
-   dependencies and evidence. The breadcrumb names each level in words.
-4. The rail's second icon shows Epics, Lanes and Evidence; the third shows
-   Your decisions and Script; the utility icons show the ten report kinds
-   (each opens a layout specimen), the docs portal layers, one docs topic
-   with its Concept, Architecture and Technical tabs, and the portal's own
-   "what changed" page.
-5. Your decisions: four form controls, each with context, options, the
-   recommended answer and why. An answer appears in the Script view's
-   second part; the script writes only the answers file.
-6. The gear: Mode, Themes, Accent and Text size. Every theme opens on deep
-   green; the second accent is plum (Graphite, Sage) or violet (Slate).
-   The menu toggle collapses the panel to the rail on desktop and opens a
-   drawer under 768 px. Comment toggles the comments rail and arms the
-   page so a click on any block drops a numbered marker.
+1. Overview: the percent with its change in points, Figure 1 (where the
+   246 tasks are), the three outcome cards, Figure 2 (the four streams
+   at their step), four tiles, and what moved since the previous report.
+2. An outcome card opens its epic view: one line, the strip, the
+   capability chips, then Progress (the partition and the theme bars,
+   each bar opens its theme), Order (ready, then waiting with the
+   predecessor each waits on) and Issues (blocked tasks, open pull
+   requests). Arrow keys move between tabs.
+3. A theme bar opens the theme view; a task row opens the task view: one
+   line, the stage path (todo, pull request, on the line, on main), the
+   eight facts, criteria, dependencies, evidence. The breadcrumb names
+   each level in words.
+4. The rail's second icon: Epics (one card per epic), Lanes (a board by
+   Coordinator and state), Evidence (the coverage matrix). The third:
+   Your decisions and Script. The utility icon: the ten report kinds
+   (nine open as navigable specimens with their own tabs), the docs
+   portal layers, one docs topic whose three tabs each open with a
+   figure, and the portal's "what changed" page.
+5. Your decisions: four questions, each with its options, the
+   recommended one marked, context behind a disclosure. An answer
+   appears in the Script view's second part.
+6. The gear: Mode, Themes, Accent and Text size. Comment toggles the
+   comments rail; under 768 px the button sits at the end of the page
+   instead of over it.
 
 ## How it was built
 
@@ -53,101 +62,94 @@ Everything under `_src/` is the build; nothing in it runs in the product.
 
 | Step | Command (from `_src/`) | What it does |
 |---|---|---|
-| gather | `node gather.cjs` | Reads the task and epic records on `origin/integration/EPC-022-the-3-2-0-milestone-fixes` and on `origin/main`, each record's last change on the line, `gh pr list` and `gh api compare` (read only) and `codeflow work next` from this worktree; writes `facts.json` with the read's start and end time. Run `git fetch origin` first. `--refresh-records` re-reads only the record texts (whole task outcomes, epic summaries, capability names from `docs/capabilities.md`, the docs diff) at the pinned tips, leaving counts, GitHub and `work next` untouched. |
-| report facts | `report.json` (by hand) | The deliverable line, the short names used before each identifier, each epic's for-whom and why-now with its source, streams, lanes, blockers, decisions, owed actions, the glossary, the four walk-through questions and the ten report kinds with their opening figure and reads, each with its source file and line and the time it was read from the trackers. |
-| build | `node build.cjs` | Writes `../prototype.html` (the kit CSS and JS inlined, the data embedded) and `kit/index.html` (the same page linking the kit files, for the workspace navigation test). |
-| render | `node render.cjs` | Captures 22 views at 1440, 1200 and 390 px in light and dark to `../captures/`, scrolled to the top of the page; fails on horizontal scroll, a page error, a paragraph over three lines in a card, a chip or pill that wraps, or clipped text; checks the Slate and Sage themes and the large text size at 1200; drives 24 journeys (drill-down, tabs and arrow keys, about-first views, focus on the new heading, breadcrumbs in words, the gear's focus in and out, docs tabs that open with a figure, every figure's title, description and data table, the nine specimens, the drawer's inert main, phone table labels). |
-| axe | `node axe.cjs` | WCAG 2.x A and AA rules over 16 views at 1440 and 390 px in both modes, plus Slate and Sage and the large size at 1200; counts critical, serious, moderate and minor; fails on serious or critical. |
-| floors | `node floors.cjs` | From the kit's tokens, the sRGB contrast of every stage fill, figure mark and text colour against its surface, per theme, mode and accent, against the 3:1 and 4.5:1 floors. Source-derived numbers, not measurements of the rendered page. |
+| gather | `node gather.cjs` | Reads the task and epic records on `origin/integration/EPC-022-the-3-2-0-milestone-fixes` and on `origin/main`, each record's last change on the line, `gh pr list` and `gh api compare` (read only) and `codeflow work next`; writes `facts.json` with the read's start and end time. `--refresh-records` re-reads only the record texts at the pinned tips. |
+| report facts | `report.json` (by hand) | The deliverable line, names before identifiers, each epic's short phrases (`epicShort`: one line, delivers, for whom, why now, menu label, with its source), streams, lanes, blockers with their short do, why and else (`blockerShort`), decisions, owed actions, terms, the four questions and the ten report kinds, each with its source and read time. |
+| build | `node build.cjs` | Writes `../prototype.html` (kit CSS and JS inlined, data embedded, every view rendered: 316 views) and `kit/index.html` (the same page linking the kit files, for the workspace navigation test). `figures.cjs` holds the docs drawings. |
+| text lines | `node textlines.cjs` | Opens the page from `file://` at 1440 and 1280 px, activates every view with every tab panel shown, and measures the rendered line count of every visible text block; fails on any block over two lines outside a closed disclosure. |
+| render | `node render.cjs` | Opens the page from `file://`; captures 22 views at 1440, 1280, 1200 and 390 px in light and dark to `../captures/` from the top of the page (390 px also full page for the overview, an epic and a task); fails on horizontal scroll, a page error, a wrapped chip, clipped text, or the Comment button over content; checks Graphite, Slate and Sage with the default and large text size at 1200 and 390; drives 33 journeys. |
+| axe | `node axe.cjs` | WCAG 2.x A and AA rules over 17 views at 1440, 1280 and 390 px in both modes, plus Slate and Sage and the large size at 1200; fails on any violation of any impact. |
+| floors | `node floors.cjs` | From the kit's tokens, the sRGB contrast of every stage fill, figure mark and text colour against its surface, per theme, mode and accent. Source-derived numbers, not measurements of the rendered page. |
 
-The facts in the committed page were read from 2026-11-02 13:40 to 13:41
-EST (line tip `aa84d8544`, `main` `b2bb61af3`); the record texts were
-re-read at the same two tips at 16:25 EST and no count changed. The
-tracker facts in `report.json` are from 12:26 EST and carry their own
-times. The change marks compare this read with the 2026-11-01 14:31 EST
-report (`_src/previous-2026-11-01-1431.json` and
-`_src/previous-live-counts-2026-11-01-1431.json`, copies of the workspace
-files that report was built from).
+The facts in the page were read from 2026-11-02 13:40 to 13:41 EST (line
+tip `aa84d8544`, `main` `b2bb61af3`); the record texts were re-read at
+the same tips at 16:25 EST and no count changed. The tracker facts in
+`report.json` were read at 12:26 EST; the blocker evidence is from 12:33
+EST and the Blockers view says so. The change marks compare this read
+with the 2026-11-01 14:31 EST report (`_src/previous-2026-11-01-1431.json`
+and `_src/previous-live-counts-2026-11-01-1431.json`).
 
-The kit (`_src/kit/cf.css`, `cf.js`, `cf-icons.js`) started as the
-workspace kit in `coordination/coordinators/visual-docs/design/after/`
-(workspace commit `d758a9e` plus that day's display gear edits). This
-round edited it, and each edit is for the token source task (TSK-1162) or
-the shell (TSK-1120) to carry or reject:
+The kit (`_src/kit/cf.css`, `cf.js`, `cf-icons.js`) is the round 2 kit:
+the workspace kit of `coordination/coordinators/visual-docs/design/after/`
+plus deep green as every theme's default accent, a `--stage-todo` token,
+secondary text for table headers and tags, focus management for views,
+the gear and the drawer. The page adds its own styles for the figures
+(partition, bars, step dots, path, board, matrix), the fact strips and
+the phone layout; TSK-1162 and TSK-1120 decide what the shipped kit
+carries.
 
-- deep green as the default accent of Slate and Sage, violet or plum as
-  the second (the operator's decision of 2026-11-02);
-- a `--stage-todo` token per theme and mode so the todo fill meets 3:1 on
-  every surface;
-- secondary text (`--text-2`) for table headers, phone column labels and
-  identifier tags, which `--text-3` failed at 4.5:1 on the sunken surface;
-- focus: a new view focuses its heading, the gear moves focus into its
-  dialog and back, the drawer makes the main column inert and returns
-  focus to its toggle;
-- phone tables hide the header row and print each cell's label before it.
+## What is real and what is a specimen
 
-The prototype also lets menu rows wrap where the kit clips them at one
-line, so an epic title is never cut to "..." in the menu. It uses the
-kit's token names (`--accent`, `--ok`, `--paper`); TSK-1162 reconciles
-them with the shipped `--cf-*` names.
-
-## What is real and what is mocked
-
-Real: every count, percent, location, theme, last-moved time, ready and
+Real: every count, percent, location, theme, last-changed time, ready and
 waiting reason, pull request number and state, blocker, lane and decision,
-each with its source in the Evidence view. The themes group an epic's
-tasks by the record section that introduced them (TSK-1095 AC-15); a task
-no amendment introduced reads "Original scope". Each epic's what, for whom
-and why now is quoted from its record at the lines Evidence names.
+each with its source in the Evidence view or the view's own disclosure.
+The themes group an epic's tasks by the record section that introduced
+them (TSK-1095 AC-15). Each epic's short phrases are written from its
+record at the lines the disclosure names; the coordination ledger's "for
+whom" comes from its Outcome because its record has no "It serves"
+sentence, and the disclosure says so.
 
 Specimens, and said so on each page: the nine report kinds other than the
-status report open as layout specimens, with the kind's menu, opening
-figure and strip drawn with labels in place of data. The report and portal
-samples task (TSK-1127) builds the real ones. The docs topic's three
-figures are drawn by hand for this page, not by the shared figure grammar.
+status report open as views with one tab per view kind and layout in
+place of data (figure families drawn with labels, lists, strips, a form,
+a command block). The report and portal samples task (TSK-1127) builds the
+real ones. The docs topic's three figures are drawn by hand, not by the
+shared figure grammar.
 
 Mocked or absent, and said so on the page:
 
-- The runtime chrome: the top bar, menu, gear and Comment button are the
-  kit's prototype code, not `codeflow present`. Comment markers live only
-  in the page.
-- Lane and window per task read `not recorded` on every task view;
-  TSK-1095's fields do not exist on the line yet.
-- Epic verification reads "not recorded on the line" because no epic
-  record on the line carries a verification result.
-- The installed `codeflow` is 3.1.0, whose `status` prints no progress
-  facts, so counts come from the records, read the way the workspace's
-  `live-count.cjs` reads them.
-- GitHub had not computed mergeability for most open pull requests at the
-  read; the Issues tab shows what it returned.
+- The runtime chrome (top bar, menu, gear, Comment) is the kit's
+  prototype code, not `codeflow present`. Comment markers live only in
+  the page.
+- Lane and window per task read `not recorded`; TSK-1095's fields do not
+  exist on the line yet.
+- Epic verification reads "not recorded on the line".
+- GitHub had not computed mergeability for most open pull requests at
+  the read; the Issues tab shows what it returned.
 
-## Checks, last run on the committed page (2026-11-02, 17:03 to 17:06 EST)
+## Checks, last run on the committed page
 
 | Check | Result |
 |---|---|
-| `render.cjs` | 156 renders at 1440, 1200 and 390 in both modes plus the theme and size loop: 0 horizontal scroll, 0 walls, 0 wrapped chips, 0 clipped text, 0 page errors; 24 of 24 journeys pass; 136 captures |
-| `axe.cjs` | 80 view renders: 0 critical, 0 serious, 0 moderate, 0 minor |
+| `textlines.cjs` | 316 views at 1440 and 1280 px, 26 422 text blocks measured, 0 over two lines outside a closed disclosure |
+| `render.cjs` | 248 renders at 1440, 1280, 1200 and 390 px in both modes plus Graphite, Slate and Sage at the default and large size: 0 horizontal scroll, 0 wrapped chips, 0 clipped text, 0 page errors, 0 Comment overlaps; 33 of 33 journeys; 187 captures |
+| `axe.cjs` | 118 view renders: 0 critical, 0 serious, 0 moderate, 0 minor |
 | `floors.cjs` | 228 pairs over 3 themes, 2 modes and 2 accents: 0 under the floor |
-| grep over `prototype.html` | 0 "..." in content; 279 identifier text nodes, every one an `id` tag after a name; 0 identifiers as the only label of a link, button or cell; 0 times without a zone |
-| workspace `textwall-check.cjs` | 0 paragraphs over 3 lines at 1440 and 390, on `prototype.html` and `_src/kit/index.html` |
+| scan of the page text | 19 714 text nodes outside script and style: 0 "..." in content, 0 identifiers as the only label of a link, 0 times without a zone |
+| workspace `textwall-check.cjs` | 0 paragraphs over 3 lines |
 | workspace `nav.test.cjs` on `_src/kit` | 31 of 31 navigation checks pass |
 | workspace `link-check.cjs` | 4 references; the one "missing" is the string `${E(h)}` inside the inlined `cf.js` source, a JavaScript template, not a link |
 
-Captures are `captures/<view>-<1440|1200|390>-<light|dark>.png` for 22
-views, each from the top of the page (the 390 px ones full page), plus
-the Slate and Sage large-size overview, `journey-script-1440-light.png`
-(an answer in the script) and `drawer-390-light.png` (the phone drawer
-open).
+All runs open the page from `file://`; none starts a server. Run on
+2026-11-02 between 18:25 and 18:45 EST.
+
+Captures to look at first: `captures/overview-1440-light.png`,
+`overview-1440-dark.png`, `overview-390-light.png`, `overview-390-dark.png`,
+`o-EPC-022-1440-light.png`, `o-EPC-022-1440-dark.png`,
+`o-EPC-022-390-light.png`, `o-EPC-022-390-dark.png`, and the task view
+`k-TSK-1122-*`; the `-390-*-full.png` copies show the whole phone page.
 
 ## Larger than this round
 
-- The nine specimen kinds carry labels, not data; TSK-1127 builds them
-  on real records.
+- The nine specimen kinds carry layout, not data; TSK-1127 builds them on
+  real records.
 - The docs topic figures are hand-drawn SVG; the shared figure grammar
   should draw them in the product.
-- The kit edits above diverge from the vendored workspace kit; TSK-1162
-  and TSK-1120 decide what the shipped kit carries.
+- The kit and page styles diverge from the vendored workspace kit;
+  TSK-1162 and TSK-1120 decide what ships.
 - The colour floors are computed from tokens, not measured on the
   rendered page; axe's contrast rule is the rendered check.
 - Tracker facts (lanes, blockers, decisions) were not re-read after
-  12:26 EST.
+  12:33 EST.
+- The guidance rules this prototype follows (names before identifiers,
+  context never cut, times with a zone, two-line blocks) are not in the
+  shipped guidance; they move to a skills task in their own PR.

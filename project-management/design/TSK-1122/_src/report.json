@@ -631,5 +631,60 @@
       "d1 to d12",
       "the operator's decisions of 12:07 EST, 2 Nov, listed in Your decisions"
     ]
-  ]
+  ],
+  "epicShort": {
+    "EPC-022": {
+      "oneLine": "The 4.0.0 release: every issue of the plan fixed or settled, landed on one line and merged once into main.",
+      "delivers": "the fixes and settlements of the 4.0.0 plan, on one line",
+      "forWhom": "adopters and contributors running codeflow ci, hooks and guards",
+      "whyNow": "it is the 4.0.0 release itself, renumbered from 3.2.0 on 28 Oct",
+      "source": "EPC-022.md Summary (line 18 to 34 on the line): what it delivers and done means; \"It serves\" sentence",
+      "card": "every plan issue fixed or settled, merged once into main",
+      "menu": "4.0.0 milestone fixes"
+    },
+    "EPC-024": {
+      "oneLine": "Stricter evidence defaults for new projects, the same scans locally as in CI, and more seats.",
+      "delivers": "strict evidence defaults, local scan parity with CI, seat capacity",
+      "forWhom": "adopters starting a project and Coordinators running seats",
+      "whyNow": "its slot is the 4.2.0 epic unless the operator orders it earlier",
+      "source": "EPC-024.md Summary and the \"Release slot\" paragraph (line 53 to 62 on the line)",
+      "card": "strict evidence defaults, local scan parity with CI, more seats",
+      "whyNowMore": "its line is cut after 4.0.0 ships",
+      "menu": "Quality defaults and seats"
+    },
+    "EPC-025": {
+      "oneLine": "The coordination ledger: every handed-over item and every lane visible on disk, so any session can follow up.",
+      "delivers": "a follow-up ledger and lane records on disk, with an event log",
+      "forWhom": "any orchestrating or lone session, on any harness or model",
+      "whyNow": "it merges into the 4.0.0 line before the pull request to main",
+      "source": "EPC-025.md Outcome (line 18 to 45 on the line); the record carries no Summary \"It serves\" sentence, so for whom is read from the Outcome",
+      "card": "every handed-over item and every lane visible on disk",
+      "forWhomNote": "from the Outcome; the record has no \"It serves\" sentence",
+      "whyNowMore": "the operator chose on 24 Oct to merge once with the event log",
+      "menu": "Coordination ledger"
+    }
+  },
+  "blockerShort": {
+    "b1": {
+      "do": "sign in a second Codex account and write accounts.toml in the root checkout",
+      "why": "decision d9 asks for the account proven live; no agent can sign in for you",
+      "alt": "accept AC-4 on the recorded dry run, with reduced assurance"
+    },
+    "b2": {
+      "do": "apply the paste-ready test edit on PR 466",
+      "why": "the edit is the operator's to make (decision d10)",
+      "alt": "let a builder make it under your name; not recommended"
+    },
+    "b3": {
+      "do": "retire the EPC-024 line and re-cut it from the 4.0.0 tip",
+      "why": "the fast-forward was refused; nothing moved, nothing lost",
+      "alt": "file the gap as a task and wait for the pre-push fix"
+    },
+    "b4": {
+      "do": "rebuild the hook binary from the line, then rerun the gates",
+      "why": "the installed binary's source digest differs from the line's sources",
+      "alt": "run the gates with the worktree binary first on PATH"
+    }
+  },
+  "blockersEvidenceAt": "2026-11-02 12:33 EST"
 }
