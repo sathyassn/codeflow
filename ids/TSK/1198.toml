@@ -1,0 +1,11 @@
+id = "TSK-1198"
+uid = "eeee44b8-4b78-4e0f-bce1-6b619c9a7441"
+kind = "TSK"
+title = "hook shims refuse or verify an externally set hook binary"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T17:53:35Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
