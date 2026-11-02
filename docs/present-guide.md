@@ -138,7 +138,13 @@ review is over.
    means every stage frame loaded or reached its bounded failure timeout;
    failed frames show a visible notice. It does not mean all stages were
    measured. Check `[data-cf-stage-notice]` for limitations before relying
-   on a capture.
+   on a capture. For a full-page browser screenshot, set the capture viewport
+   height to the document's full scroll height without changing its width,
+   then wait for fonts and two animation frames before taking the image.
+   A frame's load event does not guarantee that its offscreen pixels have
+   been composited. The browser checks use
+   `crates/codeflow-present/web/scripts/export-capture.mjs` to prepare the
+   viewport and inspect captured text pixels as well as geometry.
 
 3. Close the session with `codeflow present close <session-id>`.
 4. To reclaim space later, preview with `codeflow present clear --dry-run`,

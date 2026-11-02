@@ -1,6 +1,8 @@
 // Run by the primary: this check starts the real session service.
 // Optional --document PATH uses the design brief's status report for captures.
 import assert from "node:assert/strict";
+import { assertStageTextPainted } from "./export-paint.mjs";
+import { prepareExportCapture } from "./export-capture.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -93,14 +95,18 @@ try {
         assert.equal(await frame.locator("script").count(), 0);
         const geometry = await frame.evaluate(async () => {
           await document.fonts.ready;
-          const body = document.body;
-          const bottom = body.getBoundingClientRect().bottom + parseFloat(getComputedStyle(body).marginBottom);
+          // The root's normal-flow bounds include margins collapsed through
+          // body (for example a paragraph's 16px margin over body's 8px).
+          // body.bottom + body.marginBottom undercounts that occupied space.
+          const bottom = document.documentElement.getBoundingClientRect().bottom;
           return { height: innerHeight, scroll: document.documentElement.scrollHeight, bottom };
         });
         assert.ok(geometry.scroll <= geometry.height + 1, JSON.stringify(geometry));
         assert.ok(geometry.height <= Math.max(24, geometry.bottom) + 2, JSON.stringify(geometry));
       }
-      await capture.screenshot({ path: join(root, `${mode}-${width}.png`), fullPage: true });
+      if (!process.argv.includes("--without-capture-preparation")) await prepareExportCapture(capture);
+      const screenshot = await capture.screenshot({ path: join(root, `${mode}-${width}.png`), fullPage: true });
+      await assertStageTextPainted(capture, screenshot);
     }
     await capture.setViewportSize({ width: 900, height: 900 });
     await capture.goto(pathToFileURL(exported).href);

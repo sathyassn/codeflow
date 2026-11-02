@@ -1,3 +1,4 @@
+import { prepareExportCapture } from "./export-capture.mjs";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { access, cp, mkdir, mkdtemp, readdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
@@ -339,6 +340,7 @@ try {
   if (exportAccessibility.violations.length) {
     throw new Error(`export accessibility violations: ${exportAccessibility.violations.map((item) => item.id).join(", ")}`);
   }
+  await prepareExportCapture(exportPage);
   await exportPage.screenshot({ path: join(output, "export-dark.png"), fullPage: true });
   await assertNoPolicyViolations(exportPage, "offline export");
   await assertNoPolicyViolations(revisedPage, "second revision");
