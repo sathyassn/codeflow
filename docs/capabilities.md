@@ -663,13 +663,7 @@ Detail: [present architecture](architecture/present.md) and
 
 ### Catalog record schema
 
-The catalog loader and `validate --docs` read records directly under
-`docs/capabilities/`, named `CAP-NNN-<slug>.md`, with YAML frontmatter followed
-by Markdown prose. The legacy fences above remain supported alongside distinct
-records. An existing CAP page without frontmatter remains companion prose when
-its id has a legacy fence. Duplicate ids or UUIDs are refused, naming both
-sources, including overlap between layouts regardless of registry bindings or
-payload equality.
+Records contain YAML frontmatter and Markdown prose, checked by `validate --docs`.
 
 | Field | Shape |
 |---|---|
@@ -678,7 +672,7 @@ payload equality.
 | `status` | Required: `planned`, `building`, `shipped`, `deprecated`. |
 | `stage` | Required when shipped: `unassessed`, `experimental`, `beta`, `stable`. Beta and stable require non-gap evidence. |
 | `kind` | Required: `functional` or `non-functional`. |
-| `quality`, `measure` | Required when non-functional: a characteristic below and a nonempty measurement sentence. Optional for functional records. |
+| `quality`, `measure` | Required when non-functional: a characteristic and a nonempty measurement sentence. Optional for functional records. Characteristics: `functional-suitability`, `performance-efficiency`, `compatibility`, `interaction-capability`, `reliability`, `security`, `maintainability`, `flexibility`, `safety`. |
 | `audience` | Required nonempty list drawn from `external`, `internal`, `agent`. |
 | `publish` | Boolean, default `false`; separate from audience. |
 | `group`, `tags` | Optional project facets from this revision's `vocabulary.yaml` groups and tags. |
@@ -686,27 +680,16 @@ payload equality.
 | `since`, `former_ids` | Optional first-shipped version string and list of numeric CAP ids. |
 | `epics`, `epic_id`, `adrs`, `specs`, `depends_on`, `related`, `superseded_by`, `capabilities` | Optional record references, accepting a string or list as in legacy fences. |
 
-Quality values are `functional-suitability`, `performance-efficiency`,
-`compatibility`, `interaction-capability`, `reliability`, `security`,
-`maintainability`, `flexibility`, and `safety`. A shipped record with only
-`gap:` evidence can use `stage: unassessed`; it cannot use `beta` or `stable`.
-Evidence references are syntax-checked only. The loader never opens or executes
-their targets; evidence resolution belongs to TSK-362.
-
-The limits in `capability.rs` are `CAPABILITY_MAX_VALUE_CHARS` = 1024 Unicode
-characters per scalar or list item, `CAPABILITY_MAX_LIST_ITEMS` = 64 items per
-list, and `CAPABILITY_MAX_FRONTMATTER_KEYS` = 32 keys per record. Unknown keys,
-duplicate YAML keys, malformed YAML and values over these limits are refused
-with the source file and offending key (or `frontmatter` for the key count).
-
-File containment applies to catalog record paths, not references inside a
-record. Only regular, non-executable record files directly under the folder
-are accepted. Absolute paths, `..`, nested paths and symlinks are refused.
-Checkout and pinned-tree readers share validation; the tree reader takes its
-areas and vocabulary from that tree, independent of the checkout.
-
-`vocabulary.yaml` contains `inventory: incomplete` or `complete`, plus `groups`
-and `tags` lists of `{name, about}` definitions. Names are unique lowercase
-slugs within each list. The same scalar and list limits apply to the vocabulary.
-The example remains `incomplete` until inventory work
-establishes coverage. No record migration or id allocation occurs in the loader.
+| Validation rule | Contract |
+|---|---|
+| Record files | Regular, non-executable files directly under `docs/capabilities/`, named `CAP-NNN-<slug>.md`. Absolute paths, `..`, nested paths and symlinks are refused. Containment applies only to record files, not references inside them. |
+| Legacy compatibility | Fences and distinct folder records coexist. A CAP page without frontmatter remains companion prose when its id has a legacy fence. Legacy fences retain their existing schema. |
+| Identity | Duplicate ids or UUIDs name both sources. An identity in both layouts is refused regardless of bindings or payload equality. |
+| Evidence | References are syntax-checked, never opened or executed. Resolution belongs to TSK-362. A shipped record with only `gap:` evidence accepts `unassessed`, but refuses `beta` or `stable`. |
+| Scalar bound | `CAPABILITY_MAX_VALUE_CHARS` in `capability.rs`: 1024 Unicode characters per scalar or list item. |
+| List bound | `CAPABILITY_MAX_LIST_ITEMS`: 64 items per list. Scalar and list bounds also apply to the vocabulary. |
+| Key bound | `CAPABILITY_MAX_FRONTMATTER_KEYS`: 32 frontmatter keys per record. |
+| Schema refusals | Unknown or duplicate keys, malformed YAML and oversized values name the file and key; key-count errors name `frontmatter`. |
+| Revision | Checkout and pinned-tree readers share validation. Areas and vocabulary come from the selected revision, independently of the checkout. |
+| Vocabulary | `vocabulary.yaml` contains `inventory: incomplete` or `complete`, plus `groups` and `tags` lists of `{name, about}`. Names are unique lowercase slugs within each list. The example stays `incomplete` until inventory work establishes coverage. |
+| Operations | The loader reads data; it performs no migration or id allocation. |
