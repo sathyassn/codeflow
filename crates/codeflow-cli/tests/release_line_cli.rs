@@ -2765,7 +2765,7 @@ fn a_records_only_criterion_is_frozen_on_every_release_path() {
     fx.git(&["switch", "-q", "-C", "plan/amend", LINE_A]);
     loosen(&fx);
     fx.commit("docs(records): loosen a criterion");
-    let line = fx.ci(LINE_A, "HEAD", "plan/amend", None);
+    let line = fx.ci(LINE_A, "HEAD", "plan/amend", Some(LINE_A));
     passes(&line, "an ordinary amendment on an epic line");
     assert!(!line.1.contains(SCOPE_LINE), "{}", line.1);
 }

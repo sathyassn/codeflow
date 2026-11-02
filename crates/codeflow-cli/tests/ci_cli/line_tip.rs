@@ -196,7 +196,8 @@ fn a_line_without_trusted_authority_refuses() {
     );
 
     // Two lines at the same fetched tip: the base names no single line, so
-    // the run refuses and names both routes.
+    // a head that adds a commit refuses and names both routes. A head that
+    // is the base adds nothing, so it is not judged.
     f.git(&["switch", "-q", LINE]);
     f.git(&[
         "push",
@@ -205,6 +206,13 @@ fn a_line_without_trusted_authority_refuses() {
         &format!("{tip}:refs/heads/integration/EPC-001-twin"),
     ]);
     f.git(&["fetch", "-q", "origin"]);
+    let same = ci(&f, &["--base", &tip, "--head", "HEAD"]);
+    assert!(
+        output(&same).contains("line tip: none (the head is the base and adds no commit)"),
+        "{}",
+        output(&same)
+    );
+    f.direct();
     let twin = ci(&f, &["--base", &tip, "--head", "HEAD"]);
     refused_by_rule(&twin, "several epic lines");
     assert!(
@@ -377,29 +385,46 @@ fn unreadable_tracking_at_the_tip_refuses() {
     );
 }
 
-/// A new line starts at the default target's tip. A change whose base is
-/// that commit lands on the target, so it names no line and its own commit
-/// is not refused; the landing route's `--line-tip` claim still judges the
-/// same head as the line's next tip.
-#[test]
-fn a_new_line_at_the_default_tip_names_no_line() {
+/// A new line starts at the default target's tip, so a base at that commit
+/// cannot say whether the head lands on the target or becomes the line's
+/// next tip: no fact the requester cannot forge tells them apart. The bare
+/// run refuses and names the role flag for a change into the target
+/// (coord/planning, 2026-11-01 21:01).
+fn fresh_line_at_main() -> (Line, String, String) {
     let f = Line::new();
     f.git(&["push", "-q", "origin", "main", LINE]);
     let main = f.git(&["rev-parse", "main"]);
     assert_eq!(f.git(&["rev-parse", &format!("origin/{LINE}")]), main);
     f.git(&["switch", "-qc", "fix/TSK-001-main", "main"]);
     let own = f.direct();
-    let into_main = ci(&f, &["--base", &main, "--head", "HEAD"]);
-    let text = output(&into_main);
+    (f, main, own)
+}
+
+#[test]
+fn a_bare_run_at_a_fresh_line_and_main_refuses_naming_the_role() {
+    let (f, main, own) = fresh_line_at_main();
+    let bare = ci(&f, &["--base", &main, "--head", "HEAD"]);
+    refused_by_rule(&bare, &own[..9]);
+    let text = output(&bare);
     assert!(
-        text.contains(
-            "line tip: none (the base is the default target's fetched tip 'origin/main')"
-        ),
+        text.contains("for a change into it pass --into main"),
         "{text}"
     );
-    assert!(!text.contains("work.epic_line"), "{text}");
+    assert!(text.contains(&format!("pass --line-tip {LINE}")), "{text}");
+    // The landing route's claim judges the same head as the line's tip.
     refused_by_rule(
         &ci(&f, &["--base", &main, "--head", "HEAD", "--line-tip", LINE]),
         &own[..9],
     );
+}
+
+/// The same run with its explicit role, a change into the target, passes.
+#[test]
+fn the_same_run_into_main_passes_with_its_role() {
+    let (f, main, _) = fresh_line_at_main();
+    let into_main = ci(&f, &["--base", &main, "--head", "HEAD", "--into", "main"]);
+    passes(&into_main);
+    let text = output(&into_main);
+    assert!(!text.contains("line tip:"), "{text}");
+    assert!(!text.contains("work.epic_line"), "{text}");
 }

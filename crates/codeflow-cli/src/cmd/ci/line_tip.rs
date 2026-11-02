@@ -12,13 +12,15 @@
 //!
 //! `--line-tip <LINE>` claims the head is that line's next tip: the landing
 //! path's explicit claim. Without the claim, a run whose base is the fetched
-//! tip of exactly one epic line, and not the default target's fetched tip
-//! (where a new line starts), is judged the same way: such a run cannot
+//! tip of exactly one epic line is judged the same way: such a run cannot
 //! tell a landing candidate from a change that lands by merge, so a head
-//! that would add a direct commit refuses with a remedy naming both routes.
-//! Every finding blocks, and a line whose authority cannot be established
-//! refuses (charter D19). Authority comes only from the line's fetched tip,
-//! resolved once.
+//! that would add a direct commit refuses with a remedy naming each route.
+//! A base that is also the default target's fetched tip, as a new line's
+//! is, is no less ambiguous: no fact the requester cannot forge says which
+//! branch the head lands on, so the remedy also names `--into` for the
+//! target. Every finding blocks, and a line whose authority cannot be
+//! established refuses (charter D19). Authority comes only from the line's
+//! fetched tip, resolved once.
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -44,11 +46,13 @@ pub(super) struct Run<'a> {
     pub pushed: bool,
 }
 
-/// Where the judged line came from, for the output and the remedy.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Where the judged line came from, for the output and the remedy. A line
+/// found from the base carries the default target's branch name when the
+/// base is that target's fetched tip too.
+#[derive(Clone, PartialEq, Eq)]
 enum Source {
     Flag,
-    Base,
+    Base { target: Option<String> },
 }
 
 /// Judge the head as a line's next tip when the run's context says it is
@@ -65,20 +69,26 @@ pub(super) fn check(
         Ok(None) => return,
         Err((error, source)) => {
             ran.push("line-tip");
-            return refuse(tagged, &error, None, source);
+            return refuse(tagged, &error, None, &source);
         }
     };
     ran.push("line-tip");
-    let how = match source {
-        Source::Flag => "--line-tip",
-        Source::Base => "the base is its fetched tip",
+    let how = match &source {
+        Source::Flag => "--line-tip".to_string(),
+        Source::Base { target: None } => "the base is its fetched tip".to_string(),
+        Source::Base {
+            target: Some(target),
+        } => format!(
+            "the base is its fetched tip, and the default target '{}' is there too",
+            codeflow_core::git::display_text(target)
+        ),
     };
     println!(
         "codeflow ci: line tip: the head is judged as the next tip of '{}' ({how})",
         codeflow_core::git::display_text(&line)
     );
-    if let Err(error) = judge(root, &line, source, run.head, tagged) {
-        refuse(tagged, &error, Some(&line), source);
+    if let Err(error) = judge(root, &line, &source, run.head, tagged) {
+        refuse(tagged, &error, Some(&line), &source);
     }
 }
 
@@ -101,52 +111,53 @@ fn destination(root: &Path, run: &Run<'_>) -> Result<Option<(String, Source)>, (
     let Some(base) = run.base else {
         return Ok(None);
     };
-    // A new line starts at the default target's tip, so a base there names
-    // the default target as much as the line: the head lands on the target.
-    // Only the fetched default target counts, never a local branch or one
-    // the run names.
-    if let Some(target) = default_work_target_ref(root)
-        .map_err(|error| {
-            (
-                format!("the default target cannot be read: {error}"),
-                Source::Base,
-            )
-        })?
-        .filter(|target| target.starts_with("refs/remotes/"))
-    {
-        let tip =
-            line_adoption::reference_tip(root, &target).map_err(|error| (error, Source::Base))?;
-        if tip.as_deref() == Some(base) {
-            println!(
-                "codeflow ci: line tip: none (the base is the default target's fetched tip '{}')",
-                codeflow_core::git::display_text(target.trim_start_matches("refs/remotes/"))
-            );
-            return Ok(None);
-        }
+    // A head that is the base adds no commit, so however it lands no line
+    // receives one; the two commit ids decide this, not a name.
+    if run.head == base {
+        println!("codeflow ci: line tip: none (the head is the base and adds no commit)");
+        return Ok(None);
     }
+    let unknown = Source::Base { target: None };
+    let target = default_target_at(root, base).map_err(|error| (error, unknown.clone()))?;
+    let source = Source::Base { target };
     let mut lines =
-        line_adoption::fetched_lines_at(root, base).map_err(|error| (error, Source::Base))?;
+        line_adoption::fetched_lines_at(root, base).map_err(|error| (error, source.clone()))?;
     match lines.len() {
         0 => {
             println!("codeflow ci: line tip: none (the base is no epic line's fetched tip)");
             Ok(None)
         }
-        1 => Ok(lines.pop().map(|line| (line, Source::Base))),
+        1 => Ok(lines.pop().map(|line| (line, source))),
         _ => Err((
             format!(
                 "the base is the fetched tip of several epic lines ({}), so the line the head would become the tip of is ambiguous",
                 lines.join(", ")
             ),
-            Source::Base,
+            source,
         )),
     }
+}
+
+/// The default target's branch name when its fetched tip is `base`. Only
+/// the fetched ref counts, never a local branch.
+fn default_target_at(root: &Path, base: &str) -> Result<Option<String>, String> {
+    let Some(target) = default_work_target_ref(root)
+        .map_err(|error| format!("the default target cannot be read: {error}"))?
+    else {
+        return Ok(None);
+    };
+    let Some(name) = target.strip_prefix("refs/remotes/origin/") else {
+        return Ok(None);
+    };
+    let tip = line_adoption::reference_tip(root, &target)?;
+    Ok((tip.as_deref() == Some(base)).then(|| name.to_string()))
 }
 
 /// Judge `head` as `line`'s next tip against the line's fetched tip.
 fn judge(
     root: &Path,
     line: &str,
-    source: Source,
+    source: &Source,
     head: &str,
     tagged: &mut Vec<super::TaggedViolation>,
 ) -> Result<(), String> {
@@ -214,8 +225,8 @@ fn judge(
     }
     let (message, mut remedy) =
         line_adoption::direct_commit_refusal(line, &report.unadopted, &remote);
-    if source == Source::Base {
-        let _ = write!(remedy, "; {}", routes(line));
+    if let Source::Base { target } = source {
+        let _ = write!(remedy, "; {}", routes(line, target.as_deref()));
     }
     tagged.push(super::TaggedViolation {
         sha: None,
@@ -225,12 +236,20 @@ fn judge(
 }
 
 /// The remedy for a run that found the line from its base: it names the
-/// route for each way the head can reach the line.
-fn routes(line: &str) -> String {
+/// role flag for each way the head can land.
+fn routes(line: &str, target: Option<&str>) -> String {
     let shown = codeflow_core::git::display_text(line);
-    format!(
-        "this run found the line from its base and cannot tell how the head reaches it: pass --line-tip {shown} on a landing candidate, or, for a pull request head that lands by merge, --into {shown} or the pull request's body (--pr-body-file or CODEFLOW_PR_BODY)"
-    )
+    let mut text = format!(
+        "this run found the line from its base and cannot tell how the head reaches it: pass --line-tip {shown} on a landing candidate, or, for a pull request head that lands on the line by merge, --into {shown} or the pull request's body (--pr-body-file or CODEFLOW_PR_BODY)"
+    );
+    if let Some(target) = target {
+        let target = codeflow_core::git::display_text(target);
+        let _ = write!(
+            text,
+            "; the base is also the fetched tip of the default target, so for a change into it pass --into {target}"
+        );
+    }
+    text
 }
 
 /// A run that cannot judge the line it was given or found refuses: CI is
@@ -240,16 +259,16 @@ fn refuse(
     tagged: &mut Vec<super::TaggedViolation>,
     message: &str,
     line: Option<&str>,
-    source: Source,
+    source: &Source,
 ) {
     let shown = line.map_or_else(|| "<LINE>".to_string(), codeflow_core::git::display_text);
     let remedy = match source {
         Source::Flag => format!(
             "fetch the line (`git fetch origin`) and pass --line-tip {shown} for a landing candidate cut from its fetched tip, or --into {shown} for a pull request head that lands by merge"
         ),
-        Source::Base => format!(
+        Source::Base { target } => format!(
             "fetch the lines (`git fetch origin`); {}",
-            routes(line.unwrap_or("<LINE>"))
+            routes(line.unwrap_or("<LINE>"), target.as_deref())
         ),
     };
     tagged.push(super::TaggedViolation {

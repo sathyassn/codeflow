@@ -176,8 +176,8 @@ pub struct CiArgs {
     /// direct commit a landed `line_adoptions` entry names, the rule the
     /// pre-push hook applies to a push to the line (`work.epic_line`).
     /// Without it, a run with no pull request and no push context whose
-    /// base is the fetched tip of exactly one epic line, and not the default
-    /// target's, cannot tell how the head reaches the line and refuses when the head would add a direct
+    /// base is the fetched tip of exactly one epic line cannot tell how the
+    /// head reaches the line and refuses when the head would add a direct
     /// commit; pass `--into <LINE>` or the body for a pull request head
     /// that lands by merge.
     #[arg(long, value_name = "LINE", conflicts_with_all = ["into", "pushed_ref"])]
