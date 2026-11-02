@@ -861,12 +861,16 @@ task PR.
   the work prefixes of the policy the run judges with. A record only the
   checkout holds grants no own-task authority, and a record the checkout
   lacks takes none away, so a run from `main`, a detached checkout or the
-  task's worktree gives one verdict.
+  task's worktree gives one criteria verdict.
 - A task's own criteria change on its integration line is judged against
-  the line's tip and the range base when all of these hold: the
-  destination advertises the line and its tip is here; the task's record
-  declares the line at the line's tip and at the head; the line passes the
-  trusted-line binding; the line is not a protected branch. `main` stays
+  the line's tip and the range base when all of these hold: the run names
+  the line with an explicit `--into` (an inferred target never qualifies);
+  the run pins its policy authority with `--policy-from`, as the pre-push
+  hook does with `main`'s tip; the destination advertises the line and its
+  tip is here; the task's record declares the line at the line's tip and
+  at the head; the line passes the trusted-line binding at that pinned tip
+  and at the line's tip; the line is not a protected branch. The line's
+  tip stays a criteria point when the run's base is older. `main` stays
   the policy and commit-history authority, and a completion `main` or
   another ref holds still refuses the change.
 - Another task's record whose criteria the range leaves as the range base
