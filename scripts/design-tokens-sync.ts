@@ -57,7 +57,7 @@ await put('.codeflow/docs-portal.json', JSON.stringify(portalState, null, 2) + '
 const kitRoots = ['assets/base/agents/skills', '.agents/skills', '.claude/skills', '.codeflow/.baseline/.agents/skills', '.codeflow/.baseline/.claude/skills']
   .flatMap(root => ['cf-present', 'cf-docs-portal'].map(skill => `${root}/${skill}/resources/design-system`));
 const generatedSheets = new Set([...kitRoots.flatMap(root => [...outputs.keys()].filter(name => name.endsWith('.css')).map(name => join(root, name))),
-  ...Object.entries(paths).filter(([name]) => name.endsWith('.css')).flatMap(([, targets]) => targets)]);
+  ...Object.entries(paths).filter(([name]) => name.endsWith('.css')).flatMap(([, targets]) => targets.map(target => join(target)))]);
 for (const root of [...kitRoots, 'crates/codeflow-present/web/src', 'docs-portal/src', 'assets/docs-portal/starter/src']) {
   for (const relative of await walk(root)) {
     const path = join(root, relative);
