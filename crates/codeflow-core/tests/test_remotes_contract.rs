@@ -29,11 +29,18 @@
 //! count of occurrences, so a new registration anywhere else fails, and an
 //! entry that no longer matches fails too.
 //!
+//! A `git config remote.<name>.url <URL>` (or `.pushurl`) argument list is a
+//! registration too, and a literal `remote.<name>.url=<URL>` is read as the
+//! URL. Rust escapes in a normal or byte literal (`\x68`, `\u{68}`, `\n`,
+//! a line continuation) are decoded before the URL is read.
+//!
 //! Not seen, and so left to review: a URL built at run time (`format!`, a
-//! function result, a variable defined in another file), a remote added by
-//! a helper in another crate, and the three `*secret*` test files this
-//! environment cannot read. A passing lint says these forms were not found,
-//! nothing more.
+//! function result, `concat!`, a variable defined in another file), a remote
+//! added by a helper in another crate, and the files named in [`UNREAD`],
+//! which the lint never opens because their names say they hold secrets;
+//! the run prints them and fails on any other unreadable file or any other
+//! file with `secret` in its name. A passing lint says these forms were not
+//! found, nothing more.
 
 #![allow(clippy::too_many_lines)]
 
@@ -48,6 +55,12 @@ const ALLOWED: &[(&str, &str, usize, &str)] = &[
         "example.invalid",
         1,
         "the transport is the subject: git runs a stub ssh command, so the host is never looked up",
+    ),
+    (
+        "codeflow-cli/tests/ci_cli/destination.rs",
+        "upstream.invalid",
+        1,
+        "the configured upstream is only shown in the destination message; the logging-proxy run of this module saw no request",
     ),
     (
         "codeflow-cli/tests/ci_cli/destination.rs",
@@ -98,11 +111,25 @@ const ALLOWED: &[(&str, &str, usize, &str)] = &[
         "text of a pull request link in a redaction assertion; never given to a transport",
     ),
     (
+        "codeflow-cli/tests/work_cli.rs",
+        "github.com",
+        10,
+        "ten `git config remote.<name>.url` writes that only name a GitHub project for the work-start check; the logging-proxy run of this binary saw no request",
+    ),
+    (
         "codeflow-core/tests/wp7_contract.rs",
         "github.com",
         2,
         "remote URLs that only name a GitHub project for the work-start check; the proxy run of this binary saw no request",
     ),
+];
+
+/// Test sources the lint never opens, relative to `crates/`: their names say
+/// they hold secrets, so no agent or lint run reads them.
+const UNREAD: &[&str] = &[
+    "codeflow-cli/tests/ci_cli/secret_scan_exemption.rs",
+    "codeflow-cli/tests/refusal_journey/secret_paths.rs",
+    "codeflow-core/tests/managed_secret_scan.rs",
 ];
 
 const LOOPBACK: &[&str] = &["127.0.0.1", "localhost", "[::1]"];
@@ -170,7 +197,11 @@ fn lex(text: &str) -> (Vec<Literal>, String, Vec<u8>) {
                 skeleton[body_start..end].fill(b'x');
                 literals.push(Literal {
                     start: body_start,
-                    body: text[body_start..end].to_string(),
+                    body: if raw {
+                        text[body_start..end].to_string()
+                    } else {
+                        unescape(&text[body_start..end])
+                    },
                 });
                 at = (end + close.len()).min(bytes.len());
             } else {
@@ -185,7 +216,7 @@ fn lex(text: &str) -> (Vec<Literal>, String, Vec<u8>) {
             skeleton[body_start..end].fill(b'x');
             literals.push(Literal {
                 start: body_start,
-                body: text[body_start..end].to_string(),
+                body: unescape(&text[body_start..end]),
             });
             at = (end + 1).min(bytes.len());
         } else if byte == b'\'' {
@@ -208,6 +239,63 @@ fn lex(text: &str) -> (Vec<Literal>, String, Vec<u8>) {
     )
 }
 
+/// The value of a normal or byte literal's body: `\n`, `\x68`, `\u{68}`,
+/// escaped quotes and backslashes, and a backslash-newline continuation (which
+/// also drops the leading whitespace of the next line) are decoded.
+fn unescape(body: &str) -> String {
+    let mut out = String::new();
+    let mut chars = body.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('0') => out.push('\0'),
+            Some('x') => {
+                let hex: String = (0..2).filter_map(|_| chars.next()).collect();
+                if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                    out.push(ch);
+                }
+            }
+            Some('u') => {
+                if chars.peek() == Some(&'{') {
+                    chars.next();
+                    let mut hex = String::new();
+                    for h in chars.by_ref() {
+                        if h == '}' {
+                            break;
+                        }
+                        if h != '_' {
+                            hex.push(h);
+                        }
+                    }
+                    if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                        out.push(ch);
+                    }
+                }
+            }
+            Some('\n') => {
+                while chars.peek().is_some_and(|n| n.is_whitespace()) {
+                    chars.next();
+                }
+            }
+            Some('\r') => {
+                chars.next_if_eq(&'\n');
+                while chars.peek().is_some_and(|n| n.is_whitespace()) {
+                    chars.next();
+                }
+            }
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    out
+}
+
 fn is_word(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
@@ -225,7 +313,13 @@ fn escaped(bytes: &[u8], at: usize) -> bool {
 
 /// The host of `body` when the literal is a network remote, else `None`.
 fn network_host(body: &str) -> Option<String> {
-    let body = body.trim();
+    let mut body = body.trim();
+    // `remote.<name>.url=<URL>`, as `git -c` or a config line writes it.
+    if let Some((key, value)) = body.split_once('=') {
+        if is_remote_url_key(key) {
+            body = value.trim();
+        }
+    }
     for scheme in ["http://", "https://", "ssh://", "git://"] {
         if let Some(rest) = body.strip_prefix(scheme) {
             let end = rest
@@ -256,6 +350,20 @@ fn network_host(body: &str) -> Option<String> {
         .is_some_and(|b| is_word(b) || b == b'/' || b == b'~');
     (user_ok && host_ok && path_ok && !path.starts_with(|c: char| c.is_ascii_digit()))
         .then(|| host.to_string())
+}
+
+/// Whether `key` is `remote.<name>.url` or `remote.<name>.pushurl`.
+fn is_remote_url_key(key: &str) -> bool {
+    // A key name, not a file name: the comparison is exact.
+    #[allow(clippy::case_sensitive_file_extension_comparisons)]
+    let named = |rest: &str| rest.ends_with(".url") || rest.ends_with(".pushurl");
+    key.strip_prefix("remote.").is_some_and(named)
+}
+
+/// Whether a call or list (whitespace removed) writes a remote URL key with
+/// a literal key: `"remote.<name>.url"` or `"remote.<name>.pushurl"`.
+fn writes_remote_url(context: &str) -> bool {
+    context.split('"').any(is_remote_url_key)
 }
 
 const REGISTERING: &[&str] = &[
@@ -353,9 +461,17 @@ fn scan_text(text: &str) -> Vec<(usize, String, &'static str)> {
             .iter()
             .any(|word| statement.starts_with(word) || statement.contains(&format!(" {word}")))
             && statement.ends_with('=');
-        let registered = contexts(text, &skeleton, literal.start)
-            .iter()
-            .any(|context| REGISTERING.iter().any(|word| context.contains(word)));
+        let keyed = literal
+            .body
+            .split_once('=')
+            .is_some_and(|(key, _)| is_remote_url_key(key.trim()));
+        let registered = keyed
+            || contexts(text, &skeleton, literal.start)
+                .iter()
+                .any(|context| {
+                    writes_remote_url(context)
+                        || REGISTERING.iter().any(|word| context.contains(word))
+                });
         if bound {
             hits.push((line, host, "bound to a name"));
         } else if registered {
@@ -421,15 +537,29 @@ fn no_test_registers_a_remote_on_the_network() {
     }
     assert!(files.len() > 100, "the lint found {} sources", files.len());
     let mut found: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+    let mut skipped = Vec::new();
+    let mut unexpected = Vec::new();
     for file in &files {
-        let Ok(bytes) = std::fs::read(file) else {
-            continue; // an unreadable file cannot be read for a remote
-        };
         let shown = file
             .strip_prefix(&crates)
             .unwrap_or(file)
             .to_string_lossy()
             .replace('\\', "/");
+        if UNREAD.contains(&shown.as_str()) {
+            skipped.push(shown); // named, and never opened
+            continue;
+        }
+        if shown.to_lowercase().contains("secret") {
+            unexpected.push(format!("{shown}: a secret-named file not in UNREAD"));
+            continue;
+        }
+        let bytes = match std::fs::read(file) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                unexpected.push(format!("{shown}: unreadable ({error})"));
+                continue;
+            }
+        };
         // This file quotes URLs to explain itself and to test the reader.
         if shown.ends_with("tests/test_remotes_contract.rs") {
             continue;
@@ -442,7 +572,15 @@ fn no_test_registers_a_remote_on_the_network() {
                 .or_default() += 1;
         }
     }
-    let violations = judge(&found, ALLOWED);
+    skipped.sort();
+    eprintln!("remote lint skipped, never opened: {skipped:?}");
+    let mut violations = judge(&found, ALLOWED);
+    violations.extend(unexpected);
+    for path in UNREAD {
+        if !skipped.iter().any(|s| s == path) {
+            violations.push(format!("UNREAD entry {path} matches no source; remove it"));
+        }
+    }
     assert!(
         violations.is_empty(),
         "a test registers a remote on the network, which a Codex builder seat blocks and aborts on; \
@@ -496,6 +634,46 @@ fn the_lint_sees_the_forms_the_first_version_missed() {
         ),
         ["outside.invalid"]
     );
+}
+
+#[test]
+fn the_lint_sees_git_config_remote_url_writes_and_escaped_urls() {
+    // `git config remote.<name>.url <URL>`, the URL on a later line.
+    assert_eq!(
+        hosts("git(root, &[\n    \"config\",\n    \"remote.review.url\",\n    \"https://outside.invalid/o.git\",\n]);"),
+        ["outside.invalid"]
+    );
+    assert_eq!(
+        hosts("git(root, &[\"config\", \"remote.o.pushurl\", \"ssh://outside.invalid/o.git\"]);"),
+        ["outside.invalid"]
+    );
+    // `git -c remote.o.url=<URL>` and a config line in one literal.
+    assert_eq!(
+        hosts("run(&[\"-c\", \"remote.o.url=https://outside.invalid/o.git\"]);"),
+        ["outside.invalid"]
+    );
+    // Rust escapes are decoded before the URL is read.
+    assert_eq!(
+        hosts("Fixture::new(\"\\x68ttps://outside.invalid/o.git\");"),
+        ["outside.invalid"]
+    );
+    assert_eq!(
+        hosts("Fixture::new(\"https:\\u{2f}/outside.invalid/o.git\");"),
+        ["outside.invalid"]
+    );
+    assert_eq!(unescape("a\\\n    b\\n\\\\"), "ab\n\\");
+}
+
+#[test]
+fn the_lint_leaves_alone_git_config_writes_that_are_not_network_remotes() {
+    for quiet in [
+        "git(root, &[\"config\", \"remote.o.url\", \"file:///nonexistent/o.git\"]);",
+        "git(root, &[\"config\", \"remote.o.url\", \"https://127.0.0.1:9/o.git\"]);",
+        "git(root, &[\"config\", \"user.email\", \"t@example.test\"]);",
+        "let k = \"remote.o.url\";",
+    ] {
+        assert!(hosts(quiet).is_empty(), "{quiet}");
+    }
 }
 
 #[test]

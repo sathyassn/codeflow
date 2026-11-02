@@ -7124,6 +7124,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/contained.rs", "Tree::write_with_hook", "is_file", 1, "Type check on metadata from platform::metadata with errors propagated."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_file", "ErrorKind::NotFound", 1, "A no-follow stat not finding the leaf in the held parent proves it missing; the create then opens without following links, and other errors propagate."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_file", "is_file", 3, "Type checks on metadata obtained with propagated errors (platform::metadata and the opened file's metadata on each platform)."),
+    ("crates/codeflow-core/src/contained.rs", "platform::open_regular_for_append", "is_file", 2, "Type check on the opened descriptor's metadata, with propagated errors, on each platform; a pipe, device or folder is refused, never read as absent."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_read_only", "is_file", 2, "Type check on the opened file's metadata, with propagated errors, on each platform; a non-regular lock file is refused, never read as absent."),
     ("crates/codeflow-core/src/contained.rs", "platform::open_regular", "is_file", 2, "Type check on the opened file's metadata, with propagated errors, on each platform; a non-regular file is refused, never read as absent."),
     ("crates/codeflow-core/src/contained.rs", "platform::remove", "is_dir", 1, "Windows type check on the metadata of the handle just opened; errors propagate."),

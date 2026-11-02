@@ -510,6 +510,22 @@ impl Tree {
         })
     }
 
+    /// Open an existing regular file for appending, to learn whether this
+    /// process may write it: never created, truncated or written, never
+    /// opened through a link or a reparse point, without blocking on a
+    /// special file, and the type is checked on the opened descriptor.
+    ///
+    /// # Errors
+    ///
+    /// When a component is a link, the leaf is missing, it is not a regular
+    /// file, or the system refuses write access.
+    pub(crate) fn open_regular_for_append(&self, relative: &str) -> io::Result<File> {
+        self.explained(relative, || {
+            let (parent, name) = self.parent(relative, false)?;
+            platform::open_regular_for_append(&parent, &name)
+        })
+    }
+
     /// Open (creating if needed) a regular file to hold a lock on.
     ///
     /// # Errors
@@ -738,6 +754,31 @@ mod platform {
         Ok(file)
     }
 
+    /// Open an existing regular file for appending: never created or
+    /// truncated, never through a link, without blocking on a special file;
+    /// the type is checked on the opened descriptor.
+    pub(super) fn open_regular_for_append(
+        parent: &ConfinedDirectory,
+        leaf: &OsStr,
+    ) -> io::Result<File> {
+        let name = name(leaf)?;
+        let flags =
+            libc::O_WRONLY | libc::O_APPEND | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
+        // SAFETY: live directory descriptor and NUL-terminated basename; no
+        // O_CREAT or O_TRUNC, so no mode is needed. A successful descriptor
+        // is owned once.
+        let descriptor = unsafe { libc::openat(parent.file.as_raw_fd(), name.as_ptr(), flags) };
+        if descriptor == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: openat returned this owned descriptor.
+        let file = unsafe { File::from_raw_fd(descriptor) };
+        if !file.metadata()?.is_file() {
+            return Err(invalid());
+        }
+        Ok(file)
+    }
+
     pub(super) fn metadata(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<Metadata> {
         let name = name(leaf)?;
         let mut info = std::mem::MaybeUninit::<libc::stat>::uninit();
@@ -914,9 +955,9 @@ mod platform {
     use windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES;
     use windows_sys::Win32::Storage::FileSystem::{
         FileDispositionInfo, FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo,
-        GetFileInformationByHandleEx, SetFileInformationByHandle, DELETE, FILE_DISPOSITION_INFO,
-        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_BOTH_DIR_INFO, FILE_LIST_DIRECTORY,
-        FILE_READ_ATTRIBUTES, FILE_TRAVERSE,
+        GetFileInformationByHandleEx, SetFileInformationByHandle, DELETE, FILE_APPEND_DATA,
+        FILE_DISPOSITION_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_BOTH_DIR_INFO,
+        FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_TRAVERSE,
     };
     use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
@@ -975,6 +1016,20 @@ mod platform {
 
     pub(super) fn open_regular(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<File> {
         let file = open(parent, leaf, FILE_GENERIC_READ, false)?;
+        if !file.metadata()?.is_file() {
+            return Err(invalid());
+        }
+        Ok(file)
+    }
+
+    /// Open an existing regular file for appending: never created, never
+    /// through a reparse point (the confined open refuses them), and the
+    /// type is checked on the opened handle.
+    pub(super) fn open_regular_for_append(
+        parent: &ConfinedDirectory,
+        leaf: &OsStr,
+    ) -> io::Result<File> {
+        let file = open(parent, leaf, FILE_APPEND_DATA, false)?;
         if !file.metadata()?.is_file() {
             return Err(invalid());
         }

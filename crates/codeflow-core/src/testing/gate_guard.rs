@@ -359,6 +359,16 @@ fn probe_lock_dir(dir: &Path) -> std::io::Result<()> {
     })
 }
 
+/// The folder holding the shared config. A linked worktree's git folder is
+/// `<common>/worktrees/<name>`; any other git folder holds its own config.
+fn common_git_dir(git_dir: &Path) -> PathBuf {
+    let listed = git_dir
+        .parent()
+        .filter(|parent| parent.file_name().is_some_and(|name| name == "worktrees"))
+        .and_then(Path::parent);
+    listed.unwrap_or(git_dir).to_path_buf()
+}
+
 /// Whether this process can take the steps git starts with to rewrite the
 /// shared git config file of the repository holding `project_dir`
 /// (TSK-1156), and the path probed. Git rewrites that file for any
@@ -376,8 +386,10 @@ fn probe_lock_dir(dir: &Path) -> std::io::Result<()> {
 /// config file is not tried, so `Ok` means the rewrite is not refused at
 /// either step it can observe, not that the rename will succeed.
 pub fn probe_git_config_write(project_dir: &Path) -> (PathBuf, std::io::Result<()>) {
-    let common = match git2::Repository::discover(project_dir) {
-        Ok(repo) => repo.commondir().to_path_buf(),
+    // `discover_path` finds the git folder without opening the repository,
+    // which would read the config file and block on a pipe in its place.
+    let common = match git2::Repository::discover_path(project_dir, [] as [&Path; 0]) {
+        Ok(git_dir) => common_git_dir(&git_dir),
         Err(error) => {
             return (
                 project_dir.to_path_buf(),
@@ -390,14 +402,20 @@ pub fn probe_git_config_write(project_dir: &Path) -> (PathBuf, std::io::Result<(
     let config = common.join("config");
     let result = crate::contained::Tree::open(&common).and_then(|tree| {
         tree.create_new("config.lock", b"")?;
-        // Append mode neither truncates nor writes: it asks the system
-        // whether this process may write the file, and changes nothing.
-        let opened = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&config)
-            .map(drop);
+        // An anchored append open of the existing regular file: it neither
+        // creates, truncates nor writes, follows no link, and never blocks
+        // on a special file. It asks the system whether this process may
+        // write the file, and changes nothing.
+        let opened = tree.open_regular_for_append("config").map(drop);
         let released = tree.remove("config.lock");
-        opened.and(released)
+        match (opened, released) {
+            (Ok(()), released) => released,
+            (Err(opened), Ok(())) => Err(opened),
+            (Err(opened), Err(released)) => Err(std::io::Error::new(
+                opened.kind(),
+                format!("{opened}; the lock file was also not removed: {released}"),
+            )),
+        }
     });
     (config, result)
 }
@@ -2184,9 +2202,139 @@ mod tests {
         );
     }
 
-    /// TSK-1156: the config probe rewrites the file with its own bytes and
-    /// leaves no lock, and a held lock (how git sees a config file it cannot
-    /// write) is reported and left alone.
+    /// A repository whose config the probe is pointed at, and its git folder.
+    #[cfg(unix)]
+    fn config_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        git2::Repository::init(tmp.path()).unwrap();
+        let git_dir = tmp.path().join(".git");
+        (tmp, git_dir)
+    }
+
+    /// The probe, run on its own thread so a regression that blocks on a
+    /// special file fails the test instead of hanging the run.
+    #[cfg(unix)]
+    fn probe_with_deadline(project: &std::path::Path) -> std::io::Result<()> {
+        let project = project.to_path_buf();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(probe_git_config_write(&project).1);
+        });
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the git config probe blocked")
+    }
+
+    /// A config that is a link is never followed: the probe refuses it, the
+    /// file it points at is not opened for writing, and no lock is left.
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_refuses_a_link_and_leaves_no_lock() {
+        let (tmp, git_dir) = config_fixture();
+        let outside = tmp.path().join("outside.txt");
+        std::fs::write(&outside, "outside").unwrap();
+        std::fs::remove_file(git_dir.join("config")).unwrap();
+        std::os::unix::fs::symlink(&outside, git_dir.join("config")).unwrap();
+        assert!(
+            probe_with_deadline(tmp.path()).is_err(),
+            "a link was followed"
+        );
+        assert!(!git_dir.join("config.lock").exists());
+        assert!(git_dir.join("config").is_symlink());
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "outside");
+    }
+
+    /// A missing config is reported, and the lock the probe took is removed.
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_reports_a_missing_file_and_removes_its_lock() {
+        let (tmp, git_dir) = config_fixture();
+        std::fs::remove_file(git_dir.join("config")).unwrap();
+        let error = probe_with_deadline(tmp.path()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "{error}");
+        assert!(!git_dir.join("config.lock").exists());
+        assert!(
+            !git_dir.join("config").exists(),
+            "the probe created the file"
+        );
+    }
+
+    /// The system refuses the append open after the lock was created: the
+    /// error is returned and the lock is removed. (As the superuser the
+    /// system allows the open, so there is nothing to refuse.)
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_removes_its_lock_when_the_append_open_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let (tmp, git_dir) = config_fixture();
+        let config = git_dir.join("config");
+        let before = std::fs::read(&config).unwrap();
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o400)).unwrap();
+        let error = probe_with_deadline(tmp.path()).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "{error}"
+        );
+        assert!(!git_dir.join("config.lock").exists());
+        assert_eq!(std::fs::read(&config).unwrap(), before);
+    }
+
+    /// From a linked worktree the probe reaches the shared config of the main
+    /// repository, through the worktree folder's place under `worktrees`.
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_finds_the_shared_config_from_a_linked_worktree() {
+        let (tmp, git_dir) = config_fixture();
+        let repo = git2::Repository::open(tmp.path()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.test").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        let linked = tmp.path().join("linked");
+        repo.worktree("linked", &linked, None).unwrap();
+        let (path, result) = probe_git_config_write(&linked);
+        result.unwrap();
+        assert_eq!(
+            path.canonicalize().unwrap(),
+            git_dir.join("config").canonicalize().unwrap()
+        );
+    }
+
+    /// A special file or a folder in the config's place is refused without
+    /// blocking, and the lock is removed.
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_refuses_a_special_file_or_folder_without_blocking() {
+        let (tmp, git_dir) = config_fixture();
+        let config = git_dir.join("config");
+        std::fs::remove_file(&config).unwrap();
+        let path = std::ffi::CString::new(config.to_str().unwrap()).unwrap();
+        // SAFETY: a valid NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+        assert!(
+            probe_with_deadline(tmp.path()).is_err(),
+            "a pipe was accepted"
+        );
+        assert!(!git_dir.join("config.lock").exists());
+        std::fs::remove_file(&config).unwrap();
+        std::fs::create_dir(&config).unwrap();
+        assert!(
+            probe_with_deadline(tmp.path()).is_err(),
+            "a folder was accepted"
+        );
+        assert!(!git_dir.join("config.lock").exists());
+    }
+
+    /// TSK-1156: the config probe changes nothing and leaves no lock, and a
+    /// held lock (how git sees a config file it cannot write) is reported
+    /// and left alone.
     #[test]
     fn the_git_config_probe_changes_nothing_and_reports_a_held_lock() {
         let tmp = tempfile::tempdir().unwrap();
