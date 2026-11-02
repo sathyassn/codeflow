@@ -39,6 +39,8 @@ for (const skill of ['cf-present', 'cf-docs-portal']) for (const relative of awa
   }
 }
 await put('assets/base/scaffold-manifest.toml', manifest);
+// Match InstalledManifest's BTreeMap serialization so update stays a no-op.
+installed.files = Object.fromEntries(Object.keys(installed.files).sort().map(path => [path, installed.files[path]]));
 await put('.codeflow/manifest.json', JSON.stringify(installed, null, 2) + '\n');
 
 // Refresh only the adopted files whose bytes equal this starter revision.
