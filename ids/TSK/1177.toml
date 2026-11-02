@@ -1,0 +1,11 @@
+id = "TSK-1177"
+uid = "6c81ca72-681c-412f-b623-a049207cd828"
+kind = "TSK"
+title = "The App authority names the verdict identity and Mode B fails closed"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T04:28:09Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
