@@ -6969,3 +6969,6 @@ mod epic_line;
 
 #[path = "acceptance_cli/sync_merges.rs"]
 mod sync_merges;
+
+#[path = "acceptance_cli/line_sync_push.rs"]
+mod line_sync_push;
