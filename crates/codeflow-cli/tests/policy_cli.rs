@@ -201,7 +201,8 @@ fn validate_exits_one_on_invalid_policy_and_zero_when_clean() {
 fn unsupported_security_keys_warn_in_hooks_and_doctor_without_disabling_hooks() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
-    let message = dir.path().join("message.txt");
+    // Git's own message file: commit-msg refuses any other (TSK-412).
+    let message = dir.path().join(".git/COMMIT_EDITMSG");
     std::fs::write(&message, "fix: keep hooks working\n").unwrap();
     let released: serde_json::Value = serde_json::from_str(include_str!(
         "../../codeflow-core/tests/fixtures/policy-last-release.json"
@@ -259,7 +260,8 @@ fn unsupported_security_keys_warn_in_hooks_and_doctor_without_disabling_hooks() 
 fn unsupported_security_keys_still_refuse_invalid_values() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
-    let message = dir.path().join("message.txt");
+    // Git's own message file: commit-msg refuses any other (TSK-412).
+    let message = dir.path().join(".git/COMMIT_EDITMSG");
     std::fs::write(&message, "fix: keep hooks working\n").unwrap();
     for (key, value) in [
         ("script_bypass", serde_json::json!("deny")),

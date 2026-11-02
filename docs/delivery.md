@@ -122,6 +122,12 @@ each batch.
   ```
 
   The Blocker that `task status` writes and removes is not reviewed scope.
+  A task already blocked on the target is unblocked the same way in its
+  own pull request, and `codeflow ci` shows the Blocker the range removes.
+  Each status step is judged on its own commit and each merge against
+  every parent, so a sync of `main` that brings legal steps passes in one
+  merge or several, and a terminal status left inside one range is
+  refused (TSK-1036).
   Each reopen appends the block it supersedes to one chronological
   archive, so the record reads the same against the line and against
   `main`. Archived blocks stay byte for byte (only a validated redaction
