@@ -1,0 +1,11 @@
+id = "TSK-1191"
+uid = "89dd315a-5d77-481c-b11a-dc19f20aef9c"
+kind = "TSK"
+title = "The update warning separates steps that can alter the secret scan from steps that cannot"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T16:41:53Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
