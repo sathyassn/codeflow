@@ -837,7 +837,11 @@ fn collect_catalog_paths(
                 validate_capability_path(&path)?;
             }
             paths.push(path);
-        } else if tree.metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+        } else if tree
+            .metadata(&path)
+            .map_err(|error| catalog_error(&path, error.to_string()))?
+            .is_dir()
+        {
             collect_catalog_paths(tree, &path, paths)?;
         }
     }

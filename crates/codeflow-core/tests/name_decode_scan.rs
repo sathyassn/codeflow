@@ -122,6 +122,43 @@ const GIT2_TEXT: &[&str] = &["shorthand", "symbolic_target"];
 /// only reaches a person or is not a git or OS name: (file, enclosing item,
 /// call, how many, closed reason tag); the comment states the precise contract.
 const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // Catalog paths are constructed only from validated UTF-8 checkout names or
+    // Git tree text; invalid UTF-8 is refused before any record is constructed.
+    (
+        "codeflow-core/src/capability.rs",
+        "parse_catalog",
+        "to_string_lossy",
+        1,
+        "format-contract",
+    ),
+    (
+        "codeflow-core/src/capability.rs",
+        "validate_record",
+        "to_string_lossy",
+        1,
+        "format-contract",
+    ),
+    (
+        "codeflow-core/src/capability.rs",
+        "validate_project_facets",
+        "to_string_lossy",
+        1,
+        "format-contract",
+    ),
+    (
+        "codeflow-core/src/capability.rs",
+        "validate_evidence",
+        "to_string_lossy",
+        1,
+        "format-contract",
+    ),
+    (
+        "codeflow-core/src/capability.rs",
+        "validate_reference_ids",
+        "to_string_lossy",
+        1,
+        "format-contract",
+    ),
     // Both startup_glob_paths callers construct pattern from Pattern.rest, a UTF-8
     // shell-word String. Only those pattern components are decoded to recognize
     // recursive stars; base and filesystem entry names are never decoded here.
@@ -1502,6 +1539,54 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // rev-parse emits a validated hexadecimal tree id and a terminal newline;
+    // this does not trim a revision supplied by the caller or a repository name.
+    (
+        "crates/codeflow-core/src/capability.rs",
+        "load_capability_catalog_from_tree",
+        "trim",
+        1,
+        "format-contract",
+    ),
+    // Both readers recognize the same frontmatter separator line, allowing
+    // trailing whitespace without changing any YAML scalar or path identity.
+    (
+        "crates/codeflow-core/src/capability.rs",
+        "parse_catalog",
+        "lines",
+        1,
+        "grammar:catalog-frontmatter",
+    ),
+    (
+        "crates/codeflow-core/src/capability.rs",
+        "parse_catalog",
+        "trim_end",
+        1,
+        "grammar:catalog-frontmatter",
+    ),
+    (
+        "crates/codeflow-core/src/capability.rs",
+        "parse_record",
+        "trim_end",
+        2,
+        "grammar:catalog-frontmatter",
+    ),
+    // Only rejects empty summary, measurement and evidence text; accepted values
+    // remain unchanged and reference targets are never opened here.
+    (
+        "crates/codeflow-core/src/capability.rs",
+        "validate_record",
+        "trim",
+        3,
+        "schema-reject-only",
+    ),
+    (
+        "crates/codeflow-core/src/capability.rs",
+        "validate_evidence",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
     // TSK-397: doctor's Claude settings reader. A layer that is not UTF-8
     // or not a JSON object is reported, never read as an absent layer. A
     // `.git` file's `gitdir:` value is trimmed as Git trims it, and the main
@@ -4439,14 +4524,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Rejects blank verification evidence or standalone explanations; accepted record IDs and evidence strings remain unchanged.
     (
         "crates/codeflow-core/src/validate/docs.rs",
-        "lint_capabilities",
-        "trim",
-        1,
-        "schema-reject-only",
-    ),
-    // Rejects blank verification evidence or standalone explanations; accepted record IDs and evidence strings remain unchanged.
-    (
-        "crates/codeflow-core/src/validate/docs.rs",
         "lint_task_parent",
         "trim",
         2,
@@ -6933,6 +7010,9 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/capability.rs", "collect_catalog_paths", "ErrorKind::NotFound", 1, "The confined Tree opens every ancestor without following links; only a missing component is optional, while linked, unreadable and non-directory parents refuse."),
+    ("crates/codeflow-core/src/capability.rs", "collect_catalog_paths", "is_dir", 1, "Type check on confined metadata whose errors propagate; real subdirectories are examined to refuse nested CAP files, never followed through symlinks."),
+    ("crates/codeflow-core/src/capability.rs", "load_capability_catalog", "ErrorKind::NotFound", 1, "The confined regular-file reader rejects symlinks and unsafe ancestors before absence is accepted; missing optional legacy/config inputs are omitted, and modern records still require project areas."),
     ("crates/codeflow-core/src/hooks/gitleaks.rs", "private::open_folder", "is_dir", 1, "Type check on the descriptor opened without following a link; anything but a directory this user owns with mode 0700 refuses, which fails the scan as incomplete (TSK-412)."),
     ("crates/codeflow-core/src/hooks/gitleaks.rs", "Engine::locate", "is_file", 1,"A PATH folder whose gitleaks is not a file is skipped; when no folder has one the engine is Missing, a git.secret_scan_engine finding that refuses at block, and a found file still runs only after its checksum matches the pin (TSK-412)."),
     ("crates/codeflow-core/src/hooks/sandbox_state.rs", "read_text", "is_file", 2, "Type checks on obtained metadata, before and after opening; any non-file is unreadable, a strict-rule trigger, so a FIFO, device or directory never reads as an absent layer (TSK-397)."),
