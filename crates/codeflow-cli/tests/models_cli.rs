@@ -873,7 +873,7 @@ impl Seats {
     }
 
     /// The environment a shell has after it evals the launch line for
-    /// `family`, in a cleared environment.
+    /// `family`, with the three config-home variables removed first.
     fn launched_environment(&self, family: &str) -> String {
         let script = format!(
             "home_line=$({bin} models launch-env --family {family}) && eval \"$home_line\"; env",
@@ -881,8 +881,9 @@ impl Seats {
         );
         let output = Command::new("sh")
             .current_dir(self.project())
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
+            .env_remove("GROK_HOME")
             .env("HOME", self.home())
             .env("CODEFLOW_HOME", self.home().join(".codeflow"))
             .args(["-c", &script])
@@ -984,8 +985,9 @@ fn a_refused_profile_stops_the_launch_snippet_before_any_variable_is_set() {
     );
     let output = Command::new("sh")
         .current_dir(seats.project())
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("GROK_HOME")
         .env("HOME", seats.home())
         .env("CODEFLOW_HOME", seats.home().join(".codeflow"))
         .args(["-c", &script])
