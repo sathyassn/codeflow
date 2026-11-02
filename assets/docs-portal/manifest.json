@@ -55,7 +55,6 @@
     { "path": "src/styles/portal.css", "ownership": "managed" },
     { "path": "src/styles/utility-tokens.css", "ownership": "managed" },
     { "path": "tests/adapter.test.mjs", "ownership": "managed" },
-    { "path": "tests/capability-catalog.test.mjs", "ownership": "managed" },
     { "path": "tests/browser-keyboard.test.mjs", "ownership": "managed" },
     { "path": "tests/chrome.test.mjs", "ownership": "managed" },
     { "path": "tests/composition-browser.test.mjs", "ownership": "managed" },

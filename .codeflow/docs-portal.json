@@ -224,10 +224,6 @@
       "ownership": "managed",
       "pristine_sha256": "a3a6d9816c9887c712c86f1392e7b1eb5d1673961a80425d2aa2751a0ff1e4e1"
     },
-    "tests/capability-catalog.test.mjs": {
-      "ownership": "managed",
-      "pristine_sha256": "28efd16d663374dd46cc17faa35baa329a938f06b689bb5ccd9cc5d18865fb4e"
-    },
     "tests/chrome.test.mjs": {
       "ownership": "managed",
       "pristine_sha256": "771822f257533ab48ac3d4e47017ccd7320af22df1b39e43ef557e489d8eed54"

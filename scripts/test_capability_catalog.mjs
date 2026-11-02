@@ -4,9 +4,9 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
-import { capabilityFrontmatterRecord, parseMarkdown, sha256 } from "../scripts/lib.mjs";
-import { GENERATOR } from "../scripts/generator.mjs";
-import { commitFixture, configureFixture, portalFixture, runAdapter, starterRoot } from "./portal-fixture.mjs";
+import { capabilityFrontmatterRecord, parseMarkdown, sha256 } from "../docs-portal/scripts/lib.mjs";
+import { GENERATOR } from "../docs-portal/scripts/generator.mjs";
+import { commitFixture, configureFixture, portalFixture, runAdapter, starterRoot } from "../docs-portal/tests/portal-fixture.mjs";
 const treeRemoval = { recursive: true, force: true, maxRetries: 10, retryDelay: 100 };
 
 test("capability frontmatter preserves loader delimiter and field bounds", () => {

@@ -1357,10 +1357,7 @@ fn verify_lookup(
         .and_then(|bytes| std::str::from_utf8(bytes).ok());
     let rows = match derive {
         Some("capability-registry") if page.source_path == CAPABILITY_REGISTRY => {
-            if !context.has_capability_records {
-                // Keep the legacy check on its already-read source snapshot.
-                text.map(|text| parse_capabilities(text).0.len())
-            } else {
+            if context.has_capability_records {
                 match load_capability_catalog_from_tree(context.repository, &page.built_from_commit)
                 {
                     Ok(catalog) => Some(catalog.records.len()),
@@ -1371,6 +1368,9 @@ fn verify_lookup(
                         return;
                     }
                 }
+            } else {
+                // Keep the legacy check on its already-read source snapshot.
+                text.map(|text| parse_capabilities(text).0.len())
             }
         }
         Some(generated @ (super::lookups::SKILL_CATALOG | super::lookups::POLICY_REFERENCE)) => {
