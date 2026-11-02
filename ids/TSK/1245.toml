@@ -1,0 +1,11 @@
+id = "TSK-1245"
+uid = "55e1a2c8-ee30-4cce-a021-d1079546fdc5"
+kind = "TSK"
+title = "completion judges a reopen against the fetched line, not a stale local branch"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T18:20:37Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
