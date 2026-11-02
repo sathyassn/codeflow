@@ -321,21 +321,30 @@ pub fn fetched_lines_at(root: &Path, commit: &str) -> Result<Vec<String>, String
         .map_err(|e| format!("cannot list the fetched epic lines: {e}"))?;
     for reference in references {
         let reference = reference.map_err(|e| format!("cannot read a fetched epic line: {e}"))?;
-        let Some(name) = reference
-            .name()
-            .ok()
-            .and_then(|name| name.strip_prefix("refs/remotes/origin/"))
-        else {
-            continue;
+        let full = crate::git::GitName::from_bytes(reference.name_bytes());
+        let line = match full.rule_text() {
+            Ok(text) => match text.strip_prefix("refs/remotes/origin/") {
+                Some(name) if epic_id(name).is_ok() => Some(name.to_string()),
+                _ => continue,
+            },
+            // A name that is not text cannot be read as a line: one at the
+            // commit refuses rather than being skipped.
+            Err(_) => None,
         };
-        if epic_id(name).is_err() {
-            continue;
-        }
         let tip = reference
             .peel_to_commit()
-            .map_err(|e| format!("cannot read the tip of 'origin/{name}': {e}"))?;
-        if tip.id() == commit {
-            lines.push(name.to_string());
+            .map_err(|e| format!("cannot read the tip of '{}': {e}", full.display()))?;
+        if tip.id() != commit {
+            continue;
+        }
+        match line {
+            Some(name) => lines.push(name),
+            None => {
+                return Err(format!(
+                    "a fetched line at {commit} has a name that is not UTF-8: '{}'",
+                    full.display()
+                ))
+            }
         }
     }
     lines.sort();
