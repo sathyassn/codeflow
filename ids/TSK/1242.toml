@@ -1,0 +1,11 @@
+id = "TSK-1242"
+uid = "1421a699-8109-4dca-ba9a-0a2b30e02f02"
+kind = "TSK"
+title = "A daily exact-SHA Windows run covers each active integration line"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T18:15:25Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
