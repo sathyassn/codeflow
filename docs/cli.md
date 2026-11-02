@@ -194,6 +194,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--pr-body-file <FILE>` | Read the PR/MR body from a file (scanned like `--pr-body`). |
 | | `--actor <ACTOR>` | The actor or app id that opened or updated the pull request, as the CI workflow passes it for trusted automation profiles (SPC-013 R-82). It is trusted only in a GitHub Actions pull request event from the same repository whose actor it names; a local run, another CI or a fork is `unknown` whatever is given. Default `unknown`. |
 | | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, the branch's declared target, a named --base, a unique protected or eligible epic line at the base commit, then the repository default). An ambiguous commit-ID base requires --into or --branch. A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). |
+| | `--line-tip <LINE>` | Judge the head as the next tip of this integration line, as a landing candidate is: every commit on the head's first-parent chain from the line's fetched tip (`origin/<LINE>`) must be a merge or a direct commit a landed `line_adoptions` entry names, the rule the pre-push hook applies to a push to the line (`work.epic_line`). Without it, a run with no pull request and no push context whose base is the fetched tip of exactly one epic line cannot tell how the head reaches the line and refuses when the head would add a direct commit; pass `--into <LINE>` or the body for a pull request head that lands by merge. |
 | `codeflow policy explain` | | Print the complete policy.json key schema: every key's type, default, valid values, and purpose |
 | `codeflow policy show` | | Print the effective policy: each key's current value, its source (project file or built-in default), and any invalid values |
 | `codeflow remote protect` | | Write the rulesets codeflow owns: "codeflow authority updates" and "codeflow authority checks" on the default branch, "codeflow line checks" on the integration lines, and `codeflow protect <pattern>` for each other protected branch in policy.json |
@@ -487,6 +488,18 @@ bases need `--into` or `--branch`. Base disagreements are reported;
 bases and targets retain protection. Pre-push validates and passes
 `--into=<target>`; its base follows the `--branch` row.
 CI context errors block the push.
+
+How `codeflow ci` treats a head that could become an epic line's next tip:
+
+| Run | Judged as the line's next tip | Outcome |
+|---|---|---|
+| `--line-tip <LINE>`, for a landing candidate before its gate | Yes, from `origin/<LINE>` whatever `--base` says, with the line bound by the records at that tip | A direct commit refuses with the hook's `work.epic_line` message; a line with no fetched tip or unbound there, a head not cut from the tip, and unreadable or malformed adoption entries refuse with the cause |
+| No role, and the base is the fetched tip of exactly one epic line | Yes: the run cannot tell a candidate from a pull request head | A direct commit refuses, and the remedy names `--line-tip`, and `--into` or the body; a bare run on a task branch whose line is fetched passes `--into <LINE>` |
+| No role, and the base is the fetched tip of several epic lines | Cannot tell which line | Refuses |
+| No role, and the base is the fetched tip of both the default target and an epic line, as a new line's is | Yes: nothing the requester cannot forge says where the head lands | A direct commit refuses, and the remedy also names `--into main` for a change into the default target |
+| No role, and the head is the base | No: it adds no commit | Not judged |
+| A pull request head: a body, a pull request event, or `--into` | No: it lands by merge | Not judged |
+| A push hand-off from the pre-push hook | No | The hook judges the push |
 
 `codeflow ci` proceeds when only warnings were raised and reports the count.
 A pull request adding or modifying only the regular file `.gitleaksignore`
