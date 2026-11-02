@@ -45,8 +45,13 @@ export async function generate(): Promise<Map<string, string>> {
   const stages = await json<Record<string, string>>('stages.json');
   const blocks = (await Promise.all(['type', 'space', 'radius', 'elevation', 'motion'].map(name => json<TokenBlock[]>(`${name}.json`)))).flat();
   let css = '/* Generated from source/*.json. Run node source/generate.ts; do not edit. */\n';
-  css += `:root {\n${declarations(layout)}\n}\n`;
+  const light = colours.palettes['graphite-light']!;
+  const defaults = { ...light, ...accentFamily(colours.accents[colours.defaultAccent]!.light!, 'light', light.surface!, floors.textContrast) };
+  for (const [stage, role] of Object.entries(stages)) defaults[`stage-${stage}`] = defaults[role]!;
+  const common = Object.assign({}, layout, ...blocks.filter(block => block.selector === ':root' && !block.media).map(block => block.values), defaults);
+  css += `:root {\n${declarations(common)}\n}\n`;
   for (const block of blocks) {
+    if (block.selector === ':root' && !block.media) continue;
     const selector = block.selector.includes('data-cf-typeface') || block.selector.includes('data-cf-scale')
       ? `${block.selector}, ${block.selector.replaceAll('data-cf-typeface', 'data-cfp-typeface').replaceAll('data-cf-scale', 'data-cfp-scale')}` : block.selector;
     const rule = `${selector} {\n${declarations(block.values)}\n}\n`;
@@ -61,7 +66,6 @@ export async function generate(): Promise<Map<string, string>> {
     resolved[pair] = values;
     // Separate blocks preserve the kit's established selector contract.
     for (const selector of selectors(theme, mode)) css += `${selector} {\n${declarations(values)}\n}\n`;
-    if (pair === 'graphite-light') css += `:root {\n${declarations(values)}\n}\n`;
     for (const option of colours.themes[theme]!) {
       const accent = accentFamily(colours.accents[option]![mode]!, mode, roles.surface!, floors.textContrast);
       for (const [stage, role] of Object.entries(stages)) if (role in accent) accent[`stage-${stage}`] = accent[role]!;

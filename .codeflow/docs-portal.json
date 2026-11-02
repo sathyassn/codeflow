@@ -214,7 +214,7 @@
     },
     "src/styles/utility-tokens.css": {
       "ownership": "managed",
-      "pristine_sha256": "0447cead8f289f841b69ab27459b236239193bb9738ddc55a87642b6cc9738d3"
+      "pristine_sha256": "81a658edc92008d28bba47945042ccf9f6bfb388a76f5af16a6f6bc6f5009410"
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",

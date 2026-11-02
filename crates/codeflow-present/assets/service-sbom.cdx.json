@@ -5,23 +5,23 @@
   "components": [
     {
       "type": "file",
-      "bom-ref": "service/app-SGZ73XM3.css.br",
-      "name": "service/app-SGZ73XM3.css.br",
+      "bom-ref": "service/app-F5ZI2KRS.css.br",
+      "name": "service/app-F5ZI2KRS.css.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "a9353f7ed1763df53cd33265f6dc14a97214f5570380bf47ea8c0bfb18cc39d4"
+          "content": "45f0270f46c681f4714060c0d5cba37a9dfa5502adc8033367e5fb03eebeab13"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-SGZ73XM3.css.gz",
-      "name": "service/app-SGZ73XM3.css.gz",
+      "bom-ref": "service/app-F5ZI2KRS.css.gz",
+      "name": "service/app-F5ZI2KRS.css.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "7579eac5b998e209a3486acf745bc76fefd060624a03ef6bf28cb06e6f5a87ed"
+          "content": "9e8fd834264397b4f44b6fa0d80f3c3cab78fac31dee4aa533c1db8fce181cab"
         }
       ]
     },
