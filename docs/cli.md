@@ -548,7 +548,7 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
 - The hook names what it left to CI, such as an unresolved range.
 
 `codeflow integrate` is the local landing path for protected branches. It
-rebases the branch onto the target by default, runs every full-gate target, then
+rebases the branch onto the target by default, runs the selected landing checks, then
 fast-forwards the target ref. With `--merge`, it creates a `--no-ff` merge
 commit whose first parent is the old target tip and whose second parent is
 the unchanged source head, and gates that merge result. This keeps a task's
@@ -557,9 +557,14 @@ worktree; a root checkout is refused before candidate preparation. A head
 already contained in the target needs no new merge commit. The subject names
 both refs: `Merge branch '<branch>' into <target>`.
 
+For an `integration/` target, the diff from its pinned tip selects the gate:
+records-only checks or the full gate, as `.codeflow/rules/git-rules.md`,
+"Bodies of work", lists them. The outcome names the class and checks run,
+also saved at `<git-common-dir>/codeflow/landings/<candidate>.json`.
+
 Both modes advance the local target only after the gate and the adopted
 release structure check pass. They refuse failed, skipped or incomplete gates; a
-repository with no gate targets lands with the loud not-test-verified warning.
+code candidate with no gate targets lands with the loud not-test-verified warning.
 They also refuse if the source or target moved while testing. A conflict or
 failed gate leaves the target unchanged and restores the original checkout. The command does not push; the operator or
 primary handles the remote landing through the project's PR flow.

@@ -46,6 +46,13 @@
           },
           "description": "Shared input globs that select all targets."
         },
+        "record_checks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Targets a records-only landing runs in full mode beside the built-in codeflow validate --docs."
+        },
         "heavy_wait_seconds": {
           "type": "integer",
           "minimum": 0,

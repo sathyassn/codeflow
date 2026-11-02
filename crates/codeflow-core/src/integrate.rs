@@ -13,6 +13,7 @@
 //! the hard line (charter §6.5).
 
 use crate::workgraph::history;
+use crate::workgraph::landing_class::{classify_landing_into, LandingClass};
 
 use std::path::{Path, PathBuf};
 
@@ -121,6 +122,10 @@ pub struct IntegrateOutcome {
     pub final_checkout: String,
     /// Non-fatal partial-success conditions that need human attention.
     pub warnings: Vec<String>,
+    /// Class selected from the pinned target-to-candidate diff.
+    pub landing_class: LandingClass,
+    /// Checks successfully executed for this landing.
+    pub checks: Vec<String>,
 }
 
 impl std::fmt::Display for IntegrateOutcome {
@@ -192,6 +197,8 @@ impl IntegrateOutcome {
                 )?;
             }
         }
+        writeln!(f, "  landing class: {}", self.landing_class.name())?;
+        writeln!(f, "  checks ran: {}", self.checks.join(", "))?;
         writeln!(f, "  checkout:  {}", display_text(&self.final_checkout))?;
         for warning in &self.warnings {
             writeln!(f, "  WARNING:   {}", display_line(warning))?;
@@ -298,10 +305,10 @@ pub fn integrate_with_mode(
         repo_root, &repo, branch, target, branch_oid, target_oid, &original, mode,
     )?;
 
-    // Stage 3: test gate (full mode), then the release structure of a
+    // Stage 3: selected landing checks, then the release structure of a
     // project that adopted CodeFlow's calculator (SPC-013 R-94).
-    let test_gate = run_test_stage(repo_root, &original)?;
-    run_release_structure(repo_root, &original, &tested_oid.to_string())?;
+    let (class, test_gate, checks) =
+        run_landing_checks(repo_root, &original, branch, target, target_oid, tested_oid)?;
 
     // The source must still match the head used to prepare the candidate,
     // and the old target must be an ancestor of the tested candidate.
@@ -380,6 +387,8 @@ pub fn integrate_with_mode(
         old_target_short,
         original,
         test_gate,
+        class,
+        checks,
     )
 }
 
@@ -532,9 +541,26 @@ fn finish_integration(
     old_target: String,
     original: String,
     test_gate: TestGateSummary,
+    landing_class: LandingClass,
+    checks: Vec<String>,
 ) -> Result<IntegrateOutcome, IntegrateError> {
     let new_target_oid = resolve_branch(repo, target)?;
     let mut warnings = refresh_target_worktrees(repo_root, target, old_target_oid, tested_oid);
+    let record = serde_json::json!({
+        "base": old_target_oid.to_string(), "head": tested_oid.to_string(),
+        "target": target, "class": landing_class, "checks_ran": checks,
+    });
+    let directory = repo.commondir().join("codeflow/landings");
+    if let Err(error) = std::fs::create_dir_all(&directory).and_then(|()| {
+        std::fs::write(
+            directory.join(format!("{tested_oid}.json")),
+            record.to_string(),
+        )
+    }) {
+        warnings.push(format!(
+            "landing succeeded but its local check record could not be written: {error}"
+        ));
+    }
     if let Err(message) = restore_checkout(repo_root, &original) {
         warnings.push(format!(
             "target ref advanced, but checkout restoration failed: {message}"
@@ -550,10 +576,11 @@ fn finish_integration(
         test_gate,
         final_checkout: current_checkout(repo_root).unwrap_or(original),
         warnings,
+        landing_class,
+        checks,
     })
 }
 
-/// Run the full-mode test gate; restores `original` checkout on failure.
 /// The structural release check of a project that adopted `CodeFlow`'s
 /// calculator, on the tested commit; any other project runs nothing.
 fn run_release_structure(
@@ -582,10 +609,322 @@ fn run_release_structure(
     })
 }
 
-fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, IntegrateError> {
+fn run_landing_checks(
+    repo_root: &Path,
+    original: &str,
+    branch: &str,
+    target: &str,
+    target_oid: git2::Oid,
+    tested_oid: git2::Oid,
+) -> Result<(LandingClass, TestGateSummary, Vec<String>), IntegrateError> {
+    let class = classify_landing_into(
+        repo_root,
+        &target_oid.to_string(),
+        &tested_oid.to_string(),
+        target,
+    )
+    .class;
+    let mut checks = Vec::new();
+    if class == LandingClass::RecordsOnly {
+        checks = run_record_checks(repo_root, original, branch, target, target_oid, tested_oid)?;
+    }
+    let test_gate = run_test_stage(repo_root, original, class.gate_mode())?;
+    if matches!(test_gate, TestGateSummary::Passed { .. }) {
+        checks.push(format!("test --mode {} --all", class.gate_mode()));
+    } else if class == LandingClass::RecordsOnly {
+        let _ = restore_checkout(repo_root, original);
+        return Err(IntegrateError::TestGateFailed {
+            summary: "records-only landing requires a completed quick gate".into(),
+        });
+    }
+    run_release_structure(repo_root, original, &tested_oid.to_string())?;
+    Ok((class, test_gate, checks))
+}
+
+/// Run the records-only checks and return their names in the order they ran:
+/// `validate --docs`, `ci` on the range, the range secret scan, then the
+/// targets the project lists in `execution.record_checks`, in full mode.
+fn run_record_checks(
+    root: &Path,
+    original: &str,
+    branch: &str,
+    target: &str,
+    base: git2::Oid,
+    head: git2::Oid,
+) -> Result<Vec<String>, IntegrateError> {
+    let checked = (|| {
+        let base = base.to_string();
+        let head = head.to_string();
+        for arguments in [
+            vec!["validate", "--docs"],
+            vec![
+                "ci", "--base", &base, "--head", &head, "--branch", branch, "--into", target,
+            ],
+        ] {
+            let output = crate::git::codeflow_command()
+                .args(&arguments)
+                .current_dir(root)
+                .output()
+                .map_err(|error| error.to_string())?;
+            if !output.status.success() {
+                return Err(format!(
+                    "{} failed ({}): {}{}",
+                    arguments.join(" "),
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+        }
+        scan_record_range(root, &base, &head)?;
+        let mut ran: Vec<String> = ["validate --docs", "ci range", "built-in secret scan"]
+            .map(str::to_string)
+            .into();
+        let named = declared_record_checks(root)?;
+        if !named.is_empty() {
+            run_named_record_checks(root, &named)?;
+            ran.push(format!("test --mode full --only {}", named.join(",")));
+        }
+        Ok(ran)
+    })();
+    checked.map_err(|summary| {
+        let _ = restore_checkout(root, original);
+        IntegrateError::TestGateFailed { summary }
+    })
+}
+
+/// `execution.record_checks` from the checked-out candidate's test config.
+/// The config is not a record, so a records-only candidate carries the line
+/// tip's copy unchanged.
+fn declared_record_checks(root: &Path) -> Result<Vec<String>, String> {
+    let path = root.join(crate::testing::gate::TEST_CONFIG_PATH);
+    if crate::absence::proven_absent(&path).map_err(|error| error.to_string())? {
+        return Ok(Vec::new());
+    }
+    crate::testing::config::load_test_config(&path)
+        .map(|config| config.execution.record_checks)
+        .map_err(|error| format!("record checks cannot be read: {error}"))
+}
+
+/// Run the declared record checks in full mode. Every named target must
+/// exist with a full mode, execute and pass; none may be skipped.
+fn run_named_record_checks(root: &Path, named: &[String]) -> Result<(), String> {
+    let list = named.join(", ");
+    let outcome = run_gate_with_options(
+        root,
+        "full",
+        &GateOptions {
+            all: true,
+            only: named.to_vec(),
+            ..GateOptions::default()
+        },
+    )
+    .map_err(|error| format!("record checks {list}: {error}"))?;
+    match outcome {
+        GateOutcome::Completed {
+            results,
+            passed,
+            skipped,
+            evidence_skipped,
+            ..
+        } => {
+            let all_ran = named
+                .iter()
+                .all(|name| results.iter().any(|result| &result.name == name));
+            if passed && all_ran && evidence_skipped == 0 && skipped.is_empty() {
+                return Ok(());
+            }
+            Err(format!(
+                "record checks {list} did not all run and pass:\n{}",
+                results
+                    .iter()
+                    .map(|r| format!("  {}: exit {}", r.name, r.exit_code))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ))
+        }
+        GateOutcome::NoTargets { reason } => {
+            Err(format!("record checks {list} did not run: {reason}"))
+        }
+    }
+}
+
+/// Scan the lines each introduced commit adds, including lines a later
+/// commit removes, with the same credential patterns as pre-commit. A hit is
+/// waived only by a commit-qualified fingerprint
+/// (`<commit>:<path>:<rule>:<line>`) in the line tip's root
+/// `.gitleaksignore`, the exemption the managed secret scan reads; the
+/// candidate cannot supply its own. Never print matched content.
+fn scan_record_range(root: &Path, base: &str, head: &str) -> Result<(), String> {
+    let repo = git2::Repository::discover(root).map_err(|error| error.to_string())?;
+    let base_oid = git2::Oid::from_str(base).map_err(|error| error.to_string())?;
+    let waived = line_tip_fingerprints(&repo, base_oid)?;
+    let mut walk = super::workgraph::history::revwalk(&repo).map_err(|error| error.to_string())?;
+    walk.push(git2::Oid::from_str(head).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    walk.hide(base_oid).map_err(|error| error.to_string())?;
+    for id in walk {
+        let commit = repo
+            .find_commit(id.map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+        let id = commit.id().to_string();
+        // A merge brings in lines its parents already carry; only a line it
+        // adds against every parent (a conflict resolution) is its own.
+        let mut hits: Option<Vec<(String, u32, String)>> = None;
+        let parents = history::parents(&repo, &commit)
+            .map_err(|error| error.to_string())?
+            .len();
+        for index in 0..parents.max(1) {
+            let parent = history::parent(&repo, &commit, index)
+                .and_then(|parent| parent.tree())
+                .map_err(|error| error.to_string())?;
+            let found = added_hits(&repo, &parent, &commit, &id)?;
+            hits = Some(match hits {
+                None => found,
+                Some(first) => first
+                    .into_iter()
+                    .filter(|(path, _, text)| {
+                        found
+                            .iter()
+                            .any(|(other, _, line)| other == path && line == text)
+                    })
+                    .collect(),
+            });
+        }
+        if let Some((path, number, _)) = hits
+            .unwrap_or_default()
+            .into_iter()
+            .find(|(path, number, _)| !waived.contains(&(id.clone(), path.clone(), *number)))
+        {
+            return Err(format!(
+                "secret scan found a credential pattern at {path}:{number} in commit {id}; \
+                 remove it from the branch history and rotate it if it is real. For a \
+                 reviewed false positive, first land the fingerprint \
+                 {id}:{path}:<rule>:{number} in .gitleaksignore on the line (the exemption \
+                 the managed secret scan reads), then land again"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Lines `commit` adds against `parent` that match a credential pattern, as
+/// (path, line number, line). The line text stays in memory for the merge
+/// comparison and is never printed.
+fn added_hits(
+    repo: &git2::Repository,
+    parent: &git2::Tree<'_>,
+    commit: &git2::Commit<'_>,
+    id: &str,
+) -> Result<Vec<(String, u32, String)>, String> {
+    let tree = commit.tree().map_err(|error| error.to_string())?;
+    let diff = repo
+        .diff_tree_to_tree(Some(parent), Some(&tree), None)
+        .map_err(|error| error.to_string())?;
+    let stop: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
+    let hits: std::cell::RefCell<Vec<(String, u32, String)>> = std::cell::RefCell::new(Vec::new());
+    let binary = |delta: git2::DiffDelta<'_>| {
+        if delta.new_file().id().is_zero() {
+            return true;
+        }
+        *stop.borrow_mut() = Some(unreadable(id, &delta_path(&delta)));
+        false
+    };
+    let walked = diff.foreach(
+        &mut |delta, _| !delta.new_file().is_binary() || binary(delta),
+        Some(&mut |delta, _| binary(delta)),
+        None,
+        Some(&mut |delta, _hunk, line| {
+            if line.origin() != '+' {
+                return true;
+            }
+            let path = delta_path(&delta);
+            let Ok(text) = std::str::from_utf8(line.content()) else {
+                *stop.borrow_mut() = Some(unreadable(id, &path));
+                return false;
+            };
+            if crate::hooks::scan::scan_line(text).is_some() {
+                hits.borrow_mut()
+                    .push((path, line.new_lineno().unwrap_or(0), text.to_string()));
+            }
+            true
+        }),
+    );
+    if let Some(refusal) = stop.into_inner() {
+        return Err(refusal);
+    }
+    walked.map_err(|error| format!("secret scan of commit {id} failed: {error}"))?;
+    Ok(hits.into_inner())
+}
+
+fn unreadable(commit: &str, path: &str) -> String {
+    format!(
+        "secret scan cannot read {path} in commit {commit} as UTF-8 text; remove the binary \
+         or non-UTF-8 content from the branch, or land it with a full gate as a code change"
+    )
+}
+
+fn delta_path(delta: &git2::DiffDelta<'_>) -> String {
+    delta
+        .new_file()
+        .path_bytes()
+        .map(|path| crate::git::GitName::from_bytes(path).display().to_string())
+        .unwrap_or_default()
+}
+
+/// Commit-qualified fingerprints in the line tip's root `.gitleaksignore`,
+/// as (commit, path, line). The rule part is not compared: the built-in
+/// scan names its patterns differently from gitleaks, and the commit, path
+/// and line already fix one added line. Fingerprints without a commit do not
+/// waive a range hit.
+fn line_tip_fingerprints(
+    repo: &git2::Repository,
+    tip: git2::Oid,
+) -> Result<std::collections::HashSet<(String, String, u32)>, String> {
+    let tree = repo
+        .find_commit(tip)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| error.to_string())?;
+    let Some(entry) = tree.get_name(".gitleaksignore") else {
+        return Ok(std::collections::HashSet::new());
+    };
+    if entry.filemode() != 0o100_644 {
+        return Err(".gitleaksignore at the line tip is not a regular file".into());
+    }
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|error| error.to_string())?;
+    let text = std::str::from_utf8(blob.content())
+        .map_err(|_| ".gitleaksignore at the line tip is not UTF-8")?;
+    // One fingerprint per line, as gitleaks writes them; no other
+    // whitespace is stripped, so a padded entry matches nothing.
+    Ok(text
+        .split('\n')
+        .filter_map(|line| {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let (commit, rest) = line.split_once(':')?;
+            if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return None;
+            }
+            let (rest, number) = rest.rsplit_once(':')?;
+            let (path, _rule) = rest.rsplit_once(':')?;
+            Some((
+                commit.to_ascii_lowercase(),
+                path.to_string(),
+                number.parse().ok()?,
+            ))
+        })
+        .collect())
+}
+
+fn run_test_stage(
+    repo_root: &Path,
+    original: &str,
+    mode: &str,
+) -> Result<TestGateSummary, IntegrateError> {
     match run_gate_with_options(
         repo_root,
-        "full",
+        mode,
         &GateOptions {
             all: true,
             ..GateOptions::default()
@@ -597,9 +936,18 @@ fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, I
             passed,
             skipped,
             complete,
+            evidence_skipped,
             ..
         }) => {
-            if passed && complete && skipped.is_empty() && !results.is_empty() {
+            // `complete` denotes a full-mode run. The records path asks for
+            // every quick target (`all: true` above), with none omitted or
+            // satisfied by earlier candidate evidence.
+            if passed
+                && (complete || mode == "quick")
+                && evidence_skipped == 0
+                && skipped.is_empty()
+                && !results.is_empty()
+            {
                 return Ok(TestGateSummary::Passed {
                     targets: results.into_iter().map(|r| r.name).collect(),
                 });

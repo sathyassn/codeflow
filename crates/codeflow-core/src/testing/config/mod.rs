@@ -91,6 +91,11 @@ pub struct ExecutionConfig {
     /// Stop on first target failure.
     #[serde(default)]
     pub fail_fast: bool,
+
+    /// Targets a records-only landing runs in full mode beside the built-in
+    /// `codeflow validate --docs`. Empty runs the built-in validation only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub record_checks: Vec<String>,
 }
 
 /// Default settings applied to all targets.

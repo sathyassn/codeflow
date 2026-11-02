@@ -419,6 +419,9 @@ pub struct GitPolicy {
     /// Exact repository-relative document index files a planning amendment
     /// may carry, as declared on its target. Product and watched paths win.
     pub document_indexes: Vec<String>,
+    /// Markdown record globs eligible for the shorter integration landing gate.
+    /// Product, watched, instruction, config and special-file exclusions win.
+    pub record_paths: Vec<String>,
     /// Retired compatibility key, accepted and ignored (R-70).
     pub direct_changes: String,
     /// Trusted automation profiles (SPC-013 R-82). A profile applies in
@@ -614,6 +617,7 @@ impl Default for GitPolicy {
             work_planning: PolicyLevel::Block,
             product_paths: None,
             document_indexes: Vec::new(),
+            record_paths: crate::workgraph::change_class::default_record_paths(),
             direct_changes: "allow".to_string(),
             automation_profiles: Vec::new(),
             pr_section_mapping: None,

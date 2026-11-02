@@ -1476,7 +1476,7 @@
         {
           "path": ".agents/skills/cf-method/SKILL.md",
           "markers": [
-            "runs one full gate on that exact candidate"
+            "checks from `.codeflow/rules/git-rules.md` on that exact candidate"
           ]
         }
       ]
@@ -1689,7 +1689,7 @@
             "cut and push `integration/<epic-id>-<slug>` off the current protected target",
             "Each task still completes its producer verification and cross-lineage review before it joins a batch",
             "assembles reviewed heads into a small batch candidate in dependency order",
-            "one full gate on that exact candidate",
+            "runs the selected landing checks",
             "does not reopen unit review",
             "Boundaries are unchanged",
             "An explicit operator request about the landing shape is valid input and is honoured, but it cannot waive the clarity, safety, review or protected-branch conditions."
@@ -2916,7 +2916,7 @@
             "1: take it without asking; progress goes in the running report, never in an offer",
             "1: choose from evidence and disclose it",
             "1: classify and continue; fix an assertion-red check, push and poll again",
-            "2: once the full gate is green on that exact candidate, the primary merges it without fast forward or with `codeflow integrate`, then confirms the landed state against the candidate's evidence with `codeflow status`",
+            "2: once the landing-class checks in git-rules Bodies of work are green on that exact candidate, the primary merges it without fast forward or with `codeflow integrate`, then confirms the landed state against the candidate's evidence with `codeflow status`",
             "3: ask for a fresh grant",
             "4: wait for the operator; do not spend",
             "4: report it ready; a human merges"

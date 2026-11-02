@@ -164,8 +164,13 @@ from the line tip in dependency order, resolves any remaining conflicts
 there, and inspects each landing merge: a clean merge does not reopen unit
 review; a hand-resolved product hunk returns its task to a whole-unit
 review at its new head (cf-method "Land in batches" where installed). Then
-one full gate runs on the exact candidate
-and is attached to the PRs it covers; a standalone PR is its own
+the landing class in `git-rules.md`, "Bodies of work", selects the checks:
+records-only candidates run validation, range CI, the secret scan, the
+targets in `execution.record_checks` and the quick gate; every other
+candidate, and any candidate for a protected or release target, runs one
+full gate.
+The exact candidate's class and executed checks are attached to the PRs it
+covers; a standalone PR is its own
 candidate. A red gate is diagnosed first: a member and its dependents are
 dropped only when evidence attributes the failure to it, and a shared
 runner or environment defect is fixed at its owner and the candidate
