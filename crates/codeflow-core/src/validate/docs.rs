@@ -349,13 +349,14 @@ fn catalog_for_docs(root: &Path, report: &mut DocsLintReport) -> CapabilityCatal
     catalog
 }
 
-#[cfg(test)]
+// Only the unix-only `r22_regressions` tests call these helpers.
+#[cfg(all(test, unix))]
 fn lint_capability_epic_reciprocity(root: &Path, report: &mut DocsLintReport) {
     let catalog = catalog_for_docs(root, report);
     lint_capability_epic_reciprocity_with_catalog(root, &catalog, report);
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
     let catalog = catalog_for_docs(repo_root, report);
     build_graph_with_catalog(repo_root, &catalog, report)
