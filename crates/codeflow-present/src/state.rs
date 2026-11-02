@@ -1215,10 +1215,20 @@ impl SessionStore {
     ) -> Result<Vec<crate::stage_measurements::StageMeasurement>> {
         self.ensure_session_layout(id)?;
         let path = self.session_dir(id).join("stage-measurements.json");
-        match fs::symlink_metadata(&path) {
+        let result = match fs::symlink_metadata(&path) {
             Ok(_) => read_json(&path, limits::MAX_REVISION_STATE_BYTES),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(error) => Err(PresentError::io(path, error)),
+        };
+        match result {
+            Ok(records) => Ok(records),
+            Err(error) => {
+                eprintln!(
+                    "present: warning: advisory stage measurements ignored: {}",
+                    crate::output::display_message(&error.to_string())
+                );
+                Ok(Vec::new())
+            }
         }
     }
 

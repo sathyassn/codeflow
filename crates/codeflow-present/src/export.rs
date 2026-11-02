@@ -210,12 +210,37 @@ fn enhance_export(
         "</iframe><p data-cf-stage-notice>height not measured at this width; open the session</p>",
     );
     let captured_at = crate::state::now_unix()?;
-    let capture = format!("<aside aria-label=\"Export status\">Review capture of the session at Unix time {captured_at}. Open the session for handover.</aside>");
+    let timestamp = capture_timestamp(captured_at);
+    let capture = format!("<aside aria-label=\"Export status\">Review capture of the session at <time datetime=\"{timestamp}\" data-cf-unix=\"{captured_at}\">{timestamp}</time>. Open the session for handover.</aside>");
     html = html.replacen("<body>", &format!("<body>{capture}"), 1);
     let payload = format!(
         "<template id=\"cf-present-export-payload\">{encoded}</template><script>{bootstrap}</script>"
     );
     Ok(html.replacen("</body>", &format!("{payload}</body>"), 1))
+}
+
+// Howard Hinnant's civil-from-days algorithm, for post-epoch UTC captures.
+fn capture_timestamp(seconds: u64) -> String {
+    let days = seconds / 86_400 + 719_468;
+    let era = days / 146_097;
+    let day_of_era = days % 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let march_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * march_month + 2) / 5 + 1;
+    let (month, year) = if march_month < 10 {
+        (march_month + 3, year_of_era + era * 400)
+    } else {
+        (march_month - 9, year_of_era + era * 400 + 1)
+    };
+    let within_day = seconds % 86_400;
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        within_day / 3600,
+        within_day % 3600 / 60,
+        within_day % 60
+    )
 }
 
 fn json_template<T: serde::Serialize>(id: &str, value: &T) -> Result<String> {
@@ -402,6 +427,17 @@ mod tests {
         )
         .unwrap();
         assert!(exported.contains("Review capture"));
+        assert!(exported.contains("<time datetime="));
+        assert!(!exported.contains("Unix time"));
+        assert_eq!(super::capture_timestamp(0), "1970-01-01T00:00:00Z");
+        assert_eq!(
+            super::capture_timestamp(1_709_251_199),
+            "2024-02-29T23:59:59Z"
+        );
+        assert_eq!(
+            super::capture_timestamp(1_709_251_200),
+            "2024-03-01T00:00:00Z"
+        );
     }
 
     #[test]

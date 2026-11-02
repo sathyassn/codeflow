@@ -52,7 +52,7 @@ export function sizeStage(frame: HTMLIFrameElement, measurements: StageMeasureme
   const id = frame.closest<HTMLElement>("[data-cf-block-id]")?.dataset.cfBlockId;
   const root = document.documentElement;
   const width = frame.getBoundingClientRect().width;
-  const match = measurements.find((item) => item.stage_id === id && item.content_width === width
+  const match = measurements.find((item) => item.stage_id === id && Math.abs(item.content_width - width) <= 1 / 64
     && item.theme === root.dataset.cfTheme && item.mode === root.dataset.cfModeResolved);
   frame.style.setProperty("--cf-export-stage-height", match ? `${Math.max(24, match.height)}px` : "28rem");
   const notice = frame.parentElement?.querySelector<HTMLElement>("[data-cf-stage-notice]");

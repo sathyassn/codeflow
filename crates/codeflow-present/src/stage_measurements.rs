@@ -208,6 +208,44 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_advisory_measurements_degrade_and_are_replaced() {
+        let scratch = tempdir().unwrap();
+        let store = SessionStore::at_root(scratch.path().join("project"), "key".into()).unwrap();
+        let session = store.create(ParsedDocument::Supported(document())).unwrap();
+        let path = store
+            .session_dir(session.id)
+            .join("stage-measurements.json");
+        store
+            .record_stage_measurement(session.id, report())
+            .unwrap();
+        // Preserve the private file permissions while corrupting its JSON.
+        std::fs::write(&path, b"{invalid json").unwrap();
+        let output = scratch.path().join("unmeasured.html");
+        crate::export::export_session(
+            &store,
+            session.id,
+            &output,
+            crate::export::ExportTheme::Graphite,
+            crate::export::ExportMode::Light,
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(output).unwrap();
+        assert!(html.contains("id=\"cf-stage-measurements\">[]</template>"));
+        assert!(html.contains("height not measured at this width"));
+        store
+            .record_stage_measurement(session.id, report())
+            .unwrap();
+        assert_eq!(
+            store.stage_measurements(session.id).unwrap(),
+            vec![report()]
+        );
+        // A non-file is also unreadable advisory data, not a broken session.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(store.stage_measurements(session.id).unwrap().is_empty());
+    }
+
+    #[test]
     fn invalid_reports_do_not_replace_valid_state() {
         let scratch = tempdir().unwrap();
         let store = SessionStore::at_root(scratch.path().join("project"), "key".into()).unwrap();

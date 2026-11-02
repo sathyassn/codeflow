@@ -37,7 +37,12 @@ test("only matching width and appearance size the stage, and failure stays visib
   const report = { stage_id: "nine-rows", content_width: 832, height: 916, theme: "slate", mode: "dark" };
   sizeStage(frame, [report]); assert.equal(values.get("--cf-export-stage-height"), "916px"); assert.equal(notice.hidden, true);
   sizeStage(frame, [{ ...report, height: 48 }]); assert.equal(values.get("--cf-export-stage-height"), "48px");
-  for (const wrong of [{ ...report, content_width: 373 }, { ...report, mode: "light" }, { ...report, theme: "sage" }]) {
+  for (const content_width of [832 - 1 / 64, 832 + 1 / 64]) {
+    sizeStage(frame, [{ ...report, content_width }]);
+    assert.equal(values.get("--cf-export-stage-height"), "916px");
+    assert.equal(notice.hidden, true);
+  }
+  for (const wrong of [{ ...report, content_width: 832 + 1 / 32 }, { ...report, content_width: 373 }, { ...report, mode: "light" }, { ...report, theme: "sage" }]) {
     sizeStage(frame, [wrong]); assert.equal(values.get("--cf-export-stage-height"), "28rem");
     assert.equal(notice.hidden, false); assert.match(notice.textContent, /height not measured at this width/u);
   }
