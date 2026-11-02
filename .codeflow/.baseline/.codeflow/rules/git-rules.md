@@ -121,10 +121,10 @@ evidence attributes the failure to it. Only the finished body
 reaches `main`, via one human-reviewed PR that the operator merges. See
 cf-method, "Managing a body of work" (standard and full tiers).
 
-Direct commits on an epic line are refused at push, and `codeflow ci`
-refuses them on a landing candidate before its gate: run `codeflow ci
---line-tip integration/EPC-NNN-<slug>` on the candidate, which judges it
-from the line's fetched tip. Move an unpushed one
+Direct commits on an epic line are refused at push. `codeflow ci` refuses
+them on a landing candidate before its gate when run with `--line-tip
+integration/EPC-NNN-<slug>`, which judges the candidate from the line's
+fetched tip. Move an unpushed one
 into a pull request: keep it on a task or planning branch, run
 `git reset --keep origin/integration/EPC-NNN-<slug>` on the line (the
 default target on its first push), then open the pull request to the line.
