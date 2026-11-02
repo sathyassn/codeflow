@@ -1919,7 +1919,8 @@ fn claim_push_runs_no_failing_target_at_the_tip() {
         hooks.path(),
         "pre-push",
         &format!(
-            "#!/bin/sh\nexec '{}' git-hook pre-push \"$@\"\n",
+            "#!/bin/sh\ntouch '{}'\nexec '{}' git-hook pre-push \"$@\"\n",
+            hooks.path().join("hook.ran").display(),
             env!("CARGO_BIN_EXE_codeflow")
         ),
     );
@@ -1965,6 +1966,8 @@ fn claim_push_runs_no_failing_target_at_the_tip() {
         ),
         git(root, &["rev-parse", "HEAD"])
     );
+    // The hook ran during the claim itself, and started no target.
+    assert!(hooks.path().join("hook.ran").exists(), "{}", text(&claimed));
     assert!(!root.join("ran.marker").exists(), "{}", text(&claimed));
     // The same fixture refuses a commit `codeflow ci` rejects.
     git(
