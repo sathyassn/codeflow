@@ -1,0 +1,11 @@
+id = "TSK-1247"
+uid = "74c3bcce-9ad6-4498-84bd-1b8eb1ee511d"
+kind = "TSK"
+title = "Prove the commit standards target build cache on hosted runs after the writer reaches main"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T21:59:48Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
