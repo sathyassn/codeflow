@@ -107,11 +107,10 @@ fn a_given_since_still_runs_every_target_and_says_it_narrows_nothing() {
 fn a_shallow_clone_runs_every_target_and_recommends_no_since() {
     let source = committed_repo();
     let parent = tempfile::tempdir().unwrap();
-    let clone = parent.path().join("shallow");
     let url = format!("file://{}", source.path().display());
-    git(
-        parent.path(),
-        &["clone", "-q", "--depth", "1", &url, clone.to_str().unwrap()],
-    );
+    codeflow_fixture::clone(parent.path(), &url, "shallow")
+        .depth(1)
+        .run();
+    let clone = parent.path().join("shallow");
     assert_every_target_runs_with_the_reason(&clone, "shallow clone");
 }
