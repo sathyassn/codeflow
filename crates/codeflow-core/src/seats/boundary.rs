@@ -154,9 +154,12 @@ pub fn check_config_home(spelled: &Path, project_root: &Path) -> Result<(), Stri
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    // Only the symlink tests are Unix-only; creating a link needs a privilege
+    // on Windows. Everything else here runs on every platform.
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
     struct Fixture {
@@ -205,6 +208,7 @@ mod tests {
         assert!(check_config_home(&f.outside.join("exists"), &f.main).is_ok());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_link_from_outside_into_the_project_is_refused() {
         let f = fixture();
@@ -214,6 +218,7 @@ mod tests {
         assert!(refused(&f, &f.outside.join("link/new")).contains("inside the project"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_link_inside_local_is_refused_in_both_directions() {
         let f = fixture();
@@ -225,11 +230,17 @@ mod tests {
         assert!(refused(&f, &local.join("away/deeper")).contains("resolves elsewhere"));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn a_dangling_link_and_a_regular_file_are_refused() {
+    fn a_dangling_link_is_refused() {
         let f = fixture();
         symlink(f.outside.join("missing"), f.outside.join("dangling")).unwrap();
         assert!(refused(&f, &f.outside.join("dangling")).contains("dangling"));
+    }
+
+    #[test]
+    fn a_regular_file_is_refused_as_not_a_folder() {
+        let f = fixture();
         std::fs::write(f.outside.join("file"), "x").unwrap();
         assert!(refused(&f, &f.outside.join("file")).contains("not a folder"));
         // Below a regular file nothing can be a folder, however it is reported.

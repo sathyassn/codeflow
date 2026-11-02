@@ -887,6 +887,7 @@ impl Seats {
             .env_remove("CODEX_HOME")
             .env_remove("GROK_HOME")
             .env("HOME", self.home())
+            .env("USERPROFILE", self.home())
             .env("CODEFLOW_HOME", self.home().join(".codeflow"))
             .arg("models")
             .args(args);
@@ -1536,6 +1537,21 @@ fn a_file_from_the_previous_build_is_replaced_by_the_next_recording() {
     );
 }
 
+#[test]
+fn a_leading_tilde_expands_to_the_home_folder() {
+    let seats = Seats::new();
+    seats.profile("schema_version = 1\n[families.claude]\nconfig_home = '~/claude-work'\n");
+    let output = seats.run(&["launch-env", "--family", "claude"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "export CLAUDE_CONFIG_DIR='{}'\n",
+            seats.home().join("claude-work").display()
+        )
+    );
+}
+
 // Unix-only seat tests: the launch sequences run in `sh`, the Herdr stub needs
 // POSIX permissions, and the alias tests make symlinks. Everything that checks
 // profile parsing and refusal, launch output, per-home attribution, migration
@@ -2013,20 +2029,5 @@ exit 0
         for variable in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"] {
             assert!(env_lines(&environment, variable).is_empty(), "{variable}");
         }
-    }
-
-    #[test]
-    fn a_leading_tilde_expands_to_the_home_folder() {
-        let seats = Seats::new();
-        seats.profile("schema_version = 1\n[families.claude]\nconfig_home = '~/claude-work'\n");
-        let output = seats.run(&["launch-env", "--family", "claude"]);
-        assert_eq!(output.status.code(), Some(0), "{output:?}");
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            format!(
-                "export CLAUDE_CONFIG_DIR='{}/claude-work'\n",
-                seats.home().display()
-            )
-        );
     }
 }
