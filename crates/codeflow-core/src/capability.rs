@@ -656,6 +656,12 @@ fn parse_vocabulary(content: &str) -> Result<CapabilityVocabulary, CapabilityCat
         ));
     }
     for (key, terms) in [("groups", &vocabulary.groups), ("tags", &vocabulary.tags)] {
+        if terms.len() > CAPABILITY_MAX_LIST_ITEMS {
+            return Err(catalog_error(
+                VOCABULARY_PATH,
+                format!("{key}: list exceeds {CAPABILITY_MAX_LIST_ITEMS} items"),
+            ));
+        }
         let mut names = std::collections::BTreeSet::new();
         for term in terms {
             if !slug(&term.name) || !names.insert(&term.name) {

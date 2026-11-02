@@ -506,3 +506,22 @@ fn relationship_ids_are_syntax_checked_without_loading_their_targets() {
     );
     assert!(load_capability_catalog(dir.path()).is_ok());
 }
+
+#[test]
+fn vocabulary_lists_use_the_same_declared_bound() {
+    use std::fmt::Write;
+    let dir = fixture();
+    let mut vocabulary = String::from("inventory: incomplete\ngroups: [{name: records, about: Records}]\ntags:\n  - {name: rust, about: Rust}\n");
+    for n in 1..64 {
+        writeln!(vocabulary, "  - {{name: tag-{n}, about: Tag}}").unwrap();
+    }
+    write(dir.path(), "docs/capabilities/vocabulary.yaml", &vocabulary);
+    assert!(load_capability_catalog(dir.path()).is_ok());
+    vocabulary.push_str("  - {name: overflow, about: Tag}\n");
+    write(dir.path(), "docs/capabilities/vocabulary.yaml", &vocabulary);
+    refuse_both(
+        dir.path(),
+        "docs/capabilities/vocabulary.yaml",
+        "tags: list exceeds 64",
+    );
+}

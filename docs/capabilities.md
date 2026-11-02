@@ -707,5 +707,6 @@ areas and vocabulary from that tree, independent of the checkout.
 
 `vocabulary.yaml` contains `inventory: incomplete` or `complete`, plus `groups`
 and `tags` lists of `{name, about}` definitions. Names are unique lowercase
-slugs within each list. The example remains `incomplete` until inventory work
+slugs within each list. The same scalar and list limits apply to the vocabulary.
+The example remains `incomplete` until inventory work
 establishes coverage. No record migration or id allocation occurs in the loader.
