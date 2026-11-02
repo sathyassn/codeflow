@@ -1269,13 +1269,18 @@ fn a_replacing_push_sets_aside_the_head_it_replaces() {
 
 /// AC-5 (issue #354 item 4): `codeflow ci` before the replacing push
 /// judges the same way: the judged branch's own remote-tracking ref is set
-/// aside, another branch's is not.
+/// aside, another branch's is not. The run names the line with `--into`, as
+/// a bare run on a task branch whose line is fetched does (TSK-1155), and
+/// no `--policy-from`, so the own-line exception plays no part.
 #[test]
 fn ci_before_the_replacing_push_sets_aside_the_same_head() {
+    let into = format!("--into={LINE}");
     let ci = |repo: &Repo| {
         ci_args(
             repo.dir.path(),
-            &["--base", &repo.line, "--head", "HEAD", "--branch", OWN],
+            &[
+                "--base", &repo.line, "--head", "HEAD", "--branch", OWN, &into,
+            ],
         )
     };
     let repo = rebuilt(false);
