@@ -1874,7 +1874,7 @@ fn local_config_selects_no_receiving_source() {
         let (reviewed, side) = side_merge(root);
         git(
             root,
-            &["remote", "add", "review", "https://example.test/review.git"],
+            &["remote", "add", "review", "file:///nonexistent/review.git"],
         );
         if case == "configured upstream" {
             git(root, &["update-ref", "refs/remotes/review/main", &side]);
@@ -3917,7 +3917,7 @@ fn local_refs_and_overlays_never_make_a_merge_the_target() {
                         "remote",
                         "add",
                         "alternate",
-                        "https://example.test/alternate",
+                        "file:///nonexistent/alternate",
                     ],
                 );
                 git(
@@ -5244,7 +5244,7 @@ fn a_configured_upstream_on_another_remote_holds_the_task() {
     git(root, &["switch", "-c", "task/TSK-001-fix"]);
     git(
         root,
-        &["remote", "add", "upstream", "https://example.test/repo"],
+        &["remote", "add", "upstream", "file:///nonexistent/repo"],
     );
     git(
         root,
@@ -5691,7 +5691,7 @@ fn only_the_judged_target_supplies_a_reopened_tasks_criteria() {
                         "remote",
                         "add",
                         "alternate",
-                        "https://example.test/alternate",
+                        "file:///nonexistent/alternate",
                     ],
                 );
                 git(root, &["update-ref", "refs/remotes/alternate/main", &tip]);
