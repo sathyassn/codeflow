@@ -1,0 +1,11 @@
+id = "TSK-1178"
+uid = "b24b9838-92b6-401e-8af3-e514e0304e0b"
+kind = "TSK"
+title = "Candidate gates and the security review cannot certify themselves"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T04:28:17Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
