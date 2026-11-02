@@ -5823,6 +5823,80 @@ fn task_branch_creation_runs_no_failing_target() {
     assert_admission_is_active(dir.path(), "task/TSK-001-fix-the-flaky-test");
 }
 
+/// Push `HEAD` to `branch` on `upstream` through the installed hooks and
+/// assert that it is refused with `reason` in its output, that no test-config
+/// target started and that the destination did not move.
+#[cfg(unix)]
+fn assert_refused_push_runs_no_target(dir: &Path, branch: &str, reason: &str) {
+    let before = ok("git", dir, &["ls-remote", "upstream"]);
+    let refspec = format!("HEAD:refs/heads/{branch}");
+    let refused = with_installed_hooks("git", dir, &["push", "upstream", &refspec]);
+    let output = both_streams(&refused);
+    assert_eq!(refused.status.code(), Some(1), "{branch}: {output}");
+    assert!(output.contains(reason), "{branch} {reason}: {output}");
+    assert!(!dir.join("ran.marker").exists(), "{branch}: {output}");
+    assert_eq!(
+        ok("git", dir, &["ls-remote", "upstream"]),
+        before,
+        "{output}"
+    );
+}
+
+// TSK-1039 AC-2, issue 515: with a quick target that always fails at the tip,
+// a push refused for a commit reason and a push refused for a record reason
+// are each refused by the commit and record checks with no target run, and
+// the destination does not move (TSK-449).
+#[cfg(unix)]
+#[test]
+fn push_refused_for_a_commit_or_record_reason_runs_no_target() {
+    let dir = push_admission_repo();
+    // A commit reason: a subject that is not a conventional commit.
+    ok(
+        "git",
+        dir.path(),
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "Not conventional",
+        ],
+    );
+    assert_refused_push_runs_no_target(dir.path(), "feat/probe", "git.commit_format");
+    ok(
+        "git",
+        dir.path(),
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "reset",
+            "-q",
+            "--hard",
+            "HEAD~1",
+        ],
+    );
+    // A record reason: a task record whose id is not bound in the shared
+    // registry the destination holds.
+    ok(
+        "git",
+        dir.path(),
+        &["switch", "-c", "task/TSK-001-fix-the-flaky-test"],
+    );
+    commit_through_hooks(
+        dir.path(),
+        "project-management/tasks/TSK-001.md",
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: \"fix a flaky test\"\nintegration_target: main\ntitle: fix the flaky test\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-11-02\n---\n\n## Description\nFix it.\n\n## Acceptance Criteria\n- AC-1 the test passes\n",
+        "docs: add the standalone task record",
+    );
+    assert_refused_push_runs_no_target(
+        dir.path(),
+        "task/TSK-001-fix-the-flaky-test",
+        "work.id_registry",
+    );
+}
+
 // TSK-449 AC-2: with the heavy-work admission lock held, a push neither
 // waits for nor is refused by it, since it runs no quick target.
 #[cfg(unix)]
