@@ -597,7 +597,10 @@ mod tests {
             root.path().join("tokens.json"),
             r##"{
             "schema_version": 1,
-            "colors": {"light": {"accent": "#3860ac"}, "dark": {"accent": "#9bbeff"}}
+            "colors": {
+              "light": {"canvas":"#ffffff","surface":"#ffffff","text":"#000000","accent":"#3860ac","focus":"#005fcc"},
+              "dark": {"canvas":"#000000","surface":"#000000","text":"#ffffff","accent":"#9bbeff","focus":"#00ffff"}
+            }
         }"##,
         )
         .unwrap();
