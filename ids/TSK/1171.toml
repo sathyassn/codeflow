@@ -1,0 +1,11 @@
+id = "TSK-1171"
+uid = "89970e22-1112-4f06-80c5-d5645f779638"
+kind = "TSK"
+title = "Estimate outcomes compare each task with its frozen band"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T04:27:32Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
