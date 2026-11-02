@@ -75,19 +75,25 @@ raw files name accounts and host paths):
 
 - Step 1, `step1-output.txt`, run by the operator with the build under test
   (`codeflow 3.2.0 source=4dfcef551 dirty=false`): `export
-  CODEX_HOME='/Users/sathya/.codex-second'`, then `CODEX_HOME is the mapped
+  CODEX_HOME='~/.codex-second'`, then `CODEX_HOME is the mapped
   config home`, `rc=0`.
 - Step 2, `step5-shell-before-start.txt`: in the Herdr pane the mapped line and
   `--check` passed (`check_rc=0`) before `herdr agent start`. The seat
-  (agent `cf-codeflow-tsk431ac4-cx01`) reached `interactive_ready` true and
-  showed `OpenAI Codex (v0.166.0)` in this worktree
-  (`step5-pane-read.txt`).
+  pane then showed `OpenAI Codex (v0.166.0)` running in this worktree
+  (`step5-pane-read.txt`). The evidence does not record the agent name or a
+  ready flag; the claim rests on the pane read.
 - Step 3, `step5-output.txt`: after `record-limits` stored the reading,
   `codeflow models limits` printed `account: config home
-  /Users/sathya/.codex-second (via CODEX_HOME)` and `weekly: 71% used, resets
+  ~/.codex-second (via CODEX_HOME)` and `weekly: 71% used, resets
   2026-11-08T23:49:28Z`.
 - Step 4 (refusal when the profile names a token) is covered by the
   `models_cli` launch tests, not by a seat run.
+
+The 71% in step 3 is the stand-alone app-server read of the second config
+home (`initialize.json` names `~/.codex-second`), taken at 21:26Z and stored
+about an hour later. The seat pane read at 17:35 local showed 16% of the
+weekly limit left, so the limits view shows a stored reading, not the seat's
+current state. The AC-3 read used the same second home.
 
 Not exercised: the seat's own environment could not be read with `ps`, so
 `CODEX_HOME` inside the seat process is shown by the pane that launched it and
