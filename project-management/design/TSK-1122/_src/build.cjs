@@ -229,7 +229,7 @@ const menu = `<section class="area" data-area="release" data-title="Where the re
         ${row('kinds', 'Ten report kinds', R.kinds.length, 'pages')}
         ${row('portal', 'Docs portal layers', R.portalLayers.length, 'docs')}</section>
       <section class="area" data-area="earlier" data-title="Earlier reports" data-icon="history" data-util>
-        <a class="row" data-icon="history" href="${P.pages[5].url}"><span class="label">${esc(PREV_AT)}, earlier form</span></a></section>`;
+        <span class="row" data-icon="history" style="cursor:default" title="The earlier page is no longer published"><span class="label">${esc(PREV_AT)}, earlier form (the earlier page is no longer published)</span></span></section>`;
 
 // ---- page --------------------------------------------------------------------------------------------------
 const DATA = { tasks: T, epics: Object.fromEntries(EP.map(e => [e.id, { id: e.id, title: e.title, themes: e.themes, deliverable: e.deliverable }])), lineRef: F.read.lineRef, prevAt: PREV_AT, readAt: F.read.finished, next: F.next };
