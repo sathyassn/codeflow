@@ -984,6 +984,11 @@ pub struct ChangeContext<'a> {
     /// frozen though a later supersession or reopen left them open at the
     /// base (TSK-169).
     pub shipped: Option<&'a BTreeSet<String>>,
+    /// Records whose exact contents the range imports from a verified home
+    /// landing ([`super::acceptance::imported_records`]). Their criteria
+    /// were judged at that home, so the reopened-criteria comparison with
+    /// `base` does not apply to them; every other rule still does (TSK-1124).
+    pub imported: Option<&'a BTreeSet<String>>,
 }
 
 /// A release range's brought records, each judged where it was introduced
@@ -2097,10 +2102,19 @@ pub fn judge_change(
     context: ChangeContext<'_>,
 ) -> Verdict {
     let mut verdict = Verdict::default();
+    // An imported record's criteria were judged at its home landing, so the
+    // reopened-criteria comparison with the base does not apply (TSK-1124).
+    let imported = context.imported.is_some_and(|ids| ids.contains(&after.id));
+    let judged = |mut problems: Vec<String>| {
+        if imported {
+            problems.retain(|problem| problem != super::acceptance::REOPENED_CRITERIA);
+        }
+        problems
+    };
     verdict.apply(
         Mode::Strict,
         &after.path,
-        transition_problems(before, after),
+        judged(transition_problems(before, after)),
     );
     verdict.apply(
         Mode::Strict,
@@ -2116,7 +2130,11 @@ pub fn judge_change(
                 || is_recompletion(Some(old), after)
                 || context.reopened.is_some_and(|ids| ids.contains(&after.id)))
         {
-            verdict.apply(Mode::Strict, &after.path, reopen_problems(Some(old), after));
+            verdict.apply(
+                Mode::Strict,
+                &after.path,
+                judged(reopen_problems(Some(old), after)),
+            );
         }
     }
     verdict.apply(
@@ -2224,12 +2242,14 @@ fn judge_range_against(
     let paths = changed_paths(&repo, base, head)?;
     let reopened = reopened_in_range(&repo, base, head, &after)?;
     let (shipped, history_problems) = shipped_specs(&repo, base, &before, &after);
+    let imported = imported_ids(&repo, base, head, &after);
     let context = ChangeContext {
         base: Some(&before),
         changed_paths: Some(&paths),
         reopened: Some(&reopened),
         brought,
         shipped: Some(&shipped),
+        imported: Some(&imported),
     };
     let mut verdict = Verdict {
         notices,
@@ -2291,6 +2311,28 @@ fn judge_range_against(
     }
     verdict.sort();
     Ok(verdict)
+}
+
+/// The records the range from `base` to `head` imports unchanged from a
+/// verified home landing. A working-tree range, or one whose imports cannot
+/// be proved, imports nothing here, so no comparison is skipped; the import
+/// check refuses the unproved range on its own.
+fn imported_ids(
+    repo: &Repository,
+    base: &str,
+    head: Option<&str>,
+    after: &Graph,
+) -> BTreeSet<String> {
+    let Some(head) = head else {
+        return BTreeSet::new();
+    };
+    let (Ok(Some(base)), Ok(Some(head))) = (resolve_commit(repo, base), resolve_commit(repo, head))
+    else {
+        return BTreeSet::new();
+    };
+    super::acceptance::imported_records(repo, base, head, after)
+        .map(|imported| imported.into_keys().collect())
+        .unwrap_or_default()
 }
 
 /// On a verified integration line, the paths of the landing that brought a

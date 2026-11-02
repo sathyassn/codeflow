@@ -3880,3 +3880,66 @@ fn follow_up_of_keeps_a_lookalike_apart_from_the_task() {
     .unwrap();
     assert_eq!(record.follow_up_of.as_deref(), Some("TSK-001\u{a0}"));
 }
+
+/// TSK-1124: an imported record skips only the reopened-criteria
+/// comparison with the base; every other reopen problem still reaches the
+/// verdict, and a record that is not imported gets both.
+#[test]
+fn an_imported_record_skips_only_the_reopened_criteria_comparison() {
+    let old = block(&["AC-1", "AC-2"], "verified | epic journey");
+    let before = RecordView::parse(
+        RecordKind::Task,
+        TASK_PATH,
+        &task("TSK-001", "complete", CRITERIA, &fenced(&old)),
+    )
+    .unwrap();
+    // Re-completed with changed criteria and without the old block kept.
+    let after = RecordView::parse(
+        RecordKind::Task,
+        TASK_PATH,
+        &task(
+            "TSK-001",
+            "complete",
+            &CRITERIA.replace("shall y", "may y"),
+            &fenced(&old.replace("cargo test AC-1", "cargo test AC-1 again")),
+        ),
+    )
+    .unwrap();
+    let kept = "reopening needs the old acceptance block kept";
+    let ids: std::collections::BTreeSet<String> = ["TSK-001".to_string()].into();
+    // The base holds the earlier completion and the range reopened it, as
+    // the records range check reads a sync.
+    let base = Graph {
+        records: [("TSK-001".to_string(), before.clone())].into(),
+    };
+    let range = ChangeContext {
+        base: Some(&base),
+        reopened: Some(&ids),
+        ..ChangeContext::default()
+    };
+    for (context, criteria) in [
+        (range, true),
+        (
+            ChangeContext {
+                imported: Some(&ids),
+                ..range
+            },
+            false,
+        ),
+    ] {
+        let verdict = judge_change(
+            Some(&before),
+            &after,
+            &Graph::default(),
+            &Baseline::NotRecorded,
+            context,
+        );
+        let found = |needle: &str| verdict.errors.iter().any(|e| e.contains(needle));
+        assert!(found(kept), "{verdict:?}");
+        assert_eq!(
+            found(super::super::acceptance::REOPENED_CRITERIA),
+            criteria,
+            "{verdict:?}"
+        );
+    }
+}

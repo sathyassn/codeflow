@@ -177,6 +177,7 @@ pub fn set_status(
             reopened: None,
             brought: None,
             shipped: None,
+            imported: None,
         },
     );
     if !verdict.is_clean() {

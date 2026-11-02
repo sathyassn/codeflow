@@ -6961,6 +6961,9 @@ fn the_acceptance_help_names_the_key_and_its_fields() {
 #[path = "acceptance_cli/imports.rs"]
 mod imports;
 
+#[path = "acceptance_cli/main_reopens.rs"]
+mod main_reopens;
+
 #[path = "acceptance_cli/epic_line.rs"]
 mod epic_line;
 

@@ -740,8 +740,11 @@ impl<'r> RecordStore<'r> {
     }
 
     /// Walk `holder`'s history for the commits that introduce `version`: a
-    /// commit holds it while some parent holds no record of the task or
-    /// another version, or it has no parent. A merge that resolves the
+    /// commit holds it while no parent holds it, some parent holds another
+    /// version, or it has no parent. A merge that carries the version from
+    /// one parent while every other parent holds no record of the task introduces
+    /// nothing, so a line that synced before the task existed on main
+    /// inherits main's version (issue 464). A merge that resolves the
     /// record to one parent's version against the other's therefore
     /// introduces the version it keeps, whatever its bytes; a version is
     /// what its caller compares, never the blob, so a resolution that keeps
@@ -774,15 +777,17 @@ impl<'r> RecordStore<'r> {
                 &self.repo.find_commit(commit).map_err(unreadable)?,
             )
             .map_err(unreadable)?;
-            let mut decided = parents.is_empty();
+            let mut carried = false;
+            let mut competing = false;
             for parent in &parents {
                 let held = self.history_at(task, *parent, &mut uids)?;
-                if !version.held(&held, &mut holds) {
-                    decided = true;
-                    break;
+                if version.held(&held, &mut holds) {
+                    carried = true;
+                } else if !held.records.is_empty() {
+                    competing = true;
                 }
             }
-            if decided {
+            if !carried || competing {
                 introduced.push(commit);
             }
         }
@@ -1811,6 +1816,146 @@ mod tests {
             )],
         );
         refuses_both_orders(dir.path(), "different versions");
+    }
+
+    /// Write `text` at the record, or delete it when `text` is empty, and
+    /// commit.
+    fn save_record(root: &std::path::Path, text: &str) {
+        if text.is_empty() {
+            std::fs::remove_file(root.join(RECORD)).unwrap();
+            git(root, &["add", "-A"]);
+            git(root, &["commit", "-q", "-m", "delete the record"]);
+        } else {
+            std::fs::create_dir_all(root.join(RECORD).parent().unwrap()).unwrap();
+            save(root, RECORD, text);
+        }
+    }
+
+    /// TSK-1124: a sync that carries main's v1 into a line holding no
+    /// record of the task decides nothing, so main's later v2 is newer than
+    /// the line's v1, in both point orders. A line that has since deleted
+    /// the record still disagrees, by the absent-point rule.
+    #[test]
+    fn a_sync_into_a_line_without_the_task_introduces_nothing() {
+        for deleted in [false, true] {
+            let dir = diverged(
+                Step::Note,
+                vec![Step::File(RECORD, record(UID))],
+                vec![Step::Note],
+            );
+            let root = dir.path();
+            git(root, &["merge", "--no-ff", "-q", "-m", "sync main", "main"]);
+            if deleted {
+                save_record(root, "");
+            }
+            git(root, &["switch", "-q", "main"]);
+            save_record(
+                root,
+                &with_criterion("When run, the system shall work fast."),
+            );
+            git(root, &["switch", "-q", LINE]);
+            save(root, "later.txt", "the line advanced\n");
+            if deleted {
+                // A line that deleted the task holds v1 only in its history;
+                // the absent-point rule compares that history's version with
+                // main's, not their introductions, so it still disagrees.
+                // This test pins that stricter verdict.
+                refuses_both_orders(root, "different versions");
+                continue;
+            }
+            for points in [[LINE, "main"], ["main", LINE]] {
+                let criteria = judge_at(root, &points).criteria;
+                let Authority::Held(held) = criteria else {
+                    let why = match criteria {
+                        Authority::Unknown(reason) => reason,
+                        _ => "absent".to_string(),
+                    };
+                    panic!("{points:?}: the synced v1 competed with main's v2: {why}");
+                };
+                assert!(held.content.contains("work fast"), "{points:?}");
+            }
+        }
+    }
+
+    /// A merge of three parents that holds v1 while one parent holds
+    /// another version decides between them, so it still introduces v1.
+    #[test]
+    fn an_octopus_merge_with_a_competing_parent_still_introduces() {
+        let dir = diverged(
+            Step::Note,
+            vec![Step::File(RECORD, record(UID))],
+            vec![Step::Note],
+        );
+        let root = dir.path();
+        git(root, &["switch", "-q", "-c", "other", "main~1"]);
+        save_record(root, &with_criterion("When run, the system shall stop."));
+        git(root, &["switch", "-q", LINE]);
+        // Parents: the line (no record), main (v1), other (another
+        // version); the tree is main's, holding v1.
+        let tree = git(root, &["rev-parse", "main^{tree}"]);
+        let octopus = git(
+            root,
+            &[
+                "commit-tree",
+                &tree,
+                "-p",
+                LINE,
+                "-p",
+                "main",
+                "-p",
+                "other",
+                "-m",
+                "octopus",
+            ],
+        );
+        git(
+            root,
+            &["update-ref", &format!("refs/heads/{LINE}"), &octopus],
+        );
+        git(root, &["reset", "-q", "--hard"]);
+        git(root, &["switch", "-q", "main"]);
+        save_record(
+            root,
+            &with_criterion("When run, the system shall work fast."),
+        );
+        git(root, &["switch", "-q", LINE]);
+        save(root, "later.txt", "the line advanced\n");
+        refuses_both_orders(root, "different versions");
+    }
+
+    /// A merge that keeps v1 against a parent that once held another
+    /// version and then deleted the record is not an introduction: a
+    /// deletion holds no version. v1 and main's later v2 are ordered by
+    /// their real introductions on main, so v2 is the authority.
+    #[test]
+    fn a_merge_against_a_deleted_record_is_not_an_introduction() {
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::Note],
+            vec![
+                Step::File(RECORD, with_criterion("When run, the system shall stop.")),
+                Step::Delete,
+            ],
+        );
+        let root = dir.path();
+        // The line deleted the record and main left it alone, so the
+        // merge takes the deletion; restore main's v1 before committing.
+        git(root, &["merge", "--no-ff", "--no-commit", "main"]);
+        git(root, &["checkout", "main", "--", RECORD]);
+        git(root, &["commit", "-q", "-m", "sync main, keeping v1"]);
+        git(root, &["switch", "-q", "main"]);
+        save_record(
+            root,
+            &with_criterion("When run, the system shall work fast."),
+        );
+        git(root, &["switch", "-q", LINE]);
+        save(root, "later.txt", "the line advanced\n");
+        for points in [[LINE, "main"], ["main", LINE]] {
+            let Authority::Held(held) = judge_at(root, &points).criteria else {
+                panic!("{points:?}: v1 kept against a deletion competed with v2");
+            };
+            assert!(held.content.contains("work fast"), "{points:?}");
+        }
     }
 
     /// Introductions are traced by criteria signature (SEC-306-01), so an
