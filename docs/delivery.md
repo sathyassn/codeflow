@@ -187,13 +187,13 @@ worktrees and build directories.
 
 ### Reading where work stands
 
-`codeflow status --epic EPC-NNN` (or `--task`, `--line`, and `--json` for
+`codeflow status --epic EPC-NNN` (or `--task`, `--line`; `--json` for
 versioned facts) derives each task's stage, location, order, lane, window
-and issues from the records, fetched refs, forge and ledger, using the
-readiness core of `work next`.
+and issues from the records on each target's tip, the fetched refs, the
+forge and the ledger, with `work next`'s readiness core.
 
 - It writes nothing and never fetches; refs carry their fetch time and
-  all forge reads share one network bound. An unread fact says
+  forge reads share one network bound. An unread fact says
   `unknown`, `unverified` or `not yet estimable`, never a number or a
   pass; `not recorded` means read and empty.
 - Stage percents: not started 0, in progress 20 (a claim or task
@@ -204,39 +204,40 @@ readiness core of `work next`.
   listing cancelled ones. A task's stage and every percent over it are
   `unknown` when its home, head, branch history or, while open, the forge
   was not read, when its status is off the ladder, or when the readiness
-  core cannot judge it or finds it invalid. A malformed forge row makes
-  the forge `unverified`. An off-ladder status also leaves the open counts
+  core cannot judge it or finds it invalid. A forge row with an unreadable
+  field makes the forge `unverified`. An off-ladder status also leaves the open counts
   and finish windows `unknown`; it, or an unproven landing, keeps every
   path step over that task not done.
 - Locations: `main`, `line`, `pull request` (draft, open or approved at the
   reviewed SHA), `branch`, or `none` (`record on line` for a record
   alone), each bound to the ref read; `main` and `line` need the landing
-  commit reachable from that ref, else they are `unverified`.
+  commit reachable from that ref, else `unverified`.
 - Check runs keep UTC completion and read times; a skipped run is never
   a pass, and a read at its limit (200 pull requests, or 100 rules or
   check runs) is `unverified`. Required checks come from the base
   branch's rulesets and protection; one with no run is `missing`, and one
-  bound to an app counts only that app's run. Until both are read,
-  required checks are `unverified` and issues incomplete.
+  bound to an app counts only that app's run. Until the required set and
+  those app runs are read, required checks are `unverified` and issues
+  incomplete.
 - Pace counts a landing only where history shows a change to `complete`
-  from no record or an allowed status, else that landing, its location
-  and the pace are unproven. It needs every home and record read, and
+  from no record or an allowed status, else the landing, location
+  and pace are unproven. It needs every home and record read, and
   every creation date for additions and open counts.
 - Windows are durations from the snapshot, never dates, from an adopted
   forecast covering the scope (named stale when a task's criteria
-  changed), else planned throughput over the observed lanes (one assumed
-  lane if none). A window starts at the snapshot or its predecessors'
-  latest end, outside the scope included, and all ends run from that
+  changed), else planned throughput over observed lanes (one assumed
+  lane if none). A window starts at the snapshot or its open
+  predecessors' latest end, outside the scope included, and all ends run from that
   start. The scope finish assumes intake stops, or continues at the last
   seven days' rate.
-- The operator set reads `none owed` only when every source (records, the
-  ledger, each owed-item source, the forge, the session file) was checked,
+- The operator set reads `none owed` only when every source (records,
+  ledger, owed-item sources, forge, session file) was checked,
   else `not established`, naming it.
 - `--since` keeps each unobserved fact with its own time. An issue clears
-  only when all its sources were read again; a required check clears only
+  only when all its sources were reread; a required check clears only
   when it passed or was removed.
-- `CODEFLOW_STATUS_AS_OF=<UTC time>` fixes the snapshot time, so two runs
-  on one state print identical bytes.
+- `CODEFLOW_STATUS_AS_OF=<UTC time>` fixes the snapshot time, so runs on
+  one state are byte-identical.
 
 ### Completed work imported from another line
 
