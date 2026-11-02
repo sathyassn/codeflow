@@ -1,0 +1,11 @@
+id = "TSK-1181"
+uid = "dd8e19cc-26b2-40c1-b59d-e11ebc88704a"
+kind = "TSK"
+title = "The acceptance_binding finding names a record edit after completion, not an outside branch"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T05:20:48Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
