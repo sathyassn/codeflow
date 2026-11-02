@@ -1,0 +1,11 @@
+id = "TSK-1183"
+uid = "337bc82a-2b34-458c-b7da-8fc77568287a"
+kind = "TSK"
+title = "Bump pulldown-cmark to 0.13.6 for RUSTSEC-2026-0433"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T13:01:56Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
