@@ -454,3 +454,19 @@ fn legacy_validation_also_applies_to_pinned_trees() {
     );
     refuse_both(dir.path(), "docs/capabilities.md", "verified_by");
 }
+
+#[test]
+fn frontmatter_delimiter_whitespace_cannot_hide_a_layout_collision() {
+    let dir = fixture();
+    write(
+        dir.path(),
+        "docs/capabilities.md",
+        &fence("CAP-101", "shipped"),
+    );
+    write(
+        dir.path(),
+        RECORD,
+        &VALID.replacen("---\n", "---   \r\n", 1),
+    );
+    refuse_both(dir.path(), RECORD, "duplicate CAP-101");
+}

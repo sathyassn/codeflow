@@ -214,6 +214,34 @@ const QUALITIES: &[&str] = &[
     "safety",
 ];
 
+const RECORD_KEYS: &[&str] = &[
+    "id",
+    "uid",
+    "name",
+    "summary",
+    "status",
+    "stage",
+    "kind",
+    "quality",
+    "measure",
+    "audience",
+    "publish",
+    "area",
+    "group",
+    "tags",
+    "verified_by",
+    "since",
+    "former_ids",
+    "epics",
+    "epic_id",
+    "adrs",
+    "specs",
+    "depends_on",
+    "related",
+    "superseded_by",
+    "capabilities",
+];
+
 /// One catalog entry, with its source and optional modern facets.
 /// Legacy fences have no uid or modern facets; their identity remains their id.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -395,38 +423,11 @@ fn parse_record(file: &str, content: &str) -> Result<CapabilityRecord, Capabilit
             format!("frontmatter: exceeds {CAPABILITY_MAX_FRONTMATTER_KEYS} keys"),
         ));
     }
-    const KEYS: &[&str] = &[
-        "id",
-        "uid",
-        "name",
-        "summary",
-        "status",
-        "stage",
-        "kind",
-        "quality",
-        "measure",
-        "audience",
-        "publish",
-        "area",
-        "group",
-        "tags",
-        "verified_by",
-        "since",
-        "former_ids",
-        "epics",
-        "epic_id",
-        "adrs",
-        "specs",
-        "depends_on",
-        "related",
-        "superseded_by",
-        "capabilities",
-    ];
     for (key, val) in map {
         let key = key
             .as_str()
             .ok_or_else(|| catalog_error(file, "frontmatter key must be a string"))?;
-        if !KEYS.contains(&key) {
+        if !RECORD_KEYS.contains(&key) {
             return Err(catalog_error(file, format!("{key}: unknown key")));
         }
         bounds(file, key, val)?;
@@ -551,6 +552,15 @@ fn validate_record(
     {
         return Err(bad("former_ids", "expected numeric CAP ids"));
     }
+    validate_project_facets(record, vocabulary)
+}
+
+fn validate_project_facets(
+    record: &CapabilityRecord,
+    vocabulary: Option<&CapabilityVocabulary>,
+) -> Result<(), CapabilityCatalogError> {
+    let file = record.file.to_string_lossy();
+    let bad = |key: &str, reason: &str| catalog_error(&file, format!("{key}: {reason}"));
     if let Some(group) = &record.group {
         if !vocabulary.is_some_and(|v| v.groups.iter().any(|term| &term.name == group)) {
             return Err(bad(
@@ -645,6 +655,26 @@ struct AreaConfig {
     areas: Vec<String>,
 }
 
+fn legacy_record(entry: CapabilityEntry) -> CapabilityRecord {
+    CapabilityRecord {
+        entry,
+        file: LEGACY_PATH.into(),
+        uid: None,
+        summary: None,
+        stage: None,
+        kind: None,
+        quality: None,
+        measure: None,
+        audience: vec![],
+        publish: false,
+        group: None,
+        tags: vec![],
+        since: None,
+        former_ids: vec![],
+        prose: String::new(),
+    }
+}
+
 fn parse_catalog(
     files: &std::collections::BTreeMap<String, Vec<u8>>,
 ) -> Result<CapabilityCatalog, CapabilityCatalogError> {
@@ -670,26 +700,11 @@ fn parse_catalog(
                 message: issue.message.clone(),
             });
         }
-        for entry in entries {
-            catalog.records.push(CapabilityRecord {
-                entry,
-                file: LEGACY_PATH.into(),
-                uid: None,
-                summary: None,
-                stage: None,
-                kind: None,
-                quality: None,
-                measure: None,
-                audience: vec![],
-                publish: false,
-                group: None,
-                tags: vec![],
-                since: None,
-                former_ids: vec![],
-                prose: String::new(),
-            });
-        }
+        catalog
+            .records
+            .extend(entries.into_iter().map(legacy_record));
     }
+
     catalog.vocabulary = text(VOCABULARY_PATH)?.map(parse_vocabulary).transpose()?;
     let legacy_ids: std::collections::BTreeSet<_> =
         catalog.records.iter().map(|r| r.entry.id.clone()).collect();
@@ -702,10 +717,7 @@ fn parse_catalog(
         // Existing graduated pages are companion prose until migration adds frontmatter.
         let name = file.trim_start_matches("docs/capabilities/");
         let id = name.split('-').take(2).collect::<Vec<_>>().join("-");
-        if !content.starts_with("---\n")
-            && !content.starts_with("---\r\n")
-            && legacy_ids.contains(&id)
-        {
+        if content.lines().next().map(str::trim_end) != Some("---") && legacy_ids.contains(&id) {
             continue;
         }
         catalog.records.push(parse_record(file, content)?);
