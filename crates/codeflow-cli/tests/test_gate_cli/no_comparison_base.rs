@@ -5,10 +5,12 @@
 use super::{git, repo, run, stderr};
 use std::path::Path;
 
+// The targets append with `echo name>>runs`: under `cmd` on Windows,
+// `echo name >> runs` would write the name with a trailing space.
 const CONFIG: &str = r#"{"schema_version":"1.0","targets":[
-  {"name":"alpha","runner":"custom","narrow":["a/**"],"modes":{"quick":{"command":"echo alpha >> runs"}}},
-  {"name":"beta","runner":"custom","narrow":["b/**"],"modes":{"quick":{"command":"echo beta >> runs"}}},
-  {"name":"gamma","runner":"custom","narrow":["c/**"],"modes":{"quick":{"command":"echo gamma >> runs"}}}]}"#;
+  {"name":"alpha","runner":"custom","narrow":["a/**"],"modes":{"quick":{"command":"echo alpha>>runs"}}},
+  {"name":"beta","runner":"custom","narrow":["b/**"],"modes":{"quick":{"command":"echo beta>>runs"}}},
+  {"name":"gamma","runner":"custom","narrow":["c/**"],"modes":{"quick":{"command":"echo gamma>>runs"}}}]}"#;
 
 fn committed_repo() -> tempfile::TempDir {
     let dir = repo(CONFIG);
