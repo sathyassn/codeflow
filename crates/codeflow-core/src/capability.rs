@@ -285,8 +285,11 @@ pub struct CapabilityVocabulary {
 /// A validated catalog. Both input adapters produce the same relative paths.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CapabilityCatalog {
+    /// Validated entries sorted by id. An empty inventory has no entries.
     pub records: Vec<CapabilityRecord>,
     pub vocabulary: Option<CapabilityVocabulary>,
+    /// Whether a legacy file or a modern record exists, including an empty
+    /// legacy file. This describes the documentation layer, not inventory coverage.
     pub present: bool,
 }
 
@@ -552,7 +555,33 @@ fn validate_record(
     {
         return Err(bad("former_ids", "expected numeric CAP ids"));
     }
+    validate_reference_ids(record)?;
     validate_project_facets(record, vocabulary)
+}
+
+fn validate_reference_ids(record: &CapabilityRecord) -> Result<(), CapabilityCatalogError> {
+    let entry = &record.entry;
+    for (key, values, prefix) in [
+        ("epics", &entry.epics, Some("EPC-")),
+        ("epic_id", &entry.epic_id, Some("EPC-")),
+        ("adrs", &entry.adrs, Some("ADR-")),
+        ("specs", &entry.specs, Some("SPC-")),
+        ("capabilities", &entry.capabilities, Some("CAP-")),
+        ("depends_on", &entry.depends_on, None),
+        ("related", &entry.related, None),
+        ("superseded_by", &entry.superseded_by, None),
+    ] {
+        for id in values {
+            let valid = numeric_capability_id(id) || crate::ids::RegId::parse(id).is_some();
+            if !valid || prefix.is_some_and(|prefix| !id.starts_with(prefix)) {
+                return Err(catalog_error(
+                    &record.file.to_string_lossy(),
+                    format!("{key}: expected a record id, found {id:?}"),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_project_facets(

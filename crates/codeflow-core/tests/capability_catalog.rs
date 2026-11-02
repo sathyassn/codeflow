@@ -54,6 +54,7 @@ fn schema_refusal_fixtures_name_the_file_and_key() {
         ("duplicate-key", "duplicate"),
         ("oversized-value", "summary"),
         ("oversized-list", "tags"),
+        ("oversized-list-item", "verified_by"),
         ("oversized-keys", "frontmatter"),
         ("gap-stable", "non-gap"),
         ("unknown-area", "area"),
@@ -164,7 +165,7 @@ fn each_revision_uses_its_own_areas_and_vocabulary() {
     write(
         dir.path(),
         ".codeflow/project.toml",
-        "areas = ['new-area']\n",
+        "areas = ['engine', 'new-area']\n",
     );
     write(
         dir.path(),
@@ -200,7 +201,7 @@ fn each_revision_uses_its_own_areas_and_vocabulary() {
     write(
         dir.path(),
         ".codeflow/project.toml",
-        "areas = ['new-area']\n",
+        "areas = ['engine', 'new-area']\n",
     );
     write(dir.path(), "docs/capabilities/vocabulary.yaml", VOCAB);
     refuse_both(dir.path(), RECORD, "group");
@@ -236,7 +237,8 @@ fn unsafe_paths_and_tree_modes_are_refused() {
     for case in cases {
         let path = case["path"].as_str().unwrap();
         if ["absolute", "traversal", "nested"].contains(&case["case"].as_str().unwrap()) {
-            assert!(validate_capability_path(path).is_err());
+            let error = validate_capability_path(path).unwrap_err().to_string();
+            assert!(error.contains(path), "{error}");
         }
         if ["symlink", "executable"].contains(&case["case"].as_str().unwrap()) {
             let dir = fixture();
@@ -469,4 +471,38 @@ fn frontmatter_delimiter_whitespace_cannot_hide_a_layout_collision() {
         &VALID.replacen("---\n", "---   \r\n", 1),
     );
     refuse_both(dir.path(), RECORD, "duplicate CAP-101");
+}
+
+#[test]
+fn relationship_ids_are_syntax_checked_without_loading_their_targets() {
+    let dir = fixture();
+    for key in [
+        "epics",
+        "epic_id",
+        "adrs",
+        "specs",
+        "capabilities",
+        "depends_on",
+        "related",
+        "superseded_by",
+    ] {
+        write(
+            dir.path(),
+            RECORD,
+            &VALID.replace(
+                "kind: functional",
+                &format!("kind: functional\n{key}: [not-an-id]"),
+            ),
+        );
+        refuse_both(dir.path(), RECORD, key);
+    }
+    write(
+        dir.path(),
+        RECORD,
+        &VALID.replace(
+            "kind: functional",
+            "kind: functional\nrelated: [TSK-999, CAP-999]\nepic_id: EPC-999",
+        ),
+    );
+    assert!(load_capability_catalog(dir.path()).is_ok());
 }
