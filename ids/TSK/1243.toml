@@ -1,0 +1,11 @@
+id = "TSK-1243"
+uid = "e2b5aebf-8f0c-4c3b-8c83-0af89a99d214"
+kind = "TSK"
+title = "work.records does not judge a base-line merge as the branch's own reopen"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T18:15:35Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
