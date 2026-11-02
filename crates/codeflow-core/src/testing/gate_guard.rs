@@ -2526,15 +2526,22 @@ mod tests {
     /// The probe, run on its own thread so a regression that blocks on a
     /// special file fails the test instead of hanging the run.
     #[cfg(unix)]
-    fn probe_with_deadline(project: &std::path::Path) -> std::io::Result<()> {
+    fn probe_path_with_deadline(
+        project: &std::path::Path,
+    ) -> (std::path::PathBuf, std::io::Result<()>) {
         let project = project.to_path_buf();
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = sender.send(probe_git_config_write(&project).1);
+            let _ = sender.send(probe_git_config_write(&project));
         });
         receiver
             .recv_timeout(std::time::Duration::from_secs(10))
             .expect("the git config probe blocked")
+    }
+
+    #[cfg(unix)]
+    fn probe_with_deadline(project: &std::path::Path) -> std::io::Result<()> {
+        probe_path_with_deadline(project).1
     }
 
     /// A config that is a link is never followed: the probe refuses it, the
@@ -2943,11 +2950,15 @@ mod tests {
         assert_eq!(listing(&git_dir).len(), 1, "something was created in it");
     }
 
-    /// A marker that is a pipe or a link when the probe reads it is refused
-    /// without blocking: the read is one open that follows nothing.
+    /// A registration file (`commondir`, `gitdir`) or the checkout's `.git`
+    /// file that is a link, and a registration file that is a pipe, is
+    /// refused without blocking and leaves no file. A pipe standing where
+    /// the checkout's `.git` should be is a different case: git discovery
+    /// steps over it and finds the enclosing repository, so the probe
+    /// succeeds on that repository's own config (asserted below).
     #[cfg(unix)]
     #[test]
-    fn the_git_config_probe_refuses_a_marker_that_is_a_pipe_or_a_link() {
+    fn the_git_config_probe_refuses_a_registration_pipe_or_any_marker_link() {
         for kind in ["pipe", "link"] {
             // The two registration files and the checkout's own `.git` marker.
             for marker in ["commondir", "gitdir", "checkout .git"] {
@@ -2970,12 +2981,19 @@ mod tests {
                     std::os::unix::fs::symlink(&target, &file).unwrap();
                 }
                 let before = listing(tmp.path());
-                let result = probe_with_deadline(&linked);
-                // Git discovery steps over a pipe that stands where a
-                // checkout's `.git` should be and finds the enclosing
-                // repository, which is then measured on its own terms; every
-                // other case is refused. None blocks or leaves a file.
-                if !(kind == "pipe" && marker == "checkout .git") {
+                let (path, result) = probe_path_with_deadline(&linked);
+                if kind == "pipe" && marker == "checkout .git" {
+                    // The enclosing repository is measured, nothing else.
+                    result.unwrap();
+                    assert_eq!(
+                        path.canonicalize().unwrap(),
+                        tmp.path()
+                            .join(".git")
+                            .join("config")
+                            .canonicalize()
+                            .unwrap()
+                    );
+                } else {
                     assert!(result.is_err(), "{kind} {marker} was accepted");
                 }
                 assert_eq!(listing(tmp.path()), before, "{kind} {marker}");
