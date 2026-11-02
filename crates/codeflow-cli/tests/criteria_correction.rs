@@ -556,9 +556,11 @@ fn a_blocked_follow_up_with_only_a_plan_note_runs_the_preflight() {
 }
 
 /// AC-4: a blocked follow-up that moves to `todo` and drops its Blocker
-/// changes its own record, so the range is no correction.
+/// changes its own record, so the range is no correction. Since TSK-1036
+/// the range is an unblock in the task's own pull request: it passes,
+/// shows the Blocker it removes, and never takes the correction skip.
 #[test]
-fn a_blocked_follow_up_moved_to_todo_runs_the_preflight() {
+fn a_blocked_follow_up_moved_to_todo_is_an_unblock_not_a_correction() {
     let (_dir, result) = blocked_follow_up_range(|root| {
         write(
             root,
@@ -573,7 +575,23 @@ fn a_blocked_follow_up_moved_to_todo_runs_the_preflight() {
             ),
         );
     });
-    assert_preflight_runs(&result, "a blocked follow-up moved to todo");
+    assert_eq!(
+        result.0, 0,
+        "a blocked follow-up moved to todo: {}",
+        result.1
+    );
+    assert!(
+        result
+            .1
+            .contains("TSK-005 is unblocked in this range (blocked -> todo)"),
+        "the unblock notice must name the step: {}",
+        result.1
+    );
+    assert!(
+        !result.1.contains("starts no work"),
+        "the correction skip sentence must be absent: {}",
+        result.1
+    );
 }
 
 /// AC-4: a blocked follow-up that rewrites its own criterion text changes
