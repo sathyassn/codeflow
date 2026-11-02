@@ -1,0 +1,11 @@
+id = "TSK-1192"
+uid = "5173b79a-d5b1-4f59-976c-6afa92247c75"
+kind = "TSK"
+title = "Keep hosted coverage shards from running out of disk during the instrumented build"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T16:42:01Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
