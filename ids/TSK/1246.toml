@@ -1,0 +1,11 @@
+id = "TSK-1246"
+uid = "822b4484-7215-4572-9506-8e979820984c"
+kind = "TSK"
+title = "A line push reuses a pull request verdict only by tested tree, line, tier and latest attempt"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T18:24:02Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
