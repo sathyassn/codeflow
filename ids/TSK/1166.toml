@@ -1,0 +1,11 @@
+id = "TSK-1166"
+uid = "7c279786-6f2d-4cb8-8144-85b29d7ca7ad"
+kind = "TSK"
+title = "The trusted allowlist canary is required once the epic reaches main"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T01:42:41Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
