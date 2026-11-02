@@ -3176,16 +3176,15 @@ fn markdown_body(value: &str) -> &str {
 
 fn frontmatter_parts(value: &str) -> Result<Option<(&str, &str)>, &'static str> {
     let mut lines = value.split_inclusive('\n');
-    let Some(first) = lines
-        .next()
-        .filter(|line| line.ends_with('\n') && line.trim_end() == "---")
-    else {
+    let Some(first) = lines.next().filter(|line| {
+        line.ends_with('\n') && line.trim_end_matches([' ', '\t', '\r', '\n']) == "---"
+    }) else {
         return Ok(None);
     };
     let start = first.len();
     let mut offset = start;
     for line in lines {
-        if line.trim_end() == "---" {
+        if line.trim_end_matches([' ', '\t', '\r', '\n']) == "---" {
             return Ok(Some((&value[start..offset], &value[offset + line.len()..])));
         }
         offset += line.len();
