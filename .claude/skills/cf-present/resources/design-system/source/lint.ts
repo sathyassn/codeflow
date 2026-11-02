@@ -8,7 +8,7 @@ export function styleLiterals(css: string): string[] {
   // are not authored palette/size choices. Named colour values still are.
   for (const [, block] of source.matchAll(/\{([^{}]*)\}/g)) for (const declaration of block!.split(';')) {
     const colon = declaration.indexOf(':'); if (colon < 0) continue;
-    const value = declaration.slice(colon + 1).replace(/var\([^)]*\)/g, '');
+    const value = declaration.slice(colon + 1).replace(/--[\w-]+/g, '');
     if (value.split(/[^a-zA-Z]+/).some(word => namedColours.includes(word.toLowerCase()))) hits.push(value.trim());
   }
   return hits;

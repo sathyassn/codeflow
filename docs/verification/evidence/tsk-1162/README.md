@@ -19,3 +19,6 @@ worktree root after building its binary and portal. Captures go to
 `stylesheet-lint-before-after.txt` records a new consumer stylesheet accepted
 before the file scan and rejected after it. The automated control and planted
 fixture now run in `web/scripts/token-lint.test.mjs` as part of the web check.
+
+`literal-fallback-before.txt` records the named-colour fallback fixture failing
+before the guard was corrected. The passing source suite includes that case.
