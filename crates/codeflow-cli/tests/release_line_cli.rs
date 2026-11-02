@@ -318,10 +318,19 @@ impl Fx {
         output(&out)
     }
 
-    /// The release push as CI judges it: from the published release tip.
+    /// The release push as CI judges it: from the published release tip,
+    /// with the push hand-off the hook passes (`--pushed-ref`), so a base
+    /// that fresh lines share is not read as a line's tip (TSK-1155).
     fn ci_release(&self) -> (i32, String) {
         let published = self.git(&["rev-parse", &format!("origin/{RELEASE}")]);
-        self.ci(&published, "HEAD", RELEASE, None)
+        let pushed = format!("refs/heads/{RELEASE}");
+        self.ci_with(
+            &published,
+            "HEAD",
+            RELEASE,
+            None,
+            &["--pushed-ref", &pushed],
+        )
     }
 
     /// The pre-push hook for pushing `local` to `branch`, which the
@@ -1850,7 +1859,7 @@ fn a_late_completion_binds_through_a_closeout_only_ancestor() {
             .replace("Reviewed; waiting for the gate.\n", &block(&reviewed));
         fx.write(&path("TSK-001"), &done);
         fx.commit("docs(records): complete TSK-001");
-        let on_line = fx.ci(LINE_A, "HEAD", "plan/complete-tsk001", None);
+        let on_line = fx.ci(LINE_A, "HEAD", "plan/complete-tsk001", Some(LINE_A));
         fx.land(LINE_A, "plan/complete-tsk001");
         fx.cut_release();
         fx.import(LINE_A);
@@ -2756,7 +2765,7 @@ fn a_records_only_criterion_is_frozen_on_every_release_path() {
     fx.git(&["switch", "-q", "-C", "plan/amend", LINE_A]);
     loosen(&fx);
     fx.commit("docs(records): loosen a criterion");
-    let line = fx.ci(LINE_A, "HEAD", "plan/amend", None);
+    let line = fx.ci(LINE_A, "HEAD", "plan/amend", Some(LINE_A));
     passes(&line, "an ordinary amendment on an epic line");
     assert!(!line.1.contains(SCOPE_LINE), "{}", line.1);
 }
