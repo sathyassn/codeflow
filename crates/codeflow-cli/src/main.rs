@@ -153,7 +153,7 @@ enum Command {
     /// Run the test gate (configured targets or runtime stack detection).
     Test(cmd::test::TestArgs),
 
-    /// Run a direct heavy command under the shared gate lock.
+    /// Run a direct heavy command in a heavy-run slot, beside other heavy runs.
     Reserve(cmd::reserve::ReserveArgs),
     /// Adopt or reconcile the opt-in documentation portal (utility craft over durable docs).
     Portal(cmd::portal::PortalArgs),

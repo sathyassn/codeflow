@@ -46,16 +46,15 @@
           },
           "description": "Shared input globs that select all targets."
         },
-        "heavy_wait_seconds": {
+        "host_jobs": {
           "type": "integer",
-          "minimum": 0,
-          "default": 0,
-          "description": "Bounded wait for heavy quick work to acquire the shared gate lock."
+          "minimum": 1,
+          "description": "Jobs all heavy runs on this host share. Omitted uses the logical cores, lowered to available memory at 1 GiB per job. A run past capacity starts with its share instead of waiting."
         },
         "worker_budget": {
           "type": "integer",
           "minimum": 1,
-          "description": "Total workers allocated across concurrent heavy targets. Omitted leaves tool defaults unchanged."
+          "description": "Workers one run allocates across its concurrent heavy targets, capped at the host job budget. Omitted, a run uses the host budget."
         },
         "quick_default_class": {
           "type": "string",
@@ -230,7 +229,12 @@
         "exclusive": {
           "type": "boolean",
           "default": false,
-          "description": "Run alone."
+          "description": "Run with no other target of this run alongside it."
+        },
+        "host_exclusive": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run alone on the host: no other target of this run and no other heavy run on the machine beside it. Only for a target that cannot share the host, such as a timing-sensitive one."
         },
         "input_class": {
           "type": "string",
@@ -302,12 +306,12 @@
         },
         "heavy": {
           "type": "boolean",
-          "description": "Heavy work takes the quick gate lock; false declares light work. Omitted targets are heavy only in the quick-to-essential fallback."
+          "description": "Heavy quick work takes a heavy-run slot and its job share; false declares light work. Omitted targets are heavy only in the quick-to-essential fallback."
         },
         "workers": {
           "type": "integer",
           "minimum": 1,
-          "description": "Workers needed before this heavy target starts; requires execution.worker_budget and cannot exceed it. Omitted targets share the available budget."
+          "description": "Workers needed before this heavy target starts; requires execution.worker_budget and cannot exceed it. When the run's budget is lowered below it, the target runs at the budget. Omitted targets share the available budget."
         }
       },
       "additionalProperties": false

@@ -4319,6 +4319,31 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // TSK-1145: /proc/meminfo is read by its documented format to size the
+    // host job budget. An unreadable file or a line that does not parse
+    // gives no memory figure, and the budget falls back to the core count;
+    // no admission decision reads it.
+    (
+        "crates/codeflow-core/src/testing/capacity.rs",
+        "platform::available_memory",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/testing/capacity.rs",
+        "platform::available_memory",
+        "obtain-absent:read_to_string",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/testing/capacity.rs",
+        "platform::available_memory",
+        "trim",
+        2,
+        "format-contract",
+    ),
     // Formats owner PID/directory and stale-lock notes after lock authority has been decided using the lock itself.
     (
         "crates/codeflow-core/src/testing/gate_guard.rs",
@@ -4330,7 +4355,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Formats owner PID/directory and stale-lock notes after lock authority has been decided using the lock itself.
     (
         "crates/codeflow-core/src/testing/gate_guard.rs",
-        "acquire_gate_lock",
+        "take_slot",
         "trim",
         1,
         "display",
@@ -7152,7 +7177,6 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/testing/config/mod.rs", "load_named_test_config", "ErrorKind::NotFound", 1, "Only a NotFound from symlink_metadata on the named path becomes ConfigNotFound, a refusal; every other error refuses as unreadable (TSK-1020)."),
     ("crates/codeflow-core/src/testing/config/mod.rs", "load_named_test_config", "is_file", 1, "Read from symlink_metadata after links are refused; false refuses the named config as not regular, and the bounded no-follow reader rechecks the opened file (TSK-1020)."),
     ("crates/codeflow-core/src/testing/gate.rs", "copy_folder", "is_dir", 1, "Type check on metadata the anchored walk read without following, errors propagated; a link or special file fails before it, and a file then reopens through open_regular (TSK-1044)."),
-    ("crates/codeflow-core/src/testing/gate_guard.rs", "earliest_waiter", "ErrorKind::NotFound", 2, "The waiter folder is opened through the no-follow contained tree, so not found means no waiter has queued and no earlier ticket exists; any other error refuses as gate lock unavailable (TSK-1128)."),
     ("crates/codeflow-core/src/testing/runner/mod.rs", "this_binary_if_same", "is_file", 1, "Picks the PATH entry the command would run; a missing or non-regular entry is skipped, and a wrong pick only withholds the lock descriptors, since the device and inode must still equal the running binary's (TSK-1128)."),
     ("crates/codeflow-core/src/testing/runner/mod.rs", "open_report", "ErrorKind::NotFound", 1, "The anchored walk refuses a link at any component before it can report not found, so not found is a missing report, which is skipped as before; other errors refuse the copy and fail the target (TSK-1044)."),
     ("crates/codeflow-core/src/testing/runner/mod.rs", "run_owed_target", "ErrorKind::NotFound", 1, "A producer output checked through the anchored walk, which refuses a link at any component before it can report not found, so not found is a missing output and fails the target; other errors are a refused output and fail it too (TSK-1044)."),

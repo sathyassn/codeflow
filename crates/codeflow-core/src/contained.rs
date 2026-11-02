@@ -509,18 +509,6 @@ impl Tree {
             platform::open_regular(&parent, &name)
         })
     }
-
-    /// Open (creating if needed) a regular file to hold a lock on.
-    ///
-    /// # Errors
-    ///
-    /// When a component is a link or the leaf is not a regular file.
-    pub(crate) fn lock_file(&self, relative: &str) -> io::Result<File> {
-        self.explained(relative, || {
-            let (parent, name) = self.parent(relative, true)?;
-            platform::create_file(&parent, &name, false)
-        })
-    }
 }
 
 /// Test-only failure injection at the points a disk error is otherwise hard
@@ -1283,14 +1271,14 @@ mod tests {
         for path in ["redirect/sentinel", "leaf"] {
             assert!(io.write(path, b"bad").is_err());
             assert!(io.remove(path).is_err());
-            assert!(io.lock_file(path).is_err());
+            assert!(io.create_read_only(path).is_err());
         }
         let pipe = std::ffi::CString::new(root.path().join("pipe").as_os_str().as_bytes()).unwrap();
         // SAFETY: valid NUL-terminated fixture pathname.
         assert_eq!(unsafe { libc::mkfifo(pipe.as_ptr(), 0o600) }, 0);
         assert!(io.write("pipe", b"bad").is_err());
         assert!(io.remove("pipe").is_err());
-        assert!(io.lock_file("pipe").is_err());
+        assert!(io.create_read_only("pipe").is_err());
         assert_eq!(
             std::fs::read(outside.path().join("sentinel")).unwrap(),
             b"outside"
