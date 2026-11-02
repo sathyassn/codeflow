@@ -405,7 +405,7 @@ GATES_IF = re.compile(r"^\$\{\{ !cancelled\(\) && needs\.reuse\.outputs\.run == 
 REUSE_JOB = """\
     if: github.event_name == 'push'
     name: reuse a pull request verdict
-    needs: windows-image
+    needs: [ubuntu-image, windows-image]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -442,6 +442,7 @@ REUSE_JOB = """\
             --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}" \\
             --windows-image-os "$WINDOWS_IMAGE_OS" --windows-image-version "$WINDOWS_IMAGE_VERSION" \\
             --push-only "reuse a pull request verdict" --push-only "read the Windows runner image" \\
+            --push-only "read the Ubuntu runner image" \\
             --require "codeflow gates" --require windows
 """
 

@@ -54,7 +54,34 @@ jobs:
   windows-verdict:
     if: ${{ always() }}
     name: windows
+  gates:
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'push') }}
+    name: codeflow gates (${{ matrix.part }})
+  windows-build:
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' }}
+    name: windows test build
+    needs: reuse
+  windows-tests:
+    if: ${{ !cancelled() && needs.windows-build.result == 'success' }}
+    name: windows tests (${{ matrix.partition }} of 12)
+    needs: windows-build
 """
+PUSH_RUN = 500
+PUSH_IMAGE = {"ubuntu-24.04": ("ubuntu-24.04", "20261025.353.1"),
+              "windows-latest": ("windows-2025-vs2026", "20261021.278.1")}
+JOB_LABEL = {}
+_ids = iter(range(1000, 10 ** 6))
+
+
+def log(image, version, after_step=False):
+    """A job log head as GitHub writes it (TSK-359; from job 124950310866)."""
+    block = ["##[group]Runner Image", f"Image: {image}", f"Version: {version}",
+             "Included Software: https://github.com/actions/runner-images/blob/x/y/Readme.md", "##[endgroup]"]
+    head = ["\ufeff2026-11-01T19:15:59.8257055Z Current runner version: '2.338.2'",
+            "##[group]Runner Image Provisioner", "Hosted Compute Agent", "Version: 20261021.618", "##[endgroup]"]
+    step = ["##[group]Run actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803", "##[endgroup]"]
+    lines = head + (step + block if after_step else block + step)
+    return "\n".join(line if line.startswith("\ufeff") else f"2026-11-01T19:15:59.8312716Z {line}" for line in lines)
 
 
 class FakeGit:
@@ -81,8 +108,16 @@ class FakeGit:
         return self.changed_paths
 
 
-def job(name, conclusion="success"):
-    return {"name": name, "conclusion": conclusion}
+def job(name, conclusion="success", label=None):
+    label = label or ("windows-latest" if name.startswith("windows") else "ubuntu-24.04")
+    job_id = next(_ids)
+    JOB_LABEL[job_id] = label
+    return {"id": job_id, "name": name, "conclusion": conclusion, "labels": [label]}
+
+
+PUSH_JOBS = [job("reuse a pull request verdict", label="ubuntu-24.04"),
+             job("read the Ubuntu runner image", label="ubuntu-24.04"),
+             job("read the Windows runner image", label="windows-latest")]
 
 
 GREEN_JOBS = [job("codeflow gates (coverage)"), job("codeflow gates"), job("windows tests (1 of 12)"),
@@ -124,13 +159,15 @@ def artifact(run_id=77, head=HEAD, windows=False, **changes):
 
 
 class FakeApi:
-    def __init__(self, pulls=None, runs=None, jobs=None, caches=None, base="main", artifacts=None, zips=None):
+    def __init__(self, pulls=None, runs=None, jobs=None, caches=None, base="main", artifacts=None, zips=None,
+                 logs=None):
+        self.logs = logs or {}
         self.cache_list = caches if caches is not None else [{"key": APT_KEY, "ref": MAIN_REF}]
         self.pull_list = pulls if pulls is not None else [
             {"number": 95, "merged_at": "2026-10-11T00:43:00Z", "merge_commit_sha": PUSHED, "head": {"sha": HEAD},
              "base": {"ref": base}}]
         self.run_list = runs if runs is not None else [run(base)]
-        self.job_lists = jobs if jobs is not None else {77: GREEN_JOBS}
+        self.job_lists = {PUSH_RUN: PUSH_JOBS, **(jobs if jobs is not None else {77: GREEN_JOBS})}
         self.artifact_lists = artifacts if artifacts is not None else {77: [artifact(), artifact(windows=True)]}
         self.zips = zips if zips is not None else {977: archive(provenance(base)),
                                                    1977: archive(provenance(base, windows=True))}
@@ -153,16 +190,25 @@ class FakeApi:
     def jobs(self, run_id):
         return self.job_lists.get(run_id, [])
 
+    def job_log_head(self, job_id):
+        found = self.logs.get(job_id)
+        if isinstance(found, Exception):
+            raise found
+        if callable(found):
+            return found()
+        return found if found is not None else log(*PUSH_IMAGE[JOB_LABEL[job_id]])
+
     def caches(self, key, ref):
         if isinstance(self.cache_list, Exception):
             raise self.cache_list
         return self.cache_list
 
 
-def decide(event="push", git=None, api=None, ref=MAIN_REF, images=None, text=WORKFLOW_TEXT, line_skips=None):
+def decide(event="push", git=None, api=None, ref=MAIN_REF, images=None, text=WORKFLOW_TEXT, line_skips=None,
+           run_id=PUSH_RUN):
     skips = frozenset({RELEASE_JOB}) if line_skips is None else line_skips
     return reuse.decide(event, PUSHED, WORKFLOW, PUSH_ONLY, REQUIRED, git or FakeGit(), api or FakeApi(),
-                        APT_KEY, ref, images or IMAGES, text, skips)
+                        APT_KEY, ref, images or IMAGES, text, skips, run_id)
 
 
 class DecisionTests(unittest.TestCase):
@@ -288,7 +334,7 @@ class DecisionTests(unittest.TestCase):
     def test_the_release_parts_may_be_skipped_on_a_line_only(self):
         jobs = [*GREEN_JOBS, job(RELEASE_JOB, "skipped")]
         default = reuse.decide("push", PUSHED, WORKFLOW, PUSH_ONLY, REQUIRED, FakeGit(), FakeApi(base=LINE, jobs={77: jobs}),
-                               APT_KEY, LINE_REF, IMAGES, WORKFLOW_TEXT)
+                               APT_KEY, LINE_REF, IMAGES, WORKFLOW_TEXT, run_id=PUSH_RUN)
         self.assertEqual(default, 77)
         self.assertEqual(decide(api=FakeApi(base=LINE, jobs={77: jobs}), ref=LINE_REF), 77)
         self.assertIn("release", self.skipped(api=FakeApi(jobs={77: jobs})))
@@ -377,6 +423,128 @@ class ProvenanceTests(unittest.TestCase):
         self.assertTrue({"codeflow gates", "windows"} <= names)
         for never in ("secret scan", "gitleaks allowlist canary", "security review"):
             self.assertNotIn(never, names)
+
+
+class ImageBindingTests(unittest.TestCase):
+    """TSK-359: each job the push skips must have run on the push's image."""
+
+    def skipped(self, api, **kwargs):
+        with self.assertRaises(reuse.Skip) as caught:
+            decide(api=api, **kwargs)
+        return str(caught.exception)
+
+    def job_id(self, name):
+        return next(j["id"] for j in GREEN_JOBS if j["name"] == name)
+
+    def test_matching_images_on_every_reused_job_reuse(self):
+        self.assertEqual(decide(), 77)
+
+    def test_a_drifted_ubuntu_gate_job_is_refused(self):
+        drifted = {self.job_id("codeflow gates (coverage)"): log("ubuntu-24.04", "20261018.96.1")}
+        message = self.skipped(FakeApi(logs=drifted))
+        self.assertIn("'codeflow gates (coverage)' ran on image ubuntu-24.04 20261018.96.1", message)
+        self.assertIn("20261025.353.1", message)
+
+    def test_a_drifted_windows_job_image_or_version_is_refused(self):
+        name = "windows tests (1 of 12)"
+        for image, version in (("windows-2022", "20261021.278.1"), ("windows-2025-vs2026", "20261030.294.1")):
+            with self.subTest(image=image, version=version):
+                self.assertIn(f"{name!r} ran on image", self.skipped(FakeApi(logs={self.job_id(name): log(image, version)})))
+
+    def test_a_drifted_push_image_is_refused(self):
+        push = {PUSH_JOBS[1]["id"]: log("ubuntu-24.04", "20261101.1.1")}
+        self.assertIn("ran on image", self.skipped(FakeApi(logs=push)))
+
+    def test_a_job_the_push_also_runs_may_use_another_image(self):
+        # The secret scan runs on every push, so its image is not reused.
+        self.assertEqual(decide(api=FakeApi(logs={self.job_id("secret scan"): log("ubuntu-24.04", "1")})), 77)
+
+    def test_a_runner_image_block_printed_after_a_step_started_is_refused(self):
+        forged = {self.job_id("codeflow gates (coverage)"): log(*PUSH_IMAGE["ubuntu-24.04"], after_step=True)}
+        self.assertIn("no Runner Image block", self.skipped(FakeApi(logs=forged)))
+
+    def test_a_log_error_on_a_reused_job_runs_everything(self):
+        with self.assertRaises(OSError):
+            decide(api=FakeApi(logs={self.job_id("codeflow gates (coverage)"): OSError("HTTP 404")}))
+
+    def test_a_job_on_an_unknown_label_is_refused(self):
+        jobs = [*GREEN_JOBS, job("codeflow gates (arm)", label="ubuntu-24.04-arm")]
+        self.assertIn("ubuntu-24.04-arm", self.skipped(FakeApi(jobs={77: jobs})))
+
+    def test_a_missing_failed_repeated_or_off_label_push_image_job_is_refused(self):
+        ubuntu, windows = PUSH_JOBS[1], PUSH_JOBS[2]
+        for push in ([PUSH_JOBS[0], ubuntu], [PUSH_JOBS[0], {**ubuntu, "conclusion": "failure"}, windows],
+                     [PUSH_JOBS[0], ubuntu, ubuntu, windows], [PUSH_JOBS[0], {**ubuntu, "labels": ["windows-latest"]}, windows]):
+            with self.subTest(push=[(j["name"], j["conclusion"], j["labels"]) for j in push]):
+                api = FakeApi()
+                api.job_lists[PUSH_RUN] = push
+                self.skipped(api)
+
+    def test_a_push_image_log_not_served_yet_is_retried_then_refused(self):
+        calls = []
+
+        def late():
+            calls.append(1)
+            if len(calls) < 3:
+                raise OSError("HTTP 404")
+            return log(*PUSH_IMAGE["ubuntu-24.04"])
+        with mock.patch.object(reuse, "LOG_RETRY_SECONDS", 0):
+            self.assertEqual(decide(api=FakeApi(logs={PUSH_JOBS[1]["id"]: late})), 77)
+            self.assertIn("gave no runner image", self.skipped(FakeApi(logs={PUSH_JOBS[1]["id"]: OSError("HTTP 404")})))
+
+    def test_no_run_id_or_no_workflow_is_refused(self):
+        for run_id in (None, 0, -1):
+            with self.subTest(run_id=run_id):
+                self.assertIn("runner images cannot be compared", self.skipped(FakeApi(), run_id=run_id))
+        self.assertIn("runner images cannot be compared", self.skipped(FakeApi(), text=None))
+
+    def test_a_run_with_no_reused_job_is_refused(self):
+        jobs = [j for j in GREEN_JOBS if j["name"] not in ("codeflow gates (coverage)", "windows tests (1 of 12)")]
+        self.assertIn("no image was compared", self.skipped(FakeApi(jobs={77: jobs})))
+
+    def test_the_reused_jobs_come_from_the_pushed_workflow(self):
+        patterns = reuse.reused_jobs((ROOT / ".github" / "workflows" / "codeflow-ci.yml").read_text())
+
+        def reused(name):
+            return any(p.fullmatch(name) for p in patterns)
+        for name in ("codeflow build", "codeflow gates (checks)", "codeflow gates (coverage 1 of 2)",
+                     "codeflow gates (coverage report)", "windows test build", "windows tests (3 of 12)",
+                     "windows checks (doc, clippy, Node)", "windows journeys", "windows release journey"):
+            self.assertTrue(reused(name), name)
+        for name in ("codeflow gates", "windows", "secret scan", "security review", "gitleaks allowlist canary",
+                     "reuse a pull request verdict", "read the Windows runner image",
+                     "record the tested merge (ci-provenance)"):
+            self.assertFalse(reused(name), name)
+
+    def test_the_runner_image_block_of_a_real_log_is_read(self):
+        self.assertEqual(reuse.runner_image(log("windows-2025-vs2026", "20261021.278.1")),
+                         ("windows-2025-vs2026", "20261021.278.1"))
+        for text in ("", log("", "1"), "##[group]Runner Image\nImage: x\n"):
+            with self.subTest(text=text[:20]):
+                with self.assertRaises(reuse.Skip):
+                    reuse.runner_image(text)
+
+
+class BaseBindingTests(unittest.TestCase):
+    """TSK-359: the base the run merged with is the line before the push or
+    an ancestor of it."""
+
+    def test_a_base_off_the_destination_history_is_refused(self):
+        with self.assertRaises(reuse.Skip) as caught:
+            decide(git=OffLineBase())
+        self.assertIn("is not main before this push", str(caught.exception))
+
+    def test_the_first_parent_or_an_ancestor_of_it_is_accepted(self):
+        self.assertEqual(decide(git=FakeGit()), 77)
+        self.assertEqual(decide(api=FakeApi(zips={977: archive(provenance(base_commit=MAIN)),
+                                                  1977: archive(provenance(windows=True, base_commit=MAIN))})), 77)
+
+
+class OffLineBase(FakeGit):
+    """The head contains the base and the line, but the line never held the base."""
+
+    def is_ancestor(self, ancestor, commit):
+        return not (ancestor == BASE and commit == MAIN)
 
 
 class NoRecordedBase(FakeGit):
@@ -473,13 +641,13 @@ class MainTests(unittest.TestCase):
             return code, output.read_text()
 
     def test_reuse_writes_the_run_id(self):
-        self.assertEqual(self.main(lambda *args: 77), (0, "run=77\n"))
+        self.assertEqual(self.main(lambda *args, **kwargs: 77), (0, "run=77\n"))
 
     def test_a_reason_or_an_error_writes_nothing_and_never_fails(self):
-        def refuse(*args):
+        def refuse(*args, **kwargs):
             raise reuse.Skip("trees differ")
 
-        def broken(*args):
+        def broken(*args, **kwargs):
             raise KeyError("head")
         self.assertEqual(self.main(refuse), (0, ""))
         self.assertEqual(self.main(broken), (0, ""))
