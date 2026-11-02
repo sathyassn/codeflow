@@ -37,6 +37,11 @@ pub enum DelegateCommand {
         /// requested provenance (`unknown` when omitted).
         #[arg(long, value_name = "LEVEL")]
         effort: Option<String>,
+        /// The config home the delegate CLI is launched under, from the
+        /// account profile (`codeflow models launch-env`); recorded in each
+        /// turn's provenance. Omit it for the CLI's default home.
+        #[arg(long, value_name = "DIR")]
+        config_home: Option<String>,
     },
     /// Arm one prompt for a delegate turn.
     Arm {
@@ -93,12 +98,14 @@ pub fn run(args: &DelegateArgs) -> i32 {
             state_dir,
             model,
             effort,
+            config_home,
         } => match delegate::init_with_launch(
             run_id,
             state_dir,
             &delegate::Launch {
                 model: model.clone(),
                 effort: effort.clone(),
+                config_home: config_home.clone(),
             },
         ) {
             Ok(settings) => {

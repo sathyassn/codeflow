@@ -93,6 +93,11 @@ pane_id=$(printf '%s' "$created" | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')
 # Tracked Claude only: set after shell init in its dedicated pane; verify `1`.
 herdr pane run "$pane_id" 'export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1; echo $CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'
+# Account profile: sets this family's own config-home variable, nothing
+# else; prints nothing when the project maps no home (transport rule,
+# "Account profiles").
+home_line=$(codeflow models launch-env --family <claude|codex|grok>)
+[ -z "$home_line" ] || herdr pane run "$pane_id" "$home_line"
 herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex|grok> \
   --pane "$pane_id" -- <native-args>
 ```

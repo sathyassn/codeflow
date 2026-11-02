@@ -79,6 +79,7 @@ pub mod remedy;
 pub mod remote;
 pub mod root_checkout;
 pub mod scaffold;
+pub mod seats;
 pub mod security;
 pub mod settings;
 pub mod status;

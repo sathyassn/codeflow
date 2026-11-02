@@ -148,3 +148,48 @@ Hosting worked when:
 - your own pane keeps focus
 - the agent reports the tab label, agent name and the peer's native thread or
   session id
+
+### Run a family under another account and read its limits
+
+A long run can stop when one family's subscription reaches its 5-hour or
+weekly limit. CodeFlow does not switch accounts or move a sign-in. It lets a
+project say which folder each family's seats start under, and it shows the
+limit state each CLI exposes.
+
+1. Sign in to the second account yourself, in its own config home (for
+   example `CODEX_HOME=~/.codex-second codex login`).
+2. Write the untracked profile `.codeflow/local/accounts.toml` in the main
+   checkout (or `accounts.toml` in your CodeFlow home). It holds folder
+   paths, the name of an API-key variable and a spend cap, never a token:
+
+   ```toml
+   schema_version = 1
+
+   [families.codex]
+   config_home = "~/.codex-second"
+
+   [families.codex.api_fallback]
+   key_env = "CODEX_FALLBACK_API_KEY"   # the variable's name, never its value
+   spend_cap_usd = 25
+   ```
+
+   A key whose name says token, secret or credential, a value shaped like a
+   secret, an unknown key, a relative path, and a config home inside the
+   project outside `.codeflow/local/` each refuse the whole file. The
+   managed `.gitignore` keeps `.codeflow/local/` untracked.
+3. The agent launches each seat with only that family's variable
+   (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME`) by running
+   `eval "$(codeflow models launch-env --family <family>)"` in the seat's
+   shell first. No output means the family keeps the CLI's default home.
+4. `codeflow models limits` prints each family's account and limit state.
+   Readings arrive from what each CLI already exposes:
+
+   | Family | Source | How it reaches CodeFlow |
+   |---|---|---|
+   | Claude Code | statusline JSON `rate_limits.five_hour` and `seven_day` (Pro, Max and Ultra plans only, after the first response) | the statusline script pipes its input to `codeflow models record-limits --family claude` |
+   | Codex | app-server `account/rateLimits/read` result and `account/rateLimits/updated` event | the payload piped to `codeflow models record-limits --family codex` |
+   | Grok Build | no usage reading; only the limit-hit error | `codeflow models record-limits --family grok --limit-hit [--resets-at EPOCH]` |
+
+   A window with no reading shows `not exposed`; a window that reset after
+   its reading shows that, with the old figure. Choosing a route from these
+   readings is TSK-432's work, not this command's.

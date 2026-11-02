@@ -94,6 +94,35 @@ operator's (First-run prompts). A consult or review edits nothing whatever
 its mode. Never `--dangerously-skip-permissions` unless the operator named
 it, and never `--dangerously-bypass-hook-trust`.
 
+### Account profiles
+
+A project can keep an untracked profile, `.codeflow/local/accounts.toml`
+(or `accounts.toml` in the user's CodeFlow home), that maps a family to a
+config home the operator has already signed in to. The file holds folder
+paths, the name of an API-key variable and a spend cap, never a token;
+`codeflow models launch-env` and `codeflow models limits` refuse a file
+that names one. Every managed launch of a seat sets that family's own
+variable and no other, in the seat's shell before its CLI starts:
+
+| Family | Variable |
+|---|---|
+| Claude | `CLAUDE_CONFIG_DIR` |
+| Codex | `CODEX_HOME` |
+| Grok | `GROK_HOME` |
+
+```bash
+eval "$(codeflow models launch-env --family <claude|codex|grok>)"
+```
+
+No output means the profile maps no home for that family, and the CLI uses
+its default home. A tracked Claude seat also passes the folder to
+`codeflow delegate init --config-home <dir>`, so each turn's provenance
+names it. CodeFlow never signs in, copies or moves a sign-in, or switches a
+seat between accounts: choosing another account is the operator's, and
+rotating one person's subscriptions to get past a limit is outside what
+CodeFlow does. `codeflow models limits` shows each family's account and
+limit state (5-hour and weekly windows, or `not exposed`).
+
 ### First-run prompts
 
 A new seat can stop at a folder trust prompt, a hook trust prompt or a

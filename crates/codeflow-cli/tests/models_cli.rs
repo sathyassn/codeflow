@@ -806,3 +806,373 @@ fn models_text_marks_filled_and_open_obligations() {
     assert!(text.contains("\nobligation: xhigh-reasoning:orchid-seat: open [required]:"));
     assert!(text.contains("xhigh trigger met: false"));
 }
+
+// TSK-431: the account profile and the limit readings. Disposable folders
+// only; the profile holds paths, and no test touches a real config home,
+// keychain or credential helper.
+
+/// A project folder with an isolated home and `CodeFlow` home.
+struct Seats {
+    dir: tempfile::TempDir,
+}
+
+impl Seats {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("project")).unwrap();
+        std::fs::create_dir_all(dir.path().join("home")).unwrap();
+        Self { dir }
+    }
+
+    fn project(&self) -> PathBuf {
+        self.dir.path().join("project")
+    }
+
+    fn home(&self) -> PathBuf {
+        self.dir.path().join("home")
+    }
+
+    fn profile(&self, text: &str) {
+        write(&self.project(), ".codeflow/local/accounts.toml", text);
+    }
+
+    fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+        command
+            .current_dir(self.project())
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
+            .env_remove("GROK_HOME")
+            .env("HOME", self.home())
+            .env("CODEFLOW_HOME", self.home().join(".codeflow"))
+            .arg("models")
+            .args(args);
+        command
+    }
+
+    fn run(&self, args: &[&str]) -> Output {
+        self.command(args).output().unwrap()
+    }
+
+    fn record(&self, family: &str, payload: &str) -> Output {
+        use std::io::Write;
+        let mut child = self
+            .command(&["record-limits", "--family", family])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    /// The environment a shell has after it evals the launch line for
+    /// `family`, in a cleared environment.
+    fn launched_environment(&self, family: &str) -> String {
+        let script = format!(
+            "eval \"$({bin} models launch-env --family {family})\"; env",
+            bin = env!("CARGO_BIN_EXE_codeflow")
+        );
+        let output = Command::new("sh")
+            .current_dir(self.project())
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", self.home())
+            .env("CODEFLOW_HOME", self.home().join(".codeflow"))
+            .args(["-c", &script])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    }
+}
+
+const PROFILE: &str = r#"
+schema_version = 1
+
+[families.claude]
+config_home = "~/claude-work"
+
+[families.codex]
+config_home = "/srv/codex-second"
+
+[families.codex.api_fallback]
+key_env = "CODEX_FALLBACK_API_KEY"
+spend_cap_usd = 25
+
+[families.grok]
+config_home = "/srv/grok-second"
+"#;
+
+const CLAUDE_STATUSLINE: &str = r#"{"model":{"id":"claude-opus-5-5"},"rate_limits":{
+  "five_hour":{"used_percentage":23.5,"resets_at":4102444800},
+  "seven_day":{"used_percentage":41.2,"resets_at":4102531200}}}"#;
+
+const CODEX_READ: &str = r#"{"rateLimits":{"limitId":"codex","planType":"pro",
+  "primary":{"usedPercent":12,"windowDurationMins":300,"resetsAt":4102444800},
+  "secondary":{"usedPercent":60,"windowDurationMins":10080,"resetsAt":4102531200}}}"#;
+
+fn env_lines(environment: &str, variable: &str) -> Vec<String> {
+    let prefix = format!("{variable}=");
+    environment
+        .lines()
+        .filter(|line| line.starts_with(&prefix))
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn launch_sets_only_the_launched_familys_config_home_variable() {
+    let seats = Seats::new();
+    seats.profile(PROFILE);
+    let expected = [
+        (
+            "claude",
+            "CLAUDE_CONFIG_DIR",
+            format!("{}/claude-work", seats.home().display()),
+        ),
+        ("codex", "CODEX_HOME", "/srv/codex-second".to_string()),
+        ("grok", "GROK_HOME", "/srv/grok-second".to_string()),
+    ];
+    for (family, variable, path) in &expected {
+        let environment = seats.launched_environment(family);
+        assert_eq!(
+            env_lines(&environment, variable),
+            [format!("{variable}={path}")],
+            "{family}"
+        );
+        for (_, other, _) in expected.iter().filter(|(f, _, _)| f != family) {
+            assert!(
+                env_lines(&environment, other).is_empty(),
+                "{family} set {other}"
+            );
+        }
+    }
+}
+
+#[test]
+fn launch_with_no_profile_or_no_mapping_sets_nothing_and_says_so() {
+    let seats = Seats::new();
+    let output = seats.run(&["launch-env", "--family", "codex"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("default home"));
+    seats.profile("schema_version = 1\n[families.claude]\nconfig_home = \"/srv/c\"\n");
+    let environment = seats.launched_environment("codex");
+    for variable in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"] {
+        assert!(env_lines(&environment, variable).is_empty(), "{variable}");
+    }
+}
+
+#[test]
+fn launch_json_names_the_variable_and_folder() {
+    let seats = Seats::new();
+    seats.profile(PROFILE);
+    let output = seats.run(&["launch-env", "--family", "codex", "--json"]);
+    assert_eq!(output.status.code(), Some(0));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({"family": "codex", "variable": "CODEX_HOME", "config_home": "/srv/codex-second"})
+    );
+}
+
+#[test]
+fn a_profile_that_names_a_token_or_credential_is_refused_by_every_reader() {
+    let seats = Seats::new();
+    for (profile, needle) in [
+        (
+            "schema_version = 1\n[families.codex]\nconfig_home = \"/srv/c\"\ntoken = \"abc\"\n",
+            "token",
+        ),
+        (
+            "schema_version = 1\n[families.codex]\nconfig_home = \"/srv/c\"\n\
+             [families.codex.api_fallback]\nkey_env = \"CODEX_KEY\"\nspend_cap_usd = 5\n\
+             client_secret = \"abc\"\n",
+            "secret",
+        ),
+        (
+            concat!(
+                "schema_version = 1\n[families.codex]\nconfig_home = \"/srv/c\"\nnote = \"ghp",
+                "_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"\n"
+            ),
+            "GitHub token",
+        ),
+    ] {
+        seats.profile(profile);
+        for args in [
+            vec!["launch-env", "--family", "codex"],
+            vec!["limits"],
+            vec!["limits", "--json"],
+        ] {
+            let output = seats.run(&args);
+            assert_eq!(output.status.code(), Some(2), "{args:?}");
+            assert!(output.stdout.is_empty(), "{args:?}: nothing for a shell to eval");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains("accounts.toml") && stderr.contains(needle), "{stderr}");
+        }
+    }
+}
+
+#[test]
+fn each_familys_fixture_payload_shows_used_percentage_and_reset_time() {
+    let seats = Seats::new();
+    seats.profile(PROFILE);
+    let recorded = seats.record("claude", CLAUDE_STATUSLINE);
+    assert_eq!(recorded.status.code(), Some(0), "{recorded:?}");
+    assert_eq!(seats.record("codex", CODEX_READ).status.code(), Some(0));
+    let hit = seats.run(&[
+        "record-limits",
+        "--family",
+        "grok",
+        "--limit-hit",
+        "--resets-at",
+        "4102444800",
+    ]);
+    assert_eq!(hit.status.code(), Some(0), "{hit:?}");
+
+    let output = seats.run(&["limits", "--json"]);
+    assert_eq!(output.status.code(), Some(0));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let family = |id: &str| -> Value {
+        value["families"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["family"] == id)
+            .cloned()
+            .unwrap()
+    };
+    let claude = family("claude");
+    assert_eq!(
+        claude["five_hour"],
+        json!({"state": "used", "used_percent": 23.5, "resets_at": 4_102_444_800_u64})
+    );
+    assert_eq!(
+        claude["weekly"],
+        json!({"state": "used", "used_percent": 41.2, "resets_at": 4_102_531_200_u64})
+    );
+    let codex = family("codex");
+    assert_eq!(codex["five_hour"]["used_percent"], 12.0);
+    assert_eq!(codex["weekly"]["resets_at"], 4_102_531_200_u64);
+    assert_eq!(codex["account"]["config_home"], "/srv/codex-second");
+    assert_eq!(codex["account"]["api_fallback"]["spend_cap_usd"], 25.0);
+    let grok = family("grok");
+    assert_eq!(grok["five_hour"], json!({"state": "not_exposed"}));
+    assert_eq!(grok["limit_hit_resets_at"], 4_102_444_800_u64);
+
+    let text = String::from_utf8(seats.run(&["limits"]).stdout).unwrap();
+    assert!(
+        text.contains("5-hour: 23.5% used, resets 2100-01-01T00:00:00Z"),
+        "{text}"
+    );
+    assert!(
+        text.contains("weekly: 60% used, resets 2100-01-02T00:00:00Z"),
+        "{text}"
+    );
+    assert!(text.contains("account: config home /srv/codex-second (via CODEX_HOME)"));
+    assert!(text.contains("api fallback: key in $CODEX_FALLBACK_API_KEY, spend cap $25"));
+    assert!(text.contains("5-hour: not exposed"));
+    assert!(text.contains("limit hit reported"));
+}
+
+#[test]
+fn a_family_with_nothing_recorded_says_not_exposed() {
+    let seats = Seats::new();
+    let output = seats.run(&["limits"]);
+    assert_eq!(output.status.code(), Some(0));
+    let text = String::from_utf8(output.stdout).unwrap();
+    for family in ["claude", "codex", "grok"] {
+        assert!(text.contains(&format!(
+            "{family}:\n  account: the CLI's default config home"
+        )));
+    }
+    assert_eq!(text.matches("5-hour: not exposed").count(), 3);
+    assert_eq!(text.matches("weekly: not exposed").count(), 3);
+    assert!(text.contains("Grok Build gives no usage reading"));
+}
+
+#[test]
+fn recording_refuses_a_bad_payload_and_writes_nothing_for_an_empty_one() {
+    let seats = Seats::new();
+    for (family, payload) in [
+        ("claude", "not json"),
+        (
+            "claude",
+            r#"{"rate_limits":{"five_hour":{"used_percentage":250}}}"#,
+        ),
+        ("codex", r#"{"unrelated":true}"#),
+    ] {
+        let output = seats.record(family, payload);
+        assert_eq!(output.status.code(), Some(2), "{family} {payload}");
+    }
+    let empty = seats.record("claude", r#"{"model":{"id":"x"}}"#);
+    assert_eq!(empty.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&empty.stdout).contains("nothing recorded"));
+    assert!(!seats.project().join(".codeflow/local/limits").exists());
+    // Grok has no payload form, and only Grok takes --limit-hit.
+    assert_eq!(seats.record("grok", "{}").status.code(), Some(2));
+    let wrong = seats.run(&["record-limits", "--family", "claude", "--limit-hit"]);
+    assert_eq!(wrong.status.code(), Some(2));
+}
+
+#[test]
+fn a_linked_worktree_reads_the_main_checkouts_profile_and_readings() {
+    let seats = Seats::new();
+    let project = seats.project();
+    git(&project, &["init", "--quiet", "-b", "main"]);
+    git(
+        &project,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.test",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+            "--quiet",
+        ],
+    );
+    git(
+        &project,
+        &["worktree", "add", "--quiet", "-b", "feature", "../linked"],
+    );
+    seats.profile(PROFILE);
+    let linked = seats.dir.path().join("linked");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+    command
+        .current_dir(&linked)
+        .env("HOME", seats.home())
+        .env("CODEFLOW_HOME", seats.home().join(".codeflow"))
+        .args(["models", "launch-env", "--family", "codex"]);
+    let output = command.output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "export CODEX_HOME='/srv/codex-second'\n"
+    );
+    // A reading recorded from the worktree lands in the main checkout.
+    let mut record = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+    record
+        .current_dir(&linked)
+        .env("HOME", seats.home())
+        .env("CODEFLOW_HOME", seats.home().join(".codeflow"))
+        .args(["models", "record-limits", "--family", "grok", "--limit-hit"]);
+    assert_eq!(record.output().unwrap().status.code(), Some(0));
+    assert!(project.join(".codeflow/local/limits/grok.json").is_file());
+    assert!(!linked.join(".codeflow/local/limits").exists());
+}
+
+#[test]
+fn the_managed_ignore_keeps_the_local_folder_untracked() {
+    let ignore = include_str!("../../../assets/base/gitignore");
+    assert!(ignore.lines().any(|line| line == ".codeflow/local/"));
+}
