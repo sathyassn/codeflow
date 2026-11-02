@@ -359,6 +359,39 @@ fn probe_lock_dir(dir: &Path) -> std::io::Result<()> {
     })
 }
 
+/// Whether this process can rewrite the shared git config file of the
+/// repository holding `project_dir` (TSK-1156), and the path probed. Git
+/// rewrites that file for any `git config` change, `git push -u` and
+/// `git branch -m` of a branch with tracking settings; a profile that
+/// cannot write it refuses those with `could not write config file`.
+///
+/// The probe does what git does and changes nothing: it takes
+/// `config.lock` (so no other git process writes meanwhile), reads the
+/// file and writes the same bytes back over it through the anchored
+/// temporary-file-and-rename write, then releases the lock. A held lock
+/// is reported, never removed.
+pub fn probe_git_config_write(project_dir: &Path) -> (PathBuf, std::io::Result<()>) {
+    let common = match git2::Repository::discover(project_dir) {
+        Ok(repo) => repo.commondir().to_path_buf(),
+        Err(error) => {
+            return (
+                project_dir.to_path_buf(),
+                Err(std::io::Error::other(format!(
+                    "no git repository, so the shared git config file was not probed: {error}"
+                ))),
+            )
+        }
+    };
+    let config = common.join("config");
+    let result = crate::contained::Tree::open(&common).and_then(|tree| {
+        tree.create_new("config.lock", b"")?;
+        let rewritten = std::fs::read(&config).and_then(|bytes| tree.write("config", &bytes));
+        let released = tree.remove("config.lock");
+        rewritten.and(released)
+    });
+    (config, result)
+}
+
 /// What a builder seat has to write outside its worktree (TSK-337), each
 /// folder with its result: both gate lock folders (`locks` under `home` and
 /// `codeflow` under the common git directory), probed as
@@ -2139,6 +2172,31 @@ mod tests {
             outside.iter().any(|(_, result)| result.is_err()),
             "{outside:?}"
         );
+    }
+
+    /// TSK-1156: the config probe rewrites the file with its own bytes and
+    /// leaves no lock, and a held lock (how git sees a config file it cannot
+    /// write) is reported and left alone.
+    #[test]
+    fn the_git_config_probe_changes_nothing_and_reports_a_held_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        git2::Repository::init(tmp.path()).unwrap();
+        let git_dir = tmp.path().join(".git");
+        let config = git_dir.join("config");
+        let lock = git_dir.join("config.lock");
+        let before = std::fs::read(&config).unwrap();
+        let (path, result) = probe_git_config_write(tmp.path());
+        assert!(path.ends_with(".git/config"), "{path:?}");
+        result.unwrap();
+        assert_eq!(std::fs::read(&config).unwrap(), before);
+        assert!(!lock.exists());
+        std::fs::write(&lock, "held").unwrap();
+        let (_, result) = probe_git_config_write(tmp.path());
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&config).unwrap(), before);
+        assert_eq!(std::fs::read_to_string(&lock).unwrap(), "held");
+        let plain = tempfile::tempdir().unwrap();
+        assert!(probe_git_config_write(plain.path()).1.is_err());
     }
 
     #[test]

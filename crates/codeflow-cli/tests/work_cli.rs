@@ -2654,3 +2654,110 @@ fn with_reviews(root: &Path, rev: &str, body: &str) -> String {
         format!("{body}\n\n## Reviews\n\n| Reviewer | Scope | Verdict |\n|---|---|---|\n{rows}\n")
     }
 }
+
+// TSK-1156: a Codex builder seat cannot write the shared git config file, so
+// a claim must not need to. These tests compare the file's bytes.
+
+fn config_bytes(root: &Path) -> Vec<u8> {
+    std::fs::read(root.join(".git/config")).unwrap()
+}
+
+fn with_bare_origin(root: &Path) -> tempfile::TempDir {
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+    git(
+        root,
+        &["remote", "add", "origin", origin.path().to_str().unwrap()],
+    );
+    git(root, &["push", "-q", "origin", "main"]);
+    origin
+}
+
+fn standalone_branch(root: &Path) {
+    git(root, &["switch", "-qc", "fix/standalone"]);
+    write(
+        root,
+        "project-management/tasks/TSK-003.md",
+        &record("TSK-003", "[]"),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: record standalone"]);
+}
+
+#[test]
+fn a_claim_pushes_without_writing_the_shared_git_config() {
+    let dir = fixture();
+    let root = dir.path();
+    let origin = with_bare_origin(root);
+    let before = config_bytes(root);
+    let out = cli(root, &["work", "claim", "TSK-001"], None);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(config_bytes(root), before, "claim rewrote the git config");
+    git(
+        origin.path(),
+        &["rev-parse", "refs/heads/task/TSK-001-work-tsk-001"],
+    );
+}
+
+#[test]
+fn a_standalone_claim_renames_an_untracked_branch_without_a_config_write() {
+    let dir = fixture();
+    let root = dir.path();
+    let origin = with_bare_origin(root);
+    standalone_branch(root);
+    let before = config_bytes(root);
+    let head = git(root, &["rev-parse", "HEAD"]);
+    let out = cli(root, &["work", "claim", "TSK-003"], None);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(config_bytes(root), before, "claim rewrote the git config");
+    let branch = "task/TSK-003-work-tsk-003";
+    assert_eq!(git(root, &["branch", "--show-current"]), branch);
+    assert_eq!(git(root, &["rev-parse", "HEAD"]), head);
+    assert!(git(root, &["branch", "--list", "fix/standalone"]).is_empty());
+    assert_eq!(
+        git(
+            origin.path(),
+            &["rev-parse", &format!("refs/heads/{branch}")]
+        ),
+        head
+    );
+    succeeds(&cli(root, &["work", "start", "TSK-003"], None));
+}
+
+#[test]
+fn a_standalone_claim_moves_the_tracking_of_a_tracked_branch() {
+    let dir = fixture();
+    let root = dir.path();
+    standalone_branch(root);
+    git(root, &["config", "branch.fix/standalone.remote", "origin"]);
+    git(
+        root,
+        &[
+            "config",
+            "branch.fix/standalone.merge",
+            "refs/heads/fix/standalone",
+        ],
+    );
+    succeeds(&cli(root, &["work", "claim", "TSK-003"], None));
+    let keys = git(root, &["config", "--local", "--name-only", "--list"]);
+    assert!(
+        keys.contains("branch.task/TSK-003-work-tsk-003.remote"),
+        "{keys}"
+    );
+    assert!(!keys.contains("branch.fix/standalone."), "{keys}");
+}
+
+#[test]
+fn a_claim_that_cannot_write_the_config_renames_nothing() {
+    let dir = fixture();
+    let root = dir.path();
+    standalone_branch(root);
+    git(root, &["config", "branch.fix/standalone.remote", "origin"]);
+    // A held config.lock is how git sees a config file it cannot write.
+    std::fs::write(root.join(".git/config.lock"), "").unwrap();
+    let out = cli(root, &["work", "claim", "TSK-003"], None);
+    assert!(!out.status.success());
+    assert!(text(&out).contains("nothing was renamed"), "{}", text(&out));
+    assert_eq!(git(root, &["branch", "--show-current"]), "fix/standalone");
+    assert!(git(root, &["branch", "--list", "task/TSK-003*"]).is_empty());
+}

@@ -78,6 +78,19 @@ pub fn run(args: &DoctorArgs) -> i32 {
                 }
             }
         }
+        // The shared git config file is reported after the folders a builder
+        // seat needs, and never changes the exit: the shipped profile cannot
+        // write it, and a claim no longer needs to (TSK-1156).
+        let (config, result) = codeflow_core::testing::gate_guard::probe_git_config_write(&root);
+        let config = shown(&config.display());
+        match result {
+            Ok(()) => {
+                let _ = term_writeln!(out, "git-config writable {config}");
+            }
+            Err(error) => {
+                let _ = term_writeln!(out, "git-config denied {config}: {}", shown(&error));
+            }
+        }
         return i32::from(failed);
     }
     let Some(project_dir) = root.to_str() else {
@@ -377,10 +390,22 @@ fn codex_builder_line(
     };
     let root = codeflow_core::doctor::builder_launch_root(project);
     let place = shown(&root.display());
-    match codeflow_core::doctor::probe_codex_builder_grants(&root, &codex, codeflow) {
+    let probe = codeflow_core::doctor::probe_codex_builder_grants(&root, &codex, codeflow);
+    let config = match &probe.git_config {
+        Some(Ok(path)) => format!(
+            "; shared git config file: observed writable ({}), so `git config`, `git push -u` and `git branch -m` work in a builder seat",
+            shown(path)
+        ),
+        Some(Err(denied)) => format!(
+            "; shared git config file: observed NOT writable ({}); `codeflow work claim` does not need it, but `git config`, `git push -u` and `git branch -m` of a branch with tracking settings are refused in a builder seat",
+            shown(denied)
+        ),
+        None => String::new(),
+    };
+    match probe.grants {
         GrantCheck::Effective(dirs) => (
             format!(
-                "{line}; builder grants: observed effective from {place} under `codex sandbox` with the launch overrides and managed config: wrote {}",
+                "{line}; builder grants: observed effective from {place} under `codex sandbox` with the launch overrides and managed config: wrote {}{config}",
                 shown(&dirs.join(", "))
             ),
             false,
@@ -536,6 +561,25 @@ fn preflight_report(
     lines.extend(sandbox_lines(root));
     let (builder, failed) = codex_builder_line(root, look, codeflow);
     lines.push(builder);
+    // Only where the project defines a cf-builder profile: a project with
+    // none has no builder seat to describe.
+    let launch = codeflow_core::doctor::builder_launch_root(root);
+    let defines_builder = std::fs::read_to_string(launch.join(".codex/config.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok())
+        .and_then(|config| {
+            config
+                .get("permissions")
+                .and_then(toml::Value::as_table)
+                .cloned()
+        })
+        .is_some_and(|profiles| profiles.contains_key("cf-builder"));
+    if defines_builder {
+        lines.push(format!(
+            "codex builder seat limits: configured by the shipped cf-builder profile: {}",
+            codeflow_core::doctor::BUILDER_SEAT_LIMITS
+        ));
+    }
     for tool in PREFLIGHT_TOOLS {
         lines.push(executable_line("tool", tool, look));
     }

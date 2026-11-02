@@ -2010,8 +2010,8 @@ pub fn claim_on(
         .get(task_id)
         .map_or("", |record| record.title.as_str());
     let branch = format!("task/{task_id}-{}", super::light_paths::slug(title));
-    if renamed.is_some() {
-        git(repo_root, &["branch", "-m", &branch])?;
+    if let Some(current) = &renamed {
+        rename_standalone_branch(repo_root, current, &branch, tip)?;
     } else {
         git(repo_root, &["branch", &branch, &tip.to_string()])?;
     }
@@ -2023,7 +2023,6 @@ pub fn claim_on(
             &[
                 "push",
                 "--quiet",
-                "-u",
                 &format!("--force-with-lease={destination}:"),
                 "origin",
                 &format!("{branch}:{destination}"),
@@ -2037,6 +2036,56 @@ pub fn claim_on(
         pushed: has_origin,
         informational_branches: information,
     })
+}
+
+/// Whether the local branch `old` has `branch.<old>.*` settings in the
+/// repository's git config (its remote and merge keys).
+fn branch_has_tracking_config(repo_root: &Path, old: &str) -> Result<bool, String> {
+    let keys = git(repo_root, &["config", "--local", "--name-only", "--list"])?;
+    let prefix = format!("branch.{old}.");
+    Ok(keys.lines().any(|key| key.starts_with(&prefix)))
+}
+
+/// Rename the checked-out standalone branch `current` to `branch` at `head`.
+///
+/// `git branch -m` rewrites the shared git config file to move the old
+/// branch's settings, which a builder seat's sandbox cannot do (TSK-1156).
+/// A branch with no such settings needs no config write, so it is moved by
+/// ref operations only: create the new ref, point this worktree's `HEAD` at
+/// it, delete the old ref. A branch with settings keeps `git branch -m` so
+/// its tracking moves with it; before it runs, the config file is probed so
+/// a seat that cannot write it is refused with nothing moved, never left
+/// half renamed.
+fn rename_standalone_branch(
+    repo_root: &Path,
+    current: &crate::git::GitName,
+    branch: &str,
+    head: git2::Oid,
+) -> Result<(), String> {
+    let Ok(old) = current.rule_text() else {
+        return git(repo_root, &["branch", "-m", branch]).map(drop);
+    };
+    if branch_has_tracking_config(repo_root, old)? {
+        let (config, probe) = crate::testing::gate_guard::probe_git_config_write(repo_root);
+        probe.map_err(|error| {
+            format!(
+                "branch {old} has tracking settings, so renaming it rewrites {}, which this process cannot write ({error}); nothing was renamed",
+                crate::git::display_path(&config)
+            )
+        })?;
+        return git(repo_root, &["branch", "-m", branch]).map(drop);
+    }
+    git(repo_root, &["branch", branch, &head.to_string()])?;
+    let new_ref = format!("refs/heads/{branch}");
+    if let Err(error) = git(repo_root, &["symbolic-ref", "HEAD", &new_ref]) {
+        let _ = git(repo_root, &["update-ref", "-d", &new_ref]);
+        return Err(error);
+    }
+    git(
+        repo_root,
+        &["update-ref", "-d", &format!("refs/heads/{old}")],
+    )
+    .map(drop)
 }
 
 /// Branches on `remote` carrying `task_id`, read from the remote itself so
