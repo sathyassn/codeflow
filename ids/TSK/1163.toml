@@ -1,0 +1,11 @@
+id = "TSK-1163"
+uid = "ce3d32df-e29f-4633-a7b6-8d8cba53ce27"
+kind = "TSK"
+title = "The gitleaks allowlist canary is a required check that runs only trusted code"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T01:26:09Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
