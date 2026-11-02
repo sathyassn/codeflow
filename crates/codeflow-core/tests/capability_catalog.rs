@@ -8,6 +8,142 @@ const RECORD: &str = "docs/capabilities/CAP-101-catalog.md";
 const VALID: &str = include_str!("fixtures/capability-catalog/valid.md");
 const VOCAB: &str = "inventory: incomplete\ngroups: [{name: records, about: Records}]\ntags: [{name: rust, about: Rust}]\n";
 
+#[test]
+fn empty_or_invalid_catalog_is_present_for_reference_checks() {
+    let dir = fixture();
+    std::fs::remove_file(dir.path().join(RECORD)).unwrap();
+    write(
+        dir.path(),
+        "project-management/epics/EPC-001.md",
+        "---\nid: EPC-001\ncapabilities: [CAP-999]\n---\n",
+    );
+    for invalid in [false, true] {
+        if invalid {
+            write(dir.path(), RECORD, "---\nunknown: true\n---\n");
+        }
+        let report = codeflow_core::validate::docs::lint_docs(dir.path());
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.message.contains("CAP-999")),
+            "{report:?}"
+        );
+        assert!(!format!("{:?}", report.notes).contains("capability checks skipped"));
+    }
+}
+
+#[test]
+fn indexed_executable_mode_is_refused_even_with_filemode_disabled() {
+    let dir = fixture();
+    tree(dir.path());
+    let repo = git2::Repository::open(dir.path()).unwrap();
+    repo.config()
+        .unwrap()
+        .set_bool("core.fileMode", false)
+        .unwrap();
+    let mut index = repo.index().unwrap();
+    let mut entry = index.get_path(Path::new(RECORD), 0).unwrap();
+    entry.mode = 0o100_755;
+    index.add(&entry).unwrap();
+    index.write().unwrap();
+    assert!(load_capability_catalog(dir.path())
+        .unwrap_err()
+        .message
+        .contains("executable"));
+}
+
+#[test]
+fn review_docs_collect_errors_and_keep_reference_checks() {
+    let dir = fixture();
+    write(
+        dir.path(),
+        "docs/capabilities.md",
+        &format!("{}{}", fence("CAP-201", "bad"), fence("CAP-202", "bad")),
+    );
+    write(
+        dir.path(),
+        "docs/capabilities/CAP-102-other.md",
+        "---\nunknown: true\n---\n",
+    );
+    write(
+        dir.path(),
+        "project-management/epics/EPC-001.md",
+        "---\nid: EPC-001\ncapabilities: [CAP-101, CAP-999]\n---\n",
+    );
+    let report = codeflow_core::validate::docs::lint_docs(dir.path());
+    assert_eq!(
+        report
+            .issues
+            .iter()
+            .filter(|i| i.message.contains("status:"))
+            .count(),
+        2,
+        "{report:?}"
+    );
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|i| i.file == Path::new("docs/capabilities/CAP-102-other.md")),
+        "{report:?}"
+    );
+    assert!(
+        report.issues.iter().any(|i| i.message.contains("CAP-999")),
+        "{report:?}"
+    );
+    assert!(
+        !report
+            .issues
+            .iter()
+            .any(|i| i.message.contains("CAP-101") && i.message.contains("not found")),
+        "{report:?}"
+    );
+    assert!(
+        !format!("{:?}", report.notes).contains("capability checks skipped"),
+        "{report:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn review_checkout_modes_follow_git_and_only_apply_to_records() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = fixture();
+    write(
+        dir.path(),
+        "docs/capabilities.md",
+        &fence("CAP-201", "planned"),
+    );
+    let repo = git2::Repository::open(dir.path()).unwrap();
+    let mut index = repo.index().unwrap();
+    index
+        .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+        .unwrap();
+    index.write().unwrap();
+    repo.config()
+        .unwrap()
+        .set_bool("core.fileMode", false)
+        .unwrap();
+    for path in [RECORD, "docs/capabilities.md", ".codeflow/project.toml"] {
+        std::fs::set_permissions(
+            dir.path().join(path),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    assert!(load_capability_catalog(dir.path()).is_ok());
+    for path in ["docs/capabilities.md", ".codeflow/project.toml"] {
+        let mut entry = index.get_path(Path::new(path), 0).unwrap();
+        entry.mode = 0o100_755;
+        index.add(&entry).unwrap();
+    }
+    let revision = index.write_tree().unwrap().to_string();
+    assert!(load_capability_catalog_from_tree(dir.path(), &revision).is_ok());
+    std::fs::remove_file(dir.path().join(RECORD)).unwrap();
+    assert!(load_capability_catalog(dir.path()).is_ok());
+}
+
 fn write(root: &Path, path: &str, content: &str) {
     let path = root.join(path);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -30,6 +166,7 @@ fn tree(root: &Path) -> String {
     index
         .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
         .unwrap();
+    index.write().unwrap();
     index.write_tree().unwrap().to_string()
 }
 
@@ -39,7 +176,10 @@ fn refuse_both(root: &Path, file: &str, reason: &str) {
         load_capability_catalog(root),
         load_capability_catalog_from_tree(root, &revision),
     ] {
-        let error = result.unwrap_err().to_string();
+        let error = result
+            .map(|_| ())
+            .expect_err("catalog must be refused")
+            .to_string();
         assert!(error.contains(file), "{error}");
         assert!(error.contains(reason), "wanted {reason}: {error}");
     }

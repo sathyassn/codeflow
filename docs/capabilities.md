@@ -682,7 +682,7 @@ Records contain YAML frontmatter and Markdown prose, checked by `validate --docs
 
 | Validation rule | Contract |
 |---|---|
-| Record files | Regular, non-executable files directly under `docs/capabilities/`, named `CAP-NNN-<slug>.md`. Absolute paths, `..`, nested paths and symlinks are refused. Containment applies only to record files, not references inside them. |
+| Record files | Regular files directly under `docs/capabilities/`, named `CAP-NNN-<slug>.md`. Git index or tree mode must be non-executable; synthetic filesystem execute bits are ignored, including with `core.fileMode=false`. Untracked records have no Git mode until indexed. This mode rule does not apply to legacy or configuration files. Absolute paths, `..`, nested paths and symlinks are refused. Containment applies only to record files, not references inside them. |
 | Legacy compatibility | Fences and distinct folder records coexist. A CAP page without frontmatter remains companion prose when its id has a legacy fence. Legacy fences retain their existing schema. |
 | Identity | Duplicate ids or UUIDs name both sources. An identity in both layouts is refused regardless of bindings or payload equality. |
 | Evidence | References are syntax-checked, never opened or executed. Resolution belongs to TSK-362. A shipped record with only `gap:` evidence accepts `unassessed`, but refuses `beta` or `stable`. |
@@ -693,3 +693,4 @@ Records contain YAML frontmatter and Markdown prose, checked by `validate --docs
 | Revision | Checkout and pinned-tree readers share validation. Areas and vocabulary come from the selected revision, independently of the checkout. |
 | Vocabulary | `vocabulary.yaml` contains `inventory: incomplete` or `complete`, plus `groups` and `tags` lists of `{name, about}`. Names are unique lowercase slugs within each list. The example stays `incomplete` until inventory work establishes coverage. |
 | Operations | The loader reads data; it performs no migration or id allocation. |
+| Diagnostics | Strict loaders refuse an invalid catalog. Docs validation collects issues from every readable record, retains parsed identities for reference checks, and treats an existing file or folder as present even when records are invalid. |

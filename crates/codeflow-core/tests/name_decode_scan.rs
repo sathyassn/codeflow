@@ -126,7 +126,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Git tree text; invalid UTF-8 is refused before any record is constructed.
     (
         "codeflow-core/src/capability.rs",
-        "parse_catalog",
+        "parse_catalog_with_issues",
         "to_string_lossy",
         1,
         "format-contract",
@@ -1552,14 +1552,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // trailing whitespace without changing any YAML scalar or path identity.
     (
         "crates/codeflow-core/src/capability.rs",
-        "parse_catalog",
+        "parse_catalog_with_issues",
         "lines",
         1,
         "grammar:catalog-frontmatter",
     ),
     (
         "crates/codeflow-core/src/capability.rs",
-        "parse_catalog",
+        "parse_catalog_with_issues",
         "trim_end",
         1,
         "grammar:catalog-frontmatter",
@@ -7012,7 +7012,7 @@ const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"]
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/capability.rs", "collect_catalog_paths", "ErrorKind::NotFound", 1, "The confined Tree opens every ancestor without following links; only a missing component is optional, while linked, unreadable and non-directory parents refuse."),
     ("crates/codeflow-core/src/capability.rs", "collect_catalog_paths", "is_dir", 1, "Type check on confined metadata whose errors propagate; real subdirectories are examined to refuse nested CAP files, never followed through symlinks."),
-    ("crates/codeflow-core/src/capability.rs", "load_capability_catalog", "ErrorKind::NotFound", 1, "The confined regular-file reader rejects symlinks and unsafe ancestors before absence is accepted; missing optional legacy/config inputs are omitted, and modern records still require project areas."),
+    ("crates/codeflow-core/src/capability.rs", "inspect_capability_catalog", "ErrorKind::NotFound", 1, "The confined regular-file reader rejects symlinks and unsafe ancestors before absence is accepted; missing optional legacy/config inputs are omitted, and modern records still require project areas."),
     ("crates/codeflow-core/src/hooks/gitleaks.rs", "private::open_folder", "is_dir", 1, "Type check on the descriptor opened without following a link; anything but a directory this user owns with mode 0700 refuses, which fails the scan as incomplete (TSK-412)."),
     ("crates/codeflow-core/src/hooks/gitleaks.rs", "Engine::locate", "is_file", 1,"A PATH folder whose gitleaks is not a file is skipped; when no folder has one the engine is Missing, a git.secret_scan_engine finding that refuses at block, and a found file still runs only after its checksum matches the pin (TSK-412)."),
     ("crates/codeflow-core/src/hooks/sandbox_state.rs", "read_text", "is_file", 2, "Type checks on obtained metadata, before and after opening; any non-file is unreadable, a strict-rule trigger, so a FIFO, device or directory never reads as an absent layer (TSK-397)."),

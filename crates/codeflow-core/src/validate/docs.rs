@@ -24,7 +24,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::capability::{load_capability_catalog, CapabilityCatalog};
+use crate::capability::{inspect_capability_catalog, CapabilityCatalog};
 use crate::validate::{get_string_field, parse_frontmatter};
 use crate::workgraph::{is_valid_epic_format_id, is_valid_spec_format_id, is_valid_task_format_id};
 
@@ -126,17 +126,7 @@ struct TaskGraphIndex {
 pub fn lint_docs(repo_root: &Path) -> DocsLintReport {
     let mut report = DocsLintReport::default();
 
-    let catalog = match load_capability_catalog(repo_root) {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            report.issues.push(DocsLintIssue {
-                file: error.file.into(),
-                line: error.line,
-                message: error.message,
-            });
-            CapabilityCatalog::default()
-        }
-    };
+    let catalog = catalog_for_docs(repo_root, &mut report);
     let graph = build_graph_with_catalog(repo_root, &catalog, &mut report);
 
     lint_capabilities(&catalog, &graph, &mut report);
@@ -347,27 +337,27 @@ fn lint_capability_epic_reciprocity_with_catalog(
     }
 }
 
-#[cfg(test)]
-fn catalog_for_test(root: &Path, report: &mut DocsLintReport) -> CapabilityCatalog {
-    load_capability_catalog(root).unwrap_or_else(|error| {
-        report.issues.push(DocsLintIssue {
+fn catalog_for_docs(root: &Path, report: &mut DocsLintReport) -> CapabilityCatalog {
+    let (catalog, issues) = inspect_capability_catalog(root);
+    report
+        .issues
+        .extend(issues.into_iter().map(|error| DocsLintIssue {
             file: error.file.into(),
             line: error.line,
             message: error.message,
-        });
-        CapabilityCatalog::default()
-    })
+        }));
+    catalog
 }
 
 #[cfg(test)]
 fn lint_capability_epic_reciprocity(root: &Path, report: &mut DocsLintReport) {
-    let catalog = catalog_for_test(root, report);
+    let catalog = catalog_for_docs(root, report);
     lint_capability_epic_reciprocity_with_catalog(root, &catalog, report);
 }
 
 #[cfg(test)]
 fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
-    let catalog = catalog_for_test(repo_root, report);
+    let catalog = catalog_for_docs(repo_root, report);
     build_graph_with_catalog(repo_root, &catalog, report)
 }
 

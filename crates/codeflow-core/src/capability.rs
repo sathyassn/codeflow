@@ -149,7 +149,6 @@ fn mask_html_comments(content: &str) -> String {
 pub fn parse_capabilities(content: &str) -> (Vec<CapabilityEntry>, Vec<CapabilityParseIssue>) {
     let mut entries = Vec::new();
     let mut issues = Vec::new();
-
     let masked = mask_html_comments(content);
     let lines: Vec<&str> = masked.lines().collect();
     let mut i = 0;
@@ -196,7 +195,6 @@ pub const CAPABILITY_MAX_VALUE_CHARS: usize = 1024;
 pub const CAPABILITY_MAX_LIST_ITEMS: usize = 64;
 /// Maximum keys in a record's frontmatter.
 pub const CAPABILITY_MAX_FRONTMATTER_KEYS: usize = 32;
-
 const CATALOG_DIR: &str = "docs/capabilities";
 const LEGACY_PATH: &str = "docs/capabilities.md";
 const VOCABULARY_PATH: &str = "docs/capabilities/vocabulary.yaml";
@@ -713,77 +711,89 @@ fn legacy_record(entry: CapabilityEntry) -> CapabilityRecord {
 fn parse_catalog(
     files: &std::collections::BTreeMap<String, Vec<u8>>,
 ) -> Result<CapabilityCatalog, CapabilityCatalogError> {
+    let (catalog, issues) = parse_catalog_with_issues(files);
+    issues.into_iter().next().map_or(Ok(catalog), Err)
+}
+
+fn parse_catalog_with_issues(
+    files: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> (CapabilityCatalog, Vec<CapabilityCatalogError>) {
     let mut catalog = CapabilityCatalog {
         present: files.contains_key(LEGACY_PATH),
         ..CapabilityCatalog::default()
     };
-    let text = |path: &str| -> Result<Option<&str>, CapabilityCatalogError> {
-        files
-            .get(path)
-            .map(|bytes| {
-                std::str::from_utf8(bytes)
-                    .map_err(|error| catalog_error(path, format!("invalid UTF-8: {error}")))
-            })
-            .transpose()
-    };
-    if let Some(content) = text(LEGACY_PATH)? {
-        let (entries, issues) = parse_capabilities(content);
-        if let Some(issue) = issues.first() {
-            return Err(CapabilityCatalogError {
-                file: LEGACY_PATH.into(),
-                line: issue.line,
-                message: issue.message.clone(),
-            });
+    let mut issues = Vec::new();
+    let mut texts = std::collections::BTreeMap::new();
+    for (file, bytes) in files {
+        match std::str::from_utf8(bytes) {
+            Ok(text) => {
+                texts.insert(file.as_str(), text);
+            }
+            Err(error) => issues.push(catalog_error(file, format!("invalid UTF-8: {error}"))),
         }
+    }
+    if let Some(content) = texts.get(LEGACY_PATH) {
+        let (entries, errors) = parse_capabilities(content);
+        issues.extend(errors.into_iter().map(|error| CapabilityCatalogError {
+            file: LEGACY_PATH.into(),
+            line: error.line,
+            message: error.message,
+        }));
         catalog
             .records
             .extend(entries.into_iter().map(legacy_record));
     }
-
-    catalog.vocabulary = text(VOCABULARY_PATH)?.map(parse_vocabulary).transpose()?;
+    if let Some(content) = texts.get(VOCABULARY_PATH) {
+        match parse_vocabulary(content) {
+            Ok(vocabulary) => catalog.vocabulary = Some(vocabulary),
+            Err(error) => issues.push(error),
+        }
+    }
     let legacy_ids: std::collections::BTreeSet<_> =
         catalog.records.iter().map(|r| r.entry.id.clone()).collect();
-    for file in files
-        .keys()
-        .filter(|p| p.starts_with("docs/capabilities/") && p.as_str() != VOCABULARY_PATH)
-    {
-        validate_capability_path(file)?;
-        let content = text(file)?.unwrap_or_default();
-        // Existing graduated pages are companion prose until migration adds frontmatter.
+    for (file, content) in &texts {
+        if !file.starts_with("docs/capabilities/") || *file == VOCABULARY_PATH {
+            continue;
+        }
+        catalog.present = true;
+        if let Err(error) = validate_capability_path(file) {
+            issues.push(error);
+            continue;
+        }
         let name = file.trim_start_matches("docs/capabilities/");
         let id = name.split('-').take(2).collect::<Vec<_>>().join("-");
         if content.lines().next().map(str::trim_end) != Some("---") && legacy_ids.contains(&id) {
             continue;
         }
-        catalog.records.push(parse_record(file, content)?);
-        catalog.present = true;
+        match parse_record(file, content) {
+            Ok(record) => catalog.records.push(record),
+            Err(error) => issues.push(error),
+        }
     }
-    let modern = catalog.records.iter().any(|r| r.uid.is_some());
-    let areas = if modern {
-        let content = text(PROJECT_PATH)?.ok_or_else(|| {
-            catalog_error(
+    let mut areas = Vec::new();
+    if catalog.records.iter().any(|r| r.uid.is_some()) {
+        match texts.get(PROJECT_PATH) {
+            Some(content) => match toml::from_str::<AreaConfig>(content) {
+                Ok(config) => areas = config.areas,
+                Err(error) => issues.push(catalog_error(PROJECT_PATH, format!("areas: {error}"))),
+            },
+            None => issues.push(catalog_error(
                 PROJECT_PATH,
                 "areas: project configuration is required for catalog records",
-            )
-        })?;
-        toml::from_str::<AreaConfig>(content)
-            .map_err(|error| catalog_error(PROJECT_PATH, format!("areas: {error}")))?
-            .areas
-    } else {
-        vec![]
-    };
+            )),
+        }
+    }
     let mut ids = std::collections::BTreeMap::new();
     let mut uids = std::collections::BTreeMap::new();
     for record in &catalog.records {
         let file = record.file.to_string_lossy();
-        // Check collisions before schema differences; an overlap is always refused.
         for (key, value, seen) in [
             ("id", Some(&record.entry.id), &mut ids),
             ("uid", record.uid.as_ref(), &mut uids),
         ] {
             if let Some(value) = value {
                 if let Some(previous) = seen.insert(value.clone(), file.to_string()) {
-                    return Err(catalog_error(
+                    issues.push(catalog_error(
                         &file,
                         format!("{key}: duplicate {value}; also in {previous}"),
                     ));
@@ -792,10 +802,12 @@ fn parse_catalog(
         }
     }
     for record in &catalog.records {
-        validate_record(record, &areas, catalog.vocabulary.as_ref())?;
+        if let Err(error) = validate_record(record, &areas, catalog.vocabulary.as_ref()) {
+            issues.push(error);
+        }
     }
     catalog.records.sort_by(|a, b| a.entry.id.cmp(&b.entry.id));
-    Ok(catalog)
+    (catalog, issues)
 }
 
 fn selected_file(path: &str) -> bool {
@@ -807,8 +819,12 @@ fn selected_file(path: &str) -> bool {
             .is_some_and(|name| name.starts_with("CAP-") || name.contains("/CAP-"))
 }
 
+fn record_file(path: &str) -> bool {
+    path.starts_with("docs/capabilities/") && path != VOCABULARY_PATH
+}
+
 fn check_mode(path: &str, mode: &str) -> Result<(), CapabilityCatalogError> {
-    if mode != "100644" {
+    if mode != "100644" && (mode != "100755" || record_file(path)) {
         return Err(catalog_error(
             path,
             format!("expected a regular non-executable file, found mode {mode}"),
@@ -821,31 +837,35 @@ fn collect_catalog_paths(
     tree: &crate::contained::Tree,
     directory: &str,
     paths: &mut Vec<String>,
-) -> Result<(), CapabilityCatalogError> {
+    issues: &mut Vec<CapabilityCatalogError>,
+) -> bool {
     let entries = match tree.entries(directory, usize::MAX) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(catalog_error(directory, error.to_string())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(error) => {
+            issues.push(catalog_error(directory, error.to_string()));
+            return true;
+        }
     };
     for name in entries {
-        let name = name
-            .into_string()
-            .map_err(|_| catalog_error(directory, "non-UTF-8 catalog filename"))?;
+        let Ok(name) = name.into_string() else {
+            issues.push(catalog_error(directory, "non-UTF-8 catalog filename"));
+            continue;
+        };
         let path = format!("{directory}/{name}");
         if selected_file(&path) {
-            if path != VOCABULARY_PATH {
-                validate_capability_path(&path)?;
-            }
             paths.push(path);
-        } else if tree
-            .metadata(&path)
-            .map_err(|error| catalog_error(&path, error.to_string()))?
-            .is_dir()
-        {
-            collect_catalog_paths(tree, &path, paths)?;
+        } else {
+            match tree.metadata(&path) {
+                Ok(metadata) if metadata.is_dir() => {
+                    collect_catalog_paths(tree, &path, paths, issues);
+                }
+                Ok(_) => {}
+                Err(error) => issues.push(catalog_error(&path, error.to_string())),
+            }
         }
     }
-    Ok(())
+    true
 }
 
 /// Read and validate a checkout through repository-confined file handles.
@@ -856,34 +876,83 @@ fn collect_catalog_paths(
 pub fn load_capability_catalog(
     root: &std::path::Path,
 ) -> Result<CapabilityCatalog, CapabilityCatalogError> {
-    use std::io::Read;
-    let tree = crate::contained::Tree::open(root)
-        .map_err(|error| catalog_error("<checkout>", error.to_string()))?;
+    let (catalog, issues) = inspect_capability_catalog(root);
+    issues.into_iter().next().map_or(Ok(catalog), Err)
+}
+
+/// Retain parsed records and every refusal for collect-all documentation checks.
+/// Presence describes the file or folder, independently of schema validity.
+pub(crate) fn inspect_capability_catalog(
+    root: &std::path::Path,
+) -> (CapabilityCatalog, Vec<CapabilityCatalogError>) {
+    let tree = match crate::contained::Tree::open(root) {
+        Ok(tree) => tree,
+        Err(error) => {
+            return (
+                CapabilityCatalog::default(),
+                vec![catalog_error("<checkout>", error.to_string())],
+            )
+        }
+    };
     let mut files = std::collections::BTreeMap::new();
+    let mut issues = Vec::new();
     let mut paths = vec![LEGACY_PATH.to_string(), PROJECT_PATH.to_string()];
-    collect_catalog_paths(&tree, CATALOG_DIR, &mut paths)?;
+    let mut present = collect_catalog_paths(&tree, CATALOG_DIR, &mut paths, &mut issues);
+    let index = match git2::Repository::discover(root) {
+        Ok(repo) => match repo.index() {
+            Ok(index) => Some(index),
+            Err(error) => {
+                issues.push(catalog_error("<index>", error.to_string()));
+                None
+            }
+        },
+        Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+        Err(error) => {
+            issues.push(catalog_error("<index>", error.to_string()));
+            None
+        }
+    };
     for path in paths {
-        let mut file = match tree.open_regular(&path) {
-            Ok(file) => file,
+        let read = tree.open_regular(&path).and_then(|mut file| {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            Ok(bytes)
+        });
+        let bytes = match read {
+            Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(catalog_error(&path, error.to_string())),
+            Err(error) => {
+                present |= path == LEGACY_PATH || record_file(&path);
+                issues.push(catalog_error(&path, error.to_string()));
+                continue;
+            }
         };
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let meta = file
-                .metadata()
-                .map_err(|error| catalog_error(&path, error.to_string()))?;
-            if meta.permissions().mode() & 0o111 != 0 {
-                return Err(catalog_error(&path, "executable mode is refused"));
+        present |= path == LEGACY_PATH || record_file(&path);
+        if record_file(&path) {
+            if let Err(error) = validate_capability_path(&path) {
+                issues.push(error);
+                continue;
+            }
+            // The index is authoritative even when core.fileMode=false or the
+            // filesystem reports synthetic execute bits. Untracked files have
+            // no Git mode yet; a later indexed/tree read checks the added mode.
+            if let Some(entry) = index
+                .as_ref()
+                .and_then(|index| index.get_path(std::path::Path::new(&path), 0))
+            {
+                if let Err(error) = check_mode(&path, &format!("{:o}", entry.mode)) {
+                    issues.push(error);
+                    continue;
+                }
             }
         }
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
-            .map_err(|error| catalog_error(&path, error.to_string()))?;
         files.insert(path, bytes);
     }
-    parse_catalog(&files)
+    let (mut catalog, parse_issues) = parse_catalog_with_issues(&files);
+    catalog.present |= present;
+    issues.extend(parse_issues);
+    (catalog, issues)
 }
 
 /// Read and validate a pinned Git tree, independent of checkout content.
