@@ -45,7 +45,10 @@ Two checks keep the plan honest (TSK-1063):
   with the unmeasured tests sized as above puts a partition past
   PLAN_MINUTES, or when a filterset is too long. It runs in the build job,
   before any partition starts.
-- `check` also fails a run when a partition's test minutes plus SETUP_MINUTES
+- `check` runs two checks and reports each on its own: coverage ("Every test
+  ran in exactly one partition") and time ("Each partition finished within
+  its time margin"); `coverage` and `time` run one each. The time check
+  fails a run when a partition's test minutes plus SETUP_MINUTES
   pass MARGIN_MINUTES, the 80 percent bound of the 30 minute job limit, and
   names a partition whose report is missing (a timeout or a cancellation)
   as not run, never as failing tests. `reports` names the missing
@@ -350,8 +353,17 @@ def missing_message(missing: list[int], planned: int) -> str:
             "none of them is known to have failed")
 
 
+COVERAGE_CHECK = "Every test ran in exactly one partition"
+TIME_CHECK = "Each partition finished within its time margin"
+
+
 def check(plan: Plan, listed: set[tuple[str, str]], reports: dict[int, Path], refresh: str = REFRESH,
           setup: float = SETUP_MINUTES) -> list[str]:
+    """Both checks together; `check_coverage` and `check_time` report each on its own."""
+    return check_coverage(plan, listed, reports) + check_time(plan, reports, refresh, setup)
+
+
+def check_coverage(plan: Plan, listed: set[tuple[str, str]], reports: dict[int, Path]) -> list[str]:
     problems = []
     missing = sorted(set(range(1, plan.count + 1)) - set(reports))
     if missing:
@@ -380,6 +392,13 @@ def check(plan: Plan, listed: set[tuple[str, str]], reports: dict[int, Path], re
         problems.append(f"{test[0]} {test[1]} ran but is not in the list of tests")
     counts = {p: sum(1 for found in where.values() for at in found if at == p) for p in sorted(reports)}
     print(f"windows-partitions: {len(listed)} listed tests, {sum(counts.values())} ran; per partition {counts}")
+    return problems
+
+
+def check_time(plan: Plan, reports: dict[int, Path], refresh: str = REFRESH,
+               setup: float = SETUP_MINUTES) -> list[str]:
+    problems = []
+    times = {partition: ran(report)[1] for partition, report in sorted(reports.items())}
     if times:
         mean = sum(times.values()) / len(times)
         shown = ", ".join(f"{p}: {seconds / 60:.1f} of {plan.estimates[p - 1] / 60:.1f}"
@@ -542,9 +561,12 @@ def main(data_path: Path = DATA, prefix: str = RESULTS, source: str = SOURCE, re
     gone = commands.add_parser("reports", help="name the partitions whose JUnit report is missing")
     gone.add_argument("--results", type=Path, required=True)
     gone.add_argument("--list", type=Path, nargs="+", help="the build's test list, to number a sole report")
-    proof = commands.add_parser("check", help="prove every listed test ran in exactly its one partition")
-    proof.add_argument("--list", type=Path, nargs="+", required=True)
-    proof.add_argument("--results", type=Path, required=True)
+    for name, text in (("check", "run both checks below, each reported on its own"),
+                       ("coverage", COVERAGE_CHECK.lower()),
+                       ("time", TIME_CHECK.lower())):
+        proof = commands.add_parser(name, help=text)
+        proof.add_argument("--list", type=Path, nargs="+", required=True)
+        proof.add_argument("--results", type=Path, required=True)
     data = commands.add_parser("measure", help="write the measurements from JUnit reports")
     data.add_argument("directories", type=Path, nargs="+")
     data.add_argument("--partitions", type=int)
@@ -605,7 +627,17 @@ def main(data_path: Path = DATA, prefix: str = RESULTS, source: str = SOURCE, re
         print(f"windows-partitions: all {plan.count} partitions wrote a report")
         return 0
     else:
-        problems = check(plan, listed, junit_reports(args.results, prefix, identifier(plan, listed)), refresh, setup)
+        found = junit_reports(args.results, prefix, identifier(plan, listed))
+        checks = []
+        if args.command in ("check", "coverage"):
+            checks.append((COVERAGE_CHECK, check_coverage(plan, listed, found)))
+        if args.command in ("check", "time"):
+            checks.append((TIME_CHECK, check_time(plan, found, refresh, setup)))
+        for title, found_problems in checks:
+            print(f"windows-partitions: {'FAILED' if found_problems else 'passed'}: {title}")
+            for problem in found_problems:
+                print(f"windows-partitions: FAILED {title}: {problem}")
+        return 1 if any(found_problems for _, found_problems in checks) else 0
     for problem in problems:
         print(f"windows-partitions: FAILED {problem}")
     return 1 if problems else 0

@@ -704,6 +704,60 @@ class CoverageShardTests(unittest.TestCase):
                 wp.listed_once(lists)
 
 
+class SeparateChecksTests(unittest.TestCase):
+    """`check` reports coverage and time as two checks, so a slow runner is
+    not read as a missing test (EPC-026 run 41531210007)."""
+
+    COVERAGE = "Every test ran in exactly one partition"
+    TIME = "Each partition finished within its time margin"
+
+    def setUp(self):
+        self.plan = wp.Plan(DATA)
+        self.listed = [("cli::fast", "x"), ("cli::slow", "y"), ("cli::remedy", "two")]
+
+    def run_check(self, seconds_by_partition, dropped=()):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "results"
+            root.mkdir()
+            data = Path(directory) / "times.json"
+            data.write_text(json.dumps(DATA))
+            for partition in range(1, self.plan.count + 1):
+                tests = [t for t in self.listed
+                         if self.plan.partition_of(*t) == partition and t not in dropped]
+                report = root / f"windows-junit-{partition}" / "junit.xml"
+                report.parent.mkdir()
+                report.write_text(junit(tests, seconds_by_partition.get(partition, 60.0)))
+            suites = {}
+            for binary, name in self.listed:
+                suites.setdefault(binary, {"testcases": {}})["testcases"][name] = {"ignored": False}
+            (root / "tests.json").write_text(json.dumps({"rust-suites": suites}))
+            argv = ["windows-partitions.py", "check", "--list", str(root / "tests.json"), "--results", str(root)]
+            with patch.object(sys, "argv", argv), redirect_stdout(StringIO()) as out:
+                return wp.main(data_path=data, spread=False), out.getvalue()
+
+    def test_a_partition_over_the_margin_with_clean_coverage_fails_only_the_time_check(self):
+        code, out = self.run_check({2: 23 * 60})  # 23 + 2 setup = 25 > 24
+        self.assertEqual(code, 1)
+        self.assertIn(f"passed: {self.COVERAGE}", out)
+        self.assertIn(f"FAILED: {self.TIME}", out)
+        self.assertNotIn(f"FAILED: {self.COVERAGE}", out)
+        self.assertNotIn("ran in no partition", out)
+
+    def test_a_missing_test_fails_only_the_coverage_check(self):
+        code, out = self.run_check({}, dropped={("cli::fast", "x")})
+        self.assertEqual(code, 1)
+        self.assertIn(f"FAILED: {self.COVERAGE}", out)
+        self.assertIn(f"passed: {self.TIME}", out)
+        self.assertNotIn(f"FAILED: {self.TIME}", out)
+        self.assertIn("cli::fast x ran in no partition", out)
+
+    def test_a_clean_run_passes_both(self):
+        code, out = self.run_check({})
+        self.assertEqual(code, 0)
+        self.assertIn(f"passed: {self.COVERAGE}", out)
+        self.assertIn(f"passed: {self.TIME}", out)
+
+
 class CoverageSoleShardTests(unittest.TestCase):
     """M2 for the Linux sibling: one surviving shard artifact is written into
     the results directory itself, with its list, and the dead shards are named."""
