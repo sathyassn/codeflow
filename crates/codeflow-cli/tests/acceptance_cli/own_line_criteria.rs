@@ -1014,10 +1014,44 @@ fn verdict(result: &(i32, String)) -> (i32, Vec<String>) {
     )
 }
 
+/// The pull request body of a classed `TSK-002` run.
+const CLASSED_BODY: &str = "## Summary\nTSK-002 changes its own AC-1.\n\n- one change\n\nTask: TSK-002\n\n## Changes\n- one\n\n## Testing\n- test\n";
+
+/// [`judged_head`] as a classed task pull request, with [`CLASSED_BODY`].
+fn judged_classed(repo: &Repo, head: &str) -> (i32, String) {
+    ci_args(
+        repo.dir.path(),
+        &[
+            "--base",
+            &repo.line,
+            "--head",
+            head,
+            "--branch",
+            OWN,
+            "--policy-from",
+            &repo.main,
+            "--commits-from",
+            &repo.main,
+            &format!("--into={LINE}"),
+            "--pr-body",
+            CLASSED_BODY,
+        ],
+    )
+}
+
+/// The lines of `text` that refuse the own change as frozen criteria.
+fn frozen_refusals(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter(|line| line.contains("BLOCKED") && line.contains("criteria_frozen"))
+        .collect()
+}
+
 /// AC-1 and AC-3 (journey, issue 221): the same pushed head, judged with
 /// identical explicit inputs from `main` (which lacks the record), a
 /// detached checkout and the task's own checkout, gets one verdict from
-/// `codeflow ci` and one from a pre-push dry run: the own change passes.
+/// `codeflow ci` without a body, one from a classed task pull request run
+/// with a body naming the task, and one from a pre-push dry run: the own
+/// change passes each time.
 #[test]
 fn the_verdict_does_not_depend_on_the_checkout() {
     let repo = line_only();
@@ -1025,6 +1059,7 @@ fn the_verdict_does_not_depend_on_the_checkout() {
     let root = repo.dir.path();
     let head = git_out(root, &["rev-parse", OWN]);
     let mut verdicts = Vec::new();
+    let mut classed_verdicts = Vec::new();
     for checkout in ["main", "--detach", OWN] {
         if checkout == "--detach" {
             git(root, &["switch", "-q", "--detach", &head]);
@@ -1039,6 +1074,18 @@ fn the_verdict_does_not_depend_on_the_checkout() {
             judged.1
         );
         verdicts.push(verdict(&judged));
+        let classed = judged_classed(&repo, &head);
+        assert!(
+            classed.1.contains(OWN_DELTA),
+            "classed ci from {checkout}: {}",
+            classed.1
+        );
+        assert!(
+            frozen_refusals(&classed.1).is_empty(),
+            "classed ci from {checkout}: {}",
+            classed.1
+        );
+        classed_verdicts.push(verdict(&classed));
         let (code, text) = push(
             root,
             &["--dry-run", "origin", &format!("{head}:refs/heads/{OWN}")],
@@ -1052,6 +1099,10 @@ fn the_verdict_does_not_depend_on_the_checkout() {
     assert!(
         verdicts.windows(2).all(|pair| pair[0] == pair[1]),
         "{verdicts:#?}"
+    );
+    assert!(
+        classed_verdicts.windows(2).all(|pair| pair[0] == pair[1]),
+        "{classed_verdicts:#?}"
     );
 }
 
