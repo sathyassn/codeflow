@@ -1,0 +1,11 @@
+id = "TSK-1187"
+uid = "7699aa16-c4d0-428d-8be7-5d564703c9ac"
+kind = "TSK"
+title = "A git-guard refusal of a copy names the operand it rests on and its role"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T16:41:14Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
