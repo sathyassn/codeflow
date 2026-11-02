@@ -660,3 +660,52 @@ The status stays building until task TSK-007 records the full native platform
 and browser matrix.
 Detail: [present architecture](architecture/present.md) and
 [present guide](present-guide.md).
+
+### Catalog record schema
+
+The catalog loader and `validate --docs` read records directly under
+`docs/capabilities/`, named `CAP-NNN-<slug>.md`, with YAML frontmatter followed
+by Markdown prose. The legacy fences above remain supported alongside distinct
+records. An existing CAP page without frontmatter remains companion prose when
+its id has a legacy fence. Duplicate ids or UUIDs are refused, naming both
+sources, including overlap between layouts regardless of registry bindings or
+payload equality.
+
+| Field | Shape |
+|---|---|
+| `id`, `uid`, `name` | Required: `CAP-` and at least three digits, a UUID, and a lowercase slug. Id and name match the filename. |
+| `summary`, `area` | Required: nonempty summary and an area from this revision's `.codeflow/project.toml`. |
+| `status` | Required: `planned`, `building`, `shipped`, `deprecated`. |
+| `stage` | Required when shipped: `unassessed`, `experimental`, `beta`, `stable`. Beta and stable require non-gap evidence. |
+| `kind` | Required: `functional` or `non-functional`. |
+| `quality`, `measure` | Required when non-functional: a characteristic below and a nonempty measurement sentence. Optional for functional records. |
+| `audience` | Required nonempty list drawn from `external`, `internal`, `agent`. |
+| `publish` | Boolean, default `false`; separate from audience. |
+| `group`, `tags` | Optional project facets from this revision's `vocabulary.yaml` groups and tags. |
+| `verified_by` | Required nonempty list when shipped. Each string is `test: ref`, `journey: ref`, `record: ref` or `gap: reason`, with a nonempty reference. |
+| `since`, `former_ids` | Optional first-shipped version string and list of numeric CAP ids. |
+| `epics`, `epic_id`, `adrs`, `specs`, `depends_on`, `related`, `superseded_by`, `capabilities` | Optional record references, accepting a string or list as in legacy fences. |
+
+Quality values are `functional-suitability`, `performance-efficiency`,
+`compatibility`, `interaction-capability`, `reliability`, `security`,
+`maintainability`, `flexibility`, and `safety`. A shipped record with only
+`gap:` evidence can use `stage: unassessed`; it cannot use `beta` or `stable`.
+Evidence references are syntax-checked only. The loader never opens or executes
+their targets; evidence resolution belongs to TSK-362.
+
+The limits in `capability.rs` are `CAPABILITY_MAX_VALUE_CHARS` = 1024 Unicode
+characters per scalar or list item, `CAPABILITY_MAX_LIST_ITEMS` = 64 items per
+list, and `CAPABILITY_MAX_FRONTMATTER_KEYS` = 32 keys per record. Unknown keys,
+duplicate YAML keys, malformed YAML and values over these limits are refused
+with the source file and offending key (or `frontmatter` for the key count).
+
+File containment applies to catalog record paths, not references inside a
+record. Only regular, non-executable record files directly under the folder
+are accepted. Absolute paths, `..`, nested paths and symlinks are refused.
+Checkout and pinned-tree readers share validation; the tree reader takes its
+areas and vocabulary from that tree, independent of the checkout.
+
+`vocabulary.yaml` contains `inventory: incomplete` or `complete`, plus `groups`
+and `tags` lists of `{name, about}` definitions. Names are unique lowercase
+slugs within each list. The example remains `incomplete` until inventory work
+establishes coverage. No record migration or id allocation occurs in the loader.
