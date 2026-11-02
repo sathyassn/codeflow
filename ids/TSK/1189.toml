@@ -1,0 +1,11 @@
+id = "TSK-1189"
+uid = "45b9508f-2592-40d8-936b-e6fc65c85f93"
+kind = "TSK"
+title = "A gate that waited records its wait and the holder in run.json"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T16:41:32Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
