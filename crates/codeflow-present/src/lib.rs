@@ -29,6 +29,7 @@ pub mod config;
 #[cfg(test)]
 mod contract_tests;
 pub mod conversation;
+mod copy_rules;
 #[cfg(test)]
 mod conversation_tests;
 pub mod delivery;

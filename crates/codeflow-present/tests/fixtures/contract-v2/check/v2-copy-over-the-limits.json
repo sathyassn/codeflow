@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "title": "Where the release stands",
+  "summary": "A status page whose copy runs long, cuts a sentence and drops the zone",
+  "blocks": [
+    {
+      "type": "narrative",
+      "id": "lede",
+      "markdown": "The line moved at 13:41 and the records were read once."
+    },
+    {
+      "type": "narrative",
+      "id": "wall",
+      "markdown": "## What changed\n\nThe milestone fixes landed on the integration line after the review settled, and the quality defaults followed once the gate was green, so the release notes now describe both changes and the epic page lists every task that remains open with its owner."
+    },
+    {
+      "type": "bullets",
+      "id": "points",
+      "items": [
+        "Short point",
+        "A bullet that carries three separate points at once: the gate result, the review verdict and the release note change, which belong on three bullets of their own."
+      ]
+    },
+    {
+      "type": "table",
+      "id": "rows",
+      "title": "Open items",
+      "columns": ["Item", "State"],
+      "rows": [["the 4.0.0 milestone fixes and the quality defaults that...", "open"]]
+    },
+    {
+      "type": "code",
+      "id": "log",
+      "language": "text",
+      "code": "13:41 fetch origin ... done"
+    }
+  ]
+}

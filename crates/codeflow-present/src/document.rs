@@ -2128,13 +2128,14 @@ mod tests {
         );
     }
 
-    /// TSK-1122: a sentence cut to an ellipsis and a clock time without a
-    /// zone are copy faults in prose, titles and cells; a code block, a code
-    /// span, a ratio and a zoned time are not.
+    /// TSK-1255: a visible text block over two lines, a sentence cut to an
+    /// ellipsis and a clock time without a zone are copy warnings in prose,
+    /// bullets and cells; a code block, a code span, collapsed detail, a
+    /// ratio and a zoned time are not.
     #[test]
-    fn check_faults_cut_context_and_a_time_without_a_zone() {
+    fn check_warns_on_long_blocks_cut_context_and_a_time_without_a_zone() {
         let lines = check_document(&crate::contract_tests::fixture_bytes(
-            "check/v2-copy-cut-and-bare-time.json",
+            "check/v2-copy-over-the-limits.json",
         ));
         let copy: Vec<_> = lines
             .iter()
@@ -2143,16 +2144,23 @@ mod tests {
         assert_eq!(
             copy,
             [
-                (Some("lede"), "copy-time-zone", "fault"),
-                (Some("rows"), "copy-ellipsis", "fault"),
+                (Some("lede"), "copy-time-zone", "warning"),
+                (Some("wall"), "copy-density", "warning"),
+                (Some("points"), "copy-density", "warning"),
+                (Some("rows"), "copy-ellipsis", "warning"),
             ],
             "{lines:?}"
         );
         assert!(lines[0].message.contains("13:41"), "{}", lines[0].message);
         assert!(
-            check_lines("check/v2-copy-whole-and-zoned.json").is_empty(),
+            lines[1].message.contains("4 lines at the 68-character"),
+            "{}",
+            lines[1].message
+        );
+        assert!(
+            check_lines("check/v2-copy-within-the-limits.json").is_empty(),
             "{:?}",
-            check_lines("check/v2-copy-whole-and-zoned.json")
+            check_lines("check/v2-copy-within-the-limits.json")
         );
     }
 
