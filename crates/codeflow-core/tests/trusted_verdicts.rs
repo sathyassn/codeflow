@@ -179,14 +179,16 @@ fn the_policy_workflows_declare_their_trusted_names() {
         workflows()
             .into_iter()
             .find(|(found, _)| found == path)
-            .map(|(_, workflow)| {
-                jobs(&workflow)
-                    .into_iter()
-                    .map(|(_, name, _)| name)
-                    .filter(|name| name.starts_with("trusted: "))
-                    .collect()
-            })
-            .unwrap_or_else(|| panic!("{path}"))
+            .map_or_else(
+                || panic!("{path}"),
+                |(_, workflow)| {
+                    jobs(&workflow)
+                        .into_iter()
+                        .map(|(_, name, _)| name)
+                        .filter(|name| name.starts_with("trusted: "))
+                        .collect()
+                },
+            )
     };
     assert_eq!(
         declared("assets/base/ci/codeflow-policy.yml"),

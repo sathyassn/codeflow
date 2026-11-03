@@ -255,6 +255,33 @@ fn the_workflow_warning_reads_the_change_not_the_widened_commit_range() {
 }
 
 #[test]
+fn a_workflow_edit_in_invalid_utf8_bytes_is_still_warned() {
+    // Both versions decode lossily to the same text, so only a comparison of
+    // the raw bytes sees the edit.
+    const POLICY_WF: &str = ".github/workflows/codeflow-policy.yml";
+    let workflow = |byte: u8| {
+        let mut bytes = b"on:\n  pull_request_target:\njobs:\n  commit-lint:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: codeflow ci # ".to_vec();
+        bytes.extend([byte, b'\n']);
+        bytes
+    };
+    let dir = fixture(Some("{}"));
+    let root = dir.path();
+    git(root, &["switch", "-q", "main"]);
+    std::fs::create_dir_all(root.join(".github/workflows")).unwrap();
+    std::fs::write(root.join(POLICY_WF), workflow(0xff)).unwrap();
+    commit(root, "ci: add the policy workflow");
+    git(root, &["switch", "-q", "-C", "feat/x"]);
+    std::fs::write(root.join(POLICY_WF), workflow(0xfe)).unwrap();
+    commit(root, "ci: change one byte of the policy workflow");
+    let text = said(&ci(root));
+    assert!(
+        text.contains(&format!("this change edits {POLICY_WF}")),
+        "{text}"
+    );
+    assert!(text.contains("not valid UTF-8"), "{text}");
+}
+
+#[test]
 fn the_base_policy_also_lets_through_what_it_allows() {
     let dir = fixture(Some(LOOSER));
     let root = dir.path();

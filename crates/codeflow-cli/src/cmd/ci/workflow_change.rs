@@ -86,8 +86,9 @@ pub(super) fn render(violation: &Violation, plane: &str) -> String {
     )
 }
 
-/// The text of `path` at `rev`: `Ok(None)` when absent.
-fn text_at(root: &Path, rev: &str, path: &str) -> Result<Option<String>, String> {
+/// The bytes of `path` at `rev`: `Ok(None)` when absent. They stay bytes,
+/// so a lossy decode can never make two different versions compare equal.
+fn bytes_at(root: &Path, rev: &str, path: &str) -> Result<Option<Vec<u8>>, String> {
     let Some(id) = codeflow_core::git::blob_id_at(root, rev, path)? else {
         return Ok(None);
     };
@@ -102,12 +103,16 @@ fn text_at(root: &Path, rev: &str, path: &str) -> Result<Option<String>, String>
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+    Ok(Some(out.stdout))
 }
 
+/// What a version that is not valid UTF-8 lets the warning say.
+const NOT_UTF8: &str = "a file that is not valid UTF-8 on one side, so its triggers, permissions and jobs cannot be listed";
+
 /// The warning for one path, or `None` when the range leaves it unchanged.
+/// The raw bytes decide whether it changed; the text only describes how.
 pub(super) fn describe(root: &Path, base: &str, head: &str, path: &str) -> Option<String> {
-    let (was, now) = match (text_at(root, base, path), text_at(root, head, path)) {
+    let (was, now) = match (bytes_at(root, base, path), bytes_at(root, head, path)) {
         (Ok(was), Ok(now)) => (was, now),
         (Err(error), _) | (_, Err(error)) => {
             return Some(format!(
@@ -118,10 +123,20 @@ pub(super) fn describe(root: &Path, base: &str, head: &str, path: &str) -> Optio
     if was == now {
         return None;
     }
+    let text = |bytes: &[u8]| std::str::from_utf8(bytes).ok().map(str::to_owned);
     let changes = match (&was, &now) {
-        (None, Some(text)) => format!("adds it: {}", whole(text)),
-        (Some(text), None) => format!("removes it: {}", whole(text)),
-        (Some(was), Some(now)) => compare(was, now),
+        (None, Some(bytes)) => format!(
+            "adds it: {}",
+            text(bytes).map_or_else(|| NOT_UTF8.to_owned(), |text| whole(&text))
+        ),
+        (Some(bytes), None) => format!(
+            "removes it: {}",
+            text(bytes).map_or_else(|| NOT_UTF8.to_owned(), |text| whole(&text))
+        ),
+        (Some(was), Some(now)) => match (text(was), text(now)) {
+            (Some(was), Some(now)) => compare(&was, &now),
+            _ => format!("changes {NOT_UTF8}"),
+        },
         (None, None) => return None,
     };
     Some(format!(
