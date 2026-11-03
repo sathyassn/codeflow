@@ -426,7 +426,7 @@ fn retarget_legacy_capability_requires_migration() {
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(
         dir.path().join("docs/capabilities.md"),
-        "```yaml\nid: CAP-017\nname: legacy\nstatus: shipped\n```\n",
+        "```yaml\nid: CAP-017\nname: legacy\nstatus: building\n```\n",
     )
     .unwrap();
     let output = cli(dir.path(), &["ids", "retarget", "CAP-017"]);

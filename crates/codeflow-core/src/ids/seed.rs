@@ -557,17 +557,7 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         .map_err(|error| IdsError::Invalid(format!("{rel} cannot be renumbered: {error}")))?;
     let text =
         String::from_utf8(bytes).map_err(|error| IdsError::Invalid(format!("{rel}: {error}")))?;
-    let uid = frontmatter_value(&text, "uid").ok_or_else(|| {
-        if from.kind() == Kind::Cap {
-            IdsError::Invalid(format!(
-                "{from} has no uid; migrate the legacy fence to a folder record with a registry-bound uid before retargeting"
-            ))
-        } else {
-            IdsError::Invalid(format!(
-                "{from} has no uid; run `codeflow ids backfill` first"
-            ))
-        }
-    })?;
+    let uid = frontmatter_value(&text, "uid").ok_or_else(|| missing_retarget_uid(from))?;
     for (refname, sha) in inventory::code_refs(&git)? {
         if !is_landing_branch(branch_name(&refname)) {
             continue;
@@ -628,6 +618,15 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         standing,
         rewritten,
     })
+}
+
+fn missing_retarget_uid(from: &RegId) -> IdsError {
+    let remedy = if from.kind() == Kind::Cap {
+        "migrate the legacy fence to a folder record with a registry-bound uid before retargeting"
+    } else {
+        "run `codeflow ids backfill` first"
+    };
+    IdsError::Invalid(format!("{from} has no uid; {remedy}"))
 }
 
 /// Write a renumbering: the record under its new name with `former_ids`,
