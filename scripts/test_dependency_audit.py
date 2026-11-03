@@ -79,7 +79,44 @@ class Precedence(unittest.TestCase):
             with self.assertRaisesRegex(audit.AuditError, "Replace bare TSV"):
                 audit.parse_hook(line)
         with self.assertRaises(audit.AuditError):
-            audit.validate_entries(audit.parse_hook(json.dumps(entry(expiry="2000-01-01"))), TODAY)
+            audit.validate_entries(audit.parse_hook(json.dumps(entry(expiry="2000-01-01"))), TODAY, [finding()])
+
+    def test_expired_entry_present_fails_even_at_warn(self):
+        for level in ("block", "warn"):
+            with self.assertRaisesRegex(audit.AuditError, "expired triage"):
+                audit.judge([finding()], [finding()], [entry(expiry="2000-01-01")], [], level, TODAY)
+
+    def test_expired_entry_absent_passes_with_named_notice(self):
+        for level in ("block", "warn"):
+            code, messages = audit.judge([finding()], [], [entry(expiry="2000-01-01")], [], level, TODAY)
+            self.assertEqual(code, 0)
+            self.assertEqual(len(messages), 1)
+            self.assertIn("::notice::expired triage entry", messages[0])
+            self.assertIn("GHSA-test", messages[0])
+            self.assertIn("2000-01-01", messages[0])
+
+    def test_invalid_entries_fail_even_when_absent(self):
+        for bad in [entry(expiry="2000-01-01", owner=""), entry(expiry="never"),
+                    entry(reachability="not-reachable", evidence=""), "bare finding"]:
+            for level in ("block", "warn"):
+                with self.assertRaises(audit.AuditError):
+                    audit.judge([], [], [bad], [], level, TODAY)
+        with self.assertRaises(audit.AuditError):
+            audit.parse_hook("bare finding")
+        with self.assertRaises(audit.AuditError):
+            audit.judge([], [], [entry(), entry()], [], "warn", TODAY)
+
+    def test_failed_or_unparseable_scan_never_supplies_absence(self):
+        for level in ("block", "warn"):
+            for failure in [audit.AuditError("scan failed"), audit.AuditError("invalid OSV JSON report")]:
+                with tempfile.TemporaryDirectory() as temp:
+                    with patch.object(audit.subprocess, "run"), \
+                         patch.object(audit, "dependency_tree", return_value=Path(temp)), \
+                         patch.object(audit, "scan", side_effect=[[finding()], failure]), \
+                         patch.object(audit, "trusted_exceptions") as exceptions:
+                        with self.assertRaises(audit.AuditError):
+                            audit.run(Path("/scanner"), "base", level, Path(temp))
+                        exceptions.assert_not_called()
 
     def test_osv_json_and_unknown_severity(self):
         report = {"results": [{"source": {"path": "/scan/dev/Cargo.lock"}, "packages": [{
@@ -140,6 +177,27 @@ class Precedence(unittest.TestCase):
             text = (root / path).read_text()
             embedded = text.split("<<'CODEFLOW_AUDIT_PY'\n", 1)[1].split("          CODEFLOW_AUDIT_PY\n", 1)[0]
             self.assertEqual("\n".join(line[10:] for line in embedded.splitlines()) + "\n", expected)
+
+    def test_scan_tree_contains_only_committed_dependency_inputs(self):
+        from subprocess import CompletedProcess
+        listing = (b"100644 blob a\tCargo.lock\0"
+                   b"100644 blob b\tosv-scanner.toml\0"
+                   b"100644 blob c\t.codeflow/audit-triage.json\0"
+                   b"100755 blob d\tosv-scanner\0"
+                   b"100644 blob e\t.gitignore\0")
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp) / "inputs"
+            with patch.object(audit.subprocess, "run", side_effect=[
+                    CompletedProcess([], 0, listing), CompletedProcess([], 0, b"locked dependencies")]) as run:
+                audit.dependency_tree("HEAD", tree)
+                self.assertEqual(run.call_count, 2)
+                self.assertEqual((tree / "Cargo.lock").read_bytes(), b"locked dependencies")
+                self.assertEqual([p.name for p in tree.iterdir()], ["Cargo.lock"])
+        for listing in [b"120000 blob a\tCargo.lock\0", b"160000 commit a\tvendor\0"]:
+            with tempfile.TemporaryDirectory() as temp:
+                with patch.object(audit.subprocess, "run", return_value=CompletedProcess([], 0, listing)):
+                    with self.assertRaises(audit.AuditError):
+                        audit.dependency_tree("HEAD", Path(temp) / "inputs")
 
 
 if __name__ == "__main__":

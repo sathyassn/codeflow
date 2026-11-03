@@ -2240,9 +2240,22 @@ entry per line. Both come from the base commit and use the same validator:
 
 Every entry needs `id`, `package`, `ecosystem`, `owner`, `rationale` and
 `expiry` (UTC date, inclusive). High or critical entries also need
-`reachability: "not-reachable"` and nonempty `evidence`. An expired,
-malformed or duplicate entry fails the job. A valid triage entry never
-waives a new advisory.
+`reachability: "not-reachable"` and nonempty `evidence`. A malformed or
+duplicate entry always fails the job. An expired entry fails at warn and
+block whenever its advisory is reported at head. If a complete, parsed
+head scan does not report it, a notice names the entry and expiry instead.
+A scan error or unparseable output fails; missing results never prove
+absence. A valid triage entry never waives a new advisory.
+
+The scanner version and checksum are parsed from the base workflow;
+missing or ambiguous pins fail closed. Both scans use one explicit empty
+scanner configuration, with suppressions and triage read separately from
+base. Only committed dependency inputs are exported for each scan. The
+input names in `scripts/dependency_audit.py` cover supported lockfiles and
+dependency manifests; head scripts, executables, ignore rules and scanner
+configuration never enter the scan directory. Dependency symlinks and
+submodules fail closed. Custom input names need a reviewed input-list
+update before adoption.
 
 Migration from the old hook contract: replace bare tab-separated finding
 lines with the JSON entries above. The hook still reads the tab-separated
@@ -2250,6 +2263,13 @@ lines with the JSON entries above. The hook still reads the tab-separated
 `CODEFLOW_TRUSTED_SHA`. A bare output line now fails with migration advice;
 it cannot waive a finding without ownership, expiry or reachability evidence.
 Land the hook migration on the base before adopting this workflow.
+
+Recovery from live expired triage requires an operator merge of the
+renewal over the failing check: a PR renewing the entry is still judged by
+the expired base entry. The alternative is to fix or remove the vulnerable
+dependency so a complete head scan proves its advisory absent. Invalid
+entries always fail, even when their advisory is absent; their repair also
+requires an operator merge because the invalid base remains authoritative.
 
 Running `codeflow policy` without a subcommand prints the effective policy
 values and their sources, like `codeflow policy show`.

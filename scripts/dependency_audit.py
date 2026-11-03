@@ -55,6 +55,7 @@ def validate_entries(entries, today, findings=()):
     """Both file entries and every hook output line use this validator."""
     if not isinstance(entries, list):
         raise AuditError("triage must be a JSON array of entries")
+    present = {identity(row) for row in findings}
     high = {identity(row) for row in findings if row["severity"] >= 3}
     result = {}
     allowed = {"id", "package", "ecosystem", "owner", "rationale", "expiry", "reachability", "evidence"}
@@ -64,8 +65,7 @@ def validate_entries(entries, today, findings=()):
             raise AuditError("unknown triage fields; " + MIGRATION)
         nonempty(entry.get("owner"), "owner")
         nonempty(entry.get("rationale"), "rationale")
-        if expiry(entry.get("expiry")) < today:
-            raise AuditError(f"expired triage entry for {key}")
+        until = expiry(entry.get("expiry"))
         reachability = entry.get("reachability", "unknown")
         if reachability not in ("unknown", "reachable", "not-reachable"):
             raise AuditError("reachability must be unknown, reachable or not-reachable")
@@ -75,6 +75,9 @@ def validate_entries(entries, today, findings=()):
             raise AuditError(f"high/critical triage needs not-reachable evidence for {key}")
         if key in result:
             raise AuditError(f"duplicate triage entry for {key}")
+        if until < today and key in present:
+            raise AuditError(f"expired triage entry for {key}, expiry {until}; "
+                             "renewal while the advisory remains live requires an operator merge")
         result[key] = entry
     return result
 
@@ -165,7 +168,9 @@ def judge(base, head, triage, suppressions, level, today):
     entries = validate_entries(triage, today, head)
     previous = {identity(row) for row in base}
     failed = False
-    messages = []
+    messages = [f"::notice::expired triage entry {json.dumps(key)}, expiry {expiry(entry['expiry'])}; "
+                "advisory absent from completed head scan"
+                for key, entry in entries.items() if expiry(entry["expiry"]) < today]
     for row in head:
         key = identity(row)
         entry = entries.get(key)
@@ -267,6 +272,49 @@ def trusted_exceptions(tree, head, trusted_sha, work, today):
     return entries, suppressions
 
 
+# Dependency inputs only: no checkout scripts, scanner configuration, ignore
+# rules, executables or custom scanner-result JSON enter the scan directory.
+# Names follow OSV's supported lockfiles/manifests documentation:
+# https://google.github.io/osv-scanner/supported-languages-and-lockfiles/
+DEPENDENCY_INPUTS = frozenset({
+    "Cargo.lock", "Gemfile.lock", "gems.locked", "Pipfile.lock", "poetry.lock",
+    "requirements.txt", "pdm.lock", "pylock.toml", "uv.lock", "conan.lock",
+    "pubspec.lock", "package_config.json", "mix.lock", "go.mod", "go.sum",
+    "cabal.project.freeze", "stack.yaml.lock", "buildscript-gradle.lockfile",
+    "gradle.lockfile", "verification-metadata.xml", "pom.xml", "bun.lock",
+    "bun.lockb", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml",
+    "yarn.lock", "deps.json", "packages.config", "packages.lock.json",
+    "composer.lock", "renv.lock",
+})
+
+
+def dependency_tree(revision, destination):
+    """Export committed dependency blobs only, refusing links and submodules."""
+    destination.mkdir()
+    listing = subprocess.run(["git", "ls-tree", "-rz", "--full-tree", revision],
+                             capture_output=True, check=True).stdout
+    for record in listing.split(b"\0"):
+        if not record:
+            continue
+        meta, name = record.split(b"\t", 1)
+        mode, kind, oid = meta.decode("ascii").split()
+        path = Path(os.fsdecode(name))
+        if kind == "commit":
+            raise AuditError(f"dependency scan cannot inspect submodule {path}")
+        if path.name not in DEPENDENCY_INPUTS and not path.name.endswith(".deps.json"):
+            continue
+        if mode not in ("100644", "100755") or kind != "blob":
+            raise AuditError(f"dependency input is not a regular file: {path}")
+        if path.is_absolute() or ".." in path.parts:
+            raise AuditError("dependency input escapes scan directory")
+        target = destination / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        content = subprocess.run(["git", "cat-file", "blob", oid],
+                                 capture_output=True, check=True).stdout
+        target.write_bytes(content)
+    return destination
+
+
 def run(scanner, trusted_sha, level, work):
     if level == "off":
         print("Dependency audit is off; not run.")
@@ -280,8 +328,12 @@ def run(scanner, trusted_sha, level, work):
     config.write_text("")
     # Explicit empty config overrides all checkout configs. Suppressions are
     # judged and printed by our table, never silently removed by the scanner.
-    base = scan(scanner, tree, config)
-    head = scan(scanner, Path.cwd(), config)
+    # Both scans use the same trusted scanner/config and the same input set.
+    # Only committed dependency blobs vary; the checkout cannot supply config.
+    base_inputs = dependency_tree(trusted_sha, work / "base-inputs")
+    head_inputs = dependency_tree("HEAD", work / "head-inputs")
+    base = scan(scanner, base_inputs, config)
+    head = scan(scanner, head_inputs, config)
     today = datetime.datetime.now(datetime.timezone.utc).date()
     entries, suppressions = trusted_exceptions(tree, head, trusted_sha, work, today)
     code, messages = judge(base, head, entries, suppressions, level, today)

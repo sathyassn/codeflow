@@ -1092,6 +1092,7 @@ fn audit_repo(
     git(work, &["init", "-q", "-b", "main"]);
     git(work, &["config", "user.email", "t@example.com"]);
     git(work, &["config", "user.name", "t"]);
+    seed_audit_scanner_pin(work);
     std::fs::write(work.join("Cargo.lock"), "# lock\n").unwrap();
     if let Some(policy) = base_policy {
         std::fs::write(work.join(".codeflow/policy.json"), policy).unwrap();
@@ -1131,6 +1132,9 @@ fn audit_repo(
 const FAKE_OSV_SCANNER: &str = r#"#!/bin/sh
 case " $* " in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev/null; then echo 'No package sources found'; exit 128; fi ;; esac
 case ${OSV_FAKE:-} in
+  empty_head) case "$PWD" in */head-inputs) printf '{"results":[]}'; exit 0 ;; esac ;;
+  broken_head) case "$PWD" in */head-inputs) echo 'scan failed' >&2; exit 128 ;; esac ;;
+  malformed_head) case "$PWD" in */head-inputs) echo 'not json'; exit 0 ;; esac ;;
   silent) exit 128 ;;
   empty) echo 'No package sources found, --help for usage information.'; exit 128 ;;
   broken) echo 'Error during extraction: Cargo.lock: could not extract'; echo 'No package sources found, --help for usage information.'; exit 128 ;;
@@ -1298,6 +1302,7 @@ fn exception_repo(
     git(work, &["init", "-q", "-b", "main"]);
     git(work, &["config", "user.email", "t@example.com"]);
     git(work, &["config", "user.name", "t"]);
+    seed_audit_scanner_pin(work);
     let put = |files: &[(&str, &str)]| {
         for (path, text) in files {
             let target = work.join(path);
@@ -1322,6 +1327,11 @@ fn exception_repo(
 }
 
 const HOOK: &str = ".codeflow/audit-exceptions.sh";
+fn seed_audit_scanner_pin(work: &Path) {
+    std::fs::create_dir_all(work.join(".github/workflows")).unwrap();
+    std::fs::write(work.join(".github/workflows/codeflow-ci.yml"),
+        "          OSV_VERSION=2.4.0\n          OSV_SHA256=15314940c10d26af9c6649f150b8a47c1262e8fc7e17b1d1029b0e479e8ed8a0\n").unwrap();
+}
 const VALID_TRIAGE: &str = r#"{"id":"GHSA-test","package":"demo","ecosystem":"crates.io","owner":"team","rationale":"reviewed","expiry":"2099-01-01","reachability":"not-reachable","evidence":"no call path"}"#;
 
 /// Run the audit step at the `block` level on a repository whose base
@@ -1370,6 +1380,48 @@ fn the_project_exception_hook_uses_validated_base_entries() {
     assert!(ok, "{text}");
     let (ok, text) = run_exception_step(&[], &[(".codeflow/audit-triage.json", &file)], &[]);
     assert!(!ok, "head-only triage waived finding: {text}");
+}
+
+/// Expiry uses a completed head scan and never the PR's renewed triage.
+#[test]
+fn expired_triage_needs_verified_absence_at_head() {
+    let expired = format!("[{}]", VALID_TRIAGE.replace("2099-01-01", "2000-01-01"));
+    let renewed = format!("[{VALID_TRIAGE}]");
+    let path = ".codeflow/audit-triage.json";
+    for mode in ["", "broken_head", "malformed_head"] {
+        let (ok, text) = run_exception_step(
+            &[(path, &expired)],
+            &[(path, &renewed)],
+            &[("OSV_FAKE", mode)],
+        );
+        assert!(!ok, "{mode}: {text}");
+    }
+    let (ok, text) = run_exception_step(&[(path, &expired)], &[], &[("OSV_FAKE", "empty_head")]);
+    assert!(ok, "{text}");
+    assert!(text.contains("::notice::expired triage entry"), "{text}");
+    assert!(
+        text.contains("GHSA-test") && text.contains("2000-01-01"),
+        "{text}"
+    );
+    let invalid = expired.replace("\"owner\":\"team\"", "\"owner\":\"\"");
+    let (ok, text) = run_exception_step(&[(path, &invalid)], &[], &[("OSV_FAKE", "empty_head")]);
+    assert!(!ok, "invalid absent entry passed: {text}");
+    let (ok, text) = run_exception_step(
+        &[(HOOK, "echo bare-finding\n")],
+        &[],
+        &[("OSV_FAKE", "empty_head")],
+    );
+    assert!(!ok, "invalid hook line passed: {text}");
+    // A head-only workflow cannot replace the scanner authority.
+    let (ok, text) = run_exception_step(
+        &[(path, &renewed)],
+        &[
+            (".github/workflows/codeflow-ci.yml", "invalid head pins\n"),
+            ("osv-scanner.toml", "invalid head configuration\n"),
+        ],
+        &[],
+    );
+    assert!(ok, "head changed scanner authority: {text}");
 }
 
 #[test]

@@ -332,8 +332,18 @@ same validator as the base commit's `.codeflow/audit-triage.json` array.
 Every entry needs `id`, `package`, `ecosystem`, `owner`, `rationale` and
 `expiry` (inclusive UTC date). High or critical findings also need
 `reachability: "not-reachable"` and nonempty `evidence`. A nonzero hook exit,
-malformed output, duplicate or expired entry fails the job at both `warn`
-and `block`. A scan error also fails at either level.
+malformed output or duplicate entry fails the job at both `warn` and
+`block`. An expired entry fails if its advisory is present in the completed
+head scan; otherwise a notice names the entry and expiry. Invalid entries
+always fail. A scan error or unparseable output also fails at either level;
+missing scan evidence never proves that an advisory is absent.
+
+Scanner version and checksum come from the base workflow. Both scans use
+the same explicit empty scanner configuration; the table reads exceptions
+from base. Each scan receives only committed dependency inputs in an
+isolated directory. Head scripts, executables, ignore rules and scanner
+configuration cannot change the scan. Dependency symlinks and submodules
+fail closed. Custom input names need a reviewed input-list update.
 
 For example, a hook may print this reviewed entry from its trusted register:
 
@@ -352,6 +362,11 @@ Migration: replace the old hook output of unchanged tab-separated finding
 lines with JSON entries before adopting this workflow. Bare finding lines
 are refused. The hook cannot waive a finding without ownership, expiry or
 required reachability evidence. Land the migration on the base first.
+Renewing expired triage while its advisory is still live requires an
+operator merge over the failing check: the renewal PR still uses the
+expired base entry. Fixing or removing the vulnerable dependency can pass
+when a complete head scan proves absence. Invalid base entries always
+require an operator merge to repair, even when their advisory is absent.
 
 Only the GitHub workflow runs the hook. The GitLab, Bitbucket and generic
 wrappers carry the audit only as an optional add-on you run yourself.
