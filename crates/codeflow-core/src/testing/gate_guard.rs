@@ -1003,11 +1003,11 @@ fn fence_live_groups(
     Ok((holder, running))
 }
 
-/// The last holder recorded for the fence at `path`: the
-/// record file's holder while its process lives (a line build before
-/// TSK-1256 writes it), else the record a 3.1 gate keeps inside the lock
-/// file; empty when neither is readable. A record left by a run that died
-/// is never shown as the holder.
+/// The last holder recorded for the fence at `path`, for display only.
+/// The record file (which line builds before TSK-1256 write) is shown only
+/// while the process it names lives. Otherwise the record a 3.1 gate keeps
+/// inside the lock file is shown as it stands, with no liveness check, so
+/// it can name a 3.1 gate that has ended. Empty when neither is readable.
 fn fence_holder(path: &Path, trusted: &[String]) -> String {
     let read = |file: &Path| -> Option<String> {
         if crate::absence::proven_absent(file).ok()? {
