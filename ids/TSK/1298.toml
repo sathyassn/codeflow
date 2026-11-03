@@ -1,0 +1,11 @@
+id = "TSK-1298"
+uid = "50613af7-1374-499c-a7cd-ddd0d7fb25b4"
+kind = "TSK"
+title = "Remote query deadlines are project settings within a ceiling"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T19:41:05Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
