@@ -24,7 +24,7 @@ fn capability_hosted_snapshot_refuses_each_changed_input() {
             .trim()
             .trim_matches('\'');
         let dir = tempfile::tempdir().unwrap();
-        let snapshot = serde_json::json!({"head":{"sha":"head"},"base":{"sha":"base","ref":"main"},"body":"The body\nwith literal $() text.","state":"open"});
+        let snapshot = serde_json::json!({"number":42,"head":{"sha":"head"},"base":{"sha":"base","ref":"main","repo":{"full_name":"owner/repository"}},"body":"The body\nwith literal $() text.","state":"open"});
         let before = dir.path().join("before.json");
         let after = dir.path().join("after.json");
         std::fs::write(&before, snapshot.to_string()).unwrap();
@@ -35,6 +35,8 @@ fn capability_hosted_snapshot_refuses_each_changed_input() {
             Some("/base/ref"),
             Some("/body"),
             Some("/state"),
+            Some("/number"),
+            Some("/base/repo/full_name"),
         ] {
             let mut current = snapshot.clone();
             if let Some(pointer) = pointer {
@@ -66,6 +68,12 @@ fn capability_hosted_snapshot_refuses_each_changed_input() {
                     "--arg",
                     "target",
                     "main",
+                    "--arg",
+                    "number",
+                    "42",
+                    "--arg",
+                    "repository",
+                    "owner/repository",
                     before_filter,
                 ])
                 .arg(&after)

@@ -122,10 +122,12 @@ jobs:
             -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
             "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull.json"
           # A current body must describe the same head and target as this run.
-          jq -e --arg head "$EXPECTED_HEAD" --arg base "$EXPECTED_BASE" --arg target "$EXPECTED_TARGET" \
-            '.head.sha == $head and .base.sha == $base and .base.ref == $target and .state == "open"' \
+          jq -e --arg head "$EXPECTED_HEAD" --arg base "$EXPECTED_BASE" --arg target "$EXPECTED_TARGET" --arg number "$PR_NUMBER" --arg repository "$GITHUB_REPOSITORY" \
+            '.head.sha == $head and .base.sha == $base and .base.ref == $target and (.number | tostring) == $number and .base.repo.full_name == $repository and .state == "open"' \
             "${RUNNER_TEMP}/pull.json" >/dev/null || {
-              echo "::error::pull request head or target moved; trigger a fresh PR event, for example by editing its body"; exit 1;
+              printf '::error::expected PR %s head %s target %s (%s); received ' "$PR_NUMBER" "$EXPECTED_HEAD" "$EXPECTED_BASE" "$EXPECTED_TARGET"
+              jq -c '{number, head: .head.sha, target: .base.sha, branch: .base.ref, repository: .base.repo.full_name}' "${RUNNER_TEMP}/pull.json"
+              echo "Trigger a fresh PR event, for example by editing its body."; exit 1;
             }
           delimiter="codeflow_body_$(openssl rand -hex 16)"
           {
@@ -154,9 +156,13 @@ jobs:
             -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
             "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull-after.json"
           jq -e --slurpfile before "${RUNNER_TEMP}/pull.json" \
-            'def snapshot: [.head.sha, .base.sha, .base.ref, .body, .state]; snapshot == ($before[0] | snapshot) and .state == "open"' \
+            'def snapshot: [.number, .base.repo.full_name, .head.sha, .base.sha, .base.ref, .body, .state]; snapshot == ($before[0] | snapshot) and .state == "open"' \
             "${RUNNER_TEMP}/pull-after.json" >/dev/null || {
-              echo "::error::pull request body, head or target changed during evaluation; use the new PR event's check"; exit 1;
+              echo "::error::pull request body, head or target changed during evaluation; use the new PR event's check"
+              jq -c --slurpfile before "${RUNNER_TEMP}/pull.json" \
+                'def identities: {number, head: .head.sha, target: .base.sha, branch: .base.ref}; {judged: ($before[0] | identities), current: identities}' \
+                "${RUNNER_TEMP}/pull-after.json"
+              exit 1;
             }
 
       # The registry is fetched explicitly with full history, never forced

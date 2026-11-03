@@ -169,11 +169,6 @@ pub struct CiArgs {
     /// hosted CI never passes it.
     #[arg(long, hide = true, requires = "destination")]
     pub advertisement_stdin: bool,
-
-    /// Check catalog data as a local push preflight, without PR declarations.
-    /// This is not a hosted admission verdict.
-    #[arg(long, hide = true)]
-    pub capability_preflight: bool,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -697,6 +692,7 @@ pub fn run(args: &CiArgs) -> i32 {
     // One checked tree diff decides what the body may leave out (TSK-135).
     // Asked only with a body. A range or project paths that cannot be read
     // stop the run, never a guessed class.
+    let mut body_inventory = None;
     let change = match (pr_body.as_ref(), base_sha.as_deref()) {
         (None, _) => None,
         (Some(_), None) => Some(ChangeClass::CODE),
@@ -725,7 +721,9 @@ pub fn run(args: &CiArgs) -> i32 {
                     return 2;
                 }
             };
-            Some(change_class::classify(Some(&inventory), &project))
+            let class = change_class::classify(Some(&inventory), &project);
+            body_inventory = Some(inventory);
+            Some(class)
         }
     };
     let work_class = if scope_ready {
@@ -778,18 +776,15 @@ pub fn run(args: &CiArgs) -> i32 {
         base_sha.as_deref(),
         &head,
         pr_body.as_deref(),
-        args.capability_preflight,
+        body_inventory.as_deref(),
+        args.advertisement_stdin,
         is_pr_event(|key| environment.get(key).cloned()),
     );
     for note in capability.notes {
         println!("codeflow ci: {}", crate::cmd::shown(&note));
     }
     if capability.ran {
-        ran.push(if args.capability_preflight {
-            "capability preflight"
-        } else {
-            "capability impact"
-        });
+        ran.push("capability impact");
     }
     tagged.extend(
         capability

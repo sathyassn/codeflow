@@ -816,9 +816,9 @@ fn legacy_record(entry: CapabilityEntry) -> CapabilityRecord {
 }
 
 /// Keep each legacy entry's surrounding Markdown with the parsed entry.
-/// A document heading before the next entry belongs to that next entry;
-/// quoted and fenced example headings do not divide records. YAML parsing
-/// stays in `parse_capabilities`.
+/// An equal-or-higher heading ends an entry's section; global guidance and
+/// group headings do not become capability prose. Quoted and fenced headings
+/// do not divide records. YAML parsing stays in `parse_capabilities`.
 fn legacy_records(content: &str, entries: Vec<CapabilityEntry>) -> Vec<CapabilityRecord> {
     use pulldown_cmark::{Event, Parser, Tag};
     let lines: Vec<_> = content.split_inclusive('\n').collect();
@@ -836,12 +836,13 @@ fn legacy_records(content: &str, entries: Vec<CapabilityEntry>) -> Vec<Capabilit
     let mut depth = 0usize;
     for (event, span) in Parser::new(content).into_offset_iter() {
         match event {
-            Event::Start(Tag::Heading { .. }) if depth == 0 => {
-                headings.push(
+            Event::Start(Tag::Heading { level, .. }) if depth == 0 => {
+                headings.push((
                     offsets
                         .partition_point(|start| *start <= span.start)
                         .saturating_sub(1),
-                );
+                    level,
+                ));
                 depth += 1;
             }
             Event::Start(_) => depth += 1,
@@ -857,9 +858,9 @@ fn legacy_records(content: &str, entries: Vec<CapabilityEntry>) -> Vec<Capabilit
             let start = headings
                 .iter()
                 .rev()
-                .find(|line| **line < fence && **line >= previous)
+                .find(|(line, _)| *line < fence && *line >= previous)
                 .copied()
-                .unwrap_or(fence);
+                .map_or((fence, None), |(line, level)| (line, Some(level)));
             previous = fence + 1;
             start
         })
@@ -878,9 +879,16 @@ fn legacy_records(content: &str, entries: Vec<CapabilityEntry>) -> Vec<Capabilit
                 .iter()
                 .position(|line| line.trim() == marker)
                 .map_or(lines.len(), |n| fence + n + 2);
-            let end = starts.get(index + 1).copied().unwrap_or(lines.len());
+            let (start, level) = starts[index];
+            let next = starts.get(index + 1).map_or(lines.len(), |(line, _)| *line);
+            let end = headings
+                .iter()
+                .find(|(line, heading)| {
+                    *line >= end_fence && level.is_some_and(|level| *heading <= level)
+                })
+                .map_or(next, |(line, _)| next.min(*line));
             let mut record = legacy_record(entry);
-            record.prose = lines[starts[index]..fence].concat();
+            record.prose = lines[start..fence].concat();
             if end_fence <= end {
                 record.prose.push_str(&lines[end_fence..end].concat());
             }

@@ -1022,7 +1022,7 @@ fn clears_pr_release_impact() {
 fn clears_pr_capability_impact() {
     let dir = ci_repo(r#"{"git":{"pr_capability_impact":"block"}}"#);
     let root = dir.path();
-    write(root, ".codeflow/project.toml", "areas = ['engine']\n");
+    write(root, ".codeflow/project.toml", "schema_version = 1\ntier = 'minimal'\nscaffold_version = '4.0.0'\nstack = 'rust'\nareas = ['engine']\npolicy_armed = true\ngit_hooks = 'unwired'\npermission_preset = 'safe'\n");
     write(root, "docs/capabilities/vocabulary.yaml", "inventory: incomplete\ngroups: [{name: records, about: Records}]\ntags: [{name: rust, about: Rust}]\n");
     write(
         root,

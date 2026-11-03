@@ -122,6 +122,15 @@ const GIT2_TEXT: &[&str] = &["shorthand", "symbolic_target"];
 /// only reaches a person or is not a git or OS name: (file, enclosing item,
 /// call, how many, closed reason tag); the comment states the precise contract.
 const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // The tree entry reader rejects invalid UTF-8 with a catalog error before
+    // constructing a path; it never replaces undecodable bytes or drops entries.
+    (
+        "codeflow-core/src/capability.rs",
+        "catalog_entries",
+        "name",
+        1,
+        "format-contract",
+    ),
     // Catalog paths are constructed only from validated UTF-8 checkout names or
     // Git tree text; invalid UTF-8 is refused before any record is constructed.
     (
@@ -1539,6 +1548,54 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // Only tests whether declaration context is empty; identity tokens remain unchanged.
+    (
+        "crates/codeflow-cli/src/cmd/ci/capability_impact.rs",
+        "agreement",
+        "trim",
+        1,
+        "prose",
+    ),
+    // Normalizes natural-language catalog prose for semantic comparison, never Git names.
+    (
+        "crates/codeflow-cli/src/cmd/ci/capability_impact.rs",
+        "normalize",
+        "split_whitespace",
+        1,
+        "prose",
+    ),
+    // Reads visible Markdown declaration lines after section and container parsing.
+    (
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "capability_lines",
+        "lines",
+        1,
+        "prose",
+    ),
+    // Removes Markdown line padding; the declaration parser still checks exact ID and name tokens.
+    (
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "capability_lines",
+        "trim",
+        1,
+        "prose",
+    ),
+    // Reads Markdown fence lines inside already validated UTF-8 legacy catalog text.
+    (
+        "crates/codeflow-core/src/capability.rs",
+        "legacy_records",
+        "lines",
+        1,
+        "prose",
+    ),
+    // Recognizes legacy Markdown fences; retained prose and capability identity text are not trimmed.
+    (
+        "crates/codeflow-core/src/capability.rs",
+        "legacy_records",
+        "trim",
+        2,
+        "prose",
+    ),
     // rev-parse emits a validated hexadecimal tree id and a terminal newline;
     // this does not trim a revision supplied by the caller or a repository name.
     (

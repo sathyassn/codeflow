@@ -576,7 +576,7 @@ pub const SCHEMA: [KeySpec; 79] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Capability declarations agree with the catalog delta at exact commits.",
-        notes: "Opt-in. Hosted PR checks require a body; local preflight checks catalog data without requiring a body. Absent or off performs no catalog reads.",
+        notes: "Opt-in. Hosted PR checks require a body. Local pushes defer this rule to hosted actual-target CI. Absent or off performs no catalog reads.",
     },
     KeySpec {
         path: "git.pr_summary",

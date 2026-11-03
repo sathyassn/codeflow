@@ -1610,8 +1610,18 @@ fn substantive(value: &str) -> bool {
         && !TEMPLATE_ALTERNATIVES.contains(&normalized.as_str())
 }
 
+/// Bound the body before this rule invokes the Markdown parser.
+pub(super) const CAPABILITY_MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
+
 /// Visible own-section declaration lines, excluding examples, comments and subsections.
 pub(super) fn capability_lines(body: &str) -> Result<Vec<String>, String> {
+    const MAX_LINE_BYTES: usize = 4096;
+    const MAX_LINES: usize = 10_000;
+    if body.len() > CAPABILITY_MAX_BODY_BYTES {
+        return Err(format!(
+            "capability declaration body exceeds {CAPABILITY_MAX_BODY_BYTES} bytes"
+        ));
+    }
     let parsed = sections(body);
     let matched: Vec<_> = parsed
         .iter()
@@ -1627,12 +1637,20 @@ pub(super) fn capability_lines(body: &str) -> Result<Vec<String>, String> {
     let end = sections(content)
         .first()
         .map_or(content.len(), |s| s.heading_start);
-    Ok(field_text(&content[..end])
-        .lines()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect())
+    let visible = field_text(&content[..end]);
+    let mut lines = Vec::new();
+    for line in visible.lines().map(str::trim).filter(|s| !s.is_empty()) {
+        if line.len() > MAX_LINE_BYTES {
+            return Err(format!(
+                "capability declaration line exceeds {MAX_LINE_BYTES} bytes"
+            ));
+        }
+        if lines.len() == MAX_LINES {
+            return Err(format!("capability declaration exceeds {MAX_LINES} lines"));
+        }
+        lines.push(line.to_owned());
+    }
+    Ok(lines)
 }
 
 #[cfg(test)]

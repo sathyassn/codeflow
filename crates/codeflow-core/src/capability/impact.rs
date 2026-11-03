@@ -32,6 +32,8 @@ pub fn context(
     head: &str,
     policy: &GitPolicy,
 ) -> Result<Context, String> {
+    // This public reader also has callers outside CI; retain its own history
+    // guard even when the CLI already guarded its shared range inventory.
     crate::workgraph::history::check_command(root)?;
     let repo = git2::Repository::discover(root).map_err(|e| e.to_string())?;
     let base_id = commit(&repo, base)?;
@@ -56,14 +58,27 @@ fn project_paths(
     authority: git2::Oid,
     policy: &GitPolicy,
 ) -> Result<ProjectPaths, String> {
-    let tree = repo
+    let tree_id = repo
         .find_commit(authority)
-        .and_then(|c| c.tree())
+        .map(|c| c.tree_id())
         .map_err(|e| e.to_string())?;
-    let stack = match tree.get_path(Path::new(".codeflow/project.toml")) {
-        Err(e) if e.code() == git2::ErrorCode::NotFound => String::new(),
-        Err(e) => return Err(format!("cannot read authority project: {e}")),
-        Ok(entry) => {
+    let tree =
+        super::bounded_catalog_tree(repo, tree_id, "<authority>").map_err(|e| e.to_string())?;
+    let config = tree
+        .get_name(".codeflow")
+        .map(|entry| {
+            if entry.filemode() != 0o040_000 {
+                return Err("authority .codeflow must be a directory".to_owned());
+            }
+            super::bounded_catalog_tree(repo, entry.id(), ".codeflow").map_err(|e| e.to_string())
+        })
+        .transpose()?;
+    let stack = match config
+        .as_ref()
+        .and_then(|tree| tree.get_name("project.toml"))
+    {
+        None => String::new(),
+        Some(entry) => {
             if !matches!(entry.filemode(), 0o100_644 | 0o100_755) {
                 return Err("authority project.toml must be a regular blob".into());
             }

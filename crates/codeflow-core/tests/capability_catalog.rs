@@ -579,7 +579,7 @@ fn fence(id: &str, status: &str) -> String {
 fn legacy_prose_is_bound_to_each_entry() {
     let dir = fixture();
     let legacy = format!(
-        "# Catalog\n\n## First\n\n{}\nFirst contract.\n\n> ## Quoted heading\n\n## Second\n\n{}\nSecond contract.\n",
+        "# Catalog\n\n## First\n\n{}\nFirst contract.\n\n> ## Quoted heading\n\n### Details\n\nFirst details.\n\n# Another group\n\n## Second\n\n{}\nSecond contract.\n\n# Catalog schema\n\nGlobal guidance.\n",
         fence("CAP-098", "planned"),
         fence("CAP-099", "planned")
     );
@@ -597,9 +597,12 @@ fn legacy_prose_is_bound_to_each_entry() {
         .unwrap();
     assert!(first.prose.contains("First contract."));
     assert!(first.prose.contains("Quoted heading"));
+    assert!(first.prose.contains("First details."));
+    assert!(!first.prose.contains("Another group"));
     assert!(!first.prose.contains("Second"));
     assert!(second.prose.contains("Second contract."));
     assert!(!second.prose.contains("First"));
+    assert!(!second.prose.contains("Global guidance"));
     assert!(!first.prose.contains("id: CAP-098"));
     assert_eq!(
         catalog,

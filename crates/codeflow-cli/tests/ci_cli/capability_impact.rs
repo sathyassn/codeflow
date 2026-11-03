@@ -181,7 +181,6 @@ fn capability_missing_body_and_section_at_both_levels_and_tracking_states() {
                     pass(&out);
                 }
             }
-            pass(&ci(dir.path(), None, &["--capability-preflight"]));
         }
     }
 }
@@ -562,6 +561,226 @@ fn capability_examples_are_not_declarations() {
     }
 }
 
+#[test]
+fn capability_body_file_journey_and_declaration_bounds() {
+    let dir = fixture(Some("block"), false, false);
+    let root = dir.path();
+    write(root, FILE, RECORD);
+    commit(root);
+    let bodies = tempfile::tempdir().unwrap();
+    let path = bodies.path().join("body.md");
+    for (body, expected) in [
+        ("## Summary\n\nAdds a catalog.\n".to_owned(), 1),
+        (ADDED.to_owned(), 0),
+        (
+            format!("## Capability impact\n\n- None: {}\n", "x".repeat(4097)),
+            1,
+        ),
+        (
+            format!(
+                "## Capability impact\n\n{}",
+                "- None: No contract change.\n".repeat(10_001)
+            ),
+            1,
+        ),
+    ] {
+        std::fs::write(&path, format!("Task: TSK-001\n{body}")).unwrap();
+        let out = ci(root, None, &["--pr-body-file", path.to_str().unwrap()]);
+        println!("capability body-file journey: exit {:?}", out.status.code());
+        assert_eq!(out.status.code(), Some(expected), "{}", said(&out));
+        if body.len() > 4096 {
+            assert!(said(&out).contains("exceeds"), "{}", said(&out));
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn capability_moving_target_ref_keeps_first_commit_identity() {
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::Stdio;
+    let dir = fixture(Some("block"), true, false);
+    let root = dir.path();
+    let base = git(root, &["rev-parse", "main"]);
+    product_change(root);
+    let head = git(root, &["rev-parse", "HEAD"]);
+    git(root, &["switch", "-qc", "moved-target", "main"]);
+    write(root, FILE, "---\nid: [broken\n---\n");
+    let moved = commit(root);
+    git(root, &["switch", "-q", "feat/example"]);
+    let bodies = tempfile::tempdir().unwrap();
+    let fifo = bodies.path().join("body.fifo");
+    assert!(Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap()
+        .success());
+    let mut child = super::codeflow()
+        .args([
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/example",
+            "--pr-body-file",
+        ])
+        .arg(&fifo)
+        .current_dir(root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let mut text = String::new();
+    loop {
+        let mut line = String::new();
+        assert!(output.read_line(&mut line).unwrap() > 0, "{text}");
+        let resolved = line.contains("acceptance target");
+        text.push_str(&line);
+        if resolved {
+            break;
+        }
+    }
+    // Context has pinned the commits; the FIFO holds body resolution until
+    // the target ref moves. No production timing or test-only hook is needed.
+    git(root, &["update-ref", "refs/heads/main", &moved, &base]);
+    std::fs::write(&fifo, format!("Task: TSK-001\n{NONE}")).unwrap();
+    output.read_to_string(&mut text).unwrap();
+    let out = child.wait_with_output().unwrap();
+    text.push_str(&said(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(
+        text.contains(&format!("authority {base}, merge-base {base}, head {head}")),
+        "{text}"
+    );
+    assert_eq!(git(root, &["rev-parse", "main"]), moved);
+}
+
+#[test]
+fn capability_retarget_uses_new_policy_and_catalog() {
+    let dir = fixture(Some("off"), false, false);
+    let root = dir.path();
+    product_change(root);
+    pass(&ci(root, None, &[]));
+    git(root, &["switch", "-qc", "release", "main"]);
+    write(root, ".codeflow/policy.json", &policy(Some("block")));
+    write(root, FILE, RECORD);
+    commit(root);
+    git(root, &["switch", "-q", "feat/example"]);
+    let run = |body: Option<&str>| {
+        let mut args = vec![
+            "ci",
+            "--base",
+            "release",
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/example",
+        ];
+        if let Some(body) = body {
+            args.extend(["--pr-body", body]);
+        }
+        super::run_in(root, &args)
+    };
+    refuse(&run(None), "PR body unavailable");
+    let out = run(Some(NONE));
+    refuse(&out, "merge base predates the authority's catalog");
+    assert!(said(&out).contains("merge the target into this branch"));
+    git(root, &["merge", "--no-edit", "release"]);
+    pass(&run(Some(NONE)));
+    // Once baseline and head have catalogs, authority presence is not needed.
+    // This malformed newer authority catalog must not trigger an eager read.
+    git(root, &["switch", "-q", "release"]);
+    write(root, FILE, "---\nid: [broken\n---\n");
+    commit(root);
+    git(root, &["switch", "-q", "feat/example"]);
+    pass(&run(Some(NONE)));
+}
+
+#[test]
+fn capability_duplicate_ids_and_uids_at_baseline_or_head_refuse() {
+    for baseline in [false, true] {
+        for same_uid in [false, true] {
+            let dir = fixture(Some("block"), true, false);
+            let root = dir.path();
+            if baseline {
+                git(root, &["switch", "-q", "main"]);
+            }
+            let extra = if same_uid {
+                RECORD
+                    .replace("CAP-101", "CAP-102")
+                    .replace("name: catalog", "name: extra")
+            } else {
+                RECORD
+                    .replace("name: catalog", "name: extra")
+                    .replace("3b9e7c2a", "4b9e7c2a")
+            };
+            let path = if same_uid {
+                "docs/capabilities/CAP-102-extra.md"
+            } else {
+                "docs/capabilities/CAP-101-extra.md"
+            };
+            write(root, path, &extra);
+            commit(root);
+            if baseline {
+                git(root, &["switch", "-q", "feat/example"]);
+                git(root, &["merge", "--ff-only", "main"]);
+                product_change(root);
+            }
+            let bad_revision = git(root, &["rev-parse", if baseline { "main" } else { "HEAD" }]);
+            let out = ci(root, Some(NONE), &[]);
+            refuse(&out, "duplicate");
+            assert!(
+                said(&out).contains(&format!("catalog at {bad_revision}")),
+                "{}",
+                said(&out)
+            );
+            assert!(
+                said(&out).contains(if same_uid {
+                    "3b9e7c2a-51d4-4f0e-9a6b-0c2d8e417f55"
+                } else {
+                    "CAP-101"
+                }),
+                "{}",
+                said(&out)
+            );
+        }
+    }
+}
+
+#[test]
+fn capability_symlink_and_submodule_catalog_directories_refuse() {
+    for mode in ["120000", "160000"] {
+        let dir = fixture(Some("block"), true, false);
+        let root = dir.path();
+        let object = git(
+            root,
+            &[
+                "rev-parse",
+                if mode == "160000" {
+                    "HEAD"
+                } else {
+                    "HEAD:docs/capabilities/CAP-101-catalog.md"
+                },
+            ],
+        );
+        git(root, &["rm", "-rq", "docs/capabilities"]);
+        git(
+            root,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("{mode},{object},docs/capabilities"),
+            ],
+        );
+        git(root, &["commit", "-qm", "feat: replace catalog directory"]);
+        refuse(&ci(root, Some(NONE), &[]), "docs/capabilities");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn capability_tree_reads_never_run_checkout_filters_or_head_loaders() {
@@ -734,28 +953,10 @@ fn capability_ambiguous_and_missing_history_fail_closed() {
 }
 
 #[test]
-fn capability_shallow_history_and_hosted_preflight_are_not_verified() {
+fn capability_shallow_history_is_not_verified() {
     let dir = fixture(Some("block"), true, false);
     let root = dir.path();
     product_change(root);
-    let out = super::codeflow()
-        .args([
-            "ci",
-            "--base",
-            "main",
-            "--head",
-            "HEAD",
-            "--branch",
-            "feat/example",
-            "--capability-preflight",
-            "--pr-body",
-            &format!("Task: TSK-001\n{NONE}"),
-        ])
-        .env("GITHUB_EVENT_NAME", "pull_request_target")
-        .current_dir(root)
-        .output()
-        .unwrap();
-    refuse(&out, "cannot use the local capability preflight");
     let head = git(root, &["rev-parse", "HEAD"]);
     write(root, ".git/shallow", &format!("{head}\n"));
     let out = ci(root, Some(NONE), &[]);
@@ -841,11 +1042,9 @@ fn capability_first_and_multiple_ref_pushes_need_no_body() {
         &[("feat/example", &head), ("feat/second", &bad)],
     );
     let text = said(&out);
-    assert!(!out.status.success(), "{text}");
-    assert!(
-        text.contains(&format!("catalog at {bad}"))
-            && text.contains("feat/example")
-            && text.contains("feat/second"),
-        "{text}"
-    );
+    assert!(out.status.success(), "{text}");
+    assert!(!text.contains("catalog at"), "{text}");
+    // The same malformed head is refused by the authoritative CLI path.
+    git(root, &["switch", "-q", "feat/second"]);
+    refuse(&ci(root, Some(NONE), &[]), "catalog at");
 }

@@ -27,10 +27,18 @@ pub(super) fn evaluate(
     base: Option<&str>,
     head: &str,
     body: Option<&str>,
-    preflight: bool,
+    inventory: Option<&[super::change_class::RangeEntry]>,
+    local_push: bool,
     hosted: bool,
 ) -> Report {
     let mut report = Report::default();
+    if local_push && !hosted {
+        report.notes.push(
+            "capability impact: local push is not judged; deferred to hosted actual-target CI"
+                .into(),
+        );
+        return report;
+    }
     if let Err(error) = raw {
         report.ran = true;
         report.findings.push(Violation::always_blocking(
@@ -58,10 +66,10 @@ pub(super) fn evaluate(
     }
     report.ran = true;
     let started = std::time::Instant::now();
-    let result = if preflight && hosted {
-        Err("a hosted pull request cannot use the local capability preflight".into())
+    let result = if local_push && hosted {
+        Err("a hosted pull request cannot use a local push advertisement".into())
     } else {
-        check(root, policy, authority, base, head, body, preflight)
+        check(root, policy, authority, base, head, body, inventory)
     };
     match result {
         Ok(note) => report.notes.push(note),
@@ -92,14 +100,28 @@ fn check(
     base: Option<&str>,
     head: &str,
     body: Option<&str>,
-    preflight: bool,
+    inventory: Option<&[super::change_class::RangeEntry]>,
 ) -> Result<String, String> {
+    if body.is_some_and(|body| body.len() > super::pr_body::CAPABILITY_MAX_BODY_BYTES) {
+        return Err(format!(
+            "capability declaration body exceeds {} bytes",
+            super::pr_body::CAPABILITY_MAX_BODY_BYTES
+        ));
+    }
     let authority =
         authority.ok_or("cannot verify capability impact without a pinned policy authority")?;
     let base = base.ok_or("cannot verify capability impact without a pinned target")?;
     let context = codeflow_core::capability::impact::context(root, authority, base, head, policy)?;
     let baseline = context.merge_base;
-    let inventory = super::change_class::range_inventory(root, base, head)?;
+    // Reuse the body classifier's exact range. Without a body it has not run;
+    // only then read the inventory to decide the light-documentation exemption.
+    let owned_inventory;
+    let inventory = if let Some(inventory) = inventory {
+        inventory
+    } else {
+        owned_inventory = super::change_class::range_inventory(root, base, head)?;
+        &owned_inventory
+    };
     let paths = context.paths;
     let catalog_path = inventory.iter().any(|entry| {
         entry.path.rule_text().is_ok_and(|path| {
@@ -112,7 +134,7 @@ fn check(
             .rule_text()
             .map_or(true, |path| path_sets().is_behaviour(path))
     });
-    let light = super::change_class::classify(Some(&inventory), &paths).light;
+    let light = super::change_class::classify(Some(inventory), &paths).light;
     if light
         && !catalog_path
         && !behaviour
@@ -125,7 +147,7 @@ fn check(
     {
         return Ok("capability impact: light documentation range; assessment not required".into());
     }
-    if !preflight && body.is_none() {
+    if body.is_none() {
         return Err(
             "PR body unavailable; capability impact cannot be verified; supply CODEFLOW_PR_BODY"
                 .into(),
@@ -140,24 +162,27 @@ fn check(
     } else {
         load(head)?
     };
-    let other_target;
-    let target = if authority == baseline {
-        &before
-    } else if authority == head {
-        &after
-    } else {
-        other_target = load(authority)?;
-        &other_target
-    };
-    agreement(target, &before, &after, body, preflight)?;
-    Ok(format!(
-        "capability {}: authority {authority}, merge-base {baseline}, head {head}{}",
-        if preflight { "preflight" } else { "impact" },
-        if preflight {
-            "; catalog data checked against candidate authority; PR declarations not checked; hosted actual-target evaluation remains required"
+    if after.records.is_empty() {
+        // A real removal retains its identity-specific refusal. Otherwise
+        // authority presence is needed only to distinguish bootstrap from
+        // a branch that forked before the authority gained its catalog.
+        delta(&before, &after)?;
+        let authority_empty = if authority == baseline {
+            before.records.is_empty()
+        } else if authority == head {
+            true
         } else {
-            "; declaration agrees with catalog delta"
-        }
+            load(authority)?.records.is_empty()
+        };
+        return Err(if authority_empty {
+            "catalog is empty at the authority and head; bootstrap the catalog with valid records and matching Added declarations"
+        } else {
+            "the merge base predates the authority's catalog; merge the target into this branch before declaring capability impact"
+        }.into());
+    }
+    agreement(&before, &after, body)?;
+    Ok(format!(
+        "capability impact: authority {authority}, merge-base {baseline}, head {head}; declaration agrees with catalog delta"
     ))
 }
 
@@ -272,19 +297,11 @@ fn delta(
 }
 
 fn agreement(
-    target: &CapabilityCatalog,
     before: &CapabilityCatalog,
     after: &CapabilityCatalog,
     body: Option<&str>,
-    preflight: bool,
 ) -> Result<(), String> {
     let changes = delta(before, after)?;
-    if preflight {
-        return Ok(());
-    }
-    if after.records.is_empty() {
-        return Err(if target.records.is_empty() { "catalog is empty at the authority and head; bootstrap the catalog with valid records and matching Added declarations" } else { "head empties the authority catalog; restore its records and deprecate obsolete capabilities" }.into());
-    }
     let body = body.ok_or("PR body unavailable; capability impact cannot be verified")?;
     let lines = super::pr_body::capability_lines(body)?;
     if lines.is_empty() {
@@ -372,6 +389,43 @@ mod tests {
     use codeflow_core::hooks::PolicyLevel;
 
     #[test]
+    fn capability_push_deferral_cannot_replace_hosted_admission() {
+        let policy = GitPolicy {
+            pr_capability_impact: PolicyLevel::Block,
+            ..GitPolicy::default()
+        };
+        let raw = Ok(Some(
+            serde_json::json!({"git":{"pr_capability_impact":"block"}}),
+        ));
+        let local = evaluate(
+            Path::new("missing"),
+            &policy,
+            &raw,
+            None,
+            None,
+            "",
+            None,
+            None,
+            true,
+            false,
+        );
+        assert!(!local.ran && local.findings.is_empty());
+        let hosted = evaluate(
+            Path::new("missing"),
+            &policy,
+            &raw,
+            None,
+            None,
+            "",
+            None,
+            None,
+            true,
+            true,
+        );
+        assert!(hosted.ran && !hosted.findings.is_empty());
+    }
+
+    #[test]
     fn capability_delta_ignores_source_filename() {
         let dir = tempfile::tempdir().unwrap();
         git2::Repository::init(dir.path()).unwrap();
@@ -410,8 +464,8 @@ mod tests {
         for _ in 0..3 {
             let report = evaluate(
                 &root, &policy, &raw, Some(base), Some(base), head,
-                Some("## Capability impact\n\n- Changed CAP-016 interactive-presentation-review: The final legacy section now includes the catalog schema reference.\n"),
-                false, false,
+                Some("## Capability impact\n\n- None: The schema reference is outside the legacy capability entries.\n"),
+                None, false, false,
             );
             println!("{}", report.notes.join("\n"));
             assert!(
