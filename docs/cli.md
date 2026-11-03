@@ -632,18 +632,20 @@ its remotes live, so a narrow fetch cannot hide work.
 
 ### Create and inspect a capability
 
-`codeflow capability bootstrap` creates an epic and four ordered tasks at standard
-and full tier. On a fresh standard project, it enables durable tracking by
-creating the work records and reports that change. At minimal tier, an explicit
-invocation creates a checklist when tracking is absent; init, update and doctor
-only offer the command. Existing capability records seed the inventory.
+`codeflow capability bootstrap` resumes inventory, classification, evidence and
+review without changing policy. Minimal-tier work requires explicit invocation.
 
-Reruns retain progress and report the first open stage. An existing checklist
-must be reconciled before tracked work can replace it. The verb reads installed
-stage templates from `.codeflow/templates/capability-bootstrap/`, with shipped
-fallbacks, and preserves the project's policy. It creates no minimal-tier
-bootstrap records without an explicit invocation. The stage guide is
-`.codeflow/rules/capabilities.md`.
+| Project state or input | Bootstrap result |
+|---|---|
+| Standard or full tier | One epic and four ordered stage tasks. |
+| Fresh standard without tracking | Creating the tasks enables durable tracking; output reports the change. |
+| Minimal with tracking | One epic and four tasks, only when the verb is invoked. |
+| Minimal without tracking | A four-stage checklist at `docs/capability-bootstrap.md`, only when invoked. |
+| Existing capability records | Seed the inventory without recreating entries. |
+| Rerun | Retain progress and report the first open stage. |
+| Existing checklist with tracking now enabled | Refuse tracked creation until the checklist is explicitly reconciled. |
+| Stage templates | Read `.codeflow/templates/capability-bootstrap/` before shipped fallbacks. |
+| Stage guide | `.codeflow/rules/capabilities.md`. |
 
 Create a planned record with a stable UUID and the next available CAP number:
 
