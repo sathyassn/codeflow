@@ -1133,7 +1133,7 @@ case " $* " in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev
 case ${OSV_FAKE:-} in
   empty) echo 'No package sources found, --help for usage information.'; exit 128 ;;
   broken) echo 'Error during extraction: Cargo.lock: could not extract'; echo 'No package sources found, --help for usage information.'; exit 128 ;;
-  broken_long) echo 'Error during extraction: Cargo.lock: could not extract'; head -c 2097152 /dev/zero | tr '\\0' x; echo; exit 128 ;;
+  broken_long) echo 'Error during extraction: Cargo.lock: could not extract'; head -c 2097152 /dev/zero | tr '\000' x; echo; exit 128 ;;
 esac
 if [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi
 case " $* " in
