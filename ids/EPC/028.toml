@@ -1,0 +1,11 @@
+id = "EPC-028"
+uid = "2030db6a-a3a2-4f3a-8a68-e690789d7646"
+kind = "EPC"
+title = "The hosted gate is fast, partitioned and installed as the beta"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T15:45:32Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
