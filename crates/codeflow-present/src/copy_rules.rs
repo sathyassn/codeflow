@@ -248,17 +248,16 @@ fn visit_blocks(blocks: &[Block], visible: bool, findings: &mut Vec<CopyFinding>
             }
         }
         match block {
-            Block::Html { description, .. } => {
-                // The description sits in the stage's Details disclosure.
-                if let Some(description) = description {
-                    check_run(
-                        findings,
-                        id,
-                        &Run::plain(description, Measure::Block),
-                        false,
-                    );
-                }
-            }
+            // The description sits in the stage's Details disclosure.
+            Block::Html {
+                description: Some(description),
+                ..
+            } => check_run(
+                findings,
+                id,
+                &Run::plain(description, Measure::Block),
+                false,
+            ),
             // Collapsed detail: cut context and bare times still count.
             Block::Disclosure { blocks, .. } => visit_blocks(blocks, false, findings),
             Block::Tabs { tabs, .. } => {
