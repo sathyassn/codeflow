@@ -636,7 +636,7 @@
     "EPC-022": {
       "oneLine": "The 4.0.0 release: every issue of the plan fixed or settled, landed on one line and merged once into main.",
       "delivers": "the fixes and settlements of the 4.0.0 plan, on one line",
-      "forWhom": "adopters and contributors running codeflow ci, hooks and guards",
+      "forWhom": "adopters and contributors running codeflow ci and its hooks",
       "whyNow": "it is the 4.0.0 release itself, renumbered from 3.2.0 on 28 Oct",
       "source": "EPC-022.md Summary (line 18 to 34 on the line): what it delivers and done means; \"It serves\" sentence",
       "card": "every plan issue fixed or settled, merged once into main",

@@ -14,7 +14,7 @@ view (`prototype.html#blockers`) and the page routes on it when it loads.
 
 ## The rules this build follows
 
-Rebuilt fresh on 2026-11-02 (17:40 to 18:40 EST) after the operator
+Rebuilt fresh on 2026-11-02 (17:40 to 19:10 EST) after the operator
 rejected the previous build for walls of text. The old build and
 `report.json` were data sources only; no layout was kept.
 
@@ -53,8 +53,9 @@ rejected the previous build for walls of text. The old build and
    recommended one marked, context behind a disclosure. An answer
    appears in the Script view's second part.
 6. The gear: Mode, Themes, Accent and Text size. Comment toggles the
-   comments rail; under 768 px the button sits at the end of the page
-   instead of over it.
+   comments rail; on desktop the page keeps a lane at its right edge
+   for the fixed button, under 768 px the button sits at the end of the
+   page, so it covers no content at any width.
 
 ## How it was built
 
@@ -66,7 +67,7 @@ Everything under `_src/` is the build; nothing in it runs in the product.
 | report facts | `report.json` (by hand) | The deliverable line, names before identifiers, each epic's short phrases (`epicShort`: one line, delivers, for whom, why now, menu label, with its source), streams, lanes, blockers with their short do, why and else (`blockerShort`), decisions, owed actions, terms, the four questions and the ten report kinds, each with its source and read time. |
 | build | `node build.cjs` | Writes `../prototype.html` (kit CSS and JS inlined, data embedded, every view rendered: 316 views) and `kit/index.html` (the same page linking the kit files, for the workspace navigation test). `figures.cjs` holds the docs drawings. |
 | text lines | `node textlines.cjs` | Opens the page from `file://` at 1440 and 1280 px, activates every view with every tab panel shown, and measures the rendered line count of every visible text block; fails on any block over two lines outside a closed disclosure. |
-| render | `node render.cjs` | Opens the page from `file://`; captures 22 views at 1440, 1280, 1200 and 390 px in light and dark to `../captures/` from the top of the page (390 px also full page for the overview, an epic and a task); fails on horizontal scroll, a page error, a wrapped chip, clipped text, or the Comment button over content; checks Graphite, Slate and Sage with the default and large text size at 1200 and 390; drives 33 journeys. |
+| render | `node render.cjs` | Opens the page from `file://`; captures 22 views at 1440, 1280, 1200 and 390 px in light and dark to `../captures/` from the top of the page (390 px also full page for the overview, an epic and a task); fails on horizontal scroll, a page error, a wrapped chip, clipped text, or the Comment button over content; checks Graphite, Slate and Sage with the default and large text size at 1200 and 390; checks every one of the 316 views at 1440, 1280, 1200 and 390 px at three scroll positions for the Comment button covering content; drives 34 journeys. |
 | axe | `node axe.cjs` | WCAG 2.x A and AA rules over 17 views at 1440, 1280 and 390 px in both modes, plus Slate and Sage and the large size at 1200; fails on any violation of any impact. |
 | floors | `node floors.cjs` | From the kit's tokens, the sRGB contrast of every stage fill, figure mark and text colour against its surface, per theme, mode and accent. Source-derived numbers, not measurements of the rendered page. |
 
@@ -120,17 +121,17 @@ Mocked or absent, and said so on the page:
 
 | Check | Result |
 |---|---|
-| `textlines.cjs` | 316 views at 1440 and 1280 px, 26 422 text blocks measured, 0 over two lines outside a closed disclosure |
-| `render.cjs` | 248 renders at 1440, 1280, 1200 and 390 px in both modes plus Graphite, Slate and Sage at the default and large size: 0 horizontal scroll, 0 wrapped chips, 0 clipped text, 0 page errors, 0 Comment overlaps; 33 of 33 journeys; 187 captures |
+| `textlines.cjs` | 316 views at 1440 and 1280 px, 26 544 text blocks measured, 0 over two lines outside a closed disclosure |
+| `render.cjs` | 248 renders at 1440, 1280, 1200 and 390 px in both modes plus Graphite, Slate and Sage at the default and large size: 0 horizontal scroll, 0 wrapped chips, 0 clipped text, 0 page errors; Comment button over content in 0 of 316 views at each of 1440, 1280, 1200 and 390 px; 34 of 34 journeys; 187 captures |
 | `axe.cjs` | 118 view renders: 0 critical, 0 serious, 0 moderate, 0 minor |
 | `floors.cjs` | 228 pairs over 3 themes, 2 modes and 2 accents: 0 under the floor |
-| scan of the page text | 19 714 text nodes outside script and style: 0 "..." in content, 0 identifiers as the only label of a link, 0 times without a zone |
+| scan of the page text | 19 775 text nodes outside script and style: 0 "..." in content, 0 identifiers as the only label of a link, 0 times without a zone |
 | workspace `textwall-check.cjs` | 0 paragraphs over 3 lines |
 | workspace `nav.test.cjs` on `_src/kit` | 31 of 31 navigation checks pass |
 | workspace `link-check.cjs` | 4 references; the one "missing" is the string `${E(h)}` inside the inlined `cf.js` source, a JavaScript template, not a link |
 
 All runs open the page from `file://`; none starts a server. Run on
-2026-11-02 between 18:25 and 18:45 EST.
+2026-11-02 between 18:45 and 19:10 EST.
 
 Captures to look at first: `captures/overview-1440-light.png`,
 `overview-1440-dark.png`, `overview-390-light.png`, `overview-390-dark.png`,

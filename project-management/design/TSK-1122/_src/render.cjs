@@ -17,7 +17,7 @@ const CHECK = () => {
   for (const el of act.querySelectorAll('.chip, .tab')) { if (!vis(el)) continue; const r = el.getBoundingClientRect(); if (r.height > (el.classList.contains('tab') ? 42 : 30)) wraps.push(el.textContent.trim().slice(0, 50)); }
   for (const el of act.querySelectorAll('.card, .facts > div, .vt > div > span, .fig, .opt, .hero, .bar-row, .stream')) { if (!vis(el)) continue; if (el.scrollWidth > el.clientWidth + 2 && getComputedStyle(el).overflowX !== 'auto') overflow.push({ el: el.className, text: el.textContent.trim().slice(0, 50) }); }
   const cb = document.querySelector('.comment-btn'); let cbOverlap = false;
-  if (cb && cw < 768) { const b = cb.getBoundingClientRect(); for (const el of act.querySelectorAll('.fig, .card, .vt, .facts, .hero, p, h2, h3')) { if (!vis(el) || el.closest('details:not([open])')) continue; const r = el.getBoundingClientRect(); if (r.left < b.right && r.right > b.left && r.top < b.bottom && r.bottom > b.top) { cbOverlap = true; break; } } }
+  if (cb) { const b = cb.getBoundingClientRect(); for (const el of act.querySelectorAll('.fig, .card, .vt, .facts, .hero, p, h2, h3, .bar-l, .bar-n, li, dd')) { if (!vis(el) || el.closest('details:not([open])')) continue; const r = el.getBoundingClientRect(); if (r.left < b.right && r.right > b.left && r.top < b.bottom && r.bottom > b.top) { cbOverlap = true; break; } } }
   return { hscroll: sw > cw + 1, sw, cw, wraps, overflow, cbOverlap, title: act ? act.dataset.title : null, h: document.documentElement.scrollHeight, top: window.scrollY };
 };
 (async () => {
@@ -57,6 +57,20 @@ const CHECK = () => {
     }
     await ctx.close();
   }
+  // every view at 1440, 1280, 1200 and 390 px: the Comment button covers no visible content, at the top and at the end of the page
+  const OVERLAP = () => { const cb = document.querySelector('.comment-btn'); if (!cb) return { views: 0, hits: ['no Comment button'] }; const hits = []; let views = 0;
+    const vis = el => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden'; };
+    for (const v of document.querySelectorAll('.view')) { document.querySelectorAll('.view.is-active').forEach(x => x.classList.remove('is-active')); v.classList.add('is-active'); views++;
+      // at the top, the middle and the end of the page the button covers no element of the view; on desktop it also stays right of the page's content box
+      const pg = document.querySelector('.page'); let hit = null;
+      for (const f of [0, 0.5, 1]) { window.scrollTo(0, f * (document.documentElement.scrollHeight - innerHeight)); const b = cb.getBoundingClientRect();
+        if (innerWidth >= 768) { const p = pg.getBoundingClientRect(); const contentRight = p.right - parseFloat(getComputedStyle(pg).paddingRight); if (b.left < contentRight - 1) { hit = `${v.id}: the button reaches into the content box by ${Math.round(contentRight - b.left)} px`; break; } }
+        for (const el of v.querySelectorAll('.fig, .card, .vt, .facts, .hero, p, h2, h3, .bar-l, .bar-n, li, dd, .chip, .tab, .part, svg')) { if (!vis(el) || el.closest('details:not([open])')) continue; const r = el.getBoundingClientRect(); if (r.left < b.right && r.right > b.left && r.top < b.bottom && r.bottom > b.top) { hit = `${v.id}: ${el.className || el.tagName} "${el.textContent.trim().slice(0, 40)}" at scroll ${f}`; break; } }
+        if (hit) break; }
+      if (hit) hits.push(hit); }
+    window.scrollTo(0, 0); return { views, hits }; };
+  let overlapTotal = 0;
+  for (const W of [1440, 1280, 1200, 390]) { const c = await browser.newContext({ viewport: { width: W, height: W === 390 ? 844 : 900 } }); const p = await c.newPage(); await p.goto(`${URL}?overlap${W}`, { waitUntil: 'load' }); await p.waitForTimeout(300); const r = await p.evaluate(OVERLAP); overlapTotal += r.hits.length; console.log(`${W} px: ${r.views} views, ${r.hits.length} views where the Comment button covers content`); for (const h of r.hits.slice(0, 10)) fails.push(`${W} px Comment overlap: ${h}`); await c.close(); }
   // journeys at 1440 light: pointer drill-down, then the keyboard
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } }); const page = await ctx.newPage();
   await page.goto(URL, { waitUntil: 'load' }); await page.waitForTimeout(300);
@@ -109,6 +123,7 @@ const CHECK = () => {
   j.push(['390 px: an opened figure table keeps its field labels on each cell', await p2.evaluate(() => { const c = document.querySelector('#docs-since .fig-data td[data-l="Added"]'); return c && getComputedStyle(c, '::before').content.includes('Added') && c.getBoundingClientRect().height > 0; })]);
   await p2.screenshot({ path: path.join(CAP, 'docs-since-table-390-light.png') }); captures++;
   j.push(['390 px: the Comment button sits in the flow after the page, not over it', await p2.evaluate(() => { const cb = document.querySelector('.comment-btn'); return cb && getComputedStyle(cb).position === 'static'; })]);
+  j.push(['every view at four widths: the Comment button covers no content', overlapTotal === 0]);
   await ctx2.close(); await browser.close();
   console.log(rows.map(r => r.join('  ')).join('\n')); console.log(j.map(([k, ok]) => (ok ? 'PASS ' : 'FAIL ') + k).join('\n'));
   for (const [k, ok] of j) if (!ok) fails.push('journey: ' + k);
