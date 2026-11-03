@@ -545,9 +545,7 @@ Heavy runs share the host by capacity and start with fewer jobs past its
 budget; only a `host_exclusive` target runs alone
 ([details](troubleshooting.md#heavy-work-shares-the-host)).
 
-Heavy targets use a four-times ceiling and, when accounting permits, an
-activity deadline. The [deadline reference](test-gate.md#technical) describes
-configuration, platform limits, progress output and bounded cleanup.
+Heavy-target deadlines: [test gate reference](test-gate.md#technical).
 
 - A gate that runs cargo warns about a `CARGO_TARGET_DIR` outside the
   worktree, and each target prints a start line on stderr as it begins.
