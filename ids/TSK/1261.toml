@@ -1,0 +1,11 @@
+id = "TSK-1261"
+uid = "3a266e63-57fa-43ac-a0a0-45530070fdca"
+kind = "TSK"
+title = "Coverage on changed lines is reported on every pull request and enforced once a base exists"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T00:39:43Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
