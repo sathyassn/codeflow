@@ -1,0 +1,11 @@
+id = "TSK-1292"
+uid = "438ec9c1-8dc3-4643-a9b9-674d8d8bb89d"
+kind = "TSK"
+title = "The catalog ships the new default models and routes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T19:35:58Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
