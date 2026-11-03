@@ -4546,6 +4546,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // Recognizes YAML fence lines only: ASCII space, tab, CR and LF may
+    // follow `---`. YAML values and source identities are not trimmed.
+    (
+        "crates/codeflow-core/src/validate/portal.rs",
+        "frontmatter_parts",
+        "trim_end_matches",
+        2,
+        "grammar:yaml-frontmatter-fence",
+    ),
     // The entire pointer object is validated as string-valued first; failure adds a records-pointer issue before these proven as_str conversions.
     (
         "crates/codeflow-core/src/validate/portal.rs",
