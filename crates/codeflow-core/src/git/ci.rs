@@ -424,12 +424,29 @@ fn is_transient(err: &CiWaitError) -> bool {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A test points the `gh` spawns of this thread at a fake program, so
+    /// the subprocess path runs without reaching the network (TSK-1156).
+    static GH_PROGRAM: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The program the `gh` spawns run: `gh` on `PATH`; only a test replaces it.
+fn gh_program() -> std::ffi::OsString {
+    #[cfg(test)]
+    if let Some(program) = GH_PROGRAM.with(|program| program.borrow().clone()) {
+        return program.into_os_string();
+    }
+    "gh".into()
+}
+
 /// Invoke `gh pr checks <pr> --json name,state`.
 ///
 /// Fails loud when `gh` is missing or the command exits non-zero with stderr
 /// on the clipboard (rate-limits, auth failures, PR not found).
 async fn fetch_pr_checks(pr_number: u64) -> Result<Vec<GhCheck>, CiWaitError> {
-    let output = tokio::process::Command::new("gh")
+    let output = tokio::process::Command::new(gh_program())
         .args([
             "pr",
             "checks",
@@ -476,7 +493,7 @@ fn parse_pr_checks_output(
 async fn fetch_required_contexts(pr_number: u64) -> Result<Vec<String>, CiWaitError> {
     fetch_required_contexts_with(
         |args| async move {
-            tokio::process::Command::new("gh")
+            tokio::process::Command::new(gh_program())
                 .args(args.iter().map(String::as_str))
                 .output()
                 .await
@@ -1296,10 +1313,32 @@ mod tests {
         // quickly whether it's a 404 (installed+auth) or a spawn error
         // (no gh). If the environment makes gh hang longer than 10 s,
         // tokio::time::timeout bails out cleanly.
+        // A fake `gh` that fails at once: the real spawn path runs, and no
+        // request leaves the machine, which a Codex builder seat's sandbox
+        // would otherwise abort the whole test run for (TSK-1156).
+        #[cfg(unix)]
+        let _fake = {
+            use std::os::unix::fs::PermissionsExt as _;
+            let dir = tempfile::tempdir().unwrap();
+            let program = dir.path().join("gh");
+            std::fs::write(
+                &program,
+                "#!/bin/sh\necho 'fake gh: no network' >&2\nexit 1\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            GH_PROGRAM.with(|slot| *slot.borrow_mut() = Some(program));
+            dir
+        };
         let fut = wait_for_ci_green(99_999_999, &cfg);
-        let _ = tokio::time::timeout(Duration::from_secs(10), fut).await;
-        // No assertion on outcome — the point is coverage of the real
-        // subprocess path, not a specific PR's status.
+        let result = tokio::time::timeout(Duration::from_secs(10), fut).await;
+        GH_PROGRAM.with(|slot| *slot.borrow_mut() = None);
+        // The fake refuses every `gh` call, so the wrapper must report an
+        // error (here it cannot read the identity) and not hang or pass.
+        #[cfg(unix)]
+        assert!(matches!(result, Ok(Err(_))), "{result:?}");
+        #[cfg(not(unix))]
+        let _ = result;
     }
 
     // --- fetch_required_contexts_with: 3-step state machine coverage ---

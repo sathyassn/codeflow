@@ -74,9 +74,9 @@ fn a_quick_run_under_reserve_runs_its_heavy_targets_under_the_reserved_lock() {
     let contender = run(&linked, home.path(), &["test", "--mode", "quick"]);
     assert_eq!(contender.status.code(), Some(0), "{}", stderr(&contender));
     assert!(linked.join("heavy-ran").exists(), "{}", stderr(&contender));
-    assert!(home.path().join("locks/full-gate-1.lock").exists());
+    assert!(home.path().join("locks/full-gate-2.lock").exists());
     assert!(
-        !home.path().join("locks/full-gate-2.lock").exists(),
+        !home.path().join("locks/full-gate-3.lock").exists(),
         "the nested run shares the reserve's slot"
     );
     let reserved = run(
@@ -97,6 +97,69 @@ fn a_quick_run_under_reserve_runs_its_heavy_targets_under_the_reserved_lock() {
             .iter()
             .any(|line| line.contains("enclosing `codeflow reserve`")),
         "{lines:#?}"
+    );
+}
+
+/// Counts, for each fence path in its arguments, the inherited descriptors
+/// open on that file, and writes the counts to `fences.txt`.
+const FENCE_COUNTER: &str = r#"
+my @fences = map { join ":", (stat $_)[0, 1] } @ARGV;
+my @counts = (0) x @fences;
+for my $fd (3 .. 255) {
+    open(my $fh, "<&=", $fd) or next;
+    my $id = join ":", (stat $fh)[0, 1];
+    for my $i (0 .. $#fences) {
+        $counts[$i]++ if $id eq $fences[$i];
+    }
+}
+open(my $out, ">", "fences.tmp") or die;
+print $out join(",", @counts), "\n";
+close $out;
+rename "fences.tmp", "fences.txt" or die;
+"#;
+
+/// TSK-1256 (security round 3, F1): a target of a quick run under
+/// `codeflow reserve` inherits its own run's fence once per lock folder and
+/// no copy of the reserve's fence. The nested `codeflow` gets the reserve's
+/// fence only through the named hand-over, which it makes close-on-exec, so
+/// no child of the nested run can keep the reserve's fence after both end.
+#[test]
+fn a_nested_runs_target_inherits_no_copy_of_the_reserves_fence() {
+    let home = tempfile::tempdir().unwrap();
+    let first = repo(
+        r#"{"schema_version":"1.0","execution":{"parallel":true},"targets":[
+          {"name":"first","heavy":true,"timeout_seconds":60,"runner":"custom","modes":{"quick":{"command":"touch first-ran"}}},
+          {"name":"holder","heavy":true,"timeout_seconds":60,"runner":"custom","modes":{"quick":{"command":"while ! test -f fences.txt; do sleep 0.01; done"}}},
+          {"name":"lister","heavy":false,"timeout_seconds":60,"runner":"custom","requires":["first"],"modes":{"quick":{"command":"perl count-fences.pl \"$HOME_FENCE\" \"$REPO_FENCE\""}}}
+        ]}"#,
+    );
+    std::fs::write(first.path().join("count-fences.pl"), FENCE_COUNTER).unwrap();
+    let home_fence = home.path().join("locks/full-gate.lock");
+    let repo_fence = first.path().join(".git/codeflow/full-gate.lock");
+    let mut cmd = command(
+        first.path(),
+        home.path(),
+        &["reserve", "--", &bin(), "test", "--mode", "quick"],
+    );
+    cmd.env("HOME_FENCE", &home_fence)
+        .env("REPO_FENCE", &repo_fence);
+    let (mut reserve, rx, _stdout) = spawn(cmd);
+    let status = reserve.wait().unwrap();
+    let lines: Vec<String> = rx.try_iter().collect();
+    assert!(status.success(), "{lines:#?}");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("enclosing `codeflow reserve`")),
+        "the quick run nested under the reserve: {lines:#?}"
+    );
+    let counts = std::fs::read_to_string(first.path().join("fences.txt")).unwrap();
+    // One copy per folder: the nested run's own fence, which its targets
+    // inherit by design. A second is a leaked copy of the reserve's.
+    assert_eq!(
+        counts.trim(),
+        "1,1",
+        "fence descriptors per folder (home, repository)"
     );
 }
 
@@ -129,8 +192,8 @@ fn a_forged_hand_over_is_refused_while_another_gate_holds_the_lock() {
     let linked = linked_worktree(first.path(), &heavy_quick(false));
     let (mut holder, rx, _stdout) = spawn(command(first.path(), home.path(), &["test"]));
     wait_for(&rx, "starting target 'holder'");
-    let home_lock = home.path().join("locks/full-gate.lock");
-    let repo_lock = first.path().join(".git/codeflow/full-gate.lock");
+    let home_lock = home.path().join("locks/full-gate-1.lock");
+    let repo_lock = first.path().join(".git/codeflow/full-gate-1.lock");
     assert!(home_lock.exists() && repo_lock.exists());
     let output = std::process::Command::new("sh")
         .args([
@@ -151,7 +214,7 @@ fn a_forged_hand_over_is_refused_while_another_gate_holds_the_lock() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert!(!stderr(&output).contains("enclosing `codeflow reserve`"));
     assert!(linked.join("heavy-ran").exists());
-    assert!(home.path().join("locks/full-gate-1.lock").exists());
+    assert!(home.path().join("locks/full-gate-2.lock").exists());
     std::fs::write(first.path().join("release"), "done").unwrap();
     assert!(holder.wait().unwrap().success());
 }
@@ -225,7 +288,10 @@ const ESSENTIAL_PASS: &str = r#"{"schema_version":"1.0","targets":[
 
 /// Records which inherited descriptors are the lock files named in its
 /// arguments, unlocks every inherited descriptor, marks that it did, and
-/// waits for `release`.
+/// waits for `release`. Not being this codeflow binary, it still inherits
+/// the reserve's fence, as every target of an admitted run does, so its
+/// unlock also releases the fence: the documented escape of a target that
+/// unlocks it (TSK-1256). The tests assert only the slot files on purpose.
 const UNLOCKER: &str = r#"#!/bin/sh
 echo "${CODEFLOW_RESERVED_LOCK_FDS-unset}" > env.txt
 exec perl -e '
@@ -259,8 +325,8 @@ fn a_program_only_named_codeflow_receives_no_lock() {
         let fake = tools.path().join("codeflow");
         std::fs::write(&fake, UNLOCKER).unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let home_lock = home.path().join("locks/full-gate.lock");
-        let repo_lock = first.path().join(".git/codeflow/full-gate.lock");
+        let home_lock = home.path().join("locks/full-gate-1.lock");
+        let repo_lock = first.path().join(".git/codeflow/full-gate-1.lock");
         let program = if by_path {
             fake.to_str().unwrap().to_string()
         } else {
@@ -291,7 +357,7 @@ fn a_program_only_named_codeflow_receives_no_lock() {
         assert_eq!(env.trim(), "unset", "by path {by_path}");
         let fds = std::fs::read_to_string(first.path().join("fds.txt")).unwrap();
         assert_eq!(fds.trim(), "", "by path {by_path}: lock descriptors {fds}");
-        // The reserve's slot stays held, so the next run takes slot 1.
+        // The reserve's slot stays held, so the next run takes slot 2.
         let essential = run(&linked, home.path(), &["test", "--mode", "essential"]);
         assert_eq!(
             essential.status.code(),
@@ -299,7 +365,7 @@ fn a_program_only_named_codeflow_receives_no_lock() {
             "by path {by_path}: {}",
             stderr(&essential)
         );
-        assert!(home.path().join("locks/full-gate-1.lock").exists());
+        assert!(home.path().join("locks/full-gate-2.lock").exists());
 
         std::fs::write(first.path().join("release"), "done").unwrap();
         let status = reserve.wait().unwrap();
@@ -351,7 +417,7 @@ fn a_surviving_nested_target_keeps_the_lock_busy() {
             parsed
         })
         .expect("the target wrote its group");
-    let record = home.path().join("locks/full-gate.record");
+    let record = home.path().join("locks/full-gate-1.record");
     let recorded = (0..200).any(|_| {
         let text = std::fs::read_to_string(&record).unwrap_or_default();
         let found = text.lines().any(|line| line == format!("group={group}"));
@@ -385,11 +451,11 @@ fn a_surviving_nested_target_keeps_the_lock_busy() {
         "the target outlived the nested run and reserve"
     );
 
-    // The surviving target keeps slot 0 busy: the next run takes slot 1.
+    // The surviving target keeps slot 1 busy: the next run takes slot 2.
     let beside = run(&linked, home.path(), &["test", "--mode", "essential"]);
     let err = stderr(&beside);
     assert_eq!(beside.status.code(), Some(0), "{err}");
-    assert!(home.path().join("locks/full-gate-1.lock").exists(), "{err}");
+    assert!(home.path().join("locks/full-gate-2.lock").exists(), "{err}");
 
     std::process::Command::new("kill")
         .args(["-KILL", "--", &format!("-{group}")])
