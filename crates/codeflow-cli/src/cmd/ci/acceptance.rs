@@ -230,17 +230,50 @@ pub(super) fn release_scope<'n>(
     names
         .release
         .get_or_init(|| {
+            // A trusted default branch scopes the range from this clone's
+            // tracking ref; only a release range, whose judgment needs every
+            // branch tip, goes on to ask the destination (TSK-1267).
+            let mut release = false;
+            if let (Some(name), None) = (names.default_branch, names.advertisement) {
+                if let Some(local) = release_line::local_destination(root, names.destination, name)
+                    .map_err(ScopeError::Destination)?
+                {
+                    let scope = release_line::scope(root, &local, names.branch, names.into)
+                        .map_err(ScopeError::Scope)?;
+                    if !scope.release() {
+                        return Ok(None);
+                    }
+                    release = true;
+                }
+            }
             let destination = match (names.destination, names.advertisement) {
                 (Some(url), Some(listed)) => release_line::from_advertisement(url, listed),
                 _ => release_line::ask_destination(root, names.destination),
             }
-            .map_err(ScopeError::Destination)?;
+            .map_err(|why| ScopeError::Destination(credential_hint(why, names, release)))?;
             let scope = release_line::scope(root, &destination, names.branch, names.into)
                 .map_err(ScopeError::Scope)?;
             Ok(scope.release().then_some((destination, scope)))
         })
         .as_ref()
         .map(Option::as_ref)
+}
+
+/// `why` the destination could not be asked, with the fix when it refused
+/// for want of a credential (TSK-1267). `release` is whether a trusted
+/// default branch already showed the range is a release range.
+fn credential_hint(why: String, names: &super::Names<'_>, release: bool) -> String {
+    if !why.contains(codeflow_core::git::remote_query::AUTHENTICATION_FAILED) {
+        return why;
+    }
+    let fix = if release {
+        "this is a release range, whose judgment needs every branch tip from the destination, so give the run read access to it (for actions/checkout, `persist-credentials: true` in the job that runs codeflow ci)"
+    } else if names.default_branch.is_some() {
+        "this clone has no `refs/remotes/origin/<default branch>` to read the default branch's tip from; check out with `fetch-depth: 0`, or give the run read access to the destination"
+    } else {
+        "pass the default branch from a GitHub Actions pull_request_target run (`--default-branch \"${{ github.event.repository.default_branch }}\"`, as the managed codeflow-policy.yml does) and check out with `fetch-depth: 0`, so an ordinary range is judged without asking; or give the run read access to the destination"
+    };
+    format!("{why}: the destination needs a credential this run does not have; {fix}")
 }
 
 /// The head a release range is judged at: a pull request into a release

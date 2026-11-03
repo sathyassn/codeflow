@@ -4505,3 +4505,223 @@ fn with_reviews(root: &Path, rev: &str, body: &str) -> String {
         format!("{body}\n\n## Reviews\n\n| Reviewer | Scope | Verdict |\n|---|---|---|\n{rows}\n")
     }
 }
+
+// ---------------------------------------------------------------------------
+// TSK-1267: the default branch without a network credential
+// ---------------------------------------------------------------------------
+
+/// A private repository's HTTP endpoint: every request is answered `401`,
+/// as GitHub answers a run whose checkout kept no credential
+/// (`persist-credentials: false`). Returns its URL; the server lives as long
+/// as the test process.
+fn private_origin() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut request = [0_u8; 4096];
+            let _ = std::io::Read::read(&mut stream, &mut request);
+            let _ = stream.write_all(
+                b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"private\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+    format!("http://127.0.0.1:{port}/owner/private.git")
+}
+
+/// A GitHub event file naming `default` as the repository's default branch.
+fn event_file(fx: &Fx, default: &str) -> PathBuf {
+    let path = fx.root.parent().unwrap().join("event.json");
+    std::fs::write(
+        &path,
+        format!("{{\"repository\": {{\"default_branch\": \"{default}\"}}}}"),
+    )
+    .unwrap();
+    path
+}
+
+impl Fx {
+    /// The fixture as a hosted checkout of a private repository sees it:
+    /// every branch fetched into `refs/remotes/origin/*` (fetch-depth: 0),
+    /// then `origin` pointed at an endpoint that refuses without a
+    /// credential.
+    fn make_private(&self) {
+        self.git(&["fetch", "-q", "origin"]);
+        self.git(&["remote", "set-url", "origin", &private_origin()]);
+    }
+
+    /// `codeflow ci` as the managed policy workflow runs it: `origin` is the
+    /// destination (no `--destination`), under GitHub Actions `event`, with
+    /// the git config environment set as an adopter's masked-header
+    /// workaround sets it, which the judging git scrubs.
+    fn ci_hosted(&self, event: &str, event_path: &Path, args: &[&str]) -> (i32, String) {
+        let out = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+            .arg("ci")
+            .args(args)
+            .env("GITHUB_ACTIONS", "true")
+            .env("GITHUB_EVENT_NAME", event)
+            .env("GITHUB_EVENT_PATH", event_path)
+            .env("CODEFLOW_PR_BODY", HOSTED_BODY)
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "http.extraHeader")
+            .env("GIT_CONFIG_VALUE_0", "AUTHORIZATION: basic eDp5")
+            .current_dir(&self.root)
+            .output()
+            .unwrap();
+        output(&out)
+    }
+
+    /// A task branch on line A carrying a code change; returns its head.
+    fn task_on_line(&self) -> String {
+        self.git(&["switch", "-q", "-C", "task/TSK-001-work", LINE_A]);
+        self.write("src/one.rs", "// TSK-001\n");
+        self.commit("feat: build the work")
+    }
+}
+
+/// The pull request body the managed workflow hands over.
+const HOSTED_BODY: &str = "## Summary\nA change.\n\n- one change\n\nTask: TSK-001\n\n## Changes\n- one\n\n## Testing\n- test\n";
+
+const NEEDS_CREDENTIAL: &str = "the destination needs a credential this run does not have";
+
+/// TSK-1267 AC-1 and AC-4: on a private repository whose checkout kept no
+/// credential, with the git config environment scrubbed, the
+/// `pull_request_target` event's default branch lets an ordinary range be
+/// judged without asking the destination.
+#[test]
+fn a_pull_request_target_run_judges_a_private_repository_without_a_credential() {
+    let fx = Fx::new(false);
+    let head = fx.task_on_line();
+    fx.make_private();
+    let event = event_file(&fx, "main");
+    let base = fx.git(&["rev-parse", LINE_A]);
+    let args = [
+        "--base",
+        &base,
+        "--head",
+        &head,
+        "--branch",
+        "task/TSK-001-work",
+        "--into",
+        LINE_A,
+    ];
+    let result = fx.ci_hosted("pull_request_target", &event, &args);
+    println!("{}", result.1);
+    passes(&result, "an ordinary range on a private repository");
+    assert!(
+        result
+            .1
+            .contains("default branch 'main' from the pull_request_target event"),
+        "{}",
+        result.1
+    );
+    // The same run with the flag the managed workflow passes.
+    let mut flagged = args.to_vec();
+    flagged.extend(["--default-branch", "main"]);
+    passes(
+        &fx.ci_hosted("pull_request_target", &event, &flagged),
+        "with --default-branch",
+    );
+}
+
+/// TSK-1267 AC-1 negative and AC-2: a `pull_request` run's workflow comes
+/// from the pull request, so its flag is not trusted; the destination is
+/// asked, refuses for want of a credential, and the error says so and names
+/// the fix.
+#[test]
+fn a_head_controlled_default_branch_is_not_trusted() {
+    let fx = Fx::new(false);
+    let head = fx.task_on_line();
+    fx.make_private();
+    let event = event_file(&fx, "main");
+    let base = fx.git(&["rev-parse", LINE_A]);
+    let result = fx.ci_hosted(
+        "pull_request",
+        &event,
+        &[
+            "--base",
+            &base,
+            "--head",
+            &head,
+            "--branch",
+            "task/TSK-001-work",
+            "--into",
+            LINE_A,
+            "--default-branch",
+            "main",
+        ],
+    );
+    println!("{}", result.1);
+    assert_ne!(result.0, 0, "{}", result.1);
+    for needle in [
+        "--default-branch 'main' is not trusted",
+        "remote authentication failed",
+        NEEDS_CREDENTIAL,
+        "pull_request_target",
+    ] {
+        assert!(
+            result.1.contains(needle),
+            "missing {needle:?}:\n{}",
+            result.1
+        );
+    }
+}
+
+/// TSK-1267 AC-2: a release range needs every branch tip, so even with a
+/// trusted default branch the destination is asked, and its refusal names
+/// the credential the run needs.
+#[test]
+fn a_release_range_still_asks_the_destination_and_names_the_credential() {
+    let fx = Fx::new(false);
+    fx.cut_release();
+    fx.write("src/release.rs", "// release\n");
+    let head = fx.commit("feat: release work");
+    fx.make_private();
+    let event = event_file(&fx, "main");
+    let base = fx.git(&["rev-parse", "main"]);
+    let result = fx.ci_hosted(
+        "pull_request_target",
+        &event,
+        &[
+            "--base", &base, "--head", &head, "--branch", RELEASE, "--into", "main",
+        ],
+    );
+    println!("{}", result.1);
+    assert_ne!(result.0, 0, "{}", result.1);
+    for needle in [NEEDS_CREDENTIAL, "this is a release range"] {
+        assert!(
+            result.1.contains(needle),
+            "missing {needle:?}:\n{}",
+            result.1
+        );
+    }
+}
+
+/// TSK-1267 AC-1: a flag that disagrees with the trusted event refuses.
+#[test]
+fn a_default_branch_flag_that_disagrees_with_the_event_refuses() {
+    let fx = Fx::new(false);
+    let head = fx.task_on_line();
+    fx.make_private();
+    let event = event_file(&fx, "main");
+    let base = fx.git(&["rev-parse", LINE_A]);
+    let result = fx.ci_hosted(
+        "pull_request_target",
+        &event,
+        &[
+            "--base",
+            &base,
+            "--head",
+            &head,
+            "--branch",
+            "task/TSK-001-work",
+            "--into",
+            LINE_A,
+            "--default-branch",
+            RELEASE,
+        ],
+    );
+    assert_eq!(result.0, 2, "{}", result.1);
+    assert!(result.1.contains("disagrees"), "{}", result.1);
+}

@@ -263,6 +263,55 @@ pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String
     })
 }
 
+/// The destination's default target as this clone already holds it, with
+/// no network access (TSK-1267): `default` is a default branch name from a
+/// source the pull request's author cannot set, and its tip is this clone's
+/// `refs/remotes/origin/<default>`, which the run's own checkout fetched.
+/// `None` when that tracking ref is absent, so the caller asks the
+/// destination instead.
+///
+/// The answer carries the default target only, never the other branch
+/// tips: it can decide [`scope`], but a release range, whose judgment needs
+/// every branch tip, asks the destination.
+///
+/// # Errors
+///
+/// Returns why the tracking ref cannot be read.
+pub fn local_destination(
+    repo_root: &Path,
+    url: Option<&str>,
+    default: &str,
+) -> Result<Option<Destination>, String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
+    let tracking = format!("refs/remotes/origin/{default}");
+    let reference = match repo.find_reference(&tracking) {
+        Ok(reference) => reference,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "cannot read {}: {}",
+                display_text(&tracking),
+                error.message()
+            ))
+        }
+    };
+    let tip = reference
+        .peel_to_commit()
+        .map_err(|error| {
+            format!(
+                "cannot read the commit {} names: {}",
+                display_text(&tracking),
+                error.message()
+            )
+        })?
+        .id();
+    Ok(Some(Destination {
+        url: url.map(str::to_string),
+        default: Some((default.to_string(), tip)),
+        heads: Vec::new(),
+    }))
+}
+
 /// Whether durable work tracking is on at the destination's default
 /// target, read at its tip, which is fetched when this clone lacks it.
 /// `false` only for a destination with no default target yet, or one

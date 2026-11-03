@@ -24,6 +24,7 @@ mod change_class;
 mod classification;
 mod conflict_markers;
 mod context;
+mod default_branch;
 pub(super) use context::{judged_declared_target, Declared};
 mod id_registry;
 mod judging;
@@ -161,6 +162,23 @@ pub struct CiArgs {
     /// hook passes the location pushed to.
     #[arg(long, value_name = "URL", hide = true)]
     pub destination: Option<String>,
+
+    /// The repository's default branch, which decides whether a range is
+    /// judged under the release rules (SPC-013 R-120). Without it, every
+    /// tracked range asks the destination (`git ls-remote --symref`), which
+    /// on a private repository needs a credential, so a checkout with
+    /// `persist-credentials: false` fails. It is trusted only in a GitHub
+    /// Actions `pull_request_target` run, whose workflow comes from the
+    /// default branch; that run's event (`repository.default_branch`) is
+    /// used even without the flag, and a flag that disagrees with it
+    /// refuses. Any other run ignores it with a note, since its workflow
+    /// can be changed by the pushed commit. The default branch's tip is
+    /// read from this clone (`refs/remotes/origin/<BRANCH>`, so check out
+    /// with `fetch-depth: 0`); the destination is still asked when that
+    /// ref is absent and for a release range, whose judgment needs every
+    /// branch tip.
+    #[arg(long, value_name = "BRANCH")]
+    pub default_branch: Option<String>,
 
     /// Read the destination's advertisement (`git ls-remote --symref` of
     /// its HEAD, branches and tags) from stdin instead of asking it again.
@@ -587,6 +605,35 @@ pub fn run(args: &CiArgs) -> i32 {
         }),
     }
 
+    // Only for the `origin` destination: its tip is read from this clone's
+    // `origin` tracking ref (TSK-1267).
+    let default_branch = if args.destination.is_none() && !args.advertisement_stdin {
+        match default_branch::read(args.default_branch.as_deref(), &|key| std::env::var_os(key)) {
+            Ok(default_branch::Reading::Trusted(trusted)) => {
+                println!(
+                    "codeflow ci: default branch '{}' from {}",
+                    codeflow_core::git::display_text(&trusted.name),
+                    trusted.source
+                );
+                Some(trusted.name)
+            }
+            Ok(default_branch::Reading::None(why)) => {
+                if let Some(why) = why {
+                    eprintln!("codeflow ci: note: {}", super::shown(&why));
+                }
+                None
+            }
+            Err(why) => {
+                eprintln!("codeflow ci: {}", super::shown(&why));
+                return 2;
+            }
+        }
+    } else {
+        if args.default_branch.is_some() {
+            eprintln!("codeflow ci: note: --default-branch is not used with --destination or a handed-over advertisement; the destination named is the authority");
+        }
+        None
+    };
     let destination = match args.destination.clone() {
         Some(destination) => Some(destination),
         None => match origin_url(&root) {
@@ -618,6 +665,7 @@ pub fn run(args: &CiArgs) -> i32 {
         into: into.as_deref(),
         destination: destination.as_deref(),
         advertisement: advertisement.as_deref(),
+        default_branch: default_branch.as_deref(),
         candidate: match &authority {
             Some(Authority::Named(sha)) => Some(sha.as_str()),
             _ => None,
@@ -2642,6 +2690,10 @@ pub(super) struct Names<'a> {
     pub destination: Option<&'a str>,
     /// The destination's advertisement, when the caller already asked it.
     pub advertisement: Option<&'a str>,
+    /// The default branch from a source the pull request's author cannot
+    /// set (TSK-1267): with it, an ordinary range is scoped from this
+    /// clone's `origin` tracking ref without asking the destination.
+    pub default_branch: Option<&'a str>,
     /// The candidate authority's tip (`--policy-from`, which the pre-push
     /// hook sets to the destination default branch's tip): beside the base,
     /// a tip whose first-parent line a clean merge after a review may come
