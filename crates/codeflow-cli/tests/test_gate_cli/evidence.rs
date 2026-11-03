@@ -1026,7 +1026,7 @@ fn an_explicit_full_comparison_runs_every_target() {
     assert_eq!(record["complete"], true);
 }
 
-/// TSK-355 AC-1, AC-4, AC-7 and AC-10 under credit row B (TSK-1044 adopted
+/// TSK-355 AC-1, AC-7 and AC-10 under credit row B (TSK-1044 adopted
 /// no protected recorder): beside the fixture's seeded green full record,
 /// three explicit quick runs at three commits of one tree (the shape of the
 /// recorded `dec65cb133e4` and `d37e55ed86be` pair, chained once more) each
@@ -1091,4 +1091,76 @@ fn quick_runs_of_one_tree_reuse_no_earlier_result() {
         "{text}"
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("executed 2; skipped 0"));
+}
+
+#[test]
+fn deleted_or_corrupt_producer_output_is_regenerated_before_its_consumer() {
+    let fixture = Fixture::new(|c| {
+        c["execution"]["parallel"] = json!(true);
+        c["execution"]["max_parallel"] = json!(2);
+        c["targets"][0]["outputs"] = json!(["target/check-output"]);
+        c["targets"][1]["requires"] = json!(["rust-check"]);
+        for mode in ["full", "quick"] {
+            let command = c["targets"][1]["modes"][mode]["command"]
+                .as_str()
+                .unwrap()
+                .replace("project-management/tasks/TSK-001.md", "target/check-output");
+            c["targets"][1]["modes"][mode]["command"] = json!(command);
+        }
+        // Listing the consumer first makes the dependency enforce ordering.
+        c["targets"].as_array_mut().unwrap().swap(0, 1);
+    });
+    let output_path = fixture.root.path().join("target/check-output");
+    for corrupt in [false, true] {
+        if corrupt {
+            std::fs::write(&output_path, "broken\n").unwrap();
+        } else {
+            std::fs::remove_file(&output_path).unwrap();
+        }
+        let (text, record) = fixture.quick();
+        let producer = text.find("completed target 'rust-check': passed").unwrap();
+        let consumer = text.find("starting target 'record-check'").unwrap();
+        assert!(producer < consumer, "{text}");
+        assert_eq!(std::fs::read_to_string(&output_path).unwrap(), "good\n");
+        assert_eq!(record["results"].as_array().unwrap().len(), 2);
+        assert_eq!(record["selection"]["skipped"], json!([]));
+    }
+}
+
+#[test]
+fn same_tree_runs_non_content_targets_and_record_only_changes_run_record_checks() {
+    for class in ["history", "remote", "time", "external"] {
+        let fixture = Fixture::new(|c| c["targets"][0]["input_class"] = json!(class));
+        let dir = fixture.root.path();
+        let (_, before) = fixture.quick();
+        git(dir, &["commit", "--allow-empty", "-qm", "test: same tree"]);
+        let (text, after) = fixture.quick();
+        assert_eq!(before["git_tree"], after["git_tree"], "{class}");
+        assert_ne!(before["revision"], after["revision"], "{class}");
+        for target in ["rust-check", "record-check"] {
+            assert!(
+                text.contains(&format!("starting target '{target}'")),
+                "{text}"
+            );
+        }
+        assert_eq!(after["results"].as_array().unwrap().len(), 2);
+        assert_eq!(after["selection"]["skipped"], json!([]));
+
+        // Only the tracked record changes. Its reader must execute and
+        // report the new failure instead of retaining the earlier pass.
+        let path = dir.join("project-management/tasks/TSK-001.md");
+        let mut record = std::fs::read_to_string(&path).unwrap();
+        record.push_str("\nbroken\n");
+        std::fs::write(&path, record).unwrap();
+        git(dir, &["add", "project-management/tasks/TSK-001.md"]);
+        git(dir, &["commit", "-qm", "test: change only the record"]);
+        let output = run(dir, fixture.home.path(), &["test", "--mode", "quick"]);
+        let text = stderr(&output);
+        assert!(!output.status.success(), "{class}: {text}");
+        assert!(
+            text.contains("completed target 'record-check': FAILED"),
+            "{text}"
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("executed 2; skipped 0"));
+    }
 }
