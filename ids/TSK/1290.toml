@@ -1,0 +1,11 @@
+id = "TSK-1290"
+uid = "07880da5-bff9-48b5-bc8f-ef1730ee6cd8"
+kind = "TSK"
+title = "The hosted run measures the split coverage for TSK-1241"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T16:25:50Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
