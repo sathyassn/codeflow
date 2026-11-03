@@ -12,6 +12,7 @@ pub const CHECKLIST: &str = "docs/capability-bootstrap.md";
 const PENDING: &str = ".codeflow/capability-bootstrap.pending";
 const MAX_RECORD_BYTES: u64 = 1024 * 1024;
 const EPIC_MARKER: &str = "<!-- codeflow:capability-bootstrap v1 epic -->";
+const CHECKLIST_MARKER: &str = "<!-- codeflow:capability-bootstrap v1 checklist -->";
 
 /// Ordered outputs, shared by tracked work and the tracking-free checklist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -310,8 +311,11 @@ pub fn run(
     if !tracking {
         return checklist(&tree, templates);
     }
-    if read_optional(&tree, CHECKLIST)?.is_some() {
-        return Err(format!("{CHECKLIST} already records bootstrap progress; resume that checklist or reconcile it explicitly before removing it and starting tracked bootstrap work; no epic or task was created"));
+    if read_optional(&tree, CHECKLIST)?
+        .as_deref()
+        .is_some_and(|text| text.lines().any(|line| line == CHECKLIST_MARKER))
+    {
+        return Err(format!("{CHECKLIST} already records bootstrap progress; finish or reconcile that checklist by hand before removing it and starting tracked bootstrap work; no epic or task was created"));
     }
     let (mut epic, mut stages) = existing_work(&tree)?;
     if epic.is_none() {
@@ -385,14 +389,13 @@ pub fn run(
 }
 
 fn checklist(tree: &Tree, templates: &Templates) -> Result<Progress, String> {
-    const MARKER: &str = "<!-- codeflow:capability-bootstrap v1 checklist -->";
     let text = if let Some(text) = read_optional(tree, CHECKLIST)? {
-        if !text.lines().any(|line| line == MARKER) {
+        if !text.lines().any(|line| line == CHECKLIST_MARKER) {
             return Err(format!("{CHECKLIST} already exists and is not a bootstrap checklist; move it before retrying"));
         }
         text
     } else {
-        let mut text = format!("# Initial capability catalog\n\n{MARKER}\n\nTracking is not enabled. Complete these stages in order using {GUIDE}.\n\n");
+        let mut text = format!("# Initial capability catalog\n\n{CHECKLIST_MARKER}\n\nTracking is not enabled. Complete these stages in order using {GUIDE}.\n\n");
         for (index, stage) in Stage::ALL.into_iter().enumerate() {
             text.push_str("- [ ] ");
             text.push_str(stage.name());

@@ -352,7 +352,11 @@ fn a_legacy_standard_checklist_is_not_forgotten_when_tracking_appears() {
     assert!(!result.status.success());
     let error = String::from_utf8_lossy(&result.stderr);
     assert!(error.contains("docs/capability-bootstrap.md"), "{error}");
-    assert!(error.contains("reconcile"), "{error}");
+    assert!(
+        error.contains("finish or reconcile that checklist by hand"),
+        "{error}"
+    );
+    assert!(!error.contains("resume that checklist"), "{error}");
     assert!(error.contains("no epic or task was created"), "{error}");
     assert_eq!(
         fs::read_to_string(root.join("docs/capability-bootstrap.md")).unwrap(),
@@ -406,4 +410,21 @@ fn complete_checklist_names_the_remaining_inventory_confirmation() {
     );
     assert!(!result.contains("next stage: review"), "{result}");
     assert!(!result.contains("inventory is complete"), "{result}");
+}
+
+#[test]
+fn tracked_bootstrap_preserves_an_unrelated_file_at_the_checklist_path() {
+    let dir = repo("full");
+    let root = dir.path();
+    fs::create_dir_all(root.join("docs")).unwrap();
+    let path = root.join("docs/capability-bootstrap.md");
+    let notes =
+        "# Project bootstrap notes\n\nThese notes are unrelated to catalog stage tracking.\n";
+    fs::write(&path, notes).unwrap();
+    let result = bootstrap(root);
+    assert!(result.contains("next stage: inventory"), "{result}");
+    assert_eq!(fs::read_to_string(path).unwrap(), notes);
+    assert_eq!(files(root, "epics").len(), 1);
+    assert_eq!(files(root, "tasks").len(), 4);
+    validate(root);
 }
