@@ -217,10 +217,10 @@ fn read_optional(tree: &Tree, path: &str) -> Result<Option<String>, String> {
 fn existing_work(tree: &Tree) -> Result<(Option<Existing>, Vec<Option<Existing>>), String> {
     let files = layout::bounded_record_files(&tree.path().join("project-management"), 20_000)
         .map_err(|_| "cannot inventory bootstrap work records".to_string())?;
-    let epic = existing(&tree, &files.epics, EPIC_MARKER)?;
+    let epic = existing(tree, &files.epics, EPIC_MARKER)?;
     let mut stages = Vec::new();
     for stage in Stage::ALL {
-        stages.push(existing(&tree, &files.tasks, &stage.marker())?);
+        stages.push(existing(tree, &files.tasks, &stage.marker())?);
     }
     // Preflight the entire existing graph before making any new allocation.
     let mut previous = None;
@@ -238,7 +238,7 @@ fn existing_work(tree: &Tree) -> Result<(Option<Existing>, Vec<Option<Existing>>
             missing = true;
         }
     }
-    if let Some(pending) = read_optional(&tree, PENDING)? {
+    if let Some(pending) = read_optional(tree, PENDING)? {
         let recovered = epic
             .as_ref()
             .is_some_and(|e| pending.trim() == EPIC_MARKER && !e.id.is_empty())
