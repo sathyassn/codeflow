@@ -576,7 +576,10 @@ jobs:
           workspace=$(pwd -P)
           trusted=$(mktemp -d "$RUNNER_TEMP/gitleaks-trusted.XXXXXX")
           trap 'rm -rf "$tool" "$trusted" || true' EXIT
-          mkdir "$trusted/tree"
+          mkdir "$trusted/tree" "$trusted/source"
+          # Gitleaks also reads source/.gitleaksignore despite an explicit
+          # ignore path. Give it Git metadata without any checkout files.
+          printf 'gitdir: %s\n' "$(git rev-parse --absolute-git-dir)" >"$trusted/source/.git"
           # Remerge diffs omit octopus additions. Read those commits against
           # their first parent as well, including files later deleted.
           git rev-list --min-parents=3 "$scan" -- >"$trusted/octopus"
@@ -958,7 +961,7 @@ jobs:
           report="$RUNNER_TEMP/gitleaks-report.json"
           log="$RUNNER_TEMP/gitleaks.log"
           rc=0
-          (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$workspace" "$@" \
+          (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$trusted/source" "$@" \
             --log-opts "--full-history --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv ${scan} --" \
             --gitleaks-ignore-path "$trusted/ignore" --ignore-gitleaks-allow \
             --no-banner --log-level debug --exit-code 0 \

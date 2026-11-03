@@ -18,6 +18,9 @@ fn repo_root() -> PathBuf {
 /// installed baseline.
 fn workflows() -> Vec<(String, Value)> {
     let root = repo_root();
+    // Operator-owned workflow edits are validated as proposals before the
+    // operator installs them. Normal test runs still read the actual files.
+    let proposals = std::env::var_os("CODEFLOW_WORKFLOW_PROPOSALS").map(|path| root.join(path));
     let mut found = Vec::new();
     for dir in [
         ".github/workflows",
@@ -36,7 +39,30 @@ fn workflows() -> Vec<(String, Value)> {
             .collect();
         entries.sort();
         for path in entries {
-            let text = std::fs::read_to_string(&path).unwrap();
+            let input = if dir == ".github/workflows" {
+                match (
+                    proposals.as_ref(),
+                    path.file_name().and_then(|name| name.to_str()),
+                ) {
+                    (Some(proposals), Some("codeflow-ci.yml")) => {
+                        proposals.join("codeflow-ci.proposed.yml")
+                    }
+                    (Some(proposals), Some("codeflow-policy.yml")) => {
+                        proposals.join("codeflow-policy.proposed.yml")
+                    }
+                    _ => path.clone(),
+                }
+            } else {
+                path.clone()
+            };
+            if input != path {
+                eprintln!(
+                    "workflow proposal: {} replaces {} for this test only",
+                    input.display(),
+                    path.display()
+                );
+            }
+            let text = std::fs::read_to_string(&input).unwrap();
             let value: Value = serde_yaml::from_str(&text)
                 .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
             if value.get("jobs").is_some() {
