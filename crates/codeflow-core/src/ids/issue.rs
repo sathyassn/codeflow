@@ -450,7 +450,12 @@ pub(super) fn fetch(git: &Git, remote: &str) -> Result<Fetched, IdsError> {
     let lower = raw_stderr.to_lowercase();
     if lower.contains("couldn't find remote ref") || lower.contains("could not find remote ref") {
         let name = format!("refs/heads/{}", super::REGISTRY_BRANCH);
-        match crate::git::remote_query::ls_remote(git.root(), &["--exit-code", remote, &name]) {
+        let limits = crate::git::remote_query::QueryLimits::from_authority_or_default(git.root());
+        match crate::git::remote_query::ls_remote(
+            git.root(),
+            &["--exit-code", remote, &name],
+            limits,
+        ) {
             Ok(answer) if answer.is_empty() => {}
             Ok(_) => return Ok(Fetched::Offline(stderr)),
             Err(error) => {

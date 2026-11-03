@@ -403,3 +403,179 @@ fn asking_the_remote_sends_no_stored_http_credentials() {
         assert!(!text.contains("initialization"), "{text}");
     }
 }
+
+/// TSK-1301: a folder holding a `git` that answers `ls-remote` only after
+/// `delay` (or never, for `None`) and passes every other command to the
+/// real git, and the `PATH` that puts it first.
+#[cfg(unix)]
+fn slow_ls_remote(a: &Adopter, delay: Option<&str>) -> std::ffi::OsString {
+    use std::os::unix::fs::PermissionsExt as _;
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git on PATH");
+    let bin = a.temp.path().join("slow-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let wait = delay.map_or_else(
+        || "sleep 60; exit 128".to_string(),
+        |delay| format!("sleep {delay}"),
+    );
+    let script = format!(
+        "#!/bin/sh\nfor word in \"$@\"; do\n  if [ \"$word\" = ls-remote ]; then\n    {wait}\n    break\n  fi\ndone\nexec '{}' \"$@\"\n",
+        real.display()
+    );
+    let git = bin.join("git");
+    std::fs::write(&git, script).unwrap();
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap()
+}
+
+#[cfg(unix)]
+impl Adopter {
+    fn codeflow_on(&self, path: &std::ffi::OsStr, args: &[&str], stdin: &str) -> Output {
+        let mut child = self
+            .command(&binary())
+            .env("PATH", path)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    /// Land `policy` on the remote's `main` and fetch it, so it is the
+    /// local policy authority, then return to the task branch.
+    fn land_main_policy(&self, policy: &str) {
+        self.git(&["checkout", "-q", "main"]);
+        self.commit(&[(".codeflow/policy.json", policy)], "chore: tune waits");
+        self.git(&["push", "-q", "origin", "main"]);
+        self.git(&["fetch", "-q", "origin"]);
+        self.git(&["checkout", "-q", "task/TSK-007-cert"]);
+    }
+}
+
+/// TSK-1301 AC-2 and AC-5, the pre-push path: a destination whose
+/// default-branch lookup answers after 1.5 s stands in for GitHub's
+/// 11.3 s, scaled down. With the wait the default branch sets below that
+/// answer (1 s, one attempt, as the old fixed 10 s was below 11.3 s) the
+/// push refuses, naming the limits, the time measured and the key; with a
+/// wait above it (3 s) the same push is judged and its lookup passes.
+#[cfg(unix)]
+#[test]
+fn pre_push_waits_as_long_as_the_default_branch_policy_says() {
+    let (a, _) = Adopter::with_line();
+    let path = slow_ls_remote(&a, Some("1.5"));
+    let head = a.git(&["rev-parse", "HEAD"]);
+    let remote = a.remote_path();
+    let push = |a: &Adopter| {
+        let out = a.codeflow_on(
+            &path,
+            &["git-hook", "pre-push", "origin", remote.to_str().unwrap()],
+            &format!("refs/heads/task/TSK-007-cert {head} refs/heads/task/TSK-007-cert {ZERO}\n"),
+        );
+        said(&out)
+    };
+
+    a.land_main_policy(
+        r#"{"git":{"force_push_unprotected":"allow","remote_query_timeout_seconds":1,"remote_query_attempts":1}}"#,
+    );
+    let text = push(&a);
+    println!("pre-push, 1 s wait:\n{text}");
+    assert!(text.contains("ci.destination_unavailable"), "{text}");
+    assert!(
+        text.contains("no answer within 1s per attempt (1 attempt, "),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "s measured); git.remote_query_timeout_seconds and git.remote_query_attempts"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("raise `git.remote_query_timeout_seconds`"),
+        "{text}"
+    );
+
+    a.land_main_policy(
+        r#"{"git":{"force_push_unprotected":"allow","remote_query_timeout_seconds":3,"remote_query_attempts":1}}"#,
+    );
+    let text = push(&a);
+    println!("pre-push, 3 s wait:\n{text}");
+    assert!(!text.contains("ci.destination_unavailable"), "{text}");
+    assert!(!text.contains("no answer within"), "{text}");
+}
+
+/// TSK-1301 AC-8, the guard path: with the remote's tracking refs missing
+/// the guard asks the remote whether it holds any. A remote that never
+/// answers gets the guard's own refusal inside its 10 s network budget,
+/// naming the budget and the fetch that removes the need to ask, well
+/// before the guard's 20 s deadline and the harness's 30 s hook timeout.
+/// After that fetch the same guarded command passes while the remote still
+/// never answers, because the guard reads local refs.
+#[cfg(unix)]
+#[test]
+fn the_guard_refuses_a_silent_remote_inside_its_budget_and_a_fetch_clears_it() {
+    use codeflow_core::hooks::guard_deadline::{GUARD_DEADLINE_SECS, GUARD_REMOTE_QUERY_SECS};
+    use std::time::{Duration, Instant};
+    let (a, _) = Adopter::with_line();
+    for branch in ["HEAD", "main", "integration/line"] {
+        a.git(&[
+            "update-ref",
+            "--no-deref",
+            "-d",
+            &format!("refs/remotes/origin/{branch}"),
+        ]);
+    }
+    let silent = slow_ls_remote(&a, None);
+    let payload = json!({"tool_name":"Bash","cwd":a.work(),"tool_input":{"command":"git push --force-with-lease origin task/TSK-007-cert"}})
+        .to_string();
+
+    let started = Instant::now();
+    let guard = a.codeflow_on(&silent, &["hook", "git-guard"], &payload);
+    let took = started.elapsed();
+    let text = said(&guard);
+    println!("guard, silent remote, no tracking refs ({took:?}):\n{text}");
+    assert_eq!(guard.status.code(), Some(2), "{text}");
+    assert!(
+        took >= Duration::from_secs(GUARD_REMOTE_QUERY_SECS),
+        "{took:?}"
+    );
+    assert!(took < Duration::from_secs(GUARD_DEADLINE_SECS), "{took:?}");
+    assert!(!text.contains("reached no decision"), "{text}");
+    assert!(
+        text.contains("a session guard waits at most 10s for the network, inside its 20s deadline"),
+        "{text}"
+    );
+    assert!(text.contains("run git fetch origin"), "{text}");
+
+    a.git(&["fetch", "-q", "origin"]);
+    // Git 2.48 and later record the remote HEAD on fetch; an older git
+    // needs it named once, without the network.
+    if a.git(&["for-each-ref", "refs/remotes/origin/HEAD"])
+        .is_empty()
+    {
+        a.git(&["remote", "set-head", "origin", "main"]);
+    }
+    let started = Instant::now();
+    let guard = a.codeflow_on(&silent, &["hook", "git-guard"], &payload);
+    let took = started.elapsed();
+    let text = said(&guard);
+    println!("guard after the fetch ({took:?}):\n{text}");
+    assert_eq!(guard.status.code(), Some(0), "{text}");
+    assert!(
+        took < Duration::from_secs(GUARD_REMOTE_QUERY_SECS / 2),
+        "{took:?}"
+    );
+}
