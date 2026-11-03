@@ -8,7 +8,7 @@
     "idea": "The twenty-seven checks fall into six groups by the surface they read, and only thirteen of them can fail; the other fourteen warn at most.",
     "title": "The twenty-seven checks, by what they read",
     "kicker": "Doctor checks",
-    "caption": "A FAIL comes only from hooks, the guard timeouts, the sandbox configuration, config, permissions, the policy source, the secret engine, model bindings, the delegate round trip, repository integrity, the id registry or adopter fit.",
+    "caption": "A FAIL comes only from hooks, the guard timeouts, the sandbox configuration, config, permissions, the policy source, the secret engine, model bindings, the delegate round trip, repository integrity, the id registry, adopter fit or the capability catalog.",
     "states": [
       {
         "name": "canfail",

@@ -46,9 +46,9 @@ The twenty-seven checks fall into six groups by the surface each one reads.
 - **Delegates, model bindings and network.** `delegates`, `model-bindings`,
   `delegate-roundtrip` and `network` probe the peer CLIs, the approved model
   binding records, the binary's delegate lifecycle and a lookup of github.com.
-- **Repository and managed files.** `repo-integrity`, `managed-drift` and
-  `id-registry` read git's repository and worktree state, the managed regions
-  recorded at install and the fetched id registry refs.
+- **Repository and managed files.** `repo-integrity`, `managed-drift`,
+  `id-registry` and `capabilities` read git's repository and worktree state, the managed regions
+  recorded at install, the fetched id registry refs and the capability catalog.
 - **Customization, instructions and test config.** `customization`,
   `instructions`, `reading` and `test-config` read the product, architecture
   and agent docs for scaffold placeholders, the sizes of the instruction files
