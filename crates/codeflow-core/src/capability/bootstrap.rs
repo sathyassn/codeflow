@@ -242,7 +242,7 @@ pub fn run(
     if !tracking {
         return checklist(&tree, templates);
     }
-    let files = layout::bounded_record_files(&root.join("project-management"), 20_000)
+    let files = layout::bounded_record_files(&tree.path().join("project-management"), 20_000)
         .map_err(|_| "cannot inventory bootstrap work records".to_string())?;
     let mut epic = existing(&tree, &files.epics, EPIC_MARKER)?;
     let mut stages = Vec::new();
