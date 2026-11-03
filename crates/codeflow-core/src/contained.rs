@@ -1048,7 +1048,10 @@ mod platform {
         parent: &ConfinedDirectory,
         leaf: &OsStr,
     ) -> io::Result<File> {
-        let file = open(parent, leaf, FILE_APPEND_DATA, false)?;
+        // `FILE_READ_ATTRIBUTES` is required: the confined open and the type
+        // check below read the handle's attributes, and a handle without that
+        // right is refused with "Access is denied" (os error 5).
+        let file = open(parent, leaf, FILE_APPEND_DATA | FILE_READ_ATTRIBUTES, false)?;
         if !file.metadata()?.is_file() {
             return Err(invalid());
         }
