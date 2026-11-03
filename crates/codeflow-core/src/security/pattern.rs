@@ -83,6 +83,9 @@ pub fn is_path_targeted(cmd: &str, path: &str) -> bool {
     false
 }
 
+/// Most compiled glob patterns kept at once.
+const GLOB_CACHE_ENTRIES: usize = 128;
+
 /// Match a path against an extended glob pattern supporting `**`.
 #[must_use]
 pub fn matches_extended_glob(path: &str, pattern: &str) -> bool {
@@ -96,15 +99,20 @@ pub fn matches_extended_glob(path: &str, pattern: &str) -> bool {
             return regex.is_match(path);
         }
     }
+    #[cfg(test)]
+    tests::COMPILES.with(|n| n.set(n.get() + 1));
     let regex = glob_to_regex(pattern);
     let full_regex = format!("(?s)^{regex}$");
     let Ok(regex) = Regex::new(&full_regex) else {
         return false;
     };
     if let Ok(mut entries) = cache.lock() {
-        if entries.len() < 128 {
-            entries.insert(pattern.to_owned(), regex.clone());
+        // A full cache is emptied, not frozen: a frozen cache made every
+        // later pattern compile again on each call (TSK-1258 AC-1).
+        if entries.len() >= GLOB_CACHE_ENTRIES {
+            entries.clear();
         }
+        entries.insert(pattern.to_owned(), regex.clone());
     }
     regex.is_match(path)
 }
@@ -270,6 +278,31 @@ fn non_slash() -> Vec<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        /// Regex compiles made by `matches_extended_glob` on this thread.
+        pub(super) static COMPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// TSK-1258 AC-1: once the shared cache holds 128 patterns, a pattern
+    /// used again and again must still compile once, not on every call.
+    /// Before the fix every call after the cache filled recompiled.
+    #[test]
+    fn full_glob_cache_does_not_recompile_a_repeated_pattern() {
+        for n in 0..300 {
+            let _ = matches_extended_glob("x", &format!("tsk1258-fill-{n}/**/*.never"));
+        }
+        let before = COMPILES.with(std::cell::Cell::get);
+        for _ in 0..50 {
+            assert!(!matches_extended_glob("a/b.pem", "tsk1258-late/**/*.pem"));
+            assert!(matches_extended_glob("tsk1258-late/a/b.pem", "tsk1258-late/**/*.pem"));
+        }
+        let compiles = COMPILES.with(std::cell::Cell::get) - before;
+        assert!(
+            compiles <= 1,
+            "recompiled {compiles} times in 100 calls with a full cache"
+        );
+    }
 
     #[test]
     fn glob_intersection_matches_complete_secret_names() {
