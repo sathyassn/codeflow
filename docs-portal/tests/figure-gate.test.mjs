@@ -98,6 +98,11 @@ async function reconfigure(root, overrides, message) {
   commitFixture(root, message);
 }
 
+// The start of Starlight's sidebar state script, a fixed runtime inline
+// script every built page carries; the tests change it to stand for a
+// changed runtime.
+const STARLIGHT_SIDEBAR_SCRIPT = "var e=document.getElementById(`starlight__sidebar`)";
+
 // `browser:verify` awaits its entry point at the top level, so a module-level
 // binding declared below it is read before initialization. The first consumer
 // build with bound figures failed that way; the entry point must come last.
@@ -352,8 +357,8 @@ test("the mixed fixture renders every class and the gates name only what falls s
           const regenerate = `if the runtime changed, regenerate scripts/runtime-scripts.json: ${REGENERATE}`;
           const extra = await hostile({ inject: () => document.head.append(Object.assign(document.createElement("script"), { textContent: "void 0" })), css: null });
           assert.ok(extra.some((failure) => failure.includes("executable content: inline scripts outside the content are not ones the site's runtime emits (sha256 ") && failure.endsWith(regenerate)), extra.join("\n"));
-          assert.ok(builtBytes.includes("window.StarlightThemeProvider = (() => {"));
-          await writeFile(builtGuide, builtBytes.replace("window.StarlightThemeProvider = (() => {", "window.StarlightThemeProvider = (() => { "));
+          assert.ok(builtBytes.includes(STARLIGHT_SIDEBAR_SCRIPT));
+          await writeFile(builtGuide, builtBytes.replace(STARLIGHT_SIDEBAR_SCRIPT, `${STARLIGHT_SIDEBAR_SCRIPT} `));
           let changed;
           try { changed = (await figureGateFailures(page, visitRoute, guideOnly, built, declarations, kitSheets, inlineScripts)).failures; } finally { await writeFile(builtGuide, builtBytes); }
           assert.ok(changed.some((failure) => failure.includes("executable content: inline scripts outside the content are not ones the site's runtime emits (sha256 ") && failure.endsWith(regenerate)), changed.join("\n"));
@@ -623,8 +628,9 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
       await writeFile(builtGuide, builtBytes);
     }
     // Inline scripts outside the content are the runtime's own (R5-1): an
-    // extra one in the head fails, and so does a changed Starlight script,
-    // each naming the regeneration to run if the runtime really changed.
+    // extra one in the head fails, and so does a changed Starlight script or
+    // a changed pre-paint script, each naming the regeneration to run if the
+    // runtime really changed.
     const builtOnly = async (edited) => {
       const record = JSON.parse(pristine);
       record.artifacts.find((artifact) => artifact.path === "dist/reference/guide/index.html").sha256 = sha256(edited);
@@ -634,8 +640,10 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
     };
     const regenerate = /built page dist\/reference\/guide\/index\.html carries inline scripts the site's runtime does not emit \(sha256 \w{12}\); if the runtime changed, regenerate scripts\/runtime-scripts\.json: npm run build && node scripts\/runtime-scripts\.mjs dist/;
     assert.match(await builtOnly(builtBytes.replace("</head>", "<script>void 0</script></head>")), regenerate);
-    assert.ok(builtBytes.includes("window.StarlightThemeProvider = (() => {"));
-    assert.match(await builtOnly(builtBytes.replace("window.StarlightThemeProvider = (() => {", "window.StarlightThemeProvider = (() => { ")), regenerate);
+    assert.ok(builtBytes.includes(STARLIGHT_SIDEBAR_SCRIPT));
+    assert.match(await builtOnly(builtBytes.replace(STARLIGHT_SIDEBAR_SCRIPT, `${STARLIGHT_SIDEBAR_SCRIPT} `)), regenerate);
+    assert.ok(builtBytes.includes("var d = document.documentElement, configured = "));
+    assert.match(await builtOnly(builtBytes.replace("var d = document.documentElement, configured = ", "var d = document.documentElement, configured =  ")), regenerate);
 
     // The guide's code block passed above as Expressive Code writes it. A
     // real property on a token, a custom property outside a block's frame, a
