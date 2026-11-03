@@ -1959,10 +1959,10 @@ pub fn claim_on_in_worktree(
     pins: &[super::work_start::ReviewedPin],
     destination: Option<&Path>,
 ) -> Result<WorktreeClaim, String> {
+    refresh_claim(repo_root, task_id)?;
     let worktree = destination
         .map(|path| claim_destination(repo_root, path))
         .transpose()?;
-    refresh_claim(repo_root, task_id)?;
     let declared = claim_target(repo_root, task_id)?
         .ok_or_else(|| format!("{task_id} has no visible record with an integration_target"))?;
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
