@@ -29,6 +29,47 @@ const RELEASE: u8 = b'r';
 /// How often a keeper checks whether the target's group still has a process.
 const KEEPER_POLL_MS: libc::c_int = 200;
 
+/// The keeper's body, in the forked watcher: leave the target's group, so
+/// it ends with the target's own processes, and hold the lock copies until
+/// it does, or until the controller sends [`RELEASE`]. Never returns.
+///
+/// # Safety
+///
+/// Runs between fork and exit in a child of a possibly multithreaded
+/// process, so it uses only async-signal-safe libc calls: no allocation,
+/// locks or Rust I/O.
+unsafe fn keep_until_group_ends(reader: libc::c_int, group: libc::pid_t) -> ! {
+    if libc::setpgid(0, 0) != 0 {
+        libc::_exit(1);
+    }
+    let mut byte = 0_u8;
+    let mut open = true;
+    loop {
+        if open {
+            let mut poll = libc::pollfd {
+                fd: reader,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            if libc::poll(&raw mut poll, 1, KEEPER_POLL_MS) > 0 {
+                match libc::read(reader, (&raw mut byte).cast(), 1) {
+                    1 if byte == RELEASE => libc::_exit(0),
+                    // The controller died: keep holding.
+                    0 => open = false,
+                    _ => {}
+                }
+            }
+        } else {
+            libc::poll(std::ptr::null_mut(), 0, KEEPER_POLL_MS);
+        }
+        if libc::kill(-group, 0) != 0
+            && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        {
+            libc::_exit(0);
+        }
+    }
+}
+
 impl GroupWatch {
     /// With `hand_over`, the command itself also keeps the lock copies
     /// across exec and finds their numbers in `RESERVED_LOCKS_ENV`, so a
@@ -80,39 +121,10 @@ impl GroupWatch {
                             libc::close(fd);
                         }
                     }
-                    let mut byte = 0_u8;
                     if keep {
-                        // Leave the group, so it ends with the target's own
-                        // processes, and hold the lock copies until it does.
-                        if libc::setpgid(0, 0) != 0 {
-                            libc::_exit(1);
-                        }
-                        let mut open = true;
-                        loop {
-                            if open {
-                                let mut poll = libc::pollfd {
-                                    fd: reader,
-                                    events: libc::POLLIN,
-                                    revents: 0,
-                                };
-                                if libc::poll(&raw mut poll, 1, KEEPER_POLL_MS) > 0 {
-                                    match libc::read(reader, (&raw mut byte).cast(), 1) {
-                                        1 if byte == RELEASE => libc::_exit(0),
-                                        // The controller died: keep holding.
-                                        0 => open = false,
-                                        _ => {}
-                                    }
-                                }
-                            } else {
-                                libc::poll(std::ptr::null_mut(), 0, KEEPER_POLL_MS);
-                            }
-                            if libc::kill(-group, 0) != 0
-                                && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-                            {
-                                libc::_exit(0);
-                            }
-                        }
+                        keep_until_group_ends(reader, group);
                     }
+                    let mut byte = 0_u8;
                     loop {
                         if libc::read(reader, (&raw mut byte).cast(), 1) == 0 {
                             break;

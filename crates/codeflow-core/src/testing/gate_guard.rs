@@ -798,26 +798,10 @@ pub fn acquire_gate_lock(
     }
     // Every fence first: an older binary's gate refuses this run before it
     // takes a slot or the host in any folder (TSK-1256).
-    for dir in dirs {
-        lock.fences
-            .push((dir.join(LOCK_FILE), take_fence(dir, &trusted)?));
-    }
+    lock.fences = take_fences(dirs, &trusted)?;
     let mut host = Vec::new();
     for dir in dirs {
-        let host_path = dir.join(HOST_LOCK_FILE);
-        match try_open_and_lock(&host_path, true)? {
-            Slot::Taken(file) => host.push((host_path, AcquiredFile(file))),
-            Slot::Busy => {
-                let holder = read_holder(&host_path, None, &trusted).unwrap_or_default();
-                return Err(LockHeld {
-                    path: host_path,
-                    holder,
-                    running_groups: Vec::new(),
-                    exclusive: true,
-                    older_binary: false,
-                });
-            }
-        }
+        host.push(take_host_shared(dir, &trusted)?);
         let (acquired, path, busy) = take_slot(dir, &trusted, &mut lock.notes)?;
         // The record is what lets another run see this one and its live
         // targets, so a run that cannot write it does not run uncoordinated
@@ -870,6 +854,40 @@ pub fn acquire_gate_lock(
         });
     }
     Ok(lock)
+}
+
+/// Hold the host lock of `dir` shared, with its path.
+/// # Errors
+/// While a `host_exclusive` target holds it, naming that target, or when it
+/// cannot be opened or locked.
+fn take_host_shared(dir: &Path, trusted: &[String]) -> Result<(PathBuf, AcquiredFile), LockHeld> {
+    let path = dir.join(HOST_LOCK_FILE);
+    match try_open_and_lock(&path, true)? {
+        Slot::Taken(file) => Ok((path, AcquiredFile(file))),
+        Slot::Busy => {
+            let holder = read_holder(&path, None, trusted).unwrap_or_default();
+            Err(LockHeld {
+                path,
+                holder,
+                running_groups: Vec::new(),
+                exclusive: true,
+                older_binary: false,
+            })
+        }
+    }
+}
+
+/// Hold the fence of every directory in `dirs` shared, with its path, in
+/// order; the fences taken release if a later one refuses.
+/// # Errors
+/// As [`take_fence`].
+fn take_fences(
+    dirs: &[PathBuf],
+    trusted: &[String],
+) -> Result<Vec<(PathBuf, AcquiredFile)>, LockHeld> {
+    dirs.iter()
+        .map(|dir| Ok((dir.join(LOCK_FILE), take_fence(dir, trusted)?)))
+        .collect()
 }
 
 /// Hold the fence ([`LOCK_FILE`]) in `dir` shared.
@@ -1035,7 +1053,7 @@ pub struct HostExclusive {
     /// The fence held shared in each lock directory, taken before the host,
     /// so an older binary's gate stays out while the target runs whatever
     /// called this (TSK-1256). It releases after the host.
-    fences: Vec<AcquiredFile>,
+    fences: Vec<(PathBuf, AcquiredFile)>,
 }
 
 impl Drop for HostExclusive {
@@ -1130,10 +1148,7 @@ pub fn hold_host_exclusive_in(
         );
     }
     let trusted = trusted_dirs(root);
-    let mut fences = Vec::new();
-    for dir in dirs {
-        fences.push(take_fence(dir, &trusted).map_err(|held| with_repair_pointer(&held))?);
-    }
+    let fences = take_fences(dirs, &trusted).map_err(|held| with_repair_pointer(&held))?;
     for lock in held().iter() {
         for (_, file) in &lock.host {
             os_lock::unlock(&file.0);
@@ -1451,27 +1466,11 @@ fn inherit_gate_lock(
     }
     // The fence, held shared by this process too, so a target that outlives
     // the reserve still keeps older binaries out (TSK-1256).
-    let mut fences = Vec::new();
-    for dir in dirs {
-        fences.push((dir.join(LOCK_FILE), take_fence(dir, &trusted)?));
-    }
+    let fences = take_fences(dirs, &trusted)?;
     // The host half of the lease, taken as ordinary admission takes it.
     let mut host = Vec::new();
     for dir in dirs {
-        let host_path = dir.join(HOST_LOCK_FILE);
-        match try_open_and_lock(&host_path, true)? {
-            Slot::Taken(file) => host.push((host_path, AcquiredFile(file))),
-            Slot::Busy => {
-                let holder = read_holder(&host_path, None, &trusted).unwrap_or_default();
-                return Err(LockHeld {
-                    path: host_path,
-                    holder,
-                    running_groups: Vec::new(),
-                    exclusive: true,
-                    older_binary: false,
-                });
-            }
-        }
+        host.push(take_host_shared(dir, &trusted)?);
     }
     // The run under the reserve is the reserve's run: its busy slot counts
     // once, so `runs` is the busy slots of the most crowded folder. An
