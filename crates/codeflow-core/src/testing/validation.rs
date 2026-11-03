@@ -567,6 +567,7 @@ mod tests {
 
     fn make_run_result(name: &str) -> TargetRunResult {
         TargetRunResult {
+            termination_unconfirmed: false,
             error: None,
             evidence: None,
             target_name: name.to_string(),
@@ -981,6 +982,7 @@ mod tests {
             name: "rust-core".to_string(),
             mode: "full".to_string(),
             run_result: TargetRunResult {
+                termination_unconfirmed: false,
                 error: None,
                 evidence: None,
                 target_name: "rust-core".to_string(),

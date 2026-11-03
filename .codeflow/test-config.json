@@ -518,7 +518,7 @@
         "present-web-build"
       ],
       "outputs": [],
-      "exclusive": true,
+      "host_exclusive": true,
       "timeout_seconds": 900,
       "heavy": true,
       "workers": 9

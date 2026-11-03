@@ -77,6 +77,60 @@ that split run remains incomplete as evidence for a full landing gate.
 
 ## Technical
 
+### Worker caps and exclusive admission
+
+Both `codeflow test` and `codeflow reserve` treat inherited
+`CARGO_BUILD_JOBS` as an upper bound and print the honoured caller cap.
+A target's environment cap can lower it further. An absent variable adds
+no cap; otherwise accept a nonzero signed 32-bit integer or exact lowercase
+`default`. Positive values are literal job counts. Negative values normalize
+to logical CPUs plus that value, with a minimum of one; `default` means the
+logical CPU count. Leading plus and zeros are accepted. Whitespace, zero,
+overflow, malformed text and non-Unicode values refuse before targets start.
+Children receive normalized positive counts; target `default` cannot clear
+a smaller inherited caller cap.
+
+Admission also applies host capacity and `execution.worker_budget`. Declared
+`workers` is both a request and ceiling: siblings cannot shrink the request,
+but host contention, host capacity and explicit caps may lower the grant.
+A declared request taking the entire effective run budget drains all
+siblings and runs alone within its gate. Smaller requests may share accounted
+workers. Omitted requests divide the available budget among ready heavy work.
+Progress and saved target stderr report `workers N of M (host busy)` for a
+contention reduction; caps and host capacity name their own causes.
+
+`exclusive: true` excludes sibling targets only. A timing-sensitive target
+that cannot share the machine declares `host_exclusive: true`. After its
+siblings finish with confirmed termination, it releases both its shared host
+lease and slot, then queues for exclusivity in FIFO publication order. New
+shared arrivals and ordinary successors reacquiring admission inspect the
+queue under the same mutex used to publish tickets; they cannot slip ahead
+of a published exclusive request. Queue waits report their holder and are
+bounded by `--wait-seconds`, default zero, then return a named not-run result.
+Short queue-metadata transactions have their own bounded serialization wait.
+Legacy busy slots and live orphan groups still exclude exclusive work.
+Older binaries do not inspect the queue and can delay a writer until refusal;
+fairness against mixed-version arrivals is not guaranteed.
+
+A stable ownership file stays locked for the whole wait and run, while a
+separate queue record is written in full, closed and published under the
+queue mutex. The ownership file is reopened read only after creation, never
+renamed or removed while held. Inspections use a non-blocking ownership lock,
+not a PID or timestamp alone, to decide whether a record is stale. Cancellation
+or reclamation removes the queue record before closing and removing ownership.
+This keeps the existing containment and Windows delete-sharing protections.
+
+An admitted exclusive target uses a target-local width. Ordinary successors
+must reacquire shared admission and recalculate their grant; the larger
+exclusive allocation does not persist. On Unix the target watcher keeps
+copies of the exclusive lease, protecting its process group if the gate dies.
+A run under `codeflow reserve` cannot relinquish its parent's lease to enter
+exclusive admission. If cleanup reports termination unconfirmed, no successor
+starts and the allocation and exclusive lease remain held until termination
+is confirmed or the gate process exits.
+
+### Target configuration
+
 The config is `.codeflow/test-config.json`; its editor schema is
 `.codeflow/test-config.schema.json`. Existing configurations remain valid and
 continue executing their targets until their dependencies are declared.

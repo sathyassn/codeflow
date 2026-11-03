@@ -223,7 +223,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--replace` | Explicitly replace an existing config when applying --template. |
 | | `--add-target` | Interactively append one target to the existing config. |
 | `codeflow reserve <COMMAND>...` | | Run a direct heavy command in a heavy-run slot, beside other heavy runs |
-| | `--wait-seconds <WAIT_SECONDS>` | Maximum seconds to wait while a host-exclusive target holds the host. Zero refuses immediately. Other heavy runs never make a reserve wait. Default `0`. |
+| | `--wait-seconds <WAIT_SECONDS>` | Maximum seconds to wait while a host-exclusive target holds the host or is queued ahead of this command. Zero refuses immediately. Ordinary shared runs do not make a reserve wait. Default `0`. |
 | | `--timeout-seconds <TIMEOUT_SECONDS>` | Stop the command and its descendants after this many seconds. Default `3600`. |
 | | `<COMMAND>...` | Executable and exact arguments, following --. |
 | `codeflow validate [PATH]` | | Validate record frontmatter; --docs adds the doc-graph integrity lint |

@@ -66,6 +66,8 @@ const OUTPUT_CAPTURE_LIMIT: usize = 1024 * 1024;
 pub struct TargetRunResult {
     pub target_name: String,
     pub exit_code: i32,
+    /// TSK-1278 sets this when bounded cleanup cannot confirm termination.
+    pub termination_unconfirmed: bool,
     /// Failure detail when no ordinary process exit code explains the result.
     pub error: Option<String>,
     pub stdout: String,
@@ -137,6 +139,7 @@ pub fn run_target(
     };
 
     Ok(TargetRunResult {
+        termination_unconfirmed: false,
         error,
         evidence: None,
         target_name: target.name.clone(),
@@ -351,10 +354,14 @@ fn run_parallel(
 /// runs, itself included: always bounded by the host's job budget, even for
 /// the first run and when `worker_budget` is unset, which only caps it
 /// further (TSK-1145).
-fn run_budget(execution: &super::config::ExecutionConfig, runs: usize) -> usize {
+fn run_budget(
+    execution: &super::config::ExecutionConfig,
+    cap: super::capacity::CallerCap,
+    runs: usize,
+) -> usize {
     let host = super::capacity::host_jobs(execution.host_jobs);
-    let jobs = super::capacity::run_jobs(host, execution.worker_budget, runs);
-    if super::capacity::lowered(host, execution.worker_budget, runs) {
+    let jobs = super::capacity::run_jobs(host, cap.width(execution.worker_budget), runs);
+    if super::capacity::lowered(host, cap.width(execution.worker_budget), runs) {
         progress!(
             "[codeflow test] {runs} heavy runs share this host's {host} jobs; this run uses {jobs}"
         );
@@ -398,14 +405,31 @@ pub fn run_dependency_targets_with_admission(
 ) -> Vec<Result<TargetRunResult, TestingError>> {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::mpsc::channel;
+    let cap = match super::capacity::CallerCap::read() {
+        Ok(cap) => cap,
+        Err(error) => return vec![Err(super::delivery::invalid(project_dir, error))],
+    };
+    let target_caps = match targets
+        .iter()
+        .map(|target| cap.target(target))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(caps) => caps,
+        Err(error) => return vec![Err(super::delivery::invalid(project_dir, error))],
+    };
+    if let Some(jobs) = cap.jobs {
+        progress!("[codeflow test] caller cap CARGO_BUILD_JOBS={jobs}");
+    }
     let bound = parallel_bound(execution.parallel, execution.max_parallel);
-    let mut admission: Option<super::gate_guard::GateLock> = None;
+    let mut _admission: Option<super::gate_guard::GateLock> = None;
     let mut wait_started = None;
     // The jobs heavy targets share: the run's own budget, lowered when more
     // heavy runs share the host than its job budget holds (TSK-1145).
-    let mut budget = super::gate_guard::held_runs().map_or(execution.worker_budget, |runs| {
-        Some(run_budget(execution, runs))
-    });
+    let mut budget = Some(run_budget(
+        execution,
+        cap,
+        super::gate_guard::held_runs().unwrap_or(1),
+    ));
     let mut host_hold: Option<(usize, super::gate_guard::HostExclusive)> = None;
     let mut allocations = BTreeMap::<usize, usize>::new();
     let baseline = match super::delivery::tracked(project_dir) {
@@ -418,6 +442,7 @@ pub fn run_dependency_targets_with_admission(
     let mut completed = BTreeMap::<String, bool>::new();
     let mut results = BTreeMap::new();
     let mut exclusive_running = false;
+    let mut termination_unconfirmed = false;
     while !pending.is_empty() || !running.is_empty() {
         let mut waiting = false;
         let mut candidates: Vec<_> = pending.iter().copied().collect();
@@ -431,8 +456,13 @@ pub fn run_dependency_targets_with_admission(
                 .requires
                 .iter()
                 .any(|r| completed.get(r) == Some(&false));
-            if prerequisite_failed || (execution.fail_fast && completed.values().any(|ok| !ok)) {
-                let reason = if prerequisite_failed {
+            if termination_unconfirmed
+                || prerequisite_failed
+                || (execution.fail_fast && completed.values().any(|ok| !ok))
+            {
+                let reason = if termination_unconfirmed {
+                    "not run: termination unconfirmed"
+                } else if prerequisite_failed {
                     "not run: prerequisite failed"
                 } else {
                     "not run: fail_fast"
@@ -453,33 +483,39 @@ pub fn run_dependency_targets_with_admission(
             {
                 continue;
             }
-            if (target.exclusive || target.host_exclusive) && !running.is_empty() {
+            // Whole-budget requests drain every sibling, including light work.
+            let heavy = target.heavy == Some(true) || target.host_exclusive;
+            let requested = target
+                .workers
+                .unwrap_or(1)
+                .min(target_caps[index].unwrap_or(usize::MAX));
+            let local_exclusive = target.exclusive
+                || target.host_exclusive
+                || (target.workers.is_some() && budget.is_some_and(|b| requested >= b));
+            if local_exclusive && !running.is_empty() {
                 break;
             }
-            // A host-exclusive target needs the host, so it is admitted as heavy work.
-            let heavy = target.heavy == Some(true) || target.host_exclusive;
             let free_workers =
                 budget.map(|budget| budget.saturating_sub(allocations.values().sum()));
-            // A declared width above the run's budget runs at the budget, so a
-            // lowered budget never leaves a target waiting forever (R483-04).
-            let need = budget.map_or(target.workers.unwrap_or(1), |budget| {
-                target.workers.unwrap_or(1).clamp(1, budget.max(1))
-            });
+            let need = budget.map_or(requested, |b| requested.min(b));
             if heavy && free_workers.is_some_and(|free| free < need) {
                 continue;
             }
-            if quick && heavy && admission.is_none() {
+            if heavy && !target.host_exclusive && super::gate_guard::held_runs().is_none() {
                 // Heavy runs never wait for each other (TSK-1145): admission
                 // refuses only while a host-exclusive target holds the host,
                 // and then waits up to the run's bound.
                 let bound = Duration::from_secs(execution.heavy_wait_seconds);
-                match super::gate_guard::acquire_project_gate_lock(project_dir, "quick") {
+                match super::gate_guard::acquire_project_gate_lock(
+                    project_dir,
+                    if quick { "quick" } else { mode },
+                ) {
                     Ok(lock) => {
                         for note in &lock.notes {
                             progress!("[codeflow test] {note}");
                         }
-                        budget = Some(run_budget(execution, lock.runs));
-                        admission = Some(lock);
+                        budget = Some(run_budget(execution, cap, lock.runs));
+                        _admission = Some(lock);
                         wait_started = None;
                     }
                     Err(message) => {
@@ -505,6 +541,7 @@ pub fn run_dependency_targets_with_admission(
                 }
             }
             if target.host_exclusive {
+                _admission = None;
                 let bound = Duration::from_secs(execution.heavy_wait_seconds);
                 match super::gate_guard::hold_host_exclusive(project_dir, bound) {
                     Ok(hold) => {
@@ -524,62 +561,94 @@ pub fn run_dependency_targets_with_admission(
                     }
                 }
             }
-            // Admission may have lowered the budget for this run.
-            let free_workers =
-                budget.map(|budget| budget.saturating_sub(allocations.values().sum()));
+            // A host-exclusive grant is target-local. It never raises the
+            // shared budget used after the lease is released.
+            let target_budget = if target.host_exclusive {
+                run_budget(execution, cap, 1)
+            } else {
+                budget.unwrap_or(1)
+            };
+            let requested = target
+                .workers
+                .map(|width| width.min(target_caps[index].unwrap_or(usize::MAX)));
+            let local_exclusive = target.exclusive
+                || target.host_exclusive
+                || requested.is_some_and(|width| width >= target_budget);
+            if local_exclusive && !running.is_empty() {
+                break;
+            }
+            let free = target_budget.saturating_sub(allocations.values().sum());
+            if heavy && free < requested.unwrap_or(1).min(target_budget) {
+                continue;
+            }
             let mut target = target.clone();
-            // Heavy targets always take a share of the host-bounded budget. A
-            // budget below what the run would otherwise use (its
-            // `worker_budget`, else every core) also sizes each target not
-            // declared light, so its tools do not take the whole host.
+            if let Some(jobs) = target_caps[index] {
+                target
+                    .env
+                    .insert("CARGO_BUILD_JOBS".into(), jobs.to_string());
+            }
             let unbounded = execution.worker_budget.unwrap_or_else(|| {
                 std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
             });
-            let sized =
-                heavy || (target.heavy != Some(false) && budget.is_some_and(|b| b < unbounded));
+            let sized = heavy || (target.heavy != Some(false) && target_budget < unbounded);
+            let mut worker_note = None;
             if sized {
-                if let Some(free) = free_workers {
-                    let ready = pending
-                        .iter()
-                        .filter(|&&i| {
-                            targets[i].heavy == Some(true)
-                                && targets[i]
-                                    .requires
-                                    .iter()
-                                    .all(|r| completed.get(r) == Some(&true))
-                        })
-                        .count();
-                    let shares = if target.exclusive || target.host_exclusive {
-                        1
+                if free == 0 {
+                    continue;
+                }
+                let ready = pending
+                    .iter()
+                    .filter(|&&i| {
+                        targets[i].heavy == Some(true)
+                            && targets[i]
+                                .requires
+                                .iter()
+                                .all(|r| completed.get(r) == Some(&true))
+                    })
+                    .count();
+                let shares = if local_exclusive {
+                    1
+                } else {
+                    ready.min(bound - running.len()).max(1)
+                };
+                let workers = requested
+                    .map_or_else(|| (free / shares).max(1), |width| width.min(free).max(1))
+                    .min(target_caps[index].unwrap_or(usize::MAX));
+                allocations.insert(index, workers);
+                for key in ["CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"] {
+                    target.env.insert(key.into(), workers.to_string());
+                }
+                target.env.insert("RUST_TEST_THREADS".into(), "1".into());
+                let oracle = if target.modes[mode].command.contains("nextest") {
+                    1
+                } else {
+                    workers
+                };
+                target
+                    .env
+                    .insert("CODEFLOW_ORACLE_WORKERS".into(), oracle.to_string());
+                progress!("[codeflow test] workers for '{}': jobs={workers}, nextest={workers}, rust-tests=1, oracle={oracle}", target.name);
+                if let Some(width) = target.workers.filter(|width| *width > workers) {
+                    let host = super::capacity::host_jobs(execution.host_jobs);
+                    let alone =
+                        super::capacity::run_jobs(host, cap.width(execution.worker_budget), 1);
+                    let reason = if workers < requested.unwrap_or(width).min(alone) {
+                        "host busy"
+                    } else if target_caps[index].is_some_and(|cap| cap < width) {
+                        "caller or target cap"
+                    } else if execution.worker_budget.is_some_and(|budget| budget < width) {
+                        "configured capacity"
                     } else {
-                        ready.min(bound - running.len()).max(1)
+                        "host capacity"
                     };
-                    // Never above what is free: admission may have lowered
-                    // the budget after the fit check (R483-04).
-                    let workers = target
-                        .workers
-                        .map_or_else(|| (free / shares).max(1), |width| width.min(free).max(1));
-                    allocations.insert(index, workers);
-                    for key in ["CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"] {
-                        target.env.insert(key.into(), workers.to_string());
-                    }
-                    // A nextest slot can itself run a Rust test process or the shell oracle.
-                    // Give those nested workers one thread so they do not multiply the budget.
-                    target.env.insert("RUST_TEST_THREADS".into(), "1".into());
-                    let oracle = if target.modes[mode].command.contains("nextest") {
-                        1
-                    } else {
-                        workers
-                    };
-                    target
-                        .env
-                        .insert("CODEFLOW_ORACLE_WORKERS".into(), oracle.to_string());
-                    progress!("[codeflow test] workers for '{}': jobs={workers}, nextest={workers}, rust-tests=1, oracle={oracle}", target.name);
+                    let note = format!("workers {workers} of {width} ({reason})");
+                    progress!("[codeflow test] {}: {note}", target.name);
+                    worker_note = Some(note);
                 }
             }
             pending.remove(&index);
             running.insert(index);
-            exclusive_running = target.exclusive || target.host_exclusive;
+            exclusive_running = local_exclusive;
             let declarations = declarations.to_vec();
             let mode = mode.to_string();
             let root = project_dir.to_path_buf();
@@ -589,7 +658,15 @@ pub fn run_dependency_targets_with_admission(
             std::thread::spawn(move || {
                 announce_start(&target, &mode);
                 let result = std::panic::catch_unwind(|| {
-                    run_owed_target(&target, &mode, &root, &baseline, &run_dir, &declarations)
+                    run_owed_target(
+                        &target,
+                        &mode,
+                        &root,
+                        &baseline,
+                        &run_dir,
+                        &declarations,
+                        worker_note.as_deref(),
+                    )
                 })
                 .unwrap_or_else(|_| {
                     Err(TestingError::ParallelExecutionError {
@@ -621,27 +698,37 @@ pub fn run_dependency_targets_with_admission(
         } else {
             rx.recv().ok()
         };
-        let Some((index, result)) = received else {
+        let Some((index, mut result)) = received else {
             if waiting {
                 continue;
             }
             break;
         };
+        let unconfirmed = result
+            .as_mut()
+            .is_ok_and(|run| retain_if_unconfirmed(project_dir, run, &mut host_hold));
+        if unconfirmed {
+            termination_unconfirmed = true;
+        }
         running.remove(&index);
-        allocations.remove(&index);
+        if !unconfirmed {
+            allocations.remove(&index);
+        }
         if !running
             .iter()
             .any(|&i| targets[i].heavy == Some(true) || targets[i].host_exclusive)
         {
-            admission = None;
+            _admission = None;
         }
-        if targets[index].exclusive || targets[index].host_exclusive {
+        if !unconfirmed {
             exclusive_running = false;
         }
         if host_hold.as_ref().is_some_and(|(held, _)| *held == index) {
             host_hold = None;
         }
-        let passed = result.as_ref().is_ok_and(|r| r.exit_code == 0);
+        let passed = result
+            .as_ref()
+            .is_ok_and(|r| r.exit_code == 0 && !r.termination_unconfirmed);
         progress!(
             "[codeflow test] completed target '{}': {}",
             targets[index].name,
@@ -652,6 +739,24 @@ pub fn run_dependency_targets_with_admission(
         results.insert(index, Ok(result));
     }
     results.into_values().collect()
+}
+
+pub(crate) fn retain_if_unconfirmed(
+    root: &Path,
+    run: &mut TargetRunResult,
+    exclusive: &mut Option<(usize, super::gate_guard::HostExclusive)>,
+) -> bool {
+    if !run.termination_unconfirmed {
+        return false;
+    }
+    super::gate_guard::retain_unconfirmed(root, exclusive.take().map(|(_, hold)| hold));
+    if run.exit_code == 0 {
+        run.exit_code = -1;
+    }
+    run.error.get_or_insert_with(|| {
+        "termination unconfirmed; reservation retained until gate exit".into()
+    });
+    true
 }
 
 fn parallel_bound(parallel: bool, configured: Option<usize>) -> usize {
@@ -673,6 +778,7 @@ fn runner_failure(target: &TargetConfig, error: &TestingError) -> TargetRunResul
 
 fn not_run(target: &TargetConfig, reason: &str) -> TargetRunResult {
     TargetRunResult {
+        termination_unconfirmed: false,
         evidence: None,
         target_name: target.name.clone(),
         exit_code: -1,
@@ -697,6 +803,7 @@ fn run_owed_target(
     baseline: &std::collections::BTreeMap<String, String>,
     run_dir: &Path,
     declarations: &[TargetConfig],
+    worker_note: Option<&str>,
 ) -> Result<TargetRunResult, TestingError> {
     // Paths a target names are reached through the anchored walk, never
     // following a link or junction at any component (TSK-1044).
@@ -814,6 +921,9 @@ fn run_owed_target(
         if save_redacted_report(&locate, path, &tree, &saved, declared)? {
             result.coverage_path = Some(destination.join("coverage"));
         }
+    }
+    if let Some(note) = worker_note {
+        let _ = writeln!(result.stderr, "[codeflow test] {note}");
     }
     if target.heavy == Some(true) || target.host_exclusive {
         if let Some(workers) = target.env.get("CARGO_BUILD_JOBS") {
@@ -1110,6 +1220,7 @@ pub fn run_reserved_command(
     let start = Instant::now();
     let result = spawn_prepared(command, "reserve", timeout, true, true, hand_over)?;
     Ok(TargetRunResult {
+        termination_unconfirmed: false,
         target_name: "reserve".into(),
         error: None,
         exit_code: if result.timed_out {

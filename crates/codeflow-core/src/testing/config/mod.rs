@@ -77,7 +77,7 @@ pub struct ExecutionConfig {
     pub quick_default_class: QuickTargetClass,
 
     /// Maximum wait for a host-exclusive target: for a heavy run while one
-    /// holds the host, and for one while other heavy runs hold it. Set only
+    /// holds or queues for the host, and for one while other heavy runs hold it. Set only
     /// by `codeflow test --wait-seconds`, never by the config file; heavy
     /// runs never wait for each other (TSK-1145).
     #[serde(skip)]
@@ -198,7 +198,8 @@ pub struct TargetConfig {
     pub heavy: Option<bool>,
 
     /// Workers this heavy target needs from `execution.worker_budget` before it starts;
-    /// under a lower run budget it runs at that budget.
+    /// under a lower run budget it runs at that budget. A request taking the
+    /// whole effective budget drains siblings and runs alone within the gate.
     /// Omitted targets divide the currently available workers among ready heavy targets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workers: Option<usize>,
@@ -892,6 +893,32 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn timing_sensitive_benchmark_and_shipped_schema_use_host_exclusivity() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let config = load_test_config(&root.join(".codeflow/test-config.json")).unwrap();
+        let benchmark = config
+            .targets
+            .iter()
+            .find(|target| target.name == "read-benchmark")
+            .unwrap();
+        assert!(
+            benchmark.host_exclusive,
+            "local exclusive alone cannot protect timing from other runs"
+        );
+        let schema: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(root.join("assets/base/testing/test-config.schema.json")).unwrap(),
+        )
+        .unwrap();
+        let properties = &schema["$defs"]["target"]["properties"];
+        assert_eq!(properties["host_exclusive"]["type"], "boolean");
+        assert_eq!(properties["exclusive"]["type"], "boolean");
+        assert!(properties["host_exclusive"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("FIFO"));
+    }
 
     #[test]
     fn prerequisites_round_trip_and_reject_invalid_graphs() {

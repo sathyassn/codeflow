@@ -385,8 +385,9 @@ class GateContracts(unittest.TestCase):
         for mode in ['quick', 'essential', 'full']:
             self.assertIn('python3 -B scripts/test_contract_scans.py',
                           targets['gate-parity']['modes'][mode]['command'])
-        for name in ['present-browser', 'read-benchmark', 'present-web-build']:
+        for name in ['present-browser', 'present-web-build']:
             self.assertTrue(targets[name]['exclusive'], name)
+        self.assertTrue(targets['read-benchmark']['host_exclusive'])
         self.assertEqual(targets['journey-gate']['requires'], ['rust-coverage'])
         self.assertIn('--fail-under-lines 90', targets['rust-coverage']['modes']['full']['command'])
         self.assertIn('nextest', targets['rust-coverage']['modes']['full']['command'])

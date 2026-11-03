@@ -66,6 +66,9 @@ fn command(dir: &Path, home: &Path, args: &[&str]) -> Command {
         .current_dir(dir)
         .env("CODEFLOW_HOME", home)
         .env_remove("CARGO_TARGET_DIR")
+        // Fixtures choose their own caps; the builder's nice wrapper must
+        // not change the expected admission widths inside these fake hosts.
+        .env_remove("CARGO_BUILD_JOBS")
         .env_remove("CI");
     cmd
 }

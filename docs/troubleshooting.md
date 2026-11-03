@@ -130,20 +130,22 @@ first run on an idle host is held to the budget too. A run that finds more runs 
 starts at once with the budget divided among them, at least one job, and
 prints `N heavy runs share this host's J jobs; this run uses K`. The
 count is divided among the run's concurrent heavy targets through
-`CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS`. A target with `heavy`
-unset is capped the same way but does not wait for a share: when the heavy
-targets hold every job, it starts with one.
+`CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS`. Caller and target job caps
+remain upper bounds. The [worker cap reference](test-gate.md#worker-caps-and-exclusive-admission)
+lists accepted forms, normalization and refusal details.
 
-A target that cannot share the host, such as a timing-sensitive one,
-declares `"host_exclusive": true`. It starts only when no other heavy run
-holds the host: it takes `host.lock` exclusively, after the other targets
-of its own run end. While it runs, other heavy runs and reserves wait up to
-`--wait-seconds` (default zero), then refuse naming it; the target itself waits for other runs up to the same
-bound, then is reported not run. On Unix the target's watcher holds the
-same exclusive lock, so a host-exclusive target that outlives a killed
-gate keeps other heavy runs out until its process group exits. A run under
-`codeflow reserve` cannot run a host-exclusive target. Nothing else runs
-alone.
+Timing-sensitive targets declare `host_exclusive: true`. After their own
+siblings finish, they release shared admission and queue for the host in FIFO
+order. Later queue-aware shared arrivals defer; waits name the holder and end
+within `--wait-seconds` (default zero) in admission or refusal. Legacy slots
+and live orphan groups still exclude them. Older binaries ignore the queue,
+so mixed-version fairness is not guaranteed. An enclosing reserve cannot
+release its parent's reservation to run an exclusive target.
+
+`exclusive: true` excludes siblings only. Ordinary work after host exclusivity
+reacquires a fresh share. Unconfirmed termination starts no successors and
+retains the allocation and exclusive lease until confirmation or gate exit.
+The reference explains ownership files and Unix watcher protection.
 
 Two runs that share a build output folder, such as two gates in one
 worktree, would write the same report or coverage file. nextest fixes its
@@ -201,11 +203,16 @@ heavy targets and records their Cargo, nextest, Rust-test and shell-oracle
 counts. A heavy target can set `workers` to wait until that many workers
 are free; when its run's budget is lower, it runs at the budget. Otherwise
 it shares the available workers with other ready heavy targets.
-Light targets can run beside them. Omit the budget to retain tool
-defaults. This repository sets nine workers and gives clippy a separate
+Smaller requests may share accounted workers. A request taking the whole
+effective run budget drains all siblings, including light or unclassified
+work, and then runs alone within its gate. A contention reduction prints
+`workers N of M (host busy)` in progress and saved target stderr; caller caps
+and host capacity name their own causes. This repository sets nine workers
+and gives clippy a separate
 `target/clippy` directory; its binary build waits for the all-target build.
 Each Cargo producer takes the full budget to avoid package-cache and
-build-directory waits; light checks still run beside it.
+build-directory waits, and timing-sensitive `read-benchmark` requests host
+exclusivity.
 
 A 3.x binary on the same machine locks `full-gate.lock` exclusively, so it
 refuses while a 4.0 run holds slot 0; a 4.0 run beside it takes the next
