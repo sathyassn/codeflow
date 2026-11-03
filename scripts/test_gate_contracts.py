@@ -170,7 +170,9 @@ class GateContracts(unittest.TestCase):
         registry = read('.github/workflows/codeflow-registry.yml')
         self.assertEqual(registry.count('cargo build --release'), 1)
         self.assertNotIn('concurrency:', registry)
-        self.assertNotIn('trusted:', registry)
+        # Its one job is the registry check, never a `trusted:` verdict; its
+        # comments may name the prefix to say why.
+        self.assertEqual(re.findall(r'^    name: (.+)$', registry, re.M), ['registry check'])
         self.assertIn('run: codeflow ids check\n', registry)
 
     def test_commit_standards_admits_only_the_exact_heads_ready_run(self):

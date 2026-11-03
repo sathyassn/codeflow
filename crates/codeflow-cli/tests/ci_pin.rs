@@ -1791,7 +1791,16 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     assert!(!registry.contains("\n    if: "));
     assert!(registry.contains("codeflow ids check"));
     assert!(!POLICY.contains("name: commit standards"));
-    assert!(!REGISTRY.contains("trusted:"));
+    // Its one job is the registry check; no job name in it is a `trusted:`
+    // verdict (its comments may say why).
+    let parsed: serde_yaml::Value = serde_yaml::from_str(REGISTRY).unwrap();
+    let names: Vec<&str> = parsed["jobs"]
+        .as_mapping()
+        .unwrap()
+        .values()
+        .map(|job| job["name"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(names, ["registry check"]);
     // The checkout is the run's own commit, the default branch's tip on
     // pull_request_target, never the base or the head.
     let checkout = checkout_block(enforcing);
@@ -2015,11 +2024,17 @@ fn judge_a_forged_head(head_pin: &str) {
     // The head: an always-green workflow, its own pin, a relaxed policy and
     // a commit that breaks the target's format rule.
     git(&origin, &["checkout", "-b", "feat/x"]);
-    let forged = POLICY.replace(
-        "run: codeflow ci --base \"$BASE_SHA\" --head \"$HEAD_SHA\" --branch \"$HEAD_REF\" --actor \"$ACTOR\" --policy-from \"$AUTHORITY_SHA\" --baseline-from \"$AUTHORITY_SHA\"",
-        "run: exit 0",
-    );
+    // The forgery replaces the whole verdict block (the policy presence
+    // check and the `codeflow ci` call) with a step that always passes.
+    let start = POLICY
+        .find("        run: |\n          if ! git cat-file -e \"${AUTHORITY_SHA}:.codeflow/policy.json\"")
+        .expect("the verdict block");
+    let call = "--policy-from \"$AUTHORITY_SHA\" --baseline-from \"$AUTHORITY_SHA\"\n";
+    let end = start + POLICY[start..].find(call).expect("the verdict call") + call.len();
+    assert!(POLICY[start..end].contains("\n          codeflow ci --base \"$BASE_SHA\""));
+    let forged = format!("{}        run: exit 0\n{}", &POLICY[..start], &POLICY[end..]);
     assert_ne!(forged, POLICY);
+    assert!(!forged.contains("codeflow ci --base"), "the forged head never judges");
     std::fs::write(origin.join(".github/workflows/codeflow-policy.yml"), forged).unwrap();
     std::fs::write(
         origin.join(".codeflow/project.toml"),
