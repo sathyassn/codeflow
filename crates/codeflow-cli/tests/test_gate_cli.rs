@@ -1029,6 +1029,21 @@ fn a_killed_full_gate_never_runs_beside_its_target_in_a_fresh_scaffold() {
     let pid = wait_for_target_pid(&mut gate.0, &rx, &root.join("pid.txt"));
     let mut target = EndTarget(Some(pid));
     assert!(still_runs(pid), "the target runs under its gate");
+    if cfg!(unix) {
+        // The gate records the target's group just after it starts, and
+        // the target can write its pid first: wait for the record before
+        // the kill, or the kill can land between the two.
+        let record = home.path().join("locks/full-gate-1.record");
+        let recorded = (0..400).any(|_| {
+            let text = std::fs::read_to_string(&record).unwrap_or_default();
+            let found = text.lines().any(|line| line == format!("group={pid}"));
+            if !found {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            found
+        });
+        assert!(recorded, "the gate recorded the target's group");
+    }
     gate.0.kill().unwrap();
     gate.0.wait().unwrap();
 

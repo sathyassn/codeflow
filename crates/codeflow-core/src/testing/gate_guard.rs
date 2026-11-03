@@ -67,7 +67,7 @@
 //! it keeps copies of the run's slot, host and fence locks, so a target that
 //! outlives its run keeps its slot busy and keeps a host-exclusive target
 //! and older binaries out. Other targets can outlive a killed gate. Every
-//! target inherits the run's fences ([`fence_copies`]), and a flock belongs
+//! target inherits the run's fences, and a flock belongs
 //! to the open file description, so the fence lasts while any process of
 //! the target that kept the descriptor lives, grandchildren included; the
 //! run only ever closes its own copy of a fence, never unlocks it
@@ -1311,19 +1311,27 @@ pub fn hold_host_exclusive_in(
             crate::git::display_path(&path)
         ));
     }
+    Ok(held_exclusively(taken, fences))
+}
+
+/// The host-exclusive hold over the host locks `taken` and the `fences`
+/// held for it. From here on the fences only close, and the target
+/// inherits them as it inherits an admission's ([`fence_copies`]).
+fn held_exclusively(
+    taken: Vec<(PathBuf, Option<AcquiredFile>)>,
+    fences: Vec<(PathBuf, FenceFile)>,
+) -> HostExclusive {
     let mut hold = HostExclusive {
         files: taken,
         fences,
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
     };
-    // Held: from here on the fences only close, and the target inherits
-    // them as it inherits an admission's.
     for (_, fence) in &mut hold.fences {
         fence.armed = false;
         #[cfg(unix)]
         host_fences().push((hold.id, std::os::fd::AsRawFd::as_raw_fd(&fence.file)));
     }
-    Ok(hold)
+    hold
 }
 
 /// A busy slot in `dirs` that this process does not hold, or a fence whose
