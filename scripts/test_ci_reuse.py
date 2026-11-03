@@ -8,6 +8,7 @@ green in every job. Each other case runs every job.
 """
 
 import importlib.util
+import copy
 import io
 import json
 import os
@@ -430,6 +431,206 @@ class AdmissionTests(unittest.TestCase):
         template = (ROOT / "assets/base/ci/codeflow-policy.yml").read_text()
         for marker in ("ci-reuse.py", "workflow_run:", "checks: write", "check-runs"):
             self.assertNotIn(marker, template)
+
+
+POLICY_SPEC = importlib.util.spec_from_file_location("policy_admission", ROOT / "scripts/policy-admission.py")
+policy = importlib.util.module_from_spec(POLICY_SPEC)
+POLICY_SPEC.loader.exec_module(policy)
+
+
+class PolicyApi(FakeApi):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.current["base"]["sha"] = MAIN
+        self.current["head"]["ref"] = "task/example"
+        self.check_list = []
+        self.writes = []
+
+    def pull(self, number):
+        return copy.deepcopy(self.current)
+
+    def get(self, path):
+        if path.startswith("actions/runs/"):
+            return copy.deepcopy(self.run_list[0])
+        raise AssertionError(path)
+
+    def pages(self, path, key):
+        if path.startswith(f"commits/{HEAD}/check-runs?") and key == "check_runs":
+            return self.check_list
+        raise AssertionError((path, key))
+
+    def write(self, path, payload, method):
+        self.writes.append((path, payload, method))
+        return {"id": 100}
+
+
+def policy_event(completion=True):
+    api = PolicyApi()
+    event = {"repository": {"full_name": "o/r"}, "number": 95,
+             "pull_request": api.current, "workflow_run": run()}
+    name = "workflow_run" if completion else "pull_request_target"
+    return name, event
+
+
+class PublisherTests(unittest.TestCase):
+    def identity(self, completion=True):
+        name, event = policy_event(completion)
+        return policy.event_identity(name, event, "o/r")
+
+    def publish(self, reader=None, writer=None, identity=None, result="success", body_digest=None):
+        reader = reader or PolicyApi()
+        writer = writer or reader
+        identity = identity or self.identity()
+        return policy.publish(reader, writer, identity,
+                              body_digest or policy.digest(reader.current["body"]), result,
+                              "https://github.com/o/r/actions/runs/99")
+
+    def test_success_is_written_only_to_the_bound_head(self):
+        api = PolicyApi()
+        self.assertEqual(self.publish(api), "success")
+        path, pending, method = api.writes[0]
+        self.assertEqual((path, method), ("check-runs", "POST"))
+        self.assertEqual(pending["head_sha"], HEAD)
+        self.assertEqual(pending["status"], "in_progress")
+        payload = api.writes[-1][1]
+        self.assertEqual(payload["name"], "commit standards")
+        self.assertEqual(payload["conclusion"], "success")
+        self.assertIn("CI run 77, attempt 1", payload["output"]["summary"])
+        self.assertNotIn("current body", json.dumps(payload))
+
+    def test_failed_cancelled_skipped_and_pending_ci_never_write_success(self):
+        for changes in ({"conclusion": "failure"}, {"conclusion": "cancelled"},
+                        {"conclusion": "skipped"}, {"status": "in_progress", "conclusion": None}):
+            with self.subTest(changes=changes):
+                api = PolicyApi(runs=[run(**changes)])
+                # PR events can report pending as failure without waiting.
+                self.assertEqual(self.publish(api, identity=self.identity(False)), "failure")
+                self.assertEqual(api.writes[-1][1]["conclusion"], "failure")
+
+    def test_failed_and_cancelled_completions_write_failure(self):
+        for conclusion in ("failure", "cancelled"):
+            api = PolicyApi(runs=[run(conclusion=conclusion)])
+            identity = {**self.identity(), "conclusion": conclusion}
+            self.assertEqual(self.publish(api, identity=identity), "failure")
+
+    def test_missing_run_refuses_without_waiting(self):
+        api = PolicyApi(runs=[])
+        self.assertEqual(self.publish(api, identity=self.identity(False)), "failure")
+        self.assertEqual(api.writes[-1][1]["conclusion"], "failure")
+        with self.assertRaises(policy.reuse.Skip):
+            self.publish(PolicyApi(runs=[]))
+
+    def test_validation_failure_and_changed_body_cannot_be_admitted(self):
+        for result in ("failure", "cancelled", "skipped"):
+            self.assertEqual(self.publish(PolicyApi(), result=result), "failure")
+        self.assertEqual(self.publish(PolicyApi(), body_digest="0" * 64), "failure")
+
+    def test_retarget_event_replaces_an_earlier_success_with_failure(self):
+        api = PolicyApi()
+        api.current["base"]["ref"] = "integration/new-target"
+        identity = {**self.identity(False), "base": "integration/new-target"}
+        self.assertEqual(self.publish(api, identity=identity), "failure")
+        self.assertEqual(api.writes[-1][1]["conclusion"], "failure")
+
+    def test_draft_closed_or_skipped_verdict_refuses(self):
+        for changes in ({"draft": True}, {"state": "closed"}):
+            api = PolicyApi()
+            api.current.update(changes)
+            self.assertEqual(self.publish(api), "failure")
+        self.assertEqual(self.publish(PolicyApi(jobs={77: [job("codeflow gates", "skipped"), job("windows")]})), "failure")
+
+    def test_stale_head_target_attempt_or_completion_never_writes(self):
+        for changes in ({"head": MAIN}, {"base": "old-target"}, {"attempt": 2},
+                        {"run": 78}, {"conclusion": "failure"}):
+            with self.subTest(changes=changes):
+                api = PolicyApi()
+                with self.assertRaises(policy.reuse.Skip):
+                    self.publish(api, identity={**self.identity(), **changes})
+                self.assertEqual(api.writes, [])
+
+    def test_api_failure_at_each_read_never_writes_success(self):
+        for method in ("pull", "runs", "get", "attempt_jobs", "pages"):
+            api, writer = PolicyApi(), PolicyApi()
+            with self.subTest(method=method), mock.patch.object(api, method, side_effect=OSError("API error")):
+                with self.assertRaises(OSError):
+                    self.publish(api, writer)
+                self.assertFalse(any(payload.get("conclusion") == "success" for _, payload, _ in writer.writes))
+
+    def test_head_move_after_verdict_read_never_writes(self):
+        class Moving(PolicyApi):
+            def pages(self, path, key):
+                self.current["head"]["sha"] = MAIN
+                return []
+        api = Moving()
+        with self.assertRaises(policy.reuse.Skip):
+            self.publish(api)
+        self.assertEqual(api.writes, [])
+
+    def test_rerun_after_verdict_read_never_writes(self):
+        class Rerunning(PolicyApi):
+            def pages(self, path, key):
+                self.run_list = [run(run_attempt=2)]
+                return []
+        api = Rerunning()
+        with self.assertRaises(policy.reuse.Skip):
+            self.publish(api)
+        self.assertFalse(any(payload.get("conclusion") == "success" for _, payload, _ in api.writes))
+
+    def test_own_check_is_updated_and_another_apps_check_is_ignored(self):
+        api = PolicyApi()
+        api.check_list = [{"id": 200, "name": "commit standards", "app": {"slug": "github-actions"},
+                           "external_id": "codeflow-policy:pull:95"},
+                          {"id": 201, "name": "commit standards", "app": {"slug": "other"},
+                           "external_id": "codeflow-policy:pull:95"}]
+        self.assertEqual(self.publish(api), "success")
+        self.assertEqual((api.writes[0][0], api.writes[0][2]), ("check-runs/200", "PATCH"))
+        api.check_list.append(copy.deepcopy(api.check_list[0]))
+        api.writes.clear()
+        with self.assertRaises(policy.reuse.Skip):
+            self.publish(api)
+        self.assertEqual(api.writes, [])
+
+    def test_missing_ambiguous_or_wrong_event_identity_refuses(self):
+        for field, value in (("pull_requests", []), ("pull_requests", [{"number": 95}, {"number": 96}]),
+                             ("event", "push"), ("path", "wrong.yml"), ("run_attempt", 0)):
+            name, event = policy_event()
+            event["workflow_run"][field] = value
+            with self.subTest(field=field), self.assertRaises(policy.reuse.Skip):
+                policy.event_identity(name, event, "o/r")
+        name, event = policy_event()
+        with self.assertRaises(policy.reuse.Skip):
+            policy.event_identity(name, event, "another/repository")
+
+    def test_prepare_reads_current_body_and_writes_no_body_step_output(self):
+        api = PolicyApi()
+        api.current["body"] = "latest body, with $(untrusted shell)"
+        with tempfile.TemporaryDirectory() as directory:
+            fields = policy.prepare(api, self.identity(False), Path(directory))
+            self.assertEqual(Path(directory, "pr-body.md").read_text(), api.current["body"] + "\n")
+            self.assertEqual(fields["digest"], policy.digest(api.current["body"]))
+            self.assertNotIn(api.current["body"], json.dumps(fields))
+            self.assertEqual(fields["base_sha"], MAIN)
+
+    def test_step_output_newlines_and_missing_body_are_refused(self):
+        for value in ("task/line\nhead=injected", "task/line\rhead=injected"):
+            api = PolicyApi()
+            api.current["head"]["ref"] = value
+            with tempfile.TemporaryDirectory() as directory, self.assertRaises(policy.reuse.Skip):
+                policy.prepare(api, self.identity(False), Path(directory))
+        api = PolicyApi()
+        del api.current["body"]
+        with tempfile.TemporaryDirectory() as directory, self.assertRaises(policy.reuse.Skip):
+            policy.prepare(api, self.identity(False), Path(directory))
+
+    def test_publisher_reads_public_metadata_without_its_write_token(self):
+        request = None
+        def response(value):
+            nonlocal request
+            request = value
+            return io.BytesIO(b'{}')
+        with mock.patch.object(policy.reuse.urllib.request, "urlopen", side_effect=response):
+            policy.reuse.Api("https://api.github.com", "o/r", "").get("actions/runs/77")
+        self.assertIsNone(request.get_header("Authorization"))
 
 
 class GitTests(unittest.TestCase):

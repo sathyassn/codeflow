@@ -189,7 +189,7 @@ def current_pull(api, pull: int, head: str, base: str) -> dict:
         raise Skip("the pull request head has moved; its new head must be judged")
     if (record.get("base") or {}).get("ref") != base:
         raise Skip("the pull request was retargeted; its current target must be judged")
-    if not isinstance(record.get("body"), (str, type(None))):
+    if "body" not in record or not isinstance(record.get("body"), (str, type(None))):
         raise Skip("the pull request body is unreadable")
     return record
 
@@ -311,9 +311,18 @@ class Api:
         self.url, self.repo, self.token = url.rstrip("/"), repo, token
 
     def get(self, path: str) -> dict | list:
-        request = urllib.request.Request(f"{self.url}/repos/{self.repo}/{path}", headers={
+        headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        request = urllib.request.Request(f"{self.url}/repos/{self.repo}/{path}", headers=headers)
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.load(response)
+
+    def write(self, path: str, payload: dict, method: str) -> dict:
+        request = urllib.request.Request(f"{self.url}/repos/{self.repo}/{path}",
+                                         data=json.dumps(payload).encode(), method=method, headers={
             "Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}",
-            "X-GitHub-Api-Version": "2022-11-28"})
+            "Content-Type": "application/json", "X-GitHub-Api-Version": "2022-11-28"})
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.load(response)
 

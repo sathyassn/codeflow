@@ -48,6 +48,7 @@
       "scripts/test_windows_partitions.py",
       "scripts/ci-reuse.py",
       "scripts/test_ci_reuse.py",
+      "scripts/policy-admission.py",
       "scripts/coverage-shards.py",
       "scripts/coverage-test-times.json",
       "scripts/coverage-merge.py",
