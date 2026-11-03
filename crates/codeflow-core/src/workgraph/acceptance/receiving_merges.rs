@@ -236,11 +236,12 @@ mod tests {
         .unwrap()
     }
 
+    fn task(id: u32) -> String {
+        format!("---\nid: TSK-{id:03}\nstatus: todo\nintegration_target: integration/EPC-001-line\n---\n\n## Acceptance Criteria\n\n- AC-1 (journey) When run, the system shall work.\n\n## Closeout\n\n")
+    }
+
     fn two_tasks(review: Option<Oid>) -> (tempfile::TempDir, Repository, Oid, Oid, Oid) {
         let dir = tempfile::tempdir().unwrap();
-        let task = |id| {
-            format!("---\nid: TSK-{id:03}\nstatus: todo\nintegration_target: integration/EPC-001-line\n---\n\n## Acceptance Criteria\n\n- AC-1 (journey) When run, the system shall work.\n\n## Closeout\n\n")
-        };
         let (repo, base) = crate::git::repo_with_tree(
             dir.path(),
             &[
@@ -445,18 +446,21 @@ mod tests {
     #[test]
     fn a_review_on_the_line_cannot_cover_an_earlier_merge_resolution() {
         let dir = tempfile::tempdir().unwrap();
-        let (repo, base) = crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"base")]);
+        let (repo, base) = crate::git::repo_with_tree(
+            dir.path(),
+            &[(b"project-management/tasks/TSK-002.md", task(2).as_bytes())],
+        );
         let first = commit(
             &repo,
             base,
             b"project-management/tasks/TSK-001.md",
-            b"first record",
+            task(1).as_bytes(),
         );
         let second = commit(
             &repo,
             base,
-            b"project-management/tasks/TSK-002.md",
-            b"second record",
+            b"project-management/tasks/TSK-003.md",
+            task(3).as_bytes(),
         );
         let clean = merge(&repo, first, second);
         let resolved = commit(
@@ -479,14 +483,38 @@ mod tests {
                 ],
             )
             .unwrap();
+        let completed = format!("{}```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: https://example.test/review\n  criteria:\n    AC-1: verified | fixture passed\n  journey: verified | fixture ran\n  not_verified: none\n  follow_ups: none\n  verdict: approved\n```\n", task(2).replace("status: todo", "status: complete"));
         let head = commit(
             &repo,
             reviewed,
-            b"project-management/tasks/TSK-003.md",
-            b"later completion",
+            b"project-management/tasks/TSK-002.md",
+            completed.as_bytes(),
         );
-        let error = judge(&repo, base, head, &[reviewed]).unwrap_err();
+        repo.reference("refs/heads/main", base, true, "published default")
+            .unwrap();
+        repo.reference(
+            "refs/heads/integration/EPC-001-line",
+            head,
+            true,
+            "receiving line",
+        )
+        .unwrap();
+        let error = super::super::completions_in_range(
+            &repo,
+            &base.to_string(),
+            &head.to_string(),
+            Some(base),
+            &super::super::Criteria::Amendable,
+            &super::super::RunBases::new([base, head]),
+            Some("integration/EPC-001-line"),
+            &[],
+        )
+        .unwrap_err();
         assert!(error.contains(&reviewed.to_string()), "{error}");
+        assert!(
+            error.contains("no task landing or matching task branch"),
+            "{error}"
+        );
     }
 
     #[test]
