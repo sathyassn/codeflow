@@ -560,6 +560,17 @@ fn the_guard_refuses_a_silent_remote_inside_its_budget_and_a_fetch_clears_it() {
     );
     assert!(text.contains("run git fetch origin"), "{text}");
 
+    // The route the refusal names has to be open to the session it refused.
+    let fetch_payload =
+        json!({"tool_name":"Bash","cwd":a.work(),"tool_input":{"command":"git fetch origin"}})
+            .to_string();
+    let started = Instant::now();
+    let fetch_guard = a.codeflow_on(&silent, &["hook", "git-guard"], &fetch_payload);
+    let took = started.elapsed();
+    let text = said(&fetch_guard);
+    println!("guard on the fetch itself ({took:?}):\n{text}");
+    assert_eq!(fetch_guard.status.code(), Some(0), "{text}");
+
     a.git(&["fetch", "-q", "origin"]);
     // Git 2.48 and later record the remote HEAD on fetch; an older git
     // needs it named once, without the network.

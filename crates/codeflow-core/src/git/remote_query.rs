@@ -110,16 +110,24 @@ impl QueryLimits {
     /// The limits the local policy authority sets: the policy committed on
     /// the remote's default branch as last fetched
     /// ([`crate::hooks::landed_policy::load_local`], which never asks the
-    /// remote), or with no remote the policy that load reads.
+    /// remote).
     ///
     /// # Errors
     ///
-    /// The authority cannot be read here, such as while the remote's
-    /// tracking refs are missing; the caller decides whether the shipped
-    /// defaults stand in.
+    /// No default branch supplies a policy here: the remote's tracking refs
+    /// are missing, the authority cannot be read, or the repository is in a
+    /// labelled state with no remote, whose policy is `HEAD`'s and so the
+    /// change's own. The caller decides whether the shipped defaults stand
+    /// in.
     pub fn from_authority(root: &Path) -> Result<Self, String> {
-        crate::hooks::landed_policy::load_local(root)
-            .map(|landed| Self::from_git(&landed.policy.git))
+        let landed = crate::hooks::landed_policy::load_local(root)?;
+        if landed.authority.is_none() {
+            return Err(format!(
+                "no default branch supplies a policy: {}",
+                landed.source
+            ));
+        }
+        Ok(Self::from_git(&landed.policy.git))
     }
 
     /// [`Self::from_authority`], or the shipped defaults when the authority
@@ -825,6 +833,31 @@ mod tests {
             b"fatal: unable to access: Could not resolve host\n"
         ));
         assert!(!authentication_failed(b""));
+    }
+
+    /// TSK-1301: with no remote the local policy is `HEAD`'s, which the
+    /// change being pushed can write, so it never sets the waits.
+    #[test]
+    fn a_policy_with_no_default_branch_never_sets_the_waits() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/policy.json"),
+            r#"{"git":{"remote_query_timeout_seconds":7777}}"#,
+        )
+        .unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(".codeflow/policy.json")).unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let who = git2::Signature::now("t", "t@example.invalid").unwrap();
+        repo.commit(Some("HEAD"), &who, &who, "chore: x", &tree, &[])
+            .unwrap();
+        assert!(QueryLimits::from_authority(dir.path()).is_err());
+        assert_eq!(
+            QueryLimits::from_authority_or_default(dir.path()),
+            QueryLimits::default()
+        );
     }
 
     /// TSK-1301: a timeout names the limits used, the measured time and

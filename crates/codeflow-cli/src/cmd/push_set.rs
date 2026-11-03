@@ -194,13 +194,13 @@ fn run_checked_with_binary(
 /// The destination lookup's timeout and attempts (TSK-1301): read from the
 /// local policy authority, the remote default branch's committed policy as
 /// last fetched, never from the working copy or the pushed head, which the
-/// push itself can change. An unreadable authority leaves the shipped
-/// limits, noted; the lookup still refuses a destination that never answers.
+/// push itself can change. With no such branch to read, the shipped limits
+/// apply, noted; the lookup still refuses a destination that never answers.
 fn probe_limits(root: &Path, report: &mut StageReport) -> remote_query::QueryLimits {
     remote_query::QueryLimits::from_authority(root).unwrap_or_else(|why| {
         let limits = remote_query::QueryLimits::default();
         report.status.push(format!(
-            "note: the destination lookup uses the shipped limits ({}s per attempt, {} attempts), since the policy authority cannot be read: {why}",
+            "note: the destination lookup uses the shipped limits ({}s per attempt, {} attempts), since no default branch supplies them: {why}",
             limits.timeout().as_secs(),
             limits.attempts()
         ));
