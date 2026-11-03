@@ -2047,7 +2047,7 @@ mod tests {
         let original = crate::document::parse_document(br#"{"schema_version":2,"title":"Original","blocks":[{"type":"html","id":"stage","title":"Original stage","caption":"A paragraph.","html":"<p>Original</p>"}]}"#).unwrap();
         let (_temp, state) = app_state_with(original);
         let headers = application_headers(&state, true);
-        let stale = serde_json::json!({
+        let old_report = serde_json::json!({
             "stage_id":"stage", "revision":1, "content_width":832.0,
             "contract":crate::stage_measurements::rendering_contract(""),
             "height":48.0, "theme":"slate", "mode":"light"
@@ -2055,7 +2055,7 @@ mod tests {
         let before_update = submit_stage_measurement(
             State(state.clone()),
             headers.clone(),
-            Body::from(serde_json::to_vec(&stale).unwrap()),
+            Body::from(serde_json::to_vec(&old_report).unwrap()),
         )
         .await;
         assert_eq!(before_update.status(), StatusCode::OK);
@@ -2064,7 +2064,7 @@ mod tests {
             .store
             .update_document(state.session_id, replacement)
             .unwrap();
-        let mut current = stale.clone();
+        let mut current = old_report.clone();
         current["revision"] = serde_json::json!(2);
         current["stage_id"] = serde_json::json!("replacement");
         let accepted = submit_stage_measurement(
@@ -2082,7 +2082,7 @@ mod tests {
         let late = submit_stage_measurement(
             State(state.clone()),
             headers,
-            Body::from(serde_json::to_vec(&stale).unwrap()),
+            Body::from(serde_json::to_vec(&old_report).unwrap()),
         )
         .await;
         assert_eq!(late.status(), StatusCode::OK);
