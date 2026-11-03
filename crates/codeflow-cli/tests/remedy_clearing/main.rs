@@ -7,10 +7,9 @@
 //!
 //! - [`Proof::Runs`]: a test raises the finding, runs the step exactly as
 //!   the output prints it, and sees the finding gone on the next run.
-//! - [`Proof::Confirms`]: the finding is a note naming an event that
-//!   confirms what doctor cannot read, and stays a note, since doctor keeps
-//!   no record of runs. A test runs the printed event and shows that it
-//!   tells the states apart; it does not see the note gone.
+//! - [`Proof::Confirms`]: the printed step checks a state rather than
+//!   changing it. A test runs the step in both states and shows that its
+//!   output tells them apart; repeating it alone does not clear the finding.
 //! - [`Proof::Excluded`]: the step acts outside this machine, at a boundary
 //!   from a closed set ([`Boundary`]).
 //!
@@ -27,6 +26,7 @@ use std::sync::OnceLock;
 use codeflow_core::remedy::{Clearing, Step, CATALOG};
 
 mod guards;
+mod portal;
 #[path = "../support/process_folders.rs"]
 mod process_folders;
 mod push;
@@ -36,9 +36,8 @@ mod records;
 enum Proof {
     /// A `clears_<row>` test runs the printed step and sees the finding go.
     Runs,
-    /// A `confirms_<row>` test runs the printed confirmation event and shows
-    /// that its outcome differs between the states the note cannot tell
-    /// apart; the note itself stays.
+    /// A `confirms_<row>` test runs the printed confirmation step in both
+    /// states. The step distinguishes them without changing either state.
     Confirms,
     /// The step acts beyond this boundary, so no test can take it.
     Excluded(Boundary),
@@ -107,6 +106,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("WORK_CLASSIFICATION", Runs),
     ("TASK_RECORD_MISSING", Runs),
     ("WORKGRAPH_INVALID", Runs),
+    ("PORTAL_COPY", Confirms),
     ("ID_REGISTRY", Runs),
     ("ID_REGISTRY_UNFETCHED", Runs),
     ("ID_REGISTRY_RETARGET", Runs),
@@ -264,6 +264,7 @@ fn every_catalogued_row_is_proven_or_excluded_at_a_boundary() {
     let source = [
         include_str!("main.rs"),
         include_str!("guards.rs"),
+        include_str!("portal.rs"),
         include_str!("push.rs"),
         include_str!("records.rs"),
     ]
