@@ -1,0 +1,11 @@
+id = "TSK-1304"
+uid = "44888872-b2cc-4b19-887f-56b983df5fb9"
+kind = "TSK"
+title = "Work records can name areas that are checked against the project's areas"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T19:44:10Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
