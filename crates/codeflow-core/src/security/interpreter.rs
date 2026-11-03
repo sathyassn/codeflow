@@ -87,13 +87,22 @@ pub(crate) fn evaluate_ruled(
             }
         }
         for word in outward::literal_words(&code) {
-            if levels.secret_reads.is_active() && secret_path(&word, cwd, home, None) {
-                violations.push(Violation::new(
-                    "security.secret_reads",
-                    levels.secret_reads,
-                    format!("interpreter code names the secret store `{word}`"),
-                    crate::remedy::OUTWARD_ACTION.remedy(),
-                ));
+            if levels.secret_reads.is_active() {
+                // An error is a check that could not finish: it refuses and
+                // names its cause, never reads as "not a secret".
+                let message = match secret_path_result(&word, cwd, home, None) {
+                    Ok(false) => None,
+                    Ok(true) => Some(format!("interpreter code names the secret store `{word}`")),
+                    Err(why) => Some(format!("cannot verify an interpreter code literal: {why}")),
+                };
+                if let Some(message) = message {
+                    violations.push(Violation::new(
+                        "security.secret_reads",
+                        levels.secret_reads,
+                        message,
+                        crate::remedy::OUTWARD_ACTION.remedy(),
+                    ));
+                }
             }
             // Only path-like literals need filesystem metadata. Ordinary code
             // identifiers cannot be enforcement paths.
@@ -189,12 +198,15 @@ fn code_reads_where_calls_run(
         };
         for code in &call.code {
             for word in outward::literal_words(code) {
-                if !secret_path(&word, &dir, home, None) {
-                    continue;
-                }
-                let message = format!(
-                    "interpreter code names the secret store `{word}` in the directory it runs in"
-                );
+                let message = match secret_path_result(&word, &dir, home, None) {
+                    Ok(false) => continue,
+                    Ok(true) => format!(
+                        "interpreter code names the secret store `{word}` in the directory it runs in"
+                    ),
+                    Err(why) => format!(
+                        "cannot verify an interpreter code literal in the directory it runs in: {why}"
+                    ),
+                };
                 violations.push(Violation::new(
                     "security.secret_reads",
                     levels.secret_reads,
@@ -1108,10 +1120,7 @@ fn git_revision_word(call: &outward::Unwrapped, at: usize, value: &str, cwd: &Pa
 
 /// `reader` is `Some` for a reader's argument, saying whether the shell
 /// expands it as a pattern, and `None` for a literal in interpreter code.
-fn secret_path(word: &str, cwd: &Path, home: Option<&Path>, reader: Option<bool>) -> bool {
-    secret_path_result(word, cwd, home, reader).unwrap_or(true)
-}
-
+/// `Err` is a check that could not finish, with its cause.
 fn secret_path_result(
     word: &str,
     cwd: &Path,
@@ -1596,7 +1605,7 @@ fn secret_glob(word: &str, cwd: &Path, home: Option<&Path>) -> Result<bool, &'st
             return Err("cannot resolve the glob's home directory");
         };
         if !crate::hooks::git_guard::has_glob(pattern) {
-            if secret_path(pattern, base, home, Some(false)) {
+            if secret_path_result(pattern, base, home, Some(false))? {
                 return Ok(true);
             }
             continue;
@@ -4904,6 +4913,28 @@ mod tests {
                 .message
                 .contains("cannot establish the directory a command substitution prints")),
             "the bound, not an unknown directory, is the stated cause: {findings:?}"
+        );
+    }
+
+    /// TSK-1258 round 3: an oversize literal in inline interpreter code is
+    /// refused with the bound named, not as "names the secret store".
+    #[test]
+    fn oversize_interpreter_literal_names_the_bound() {
+        let repo = repo();
+        let long = "a".repeat(super::super::pattern::MAX_GLOB_PATH_BYTES + 1);
+        let command = format!("python3 -c \"print('/{long}')\"");
+        let findings = judge_in(&repo, &repo.root, &repo.root, &command, PolicyLevel::Block);
+        assert!(
+            findings
+                .iter()
+                .any(|v| v.message.contains("longer than the glob matcher's bound")),
+            "{findings:?}"
+        );
+        assert!(
+            !findings.iter().any(|v| v
+                .message
+                .contains("interpreter code names the secret store")),
+            "{findings:?}"
         );
     }
 

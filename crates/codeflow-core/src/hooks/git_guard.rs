@@ -5597,9 +5597,22 @@ fn find_action_violation(
         }
     }
     // The shell expands a glob starting point before `find` runs.
-    let start_paths: Vec<PathBuf> = starts
-        .iter()
-        .flat_map(|start| word_readings(start).unwrap_or_else(|| vec![(*start).to_string()]))
+    // A starting point whose braces cannot all be read refuses, never reads
+    // as the unexpanded word (TSK-1258).
+    let mut readings = Vec::new();
+    for start in &starts {
+        match word_readings(start) {
+            Some(words) => readings.extend(words),
+            None => {
+                return Some(hook_integrity_violation(
+                    level,
+                    "cannot read find targets: a brace expansion in a starting point is too large to read".to_string(),
+                ))
+            }
+        }
+    }
+    let start_paths: Vec<PathBuf> = readings
+        .into_iter()
         .flat_map(|start| {
             let glob = WordGlob::new(&start, cwd);
             if has_glob(&start) {
@@ -14942,6 +14955,24 @@ mod tests {
             String::from_utf8_lossy(&output.stdout)
         );
     }
+    /// TSK-1258 sweep: a `find` starting point whose braces cannot all be
+    /// read refuses with its cause, never reads as the unexpanded word.
+    #[test]
+    fn find_start_with_unreadable_braces_refuses_with_its_cause() {
+        let dir = std::env::temp_dir();
+        let word = format!("{}x{}", "{".repeat(100_000), "}".repeat(100_000));
+        let args = vec![word, "-name".to_string(), "a".to_string()];
+        let violation = find_action_violation(&args, PolicyLevel::Block, &dir, &dir, "find x")
+            .expect("an unreadable starting point refuses");
+        assert!(
+            violation
+                .message
+                .contains("a brace expansion in a starting point is too large"),
+            "{}",
+            violation.message
+        );
+    }
+
     /// TSK-1258 sibling sweep: brace expansion stays bounded on a long word.
     /// Unmatched `{` once cost a scan to the end of the word each, and a
     /// chain of single-word groups recursed once per group.
