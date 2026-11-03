@@ -93,7 +93,16 @@ fn transfer_plan(case: &str) -> (tempfile::TempDir, String) {
 }
 
 fn close_transfer(root: &Path, epic: &str, result: &str) -> (bool, String) {
-    let acceptance = format!("acceptance:\n  reviewed: {}\n  review: session:transfer@sha256:00\n  criteria:\n    AC-1: {result}\n  journey: none | ordinary criterion\n  not_verified: none\n  follow_ups: none: transfer recorded\n  verdict: approved\n", head(root));
+    close_transfer_criterion(root, epic, "AC-1", result)
+}
+
+fn close_transfer_criterion(
+    root: &Path,
+    epic: &str,
+    criterion: &str,
+    result: &str,
+) -> (bool, String) {
+    let acceptance = format!("acceptance:\n  reviewed: {}\n  review: session:transfer@sha256:00\n  criteria:\n    {criterion}: {result}\n  journey: none | ordinary criterion\n  not_verified: none\n  follow_ups: none: transfer recorded\n  verdict: approved\n", head(root));
     // Outside the repository: the completion binding must see no unrelated edit.
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(file.path(), acceptance).unwrap();
@@ -283,26 +292,26 @@ fn transfer_cli_source_waiver_keeps_the_destination_journey_obligation() {
 fn deleted_source_criterion_workaround_closes_but_warns_about_its_frozen_tag() {
     let (dir, _) = transfer_plan("unrecorded");
     let root = dir.path();
+    let original = std::fs::read_to_string(root.join(TRANSFER_EPIC_PATH)).unwrap();
+    write(
+        root,
+        TRANSFER_EPIC_PATH,
+        &format!("{original}- AC-2 An unchanged ordinary obligation.\n"),
+    );
+    commit(root, "docs: retain another source obligation");
     write(
         root,
         TRANSFER_EPIC_PATH,
         &transfer_epic(
             "EPC-001",
             "planning",
-            "- [x] AC-2 An unchanged ordinary obligation.",
+            "- AC-2 An unchanged ordinary obligation.",
         ),
     );
     commit(root, "docs: delete source criterion workaround");
-    let out = codeflow()
-        .args(["epic", "status", "EPC-001", "complete"])
-        .current_dir(root)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let result =
+        close_transfer_criterion(root, "EPC-001", "AC-2", "verified | unchanged obligation");
+    assert!(result.0, "{}", result.1);
     let out = codeflow()
         .args(["validate", "--docs"])
         .current_dir(root)
