@@ -4116,6 +4116,20 @@ fn completions_received(
         &local,
         *criteria == Criteria::Amendable,
     );
+    let branch_task = if receiving.is_some() && receiving_line(line, None).is_none() {
+        line.map(|branch| {
+            super::work_start::task_id_from_branch_at(
+                repo.workdir().unwrap_or_else(|| repo.path()),
+                branch,
+                head,
+            )
+            .map_err(|error| error.to_string())
+        })
+        .transpose()?
+        .flatten()
+    } else {
+        None
+    };
     let mut reviewed = Vec::new();
     let mut proofs = LineProofs::default();
     for task in after
@@ -4213,7 +4227,11 @@ fn completions_received(
                 ),
             );
             if let Some(proof) = bound.proof {
-                reviewed.push(proof.reviewed);
+                reviewed.push(receiving_merges::ReviewedTaskHead {
+                    head: proof.reviewed,
+                    branch_base: (branch_task.as_deref() == Some(task.id.as_str()))
+                        .then_some(base_oid),
+                });
             }
             // A completion made before the range head but bound at it (a
             // frozen range) did not make the head's change: name the head.

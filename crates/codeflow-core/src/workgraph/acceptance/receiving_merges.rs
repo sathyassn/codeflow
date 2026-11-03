@@ -14,13 +14,21 @@ use super::{
 #[derive(Clone, Copy, Debug)]
 pub(super) struct LineSyncTip(pub(super) Oid);
 
+/// A bound task review, with an unlanded base only when the judged branch
+/// carries that same task. A review on the line needs a proven task landing.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ReviewedTaskHead {
+    pub(super) head: Oid,
+    pub(super) branch_base: Option<Oid>,
+}
+
 pub(super) fn findings(
     repo: &Repository,
     base: Oid,
     head: Oid,
     line: Option<&str>,
     graph: &Graph,
-    reviewed: &[Oid],
+    reviewed: &[ReviewedTaskHead],
     sync_tip: Option<LineSyncTip>,
 ) -> Result<Vec<Finding>, String> {
     let Some(line) = line.filter(|line| super::super::line_adoption::epic_id(line).is_ok()) else {
@@ -107,37 +115,43 @@ pub(super) fn findings(
 /// A task review covers its first-parent work before its landing, not the
 /// ancestors brought in by its merges. The landing's first parent is the
 /// receiving line before that task landed. A review still on a task branch
-/// instead uses this run's base. Keep exact commit ids: hiding a reviewed
+/// instead uses its verified branch base. Keep exact commit ids: hiding a reviewed
 /// tip in a revwalk would also hide every imported task it contains.
 fn reviewed_own_commits(
     repo: &Repository,
     base: Oid,
     head: Oid,
     merges: &[(Oid, Vec<Oid>)],
-    reviewed: &[Oid],
+    reviewed: &[ReviewedTaskHead],
 ) -> Result<BTreeSet<Oid>, String> {
     let mut own = BTreeSet::new();
-    for reviewed in reviewed {
-        if !is_ancestor_or_same(repo, *reviewed, head)? {
+    for task in reviewed {
+        let reviewed = task.head;
+        if !is_ancestor_or_same(repo, reviewed, head)? {
             return Err(format!(
                 "reviewed commit {reviewed} is not in the judged head {head}"
             ));
         }
-        let mut boundary = base;
-        for (merge, parents) in merges {
-            if is_ancestor_or_same(repo, *reviewed, parents[0])? {
+        if is_ancestor_or_same(repo, reviewed, base)? {
+            continue;
+        }
+        let mut boundary = task.branch_base;
+        'landing: for (merge, parents) in merges {
+            if is_ancestor_or_same(repo, reviewed, parents[0])? {
                 continue;
             }
             for parent in &parents[1..] {
-                if is_ancestor_or_same(repo, *reviewed, *parent)? {
+                if is_ancestor_or_same(repo, reviewed, *parent)? {
                     if parents.len() != 2 {
                         return Err(format!("merge {merge} has {} parents; cannot prove the task's own work for reviewed commit {reviewed}", parents.len()));
                     }
-                    boundary = parents[0];
+                    boundary = Some(parents[0]);
+                    break 'landing;
                 }
             }
         }
-        let mut at = *reviewed;
+        let boundary = boundary.ok_or_else(|| format!("cannot prove the task's own work at reviewed commit {reviewed}: no task landing or matching task branch establishes its base; complete the task from its own reviewed branch"))?;
+        let mut at = reviewed;
         while !is_ancestor_or_same(repo, at, boundary)? {
             let commit = repo
                 .find_commit(at)
@@ -307,13 +321,20 @@ mod tests {
     ) -> Result<Vec<Finding>, String> {
         repo.reference("refs/heads/main", base, true, "published default")
             .unwrap();
+        let reviewed: Vec<_> = reviewed
+            .iter()
+            .map(|head| ReviewedTaskHead {
+                head: *head,
+                branch_base: None,
+            })
+            .collect();
         findings(
             repo,
             base,
             head,
             Some("integration/EPC-001-line"),
             &Graph::default(),
-            reviewed,
+            &reviewed,
             None,
         )
     }
@@ -418,6 +439,127 @@ mod tests {
         assert!(
             found.is_empty(),
             "clean sync adds no work of its own: {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_review_on_the_line_cannot_cover_an_earlier_merge_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, base) = crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"base")]);
+        let first = commit(
+            &repo,
+            base,
+            b"project-management/tasks/TSK-001.md",
+            b"first record",
+        );
+        let second = commit(
+            &repo,
+            base,
+            b"project-management/tasks/TSK-002.md",
+            b"second record",
+        );
+        let clean = merge(&repo, first, second);
+        let resolved = commit(
+            &repo,
+            clean,
+            b"src/hidden.rs",
+            b"uncompleted merge resolution",
+        );
+        let who = git2::Signature::now("Test", "test@example.test").unwrap();
+        let reviewed = repo
+            .commit(
+                None,
+                &who,
+                &who,
+                "merge with own work",
+                &repo.find_commit(resolved).unwrap().tree().unwrap(),
+                &[
+                    &repo.find_commit(first).unwrap(),
+                    &repo.find_commit(second).unwrap(),
+                ],
+            )
+            .unwrap();
+        let head = commit(
+            &repo,
+            reviewed,
+            b"project-management/tasks/TSK-003.md",
+            b"later completion",
+        );
+        let error = judge(&repo, base, head, &[reviewed]).unwrap_err();
+        assert!(error.contains(&reviewed.to_string()), "{error}");
+    }
+
+    #[test]
+    fn an_unlanded_task_review_uses_its_own_branch_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, base) = crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"base")]);
+        let line = commit(
+            &repo,
+            base,
+            b"project-management/tasks/TSK-001.md",
+            b"line record",
+        );
+        let own = commit(&repo, base, b"src/own.rs", b"own work");
+        let sync = merge(&repo, own, line);
+        let reviewed = commit(&repo, sync, b"src/own.rs", b"reviewed own work");
+        let head = commit(
+            &repo,
+            reviewed,
+            b"project-management/tasks/TSK-002.md",
+            b"completion",
+        );
+        repo.reference("refs/heads/main", base, true, "published default")
+            .unwrap();
+        let reviewed = [ReviewedTaskHead {
+            head: reviewed,
+            branch_base: Some(line),
+        }];
+        let found = findings(
+            &repo,
+            line,
+            head,
+            Some("integration/EPC-001-line"),
+            &Graph::default(),
+            &reviewed,
+            None,
+        )
+        .unwrap();
+        assert!(
+            found.is_empty(),
+            "the task branch's own review still applies before landing: {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_completed_task_branch_gets_its_base_through_the_pull_request_check() {
+        let (_dir, repo, _base, line, landed) = two_tasks(None);
+        let head =
+            super::super::history::parent_id(&repo, &repo.find_commit(landed).unwrap(), 1).unwrap();
+        repo.reference(
+            "refs/heads/integration/EPC-001-line",
+            line,
+            true,
+            "receiving line before landing",
+        )
+        .unwrap();
+        let found = super::super::pull_request_findings_into(
+            repo.workdir().unwrap(),
+            &line.to_string(),
+            &head.to_string(),
+            &super::super::Criteria::OwnTask("TSK-002".into()),
+            None,
+            (
+                Some("task/TSK-002-own-work"),
+                Some("integration/EPC-001-line"),
+                None,
+            ),
+            &[],
+            super::super::Scope::default(),
+        )
+        .unwrap();
+        assert!(
+            !found.iter().any(|finding| !finding.note),
+            "the completed task branch must keep its own review: {found:?}"
         );
     }
 }
