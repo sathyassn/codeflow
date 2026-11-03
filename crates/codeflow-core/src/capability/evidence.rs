@@ -214,9 +214,7 @@ fn existing_file(tree: &Tree, index: Option<&git2::Index>, path: &str) -> Result
         Ok(metadata) if !metadata.is_file() => Err(format!("{path} is not a regular file")),
         Ok(metadata) if metadata.len() == 0 => Err(format!("{path} is empty")),
         Ok(_) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            Err(format!("{path} does not exist"))
-        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Err(format!("{path} does not exist")),
         Err(error) if error.kind() == ErrorKind::PermissionDenied => {
             let tracked =
                 index.is_some_and(|index| index.get_path(std::path::Path::new(path), 0).is_some());
@@ -257,7 +255,10 @@ fn has_word(text: &str, word: &str) -> bool {
     let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
     text.match_indices(word).any(|(start, _)| {
         !text[..start].chars().next_back().is_some_and(is_word)
-            && !text[start + word.len()..].chars().next().is_some_and(is_word)
+            && !text[start + word.len()..]
+                .chars()
+                .next()
+                .is_some_and(is_word)
     })
 }
 
@@ -280,9 +281,9 @@ fn rust_test_defined(text: &str, name: &str, test_tree: bool) -> bool {
     };
     let is_test = |line: usize| {
         declares(lines[line], "fn", last)
-            && attributes_above(&lines, line).iter().any(|attribute| {
-                !attribute.starts_with("#[cfg") && attribute.contains("test")
-            })
+            && attributes_above(&lines, line)
+                .iter()
+                .any(|attribute| !attribute.starts_with("#[cfg") && attribute.contains("test"))
     };
     segments
         .iter()

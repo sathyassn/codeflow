@@ -871,7 +871,10 @@ fn legacy_validation_also_applies_to_pinned_trees() {
     write(
         dir.path(),
         "docs/capabilities.md",
-        &fence("CAP-099", "shipped").replace("['test: crates/codeflow-core/tests/capability_catalog.rs']", "[]"),
+        &fence("CAP-099", "shipped").replace(
+            "['test: crates/codeflow-core/tests/capability_catalog.rs']",
+            "[]",
+        ),
     );
     refuse_both(dir.path(), "docs/capabilities.md", "verified_by");
 }

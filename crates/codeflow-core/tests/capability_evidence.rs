@@ -146,7 +146,10 @@ fn a_renamed_test_is_refused() {
     write(dir.path(), TEST_FILE, "#[test]\nfn renamed_case() {}\n");
     let issues = evidence_issues(&lint_docs(dir.path()));
     assert_eq!(issues.len(), 1, "{issues:?}");
-    assert!(issues[0].contains("has no test named real_case"), "{issues:?}");
+    assert!(
+        issues[0].contains("has no test named real_case"),
+        "{issues:?}"
+    );
 
     std::fs::rename(
         dir.path().join(TEST_FILE),
@@ -182,14 +185,20 @@ fn a_named_test_must_be_declared_not_merely_mentioned() {
 #[test]
 fn malformed_entries_are_refused() {
     for (entry, reason) in [
-        ("test: cargo test capability_catalog", "command or free text"),
+        (
+            "test: cargo test capability_catalog",
+            "command or free text",
+        ),
         ("test: /etc/passwd/tests/x.rs", "repository-relative"),
         ("test: ../outside/tests/x.rs", "repository-relative"),
         ("test: crates/app/tests/./flow.rs", "repository-relative"),
         ("test: crates\\app\\tests\\flow.rs", "repository-relative"),
         ("test: crates/app/tests/flow.rs::", "is not a test name"),
         ("record: crates/app/tests/flow.rs", "docs/verification/"),
-        ("record: docs/verification/../../secrets.md", "repository-relative"),
+        (
+            "record: docs/verification/../../secrets.md",
+            "repository-relative",
+        ),
         ("record: docs/verification/", "repository-relative"),
         ("gap: tests pending", "gap: <proof>: <reason>"),
         ("gap: engine: tests pending", "gap: <proof>: <reason>"),
@@ -202,11 +211,18 @@ fn malformed_entries_are_refused() {
 #[test]
 fn folders_data_and_fixtures_are_not_evidence() {
     let dir = checkout();
-    write(dir.path(), "crates/app/tests/fixtures/case.rs", "fn x() {}\n");
+    write(
+        dir.path(),
+        "crates/app/tests/fixtures/case.rs",
+        "fn x() {}\n",
+    );
     write(dir.path(), "docs/verification/empty.md", "");
     std::fs::create_dir_all(dir.path().join("docs/verification/folder")).unwrap();
     for (entry, reason) in [
-        ("test: crates/app/tests/fixtures/case.rs", "is a source file"),
+        (
+            "test: crates/app/tests/fixtures/case.rs",
+            "is a source file",
+        ),
         ("test: crates/app/tests", "not a regular file"),
         ("record: docs/verification/empty.md", "is empty"),
         ("record: docs/verification/folder", "not a regular file"),
@@ -225,7 +241,8 @@ fn a_named_lookup_over_the_read_bound_is_refused_and_a_whole_file_is_not_read() 
     let dir = checkout();
     let large = dir.path().join("crates/app/tests/large.rs");
     let file = std::fs::File::create(large).unwrap();
-    file.set_len(CAPABILITY_MAX_EVIDENCE_FILE_BYTES + 1).unwrap();
+    file.set_len(CAPABILITY_MAX_EVIDENCE_FILE_BYTES + 1)
+        .unwrap();
     fence(dir.path(), &["test: crates/app/tests/large.rs::case"]);
     let issues = evidence_issues(&lint_docs(dir.path()));
     assert!(issues[0].contains("cannot be read"), "{issues:?}");
