@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-"""Daily Windows source selection, exact-SHA verdict and workflow controls.
-
-Before the operator applies the workflow patch, set WINDOWS_DAILY_PROPOSALS
-to target/task-evidence to check the proposed workflow copies instead.
+"""Daily Windows source selection, exact-SHA verdict, workflow controls, and
+the reduced Windows tier's switch and verdict, run from the workflow's own text.
 """
 
 import importlib.util
@@ -120,8 +118,6 @@ class VerdictTests(unittest.TestCase):
 
 
 def workflow(name):
-    if proposals := os.environ.get("WINDOWS_DAILY_PROPOSALS"):
-        return (Path(proposals) / f"{name}.proposed.yml").read_text()
     return (ROOT / ".github/workflows" / f"{name}.yml").read_text()
 
 
@@ -195,6 +191,146 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("path: source/target/nextest/partitions", runner)
         self.assertIn("path: source/target/windows-tests.tar.zst", runner)
         self.assertNotIn("actions: write", runner)
+
+
+def step_script(job, step):
+    """The bash script of one named `run: |` step, as the runner sees it."""
+    lines = job.splitlines()
+    at = lines.index(f"      - name: {step}")
+    start = lines.index("        run: |", at) + 1
+    script = []
+    for line in lines[start:]:
+        if line.strip() and not line.startswith(" " * 10):
+            break
+        script.append(line[10:])
+    return "\n".join(script)
+
+
+SWITCH = re.compile(r'REDUCED_TIER: "(on|off)"')
+
+
+class TierSwitchTests(unittest.TestCase):
+    """AC-5: with the switch on a pull request into a line takes the reduced
+    tier; with it off, and for any other base, every partition stays."""
+
+    def tier(self, switch, base):
+        job = jobs(workflow("codeflow-ci"))["windows-tier"]
+        self.assertRegex(job, SWITCH)
+        script = step_script(job, "Choose the Windows tier")
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "output"
+            done = subprocess.run(["bash", "-e", "-c", script], text=True, capture_output=True, env={
+                "PATH": os.environ["PATH"], "REDUCED_TIER": switch, "BASE": base, "GITHUB_OUTPUT": str(output)})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return output.read_text().strip()
+
+    def test_switch_on_reduces_only_a_pull_request_into_an_integration_line(self):
+        self.assertEqual(self.tier("on", "integration/EPC-022-x"), "tier=reduced")
+        for base in ("main", "master", "task/integration/x", "integration", ""):
+            with self.subTest(base=base):
+                self.assertEqual(self.tier("on", base), "tier=full")
+
+    def test_switch_off_keeps_every_partition_on_every_base(self):
+        for base in ("integration/EPC-022-x", "main", "master"):
+            with self.subTest(base=base):
+                self.assertEqual(self.tier("off", base), "tier=full")
+
+    def test_any_other_switch_value_keeps_every_partition(self):
+        for switch in ("", "ON", "true", "yes"):
+            with self.subTest(switch=switch):
+                self.assertEqual(self.tier(switch, "integration/EPC-022-x"), "tier=full")
+
+    def test_only_a_pull_request_chooses_a_tier(self):
+        job = jobs(workflow("codeflow-ci"))["windows-tier"]
+        self.assertIn("if: github.event_name == 'pull_request'", job)
+
+    def test_the_skip_comes_from_the_build_job_and_a_push_keeps_it_running(self):
+        ci = jobs(workflow("codeflow-ci"))
+        self.assertIn("needs.windows-tier.outputs.tier != 'reduced'", ci["windows-build"])
+        self.assertIn("!cancelled()", ci["windows-build"])
+        self.assertIn("needs: [reuse, windows-tier]", ci["windows-build"])
+        self.assertIn("needs.windows-build.result == 'success'", ci["windows-tests"])
+        self.assertIn("needs.windows-tests.result != 'skipped'", ci["windows-journeys"])
+        for kept in ("windows", "windows-release-journey"):
+            self.assertNotIn("windows-tier", ci[kept])
+        self.assertIn("needs.windows-tier.outputs.tier == 'reduced'", ci["windows-tier-journeys"])
+
+    def test_the_daily_runner_has_no_tier(self):
+        self.assertNotIn("tier", workflow("windows-daily-run").lower())
+
+
+class TierVerdictTests(unittest.TestCase):
+    """AC-4 and AC-5: the `windows` verdict accepts exactly the reduced tier's
+    declared skips, refuses any other skip, and its summary says so."""
+
+    SHA = "c" * 40
+
+    def verdict(self, **changes):
+        job = jobs(workflow("codeflow-ci"))["windows-verdict"]
+        script = step_script(job, "Every Windows job passed")
+        env = {"REUSE": "skipped", "REUSED": "", "TIER": "reduced", "EVENT": "pull_request",
+               "BASE": "integration/EPC-022-x", "CHECKS": "success", "BUILD": "skipped", "TESTS": "skipped",
+               "JOURNEYS": "skipped", "RELEASE": "success", "TIER_JOURNEYS": "success", "MISSING": ""}
+        env.update(changes)
+        with tempfile.TemporaryDirectory() as temp:
+            summary = Path(temp) / "summary.md"
+            summary.touch()
+            done = subprocess.run(["bash", "-e", "-c", script], text=True, capture_output=True, env={
+                **env, "PATH": os.environ["PATH"], "GITHUB_SHA": self.SHA, "GITHUB_STEP_SUMMARY": str(summary),
+                "GITHUB_SERVER_URL": "https://example.invalid", "GITHUB_REPOSITORY": "o/n"})
+            return done.returncode, done.stdout, summary.read_text()
+
+    def test_the_declared_skips_pass_and_the_summary_names_the_commit_and_the_limit(self):
+        code, _, summary = self.verdict()
+        self.assertEqual(code, 0)
+        self.assertIn(self.SHA, summary)
+        self.assertIn("twelve test partitions were skipped by tier", summary)
+        self.assertIn("not full Windows evidence", summary)
+
+    def test_any_other_skip_or_outcome_is_refused(self):
+        for name in ("CHECKS", "RELEASE", "TIER_JOURNEYS"):
+            for state in ("skipped", "failure", "cancelled", ""):
+                with self.subTest(name=name, state=state):
+                    code, out, summary = self.verdict(**{name: state})
+                    self.assertEqual(code, 1)
+                    self.assertIn("reduced Windows tier accepts only", out)
+                    self.assertEqual(summary, "")
+
+    def test_a_partition_path_job_that_ran_is_not_a_declared_skip(self):
+        for name in ("BUILD", "TESTS", "JOURNEYS"):
+            for state in ("success", "failure", "cancelled"):
+                with self.subTest(name=name, state=state):
+                    self.assertEqual(self.verdict(**{name: state})[0], 1)
+
+    def test_the_reduced_tier_is_refused_on_main_and_on_a_push(self):
+        for changes in ({"BASE": "main"}, {"BASE": "master"}, {"BASE": ""}, {"EVENT": "push"},
+                        {"EVENT": "schedule"}, {"EVENT": "workflow_dispatch"}):
+            with self.subTest(changes=changes):
+                self.assertEqual(self.verdict(**changes)[0], 1)
+
+    def test_the_full_tier_still_needs_every_job(self):
+        full = {"TIER": "full", "BUILD": "success", "TESTS": "success", "JOURNEYS": "success",
+                "TIER_JOURNEYS": "skipped"}
+        self.assertEqual(self.verdict(**full)[0], 0)
+        for name in ("CHECKS", "BUILD", "TESTS", "JOURNEYS", "RELEASE"):
+            for state in ("skipped", "failure", "cancelled"):
+                with self.subTest(name=name, state=state):
+                    self.assertEqual(self.verdict(**{**full, name: state})[0], 1)
+
+    def test_the_tier_journey_job_is_refused_outside_the_reduced_tier(self):
+        full = {"TIER": "full", "BUILD": "success", "TESTS": "success", "JOURNEYS": "success"}
+        for state in ("success", "failure", "cancelled", ""):
+            with self.subTest(state=state):
+                self.assertEqual(self.verdict(**{**full, "TIER_JOURNEYS": state})[0], 1)
+
+    def test_a_missing_tier_on_a_skipped_build_is_refused(self):
+        self.assertEqual(self.verdict(TIER="", TIER_JOURNEYS="skipped")[0], 1)
+
+    def test_reuse_still_needs_every_windows_job_skipped(self):
+        reused = {"TIER": "", "REUSE": "success", "REUSED": "123", "CHECKS": "skipped", "RELEASE": "skipped",
+                  "TIER_JOURNEYS": "skipped", "EVENT": "push", "BASE": ""}
+        self.assertEqual(self.verdict(**reused)[0], 0)
+        self.assertEqual(self.verdict(**{**reused, "TIER_JOURNEYS": "success"})[0], 1)
 
 
 if __name__ == "__main__":
