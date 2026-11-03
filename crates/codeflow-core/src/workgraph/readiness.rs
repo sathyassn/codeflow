@@ -1992,46 +1992,14 @@ pub fn claim_on_in_worktree(
     let reference_shown = shown(&reference);
     super::work_start::validate_anchored_task_on(&repo, &records, task_id, &reference, pins)
         .map_err(|error| format!("not ready on {reference_shown}: {error}"))?;
-    let ids = BTreeSet::from([task_id.to_string()]);
-    let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
-    let mut visible = visible_work_branches(&repo, &prefixes, &ids, &remotes)?;
-    let information = visible.information(task_id, &reference);
-    let mut carried = visible.claims.remove(task_id).unwrap_or_default();
-    for remote in &remotes {
-        carried.extend(remote_claims(&repo, repo_root, &prefixes, task_id, remote)?);
-    }
-    if let Some(current) = &renamed {
-        carried.retain(|(name, _)| name != current);
-    }
-    let (open, done) = split_landed(&repo, repo_root, &carried, target_tip);
-    if !open.is_empty() {
-        let shown: Vec<String> = open.iter().map(|name| name.display().to_string()).collect();
-        return Err(format!(
-            "{task_id} is already claimed by a visible branch: {}",
-            shown.join(", ")
-        ));
-    }
-    // Finished work is not claimed again (TSK-1038): the landed branch and
-    // the one command that settles the record are named.
-    let landed = landed_work_branches(
+    let information = check_claim_visibility(
         &repo,
-        &LandLine::new(),
-        &carried,
-        &done,
-        target_tip,
+        repo_root,
         task_id,
-    );
-    if !landed.is_empty() {
-        let shown: Vec<String> = landed
-            .iter()
-            .map(|name| name.display().to_string())
-            .collect();
-        return Err(format!(
-            "{task_id} has already landed on {reference_shown} in {} while its record is still open; settle the record with `{}`",
-            shown.join(", "),
-            landed_status_command(task_id)
-        ));
-    }
+        &remotes,
+        (&reference, target_tip),
+        renamed.as_ref(),
+    )?;
     let title = records
         .get(task_id)
         .map_or("", |record| record.title.as_str());
@@ -2079,6 +2047,53 @@ pub fn claim_on_in_worktree(
         },
         worktree,
     })
+}
+
+/// Check local and live remote claims before creating either the branch or
+/// its checkout, retaining unrelated branches as information.
+fn check_claim_visibility(
+    repo: &Repository,
+    repo_root: &Path,
+    task_id: &str,
+    remotes: &BTreeSet<String>,
+    target: (&str, git2::Oid),
+    renamed: Option<&GitName>,
+) -> Result<Vec<String>, String> {
+    let (reference, target_tip) = target;
+    let ids = BTreeSet::from([task_id.to_string()]);
+    let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
+    let mut visible = visible_work_branches(repo, &prefixes, &ids, remotes)?;
+    let information = visible.information(task_id, reference);
+    let mut carried = visible.claims.remove(task_id).unwrap_or_default();
+    for remote in remotes {
+        carried.extend(remote_claims(repo, repo_root, &prefixes, task_id, remote)?);
+    }
+    if let Some(current) = renamed {
+        carried.retain(|(name, _)| name != current);
+    }
+    let (open, done) = split_landed(repo, repo_root, &carried, target_tip);
+    if !open.is_empty() {
+        let shown: Vec<String> = open.iter().map(|name| name.display().to_string()).collect();
+        return Err(format!(
+            "{task_id} is already claimed by a visible branch: {}",
+            shown.join(", ")
+        ));
+    }
+    // Finished work is not claimed again (TSK-1038).
+    let landed = landed_work_branches(repo, &LandLine::new(), &carried, &done, target_tip, task_id);
+    if !landed.is_empty() {
+        let branches: Vec<String> = landed
+            .iter()
+            .map(|name| name.display().to_string())
+            .collect();
+        return Err(format!(
+            "{task_id} has already landed on {} in {} while its record is still open; settle the record with `{}`",
+            shown(reference),
+            branches.join(", "),
+            landed_status_command(task_id)
+        ));
+    }
+    Ok(information)
 }
 
 /// Resolve through the nearest existing parent before checking the project's
