@@ -55,8 +55,6 @@ pub(super) fn run_observed(
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(super::target_job::CREATE_SUSPENDED);
     }
-    #[cfg(not(unix))]
-    let _ = hand_over;
     #[cfg(unix)]
     let mut watcher = if supervised {
         Some(super::group_watch::GroupWatch::prepare(&mut cmd, hand_over).map_err(spawn_err)?)
@@ -80,7 +78,7 @@ pub(super) fn run_observed(
     }
 
     let start = Instant::now();
-    let mut child = cmd.spawn().map_err(spawn_err)?;
+    let mut child = super::spawn_inheriting_fences(&mut cmd, hand_over).map_err(spawn_err)?;
     let mut membership_uncertain: Option<String> = None;
     let mut status = None;
     #[cfg(unix)]

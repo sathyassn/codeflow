@@ -1068,7 +1068,7 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
         return {path.as_posix(): (parity.ROOT / path).read_text(encoding="utf-8") for path in parity.workflow_files()}
 
     def problems(self, path: str, text: str) -> list[str]:
-        return parity.timeout_problems(text, path, parity.UNBOUNDED_BY_DESIGN.get(path))
+        return parity.timeout_problems(text, path)
 
     def test_every_workflow_file_is_found_and_none_is_unbounded(self):
         files = self.files()
@@ -1146,14 +1146,16 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
             ".github/workflows/loop.yml": self.CALLER.format(target="./.github/workflows/loop.yml")})
         self.assertTrue(any("calls itself again" in p for p in loop), loop)
 
-    def test_the_adopter_template_exempts_only_its_named_jobs(self):
+    def test_the_adopter_template_requires_a_timeout_on_every_job(self):
         path = "assets/base/ci/codeflow-ci.yml"
         text = self.files()[path]
         self.assertEqual(self.problems(path, text), [])
         self.assertTrue(self.problems(path, text.replace("    timeout-minutes: 30\n", "", 1)))
-        self.assertTrue(parity.timeout_problems(text), "without the exemptions the unbounded jobs are named")
-        stale = parity.timeout_problems("jobs:\n  other:\n    timeout-minutes: 5\n", path, {"gates": "x"})
-        self.assertTrue(any("exempts job 'gates'" in p for p in stale), stale)
+        self.assertEqual(parity.timeout_problems(text), [])
+        unbounded = re.sub(r"^    timeout-minutes: \d+\n", "", text, flags=re.M)
+        problems = self.problems(path, unbounded)
+        for name in parity.jobs_section(text):
+            self.assertTrue(any(f"job '{name}'" in p for p in problems), problems)
 
     def test_a_new_workflow_without_timeouts_is_found_and_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1205,7 +1207,7 @@ class JobHeaderControls(unittest.TestCase):
         return {path.as_posix(): (parity.ROOT / path).read_text(encoding="utf-8") for path in parity.workflow_files()}
 
     def problems(self, path: str, text: str) -> list[str]:
-        return parity.timeout_problems(text, path, parity.UNBOUNDED_BY_DESIGN.get(path))
+        return parity.timeout_problems(text, path)
 
     def drop_timeout(self, text: str, job: str, header: str | None = None) -> str:
         """`text` with the job's header rewritten as `header` and its timeout removed."""
