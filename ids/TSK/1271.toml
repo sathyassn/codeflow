@@ -1,0 +1,11 @@
+id = "TSK-1271"
+uid = "9263edb3-37e8-41c2-911e-e416b1397914"
+kind = "TSK"
+title = "A pinned claim's review lookup survives a slow provider and still refuses a dead one"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T04:20:50Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
