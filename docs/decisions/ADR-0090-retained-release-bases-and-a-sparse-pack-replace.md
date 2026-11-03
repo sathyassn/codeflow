@@ -50,20 +50,26 @@ assets of every published release (v2.0.0, v2.1.0, v3.0.0, v3.1.0, v3.1.1,
 then each release from 4.0.0 on) as one deduplicated, solid zstd stream with
 a TOML index under `assets/releases/`, and the release step adds the release
 being prepared and refuses one whose bases are missing. `.codeflow/manifest.json`
-moves to schema 2: an entry records `src`, `ownership`, `exec` and the
-`version` its base is read at, and no digest; the top-level
+moves to schema 2: an entry records `src`, `ownership`, `exec`, `version`
+and the required `base_source` (`release`, `pack` or `unknown`), with no
+digest. Version is a label, not proof of a base. The top-level
 `scaffold_version` stamp is dropped, since `.codeflow/project.toml` already
 carries it. What the binary cannot reproduce lives in a tracked sparse pack,
 `.codeflow/bases/<dest>`: the rendered copy of every `template = true`
 managed or managed-region entry, and every file installed by a development
 build (a binary whose assets are not a retained release's). The base of a
-file is looked up in the pack first, then in the retained release the entry
-names, then it is absent; every decision that compared a hash with the
-record compares bytes with that base. `codeflow update` migrates a 3.x
+file is read only from its recorded source: a release entry reads retained
+bytes, a pack entry requires its pack without release fallback, and an
+unknown entry has no base even if its version is retained. A missing
+template pack never substitutes the raw template. Every comparison uses
+that actual base; a present orphan with no base is kept and unmanaged. `codeflow update` migrates a 3.x
 project in one run: it derives each entry's base from the old baseline copy
 and digest, writes the pack entries it needs, writes the schema 2 manifest,
 and removes `.codeflow/.baseline/` last, following no link and writing
-nothing outside `.codeflow/`. A published 2.x or 3.x binary cannot update
+nothing outside `.codeflow/`. An untrusted legacy base is recorded as
+`unknown`, so restart or a retained version cannot restore false deletion
+authority. A source-only pack-to-release conversion requires exact-byte
+proof, stores the source first and then removes the redundant pack. A published 2.x or 3.x binary cannot update
 the result: at every tag from v2.0.0 to v3.1.1 its parser requires the
 `sha256` field (at v3.1.1, `state.rs:498`, read at `:534`), so `update`
 fails on the missing field before it writes a project file and without
@@ -112,10 +118,15 @@ Displaced alternatives:
   published binary removes each entry it can reproduce.
 - The trust surface shrinks: a base read from the binary cannot be edited by
   an agent session, where a committed baseline copy could be. The pack and
-  the pending resolution records become protected paths when TSK-1087 adds
-  them (`SPC-015` R-29); the current default protects installed bases under
-  `.codeflow/.baseline/**`
-  (`crates/codeflow-core/src/security/policy.rs:48`).
+  the pending resolution records become protected inputs when TSK-1087
+  adds them alongside the manifest in both `SecurityPolicy::defaults` and
+  `security/actions.json`'s `claude_edit_denies` (`SPC-015` R-29).
+  The edit guard derives direct and linked-worktree protection from that
+  action table, not from policy defaults. TSK-1087 regenerates permission
+  presets and tests denial of edits to all three inputs, including absent
+  paths, while preserving normal engine writes. Baseline protection stays
+  while schema 1 migration still reads it; the current policy default's
+  baseline row alone does not protect the new inputs through the edit guard.
 - The binary grows by the compressed pack, 0.59 MB today, and by at most the
   changed assets of each future release. The advisory budget is 2 MB; the
   build or release check warns, never fails, when it is passed, and the
@@ -140,8 +151,8 @@ Displaced alternatives:
   rules lose their baseline rows (`docs/releasing.md` "Typed repair rule",
   `scripts/release.py:1491-1572`): a repair no longer touches the manifest
   or a baseline.
-- Every reader of `.codeflow/.baseline/` changes in TSK-1087: the policy
-  default, the model catalog scan, the eval kit scrub, the release scripts,
+- Every reader of `.codeflow/.baseline/` changes in TSK-1087: policy
+  defaults, the edit action table and generated presets, the model catalog scan, the eval kit scrub, the release scripts,
   the tests and the docs that name it; `SPC-015` lists them.
 - The 2.1.0 stand-in copies for a missing baseline
   (`crates/codeflow-core/src/scaffold/prior_release.rs`, TSK-171) are kept
@@ -157,3 +168,30 @@ shipped base, which is the committed copy and digest until TSK-1087 lands
 and the binary's retained releases with the sparse pack `.codeflow/bases/`
 from then on, and names this record. TSK-1086 and TSK-1087 update the row
 again when they land.
+
+## Design amendment, 2026-11-03
+
+Review of `1fa342d63` found that an implicit fallback could replace an
+unknown base with release bytes, and that version-only pending identity
+rejected development builds of a published version. The schema and lookup
+above now require `base_source`; R-1/R-6/R-19 preserve unknown and required
+pack states across restarts. R-5/R-8 allow a proven source-only conversion
+on publication without a shared stamp, while unrelated resyncs keep other
+entries unchanged.
+
+Pending resolutions in R-17 keep the actual old and proposed content
+hashes, complete entry snapshots, and proposed shipped bytes. A version
+collision does not reject a legitimate proposal: a development proposal
+uses `pack`, even when the release index contains that version with other
+bytes. Acceptance stores the proposed pack before its entry and removes
+the pending record last. Retrying accepts either validated old/new state,
+including equal version labels. A person's resolution never becomes the
+base. These temporary hashes do not reintroduce a manifest digest.
+
+The protection plan now reaches the action table, generated presets and
+edit-guard tests for the manifest, pack and pending records. TSK-1087 owns
+these changes and tests for unknown-base orphan preservation, missing
+template packs, same-version development proposals and interrupted
+acceptance. TSK-247 consumes the same source-aware derivation without
+writes. The retained-release reader in TSK-1086 is unchanged. This
+amendment awaits the finder's confirmation and the design author's re-read.
