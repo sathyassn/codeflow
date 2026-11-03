@@ -27,18 +27,13 @@ asks for evidence-reuse attacks. AC-1/2/3/4/6 remain unchanged by this ruling.
 
 ## Four binding rules
 
-1. **No integration execution under main's ref.** Remove the main dispatch
-   writer, build_sha input and integration checkout/containment path. No main
-   job builds, installs toolchains from, tests or executes an integration tree
-   or artifact. Main push builds only its own immutable event SHA. Main-target
-   PR policy checks use their main base SHA. For integration-target PR checks,
-   keep target commits as Git data and use the trusted main-built policy binary
-   rather than build the integration target under pull_request_target's main
-   ref. Preserve target-policy/record inspection and head-as-data behavior;
-   the main binary must never load executable helpers from the integration
-   tree. The existing admission script must likewise come from trusted main.
-   This path needs review of compatibility with target policy before building;
-   no unverified target-code execution is retained as a fallback.
+1. **Remove the integration dispatch writer; preserve target judging.** Remove
+   build_sha and the dispatched integration checkout/build. Main push builds
+   only its immutable event SHA. Integration-target PR runs keep checking out
+   and building their own base target as today and never save. Their token's
+   cache access stays read-only. This task does not replace the target's binary
+   or admission helper with main's, so ahead-of-main policy schemas remain
+   judged by the target's own code.
 
 2. **No main cache of any kind from integration output.** The only producer
    is push:main executing main code on its own runner. No dispatch or artifact
@@ -48,6 +43,9 @@ asks for evidence-reuse attacks. AC-1/2/3/4/6 remain unchanged by this ruling.
    executed or saved in main scope, even if that SHA later lands on main.
    After landing, build afresh as main code. This task disables integration
    cache writes in the policy workflow rather than retaining a second producer.
+   Cost: each integration push rebuilds dependencies not already supplied by
+   a matching main dependency cache; it cannot retain its own new build output
+   for later runs. This trades integration cache performance for simpler saves.
 
 3. **No new run-evidence trust boundary.** The API run/workflow-blob/tree/digest
    verifier required for part (a) is removed with that part. Nothing accepts
@@ -56,9 +54,10 @@ asks for evidence-reuse attacks. AC-1/2/3/4/6 remain unchanged by this ruling.
    comes from the event's trusted main commit and clean checkout; cache keys
    are calculated locally before fetching any PR head, never from head input.
 
-4. **Fail closed.** Wrong, absent or inexact binary entries rebuild only from
-   trusted main source. A dirty source, failed build or wrong rebuilt identity
-   refuses before PATH or save-enabling output. No integration build fallback.
+4. **Fail closed.** Wrong, absent or inexact main binary entries rebuild from
+   their main target. Integration targets always build their own source and
+   never use or save the main binary cache. A dirty source, failed build or
+   wrong rebuilt identity refuses before PATH or save-enabling output.
    The PR body explains runtime-token arbitrary-key cache poisoning and why
    self-reported binary identity cannot authenticate an adversarial writer.
    Main-owned production plus read-only PR consumers is the standard boundary;
@@ -99,9 +98,11 @@ Use strict shell mode. A missing cache never weakens these rules.
 - Mutation tests reject every non-main save: PR head, integration push,
   arbitrary-ref dispatch, workflow_dispatch in allowed, master in allowed,
   or either save-if missing the push/main-ref conjunction.
-- Reject integration checkout/build/toolchain/helper execution on main-ref
-  events, artifact transfer and old/integration namespace fallback. Confirm
-  integration-target policy checks read target Git data with trusted tooling.
+- Reject the dispatched integration writer, artifact transfer and legacy
+  namespace fallback. Confirm integration targets retain their own build and
+  that neither save step can run for integration pushes or PR events.
+- Sweep `.github/workflows/` and `assets/base/ci/`: no sibling workflow may
+  name the policy binary or dependency namespace and become another writer.
 - Assert lookup-only for push:main, ordinary restore for eligible readers,
   no fallback keys, key changes on SHA/toolchain/image changes, dirty-tree
   refusal and absence of head-derived keys.
@@ -110,6 +111,9 @@ Use strict shell mode. A missing cache never weakens these rules.
 - Hosted AC-6 sequence: main push saves SHA X, main-target PR base X hits,
   then moving main misses. Compare the hit job with the AC-1 PR-target miss
   baseline, not with a push job. Keep runner/toolchain conditions comparable.
+- Hosted AC-3 refusal: after the change reaches the line, cite an integration
+  push run showing both binary and dependency save steps skipped, with cache
+  API evidence that no new main-scope entry for that SHA was created.
 - AC-5 requires the new cross-lineage review; old reviews and the old quick
   gate do not approve this design's implementation. Hosted evidence is still
   unavailable until trusted main workflow content carries the change.
@@ -130,16 +134,26 @@ this task cannot authenticate against malicious control of main itself.
 
 ## Operator delivery and remaining review
 
-Prepare the policy workflow patch against a copy and preserve
-`target/task-evidence/codeflow-policy.yml.patch`. Deliver the untracked script
-`coordination/scripts/operator/apply-tsk1240-codeflow-policy.sh` with a plain
-header, exact task-head and line-base pins, drift refusal, apply-check,
-apply/commit/push and printed head/ref/stat. The operator reviews and runs it;
-the builder does not edit the real workflow or run the script.
+This PR restores its real policy workflow to line revision
+`59c9ae96547aaf8241e0c66029c809b80d748f51`, removing the withdrawn writer from
+the branch. Other workflow files already match that line. The proposed (b)
+text is `operator-patches/TSK-1240-codeflow-policy.proposed.yml`, pinned by
+SHA-256 in both contract suites' shared loader. Tests read that proposal and
+prove the operator patch produces exactly its bytes. The real file may be
+only the pinned line text or the identical operator-applied proposal.
+
+Deliver `operator-patches/apply-TSK-1240.sh` and
+`operator-patches/TSK-1240-codeflow-policy.patch`. The script checks the exact
+task branch, line-workflow digest, proposal and patch digests, both test-script
+digests and the existing admission helper digest. It runs git apply --check,
+applies, verifies byte equality, and stops. No commit or push. Only the operator
+runs it after review, so trusted main receives only reviewed identical text
+through the normal landing path; the script itself refuses main. Validate
+with git apply --check and sh -n without executing the script.
 
 Non-workflow work after approval is limited to the relevant contract tests,
 task/PR evidence and necessary main-owned helper changes. Planning owns
-TSK-1248's follow-up re-scope. Do not build before Fable re-reads this b-only
-design, including the main-ref integration-target reader boundary in rule 1.
+TSK-1248's follow-up re-scope. The r3 repairs are light edits and patch syntax
+validation only; execution tests and hosted evidence remain owed.
 
-TSK-1240 design is main-built caches only; AC-5 narrowed, AC-7/AC-8 removed; awaiting Fable re-read, no implementation or push.
+TSK-1240 r3 design repairs preserve target builds, remove the withdrawn writer, and deliver the main-only change through an operator patch; no heavy run or push.
