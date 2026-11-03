@@ -1,0 +1,11 @@
+id = "TSK-1278"
+uid = "798c1826-119e-40ad-96b5-8d38da8301bc"
+kind = "TSK"
+title = "A heavy target given fewer workers gets the time it needs, or waits, and a timeout says so"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T06:26:52Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
