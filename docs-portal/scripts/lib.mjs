@@ -353,7 +353,9 @@ export function capabilityFrontmatterRecord(parsed, sourcePath) {
   const entries = Object.entries(parsed);
   if (entries.length > CAPABILITY_FIELD_LIMIT) throw new Error(`${sourcePath}: capability ${id} declares more than ${CAPABILITY_FIELD_LIMIT} fields`);
   const fields = entries.map(([field, value]) => [field, capabilityValueText(value)]);
-  if (fields.some(([field, value]) => field.length > 64 || value.length > CAPABILITY_VALUE_LIMIT)) {
+  // The limit applies per value and per list item, as the Rust loader's does.
+  const values = entries.flatMap(([, value]) => (Array.isArray(value) ? value : [value]).map(capabilityValueText));
+  if (fields.some(([field]) => field.length > 64) || values.some((value) => value.length > CAPABILITY_VALUE_LIMIT)) {
     throw new Error(`${sourcePath}: capability ${id} declares a field beyond the rendered bounds`);
   }
   return { id, fields, lookup: new Map(fields) };

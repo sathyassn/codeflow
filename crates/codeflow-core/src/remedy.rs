@@ -333,6 +333,9 @@ catalog! {
     /// References into an absent capability registry.
     DOCS_CAPABILITIES_UNCHECKED = Step::Edit("docs/capabilities.md"),
         "add each capability named to docs/capabilities.md, or remove the references to it";
+    /// A legacy capability catalog whose evidence has no types yet.
+    CAPABILITY_EVIDENCE_UNTYPED = Step::Edit("docs/capabilities.md"),
+        "give each verified_by entry a kind: test: <path>[::<name>], journey: <path>[::<name>], record: docs/verification/<path> or gap: <proof>: <reason>";
     /// A task branch whose planning is not anchored on the target.
     WORK_START_RECONCILE = Step::Codeflow("codeflow work start"),
         "reconcile the target branch, then run `codeflow work start {id}`";

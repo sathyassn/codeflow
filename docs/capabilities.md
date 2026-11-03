@@ -13,9 +13,9 @@
      and links to the page that owns the detail; put operating detail on that
      owner page, not here.
      `validate --docs` enforces referential integrity (each entry's epics[] and
-     adrs[] resolve to real files) and a non-empty verified_by on shipped
-     entries; it does not verify that the test tags resolve, and it does not
-     block an epic from closing.
+     adrs[] resolve to real files), a non-empty verified_by on shipped entries,
+     and that each verified_by entry resolves to a test, a verification record
+     or a declared gap; it does not block an epic from closing.
      Statuses: planned, then building, then shipped, then deprecated (never
      delete).
      Keep this registry while it remains easy to scan; graduate to
@@ -44,7 +44,8 @@ capability id (CAP-###).
   fence order.
 - `codeflow validate --docs` checks referential integrity: every epic (EPC)
   and architecture decision record (ADR) an entry names must resolve to a real
-  file, and a shipped entry needs a non-empty `verified_by`.
+  file, a shipped entry needs a non-empty `verified_by`, and each `verified_by`
+  entry must resolve (see "Evidence" in Technical).
 - `codeflow status` and `codeflow orient` also parse the fences.
 
 `Area` is the `area` field of the yaml fence. It names the part of the codebase
@@ -101,7 +102,7 @@ id: CAP-001
 name: scaffold-init
 area: scaffold
 status: shipped
-verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/tier_floor_e2e.rs", "codeflow-cli tests/settings_presets.rs", "codeflow-cli tests/codex_config.rs"]
+verified_by: ["test: crates/codeflow-core/src/scaffold/init.rs::tests", "test: crates/codeflow-core/src/scaffold/detect.rs::tests", "test: crates/codeflow-core/tests/scaffold_test.rs", "test: crates/codeflow-cli/tests/tier_floor_e2e.rs", "test: crates/codeflow-cli/tests/settings_presets.rs", "test: crates/codeflow-cli/tests/codex_config.rs"]
 epics: [EPC-001, EPC-005, EPC-009, EPC-011, EPC-012, EPC-020, EPC-022, EPC-023, EPC-024]
 adrs: [ADR-0019, ADR-0025, ADR-0026, ADR-0054, ADR-0055]
 ```
@@ -133,7 +134,7 @@ id: CAP-002
 name: scaffold-update
 area: scaffold
 status: shipped
-verified_by: ["cargo test scaffold::update", "cargo test scaffold::release_pin", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/release_pin.rs", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
+verified_by: ["test: crates/codeflow-core/src/scaffold/update.rs::tests", "test: crates/codeflow-core/src/scaffold/release_pin.rs::tests", "test: crates/codeflow-core/tests/scaffold_test.rs", "test: crates/codeflow-cli/tests/release_pin.rs", "test: crates/codeflow-core/src/scaffold/state.rs::tests", "test: crates/codeflow-core/src/scaffold/settings_merge.rs::tests", "test: crates/codeflow-core/src/scaffold/region.rs::tests", "test: crates/codeflow-core/src/scaffold/manifest.rs::tests", "test: crates/codeflow-cli/tests/tier_floor_e2e.rs"]
 epics: [EPC-001, EPC-005, EPC-012, EPC-018, EPC-020, EPC-022, EPC-023, EPC-024]
 adrs: [ADR-0011, ADR-0019]
 ```
@@ -170,7 +171,7 @@ id: CAP-012
 name: scaffold-customize
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "cargo test doctor::tests::test_customization", "codeflow-core tests/scaffold_test.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+verified_by: ["test: crates/codeflow-core/tests/manifest_consistency.rs", "test: crates/codeflow-core/src/doctor/mod.rs::tests::test_customization_passes_after_reconciliation", "test: crates/codeflow-core/tests/scaffold_test.rs", "record: docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
 epics: [EPC-003, EPC-004, EPC-005, EPC-009, EPC-010, EPC-011, EPC-012, EPC-020, EPC-024]
 adrs: [ADR-0025, ADR-0044]
 ```
@@ -195,7 +196,7 @@ id: CAP-017
 name: optional-agentic-estimation
 area: engine
 status: shipped
-verified_by: [estimate, estimate_cli, estimate_adoption_e2e, estimate_outcomes_cli, manifest_consistency]
+verified_by: ["test: crates/codeflow-core/src/estimate/mod.rs::tests", "test: crates/codeflow-cli/tests/estimate_cli.rs", "test: crates/codeflow-cli/tests/estimate_adoption_e2e.rs", "test: crates/codeflow-cli/tests/estimate_outcomes_cli.rs", "test: crates/codeflow-core/tests/manifest_consistency.rs"]
 epics: [EPC-006, EPC-023]
 adrs: [ADR-0057, ADR-0079]
 ```
@@ -218,7 +219,7 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["codeflow-core tests/path_policy.rs", "codeflow-cli tests/path_policy_cli.rs", "cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-core tests/managed_secret_scan.rs", "codeflow-core tests/policy_key_placement.rs", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "codeflow-cli tests/ci_pin.rs", "codeflow-cli tests/ci_pin_platforms.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs", "codeflow-cli tests/refusal_journey.rs", "cargo test hooks::git_discard", "cargo test hooks::edit_guard", "cargo test security::outward", "cargo test security::interpreter"]
+verified_by: ["test: crates/codeflow-core/tests/path_policy.rs", "test: crates/codeflow-cli/tests/path_policy_cli.rs", "test: crates/codeflow-core/src/hooks/git_hook.rs::tests", "test: crates/codeflow-core/src/hooks/conflict_markers.rs::tests", "test: crates/codeflow-core/src/hooks/git_guard.rs::tests", "test: crates/codeflow-core/src/hooks/policy.rs::tests", "test: crates/codeflow-core/src/hooks/policy_schema.rs::tests", "test: crates/codeflow-core/src/hooks/standards.rs::tests", "test: crates/codeflow-core/tests/managed_secret_scan.rs", "test: crates/codeflow-core/tests/policy_key_placement.rs", "test: crates/codeflow-cli/tests/hooks_cli.rs", "test: crates/codeflow-cli/tests/policy_cli.rs", "test: crates/codeflow-cli/tests/ci_cli.rs", "test: crates/codeflow-cli/tests/ci_pin.rs", "test: crates/codeflow-cli/tests/ci_pin_platforms.rs", "test: crates/codeflow-core/src/release_local.rs::tests", "test: crates/codeflow-cli/tests/release_journey.rs", "test: crates/codeflow-cli/tests/release_impact_corpus.rs", "test: scripts/test_release.py", "test: crates/codeflow-core/src/ledger/refusal.rs::tests", "test: crates/codeflow-core/src/ceremony/mod.rs::tests", "test: crates/codeflow-cli/tests/report_cli.rs", "test: crates/codeflow-cli/tests/refusal_journey.rs", "test: crates/codeflow-core/src/hooks/git_discard.rs::tests", "test: crates/codeflow-core/src/hooks/edit_guard.rs::tests", "test: crates/codeflow-core/src/security/outward.rs::tests", "test: crates/codeflow-core/src/security/interpreter.rs::tests"]
 epics: [EPC-001, EPC-011, EPC-017, EPC-020, EPC-022, EPC-023, EPC-024]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
@@ -275,7 +276,7 @@ id: CAP-008
 name: remote-protect-doctor
 area: engine
 status: shipped
-verified_by: ["cargo test remote::", "cargo test doctor::", "codeflow-cli tests/recall_remote_cli.rs"]
+verified_by: ["test: crates/codeflow-core/src/remote.rs::tests", "test: crates/codeflow-core/src/doctor/mod.rs::tests", "test: crates/codeflow-cli/tests/recall_remote_cli.rs", "gap: hosted: tests stub the GitHub boundary, so none of them applies a ruleset on GitHub"]
 epics: [EPC-001, EPC-002, EPC-003, EPC-020, EPC-022, EPC-023, EPC-024]
 adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
 ```
@@ -284,6 +285,9 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
   the default branch, and pull requests with strict, pinned checks guard it,
   the integration lines and each other protected branch. It never weakens a
   rule and reports what the plan cannot apply.
+- The tests for these commands stub the GitHub boundary: `gh` is a scripted
+  transport (`GithubProvider::run_gh`), so they show what would be sent and
+  how replies are read, never that GitHub accepts it.
 - `codeflow doctor` runs twenty-six health checks on the repository and the
   tools around it, including the default branch's host rules.
 
@@ -307,7 +311,7 @@ id: CAP-011
 name: security-redteam-review
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::policy", "codeflow-core tests/manifest_consistency.rs"]
+verified_by: ["test: crates/codeflow-core/src/hooks/policy.rs::tests", "test: crates/codeflow-core/tests/manifest_consistency.rs"]
 epics: [EPC-003, EPC-012]
 adrs: [ADR-0016]
 ```
@@ -335,7 +339,7 @@ id: CAP-004
 name: test-gate
 area: engine
 status: shipped
-verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs", "codeflow-cli tests/test_gate_cli.rs", "cargo test testing::delivery", "cargo test testing::evidence"]
+verified_by: ["test: crates/codeflow-core/src/testing/gate.rs::tests", "test: crates/codeflow-core/src/testing/config/mod.rs::tests", "test: crates/codeflow-core/tests/integration_testing_setup.rs", "test: crates/codeflow-cli/tests/test_gate_cli.rs", "test: crates/codeflow-core/src/testing/delivery.rs::tests", "test: crates/codeflow-core/src/testing/evidence.rs::tests"]
 epics: [EPC-001, EPC-022, EPC-023, EPC-024]
 adrs: [ADR-0021, ADR-0031, ADR-0085]
 ```
@@ -385,7 +389,7 @@ id: CAP-005
 name: integrate
 area: engine
 status: shipped
-verified_by: ["cargo test integrate::", "codeflow-core tests/integrate_merge.rs", "codeflow-cli tests/integrate_merge_cli.rs", "codeflow-cli tests/acceptance_journey.rs"]
+verified_by: ["test: crates/codeflow-core/src/integrate.rs::tests", "test: crates/codeflow-core/tests/integrate_merge.rs", "test: crates/codeflow-cli/tests/integrate_merge_cli.rs", "test: crates/codeflow-cli/tests/acceptance_journey.rs"]
 epics: [EPC-001, EPC-022]
 adrs: []
 ```
@@ -409,7 +413,7 @@ id: CAP-007
 name: orient-session-summary
 area: engine
 status: shipped
-verified_by: ["cargo test workgraph::line_drift", "codeflow-cli tests/orient_cli.rs", "cargo test hooks::orient", "cargo test hooks::guidance", "cargo test hooks::session_summary", "cargo test status::", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs", "codeflow-cli tests/init_e2e.rs", "codeflow-core tests/rule_reinjection_update.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+verified_by: ["test: crates/codeflow-core/src/workgraph/line_drift.rs::tests", "test: crates/codeflow-cli/tests/orient_cli.rs", "test: crates/codeflow-core/src/hooks/orient.rs::tests", "test: crates/codeflow-core/src/hooks/guidance.rs::tests", "test: crates/codeflow-core/src/hooks/session_summary.rs::tests", "test: crates/codeflow-core/src/status.rs::tests", "test: crates/codeflow-cli/tests/hooks_cli.rs", "test: crates/codeflow-cli/tests/codex_hooks.rs", "test: crates/codeflow-cli/tests/init_e2e.rs", "test: crates/codeflow-core/tests/rule_reinjection_update.rs", "record: docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
 epics: [EPC-001, EPC-004, EPC-023, EPC-025]
 adrs: [ADR-0013, ADR-0044]
 ```
@@ -449,7 +453,7 @@ id: CAP-006
 name: recall-registry
 area: engine
 status: shipped
-verified_by: ["cargo test recall::", "cargo test registry::", "codeflow-cli tests/recall_remote_cli.rs"]
+verified_by: ["test: crates/codeflow-core/src/recall.rs::tests", "test: crates/codeflow-core/src/registry.rs::tests", "test: crates/codeflow-cli/tests/recall_remote_cli.rs"]
 epics: [EPC-001]
 adrs: [ADR-0045]
 ```
@@ -470,7 +474,7 @@ id: CAP-009
 name: cross-vendor-delegation
 area: scaffold
 status: shipped
-verified_by: ["cargo test doctor::tests::test_check_delegates", "cargo test --test orchestration_contract", "codeflow-core tests/herdr_host_contract.rs", "evals/skill-triggers/test_triggers.py", "docs/verification/host-neutral-duo-canary-2026-07-15.md", "docs/verification/herdr-primary-consult-canary-2026-08-30.md"]
+verified_by: ["test: crates/codeflow-core/src/doctor/mod.rs::tests::test_check_delegates_in_the_sandbox_reports_auth_unreadable", "test: crates/codeflow-cli/tests/orchestration_contract.rs", "test: crates/codeflow-core/tests/herdr_host_contract.rs", "test: evals/skill-triggers/test_triggers.py", "record: docs/verification/host-neutral-duo-canary-2026-07-15.md", "record: docs/verification/herdr-primary-consult-canary-2026-08-30.md"]
 epics: [EPC-002, EPC-011, EPC-012, EPC-018, EPC-022, EPC-023, EPC-024, EPC-025]
 adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059, ADR-0077]
 ```
@@ -492,7 +496,7 @@ id: CAP-010
 name: duo-model-orchestration
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md", "cargo test workgraph::redaction", "codeflow-cli tests/ci_cli/acceptance_fix.rs", "codeflow-cli tests/ci_cli/cancelled_standalone.rs", "cargo test workgraph::lifecycle", "cargo test workgraph::record_text", "codeflow-cli tests/record_lifecycle_journey.rs", "cargo test -p codeflow-cli --test models_cli", "cargo test -p codeflow-core --test model_catalog_surfaces", "cargo test -p codeflow-cli --test models_managed_catalog", "cargo test -p codeflow-cli --test models_design_authority", "codeflow-cli tests/acceptance_cli.rs", "codeflow-cli tests/acceptance_journey.rs", "codeflow-cli tests/release_line_cli.rs", "codeflow-cli tests/feedback_cli.rs", "cargo test feedback::tests"]
+verified_by: ["test: crates/codeflow-core/tests/manifest_consistency.rs", "test: crates/codeflow-core/tests/model_eval_contract.rs", "test: crates/codeflow-core/src/model_qualification.rs::tests", "test: crates/codeflow-cli/tests/orchestration_contract.rs", "test: crates/codeflow-core/src/validate/docs.rs::tests", "test: crates/codeflow-core/src/models/task.rs::tests", "record: docs/verification/task-graph-verification-canary-2026-07-25.md", "record: docs/verification/design-direction-canary-2026-07-26.md", "record: docs/verification/design-language-appearance-canary-2026-08-01.md", "record: docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "test: crates/codeflow-core/src/doctor/mod.rs::tests::test_check_delegates_in_the_sandbox_reports_auth_unreadable", "record: docs/verification/grok-host-duo-canary-2026-09-07.md", "test: crates/codeflow-core/src/workgraph/redaction.rs::tests", "test: crates/codeflow-cli/tests/ci_cli/acceptance_fix.rs", "test: crates/codeflow-cli/tests/ci_cli/cancelled_standalone.rs", "test: crates/codeflow-core/src/workgraph/lifecycle.rs::tests", "test: crates/codeflow-core/src/workgraph/record_text.rs::tests", "test: crates/codeflow-cli/tests/record_lifecycle_journey.rs", "test: crates/codeflow-cli/tests/models_cli.rs", "test: crates/codeflow-core/tests/model_catalog_surfaces.rs", "test: crates/codeflow-cli/tests/models_managed_catalog.rs", "test: crates/codeflow-cli/tests/models_design_authority.rs", "test: crates/codeflow-cli/tests/acceptance_cli.rs", "test: crates/codeflow-cli/tests/acceptance_journey.rs", "test: crates/codeflow-cli/tests/release_line_cli.rs", "test: crates/codeflow-cli/tests/feedback_cli.rs", "test: crates/codeflow-core/src/feedback.rs::tests"]
 epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, EPC-017, EPC-018, EPC-020, EPC-022, EPC-023, EPC-024, EPC-025]
 adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060, ADR-0069, ADR-0084]
 ```
@@ -542,7 +546,7 @@ id: CAP-013
 name: model-binding-evaluation
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/live_eval_pack.rs (with the live delivery holdout checked out)", "cf-evaluate-model scripts/test_fake_effects.py + test_configure_fake_endpoint.py + test_security_sim.py", "codeflow-cli tests/init_e2e.rs", "evals/model-artifacts/test_retention_pack.py", "codeflow-cli tests/retention_pack.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test -p codeflow-cli --test models_cli", "cargo test -p codeflow-core --test model_catalog_surfaces", "cargo test -p codeflow-cli --test models_managed_catalog"]
+verified_by: ["test: crates/codeflow-core/tests/model_eval_contract.rs", "test: crates/codeflow-core/src/model_qualification.rs::tests", "test: crates/codeflow-core/src/doctor/mod.rs::tests::model_bindings_missing_active_record_fails_closed", "test: evals/model-artifacts/test_eval_kit.py", "gap: native: crates/codeflow-cli/tests/live_eval_pack.rs passes without running unless the live delivery holdout is checked out, and CI does not check it out", "test: assets/base/agents/skills/cf-evaluate-model/scripts/test_fake_effects.py", "test: assets/base/agents/skills/cf-evaluate-model/scripts/test_configure_fake_endpoint.py", "test: assets/base/agents/skills/cf-evaluate-model/scripts/test_security_sim.py", "test: crates/codeflow-cli/tests/init_e2e.rs", "test: evals/model-artifacts/test_retention_pack.py", "test: crates/codeflow-cli/tests/retention_pack.rs", "record: docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "record: docs/verification/model-role-quality-diagnostic-2026-07-26.md", "record: docs/verification/design-language-appearance-canary-2026-08-01.md", "record: docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "test: crates/codeflow-cli/tests/models_cli.rs", "test: crates/codeflow-core/tests/model_catalog_surfaces.rs", "test: crates/codeflow-cli/tests/models_managed_catalog.rs"]
 epics: [EPC-003, EPC-004, EPC-005, EPC-008, EPC-010, EPC-011, EPC-012, EPC-017, EPC-018, EPC-020, EPC-022, EPC-023]
 adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR-0054, ADR-0055, ADR-0060, ADR-0069]
 ```
@@ -577,7 +581,7 @@ id: CAP-014
 name: transport-neutral-delegate-lifecycle
 area: engine
 status: building
-verified_by: ["cargo test delegate::", "codeflow-cli tests/delegate_cli.rs", "codeflow-cli tests/delegate_pty_stress.rs", "cargo test doctor::tests::test_delegate_roundtrip", "docs/verification/delegate-lifecycle-canary-2026-07-23.md", "docs/verification/delegate-lifecycle-canary-2026-07-24.md"]
+verified_by: ["test: crates/codeflow-core/src/delegate.rs::tests", "test: crates/codeflow-cli/tests/delegate_cli.rs", "test: crates/codeflow-cli/tests/delegate_pty_stress.rs", "test: crates/codeflow-core/src/doctor/mod.rs::tests::test_delegate_roundtrip_passes_all_binary_steps", "record: docs/verification/delegate-lifecycle-canary-2026-07-23.md", "record: docs/verification/delegate-lifecycle-canary-2026-07-24.md"]
 epics: [EPC-002, EPC-019]
 adrs: [ADR-0036, ADR-0037]
 ```
@@ -613,7 +617,7 @@ id: CAP-015
 name: opt-in-documentation-portal
 area: scaffold
 status: shipped
-verified_by: ["codeflow test --mode full --strict", "cargo test scaffold::portal", "cargo test validate::portal", "codeflow-core tests/manifest_consistency.rs", "node --test docs-portal/tests/adapter.test.mjs", "npm run build --prefix docs-portal", "codeflow validate --portal docs-portal", "docs/verification/tsk-009-docs-portal/", "docs/verification/tsk-020-portal-ownership.md"]
+verified_by: ["gap: hosted: the full gate builds the portal in hosted CI; no record names a run", "test: crates/codeflow-core/src/scaffold/portal.rs::tests", "test: crates/codeflow-core/src/validate/portal.rs::tests", "test: crates/codeflow-core/tests/manifest_consistency.rs", "test: docs-portal/tests/adapter.test.mjs", "record: docs/verification/tsk-009-docs-portal/README.md", "record: docs/verification/tsk-020-portal-ownership.md"]
 epics: [EPC-005, EPC-007, EPC-013, EPC-014, EPC-016, EPC-017, EPC-022, EPC-023]
 adrs: [ADR-0048, ADR-0058]
 ```
@@ -639,7 +643,7 @@ id: CAP-016
 name: interactive-presentation-review
 area: engine
 status: building
-verified_by: ["cargo test -p codeflow-present", "cargo test -p codeflow-cli --test present_cli", "npm run check:browser --prefix crates/codeflow-present/web", "codeflow-core tests/manifest_consistency.rs"]
+verified_by: ["test: crates/codeflow-present/tests/method_controls.rs", "test: crates/codeflow-cli/tests/present_cli.rs", "gap: native: the browser checks in crates/codeflow-present/web run in a real browser outside the Rust test tree; no record names a run", "test: crates/codeflow-core/tests/manifest_consistency.rs"]
 epics: [EPC-005, EPC-014, EPC-016, EPC-020, EPC-022]
 adrs: [ADR-0049, ADR-0050, ADR-0052, ADR-0053]
 ```
@@ -670,15 +674,35 @@ Records contain YAML frontmatter and Markdown prose, checked by `validate --docs
 | `id`, `uid`, `name` | Required: `CAP-` and at least three digits, a UUID, and a lowercase slug. Id and name match the filename. |
 | `summary`, `area` | Required: nonempty summary and an area from this revision's `.codeflow/project.toml`. |
 | `status` | Required: `planned`, `building`, `shipped`, `deprecated`. |
-| `stage` | Required when shipped: `unassessed`, `experimental`, `beta`, `stable`. Beta and stable require non-gap evidence. |
+| `stage` | Required when shipped: `unassessed`, `experimental`, `beta`, `stable`. Beta and stable require non-gap evidence, and a shipped record whose only evidence is `gap:` is `unassessed`. |
 | `kind` | Required: `functional` or `non-functional`. |
 | `quality`, `measure` | Required when non-functional: a characteristic and a nonempty measurement sentence. Optional for functional records. Characteristics: `functional-suitability`, `performance-efficiency`, `compatibility`, `interaction-capability`, `reliability`, `security`, `maintainability`, `flexibility`, `safety`. |
 | `audience` | Required nonempty list drawn from `external`, `internal`, `agent`. |
 | `publish` | Boolean, default `false`; separate from audience. |
 | `group`, `tags` | Optional project facets from this revision's `vocabulary.yaml` groups and tags. |
-| `verified_by` | Required nonempty list when shipped. Each string is `test: ref`, `journey: ref`, `record: ref` or `gap: reason`, with a nonempty reference. |
+| `verified_by` | Required nonempty list when shipped. Each string is one of the evidence kinds below. |
 | `since`, `former_ids` | Optional first-shipped version string and list of numeric CAP ids. |
 | `epics`, `epic_id`, `adrs`, `specs`, `depends_on`, `related`, `superseded_by`, `capabilities` | Optional record references, accepting a string or list as in legacy fences. |
+
+| Evidence | What `validate --docs` checks |
+|---|---|
+| `test: <path>` | A file in the test tree: a `tests`, `test`, `__tests__`, `spec` or `specs` folder, or a name such as `test_x.py`, `x_test.go` or `x.test.mjs`. Fixtures and data files do not count. |
+| `test: <path>::<name>` | That file holds this test. In Rust, `<name>` is a declared test function or test module, and the file may be a source file with inline tests. In other languages the file must be in the test tree and hold the name as a whole word. |
+| `journey: <path>[::<name>]` | Resolves as `test:`. It marks a test that drives the whole path a user takes. |
+| `record: docs/verification/<path>` | A non-empty verification record. Currency is a review judgment: the check proves the record exists. |
+| `gap: <proof>: <reason>` | A declared gap, not proof. `<proof>` is what is still owed: `test`, `journey`, `hosted` or `native`. |
+
+- A source file named alone, a command, free text and an unresolved reference
+  are refused, naming the capability and the entry.
+- Nothing an entry names is run. Files are read through the repository-confined
+  reader, and links are refused. `CAPABILITY_MAX_EVIDENCE_FILE_BYTES` (16 MiB)
+  bounds the file read to find a `::<name>`; it guards parsing of
+  repository-controlled input and is not a setting.
+- Where a sandbox denies reading a path, a whole-file entry resolves only when
+  the Git index tracks that path.
+- A legacy fence file with no typed entry keeps validating with one warning
+  through 4.x. Its first typed entry makes every fence entry in the file subject
+  to these rules.
 
 | Validation rule | Contract |
 |---|---|

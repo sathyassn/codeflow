@@ -8,6 +8,13 @@
 
 use serde::Deserialize;
 
+mod evidence;
+pub(crate) use evidence::resolve_evidence;
+pub use evidence::{
+    is_typed_evidence, parse_evidence, Evidence, TestIdentity, CAPABILITY_MAX_EVIDENCE_FILE_BYTES,
+    EVIDENCE_KINDS, GAP_PROOFS, VERIFICATION_RECORD_DIR,
+};
+
 /// Legal capability status values (charter §5: planned → building →
 /// shipped → deprecated; deprecate, never delete).
 pub const CAPABILITY_STATUS_VALUES: &[&str] = &["planned", "building", "shipped", "deprecated"];
@@ -21,7 +28,8 @@ pub struct CapabilityEntry {
     pub area: String,
     /// Status string as written (validated by the docs lint, not here).
     pub status: String,
-    /// Test tags proving the capability works.
+    /// What proves the capability works, as typed entries ([`parse_evidence`]).
+    /// A legacy fence may still hold free-form tags.
     pub verified_by: Vec<String>,
     /// `EPC-###` ids that built or changed it.
     pub epics: Vec<String>,
@@ -739,22 +747,28 @@ fn validate_evidence(record: &CapabilityRecord) -> Result<(), CapabilityCatalogE
         return Err(bad("stage/verified_by", "both are required when shipped"));
     }
     let mut proof = false;
-    for evidence in &entry.verified_by {
-        let Some((kind, reference)) = evidence.split_once(':') else {
-            return Err(bad("verified_by", "expected kind: reference"));
-        };
-        if !["test", "journey", "record", "gap"].contains(&kind) || reference.trim().is_empty() {
-            return Err(bad(
+    for value in &entry.verified_by {
+        let evidence = parse_evidence(value).map_err(|reason| {
+            bad(
                 "verified_by",
-                "expected test, journey, record or gap with a nonempty reference",
-            ));
-        }
-        proof |= kind != "gap";
+                &format!("{}: entry {value:?}: {reason}", entry.id),
+            )
+        })?;
+        proof |= evidence.is_proof();
     }
     if matches!(record.stage.as_deref(), Some("beta" | "stable")) && !proof {
         return Err(bad(
             "verified_by",
             "beta and stable require non-gap evidence",
+        ));
+    }
+    if entry.status == "shipped" && !proof && record.stage.as_deref() != Some("unassessed") {
+        return Err(bad(
+            "stage",
+            &format!(
+                "{}: a shipped capability whose only evidence is gap: must carry stage: unassessed",
+                entry.id
+            ),
         ));
     }
     Ok(())
