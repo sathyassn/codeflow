@@ -267,10 +267,17 @@ fn review_lookup_binds_repository_and_bounds_descendant_stdout() {
 
 // These fixtures call the real CLI; only the hosted review transport is fake.
 #[cfg(unix)]
-fn pinned_review_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
+fn pinned_review_fixture(level: &str) -> (tempfile::TempDir, tempfile::TempDir, String) {
     let dir = fixture();
     let root = dir.path();
     let bin = tempfile::tempdir().unwrap();
+    write(
+        root,
+        ".codeflow/policy.json",
+        &format!(r#"{{"git": {{"work_planning": "{level}"}}}}"#),
+    );
+    git(root, &["add", ".codeflow/policy.json"]);
+    git(root, &["commit", "-qm", "chore: set planning policy"]);
     let branch = "task/TSK-001-work";
     git(
         root,
@@ -294,8 +301,15 @@ fn pinned_review_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
 #[test]
 #[cfg(unix)]
 fn a_slow_review_provider_allows_pinned_claim_and_start() {
+    for level in ["block", "warn"] {
+        slow_review_provider(level);
+    }
+}
+
+#[cfg(unix)]
+fn slow_review_provider(level: &str) {
     use std::time::{Duration, Instant};
-    let (dir, bin, pin) = pinned_review_fixture();
+    let (dir, bin, pin) = pinned_review_fixture(level);
     let root = dir.path();
     let script = bin.path().join("gh");
     let original = std::fs::read_to_string(&script).unwrap();
@@ -337,8 +351,15 @@ fn a_slow_review_provider_allows_pinned_claim_and_start() {
 #[test]
 #[cfg(unix)]
 fn failed_review_providers_refuse_pins_without_mutating_the_branch() {
+    for level in ["block", "warn"] {
+        failed_review_providers(level);
+    }
+}
+
+#[cfg(unix)]
+fn failed_review_providers(level: &str) {
     use std::time::{Duration, Instant};
-    let (dir, bin, pin) = pinned_review_fixture();
+    let (dir, bin, pin) = pinned_review_fixture(level);
     let root = dir.path();
     let script = bin.path().join("gh");
     let on = format!("TSK-001@{pin}");
@@ -387,6 +408,46 @@ fn failed_review_providers_refuse_pins_without_mutating_the_branch() {
                 git(root, &["branch", "-D", child]);
             }
         }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn an_unverifiable_pin_refuses_warn_start() {
+    let (dir, bin, pin) = pinned_review_fixture("warn");
+    let root = dir.path();
+    git(root, &["switch", "-qc", "task/TSK-002-work-tsk-002", &pin]);
+    std::fs::write(bin.path().join("gh"), "#!/bin/sh\nexit 1\n").unwrap();
+    let out = cli(
+        root,
+        &[
+            "work",
+            "start",
+            "TSK-002",
+            "--on",
+            &format!("TSK-001@{pin}"),
+        ],
+        Some(bin.path()),
+    );
+    let error = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{error}");
+    assert!(error.contains("provider failed"), "{error}");
+    assert!(!error.contains("continuing"), "{error}");
+}
+
+#[test]
+#[cfg(unix)]
+fn ordinary_planning_findings_keep_their_policy_level() {
+    for level in ["block", "warn"] {
+        let (dir, _, _) = pinned_review_fixture(level);
+        let out = cli(dir.path(), &["work", "start", "TSK-002"], None);
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(i32::from(level == "block")),
+            "{error}"
+        );
+        assert_eq!(error.contains("continuing"), level == "warn", "{error}");
     }
 }
 

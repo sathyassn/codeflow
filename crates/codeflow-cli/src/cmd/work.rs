@@ -10,6 +10,7 @@ use codeflow_core::hooks::policy::Policy;
 use codeflow_core::hooks::PolicyLevel;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::readiness::{self, Backlog, Entry, State};
+use codeflow_core::workgraph::work_start::ReviewedPin;
 use codeflow_core::workgraph::{
     declared_work_target, durable_work_tracking_enabled, resolve_work_target_checked,
 };
@@ -328,7 +329,7 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
 /// `work start`: the planning checks, once per task, at the
 /// `git.work_planning` level (TSK-133). At `warn` a finding is reported and
 /// the command succeeds; CI reports the same finding at the same level. An
-/// unreadable tracking state always blocks.
+/// unreadable tracking state or unverifiable explicit pin always blocks.
 fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
@@ -359,8 +360,20 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
             return 2;
         }
     };
+    // Explicit review evidence is required even when planning findings warn.
+    // Keep verification failures outside the policy-controlled findings.
+    let pins = match resolve_pins(&root, on) {
+        Ok(pins) => pins,
+        Err(error) => {
+            eprintln!(
+                "work start: error: {error}",
+                error = crate::cmd::shown(&error)
+            );
+            return 1;
+        }
+    };
     let level = policy.git.work_planning_level();
-    let Err(findings) = plan_check(&root, task_id, target, on) else {
+    let Err(findings) = plan_check(&root, task_id, target, &pins) else {
         return 0;
     };
     let warn = level == PolicyLevel::Warn;
@@ -384,7 +397,7 @@ fn plan_check(
     root: &std::path::Path,
     task_id: &str,
     target: Option<&str>,
-    on: &[String],
+    pins: &[ReviewedPin],
 ) -> Result<(), Vec<String>> {
     let workgraph = validate_workgraph(root);
     if !workgraph.is_clean() {
@@ -401,9 +414,8 @@ fn plan_check(
         Ok(resolved) => resolved.map_or_else(|| "main".to_string(), |r| r.target),
         Err(error) => return Err(vec![error.to_string()]),
     };
-    let pins = resolve_pins(root, on).map_err(|error| vec![error])?;
     let report =
-        codeflow_core::workgraph::work_start::check_work_start_on(root, task_id, &target, &pins)
+        codeflow_core::workgraph::work_start::check_work_start_on(root, task_id, &target, pins)
             .map_err(|error| vec![error.to_string()])?;
     println!(
         "work start: {} anchored at {} for {} -> {}",
