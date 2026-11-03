@@ -5916,6 +5916,124 @@ class ProcessRepairTests(unittest.TestCase):
         pending = screen.replace('Try "fix lint errors"', "trial prompt")
         self.assertTrue(runner.holds(runner.editor(pending, "test/cache-plan"), "trial prompt"))
 
+    def test_claude_shipped_status_line_row_names_this_fixture(self):
+        runner = self.runner()
+        # Captured from a refused trial on 2026-10-30: a fixture scaffolded from
+        # the 3.2.0 line, whose .claude/settings.json ships the status line.
+        screen = (ROOT / "evals/qualification/screens/claude-shipped-status-line.txt").read_text(encoding="utf-8")
+        branch = "task/TSK-031-retry-settings-from-config"
+        status = {"model": "claude-opus-5-5", "folder": "repository"}
+        self.assertEqual('Try "fix typecheck errors"', runner.editor(screen, branch, status))
+        # The expectation comes from the trial's own checked native flags.
+        for native in [["--model", "claude-opus-5-5", "--effort", "high", "--permission-mode", "auto"],
+                       ["--model=claude-opus-5-5", "--permission-mode=auto"]]:
+            runner.permission_flags("claude", native)
+            self.assertEqual(status, runner.claude_expectation(native, Path("/subjects/trial/repository")))
+        self.assertIsNone(runner.claude_expectation(["--permission-mode", "auto"], Path("/r/repository"))["model"])
+        row = "  Opus 5.5 (claude-opus-5-5) | v2.1.314 | default | repository (task/TSK-031-retry-settings-from-config) | ctx:0k/1000k (0%)"
+        self.assertIn(row + "\n", screen)
+        # Without the status expectation, or with another fixture's identity, it refuses.
+        for bad_branch, bad_status in [(branch, None), (None, status), ("task/TSK-032-other", status),
+                                       (branch, {**status, "model": "claude-fable-5-1"}),
+                                       (branch, {**status, "model": "opus"}),
+                                       (branch, {**status, "model": None}),
+                                       (branch, {**status, "folder": "other"})]:
+            self.assertIsNone(runner.editor(screen, bad_branch, bad_status), (bad_branch, bad_status))
+        # Rows that differ from the shipped grammar refuse.
+        for bad in [row.replace("(task/TSK-031-retry-settings-from-config)", "(task/TSK-031-retry-settings-from-config-2)"),
+                    row.replace("(claude-opus-5-5)", "(claude-opus-5-5-x)"),
+                    row.replace("Opus 5.5", "Opus | 5.5"),
+                    row.replace(" | default |", " | |"),
+                    row.replace(" | v2.1.314", " | 2.1.314"),
+                    row + " | extra",
+                    row.replace("ctx:0k/1000k (0%)", "ctx:0k/1000k"),
+                    "  repository (task/TSK-031-retry-settings-from-config) | jq not found",
+                    "  allow import (task/TSK-031-retry-settings-from-config)",
+                    row.replace("  Opus", "Opus")]:
+            self.assertIsNone(runner.editor(screen.replace(row, bad), branch, status), bad)
+        # Claude Code cuts a row wider than the pane and ends it with "…".
+        head = "  Opus 5.5 (claude-opus-5-5) | v2.1.314 | default | repository (task/TSK-031-retry-settings-from-config)"
+        for cut in [head + "…", head + " |…", head + " | c…", head + " | ctx:0k/10…", head + " | ctx:0k/1000k (0…"]:
+            self.assertEqual('Try "fix typecheck errors"', runner.editor(screen.replace(row, cut), branch, status), cut)
+        for cut in [head[:-1] + "…", head[:40] + "…", head + " | x…", head + " | ctx:0k/1000k (0%) extra…",
+                    head + " | c", row[:-1]]:
+            self.assertIsNone(runner.editor(screen.replace(row, cut), branch, status), cut)
+        # The status row replaces Claude Code's own branch row; both together refuse.
+        both = screen.replace(row, row + "\n  " + branch)
+        self.assertIsNone(runner.editor(both, branch, status))
+        # Readiness and delivery pass the expectation through.
+        with patch.object(runner, "herdr", return_value=screen), \
+             patch.object(runner, "state", return_value={"agent_status": "idle"}), patch.object(runner.time, "sleep"):
+            self.assertEqual("idle", runner.wait_ready("owned", 1, "claude", Path("/subject/repository"), [], [],
+                                                       branch, claude=status)["agent_status"])
+        with patch.object(runner, "herdr", return_value=screen), \
+             patch.object(runner, "state", return_value={"agent_status": "idle"}), \
+             patch.object(runner.time, "monotonic", side_effect=[0, 2]), patch.object(runner.time, "sleep"), \
+             self.assertRaisesRegex(runner.Refused, "seat did not become ready"):
+            runner.wait_ready("owned", 1, "claude", Path("/subject/repository"), [], [], branch)
+        pending = screen.replace('Try "fix typecheck errors"', "trial prompt")
+        with patch.object(runner, "herdr", side_effect=[screen, "sent", pending, "sent"]) as transport, \
+             patch.object(runner, "started", return_value=True), patch.object(runner.time, "sleep"):
+            self.assertEqual(1, runner.deliver_claude("owned", "trial prompt", {}, 1, branch, None, status))
+        self.assertEqual(1, sum(c.args[:2] == ("pane", "send-keys") for c in transport.call_args_list))
+
+    def test_claude_rows_under_the_editor_are_a_known_set(self):
+        runner = self.runner()
+        # Captured from live trial 3 of TSK-1033 on 2026-10-30, after the paste:
+        # the status line, the mode row, then the editor hint on its own row.
+        pending = (ROOT / "evals/qualification/screens/claude-status-line-pending-input.txt").read_text(encoding="utf-8")
+        branch = "feat/escalate-failed-jobs"
+        status = {"model": "claude-sonnet-5-5", "folder": "repository"}
+        prompt = "Make the change in CHANGE.md with its tests, then say which files you changed.\n"
+        self.assertTrue(runner.holds(runner.editor(pending, branch, status), prompt))
+        row, mode, hint = pending.splitlines()[-3:]
+        self.assertEqual(("  ⏵⏵ auto mode on (shift+tab to cycle)", "ctrl+g to edit in Nvim"), (mode, hint.strip()))
+        prefix = pending[:pending.index(row)]
+        draft = "❯ Make the change in CHANGE.md with its tests, then say which files you changed."
+        self.assertIn(draft, prefix)
+
+        def frame(rows, editor_line=draft):
+            return prefix.replace(draft, editor_line) + "\n".join(rows) + "\n"
+
+        manual = "  ⏸ manual mode on"
+        cut = row[:row.index(" | ctx:")] + " | c…"
+        placeholder = '❯ Try "fix lint errors"'
+        # Known sets: with input, the hint row may follow; without it, it never does.
+        for rows in [[row, mode, hint], [row, manual, hint], [row, mode], [row, manual], [cut, mode, hint],
+                     [row, mode, hint.replace("Nvim", "VS Code")]]:
+            self.assertTrue(runner.holds(runner.editor(frame(rows), branch, status), prompt), rows)
+        for rows in [[row, mode], [row, manual], [cut, mode]]:
+            self.assertEqual('Try "fix lint errors"', runner.editor(frame(rows, placeholder), branch, status), rows)
+        self.assertEqual("", runner.editor(frame([row, mode], "❯ "), branch, status))
+        # Live probe: the transient hint can sit above the top rule instead, outside the frame.
+        rule = next(line for line in prefix.splitlines() if set(line) == {"─"})
+        above = frame([row, mode]).replace(rule, " " * 94 + "ctrl+g to edit in VS Code\n" + rule, 1)
+        self.assertTrue(runner.holds(runner.editor(above, branch, status), prompt))
+        # Anything else refuses: the hint without input, out of order, repeated or
+        # reworded, under another row, or under a status line for another fixture.
+        for rows, editor_line in [([row, mode, hint], placeholder), ([row, mode, hint], "❯ "),
+                                  ([row, hint, mode], draft), ([row, mode, hint, hint], draft),
+                                  ([row, mode, hint.replace("Nvim", "Vim")], draft),
+                                  ([row, mode, hint.replace("ctrl+g to edit in Nvim", "allow import")], draft),
+                                  ([row, mode, "ctrl+g to edit in Nvim"], draft),
+                                  ([mode, hint], draft), (["  " + branch, mode, hint], draft),
+                                  (["  codeflow-qualify", mode, hint], draft),
+                                  ([row.replace(branch, "feat/other"), mode, hint], draft),
+                                  ([row.replace("claude-sonnet-5-5", "claude-opus-5-5"), mode, hint], draft),
+                                  ([row, mode + " · PR #436", hint], draft), ([row, mode, hint, "  unknown"], draft),
+                                  ([row, mode, "  unknown"], draft)]:
+            self.assertIsNone(runner.editor(frame(rows, editor_line), branch, status), (rows, editor_line))
+        # Claude Code's own branch row carries the hint only with input, too.
+        hinted = "  " + branch + "       ctrl+g to edit in Nvim"
+        self.assertTrue(runner.holds(runner.editor(frame([hinted, mode]), branch), prompt))
+        self.assertIsNone(runner.editor(frame([hinted, mode], placeholder), branch))
+        # Delivery: the ready frame, then this captured pending frame, then one Enter.
+        ready = frame([row, mode], placeholder)
+        with patch.object(runner, "herdr", side_effect=[ready, "sent", pending, "sent"]) as transport, \
+             patch.object(runner, "started", return_value=True), patch.object(runner.time, "sleep"):
+            self.assertEqual(1, runner.deliver_claude("owned", prompt, {}, 1, branch, None, status))
+        self.assertEqual(1, sum(c.args[:2] == ("pane", "send-keys") for c in transport.call_args_list))
+
     def test_claude_readiness_waits_for_renderer_then_verified_editor(self):
         runner = self.runner(); events = []; displays = []
         screen = self.renderer_screen(); selected = self.renderer_screen(True)
@@ -7015,16 +7133,20 @@ class ProcessRepairTests(unittest.TestCase):
                     return {"result": {"process_info": {"foreground_processes": [{"name": "zsh"}]}}}
                 return {"result": {"agent": {"agent_status": "idle", "state_change_seq": 0}}}
 
-            def ready(*_args, **_kwargs):
+            expectations = []
+
+            def ready(*_args, **kwargs):
                 order.append("ready")
+                expectations.append(kwargs.get("claude"))
                 return {"agent_status": "idle"}
 
             def snapshot(*_args, **_kwargs):
                 order.append("snapshot")
                 return {"entries": {}, "errors": {}}
 
-            def deliver(*_args):
+            def deliver(*args):
                 order.append("delivery")
+                expectations.append(args[6])
                 return 1
 
             native = ["--model", "chosen-selector", "--permission-mode", "auto"]
@@ -7039,6 +7161,8 @@ class ProcessRepairTests(unittest.TestCase):
                 runner.launch(args)
             # Peers can only be opened after delivery; the watcher is answering by then.
             self.assertEqual(["start", "ready", "snapshot", "watch", "delivery"], order)
+            # The shipped status line is checked against the requested model and this fixture's folder.
+            self.assertEqual([{"model": "chosen-selector", "folder": "repository"}] * 2, expectations)
             self.assertFalse((args.output / "peers.stop").exists())
             args.output = evidence_root / "delivery-refused"
             with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \

@@ -190,6 +190,12 @@ fn init_writes(
                 .and_then(|state| state.release_rules)
                 .unwrap_or(1),
         ),
+        // A new scaffold refuses files over the default size limit; a
+        // project initialized before keeps the kind it had (TSK-323).
+        file_size_rule: previous.as_ref().map_or_else(
+            || Some("refuse".to_string()),
+            |state| state.file_size_rule.clone(),
+        ),
     };
     state.store(root)?;
     // The Outcome section's adoption marker (TSK-435): a fresh project lists

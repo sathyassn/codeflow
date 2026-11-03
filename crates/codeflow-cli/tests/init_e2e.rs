@@ -610,7 +610,7 @@ fn init_full_tier_preserves_representative_brownfield_present_files() {
 /// gate while another holds the gate lock.
 #[test]
 fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
-    use codeflow_core::testing::gate_guard::{acquire_full_gate_lock, lock_dirs};
+    use codeflow_core::testing::gate_guard::{hold_host_exclusive_in, lock_dirs};
 
     for tier in ["--minimal", "--standard", "--full"] {
         let tmp = tempfile::tempdir().unwrap();
@@ -643,14 +643,16 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
         assert_eq!(warned.status.code(), Some(0), "{tier}: {err}");
         assert!(err.contains("warning: CARGO_TARGET_DIR="), "{tier}: {err}");
 
-        let held = acquire_full_gate_lock(&lock_dirs(&root, Some(&home)).unwrap(), &root).unwrap();
+        let held = hold_host_exclusive_in(
+            &lock_dirs(&root, Some(&home)).unwrap(),
+            &root,
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
         let locked = gate(None);
         let err = String::from_utf8_lossy(&locked.stderr).to_string();
         assert_eq!(locked.status.code(), Some(1), "{tier}: {err}");
-        assert!(
-            err.contains("another heavy gate is running"),
-            "{tier}: {err}"
-        );
+        assert!(err.contains("host-exclusive"), "{tier}: {err}");
         drop(held);
 
         // A child forked by a sibling test can hold the released descriptor
@@ -662,7 +664,7 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
                 false
             }
         });
-        assert!(passed, "{tier}: the gate runs once the lock is free");
+        assert!(passed, "{tier}: the gate runs once the host is free");
     }
 }
 
@@ -2427,11 +2429,15 @@ fn a_fresh_standard_project_prints_steps_that_clear_each_finding() {
 }
 
 /// Let the destination take `chore/seed` as `target` by fetching, so no
-/// client hook runs on the protected branch, and refresh `origin`.
+/// client hook runs on the protected branch, refresh `origin` and record
+/// `target` as its default branch.
 fn seed(root: &Path, dest: &Path, target: &str) {
     let refspec = format!("chore/seed:{target}");
     git_stdout(dest, &["fetch", "-q", root.to_str().unwrap(), &refspec]);
     git_with_binary(root, &["fetch", "-q", "origin"]);
+    // Git before 2.48 does not record origin/HEAD on fetch, and the policy
+    // authority is the remote default branch alone (ADR-0091).
+    git_with_binary(root, &["remote", "set-head", "origin", target]);
 }
 
 fn stderr_text(out: &Output) -> String {

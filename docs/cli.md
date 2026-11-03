@@ -194,18 +194,23 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--pr-body-file <FILE>` | Read the PR/MR body from a file (scanned like `--pr-body`). |
 | | `--actor <ACTOR>` | The actor or app id that opened or updated the pull request, as the CI workflow passes it for trusted automation profiles (SPC-013 R-82). It is trusted only in a GitHub Actions pull request event from the same repository whose actor it names; a local run, another CI or a fork is `unknown` whatever is given. Default `unknown`. |
 | | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, the branch's declared target, a named --base, a unique protected or eligible epic line at the base commit, then the repository default). An ambiguous commit-ID base requires --into or --branch. A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). |
+| | `--line-tip <LINE>` | Judge the head as the next tip of this integration line, as a landing candidate is: every commit on the head's first-parent chain from the line's fetched tip (`origin/<LINE>`) must be a merge or a direct commit a landed `line_adoptions` entry names, the rule the pre-push hook applies to a push to the line (`work.epic_line`). Without it, a run with no pull request and no push context whose base is the fetched tip of exactly one epic line cannot tell how the head reaches the line and refuses when the head would add a direct commit; pass `--into <LINE>` or the body for a pull request head that lands by merge. |
 | `codeflow policy explain` | | Print the complete policy.json key schema: every key's type, default, valid values, and purpose |
 | `codeflow policy show` | | Print the effective policy: each key's current value, its source (project file or built-in default), and any invalid values |
-| `codeflow remote protect` | | Apply protected-branch policy to the remote provider |
+| `codeflow remote protect` | | Write the rulesets codeflow owns: "codeflow authority updates" and "codeflow authority checks" on the default branch, "codeflow line checks" on the integration lines, and `codeflow protect <pattern>` for each other protected branch in policy.json |
 | | `--provider <PROVIDER>` | Remote provider (only `github` has an adapter; others print the manual checklist). Default `github`. |
 | | `--dry-run` | Print the intended rules without applying anything. |
+| | `--profile <PROFILE>` | Who reviews and who moves the default branch: solo-administrator (no approval; only the administrator role updates the default branch) or independent-review (one approval, stale approvals dismissed, the last push approved by someone else; only the maintain role updates it). One of `solo-administrator`, `independent-review`. Default `solo-administrator`. |
+| | `--check-app <APP_ID>` | The id of the GitHub App that creates the authority: checks (Mode A). Without it, the trusted: checks are pinned to GitHub Actions (Mode B). |
+| | `--lines <PATTERN>` | The integration-line branch pattern "codeflow line checks" targets. Default `integration/**`. |
 
 ### Verify
 
 | Command | Argument or flag | What it does |
 |---|---|---|
 | `codeflow test` | | Run the test gate (configured targets or runtime stack detection) |
-| | `--mode <MODE>` | Full (default) and essential hold the shared heavy-work lock for the run. Undeclared quick targets use `execution.quick_default_class` (light by default). Quick runs light targets beside gates; heavy targets wait up to `execution.heavy_wait_seconds` (default zero), then refuse if still held. With no quick targets, quick uses essential targets, heavy unless declared light. Both the `CodeFlow` home and git common directory use `full-gate.lock`, also excluding full gates from 3.1. Essential gates from 3.1 take no lock. These locks do not make the rest of the machine quiet. One of `full`, `quick`, `essential`. Default `full`. |
+| | `--mode <MODE>` | Full (default) and essential take a heavy-run slot for the run; quick takes one when its first heavy target starts. Heavy runs in any worktree or project run at once; past the host's job budget a run uses fewer jobs. Undeclared quick targets use `execution.quick_default_class` (light by default). Only a `host_exclusive` target runs alone; while one holds the host, heavy work waits up to `--wait-seconds` (default zero), then refuses. Under `codeflow reserve` quick uses its slot (Unix). With no quick targets, quick uses essential targets, heavy unless declared light. One of `full`, `quick`, `essential`. Default `full`. |
+| | `--wait-seconds <SECONDS>` | Seconds heavy work waits for a host-exclusive target, or a host-exclusive target for other heavy runs. Default zero. |
 | | `--lock-status` | Read recorded lock holders and their start times without running targets. Records are snapshots; admission still checks the OS lock and live target groups. |
 | | `--strict` | Exit non-zero when no targets executed or a requested target was skipped. Explicit --only and mode exclusions are not skips. Use for scripted callers that require execution evidence. |
 | | `--since <SINCE>` | Accepted and narrows nothing: no local run record earns selection credit (ADR-0089), so every eligible target runs. |
@@ -217,8 +222,8 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--template <NAME>` | Write an embedded test-config template by name. |
 | | `--replace` | Explicitly replace an existing config when applying --template. |
 | | `--add-target` | Interactively append one target to the existing config. |
-| `codeflow reserve <COMMAND>...` | | Run a direct heavy command under the shared gate lock |
-| | `--wait-seconds <WAIT_SECONDS>` | Maximum seconds to wait for another heavy run. Zero refuses immediately. Default `0`. |
+| `codeflow reserve <COMMAND>...` | | Run a direct heavy command in a heavy-run slot, beside other heavy runs |
+| | `--wait-seconds <WAIT_SECONDS>` | Maximum seconds to wait while a host-exclusive target holds the host. Zero refuses immediately. Other heavy runs never make a reserve wait. Default `0`. |
 | | `--timeout-seconds <TIMEOUT_SECONDS>` | Stop the command and its descendants after this many seconds. Default `3600`. |
 | | `<COMMAND>...` | Executable and exact arguments, following --. |
 | `codeflow validate [PATH]` | | Validate record frontmatter; --docs adds the doc-graph integrity lint |
@@ -230,10 +235,11 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `<BRANCH>` | Branch to integrate. |
 | | `--into <INTO>` | Target branch to land on. Default `main`. |
 | | `--merge` | Preserve the source head with a no-fast-forward merge commit. |
-| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, guard-timeouts, startup-files, git-config-includes, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
+| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, guard-timeouts, startup-files, sandbox, git-config-includes, config, permissions, policy-source, secret-engine, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
 | | `--preflight` | Print the seat, sandbox and tool evidence the orchestrator preflight reads, each value marked configured, observed or unavailable; exit 1 when Codex refuses the builder launch or a builder write is refused; when the builder write probe gives no result, the line says builder readiness is not established and the exit stays 0. |
+| | `--profile <PROFILE>` | With `--check remote-perimeter`: compare the rulesets `codeflow remote protect` owns with this profile (solo-administrator or independent-review). A non-empty bypass list on the authority or line checks fails with or without it. One of `solo-administrator`, `independent-review`. |
 | `codeflow work next` | | List ready tasks first, then landed (work merged), waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
 | | `--epic <EPC-NNN>` | Only tasks of this epic. |
 | | `--json` | Print the same facts as JSON, each task with its `state`; a landed task adds `landed_branches` and `suggested_command`. |
@@ -483,6 +489,18 @@ bases and targets retain protection. Pre-push validates and passes
 `--into=<target>`; its base follows the `--branch` row.
 CI context errors block the push.
 
+How `codeflow ci` treats a head that could become an epic line's next tip:
+
+| Run | Judged as the line's next tip | Outcome |
+|---|---|---|
+| `--line-tip <LINE>`, for a landing candidate before its gate | Yes, from `origin/<LINE>` whatever `--base` says, with the line bound by the records at that tip | A direct commit refuses with the hook's `work.epic_line` message; a line with no fetched tip or unbound there, a head not cut from the tip, and unreadable or malformed adoption entries refuse with the cause |
+| No role, and the base is the fetched tip of exactly one epic line | Yes: the run cannot tell a candidate from a pull request head | A direct commit refuses, and the remedy names `--line-tip`, and `--into` or the body; a bare run on a task branch whose line is fetched passes `--into <LINE>` |
+| No role, and the base is the fetched tip of several epic lines | Cannot tell which line | Refuses |
+| No role, and the base is the fetched tip of both the default target and an epic line, as a new line's is | Yes: nothing the requester cannot forge says where the head lands | A direct commit refuses, and the remedy also names `--into main` for a change into the default target |
+| No role, and the head is the base | No: it adds no commit | Not judged |
+| A pull request head: a body, a pull request event, or `--into` | No: it lands by merge | Not judged |
+| A push hand-off from the pre-push hook | No | The hook judges the push |
+
 `codeflow ci` proceeds when only warnings were raised and reports the count.
 A pull request adding or modifying only the regular file `.gitleaksignore`
 without changing its mode may name one existing epic or
@@ -500,14 +518,12 @@ note and still refuses an added, removed, renumbered or reordered
 criterion, a changed tag or checkbox form, or an added list item that is
 no criterion (ADR-0080).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
-another provider prints the manual checklist. It requires the checks in
-`git.required_checks` (by default the shipped CI job names) on a branch that
-is up to date with its base, pinned to GitHub Actions on a ruleset. It reads
-the live rules first: every active repository ruleset that already targets the
-branch is updated in place, never duplicated, and a classic protection update keeps the
-settings it does not own, such as conversation resolution. A live read that
-fails or does not parse writes nothing for that branch. `codeflow doctor
---check remote-perimeter` reads the default branch's live rules back.
+another provider prints the manual checklist. It writes only rulesets it owns
+by name, never another ruleset or classic branch protection, and never weakens
+a rule; the rulesets, profiles and recovery window are in the
+[policy reference](policy-reference.md#remote-protection). A live read that
+fails or does not parse writes nothing. `codeflow doctor --check
+remote-perimeter` reads the default branch's live rules back.
 
 ### Verify notes
 
@@ -522,13 +538,13 @@ and CI runs it again.
 | Captured output | Bounded, with truncation reported |
 | `test setup` | Detects only at the repository root; monorepos declare package `cwd` targets; never automatically replaces populated or malformed config |
 
-One full gate runs at a time on a machine.
+Heavy runs share the host by capacity and start with fewer jobs past its
+budget; only a `host_exclusive` target runs alone
+([details](troubleshooting.md#heavy-work-shares-the-host)).
 
-- A second gate refuses and names the holder.
 - A gate that runs cargo warns about a `CARGO_TARGET_DIR` outside the
   worktree, and each target prints a start line on stderr as it begins.
-- A killed gate never lets a second one run beside its target. On Unix the
-  lock is held until the target's process group exits. On Windows the
+- A killed gate's slot stays busy while its target runs. On Windows the
   target's job object ends its process tree with the gate.
 
 The `pre-push` hook runs the push set: `codeflow ci` over the pushed range,

@@ -28,6 +28,7 @@ mod git_config;
 mod grok_hooks;
 mod guard_timeouts;
 mod remote_perimeter;
+mod sandbox;
 mod startup_files;
 
 pub use codex_profile::{
@@ -165,6 +166,10 @@ pub struct Options {
     /// `GROK_HOME`, `GROK_FOLDER_TRUST`); `None` reads the process
     /// environment.
     pub env_var: Option<EnvVarFn>,
+    /// The branch-protection profile `remote-perimeter` compares the owned
+    /// rulesets with (`solo-administrator` or `independent-review`);
+    /// `None` compares none, and the security floor is judged either way.
+    pub remote_profile: Option<String>,
 }
 
 impl Options {
@@ -298,10 +303,12 @@ const CHECK_NAMES: &[&str] = &[
     "grok",
     "guard-timeouts",
     "startup-files",
+    "sandbox",
     "git-config-includes",
     "config",
     "permissions",
     "policy-source",
+    "secret-engine",
     "network",
     "delegates",
     "model-bindings",
@@ -332,11 +339,13 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     let mut m: HashMap<&'static str, CheckFn> = HashMap::new();
     m.insert("hooks", check_hooks);
     m.insert("policy-source", check_policy_source);
+    m.insert("secret-engine", check_secret_engine);
     m.insert("claude", check_claude);
     m.insert("codex", check_codex);
     m.insert("grok", check_grok);
     m.insert("guard-timeouts", guard_timeouts::check);
     m.insert("startup-files", startup_files::check);
+    m.insert("sandbox", sandbox::check);
     m.insert("git-config-includes", git_config::check);
     m.insert("config", check_config);
     m.insert("permissions", check_permissions);
@@ -4282,6 +4291,87 @@ fn check_policy_source(opts: &Options) -> CheckResult {
     }
 }
 
+/// The commit-time secret scan's engine (TSK-412): with
+/// `git.secret_scan_engine: gitleaks`, the folders searched, the binary
+/// found with its checksum and version, and the pin expected. It runs the
+/// binary, to read its version, only when its checksum is the pinned one.
+/// Unusable is a failure at `block` and a warning at `warn`, as the hook
+/// judges it.
+fn check_secret_engine(opts: &Options) -> CheckResult {
+    use crate::hooks::gitleaks::Engine;
+    use crate::hooks::policy::{Policy, SecretScanEngine};
+    let start = Instant::now();
+    let result = |status, message| CheckResult {
+        name: "secret-engine".into(),
+        status,
+        message,
+        duration: start.elapsed(),
+    };
+    let policy = match Policy::load_effective(Path::new(&opts.project_dir)) {
+        Ok((policy, _)) => policy.git,
+        Err(error) => return result(Status::Fail, format!("cannot read policy: {error}")),
+    };
+    if policy.secret_scan_engine == SecretScanEngine::Builtin {
+        return result(
+            Status::Pass,
+            "the staged secret scan runs the built-in patterns only (git.secret_scan_engine is builtin)".into(),
+        );
+    }
+    if !policy.secret_scan.is_active() {
+        return result(
+            Status::Pass,
+            format!(
+                "git.secret_scan is {}, so the staged scan and its gitleaks engine do not run",
+                policy.secret_scan
+            ),
+        );
+    }
+    let engine = Engine::with_path(opts.env("PATH").as_deref());
+    let searched = if engine.search.is_empty() {
+        "searched no folder (PATH has no absolute entry)".to_string()
+    } else {
+        format!(
+            "searched {}",
+            engine
+                .search
+                .iter()
+                .map(|dir| crate::git::display_path(dir))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let pin = engine.expected.describe();
+    match engine.verify() {
+        Ok(verified) => result(
+            Status::Pass,
+            format!(
+                "gitleaks {} at {} with sha256 {}; the pin is {pin}; {searched}",
+                engine.expected.version,
+                crate::git::display_path(&verified.path),
+                verified.sha256
+            ),
+        ),
+        Err(unusable) => {
+            let message = format!("{}; the pin is {pin}; {searched}", unusable.describe());
+            if policy.secret_scan == crate::hooks::PolicyLevel::Block {
+                result(Status::Fail, message)
+            } else {
+                let archive = engine
+                    .expected
+                    .archive
+                    .clone()
+                    .unwrap_or_else(|| "none is pinned for this platform".to_string());
+                result(
+                    Status::Warn(
+                        crate::remedy::SECRET_ENGINE_UNAVAILABLE.with(&[("archive", &archive)]),
+                    ),
+                    message,
+                )
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// The step a warning names, or "" for any other status.
@@ -4343,7 +4433,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 24);
+        assert_eq!(check_names().len(), 26);
     }
 
     #[test]
@@ -6290,6 +6380,7 @@ mod tests {
             permission_preset: "acceptEdits".into(),
             product_one_liner: "x".into(),
             release_rules: None,
+            file_size_rule: None,
         }
         .store(dir.path())
         .unwrap();

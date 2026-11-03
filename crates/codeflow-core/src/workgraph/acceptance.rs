@@ -207,6 +207,16 @@ fn first_parent(repo: &Repository, at: Oid) -> Result<Option<Oid>, String> {
         .next())
 }
 
+fn is_merge(repo: &Repository, at: Oid) -> Result<bool, String> {
+    let commit = repo
+        .find_commit(at)
+        .map_err(|error| format!("cannot read commit {at}: {error}"))?;
+    Ok(history::parents(repo, &commit)
+        .map_err(|error| error.to_string())?
+        .len()
+        > 1)
+}
+
 /// The span of the `## Blocker` section when it has exactly the shape
 /// `task status <id> blocked` writes (TSK-340, issue #198): the heading, one
 /// empty line, the `reason`, `owner` and `revisit` items with a value each,
@@ -455,6 +465,7 @@ mod imports;
 mod receiving_merges;
 pub(crate) use imports::clear_cache as clear_import_cache;
 pub use imports::{imported_record_paths, imported_records, ImportedRecord};
+use receiving_merges::LineSyncTip;
 
 /// The source and completion endpoints established by the binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1677,14 +1688,25 @@ fn task_landing(
     let Ok(second) = history::parent_id(repo, &merge, 1) else {
         return unreadable("the landing merge");
     };
+    // Only a merge on a trusted receiving line is a landing (TSK-340).
+    let untrusted = untrusted_landing(repo, merge.id(), reviewed, receiving);
+    // A completion that changes product code is refused first, landing or
+    // not, so an unverified line binds it at the range head and names that
+    // change (TSK-433). The refusal calls the merge a landing only when the
+    // trust check found one, so a sync is never "the landing merge"
+    // (TSK-1066).
     if let Some(path) = completion {
+        let label = if untrusted.is_none() {
+            "the landing merge"
+        } else {
+            "the merge"
+        };
         return Landed::Refused(format!(
-            "{COMPLETION_CHANGES} {path}; a completion after the landing merge {} of the reviewed commit {reviewed} changes planning records only",
+            "{COMPLETION_CHANGES} {path}; a completion after {label} {} of the reviewed commit {reviewed} changes planning records only",
             merge.id()
         ));
     }
-    // Only a merge on a trusted receiving line is a landing (TSK-340).
-    if let Some(why) = untrusted_landing(repo, merge.id(), reviewed, receiving) {
+    if let Some(why) = untrusted {
         return Landed::NotALanding(why);
     }
     if let Err(error) = check_after_landing(
@@ -3853,7 +3875,6 @@ fn reopened_judged(
 /// Returns a message when a revision, the merge-base or a tree cannot be
 /// read.
 #[allow(clippy::too_many_arguments)] // The range, the run's authorities and the stacked heads.
-#[allow(clippy::too_many_lines)] // Keep import, reopening and local completion judgments in order.
 pub fn completions_in_range(
     repo: &Repository,
     base: &str,
@@ -3862,6 +3883,48 @@ pub fn completions_in_range(
     criteria: &Criteria,
     run: &RunBases,
     line: Option<&str>,
+    stacked: &[StackedHead],
+) -> Result<Vec<Finding>, String> {
+    completions_received(
+        repo,
+        base,
+        head,
+        default_target,
+        criteria,
+        run,
+        (line, receiving_line(line, None), None),
+        stacked,
+    )
+}
+
+/// The epic line whose merges in the range are judged as its own work: the
+/// judged branch when it is an epic line (a line push), else the pull
+/// request's target when that is one (a task pull request into a line).
+/// The judged branch always wins, so naming a target only adds a check.
+fn receiving_line<'a>(branch: Option<&'a str>, into: Option<&'a str>) -> Option<&'a str> {
+    let epic_line = |name: &'a str| {
+        let name = super::work_start::logical_target(name);
+        super::line_adoption::epic_id(name).is_ok().then_some(name)
+    };
+    branch
+        .and_then(epic_line)
+        .or_else(|| into.and_then(epic_line))
+}
+
+/// [`completions_in_range`] with the judged branch (`line`) and the epic
+/// line that receives the range's merges (`receiving`, see
+/// [`receiving_line`]) given apart, and the receiving line's tip when this
+/// is the push of a task branch into it (`sync_tip`, see [`LineSyncTip`]).
+#[allow(clippy::too_many_arguments)] // The range, the run's authorities and the stacked heads.
+#[allow(clippy::too_many_lines)] // Keep import, reopening and local completion judgments in order.
+fn completions_received(
+    repo: &Repository,
+    base: &str,
+    head: &str,
+    default_target: Option<Oid>,
+    criteria: &Criteria,
+    run: &RunBases,
+    (line, receiving, sync_tip): (Option<&str>, Option<&str>, Option<LineSyncTip>),
     stacked: &[StackedHead],
 ) -> Result<Vec<Finding>, String> {
     let _judgment = history::judgment();
@@ -3948,6 +4011,20 @@ pub fn completions_in_range(
                 Some(block) => introduced_at(repo, task, block, head_oid)?,
                 None => head_oid,
             };
+            // A merge carries a completion from one of its parents. One
+            // that writes an acceptance block neither parent holds edited
+            // the block itself, so name that edit and the merge rather than
+            // whatever else changed since the review (TSK-1066).
+            if block.is_some() && is_merge(repo, introduced)? {
+                findings.push(finding(
+                    BINDING_RULE,
+                    format!(
+                        "{}: merge {introduced} edits the acceptance block in {}, which neither of its parents holds; a merge carries a completion unchanged, so complete the task in its own pull request and review the result",
+                        task.id, task.path
+                    ),
+                ));
+                continue;
+            }
             let source_base = if amendable {
                 source_landing_base(repo, head_oid, introduced)?
             } else {
@@ -4004,7 +4081,7 @@ pub fn completions_in_range(
         repo, &before, &local, head_oid, amendable,
     )?);
     findings.extend(receiving_merges::findings(
-        repo, base_oid, head_oid, line, &after, &reviewed,
+        repo, base_oid, head_oid, receiving, &after, &reviewed, sync_tip,
     )?);
     Ok(findings)
 }
@@ -4371,7 +4448,6 @@ pub fn pull_request_findings(
 ///
 /// Returns a message when a revision, the merge-base or a tree cannot be
 /// read.
-#[allow(clippy::too_many_lines)] // Keep import, reopening and local completion judgments in order.
 pub fn pull_request_findings_judged(
     repo_root: &std::path::Path,
     base: &str,
@@ -4379,6 +4455,44 @@ pub fn pull_request_findings_judged(
     criteria: &Criteria,
     authority: Option<&str>,
     branch: Option<&str>,
+    pins: &[super::work_start::ReviewedPin],
+) -> Result<Vec<Finding>, String> {
+    pull_request_findings_into(
+        repo_root,
+        base,
+        head,
+        criteria,
+        authority,
+        (branch, None, None),
+        pins,
+    )
+}
+
+/// [`pull_request_findings_judged`] for a pull request that also names its
+/// target (`into`: `--into` or the host's base ref). When the judged
+/// branch is not an epic line and the target is one, the
+/// target receives the range's merges: a sync merge a task branch carries
+/// is judged as the line push judges it (TSK-1066).
+///
+/// `sync_tip` is the target line's tip, which only the pre-push hand-off of
+/// a task branch gives (TSK-1149): a merge on the branch that brings in
+/// nothing but that line's history is then not judged as the line's work,
+/// so the push that keeps a hand-resolved line sync durable goes through.
+/// It applies only when the target, not the judged branch, is the epic
+/// line; the pull request check at ready and at landing never passes it.
+///
+/// # Errors
+///
+/// Returns a message when a revision, the merge-base or a tree cannot be
+/// read.
+#[allow(clippy::too_many_lines)] // Keep import, reopening and local completion judgments in order.
+pub fn pull_request_findings_into(
+    repo_root: &std::path::Path,
+    base: &str,
+    head: &str,
+    criteria: &Criteria,
+    authority: Option<&str>,
+    (branch, into, sync_tip): (Option<&str>, Option<&str>, Option<&str>),
     pins: &[super::work_start::ReviewedPin],
 ) -> Result<Vec<Finding>, String> {
     let _judgment = history::judgment();
@@ -4392,6 +4506,17 @@ pub fn pull_request_findings_judged(
     };
     let target_tip = oid(base)?;
     let candidate = authority.map(oid).transpose()?;
+    // Only a task branch's push into its line relaxes the line's merges:
+    // the judged branch itself must not be an epic line (a line push keeps
+    // judging every merge), and the target must be one.
+    let sync_tip = match sync_tip {
+        Some(tip)
+            if receiving_line(branch, None).is_none() && receiving_line(None, into).is_some() =>
+        {
+            Some(LineSyncTip(oid(tip)?))
+        }
+        _ => None,
+    };
     let run = RunBases::new(std::iter::once(target_tip).chain(candidate));
     let head_tip = oid(head)?;
     let mut at_head = Graph::from_revision(&repo, head)?;
@@ -4482,14 +4607,14 @@ pub fn pull_request_findings_judged(
         }
     }
     found.extend(stacked_records_kept(&at_head, &stacked));
-    found.extend(completions_in_range(
+    found.extend(completions_received(
         &repo,
         base,
         head,
         Some(target_tip),
         criteria,
         &run,
-        branch,
+        (branch, receiving_line(branch, into), sync_tip),
         &stacked,
     )?);
     Ok(found)

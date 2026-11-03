@@ -332,6 +332,26 @@ table does not list is refused, whoever writes it:
 | todo or blocked to cancelled | `codeflow task status TSK-NNN cancelled --reason <why> --scope <where it went>` | the reason and scope disposition in the Closeout |
 | complete to todo (reopen) | `codeflow task status TSK-NNN todo --reason <why>` | the old acceptance block, kept and marked superseded |
 
+A task already blocked on the target is unblocked in its own pull request.
+`work claim` and `work next` read the target, where the task is still
+blocked, so cut the task branch from the target, run `codeflow task status
+TSK-NNN todo`, commit the record, then run `codeflow work start TSK-NNN`.
+`codeflow ci` shows the Blocker the range removes, for the reviewer to
+confirm, and the unblock never admits work whose `depends_on` predecessors
+are open. The same pull request may then complete or cancel the task.
+
+CI and pre-push judge a range one status step per commit, and a merge
+against each of its parents. `blocked -> todo -> complete` across commits
+passes; a direct `blocked -> complete` in one commit is refused, and so is
+a cancelled task revived inside one range. A merge that brings the other
+side's legal steps, such as a sync of `main` into a line, passes whether it
+is merged in one step or several. History that cannot be read (a shallow
+clone, a missing object, an unparsable record version) refuses and names
+its cause. A `plan/` amendment names the epics whose plan it changes, so it
+needs an epic on its `Task:` line; a standalone task's status rides in its
+own task pull request, and an unlanded standalone cancellation takes the
+route below.
+
 A standalone task cancelled before its record reached the target can leave
 its cancellation record through a `plan/` pull request. Run `codeflow task
 status TSK-NNN cancelled --reason <why> --scope <where it went>` on the task

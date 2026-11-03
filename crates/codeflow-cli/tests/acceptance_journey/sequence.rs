@@ -31,7 +31,7 @@ fn hand_complete_ci(root: &Path, branch: &str, block_file: &str) -> Output {
 }
 
 /// TSK-001's acceptance block with both criteria verified at `reviewed`.
-fn task_block(dir: &Path, name: &str, reviewed: &str, ac1: &str) -> String {
+pub(super) fn task_block(dir: &Path, name: &str, reviewed: &str, ac1: &str) -> String {
     let body = format!(
         "acceptance:\n  reviewed: {reviewed}\n  review: session:sequence@sha256:00\n  criteria:\n    AC-1: {ac1}\n    AC-2: verified | the journey ran\n  journey: verified | crates/codeflow-cli/tests/acceptance_journey/sequence.rs\n  not_verified: none\n  follow_ups: none: journey fixture\n  verdict: approved\n"
     );
@@ -50,7 +50,7 @@ fn epic_block(dir: &Path, reviewed: &str) -> String {
     path.to_string_lossy().to_string()
 }
 
-fn status(root: &Path, kind: &str, id: &str, args: &[&str]) -> Output {
+pub(super) fn status(root: &Path, kind: &str, id: &str, args: &[&str]) -> Output {
     let mut all = vec![kind, "status", id];
     all.extend_from_slice(args);
     codeflow(root, &all)
@@ -113,7 +113,7 @@ fn line_ci(root: &Path, main: &str) -> Output {
     )
 }
 
-fn merge(root: &Path, into: &str, branch: &str, message: &str) {
+pub(super) fn merge(root: &Path, into: &str, branch: &str, message: &str) {
     git(root, &["switch", "-q", into]);
     git(root, &["merge", "-q", "--no-ff", branch, "-m", message]);
 }
@@ -143,7 +143,7 @@ pub(super) fn host_merge(root: &Path, main: &str, branch: &str) {
 
 /// A fresh project with an epic line, its plan landed, and `src/**` as
 /// product code. With `second`, the epic has two tasks. Returns the default branch's name.
-fn planned_project(root: &Path, second: bool) -> String {
+pub(super) fn planned_project(root: &Path, second: bool) -> String {
     ok(&codeflow(root, &["init", "--yes", "--full"]), "init --full");
     let main = git(root, &["branch", "--show-current"]);
     git(root, &["switch", "-q", "-c", LINE]);
@@ -185,7 +185,7 @@ fn set_policy(root: &Path, change: impl FnOnce(&mut serde_json::Value)) {
     std::fs::write(path, serde_json::to_string_pretty(&policy).unwrap() + "\n").unwrap();
 }
 
-fn write(root: &Path, relative: &str, content: &str) {
+pub(super) fn write(root: &Path, relative: &str, content: &str) {
     let path = root.join(relative);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, content).unwrap();
@@ -1263,6 +1263,8 @@ fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
         &["remote", "add", "origin", &origin.to_string_lossy()],
     );
     git(&root, &["fetch", "-q", "origin"]);
+    // Git before 2.48 records no remote HEAD on fetch (ADR-0091).
+    git(&root, &["remote", "set-head", "origin", "-a"]);
     let unpinned = status(
         &root,
         "task",

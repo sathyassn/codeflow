@@ -103,6 +103,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCS_CAPABILITIES_UNCHECKED", Runs),
     ("WORK_START_RECONCILE", Runs),
     ("WORK_START_MERGE_PLANNING", Runs),
+    ("WORK_START_UNBLOCK", Runs),
     ("WORK_CLASSIFICATION", Runs),
     ("TASK_RECORD_MISSING", Runs),
     ("WORKGRAPH_INVALID", Runs),
@@ -119,6 +120,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("UNVERIFIED_LINE_FROZEN", Excluded(HumanAuthority)),
     ("CRITERIA_DELTA", Excluded(HumanAuthority)),
     ("CRITERIA_AUTHORITY", Excluded(HumanAuthority)),
+    ("RECORD_UNBLOCKED", Excluded(HumanAuthority)),
     ("CRITERIA_CORRECTION", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_CHANGE", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_RECORD", Excluded(HumanAuthority)),
@@ -178,6 +180,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("ENV_FILE_STAGED", Runs),
     ("SECRET_SCAN_INCOMPLETE", Runs),
     ("SECRET_STAGED", Runs),
+    ("SECRET_ENGINE_UNAVAILABLE", Excluded(Network)),
     ("PUSH_SET_CI", Runs),
     ("PUSH_SET_BY_HAND", Runs),
     ("PUSH_RANGE_UNRESOLVED", Runs),
@@ -237,6 +240,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_STARTUP_RELOCATED", Excluded(HumanAuthority)),
     // The operator decides which configuration inputs to repair or remove.
     ("DOCTOR_GIT_CONFIG_INCLUDES", Excluded(HumanAuthority)),
+    // Settings the guard cannot read are the operator's to confirm.
+    ("DOCTOR_TEXT_RULE_UNSEEN", Excluded(HumanAuthority)),
     ("GUARD_UNCLASSIFIABLE", Runs),
     ("GUARD_UNRESOLVED", Runs),
     ("GUARD_ALIAS", Runs),
@@ -598,6 +603,8 @@ fn with_destination(root: &Path) -> PathBuf {
     );
     git(root, &["remote", "add", "origin", dest.to_str().unwrap()]);
     git(root, &["fetch", "-q", "origin"]);
+    // TSK-1077: record the policy authority on every git version.
+    git(root, &["remote", "set-head", "origin", &target]);
     git(
         root,
         &["switch", "-q", "-c", "feat/x", &format!("origin/{target}")],

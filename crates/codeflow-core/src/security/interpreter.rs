@@ -9,6 +9,8 @@ mod git_reads;
 pub(crate) mod git_repository;
 mod git_staging;
 
+/// [`evaluate_ruled`] under the baseline rule alone.
+#[cfg(test)]
 pub(crate) fn evaluate(
     command: &str,
     levels: &SecuritySection,
@@ -16,6 +18,21 @@ pub(crate) fn evaluate(
     cwd: &Path,
     root: &Path,
     home: Option<&Path>,
+) -> Vec<Violation> {
+    evaluate_ruled(command, levels, integrity, cwd, root, home, None)
+}
+
+/// Judge interpreter code and arguments. `strict` is `Some(trigger)` in
+/// the tightened outcome of TSK-397 design D, which adds the strict
+/// branch's argument rule to the baseline's.
+pub(crate) fn evaluate_ruled(
+    command: &str,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &Path,
+    root: &Path,
+    home: Option<&Path>,
+    strict: Option<&str>,
 ) -> Vec<Violation> {
     let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
     // A rooted Windows home without a drive inherits the caller's drive.
@@ -35,7 +52,7 @@ pub(crate) fn evaluate(
     let _shares = TrustedShares::enter(&[home, session_dir.as_deref()]);
     // Position-scoped arguments carry more precise provenance than the broad
     // literal scan below. Keep their finding first when both name one path.
-    let mut violations = super::arguments::evaluate(command, integrity, cwd, root, home);
+    let mut violations = super::arguments::evaluate(command, integrity, cwd, root, home, strict);
     violations.extend(secret_reads(command, levels, cwd, home));
     let visible = if command.contains("<<") {
         super::composed::paths::execution_text(command, cwd, home)
@@ -4246,13 +4263,50 @@ mod tests {
         }
     }
 
-    /// The findings for `command` run from `dir` in the checkout `root`.
+    /// The findings for `command` run from `dir` in the checkout `root`,
+    /// under the baseline rule.
     fn judge_in(
         repo: &Repo,
         dir: &Path,
         root: &Path,
         command: &str,
         integrity: PolicyLevel,
+    ) -> Vec<Violation> {
+        judge_with(repo, dir, root, command, integrity, None)
+    }
+
+    /// The trigger the tightened outcome's tests name (TSK-397 design D).
+    const TEST_TRIGGER: &str = "a test selected the strict rule";
+
+    /// [`evaluate_ruled`] in the tightened outcome.
+    fn evaluate_tightened(
+        command: &str,
+        levels: &SecuritySection,
+        integrity: PolicyLevel,
+        cwd: &Path,
+        root: &Path,
+        home: Option<&Path>,
+    ) -> Vec<Violation> {
+        evaluate_ruled(
+            command,
+            levels,
+            integrity,
+            cwd,
+            root,
+            home,
+            Some(TEST_TRIGGER),
+        )
+    }
+
+    /// [`judge_in`] under `strict`: `None` for the baseline, `Some` for the
+    /// tightened outcome.
+    fn judge_with(
+        repo: &Repo,
+        dir: &Path,
+        root: &Path,
+        command: &str,
+        integrity: PolicyLevel,
+        strict: Option<&str>,
     ) -> Vec<Violation> {
         // These placeholders occur unquoted, inside shell quotes and inside
         // code literals. Use slash paths so shell escape removal cannot
@@ -4265,13 +4319,14 @@ mod tests {
         let command = command
             .replace("@ROOT@", &shell_path(&repo.root))
             .replace("@LINKED@", &shell_path(&repo.linked));
-        evaluate(
+        evaluate_ruled(
             &command,
             &SecuritySection::default(),
             integrity,
             dir,
             root,
             Some(&repo.home),
+            strict,
         )
     }
 
@@ -4279,9 +4334,31 @@ mod tests {
         findings.iter().find(|v| v.rule == "git.hook_integrity")
     }
 
+    /// A refusal in the tightened outcome: the line's `git.hook_integrity`
+    /// finding, or one only the strict branch makes, which takes
+    /// `security.text_guard` (TSK-397 security review SEC01-1).
+    fn tightened_refusal(findings: &[Violation]) -> Option<&Violation> {
+        findings.iter().find(|v| {
+            v.rule == "git.hook_integrity"
+                || (v.rule == super::super::arguments::STRICT_RULE
+                    && v.level == PolicyLevel::Block
+                    && v.level_fixed)
+        })
+    }
+
+    fn tightened_argument_refusal(findings: &[Violation]) -> bool {
+        tightened_refusal(findings).is_some_and(|v| {
+            (v.message.contains("interpreter")
+                || v.message.contains("cannot verify the run-time argument"))
+                && !v.message.contains("interpreter code")
+        })
+    }
+
     fn argument_refusal(findings: &[Violation]) -> bool {
         integrity_refusal(findings).is_some_and(|v| {
-            v.message.contains("interpreter") && !v.message.contains("interpreter code")
+            (v.message.contains("interpreter")
+                || v.message.contains("cannot verify the run-time argument"))
+                && !v.message.contains("interpreter code")
         })
     }
 
@@ -4293,6 +4370,46 @@ mod tests {
             let findings = judge_in(repo, dir, root, command, PolicyLevel::Block);
             if !argument_refusal(&findings) {
                 wrong.push(format!("should refuse: {command}: {findings:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// Every command refuses in the tightened outcome, under
+    /// `git.hook_integrity`, with a finding about an interpreter argument.
+    /// These are the strict branch's expectations (TSK-397 design D A4):
+    /// the baseline is judged by the line's own tests.
+    fn assert_tightened_refuses(repo: &Repo, dir: &Path, root: &Path, commands: &[&str]) {
+        let mut wrong = Vec::new();
+        for command in commands {
+            let findings = judge_with(
+                repo,
+                dir,
+                root,
+                command,
+                PolicyLevel::Block,
+                Some(TEST_TRIGGER),
+            );
+            if !tightened_argument_refusal(&findings) {
+                wrong.push(format!(
+                    "should refuse when tightened: {command}: {findings:?}"
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// Under the baseline, every finding for each command is the line's
+    /// secret-read refusal, and there is at least one: the argument rule
+    /// adds nothing.
+    fn assert_line_refuses_only_secret_reads(repo: &Repo, commands: &[&str]) {
+        let mut wrong = Vec::new();
+        for command in commands {
+            let findings = judge_in(repo, &repo.root, &repo.root, command, PolicyLevel::Block);
+            if findings.is_empty() || findings.iter().any(|v| v.rule != "security.secret_reads") {
+                wrong.push(format!(
+                    "should refuse only as a secret read: {command}: {findings:?}"
+                ));
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
@@ -5039,8 +5156,971 @@ mod tests {
                 "echo notes.txt | xargs python3 edit.py",
                 "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
                 "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
-                "cd src && python3 app.py settings.json",
+                "cd ./src && python3 app.py notes.txt",
                 "python3 edit.py \"@ROOT@/src/app.py\"",
+            ],
+        );
+    }
+
+    /// TSK-397 AC-1: from the checkout root, a parent path after `cd src`
+    /// refuses in both outcomes, since it leaves the checkout from where
+    /// the line started.
+    #[test]
+    fn a_parent_path_after_cd_refuses_in_both_outcomes() {
+        let repo = repo();
+        for strict in [None, Some(TEST_TRIGGER)] {
+            for command in [
+                "cd src && python3 tool.py ..",
+                "cd src && python3 tool.py ../.claude/settings.json",
+            ] {
+                let findings = judge_with(
+                    &repo,
+                    &repo.root,
+                    &repo.root,
+                    command,
+                    PolicyLevel::Block,
+                    strict,
+                );
+                assert!(
+                    argument_refusal(&findings),
+                    "{strict:?} {command}: {findings:?}"
+                );
+            }
+        }
+    }
+
+    /// TSK-397 (operator decision): after `cd`, the guard keeps judging
+    /// interpreter arguments from the starting directory too. Where a `cd`
+    /// lands depends on shell state the guard cannot see, so narrowing
+    /// cannot be made sound; a parent path that is legitimate from the
+    /// destination still refuses when it leaves the checkout from the start.
+    #[test]
+    fn cd_keeps_the_starting_directory() {
+        let repo = repo();
+        std::fs::create_dir_all(repo.root.join("lib")).unwrap();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd src && python3 tool.py ..",
+                "cd src && python3 tool.py ../.claude/settings.json",
+                "cd src && python3.13 tool.py ..",
+                "cd src && node tool.js ..",
+                "cd src && ruby tool.rb ..",
+                "cd src && perl tool.pl ..",
+                "cd -P src && python3 tool.py ..",
+                "cd -- src && python3 tool.py ..",
+                // A bare name may be found through a `CDPATH` only the shell
+                // holds, so its destination is unknown (Codex finding 3).
+                "cd src && python3 app.py settings.json",
+                // Any `cd` may run a function or hook first (Codex round 3).
+                "cd ./src && python3 app.py settings.json",
+                "cd /tmp && python3 app.py settings.json",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "cd ./src && python3 tool.py ../lib",
+                "cd ./src && python3 app.py notes.txt",
+            ],
+        );
+    }
+
+    #[test]
+    fn other_cd_joins_keep_the_starting_directory() {
+        let repo = repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd src; python3 tool.py ..",
+                "cd src || python3 tool.py ..",
+                "(cd src) && python3 tool.py ..",
+                "cd src && true || python3 tool.py ..",
+                "cd src && true; python3 tool.py ..",
+                "cd src & python3 tool.py ..",
+                "cd src | python3 tool.py ..",
+                "! cd src && python3 tool.py ..",
+                "python3 tool.py .. && cd src",
+                "cd src && popd && python3 tool.py ..",
+                "cd src && eval popd && python3 tool.py ..",
+                "cd src && cd .. && python3 tool.py ..",
+            ],
+        );
+    }
+
+    #[test]
+    fn line_local_cdpath_keeps_directory_uncertainty() {
+        let repo = repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "CDPATH=.claude; cd src && python3 tool.py ../settings.json",
+                "CDPATH=$SEARCH cd src && python3 tool.py ../settings.json",
+                // TSK-397 security review F2: every assignment form.
+                "CDPATH+=.claude && cd src && python3 tool.py ../settings.json",
+                "cdpath=.claude && cd src && python3 tool.py ../settings.json",
+                "cdpath=(.claude) && cd src && python3 tool.py ../settings.json",
+                "cdpath+=(.claude); cd src && python3 tool.py ../settings.json",
+                "export CDPATH=.claude; cd src && python3 tool.py ../settings.json",
+                "declare -x CDPATH=.claude; cd src && python3 tool.py ../settings.json",
+                "typeset -a cdpath=(.claude); cd src && python3 tool.py ../settings.json",
+                "set -A cdpath .claude; cd src && python3 tool.py ../settings.json",
+                "printf -v CDPATH .claude; cd src && python3 tool.py ../settings.json",
+                "read CDPATH <<< .claude; cd src && python3 tool.py ../settings.json",
+            ],
+        );
+    }
+
+    /// TSK-397 review fixture: `src/lnk` and `safe/lnk` point at `.claude`,
+    /// `hidden` is `.claude` under another name, and `bridge` is
+    /// `.claude/deep`, so `bridge/..` is `.claude` when read physically.
+    #[cfg(unix)]
+    fn linked_repo() -> Repo {
+        let repo = repo();
+        for dir in ["safe", ".claude/src", ".claude/deep"] {
+            std::fs::create_dir_all(repo.root.join(dir)).unwrap();
+        }
+        for (at, to) in [
+            ("src/lnk", "../.claude"),
+            ("safe/lnk", "../.claude"),
+            ("hidden", ".claude"),
+            ("bridge", ".claude/deep"),
+        ] {
+            std::os::unix::fs::symlink(to, repo.root.join(at)).unwrap();
+        }
+        repo
+    }
+
+    /// Grok finding 1: from a symlinked hook cwd, `cd ..` may land in the
+    /// link target's parent; a `..` makes the directory unknown.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_cwd_keeps_both_parents() {
+        let repo = linked_repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root.join("src/lnk"),
+            &repo.root,
+            &[
+                "cd .. && python3 .claude/settings.json",
+                "cd .. && python3 .codex/config.toml",
+                "cd -P .. && python3 .claude/settings.json",
+            ],
+        );
+    }
+
+    /// Grok finding 2: `ruby -C` changes directory physically, so
+    /// `lnk/..` is the link target's parent, with or without a `cd`.
+    #[cfg(unix)]
+    #[test]
+    fn ruby_chdir_resolves_links_before_parents() {
+        let repo = linked_repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd safe && ruby -C lnk/.. .claude/settings.json",
+                "cd safe && ruby -Clnk/.. .codex/config.toml",
+                "cd safe && ruby -C ./lnk/.. .claude/settings.json",
+                "ruby -C safe/lnk/.. .claude/settings.json",
+                "cd safe && ruby -C .. .claude/settings.json",
+            ],
+        );
+    }
+
+    /// Grok finding 3: the shell removes quotes and backslashes and
+    /// expands parameters before it reads a name, so a spelled-apart
+    /// `CDPATH` still makes the directory unknown.
+    #[cfg(unix)]
+    #[test]
+    fn a_spelled_apart_cdpath_is_still_cdpath() {
+        let repo = linked_repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "export CD''PATH=hidden && cd src && python3 ../settings.json",
+                "export CD\\PATH=hidden && cd src && python3 ../settings.json",
+                "export CD\"\"PATH=hidden && cd src && python3 ../settings.json",
+                "export CD${E}PATH=hidden && cd src && python3 ../settings.json",
+                "printf -v CD''PATH hidden && cd src && python3 ../settings.json",
+            ],
+        );
+    }
+
+    /// TSK-397 security review F4: an encoded or expanded `CDPATH` name
+    /// cannot be read from the text, so any expansion on a line whose `cd`
+    /// CDPATH could redirect makes the directory unknown.
+    #[cfg(unix)]
+    #[test]
+    fn an_encoded_cdpath_makes_the_directory_unknown() {
+        let repo = linked_repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                r"export $'\x43DPATH'=hidden && cd src && python3 tool.py ../settings.json",
+                r"export $'\103DPATH'=hidden && cd src && python3 tool.py ../settings.json",
+                r"export ${X:-CDPATH}=hidden && cd src && python3 tool.py ../settings.json",
+                r"export CD$'\x50'ATH=hidden && cd src && python3 tool.py ../settings.json",
+                r"printf -v $'\x43DPATH' hidden && cd src && python3 tool.py ../settings.json",
+                // F6: backtick substitution spells it without a `$`.
+                r"export `printf '\103DPATH'`=hidden && cd src && python3 tool.py ../settings.json",
+                r"export `rev <<< HTAPDC`=hidden && cd src && python3 tool.py ../settings.json",
+                r"export `echo HTAPDC | rev`=hidden && cd src && python3 tool.py ../settings.json",
+            ],
+        );
+    }
+
+    /// Grok finding 4: a path-named interpreter may be a wrapper, and an
+    /// option before the script may load code that changes directory first.
+    /// These were bypasses of the withdrawn narrowing; they stay refusals.
+    #[cfg(unix)]
+    #[test]
+    fn interpreters_that_load_code_first_keep_the_wider_set() {
+        let repo = linked_repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd safe && ./python3 .claude/settings.json",
+                "cd safe && python3 -m evil .claude/settings.json",
+                "cd safe && python3 -I x.py .claude/settings.json",
+                "cd safe && node -r ./ch.js ./read.js .claude/settings.json",
+                "cd safe && node --require ./ch.js ./read.js .claude/settings.json",
+                "cd safe && node --import ./ch.mjs read.js .claude/settings.json",
+                "cd safe && ruby -r ./ch.rb read.rb .claude/settings.json",
+                "cd safe && perl -Mevil read.pl .claude/settings.json",
+                "cd safe && NODE_OPTIONS=--require=./ch.js node read.js .claude/settings.json",
+            ],
+        );
+    }
+
+    /// TSK-397 Codex review round 2: shell functions, `chpwd` hooks and
+    /// `PATH` wrappers (1), the shell's logical `PWD` (2), a `CDPATH` only
+    /// the shell holds (3), zsh's two-operand `cd` (6) and `cdable_vars` (7)
+    /// all move the shell where the guard cannot follow, so each refuses.
+    /// Finding 4 is pinned by `cdpath_entries_resolve_links_before_parents`
+    /// and finding 5 by `an_encoded_cdpath_makes_the_directory_unknown`.
+    #[cfg(unix)]
+    #[test]
+    fn shell_state_the_guard_cannot_see_keeps_the_wider_set() {
+        let repo = linked_repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd src && python3 tool.py .claude/settings.json",
+                "cd src && python3 tool.py ../settings.json",
+                "cd destination && python3 settings.json",
+                "cd destination && python3 .claude/settings.json",
+                // Security review F2: forms the CDPATH rule never refused,
+                // so these lines show the unresolved-`cd` fix on its own.
+                "cd ./destination && python3 x.py settings.json",
+            ],
+        );
+        assert_tightened_refuses(
+            &repo,
+            &repo.root.join("src"),
+            &repo.root,
+            &[
+                "cd .. && python3 settings.json",
+                "cd src hidden && python3 settings.json",
+                "cd @ROOT@/src @ROOT@/hidden && python3 settings.json",
+                "cd -- src hidden && python3 settings.json",
+            ],
+        );
+        let set = |line: &str, cwd: &Path| outward::line_directories(line, cwd, None, true);
+        assert!(set("cd src hidden", &repo.root.join("src")).unknown);
+        assert!(set("cd destination", &repo.root).unknown);
+        assert!(set("cd ..", &repo.root.join("src")).unknown);
+        assert!(set("cd src", &repo.root).unknown);
+        assert!(set("cd ./src", &repo.root).unknown);
+        assert!(
+            set(
+                &format!("cd {}", repo.root.join("src").display()),
+                &repo.root
+            )
+            .unknown
+        );
+    }
+
+    /// TSK-397 security review F1: after a `cd`, a word the guard does not
+    /// model may be a user alias or function that returns to the start
+    /// directory (oh-my-zsh `-` and `1`, zoxide `z`).
+    #[test]
+    fn unmodeled_commands_after_cd_keep_the_starting_directory() {
+        let repo = repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd src && - && python3 tool.py .claude/settings.json",
+                "cd src && 1 && python3 tool.py .claude/settings.json",
+                "cd src && .. && python3 tool.py .claude/settings.json",
+                "cd src && up && python3 tool.py .claude/settings.json",
+                "cd src && z repo && python3 tool.py .claude/settings.json",
+                "cd src && - && python3 tool.py .claude/settings.local.json",
+                "cd src && - && python3 tool.py .codex/config.toml",
+                "cd src && - && python3 tool.py .claude",
+                "cd src && true && python3 tool.py .claude/settings.json",
+                "cd src && python3 tool.py .. && python3 tool.py .claude/settings.json",
+            ],
+        );
+    }
+
+    /// Codex review round 3 findings 2 and 3: `popd`, a bare `pushd` and
+    /// `pushd +N` use a directory stack the guard never saw, and a bare `cd`
+    /// uses the shell's `HOME`. Every shell directory change, in any
+    /// spelling, makes the directory unknown.
+    #[test]
+    fn every_shell_directory_change_is_unknown() {
+        let repo = repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "popd && python3 tool.py settings.json",
+                "pushd && python3 tool.py settings.json",
+                "pushd +1 && python3 tool.py settings.json",
+                "pushd ./src && python3 tool.py settings.json",
+                "cd && python3 tool.py settings.json",
+                "cd ~ && python3 tool.py settings.json",
+                "chdir ./src && python3 tool.py settings.json",
+                "builtin cd ./src && python3 tool.py settings.json",
+                "command cd ./src && python3 tool.py settings.json",
+                "eval cd ./src && python3 tool.py settings.json",
+                "cd ./src; python3 tool.py settings.json",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "python3 tool.py settings.json",
+                "cd ./src && python3 tool.py notes.txt",
+                "pushd ./src >/dev/null && python3 tool.py out.json && popd",
+            ],
+        );
+    }
+
+    /// Security review F1: a `trap` action or an `alias` value is code the
+    /// shell runs later, and a directory change inside its quoted text is
+    /// never split out, so either makes the directory unknown.
+    #[test]
+    fn trap_actions_and_aliases_are_unknown() {
+        let repo = repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "trap 'builtin cd ./hidden' DEBUG; python3 x.py settings.json",
+                "trap 'cd ./hidden' ERR; false; python3 x.py settings.json",
+                "trap \"pushd ./hidden\" DEBUG; python3 x.py settings.json",
+                "shopt -s expand_aliases\nalias up='cd ./hidden'\nup\npython3 x.py settings.json",
+                "unalias up; python3 x.py settings.json",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &["trap 'rm -f out.tmp' EXIT; python3 x.py notes.txt"],
+        );
+    }
+
+    /// Security review SF-1 to SF-3 and Codex review round 4: a program
+    /// word the guard does not model may be a shell function (zoxide's `z`,
+    /// one made with `autoload` or the zsh `functions` table), a word the
+    /// shell expands into `cd`, or a command that installs a hook or an
+    /// option that changes directory. Any such command before an
+    /// interpreter call makes the directory unknown.
+    #[test]
+    fn unmodeled_commands_before_an_interpreter_are_unknown() {
+        let repo = repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                // SF-1: a program word that expands to `cd`.
+                "${X:-cd} .claude && python3 ../src/w.py settings.json",
+                "\"${X:-cd}\" .claude && python3 x.py settings.json",
+                "{cd,.claude}; python3 x.py settings.json",
+                "x=c d=d $x$d .claude && python3 x.py settings.json",
+                "${=X} && python3 x.py settings.json",
+                // SF-2: functions the line defines.
+                "autoload -Uz f && f && python3 x.py settings.json",
+                "functions[f]='builtin cd ./hidden'; f; python3 x.py settings.json",
+                "aliases[up]='cd .claude'; up; python3 x.py settings.json",
+                // SF-3: a shell function from the profile.
+                "z .claude; python3 x.py settings.json",
+                "make && python3 x.py settings.json",
+                // Codex round 4: options and hooks.
+                "setopt autocd; hidden; python3 x.py settings.json",
+                "shopt -s autocd; hidden; python3 x.py settings.json",
+                "PROMPT_COMMAND='builtin cd ./hidden'; python3 x.py settings.json",
+                "PROMPT_COMMAND[0]='builtin cd ./hidden'; python3 x.py settings.json",
+                "precmd_functions+=(f); python3 x.py settings.json",
+                "chpwd_functions=(f); python3 x.py settings.json",
+                // SF-6: a loop runs its condition again after its body.
+                "while python3 /tmp/w.py settings.json; do cd .claude; done",
+                "until python3 /tmp/w.py settings.json; do cd .claude; done",
+                "while python3 w.py settings.json; do builtin cd .claude; done",
+                "while python3 w.py settings.json; do pushd .claude; done",
+                "while python3 w.py settings.json; do z .claude; done",
+                "while python3 w.py settings.json { cd .claude }",
+                "while python3 x.py settings.json; do cd ./hidden || break; done",
+                "while command python3 w.py settings.json; do builtin cd .claude; done",
+                // Codex review round 5: a current-shell substitution runs
+                // during expansion, before the interpreter starts.
+                "python3 x.py settings.json ${ cd ./hidden; }",
+                "python3 x.py settings.json <<EOF\n${ cd ./hidden; }\nEOF",
+                // Codex review round 6: quoted or assigned, the substitution
+                // still runs in this shell.
+                "python3 x.py settings.json \"${ cd ./hidden; }\"",
+                "v=\"${ cd ./hidden; }\"; python3 x.py settings.json",
+                "python3 x.py settings.json \"${| cd ./hidden; }\"",
+                "python3 x.py settings.json > \"${ cd ./hidden; }\"",
+                // Security review SR2-1: words after the substitution, or
+                // joined to it, are still judged.
+                "python3 x.py ${ cd ./hidden; } settings.json",
+                "python3 x.py settings.json${ cd ./hidden; }",
+                "python3 x.py settings.json <<< \"${ cd ./hidden; }\"",
+                // Codex review round 7: no word is skipped by its shape, a
+                // continuation does not hide `${`, and a `$PWD` form refuses
+                // whatever follows it.
+                "s python3; python3 x.py settings.json",
+                "123 python3; python3 x.py settings.json",
+                "s -n 5 python3; python3 x.py settings.json",
+                "python3 x.py settings.json \"$\\\n{ cd ./hidden; }\"",
+                "v=\"$\\\n{ cd ./hidden; }\"; python3 x.py settings.json",
+                "python3 x.py settings.json > \"$\\\n{ cd ./hidden; }\"",
+                "z; python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; python3 /abs/read_dir.py ${PWD}/src/..",
+                "z; python3 /abs/read_dir.py $(pwd)/src/..",
+                // Security review SR2-2: from a directory the guard cannot
+                // follow, `.` or an ancestor may be a protected directory.
+                "while python3 /abs/w.py .; do cd ./hidden || break; done",
+                "while python3 /abs/w.py ./; do cd ./hidden || break; done",
+                "until python3 /abs/w.py .; do cd ./hidden; done",
+                "for i in 1 2; do python3 /abs/w.py .; cd ./hidden; done",
+                "f() { cd ./hidden; }; while python3 /abs/w.py .; do f; done",
+                "cd ./src && python3 /abs/w.py ..",
+                "cd ./src && python3 /abs/w.py x/..",
+                "cd ./src && python3 /abs/w.py $PWD",
+                "cd ./src && python3 /abs/w.py ${PWD}",
+                "cd ./src && python3 /abs/w.py $(pwd)",
+                "cd ./src && python3 /abs/w.py `pwd`",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "python3 x.py settings.json",
+                "make && python3 x.py notes.txt",
+                "nice -n 5 python3 x.py settings.json",
+                "timeout 5 node x.js settings.json",
+                "env -u X python3 x.py settings.json",
+                "cd web && node build.js",
+            ],
+        );
+    }
+
+    /// Codex review round 8 and security review round 4: one lexer with the
+    /// shell's own states reads every word. A quoted or escaped word is
+    /// never `!`, a reserved word or an assignment, a digit-led name is not
+    /// an assignment, `$'...'` keeps its escaped quote, and any operand
+    /// filled in at run time refuses where the directory is unknown.
+    #[test]
+    fn the_shell_lexer_decides_command_position_and_taint() {
+        let repo = repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                // C8-2, SR4-1: command position.
+                "1=x python3; python3 x.py settings.json",
+                "\"a=b\" python3; python3 x.py settings.json",
+                "a\\=b python3; python3 x.py settings.json",
+                "'s=x' python3; python3 x.py settings.json",
+                "s\\=x python3; python3 x.py settings.json",
+                "\"!\" python3; python3 x.py settings.json",
+                "'!' python3; python3 x.py settings.json",
+                "\"then\" python3; python3 x.py settings.json",
+                "\\then python3; python3 x.py settings.json",
+                "\"do\" python3; python3 x.py settings.json",
+                "'do' python3; python3 x.py settings.json",
+                "\"if\" python3; python3 x.py settings.json",
+                "'if' python3; python3 x.py settings.json",
+                "\"while\" python3; python3 x.py settings.json",
+                // C8-1, SR4-2: ANSI-C quoting before a continuation.
+                "v=$'\\''; python3 x.py settings.json \"$\\\n{ cd ./hidden; }\"",
+                "v=$'\\''; v=\"$\\\n{ cd ./hidden; }\"; python3 x.py settings.json",
+                "v=$'\\''; python3 x.py settings.json > \"$\\\n{ cd ./hidden; printf %s x; }\"",
+                "v=$'\\''; python3 x.py settings.json <<EOF\n$\\\n{ cd ./hidden; }\nEOF",
+                "v=$'a\\'b'; python3 x.py settings.json \"$\\\n{ cd ./hidden; }\"",
+                // C8-3, SR4-3: values derived from the working directory.
+                "z; python3 /abs/read_dir.py \"$( pwd)/src/..\"",
+                "z; python3 /abs/read_dir.py \"$(command pwd)/src/..\"",
+                "z; python3 /abs/read_dir.py \"$(builtin pwd)/src/..\"",
+                "z; python3 /abs/read_dir.py \"` pwd`/src/..\"",
+                "z; python3 /abs/read_dir.py ~+",
+                "z; python3 /abs/read_dir.py ~0",
+                "z; python3 /abs/read_dir.py ~+/src/..",
+                "z; python3 /abs/read_dir.py ~-",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "python3 x.py notes.txt",
+                "nice -n 5 python3 x.py settings.json",
+                "X=1 python3 x.py settings.json",
+                "z; python3 x.py notes.txt",
+            ],
+        );
+    }
+
+    /// Security review round 5: a tilde anywhere in a word is a tilde, an
+    /// assignment counts only as a whole command in the main shell, and the
+    /// lexer's unmodeled corners are opaque.
+    #[test]
+    fn assignments_and_lexer_corners_fail_closed() {
+        let repo = repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                // SR5-1: a tilde after `=` or `:`.
+                "x=~+; z; python3 /abs/r.py \"$x\"",
+                "x=a:~+; z; python3 /abs/r.py \"$x\"",
+                "export x=~+; z; python3 /abs/r.py \"$x\"",
+                "a=(~+); z; python3 /abs/r.py \"${a[0]}\"",
+                "z; python3 /abs/r.py d=~+/src/..",
+                // SR5-2: assignments that do not reach the main shell, or
+                // whose value the line does not know.
+                "(x=notes.txt); z; python3 /abs/r.py \"$x\"",
+                "x=notes.txt | true; z; python3 /abs/r.py \"$x\"",
+                "y=$(x=notes.txt); z; python3 /abs/r.py \"$x\"",
+                "x+=notes.txt; z; python3 /abs/r.py \"$x\"",
+                "for x; do z; python3 /abs/r.py \"$x\"; done",
+                "declare -n x=PWD; z; python3 /abs/r.py \"$x\"",
+                "case x in *) z; python3 /abs/r.py \"$x\";; esac",
+                "HOME=.claude; z; python3 /abs/r.py \"$HOME\"",
+                "printf -v x %s notes.txt; z; python3 /abs/r.py \"$x\"",
+                // SR5-3 to SR5-5: corners the lexer does not model.
+                "python3 x.py settings.json <<$'E'\nE",
+                "python3 x.py settings.json <<$(x)\n$(x)",
+                "python3 x.py settings.json \"$(( '1' ))\"",
+                "python3 x.py settings.json \"$((echo 1) )\"",
+                "python3 x.py settings.json \"${x:-'}'}\"",
+                // SR4-2 as round 4 wrote it, with `$'\''` as an operand.
+                "python3 x.py settings.json $'\\'' \"$\\\n{ cd ./src/lnk; }\"",
+            ],
+        );
+        // Codex review round 10: a function may change `HOME`, so even a
+        // plain `~` is untrusted once the directory is unknown.
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &["z; python3 /abs/r.py ~/notes.txt"],
+        );
+        assert_allowed(&repo, &["python3 /abs/r.py ~/notes.txt"]);
+    }
+
+    /// Codex review round 9: no variable is trusted once the directory is
+    /// unknown, a quoted or expanded interpreter name keeps its operands
+    /// judged, and non-ASCII input is read without a panic.
+    /// Round 13 (C13-1 to C13-3, SR8-1 to SR8-3): launcher stops, literal
+    /// program words, array tildes and `eval` text.
+    #[test]
+    fn launcher_stops_and_literal_words_keep_operands() {
+        let repo = repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                // C13-1, SR8-1: a stop inside a launcher keeps its words unless it is a
+                // literal program known not to run its operands, after literal
+                // launcher options.
+                r#"z; nice -n $N rg "$PWD/src/..""#,
+                // N="5 python3 /abs/read_last.py"; z; nice -n $N rg "$PWD/src/.."
+                r#"z; timeout $N rg "$PWD/src/..""#,
+                r#"z; env -u $N rg "$PWD/src/..""#,
+                r#"z; nice -n $=N rg "$PWD/src/..""#,
+                r#"z; timeout $=N rg "$PWD/src/..""#,
+                r#"z; env -u $=N rg "$PWD/src/..""#,
+                r#"z; xargs strace "$P" /abs/r.py "$PWD/src/..""#,
+                r#"z; nice strace "$P" /abs/r.py "$PWD/src/..""#,
+                r#"rg --files | xargs strace "$P" /abs/r.py "$PWD/src/..""#,
+                r#"z; strace "$P" /abs/r.py "$PWD/src/..""#,
+                r#"z; uv run "$P" /abs/r.py "$PWD/src/..""#,
+                r#"z; nice gdb --args "$P" /abs/r.py "$PWD/src/..""#,
+                r#"z; xargs --replace python3 /abs/read_last.py "$PWD/src/..""#,
+                r#"z; xargs --eof python3 /abs/read_last.py "$PWD/src/..""#,
+                r#"z; xargs --max-lines python3 /abs/read_last.py "$PWD/src/..""#,
+                // C13-2, SR8-2: a program word from brace expansion, a glob or zsh
+                // `=cmd` is not literal.
+                r#"z; python{3..3} /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; /abs/bin/probe-pyth?n3 /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; /abs/bin/pyth[o]n3 /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; =python3 /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; nice python{3..3} /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; nice /abs/bin/probe-pyth?n3 /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; nice =python3 /abs/read_dir.py "$PWD/src/..""#,
+                // C13-3, SR8-3: a tilde after a blank in an array literal.
+                r#"z; a=(ordinary ~+/settings.json); python3 /abs/read_arg.py "${a[1]}""#,
+                r#"z; a=(ordinary ~+/settings.json); python3 /abs/read_arg.py "${a[2]}""#,
+                // eval parses single-quoted text again.
+                r#"z; eval 'python3 /abs/r.py "$PWD/src/.."'"#,
+                r#"z; eval 'nice "$P" /abs/r.py "$PWD/src/.."'"#,
+                // C14-1, SR9-1: an allowlisted program with an option that
+                // runs a program, writes a file or evaluates a subscript.
+                r#"z; env rg --pre "$P" x "$PWD/src/..""#,
+                r#"z; rg --pre=python3 x "$PWD/src/..""#,
+                r#"rg --files | xargs rg --pre=python3 . "$PWD/src/..""#,
+                r#"z; env gsort --compress-program="$C" -S 1k "$PWD/src/..""#,
+                r#"z; sort --comp="$C" "$PWD/src/..""#,
+                r#"z; ag --pager "$P" x "$PWD/src/..""#,
+                r#"z; file -z "$PWD/src/..""#,
+                r#"z; command printf -v 'a[$(python3 /abs/index_arg.py "$PWD/src/..")]' %s value"#,
+                r#"z; command printf %n 'a[$(python3 /abs/index_arg.py "$PWD/src/..")]'"#,
+                r#"z; command test -v 'a[$(python3 /abs/index_arg.py "$PWD/src/..")]'"#,
+                // `xargs` may append an option such as `--pre`.
+                "rg --files | xargs rg \"$HOME/x\"",
+                "rg --files | xargs -n 1 rg \"$HOME/x\"",
+                // C14-2: zsh extended patterns in the program word.
+                r#"z; /abs/glob-bin/pytho#n3 /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; /abs/glob-bin/^absent /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; /abs/bin/python3~x /abs/read_dir.py "$PWD/src/..""#,
+                // SR9-2, SR9-4: a stop on neither list, at the start of a
+                // command and inside a launcher.
+                r#"bwrap "$P" /abs/r.py "$PWD/src/..""#,
+                r#"z; myrun "$P" /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; myrun "${P:-python3}" /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; nice some-tool "$P" /abs/r.py "$PWD/src/..""#,
+                r#"z; xargs bwrap "$P" /abs/r.py "$PWD/src/..""#,
+                // A line that may change what a name runs exempts none.
+                r#"enable -n cd; cd "$p""#,
+                r#"disable cd; cd "$p""#,
+            ],
+        );
+        // The argument rule allows these; the line's secret-read rule
+        // (TSK-1002) refuses their run-time file operands on its own.
+        assert_line_refuses_only_secret_reads(
+            &repo,
+            &[
+                "rg --files | xargs rg -- x \"$HOME/x\"",
+                "rg --files | xargs -n 1 cat \"$HOME/x\"",
+                "rg --files | xargs --replace=X grep -l X \"$HOME/x\"",
+                "rg -n pattern ./\"$D\"",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "eval 'ls src'",
+                "printf '%s\\n' \"$HOME\"",
+                "[ -f \"$HOME/x\" ] && echo yes",
+                "[[ -d \"$HOME\" ]] && echo yes",
+                "cd ~ && cd \"$p\"",
+                "cd / && pushd \"$p\"",
+            ],
+        );
+    }
+
+    #[test]
+    fn no_variable_is_trusted_and_no_operand_is_dropped() {
+        let repo = repo();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                // C9-1: the program word is quoted, escaped or expanded.
+                "z; \"python3\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; \\python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "prog=python3; z; \"$prog\" /abs/read_dir.py \"$PWD/src/..\"",
+                // C9-2: every assignment path, now untrusted.
+                "z; p=$(pwd); p+=/src/..; python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); export p+=/src/..; python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); declare p+=/src/..; python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); (p=safe); python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); p=safe python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); case p in x) ;; esac; python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); p+=; python3 /abs/read_dir.py \"$p\"",
+                "p=safe; z; python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); export p=safe; python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); printf -v p %s safe; python3 /abs/read_dir.py \"$p\"",
+                // The accepted cost: a variable after an unmodeled command.
+                "printf -v p '%s%s' 'no' 'tes.txt'; python3 tool.py \"$p\"",
+                "export a=notes.txt; python3 tool.py \"$a\"",
+                "x=notes.txt; z; python3 /abs/r.py \"$x\"",
+                // C10-1: a launcher wrapping a quoted interpreter name, or
+                // an unsupported wrapper, keeps the operands judged.
+                "z; env \"python3\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; command \"python3\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; nice -n 5 \"python3\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; timeout 5 \"python3\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; builtin command python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; env -u X \"python3\" /abs/read_dir.py \"$PWD/src/..\"",
+                // C11-1, C11-2, SR7-1: a launcher whose options are not
+                // parsed, or an unmodeled wrapper, keeps its words as
+                // operands, and that finding is never skipped.
+                "z; builtin command ${P:-python3} /abs/read_dir.py \"$PWD/src/..\"",
+                "z; builtin command \"$P\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; env -S \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; env -S \"python3 /abs/read_dir.py $PWD/src/..\"",
+                "z; env env -S \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; command env -S \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; builtin command ${P:-python3} /abs/read_dir.py \"$PWD/src/..\"; python3 -V",
+                "z; env -S \"python3 /abs/read_dir.py $PWD/src/..\"; python3 -V",
+                // C10-2: `~` after a command that may change `HOME`.
+                "z; python3 x.py ~/settings.json",
+                "z\npython3 x.py ~/settings.json",
+                // SR6-1, SR6-2.
+                "x=$PWD; z; python3 /abs/r.py $=x/src/..",
+                "x=$PWD; z; python3 /abs/r.py $^x/src/..",
+                "for x do cd ..; done; python3 x.py settings.json",
+                // C12-1: `arch`, `script` and `find -exec` carry the
+                // interpreter, literal or expanded.
+                "z; arch -arm64 python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; arch -arm64 \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; /usr/bin/arch -arm64 python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; /usr/bin/arch -arm64 \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; script -q /abs/typescript python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; script -q /abs/typescript \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; find . -prune -exec python3 /abs/read_dir.py \"$PWD/src/..\" \\;",
+                "z; find . -prune -exec \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\" \\;",
+                // C12-1: a run-time program under a parsed launcher.
+                "rg --files | xargs \"$P\" /abs/r.py \"$PWD/src/..\"",
+                // C12-2: the `time` keyword and its options.
+                "z; time -p python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; time -p \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; time -p -- python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; time -p env python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; time -p nice -n 5 env \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                // C9-3: non-ASCII words.
+                "é; python3 x.py settings.json",
+                "export x=é; python3 x.py settings.json",
+                "é=1; python3 x.py settings.json",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "x=café; python3 x.py notes.txt",
+                // Ordinary commands with expansions stay allowed (round 11).
+                "echo \"$HOME\"",
+                "echo $PATH",
+                "ls ~",
+                "git log --since=\"$D\" --oneline",
+                "grep -rn \"$PAT\" src",
+                "printf -v p %s notes.txt; python3 x.py notes.txt",
+                "p=notes.txt; python3 x.py \"$p\"",
+                "! command git rebase -x 'cargo test' HEAD~3",
+            ],
+        );
+        // A program with no option that runs anything, through a parsed
+        // launcher, keeps its words (round 12): the argument rule allows
+        // them. The line's secret-read rule (TSK-1002) refuses the run-time
+        // `xargs` input on its own.
+        assert_line_refuses_only_secret_reads(
+            &repo,
+            &[
+                "rg --files | xargs grep \"$HOME/x\"",
+                "rg --files | xargs egrep \"$HOME/x\"",
+                "rg --files | xargs fgrep \"$HOME/x\"",
+            ],
+        );
+        // The accepted cost of the one rule (operator decision,
+        // 2026-10-27): a program off the allowlist, or one whose options
+        // may run a program, keeps its run-time words.
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cargo test -p \"$CRATE\"",
+                "rg --files | xargs ag \"$HOME/x\"",
+                "D=build && find $D -delete",
+            ],
+        );
+        // C9-4: a NUL byte refuses before anything is read.
+        let found = crate::hooks::exec_guard::evaluate_at(
+            "python3 x.py settings.json \"$\0{ cd ./hidden; }\"",
+            &SecuritySection::default(),
+            PolicyLevel::Block,
+            &repo.root,
+            &repo.root,
+        );
+        assert!(found.iter().any(|v| v.message.contains("NUL")), "{found:?}");
+    }
+
+    /// Codex review round 3 finding 1: a `cd` function or a zsh `chpwd`
+    /// hook in the shell moves it after `cd ./src`. The real shells land in
+    /// `.claude`, and the guard refuses the line.
+    #[cfg(unix)]
+    #[test]
+    fn a_cd_hook_moves_the_shell_after_a_followed_cd() {
+        let repo = repo();
+        let claude = std::fs::canonicalize(repo.root.join(".claude")).unwrap();
+        for (shell, args) in [
+            (
+                "bash",
+                [
+                    "-c",
+                    r#"cd() { builtin cd "$@" && builtin cd "$R/.claude"; }; cd ./src && /bin/pwd -P"#,
+                ],
+            ),
+            (
+                "zsh",
+                [
+                    "-fc",
+                    r#"chpwd() { builtin cd -q "$R/.claude"; }; cd ./src && /bin/pwd -P"#,
+                ],
+            ),
+        ] {
+            let Ok(output) = std::process::Command::new(shell)
+                .args(args)
+                .env("R", &repo.root)
+                .env_remove("CDPATH")
+                .current_dir(&repo.root)
+                .output()
+            else {
+                eprintln!("skipped: {shell} is not installed");
+                continue;
+            };
+            assert!(output.status.success(), "{shell}: {output:?}");
+            let printed = String::from_utf8(output.stdout).unwrap();
+            assert_eq!(Path::new(printed.trim()), claude, "{shell}");
+        }
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &["cd ./src && python3 tool.py settings.json"],
+        );
+    }
+
+    #[test]
+    fn inherited_cdpath_includes_search_destinations() {
+        const CHILD_ROOT: &str = "CODEFLOW_TEST_397_CDPATH_ROOT";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let root = PathBuf::from(root);
+            let line = "cd src && python3 tool.py ../settings.json";
+            let findings = evaluate_tightened(
+                line,
+                &SecuritySection::default(),
+                PolicyLevel::Block,
+                &root,
+                &root,
+                None,
+            );
+            assert!(argument_refusal(&findings), "{findings:?}");
+            assert!(outward::line_directories(line, &root, None, true).unknown);
+            return;
+        }
+        let repo = repo();
+        std::fs::create_dir(repo.root.join(".claude/src")).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "security::interpreter::tests::inherited_cdpath_includes_search_destinations",
+                "--nocapture",
+            ])
+            .env(CHILD_ROOT, &repo.root)
+            .env("CDPATH", repo.root.join(".claude"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Codex review round 2 finding 4: a `CDPATH` entry such as `bridge/..`
+    /// reaches `.claude/src`; the `cd` makes the directory unknown.
+    #[cfg(unix)]
+    #[test]
+    fn cdpath_entries_resolve_links_before_parents() {
+        const CHILD_ROOT: &str = "CODEFLOW_TEST_397_CDPATH_LINK_ROOT";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let root = PathBuf::from(root);
+            let line = "cd -P src && python3 tool.py ../settings.json";
+            let findings = evaluate_tightened(
+                line,
+                &SecuritySection::default(),
+                PolicyLevel::Block,
+                &root,
+                &root,
+                None,
+            );
+            assert!(argument_refusal(&findings), "{findings:?}");
+            assert!(outward::line_directories(line, &root, None, true).unknown);
+            return;
+        }
+        let repo = linked_repo();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "security::interpreter::tests::cdpath_entries_resolve_links_before_parents",
+                "--nocapture",
+            ])
+            .env(CHILD_ROOT, &repo.root)
+            .env("CDPATH", "bridge/..")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// A `cd` through a symbolic link makes the directory unknown, like
+    /// every shell directory change.
+    #[cfg(unix)]
+    #[test]
+    fn a_cd_through_a_link_is_unknown() {
+        let repo = repo();
+        std::os::unix::fs::symlink(repo.root.join("src"), repo.root.join("link")).unwrap();
+        let dirs = outward::line_directories(
+            "cd link && python3 tool.py ..",
+            &repo.root,
+            Some(&repo.home),
+            true,
+        );
+        assert!(dirs.unknown, "{dirs:?}");
+        assert!(dirs.dirs.contains(&repo.root), "{dirs:?}");
+        std::os::unix::fs::symlink(&repo.home, repo.root.join("outside")).unwrap();
+        assert_tightened_refuses(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd link && python3 tool.py ..",
+                "cd link && python3 tool.py ../.claude/settings.json",
+                "cd outside && python3 tool.py ../repo/.claude/settings.json",
             ],
         );
     }
@@ -5084,10 +6164,22 @@ mod tests {
             outward::interpreter_calls("node --eval=code x", cwd)[0].args,
             ["x"]
         );
-        // The line's directory set: every directory a change may reach,
-        // whether or not it succeeds, through every spelling.
-        let set = |line: &str| outward::line_directories(line, cwd, Some(Path::new("/h")));
-        let has = |line: &str, dir: &str| set(line).dirs.contains(&PathBuf::from(dir));
+        assert!(outward::interpreter_calls("rustc x.rs", cwd).is_empty());
+        // A version suffix is read past; a multi-byte name ending is not cut
+        // inside a character.
+        assert_eq!(outward::interpreter_calls("ruby3.3 x", cwd).len(), 1);
+        assert!(outward::interpreter_calls("gre\u{a0}1 x", cwd).is_empty());
+    }
+
+    /// The directory set each outcome reads from a line (TSK-397 design D).
+    #[test]
+    fn the_directory_set_follows_cd_in_each_outcome() {
+        let cwd = Path::new("/w");
+        // The baseline directory set, the line's rule: every directory a
+        // change may reach, whether or not it succeeds, through every
+        // spelling, beside the starting directory.
+        let line_set =
+            |line: &str| outward::line_directories(line, cwd, Some(Path::new("/h")), false);
         for (line, dir) in [
             ("cd sub && python3 x", "/w/sub"),
             ("cd -- sub && python3 x", "/w/sub"),
@@ -5107,21 +6199,59 @@ mod tests {
             ("cd a && cd .. && python3 x", "/w/a"),
             ("cd && python3 x", "/h"),
         ] {
-            assert!(has(line, dir), "{line}: {:?}", set(line));
-            assert!(has(line, "/w"), "{line}: {:?}", set(line));
+            let found = line_set(line);
+            assert!(
+                found.dirs.contains(&PathBuf::from(dir)),
+                "{line}: {found:?}"
+            );
+            assert!(
+                found.dirs.contains(&PathBuf::from("/w")),
+                "{line}: {found:?}"
+            );
         }
         for line in [
             "cd \"$D\" && python3 x",
             "cd - && python3 x",
             "cd ~u && python3 x",
         ] {
-            assert!(set(line).unknown, "{line}");
+            assert!(line_set(line).unknown, "{line}");
         }
-        assert!(outward::interpreter_calls("rustc x.rs", cwd).is_empty());
-        // A version suffix is read past; a multi-byte name ending is not cut
-        // inside a character.
-        assert_eq!(outward::interpreter_calls("ruby3.3 x", cwd).len(), 1);
-        assert!(outward::interpreter_calls("gre\u{a0}1 x", cwd).is_empty());
+        // The strict branch's directory set. A process's own directory
+        // option is followed, beside the starting directory; a shell
+        // directory change, in every spelling, makes the set unknown and
+        // keeps the starting directory (TSK-397).
+        let set = |line: &str| outward::line_directories(line, cwd, Some(Path::new("/h")), true);
+        let has = |line: &str, dir: &str| set(line).dirs.contains(&PathBuf::from(dir));
+        for line in [
+            "env -C sub python3 x",
+            "env -Csub python3 x",
+            "env --chdir=sub python3 x",
+            "git -C sub status; python3 x",
+        ] {
+            assert!(has(line, "/w/sub"), "{line}: {:?}", set(line));
+            assert!(has(line, "/w"), "{line}: {:?}", set(line));
+        }
+        for line in [
+            "cd sub && python3 x",
+            "cd -- sub && python3 x",
+            "cd -P -L sub && python3 x",
+            "cd -q sub; python3 x",
+            "command cd sub && python3 x",
+            "command -p cd sub && python3 x",
+            "builtin cd sub && python3 x",
+            "! cd sub; python3 x",
+            "pushd sub >/dev/null && python3 x",
+            "chdir sub && python3 x",
+            "cd a && cd b && python3 x",
+            "cd a && cd .. && python3 x",
+            "cd && python3 x",
+            "cd \"$D\" && python3 x",
+            "cd - && python3 x",
+            "cd ~u && python3 x",
+        ] {
+            assert!(set(line).unknown, "{line}: {:?}", set(line));
+            assert!(has(line, "/w"), "{line}: {:?}", set(line));
+        }
     }
 
     /// Every command refuses with a finding about an interpreter argument
@@ -5437,6 +6567,7 @@ mod tests {
             &repo,
             &[
                 "cd src && python3 app.py settings.json",
+                "cd ./src && python3 app.py notes.txt",
                 "find . -name '*.py' -execdir python3 -m py_compile {} +",
                 "find . -name '*.rs' -execdir python3 lint.py {} +",
                 "find src -execdir python3 lint.py notes.txt \\;",
@@ -6164,5 +7295,44 @@ mod tests {
             &repo,
             &["source venv/bin/activate && echo ok && python3 src/app.py"],
         );
+        // In the tightened outcome a printf format the text does not show
+        // may hold `%n`, so its words are judged (TSK-397 design D).
+        let findings = judge_with(
+            &repo,
+            &repo.root,
+            &repo.root,
+            "f='%s%s\\n'; printf \"$f\" no tes.txt | python3 -c 'import sys; print(sys.stdin.read())'",
+            PolicyLevel::Block,
+            Some(TEST_TRIGGER),
+        );
+        assert!(tightened_refusal(&findings).is_some(), "{findings:?}");
+    }
+
+    /// SEC01-1: a finding only the strict branch makes blocks at every
+    /// `git.hook_integrity` level; the line's own findings keep that level.
+    #[test]
+    fn strict_only_findings_block_at_every_integrity_level() {
+        let repo = repo();
+        let command = "cd src && python3 tool.py settings.json";
+        for level in [PolicyLevel::Block, PolicyLevel::Warn, PolicyLevel::Off] {
+            let baseline = judge_with(&repo, &repo.root, &repo.root, command, level, None);
+            assert!(baseline.is_empty(), "{level:?}: {baseline:?}");
+            let strict = judge_with(
+                &repo,
+                &repo.root,
+                &repo.root,
+                command,
+                level,
+                Some(TEST_TRIGGER),
+            );
+            assert!(
+                strict
+                    .iter()
+                    .any(|v| v.rule == super::super::arguments::STRICT_RULE
+                        && v.level == PolicyLevel::Block
+                        && v.level_fixed),
+                "{level:?}: {strict:?}"
+            );
+        }
     }
 }
