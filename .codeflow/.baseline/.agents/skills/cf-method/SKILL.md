@@ -163,8 +163,11 @@ waive the clarity, safety, review or protected-branch conditions.
    into the task branch and resolves conflicts there. Each task still
    completes its producer verification and cross-lineage review before it
    joins a batch.
-3. **Land in batches.** The primary assembles reviewed heads into a small
-   batch candidate in dependency order, inspects each landing merge (a clean
+3. **Land in batches.** When a line lands, the primary puts every PR
+   reviewed and ready at that moment on one candidate in dependency order; a
+   PR that becomes ready later joins the next candidate, never held behind
+   another PR's landing or hosted run. Each line has one candidate at a time,
+   and lines land in parallel. It inspects each landing merge (a clean
    merge, its tree equal to the re-merge of its parents, does not reopen
    unit review and carries it as `codeflow ci` binds it; a hand-resolved
    product hunk is that task's own work and returns it to a whole-unit
@@ -172,7 +175,7 @@ waive the clarity, safety, review or protected-branch conditions.
    candidate, and that look is not a unit review), and runs one full gate on
    that exact candidate. It lands through one of two
    sanctioned modes: **Local**, `codeflow integrate <candidate> --into
-   integration/<…>` on a candidate cut from the current line tip (serialized,
+   integration/<…>` on a candidate cut from the current line tip (one per line at a time,
    runs the non-selective full gate, keeps the tested tip); or **PR** into the
    integration branch, merged by the primary once the candidate's
    `codeflow test --mode full --all` gate is complete and green and the PR's
