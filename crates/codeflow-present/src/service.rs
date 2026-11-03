@@ -739,9 +739,9 @@ async fn submit_stage_measurement(
         .store
         .record_stage_measurement(state.session_id, report)
     {
-        Ok(()) => response_with_headers(
+        Ok(outcome) => response_with_headers(
             StatusCode::OK,
-            Body::from("{}"),
+            Body::from(serde_json::json!({ "status": outcome }).to_string()),
             &[
                 (header::CONTENT_TYPE, "application/json"),
                 (header::CACHE_CONTROL, "no-store"),
@@ -2040,6 +2040,108 @@ mod tests {
         let oversized =
             submit_stage_measurement(State(state), headers, Body::from(vec![b' '; 4097])).await;
         assert_eq!(oversized.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn stage_measurements_ignore_valid_older_revision_without_changing_current_state() {
+        let original = crate::document::parse_document(br#"{"schema_version":2,"title":"Original","blocks":[{"type":"html","id":"stage","title":"Original stage","caption":"A paragraph.","html":"<p>Original</p>"}]}"#).unwrap();
+        let (_temp, state) = app_state_with(original);
+        let headers = application_headers(&state, true);
+        let stale = serde_json::json!({
+            "stage_id":"stage", "revision":1, "content_width":832.0,
+            "contract":crate::stage_measurements::rendering_contract(""),
+            "height":48.0, "theme":"slate", "mode":"light"
+        });
+        let before_update = submit_stage_measurement(
+            State(state.clone()),
+            headers.clone(),
+            Body::from(serde_json::to_vec(&stale).unwrap()),
+        )
+        .await;
+        assert_eq!(before_update.status(), StatusCode::OK);
+        let replacement = crate::document::parse_document(br#"{"schema_version":2,"title":"Replacement","blocks":[{"type":"html","id":"replacement","title":"Replacement stage","caption":"Another paragraph.","html":"<p>Replacement</p>"}]}"#).unwrap();
+        state
+            .store
+            .update_document(state.session_id, replacement)
+            .unwrap();
+        let mut current = stale.clone();
+        current["revision"] = serde_json::json!(2);
+        current["stage_id"] = serde_json::json!("replacement");
+        let accepted = submit_stage_measurement(
+            State(state.clone()),
+            headers.clone(),
+            Body::from(serde_json::to_vec(&current).unwrap()),
+        )
+        .await;
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let saved = state.store.stage_measurements(state.session_id).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].revision, 2);
+        assert_eq!(saved[0].stage_id, "replacement");
+
+        let late = submit_stage_measurement(
+            State(state.clone()),
+            headers,
+            Body::from(serde_json::to_vec(&stale).unwrap()),
+        )
+        .await;
+        assert_eq!(late.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(late.into_body(), 512).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"status":"ignored_stale_revision"})
+        );
+        assert_eq!(
+            state.store.stage_measurements(state.session_id).unwrap(),
+            saved
+        );
+    }
+
+    #[tokio::test]
+    async fn stage_measurements_reject_malformed_and_invalid_older_reports() {
+        let document = br#"{"schema_version":2,"title":"Stage","blocks":[{"type":"html","id":"stage","title":"Measured stage","caption":"A paragraph.","html":"<p>Stage</p>"}]}"#;
+        let (_temp, state) = app_state_with(crate::document::parse_document(document).unwrap());
+        state
+            .store
+            .update_document(
+                state.session_id,
+                crate::document::parse_document(document).unwrap(),
+            )
+            .unwrap();
+        let valid_old = serde_json::json!({
+            "stage_id":"stage", "revision":1, "content_width":832.0,
+            "contract":crate::stage_measurements::rendering_contract(""),
+            "height":48.0, "theme":"slate", "mode":"light"
+        });
+        let mut invalid_bodies = vec![b"{".to_vec(), b"{}".to_vec()];
+        for (field, value) in [
+            ("height", serde_json::json!("48px")),
+            ("height", serde_json::json!(23)),
+            ("content_width", serde_json::json!(9999)),
+            ("contract", serde_json::json!("unknown")),
+            ("stage_id", serde_json::json!("missing")),
+            ("theme", serde_json::json!("unknown")),
+            ("mode", serde_json::json!("unknown")),
+            ("revision", serde_json::json!(0)),
+            ("revision", serde_json::json!(3)),
+            ("extra", serde_json::json!(true)),
+        ] {
+            let mut invalid = valid_old.clone();
+            invalid[field] = value;
+            invalid_bodies.push(serde_json::to_vec(&invalid).unwrap());
+        }
+        let headers = application_headers(&state, true);
+        for body in invalid_bodies {
+            let rejected =
+                submit_stage_measurement(State(state.clone()), headers.clone(), Body::from(body))
+                    .await;
+            assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        }
+        assert!(state
+            .store
+            .stage_measurements(state.session_id)
+            .unwrap()
+            .is_empty());
     }
 
     /// The answer as the page sends it for `store-choice` of the forms

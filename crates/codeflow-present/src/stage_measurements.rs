@@ -17,6 +17,15 @@ pub(crate) const MAX_ENTRIES_PER_STAGE: usize = CONTENT_WIDTHS.len() * 6;
 pub(crate) const MAX_HEIGHT: f64 = 1_000_000.0;
 pub(crate) const MIN_HEIGHT: f64 = 24.0;
 
+/// An advisory report either updates its revision's state or loses a race
+/// with a newer revision and is acknowledged without changing state.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StageMeasurementOutcome {
+    Recorded,
+    IgnoredStaleRevision,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StageMeasurement {

@@ -20,6 +20,7 @@ use crate::{
     error::{PresentError, Result},
     limits,
     platform::is_link_like,
+    stage_measurements::StageMeasurementOutcome,
 };
 
 #[cfg(not(windows))]
@@ -1169,15 +1170,22 @@ impl SessionStore {
     }
 
     /// Measurements are bounded advisory state, replaced atomically under the
-    /// same session lock as revision changes. Old revisions are discarded.
+    /// same session lock as revision changes. Valid late reports are checked
+    /// against their source revision and ignored without altering current state.
     pub(crate) fn record_stage_measurement(
         &self,
         id: Uuid,
         measurement: crate::stage_measurements::StageMeasurement,
-    ) -> Result<()> {
+    ) -> Result<StageMeasurementOutcome> {
         let _project_lease = self.lock_project_mutation()?;
         let _lock = self.lock_session(id)?;
-        let revision = self.current_revision(id)?;
+        let current = self.current_revision(id)?;
+        let stale = measurement.revision > 0 && measurement.revision < current.revision;
+        let revision = if stale {
+            self.revision(id, measurement.revision)?
+        } else {
+            current
+        };
         let RevisionContent::Supported { document } = revision.content else {
             return Err(PresentError::InvalidRequest(
                 "this revision cannot be measured".into(),
@@ -1189,6 +1197,9 @@ impl SessionStore {
             .unwrap_or_default();
         let contract = crate::stage_measurements::rendering_contract(&utility);
         measurement.validate(&document, revision.revision, &contract)?;
+        if stale {
+            return Ok(StageMeasurementOutcome::IgnoredStaleRevision);
+        }
         let mut records = self.stage_measurements(id)?;
         records.retain(|entry| {
             entry
@@ -1217,7 +1228,8 @@ impl SessionStore {
         write_json_atomic(
             &self.session_dir(id).join("stage-measurements.json"),
             &records,
-        )
+        )?;
+        Ok(StageMeasurementOutcome::Recorded)
     }
 
     pub(crate) fn stage_measurements(
