@@ -1503,15 +1503,21 @@ fn secret_path_spelling_checked(
     if secret_stores()
         .iter()
         .any(|store| word.trim_end_matches('/') == store)
-        || actions::table().sandbox_read_denies.iter().any(|path| {
-            word == path
-                || word
-                    .strip_prefix(path)
-                    .is_some_and(|tail| tail.starts_with('/'))
-                || reader.is_some_and(|expands| secret_prefix(word, path, expands))
-        })
     {
         return Ok(true);
+    }
+    for path in &actions::table().sandbox_read_denies {
+        if word == path
+            || word
+                .strip_prefix(path)
+                .is_some_and(|tail| tail.starts_with('/'))
+            || match reader {
+                Some(expands) => secret_prefix(word, path, expands)?,
+                None => false,
+            }
+        {
+            return Ok(true);
+        }
     }
     for group in &actions::table().claude_read_groups {
         // This group has no carve-outs; source-name and env-file groups do.
@@ -1527,8 +1533,10 @@ fn secret_path_spelling_checked(
                 GlobMatch::Unbounded(cause) => return Err(cause),
                 GlobMatch::NoMatch => {}
             }
-            if reader.is_some_and(|expands| secret_prefix(word, pattern, expands)) {
-                return Ok(true);
+            if let Some(expands) = reader {
+                if secret_prefix(word, pattern, expands)? {
+                    return Ok(true);
+                }
             }
         }
     }
@@ -1591,7 +1599,7 @@ fn secret_backup(word: &str) -> bool {
 /// Expand shell words without substituting a directory for an incomplete
 /// listing. Store directories refuse before any filesystem enumeration.
 fn secret_glob(word: &str, cwd: &Path, home: Option<&Path>) -> Result<bool, &'static str> {
-    if home_rule_glob(word, cwd, home) {
+    if home_rule_glob(word, cwd, home)? {
         return Ok(true);
     }
     let readings = crate::hooks::git_guard::word_readings(word)
@@ -1630,15 +1638,13 @@ fn secret_glob(word: &str, cwd: &Path, home: Option<&Path>) -> Result<bool, &'st
 /// A named home rule protects its own filename, including conservative
 /// brace readings. This does not turn its parent into a whole-directory
 /// store or apply name intersection to ordinary workspace source globs.
-fn home_rule_glob(word: &str, cwd: &Path, home: Option<&Path>) -> bool {
+fn home_rule_glob(word: &str, cwd: &Path, home: Option<&Path>) -> Result<bool, &'static str> {
     let Some((base, relative)) = glob_base(word, cwd, home) else {
-        return false;
+        return Ok(false);
     };
     let absolute = outward::lexical_join(base, Path::new(relative));
     let word = home_spelling(&crate::portable_path::slashed(&absolute), home);
-    let Some(readings) = secret_pattern_readings(&word) else {
-        return true;
-    };
+    let readings = secret_pattern_readings(&word)?;
     // File selectors must share an actual filename. Adding descendants
     // here would turn a public *.md leaf into an ancestor of private jsonl.
     let intersects = |rule: &str| {
@@ -1648,7 +1654,7 @@ fn home_rule_glob(word: &str, cwd: &Path, home: Option<&Path>) -> bool {
                 .any(|reading| super::pattern::glob_intersects(reading, rule).unwrap_or(true))
     };
     let table = actions::table();
-    table
+    Ok(table
         .sandbox_read_denies
         .iter()
         .map(String::as_str)
@@ -1660,7 +1666,7 @@ fn home_rule_glob(word: &str, cwd: &Path, home: Option<&Path>) -> bool {
                         .and_then(|rule| rule.strip_suffix(')'))
                         .is_some_and(intersects)
                 })
-        })
+        }))
 }
 
 fn glob_base<'a>(
@@ -2811,36 +2817,36 @@ fn directory_option(name: &str, args: &[String], at: usize) -> bool {
 }
 
 /// Bounded shell readings shared by leaf and ancestor comparisons.
-fn secret_pattern_readings(word: &str) -> Option<Vec<String>> {
-    let mut readings = crate::hooks::git_guard::word_readings(word)?;
+/// `Err` names why the braces could not be read (past the brace bound).
+fn secret_pattern_readings(word: &str) -> Result<Vec<String>, &'static str> {
+    let mut readings = crate::hooks::git_guard::word_readings(word)
+        .ok_or("cannot inspect every brace alternative")?;
     // Keep the existing conservative singleton-brace reading too. Shell
     // options can give braces meanings beyond the default comma grammar.
     if word.contains('{') && !word.contains([',', '$']) {
         readings.push(word.replace(['{', '}'], ""));
     }
-    Some(readings)
+    Ok(readings)
 }
 
 /// Compare complete glob languages rather than their literal prefixes. The
 /// shared brace reader bounds alternatives; unknown pattern syntax refuses.
-fn secret_prefix(word: &str, store: &str, expands: bool) -> bool {
+fn secret_prefix(word: &str, store: &str, expands: bool) -> Result<bool, &'static str> {
     if !expands {
-        return !store.starts_with("**/")
+        return Ok(!store.starts_with("**/")
             && store
                 .strip_prefix(word.trim_end_matches('/'))
-                .is_some_and(|tail| tail.starts_with('/'));
+                .is_some_and(|tail| tail.starts_with('/')));
     }
-    let Some(readings) = secret_pattern_readings(word) else {
-        return true;
-    };
-    readings.iter().any(|reading| {
+    let readings = secret_pattern_readings(word)?;
+    Ok(readings.iter().any(|reading| {
         let intersects =
             |left: &str, right: &str| super::pattern::glob_intersects(left, right).unwrap_or(true);
         intersects(reading, store)
             || (!store.starts_with("**/")
                 && (intersects(reading, &format!("{store}/**"))
                     || intersects(&format!("{}/**", reading.trim_end_matches('/')), store)))
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -4934,6 +4940,39 @@ mod tests {
             !findings.iter().any(|v| v
                 .message
                 .contains("interpreter code names the secret store")),
+            "{findings:?}"
+        );
+    }
+
+    /// TSK-1258 round 4: a word with few braces but past the brace byte bound
+    /// is refused with the brace bound named, not as a secret.
+    #[test]
+    fn brace_word_past_the_byte_bound_names_the_brace_bound() {
+        let repo = repo();
+        let word = format!("pub{{a,b}}{}", "/x".repeat(3000));
+        assert!(word.len() > 4096 && word.len() < super::super::pattern::MAX_GLOB_PATH_BYTES);
+        let cause = "cannot inspect every brace alternative";
+        assert_eq!(
+            secret_path_result(&word, &repo.root, None, Some(true)),
+            Err(cause)
+        );
+        assert_eq!(secret_glob(&word, &repo.root, None), Err(cause));
+        assert_eq!(secret_pattern_readings(&word), Err(cause));
+        let findings = judge_in(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &format!("cat {word}"),
+            PolicyLevel::Block,
+        );
+        assert!(
+            findings.iter().any(|v| v.message.contains(cause)),
+            "{findings:?}"
+        );
+        assert!(
+            !findings
+                .iter()
+                .any(|v| v.message.contains("names a secret")),
             "{findings:?}"
         );
     }
