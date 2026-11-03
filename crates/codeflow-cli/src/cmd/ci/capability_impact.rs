@@ -156,12 +156,13 @@ fn check(
     let load = |sha: &str| {
         load_capability_catalog_from_tree(root, sha).map_err(|e| format!("catalog at {sha}: {e}"))
     };
-    let before = load(&baseline)?;
+    let mut before = load(&baseline)?;
     let after = if head == baseline {
         before.clone()
     } else {
         load(head)?
     };
+    let registry = join_legacy_identities(root, &mut before, &after)?;
     if after.records.is_empty() {
         // A real removal retains its identity-specific refusal. Otherwise
         // authority presence is needed only to distinguish bootstrap from
@@ -182,8 +183,58 @@ fn check(
     }
     agreement(&before, &after, body)?;
     Ok(format!(
-        "capability impact: authority {authority}, merge-base {baseline}, head {head}; declaration agrees with catalog delta"
+        "capability impact: authority {authority}, merge-base {baseline}, head {head}; registry {}; declaration agrees with catalog delta",
+        registry.as_deref().unwrap_or("not needed")
     ))
+}
+
+/// Only the registry can connect a UID-less legacy entry to a typed record.
+fn join_legacy_identities(
+    root: &Path,
+    before: &mut CapabilityCatalog,
+    after: &CapabilityCatalog,
+) -> Result<Option<String>, String> {
+    let mut pending = Vec::new();
+    for (index, previous) in before.records.iter().enumerate() {
+        if previous.uid.is_some() {
+            continue;
+        }
+        // Unconverted legacy entries keep their existing identity.
+        if after.records.iter().any(|record| {
+            record.uid.is_none() && record.entry.id == previous.entry.id
+        }) {
+            continue;
+        }
+        let candidates: Vec<_> = after.records.iter().filter(|record| {
+            record.uid.is_some() && (record.entry.id == previous.entry.id
+                || record.former_ids.contains(&previous.entry.id))
+        }).collect();
+        if candidates.len() != 1 {
+            return Err(format!("{} identity removed or replaced; migration needs exactly one matching record", previous.entry.id));
+        }
+        // Retarget preserves UID but binds the new number; former_ids supplies
+        // the old-to-current ID edge, never a substitute for the UID binding.
+        let number = codeflow_core::ids::RegId::parse(&candidates[0].entry.id)
+            .and_then(|id| id.seq())
+            .ok_or_else(|| format!("invalid capability id {}", candidates[0].entry.id))?;
+        pending.push((index, number, candidates[0]));
+    }
+    if pending.is_empty() {
+        return Ok(None);
+    }
+    let numbers: Vec<_> = pending.iter().map(|(_, number, _)| *number).collect();
+    let (sha, bindings) = codeflow_core::capability::impact::registry_bindings(root, &numbers)?;
+    let mut identities: BTreeSet<_> = before.records.iter().filter_map(|record| record.uid.clone()).collect();
+    for ((index, _, candidate), uid) in pending.into_iter().zip(bindings) {
+        if candidate.uid.as_ref() != Some(&uid) {
+            return Err(format!("{} migration UID disagrees with registry at {sha}", before.records[index].entry.id));
+        }
+        if !identities.insert(uid.clone()) {
+            return Err(format!("duplicate migration UID {uid} at registry {sha}"));
+        }
+        before.records[index].uid = Some(uid);
+    }
+    Ok(Some(sha))
 }
 
 fn normalize(value: &str) -> String {

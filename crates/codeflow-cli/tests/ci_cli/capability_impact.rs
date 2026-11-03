@@ -414,7 +414,7 @@ fn capability_unbound_legacy_conversion_fails_closed() {
     commit(root);
     refuse(
         &ci(root, Some(CHANGED), &[]),
-        "identity removed or replaced",
+        "cannot pin capability registry",
     );
 }
 
@@ -1047,4 +1047,65 @@ fn capability_first_and_multiple_ref_pushes_need_no_body() {
     // The same malformed head is refused by the authoritative CLI path.
     git(root, &["switch", "-q", "feat/second"]);
     refuse(&ci(root, Some(NONE), &[]), "catalog at");
+}
+
+#[test]
+fn capability_registry_join_preserves_renumbered_identity_and_refuses_bad_bindings() {
+    for case in ["valid", "missing", "malformed", "mismatch", "symlink", "remote-missing"] {
+        let dir = fixture(Some("block"), false, false);
+        let root = dir.path();
+        git(root, &["switch", "-q", "main"]);
+        write(root, "docs/capabilities.md", "```yaml\nid: CAP-101\nname: catalog\narea: engine\nstatus: planned\n```\n");
+        commit(root);
+        git(root, &["switch", "-q", "feat/example"]);
+        git(root, &["merge", "--ff-only", "main"]);
+        write(root, "docs/capabilities.md", "# Catalog\n");
+        write(root, "docs/capabilities/CAP-202-catalog.md", &RECORD
+            .replace("id: CAP-101", "id: CAP-202\nformer_ids: [CAP-101]")
+            .replace("The catalog describes the product.", "Readers see the converted and edited catalog."));
+        commit(root);
+        let repo = git2::Repository::open(root).unwrap();
+        let uid = if case == "mismatch" {
+            "a7fb4faa-c84d-45ca-ad4d-24d039e0919b"
+        } else {
+            "3b9e7c2a-51d4-4f0e-9a6b-0c2d8e417f55"
+        };
+        let entry = codeflow_core::ids::Entry::issued(
+            codeflow_core::ids::RegId::canonical(codeflow_core::ids::Kind::Cap, 202),
+            uid.to_owned(), "Catalog binding", "fixture@example.test", "none",
+        );
+        let bytes = if case == "malformed" { "invalid toml".to_owned() } else { entry.render() };
+        let blob = repo.blob(bytes.as_bytes()).unwrap();
+        let mut cap = repo.treebuilder(None).unwrap();
+        if case != "missing" {
+            cap.insert("202.toml", blob, if case == "symlink" { 0o120_000 } else { 0o100_644 }).unwrap();
+        }
+        let mut ids = repo.treebuilder(None).unwrap();
+        ids.insert("CAP", cap.write().unwrap(), 0o040_000).unwrap();
+        let mut registry = repo.treebuilder(None).unwrap();
+        registry.insert("ids", ids.write().unwrap(), 0o040_000).unwrap();
+        let tree_id = registry.write().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let signature = repo.signature().unwrap();
+        let sha = repo.commit(Some(codeflow_core::ids::REGISTRY_REF), &signature, &signature,
+            "chore: bind capability", &tree, &[]).unwrap();
+        if case == "remote-missing" {
+            repo.remote("origin", "https://example.invalid/fixture.git").unwrap();
+        }
+        let declaration = "## Capability impact\n\n- Changed CAP-202 catalog: Readers get the converted and edited catalog.\n";
+        let out = ci(root, Some(declaration), &[]);
+        match case {
+            "valid" => {
+                pass(&out);
+                assert!(said(&out).contains(&format!("registry {sha}")));
+                refuse(&ci(root, Some(&declaration.replace("Changed", "Added")), &[]), "disagrees");
+            }
+            "missing" => refuse(&out, "lacks ids/CAP/202.toml"),
+            "malformed" => refuse(&out, "registry at"),
+            "mismatch" => refuse(&out, "migration UID disagrees"),
+            "symlink" => refuse(&out, "must be a regular blob"),
+            "remote-missing" => refuse(&out, "cannot pin capability registry"),
+            _ => unreachable!(),
+        }
+    }
 }

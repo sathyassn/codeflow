@@ -192,6 +192,16 @@ jobs:
             echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); this run belongs to an older event, so it fails; re-run the check for the current head"; exit 1
           fi
 
+      # The registry is fetched explicitly with full history, never forced
+      # (R-20); the pull request head above was fetched as data only.
+      - name: Fetch the shared registry
+        run: |
+          if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
+            git fetch --no-tags origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+          else
+            echo "codeflow/registry is not on origin; the check reports it when records are tracked"
+          fi
+
       # The body is read when the job runs, never taken from the event. An
       # event carries the body as it was when the event fired, and the run
       # that survives the concurrency group can belong to an older event (one
@@ -255,16 +265,6 @@ jobs:
                 "${RUNNER_TEMP}/pull-after.json"
               exit 1;
             }
-
-      # The registry is fetched explicitly with full history, never forced
-      # (R-20); the pull request head above was fetched as data only.
-      - name: Fetch the shared registry
-        run: |
-          if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
-            git fetch --no-tags origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
-          else
-            echo "codeflow/registry is not on origin; the check reports it when records are tracked"
-          fi
 
       - name: codeflow ids check
         env:

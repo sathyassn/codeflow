@@ -115,3 +115,69 @@ fn project_paths(
     paths.validate()?;
     Ok(paths)
 }
+
+/// Read capability bindings from one pinned registry authority revision.
+///
+/// # Errors
+/// Refuses missing authority history, unsafe tree modes, oversized blobs and
+/// every binding parser error. No checkout or head-provided registry is read.
+pub fn registry_bindings(root: &Path, numbers: &[u64]) -> Result<(String, Vec<String>), String> {
+    if numbers.len() > super::CAPABILITY_MAX_TREE_FILES {
+        return Err("capability binding count exceeds the catalog entry limit".into());
+    }
+    crate::workgraph::history::check_command(root)?;
+    let repo = git2::Repository::discover(root).map_err(|e| e.to_string())?;
+    // A configured origin requires its fetched authority copy. A local branch
+    // is authority only in a repository with no origin, never a hosted fallback.
+    let registry_ref = match repo.find_remote(crate::ids::AUTHORITY) {
+        Ok(_) => crate::ids::tracking_ref(crate::ids::AUTHORITY),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            crate::ids::REGISTRY_REF.to_owned()
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    let registry = repo
+        .find_reference(&registry_ref)
+        .and_then(|reference| reference.peel_to_commit())
+        .map_err(|error| format!("cannot pin capability registry {registry_ref}: {error}"))?;
+    let sha = registry.id().to_string();
+    let mut tree = super::bounded_catalog_tree(&repo, registry.tree_id(), "<registry>")
+        .map_err(|error| error.to_string())?;
+    for directory in ["ids", "CAP"] {
+        let entry = tree
+            .get_name(directory)
+            .ok_or_else(|| format!("registry at {sha} lacks {directory}"))?;
+        if entry.filemode() != 0o040_000 {
+            return Err(format!("registry at {sha}: {directory} must be a directory"));
+        }
+        let id = entry.id();
+        drop(entry);
+        tree = super::bounded_catalog_tree(&repo, id, directory)
+            .map_err(|error| error.to_string())?;
+    }
+    let mut bindings = Vec::with_capacity(numbers.len());
+    let mut total_bytes = 0usize;
+    for &number in numbers {
+        let path = crate::ids::RegId::canonical(crate::ids::Kind::Cap, number).registry_path();
+        let filename = path.rsplit('/').next().ok_or("invalid capability registry path")?;
+        let entry = tree
+            .get_name(filename)
+            .ok_or_else(|| format!("registry at {sha} lacks {path}"))?;
+        if entry.filemode() != 0o100_644 {
+            return Err(format!("registry at {sha}: {path} must be a regular blob"));
+        }
+        let (size, kind) = repo.odb().and_then(|odb| odb.read_header(entry.id()))
+            .map_err(|error| error.to_string())?;
+        if kind != git2::ObjectType::Blob || size > crate::ids::entry::CAPABILITY_BINDING_MAX_BYTES {
+            return Err(format!("registry at {sha}: {path} exceeds the binding blob limit"));
+        }
+        total_bytes = total_bytes.saturating_add(size);
+        if total_bytes > super::CAPABILITY_MAX_TREE_BYTES {
+            return Err("capability bindings exceed the aggregate catalog byte limit".into());
+        }
+        let blob = repo.find_blob(entry.id()).map_err(|error| error.to_string())?;
+        bindings.push(crate::ids::capability_uid_from_blob(number, blob.content())
+            .map_err(|error| format!("registry at {sha}: {path}: {error}"))?);
+    }
+    Ok((sha, bindings))
+}
