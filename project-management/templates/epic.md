@@ -8,6 +8,7 @@ capabilities: []         # CAP-### ids this epic creates or changes
 adrs: []                 # ADR ids consumed or produced
 specs: []                # SPC-### inputs consumed by this epic
 external_refs: []        # opaque links/ids only; never mirror external status
+parent_line: null        # optional: another epic's line this epic lands on, exactly integration/EPC-NNN-<slug>; read only from the line tip, never a branch
 created: {{DATE}}
 ---
 
