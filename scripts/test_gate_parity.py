@@ -982,9 +982,14 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
             self.BROWSERS, "if timeout --kill-after=30s 10m echo skip; npx playwright install chromium"))
 
     def test_an_added_install_through_a_variable_is_refused(self):
-        self.assertEqual(WORKFLOW.count(self.CLI), 1)
-        self.assert_unpinned(WORKFLOW.replace(
-            self.CLI, self.CLI + '          PW=playwright\n          npx "$PW" install chromium\n'))
+        jobs = parity.jobs_section(WORKFLOW)
+        for name in ("gates", "gates-release"):
+            with self.subTest(job=name):
+                job = jobs[name]
+                self.assertEqual(job.count(self.CLI), 1)
+                changed = job.replace(
+                    self.CLI, self.CLI + '          PW=playwright\n          npx "$PW" install chromium\n')
+                self.assert_unpinned(WORKFLOW.replace(job, changed))
 
     def test_a_new_step_naming_playwright_is_refused(self):
         step = ("      - name: Warm the Playwright cache\n        if: matrix.part == 'present'\n"
