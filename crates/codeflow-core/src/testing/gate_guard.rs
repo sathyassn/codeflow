@@ -1056,7 +1056,9 @@ fn holder_alive(record: &str) -> bool {
 fn holder_alive(record: &str) -> bool {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, WAIT_TIMEOUT};
-    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
 
     let Some(pid) = record
         .split_terminator('\n')
