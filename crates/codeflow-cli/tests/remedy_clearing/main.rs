@@ -175,6 +175,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("CI_BODY_UNSUPPLIED", Runs),
     ("CI_SECURITY_LEVEL_LOWERED", Runs),
     ("CI_SETUP_HOOK_CHANGED", Runs),
+    ("CI_WORKFLOW_CHANGED", Runs),
     ("SCAFFOLD_MANIFEST_BROKEN", Excluded(Network)),
     ("PATH_POLICY", Runs),
     ("ENV_FILE_STAGED", Runs),
@@ -1147,6 +1148,58 @@ fn clears_ci_setup_hook_changed() {
         git(root, &["commit", "-q", "-m", "ci: restore the setup hook"]);
         let after = ci(root, &[]);
         assert!(!after.contains("codeflow ci: note: this change"), "{after}");
+    }
+}
+
+#[test]
+fn clears_ci_workflow_changed() {
+    const WORKFLOW: &str = ".github/workflows/codeflow-policy.yml";
+    const TARGET: &str = "on:\n  pull_request_target:\njobs:\n  verdict:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: exit 1\n";
+    for verb in ["adds", "edits", "removes"] {
+        let dir = ci_repo(DEFAULTS);
+        let root = dir.path();
+        if verb != "adds" {
+            git(root, &["switch", "-q", "main"]);
+            write(root, WORKFLOW, TARGET);
+            git(root, &["add", WORKFLOW]);
+            git(
+                root,
+                &["commit", "-q", "-m", "ci: seed the policy workflow"],
+            );
+            git(root, &["switch", "-q", "feat/x"]);
+            git(root, &["merge", "--ff-only", "main"]);
+        }
+        if verb == "removes" {
+            std::fs::remove_file(root.join(WORKFLOW)).unwrap();
+        } else {
+            write(
+                root,
+                WORKFLOW,
+                "on:\n  push:\njobs:\n  verdict:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: exit 0\n",
+            );
+        }
+        git(root, &["add", WORKFLOW]);
+        git(
+            root,
+            &["commit", "-q", "-m", "ci: change the policy workflow"],
+        );
+        let before = ci(root, &[]);
+        let finding = format!("this change edits {WORKFLOW}");
+        assert_prints_row(block(&before, &finding), "CI_WORKFLOW_CHANGED");
+        // The printed step: restore the workflow to its target state,
+        // including absence for a new one.
+        if verb == "adds" {
+            std::fs::remove_file(root.join(WORKFLOW)).unwrap();
+        } else {
+            write(root, WORKFLOW, TARGET);
+        }
+        git(root, &["add", WORKFLOW]);
+        git(
+            root,
+            &["commit", "-q", "-m", "ci: restore the policy workflow"],
+        );
+        let after = ci(root, &[]);
+        assert!(!after.contains("ci.workflow_change"), "{after}");
     }
 }
 
