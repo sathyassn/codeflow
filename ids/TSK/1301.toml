@@ -1,0 +1,11 @@
+id = "TSK-1301"
+uid = "4e99bc68-ca15-48e6-aacf-7eaf63cc9027"
+kind = "TSK"
+title = "The pre-push destination probe's timeout and attempt count come from policy"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T19:43:19Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
