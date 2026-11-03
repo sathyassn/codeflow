@@ -252,9 +252,9 @@ pub(super) fn run(
             #[cfg(windows)]
             {
                 termination_confirmed = status.is_some()
-                    && job.as_ref().map_or(true, |job| {
-                        job.accounting().is_ok_and(|(_, active)| active == 0)
-                    });
+                    && job
+                        .as_ref()
+                        .is_none_or(|job| job.accounting().is_ok_and(|(_, active)| active == 0));
             }
             #[cfg(target_os = "linux")]
             if let Some(group) = &cgroup {

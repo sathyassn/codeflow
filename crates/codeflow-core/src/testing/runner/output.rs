@@ -157,7 +157,7 @@ fn completed_count(line: &str) -> Option<String> {
 
 #[cfg(windows)]
 fn available(pipe: &impl Pipe) -> io::Result<usize> {
-    use windows_sys::Win32::Foundation::{ERROR_BROKEN_PIPE, HANDLE};
+    use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::System::Pipes::PeekNamedPipe;
     let mut count = 0;
     // SAFETY: only queries our owned pipe; no blocking read occurs until bytes exist.
@@ -172,11 +172,7 @@ fn available(pipe: &impl Pipe) -> io::Result<usize> {
         )
     } == 0
     {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) {
-            return Err(io::Error::from(io::ErrorKind::BrokenPipe));
-        }
-        return Err(error);
+        return Err(io::Error::last_os_error());
     }
     Ok(count as usize)
 }

@@ -70,12 +70,17 @@ pub(super) struct Cgroup {
 
 impl Cgroup {
     pub fn discover() -> io::Result<Self> {
-        let membership = std::fs::read_to_string("/proc/self/cgroup")?;
+        let membership = kernel_text("/proc/self/cgroup")?;
         let current = membership
             .lines()
             .find_map(|line| line.strip_prefix("0::"))
             .ok_or_else(|| io::Error::other("no cgroup v2 membership"))?;
-        let mounts = std::fs::read_to_string("/proc/self/mountinfo")?;
+        if current == "/" {
+            return Err(io::Error::other(
+                "cgroup root is not an explicit delegated subtree",
+            ));
+        }
+        let mounts = kernel_text("/proc/self/mountinfo")?;
         let path = mounts
             .lines()
             .find_map(|line| {
@@ -108,7 +113,16 @@ impl Cgroup {
         if unsafe { libc::mkdirat(parent.0.as_raw_fd(), c_name.as_ptr(), 0o700) } != 0 {
             return Err(io::Error::last_os_error());
         }
-        let directory = Directory(parent.at(&name, libc::O_RDONLY | libc::O_DIRECTORY)?);
+        let directory = match parent.at(&name, libc::O_RDONLY | libc::O_DIRECTORY) {
+            Ok(file) => Directory(file),
+            Err(error) => {
+                // No workload was launched. Only remove the empty name we created.
+                unsafe {
+                    libc::unlinkat(parent.0.as_raw_fd(), c_name.as_ptr(), libc::AT_REMOVEDIR);
+                }
+                return Err(error);
+            }
+        };
         Ok(Self {
             path: parent_path.join(&name),
             parent,
@@ -222,6 +236,15 @@ fn counter(text: &str, wanted: &str) -> io::Result<u64> {
         }
     }
     found.ok_or_else(|| io::Error::other("missing cgroup counter"))
+}
+
+fn kernel_text(path: &str) -> io::Result<String> {
+    let mut text = String::new();
+    File::open(path)?.take(65_537).read_to_string(&mut text)?;
+    if text.len() > 65_536 {
+        return Err(io::Error::other("cgroup discovery data too large"));
+    }
+    Ok(text)
 }
 
 fn unescape(text: &str) -> String {
