@@ -1,0 +1,11 @@
+id = "TSK-1258"
+uid = "8b6c9a24-8ed6-4a37-9e12-fbd4ba742970"
+kind = "TSK"
+title = "The guard's glob matcher stays bounded on every input and refuses when it cannot finish"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T00:30:57Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
