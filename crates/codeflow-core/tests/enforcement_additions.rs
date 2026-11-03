@@ -51,7 +51,11 @@ fn prior_assets() -> (tempfile::TempDir, DirSource) {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/enforcement-3.1.1")
             .join(name);
-        write(&base, destination, &std::fs::read_to_string(fixture).unwrap());
+        write(
+            &base,
+            destination,
+            &std::fs::read_to_string(fixture).unwrap(),
+        );
     }
     let source = DirSource::new(dir.path());
     (dir, source)
@@ -88,7 +92,14 @@ fn update(source: &DirSource, root: &Path) {
     .unwrap();
 }
 
-fn survives(relative: &str, patch: impl FnOnce(&str) -> (String, String)) {
+fn survives(relative: &str, patch: impl Fn(&str) -> (String, String)) {
+    check_survival(relative, &patch, false);
+    if !relative.ends_with(".rules") {
+        check_survival(relative, &patch, true);
+    }
+}
+
+fn check_survival(relative: &str, patch: &impl Fn(&str) -> (String, String), candidate: bool) {
     let (_assets, source) = prior_assets();
     let project = project(&source);
     let path = project.path().join(relative);
@@ -96,6 +107,21 @@ fn survives(relative: &str, patch: impl FnOnce(&str) -> (String, String)) {
     let (patched, addition) = patch(&before);
     assert_ne!(before, patched, "fixture patch must add project content");
     std::fs::write(&path, &patched).unwrap();
+
+    if candidate {
+        let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base");
+        for name in [
+            "policy.json",
+            "settings/default.json",
+            "codex/rules/codeflow.rules",
+        ] {
+            write(
+                &_assets.path().join("base"),
+                name,
+                &std::fs::read_to_string(shipped.join(name)).unwrap(),
+            );
+        }
+    }
 
     for _ in 0..2 {
         update(&source, project.path());

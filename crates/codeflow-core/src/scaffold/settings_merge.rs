@@ -100,8 +100,8 @@ fn matcher_of(group: &Value) -> Option<&str> {
 }
 
 /// Merges the shipped settings preset into the user's settings file.
-/// Returns the merged JSON text (pretty, 2-space) and appends one line per
-/// mutation/preservation decision to `report`.
+/// Returns merged JSON, preserving unchanged project entries as written,
+/// and appends one line per mutation/preservation decision to `report`.
 ///
 /// # Errors
 ///
@@ -181,6 +181,7 @@ fn merge(
     report: &mut Vec<Shown>,
 ) -> Result<String, ScaffoldError> {
     let preset = Preset(&SHIPPED_PRESETS);
+    let original = current;
     let mut current: Value = serde_json::from_str(current)?;
     let incoming: Value = serde_json::from_str(incoming)?;
     let previous: Option<Value> = previous.map(serde_json::from_str).transpose()?;
@@ -246,12 +247,12 @@ fn merge(
         }
     }
 
-    serde_json::to_string_pretty(&current)
-        .map(|mut s| {
-            s.push('\n');
-            s
-        })
-        .map_err(ScaffoldError::from)
+    super::json_edit::preserving_edit(original, &current).ok_or_else(|| {
+        ScaffoldError::invalid(
+            Shown::fixed("settings.json"),
+            Shown::fixed("the settings merge could not preserve unchanged project entries"),
+        )
+    })
 }
 
 /// The top-level keys that are each person's preference, not policy

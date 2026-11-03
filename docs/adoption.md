@@ -361,6 +361,30 @@ Upgrade the binary once, then run `codeflow update` in each repository.
 
 The version-skew warning is gone and no `.new` file remains.
 
+#### Project additions to enforcement files
+
+A person can add project policy keys, Claude deny entries and Codex rules.
+The agent guards continue to refuse agent writes to these enforcement files.
+
+| File | How the additions survive `codeflow update` |
+|---|---|
+| `.codeflow/policy.json` | Existing merge rules choose the resulting keys and defaults; unchanged project entries keep their spelling and whitespace |
+| `.codeflow/project.toml` | CodeFlow updates its root fields and adoption markers; project tables, comments and formatting stay as written |
+| `.claude/settings.json` | The settings merge keeps project permission entries and their spelling while applying shipped changes |
+| `.codex/rules/codeflow.rules` | The normal three-way merge keeps non-overlapping additions; unchanged shipped content keeps the whole file without a conflict proposal |
+| Other `.codex/rules/*.rules` files | Project-owned files stay untouched and appear in doctor's inventory by line |
+
+`codeflow doctor --check managed-drift` lists project additions by file and
+entry. JSON entries use JSON pointers, such as `/permissions/deny/12`;
+Codex additions use line numbers. The report keeps permission values and
+command text private. Missing baselines and edits to shipped Codex lines are
+reported as unclassified. An inconsistent baseline fails the check.
+
+This inventory identifies saved additions. The harness trust and enforcement
+checks establish whether the rules run. Edits inside managed text markers
+still produce the existing drift warning. Overlapping changes to a managed
+file still need a person to resolve the `.new` proposal.
+
 **CI pins its binary too.** The scaffolded workflows install the release
 named by `scaffold_version` in the target branch's `.codeflow/project.toml`
 and verify it against that release's `sha256.sum` and the target's

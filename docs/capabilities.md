@@ -146,6 +146,7 @@ adrs: [ADR-0011, ADR-0019]
 | User-modified file | Three-way merge from `.codeflow/.baseline/`; a conflict produces a `.new` file and saves the pending shipped content. After resolution, the next update records that shipped baseline, so the conflict does not repeat |
 | Managed region | Updates it in place |
 | User-owned schema-versioned file | Adds new keys with defaults |
+| Project enforcement additions | Keeps unchanged project entries as written; doctor inventories them by file and entry |
 | Missing in-tier manifest entry | Installs it |
 | All classes | Never clobbers or silently skips |
 

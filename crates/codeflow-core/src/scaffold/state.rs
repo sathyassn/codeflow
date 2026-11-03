@@ -3,9 +3,9 @@
 //! that makes `codeflow update` possible), plus the `.codeflow/.baseline/`
 //! pristine-copy store used as the 3-way merge base.
 //!
-//! `project.toml` is user-owned: load/store round-trips through a
-//! `toml::Table` so keys codeflow does not know about (e.g. a future
-//! `orient.enabled = false`) survive every rewrite.
+//! `project.toml` is user-owned: load/store updates CodeFlow's root fields
+//! by their parsed spans. Project additions keep their comments, spelling
+//! and whitespace, including keys CodeFlow does not know about.
 
 use std::path::{Path, PathBuf};
 
@@ -104,9 +104,10 @@ impl ProjectState {
             )
         })?;
         // Read without following a link, as the write below refuses one.
-        let merged = match read_beneath_root(root, PROJECT_TOML)? {
+        let existing = read_beneath_root(root, PROJECT_TOML)?;
+        let merged = match &existing {
             Some(existing) => {
-                let mut table: toml::Table = toml::from_str(&existing).map_err(|e| {
+                let mut table: toml::Table = toml::from_str(existing).map_err(|e| {
                     ScaffoldError::invalid(
                         Shown::path(PROJECT_TOML),
                         Shown::place(&crate::scaffold::ParsePlace::toml(&existing, &e)),
@@ -119,14 +120,77 @@ impl ProjectState {
             }
             None => ours,
         };
-        let text = state_text(&merged).map_err(|_| {
-            ScaffoldError::invalid(
-                Shown::path(PROJECT_TOML),
-                Shown::fixed("the project state could not be written as TOML"),
-            )
-        })?;
+        let text = match existing {
+            Some(existing) => preserving_state_text(&existing, &merged)?,
+            None => state_text(&merged).map_err(|_| {
+                ScaffoldError::invalid(
+                    Shown::path(PROJECT_TOML),
+                    Shown::fixed("the project state could not be written as TOML"),
+                )
+            })?,
+        };
         write_record(root, PROJECT_TOML, text.as_bytes())
     }
+}
+
+/// Update top-level state values without rewriting the project's tables,
+/// comments, key spelling or whitespace. New root keys precede the document,
+/// so a final table header can never capture them. Reparse the result before
+/// a caller writes it; a layout that cannot be preserved is refused.
+pub(crate) fn preserving_state_text(
+    existing: &str,
+    expected: &toml::Table,
+) -> Result<String, ScaffoldError> {
+    let invalid = || {
+        ScaffoldError::invalid(
+            Shown::fixed(PROJECT_TOML),
+            Shown::fixed("the project state update could not preserve unchanged project entries"),
+        )
+    };
+    let fields: std::collections::BTreeMap<String, toml::Spanned<toml::Value>> =
+        toml::from_str(existing).map_err(|_| invalid())?;
+    if fields.keys().any(|key| !expected.contains_key(key)) {
+        return Err(invalid());
+    }
+    let mut changes = Vec::new();
+    let mut added = String::new();
+    for (key, value) in expected {
+        if fields
+            .get(key)
+            .is_some_and(|field| field.get_ref() == value)
+        {
+            continue;
+        }
+        let singleton = toml::Table::from_iter([(key.clone(), value.clone())]);
+        let encoded = state_text(&singleton).map_err(|_| invalid())?;
+        if let Some(field) = fields.get(key) {
+            // Only root scalar/array state is rewritten. Project tables are
+            // outside this writer's ownership.
+            if value.is_table() || field.get_ref().is_table() {
+                return Err(invalid());
+            }
+            let encoded_fields: std::collections::BTreeMap<String, toml::Spanned<toml::Value>> =
+                toml::from_str(&encoded).map_err(|_| invalid())?;
+            let span = encoded_fields.get(key).ok_or_else(invalid)?.span();
+            changes.push((field.span(), encoded[span].to_string()));
+        } else {
+            added.push_str(&encoded);
+            if !added.ends_with('\n') {
+                added.push('\n');
+            }
+        }
+    }
+    changes.sort_by_key(|(span, _)| std::cmp::Reverse(span.start));
+    let mut text = existing.to_string();
+    for (span, value) in changes {
+        text.replace_range(span, &value);
+    }
+    text.insert_str(0, &added);
+    let parsed: toml::Table = toml::from_str(&text).map_err(|_| invalid())?;
+    if parsed != *expected {
+        return Err(invalid());
+    }
+    Ok(text)
 }
 
 /// The `[scaffold]` section of `project.toml` — user-owned knobs that steer
@@ -1515,6 +1579,45 @@ pub(crate) fn set_exec(path: &Path, exec: bool) -> Result<(), ScaffoldError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn state_edits_preserve_project_comments_and_only_replace_owned_values() {
+        let before = "# Project state\n\"scaffold_version\" = '3.1.1' # Pin\nareas = [ 'engine' ]\n\n# Project extension\n[project_tools]\nname = '''scaffold_version = \"decoy\"''' # Keep this\n";
+        let mut expected: toml::Table = toml::from_str(before).unwrap();
+        expected.insert(
+            "scaffold_version".into(),
+            toml::Value::String("4.0.0".into()),
+        );
+        expected.insert("release_rules".into(), toml::Value::Integer(1));
+        let out = preserving_state_text(before, &expected).unwrap();
+        assert!(out.starts_with("release_rules = 1\n"), "{out}");
+        assert!(out.contains("\"scaffold_version\" = \"4.0.0\" # Pin"));
+        assert!(out.ends_with("\n# Project extension\n[project_tools]\nname = '''scaffold_version = \"decoy\"''' # Keep this\n"));
+        assert_eq!(preserving_state_text(&out, &expected).unwrap(), out);
+    }
+
+    #[test]
+    fn state_edits_handle_multiline_arrays_and_crlf() {
+        let before = "areas = [\r\n 'engine',\r\n 'docs',\r\n]\r\n# Project table\r\n[project_tools]\r\ncommand = 'project-check'\r\n";
+        let mut expected: toml::Table = toml::from_str(before).unwrap();
+        expected.insert(
+            "areas".into(),
+            toml::Value::Array(vec![toml::Value::String("scaffold".into())]),
+        );
+        let out = preserving_state_text(before, &expected).unwrap();
+        assert!(
+            out.ends_with("# Project table\r\n[project_tools]\r\ncommand = 'project-check'\r\n")
+        );
+        assert_eq!(toml::from_str::<toml::Table>(&out).unwrap(), expected);
+    }
+
+    #[test]
+    fn state_edits_refuse_to_remove_or_replace_project_tables() {
+        let before = "[project_tools]\ncommand = 'project-check'\n";
+        assert!(preserving_state_text(before, &toml::Table::new()).is_err());
+        let expected: toml::Table = toml::from_str("[project_tools]\ncommand = 'other'\n").unwrap();
+        assert!(preserving_state_text(before, &expected).is_err());
+    }
 
     /// A manifest record that cannot be read refuses; only a missing one
     /// is the empty record.

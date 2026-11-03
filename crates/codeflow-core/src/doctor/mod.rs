@@ -24,6 +24,7 @@ use crate::scaffold::state::InstalledManifest;
 
 mod ci_pin;
 mod codex_profile;
+mod enforcement_additions;
 mod git_config;
 mod grok_hooks;
 mod guard_timeouts;
@@ -3538,6 +3539,23 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
         }
     };
 
+    let additions = match enforcement_additions::inventory(&root, &installed) {
+        Ok(additions) => additions,
+        Err(error) => return input_failure("managed-drift", start, &root, error),
+    };
+    let notes = if additions.notes.is_empty() {
+        String::new()
+    } else {
+        format!("; {}", additions.notes.join("; "))
+    };
+    let additions = if additions.entries.is_empty() {
+        notes
+    } else {
+        format!(
+            "; project additions (inventory; enforcement not verified): {}{notes}",
+            additions.entries.join("; ")
+        )
+    };
     let mut drifted: Vec<String> = Vec::new();
     for (dest, file) in &installed.files {
         if file.ownership != Ownership::ManagedRegion {
@@ -3567,13 +3585,15 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
     }
 
     if drifted.is_empty() {
-        return pass("no managed-region drift (codeflow blocks match the record)".into());
+        return pass(format!(
+            "no managed-region drift (codeflow blocks match the record){additions}"
+        ));
     }
     CheckResult {
         name: "managed-drift".into(),
         status: Status::Warn(remedy::DOCTOR_MANAGED_DRIFT.remedy()),
         message: format!(
-            "{} managed region(s) hand-edited inside codeflow markers; `codeflow update` will regenerate and lose these edits: {}",
+            "{} managed region(s) hand-edited inside codeflow markers; `codeflow update` will regenerate and lose these edits: {}{additions}",
             drifted.len(),
             drifted.join(", ")
         ),

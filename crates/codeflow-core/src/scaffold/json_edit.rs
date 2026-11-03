@@ -138,6 +138,132 @@ pub fn verified(edited: String, expected: &Value) -> Option<String> {
     (parsed == *expected).then_some(edited)
 }
 
+/// Apply a semantic JSON change while keeping the bytes of unchanged members
+/// and array entries. The caller supplies the merge's result, never a second
+/// merge policy. Parsing the result again verifies every splice.
+#[must_use]
+pub fn preserving_edit(text: &str, expected: &Value) -> Option<String> {
+    let before: Value = serde_json::from_str(text).ok()?;
+    verified(edit_value(text, &before, expected)?, expected)
+}
+
+fn edit_value(text: &str, before: &Value, after: &Value) -> Option<String> {
+    if before == after {
+        return Some(text.to_string());
+    }
+    match (before, after) {
+        (Value::Object(old), Value::Object(new)) => {
+            let mut out = text.to_string();
+            for key in old.keys().filter(|key| !new.contains_key(*key)) {
+                out = remove_member(&out, key)?;
+            }
+            for (key, value) in new {
+                if let Some(previous) = old.get(key) {
+                    let (start, end) = value_span(&out, &[key.as_str()])?;
+                    let next = edit_value(&out[start..end], previous, value)?;
+                    out.replace_range(start..end, &next);
+                } else {
+                    out = insert_member(&out, &[], key, &serde_json::to_string(value).ok()?)?;
+                }
+            }
+            Some(out)
+        }
+        (Value::Array(old), Value::Array(new)) => {
+            // Keep each retained entry's spelling and surrounding whitespace,
+            // even when the permission merge changes its position. The merge
+            // owns ordering and membership; this layer only renders its result.
+            let segments = array_segments(text)?;
+            let mut entries = Vec::with_capacity(new.len());
+            let mut used = vec![false; old.len()];
+            for value in new {
+                if let Some(index) = old
+                    .iter()
+                    .enumerate()
+                    .position(|(index, prior)| !used[index] && prior == value)
+                {
+                    used[index] = true;
+                    entries.push(segments.get(index)?.to_string());
+                } else {
+                    entries.push(serde_json::to_string(value).ok()?);
+                }
+            }
+            let open = skip_ws(text, 0);
+            let close = text.rfind(']')?;
+            Some(format!(
+                "{}{}{}",
+                &text[..=open],
+                entries.join(","),
+                &text[close..]
+            ))
+        }
+        _ => {
+            let start = skip_ws(text, 0);
+            let end = value_end(text, start)?;
+            Some(format!(
+                "{}{}{}",
+                &text[..start],
+                serde_json::to_string(after).ok()?,
+                &text[end..]
+            ))
+        }
+    }
+}
+
+/// Array entries without commas, including the whitespace each person wrote
+/// around the value. JSON strings may contain commas, brackets and escapes.
+fn array_segments(text: &str) -> Option<Vec<&str>> {
+    let open = skip_ws(text, 0);
+    if *text.as_bytes().get(open)? != b'[' {
+        return None;
+    }
+    let mut start = open + 1;
+    let mut segments = Vec::new();
+    loop {
+        let value = skip_ws(text, start);
+        if *text.as_bytes().get(value)? == b']' {
+            return Some(segments);
+        }
+        let end = skip_ws(text, value_end(text, value)?);
+        segments.push(&text[start..end]);
+        match text.as_bytes().get(end)? {
+            b',' => start = end + 1,
+            b']' => return Some(segments),
+            _ => return None,
+        }
+    }
+}
+
+/// Remove a member in any object layout, including the final or only member.
+/// Parse key tokens rather than searching for their possibly escaped bytes.
+fn remove_member(text: &str, key: &str) -> Option<String> {
+    let mut at = object_open(text, &[])?;
+    let mut preceding_comma = None;
+    loop {
+        let start = skip_ws(text, at);
+        let mut names = serde_json::Deserializer::from_str(&text[start..]).into_iter::<String>();
+        let name = names.next()?.ok()?;
+        at = skip_ws(text, start + names.byte_offset());
+        if *text.as_bytes().get(at)? != b':' {
+            return None;
+        }
+        let end = value_end(text, skip_ws(text, at + 1))?;
+        let next = skip_ws(text, end);
+        if name == key {
+            let (start, end) = if text.as_bytes().get(next) == Some(&b',') {
+                (start, next + 1)
+            } else {
+                (preceding_comma.unwrap_or(start), end)
+            };
+            return Some(format!("{}{}", &text[..start], &text[end..]));
+        }
+        if text.as_bytes().get(next) != Some(&b',') {
+            return None;
+        }
+        preceding_comma = Some(next);
+        at = next + 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +320,54 @@ mod tests {
         );
         // The last member cannot be removed without touching a comma.
         assert!(remove_member_line(PRETTY, &["git", "pr_sections"]).is_none());
+    }
+
+    #[test]
+    fn semantic_edits_keep_project_members_and_array_spelling() {
+        let current = "{\n  \"ours\" : [ \"\\u0078\",  {\"a\":1} ],\n  \"rules\": [\n\t\"Read(project/\\u002a)\" ,\n  \"retired\"\n],\n  \"managed\": 1\n}\n";
+        let expected = serde_json::json!({
+            "ours": ["x", {"a": 1}],
+            "rules": ["new", "Read(project/*)"],
+            "managed": 2
+        });
+        let out = preserving_edit(current, &expected).unwrap();
+        assert!(out.contains("\"ours\" : [ \"\\u0078\",  {\"a\":1} ]"));
+        assert!(out.contains("\n\t\"Read(project/\\u002a)\" "));
+        assert_eq!(preserving_edit(&out, &expected).unwrap(), out);
+    }
+
+    #[test]
+    fn semantic_edits_handle_member_removal_and_nested_values() {
+        for text in [
+            r#"{"first":1,"keep":{"x":["a,]",2]},"last":3}"#,
+            "{\r\n \"first\": 1,\r\n \"keep\": {\"x\":[\"a,]\",2]},\r\n \"last\": 3\r\n}\r\n",
+        ] {
+            let before: Value = serde_json::from_str(text).unwrap();
+            assert_eq!(preserving_edit(text, &before).unwrap(), text);
+            // Finite mutation matrix: delete the first, middle, final or every
+            // member, then add a nested value. The parsed result is the oracle.
+            for removed in [
+                vec!["first"],
+                vec!["keep"],
+                vec!["last"],
+                vec!["first", "keep", "last"],
+            ] {
+                let mut expected = before.clone();
+                for key in removed {
+                    expected.as_object_mut().unwrap().remove(key);
+                }
+                expected["added"] = serde_json::json!({"nested": [true, null]});
+                let out = preserving_edit(text, &expected).unwrap();
+                assert_eq!(serde_json::from_str::<Value>(&out).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_array_values_keep_their_distinct_spelling() {
+        let before = r#"{"rules":["x", "\u0078"]}"#;
+        let expected = serde_json::json!({"rules": ["x", "x", "new"]});
+        let out = preserving_edit(before, &expected).unwrap();
+        assert!(out.contains(r#""x", "\u0078""#), "{out}");
     }
 }

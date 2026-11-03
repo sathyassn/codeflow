@@ -628,12 +628,7 @@ fn record_work_records_baseline(root: &Path) -> Result<Option<Shown>, ScaffoldEr
         BASELINE_KEY.to_string(),
         toml::Value::String(head.to_string()),
     );
-    let next = super::state::state_text(&table).map_err(|_| {
-        ScaffoldError::invalid(
-            Shown::path(&path),
-            Shown::fixed("the project state could not be written as TOML"),
-        )
-    })?;
+    let next = super::state::preserving_state_text(&text, &table)?;
     write_record(root, PROJECT_TOML, next.as_bytes())?;
     Ok(Some(shown!(
         "recorded {} = {}: work-record rules apply to records changed after this commit",
@@ -708,12 +703,7 @@ pub(crate) fn record_outcome_marker(root: &Path) -> Result<Option<Shown>, Scaffo
     };
     let commit = head.map(|head| head.to_string());
     let next =
-        super::state::state_text(&with_marker(table, commit.as_deref(), &uids)).map_err(|_| {
-            ScaffoldError::invalid(
-                Shown::path(&path),
-                Shown::fixed("the project state could not be written as TOML"),
-            )
-        })?;
+        super::state::preserving_state_text(&text, &with_marker(table, commit.as_deref(), &uids))?;
     write_record(root, PROJECT_TOML, next.as_bytes())?;
     Ok(Some(shown!(
         "recorded {} with {} present record(s){}: they warn without an `## Outcome` section, and every later open task or epic must state one",
@@ -1214,11 +1204,9 @@ fn sync_user_owned_json(
 
     let migrated = migrate_policy_values(&entry.dest, &mut user);
 
-    // Refresh the shipped-default baseline and record either way.
-    Baseline::write(root, &entry.dest, rendered)?;
-    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
-
     if added.is_empty() && migrated.is_empty() && moved.is_empty() {
+        Baseline::write(root, &entry.dest, rendered)?;
+        record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
         let mut notes = vec![Shown::fixed(
             "user-owned: values never mutated; no new default keys",
         )];
@@ -1242,11 +1230,9 @@ fn sync_user_owned_json(
     if !prior.is_empty() {
         notes.insert(0, prior_release_note());
     }
-    let migrated_any = !migrated.is_empty();
     notes.extend(migrated);
     notes.extend(recommended);
     notes.extend(unsupported_policy_notes(&user));
-    let mut schema_advanced = false;
     if let (Some(user_sv), Some(new_sv)) = (
         user.get("schema_version")
             .and_then(serde_json::Value::as_u64),
@@ -1262,25 +1248,18 @@ fn sync_user_owned_json(
                 "schema_version advanced to {}",
                 Shown::number(new_sv)
             ));
-            schema_advanced = true;
         }
     }
 
-    // Splice only the added keys into the adopter's bytes; a migrated value
-    // or a layout the splice cannot reproduce falls back to a rewrite.
-    let preserved = if migrated_any {
-        None
-    } else {
-        preserving_edit(&current_text, &user, &added, &moved, schema_advanced)
-    };
-    let next = if let Some(text) = preserved {
-        text
-    } else {
-        let mut text = serde_json::to_string_pretty(&user)?;
-        text.push('\n');
-        text
-    };
+    let next = super::json_edit::preserving_edit(&current_text, &user).ok_or_else(|| {
+        ScaffoldError::invalid(
+            Shown::path(&entry.dest),
+            Shown::fixed("the policy update could not preserve unchanged project entries"),
+        )
+    })?;
     write_file(&dest_path, next.as_bytes())?;
+    Baseline::write(root, &entry.dest, rendered)?;
+    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
     push_diff(diffs, &entry.dest, &current_text, &next, rendered, raw);
     report.file_with_notes(&entry.dest, Action::KeysAdded, notes);
     Ok(())
@@ -1326,46 +1305,6 @@ fn policy_key(path: &str, raw: Option<Shipped<'_>>) -> Shown {
 fn shipped_value(value: &serde_json::Value, raw: Option<Shipped<'_>>) -> Shown {
     raw.and_then(|raw| Shown::shipped(&value.to_string(), raw))
         .unwrap_or_else(|| Shown::fixed("<the new shipped default>"))
-}
-
-/// The adopter's file with only the `added` keys (and removed deprecated
-/// ones), and an advanced `schema_version`, spliced in, when that reproduces
-/// `user` exactly: every
-/// byte the adopter wrote stays as written (TSK-107 review F6).
-fn preserving_edit(
-    current: &str,
-    user: &serde_json::Value,
-    added: &[String],
-    moved: &[MovedDefault],
-    schema_advanced: bool,
-) -> Option<String> {
-    let mut text = current.to_string();
-    for change in moved {
-        let parts: Vec<&str> = change.path.split('.').collect();
-        text = super::json_edit::replace_value(&text, &parts, &change.new.to_string())?;
-    }
-    for path in added {
-        // A `-` marks a deprecated key the sync removed.
-        if let Some(gone) = path.strip_prefix('-') {
-            let parts: Vec<&str> = gone.split('.').collect();
-            text = super::json_edit::remove_member_line(&text, &parts)?;
-            continue;
-        }
-        let parts: Vec<&str> = path.split('.').collect();
-        let (key, parent) = parts.split_last()?;
-        let value = user.pointer(&format!("/{}", parts.join("/")))?;
-        text = super::json_edit::insert_member(
-            &text,
-            parent,
-            key,
-            &serde_json::to_string(value).ok()?,
-        )?;
-    }
-    if schema_advanced {
-        let version = user.get("schema_version")?.to_string();
-        text = super::json_edit::replace_value(&text, &["schema_version"], &version)?;
-    }
-    super::json_edit::verified(text, user)
 }
 
 /// A policy scalar that still held the prior shipped default and moved to
