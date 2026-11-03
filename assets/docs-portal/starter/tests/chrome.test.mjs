@@ -5,7 +5,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { portalSkinOrder, validatePortalConfig } from "../scripts/lib.mjs";
 import { buildFixture, commitFixture, configureFixture, runLocalAdapter, selfContainedPortalFixture } from "./portal-fixture.mjs";
-import { inlineScripts, allowedInlineScripts, scriptSha256, prePaintHashes, PRE_PAINT_FIXTURE_FILE, REGENERATE } from "../scripts/runtime-scripts.mjs";
+import { inlineScripts, allowedInlineScripts, scriptSha256, prePaintHashes, runtimeScriptsFailure, PRE_PAINT_FIXTURE_FILE, REGENERATE } from "../scripts/runtime-scripts.mjs";
 import { prePaintScript } from "../scripts/runtime-scripts.mjs";
 import { PORTAL_THEMES } from "../scripts/lib.mjs";
 import committedScripts from "../scripts/runtime-scripts.json" with { type: "json" };
@@ -52,11 +52,24 @@ test('the committed pre-paint hashes and fixture are the generator output for ev
   assert.equal(fixture.sha256, scriptSha256(fixture.script));
   assert.equal(fixture.sha256, committedScripts.pre_paint_sha256[fixture.theme]);
   for (const theme of PORTAL_THEMES) assert.ok(allowedInlineScripts(theme).has(scriptSha256(prePaintScript(theme))), theme);
-  assert.throws(() => allowedInlineScripts('ink'), /records no pre-paint script hash for theme "ink"; regenerate it: /);
-  assert.throws(() => allowedInlineScripts('__proto__'), /records no pre-paint script hash for theme "__proto__"/);
-  const { pre_paint_sha256: _, ...old } = committedScripts;
-  assert.throws(() => allowedInlineScripts('signal', { ...old, schema_version: 1 }), /has schema_version 1, not 2; regenerate it: /);
-  assert.throws(() => allowedInlineScripts('signal', { ...committedScripts, pre_paint_sha256: { ...committedScripts.pre_paint_sha256, signal: 'abc' } }), /records no pre-paint script hash for theme "signal"/);
+});
+
+// The browser gate reads a runtime script list as the Rust validator does:
+// both run these shared cases and must give exactly the recorded reason, so
+// neither accepts a list the other refuses (figures.rs,
+// runtime_script_list_fails_closed_like_the_starter_reader).
+test('the runtime script list reader refuses what the Rust validator refuses, with the same reason', async () => {
+  const { cases } = JSON.parse(await readFile(path.join(import.meta.dirname, 'fixtures/runtime-scripts-cases.json'), 'utf8'));
+  assert.ok(cases.length >= 10);
+  const at = (root, pointer) => pointer.split('/').slice(1).reduce((node, key) => node[key], root);
+  for (const { name, theme, set = {}, remove = [], error } of cases) {
+    const list = structuredClone(committedScripts);
+    for (const [pointer, value] of Object.entries(set)) { const cut = pointer.lastIndexOf('/'); at(list, pointer.slice(0, cut))[pointer.slice(cut + 1)] = value; }
+    for (const pointer of remove) { const cut = pointer.lastIndexOf('/'); delete at(list, pointer.slice(0, cut))[pointer.slice(cut + 1)]; }
+    assert.equal(runtimeScriptsFailure(theme, list), error, name);
+    if (error === null) assert.ok(allowedInlineScripts(theme, list).has(committedScripts.pre_paint_sha256[theme]), name);
+    else assert.throws(() => allowedInlineScripts(theme, list), { message: `the runtime's inline script list scripts/runtime-scripts.json cannot be read: ${error}` }, name);
+  }
 });
 
 test('canonical and compatibility portal themes build the same skin order', { timeout: 120_000 }, async () => {

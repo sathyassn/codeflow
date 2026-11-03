@@ -126,7 +126,7 @@
     },
     "scripts/runtime-scripts.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "55311847536cc042a1579489899902afb2171826e6245951e3242d93665220de"
+      "pristine_sha256": "9ef88e9877804b944a6441a7bf936f21d030579844d26af8ca8501ef6af89330"
     },
     "scripts/site-server.mjs": {
       "ownership": "managed",
@@ -226,7 +226,7 @@
     },
     "tests/chrome.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "9f7acefe22129784c737903568f96b5288536106480aec6c7dc6f4e7329b9c94"
+      "pristine_sha256": "96a65c878596234bab7725d9a732542fbc53946efefb3faba96fae67954f9694"
     },
     "tests/composition-browser.test.mjs": {
       "ownership": "managed",
@@ -387,6 +387,10 @@
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",
       "pristine_sha256": "0b442af14a23ccd4a3636d0c1cb7e3c43f24aab07313bda13ea136fcf5cd290a"
+    },
+    "tests/fixtures/runtime-scripts-cases.json": {
+      "ownership": "managed",
+      "pristine_sha256": "16dcdcad47a668c87f6539eb454042a32f0fb6cc0d7037fd6d399b9da8465e4e"
     },
     "tests/page-anatomy-browser.test.mjs": {
       "ownership": "managed",

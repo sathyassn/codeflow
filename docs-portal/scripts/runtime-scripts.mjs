@@ -50,14 +50,37 @@ export function prePaintHashes(list = committed) {
   return Object.fromEntries(PORTAL_THEMES.map((theme) => [theme, scriptSha256(prePaintScript(theme, list))]));
 }
 
+// What an owner does about a list from before version 2. The old generator
+// keeps the committed schema_version, so regenerating alone writes version 1
+// again: the version 2 generator comes first. The Rust validator gives the
+// same reason (crates/codeflow-core/src/validate/portal/figures.rs).
+export const SCHEMA_UPGRADE = `adopt the version ${RUNTIME_SCRIPTS_SCHEMA} generator first (\`codeflow update\` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: ${REGENERATE}; see the changelog entry "The portal's runtime script list is version ${RUNTIME_SCRIPTS_SCHEMA}"`;
+
+// Why a runtime script list cannot be read for a theme, or null when it can.
+// The checks and their order match the Rust validator's, so the browser gate
+// and `validate --portal` accept and refuse the same lists with the same reason.
+export function runtimeScriptsFailure(theme, list) {
+  const version = list?.schema_version;
+  if (version !== RUNTIME_SCRIPTS_SCHEMA) return `it has schema_version ${Number.isSafeInteger(version) && version >= 0 ? version : "none"}, and this codeflow reads version ${RUNTIME_SCRIPTS_SCHEMA}; ${SCHEMA_UPGRADE}`;
+  const hashes = list.pre_paint_sha256;
+  if (!hashes || typeof hashes !== "object" || Array.isArray(hashes)) return `it records no pre-paint script hashes; regenerate it: ${REGENERATE}`;
+  const recorded = Object.keys(hashes).sort();
+  const themes = [...PORTAL_THEMES].sort();
+  if (recorded.join("\n") !== themes.join("\n")) return `its pre-paint script hashes name the themes ${recorded.join(", ")}, not ${themes.join(", ")}; regenerate it: ${REGENERATE}`;
+  const prePaint = Object.hasOwn(hashes, theme) ? hashes[theme] : undefined;
+  if (typeof prePaint !== "string" || !SHA256.test(prePaint)) return `it records no pre-paint script hash for the theme ${JSON.stringify(theme)}; regenerate it: ${REGENERATE}`;
+  if (!Array.isArray(list.scripts)) return "it lists no scripts";
+  if (!list.scripts.every((script) => typeof script?.sha256 === "string" && SHA256.test(script.sha256))) return "a script entry has no sha256";
+  return null;
+}
+
 // The hashes an inline script outside the page content may have: the fixed
-// scripts and the recorded pre-paint hash for the theme. An older list, or
-// one with no hash for the theme, is refused rather than read loosely.
+// scripts and the recorded pre-paint hash for the theme. A list the reader
+// cannot read exactly is refused rather than read loosely.
 export function allowedInlineScripts(theme, list = committed) {
-  if (list?.schema_version !== RUNTIME_SCRIPTS_SCHEMA) throw new Error(`${RUNTIME_SCRIPTS_FILE} has schema_version ${list?.schema_version}, not ${RUNTIME_SCRIPTS_SCHEMA}; regenerate it: ${REGENERATE}`);
-  const prePaint = Object.hasOwn(list.pre_paint_sha256 ?? {}, theme) ? list.pre_paint_sha256[theme] : undefined;
-  if (typeof prePaint !== "string" || !SHA256.test(prePaint)) throw new Error(`${RUNTIME_SCRIPTS_FILE} records no pre-paint script hash for theme ${JSON.stringify(theme)}; regenerate it: ${REGENERATE}`);
-  return new Set([...list.scripts.map((script) => script.sha256), prePaint]);
+  const failure = runtimeScriptsFailure(theme, list);
+  if (failure) throw new Error(`the runtime's inline script list ${RUNTIME_SCRIPTS_FILE} cannot be read: ${failure}`);
+  return new Set([...list.scripts.map((script) => script.sha256), list.pre_paint_sha256[theme]]);
 }
 
 // The inline scripts of a built page, in order.

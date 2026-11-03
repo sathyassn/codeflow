@@ -395,6 +395,10 @@
       "ownership": "managed"
     },
     {
+      "path": "tests/fixtures/runtime-scripts-cases.json",
+      "ownership": "managed"
+    },
+    {
       "path": "tests/page-shapes.mjs",
       "ownership": "managed"
     },
