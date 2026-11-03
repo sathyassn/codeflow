@@ -181,8 +181,9 @@ try {
   recordBrowserVersion(context);
   observeContext(context, requests, responses, consoleErrors, observerTasks);
   const browserProcessesV1 = await waitForProfileProcess(browserProfileV1);
-  // Trace DOM snapshots run scripts in every frame, which scriptless measuring
-  // sandboxes refuse. They are diagnostic, not an assertion; keep screenshots.
+  // Sandboxed scriptless frames refuse the trace snapshot streamer. The .state
+  // probe at 4804477cc found 40 of 43 blocked events followed captureSnapshot.
+  // DOM snapshots are diagnostic, not an assertion; keep screenshots and traces.
   await context.tracing.start({ screenshots: true, snapshots: false, sources: false });
   tracingStarted = true;
   const page = context.pages()[0] ?? await context.newPage();
@@ -320,8 +321,9 @@ try {
   recordBrowserVersion(context);
   observeContext(context, requests, responses, consoleErrors, observerTasks);
   const browserProcessesV2 = await waitForProfileProcess(browserProfileV2);
-  // Trace DOM snapshots run scripts in every frame, which scriptless measuring
-  // sandboxes refuse. They are diagnostic, not an assertion; keep screenshots.
+  // Sandboxed scriptless frames refuse the trace snapshot streamer. The .state
+  // probe at 4804477cc found 40 of 43 blocked events followed captureSnapshot.
+  // DOM snapshots are diagnostic, not an assertion; keep screenshots and traces.
   await context.tracing.start({ screenshots: true, snapshots: false, sources: false });
   tracingStarted = true;
   const revisedPage = context.pages()[0] ?? await context.newPage();
