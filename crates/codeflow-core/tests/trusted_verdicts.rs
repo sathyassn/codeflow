@@ -99,6 +99,10 @@ fn only_pull_request_target_workflows_emit_a_trusted_name() {
                 name, "commit standards",
                 "{path} job {id} still produces the old name"
             );
+            assert_ne!(
+                name, "secret scan",
+                "{path} job {id} still produces the old scan name"
+            );
             if name.starts_with("trusted: ") {
                 assert_eq!(
                     events(&workflow),
@@ -192,15 +196,19 @@ fn the_policy_workflows_declare_their_trusted_names() {
     };
     assert_eq!(
         declared("assets/base/ci/codeflow-policy.yml"),
-        ["trusted: commit standards"]
+        ["trusted: commit standards", "trusted: secret scan"]
     );
     assert_eq!(
         declared(".codeflow/.baseline/.github/workflows/codeflow-policy.yml"),
-        ["trusted: commit standards"]
+        ["trusted: commit standards", "trusted: secret scan"]
     );
     assert_eq!(
         declared(".github/workflows/codeflow-policy.yml"),
-        ["trusted: commit standards", "trusted: release impact"]
+        [
+            "trusted: commit standards",
+            "trusted: release impact",
+            "trusted: secret scan",
+        ]
     );
 }
 
@@ -252,6 +260,81 @@ fn every_verdict_job_runs_only_the_default_branch_code() {
                 assert!(text.contains("--codeflow-bin target/release/codeflow"));
                 assert!(text.contains("CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}"));
                 assert!(!text.contains("github.event.pull_request.body"));
+            }
+        }
+    }
+}
+
+/// TSK-1176 AC-1/2/4/5: every event class gets the correct producer and
+/// authority inputs. The shell fixture exercises the extracted scan body
+/// with real Git and gitleaks; these assertions cover GitHub's wiring.
+#[test]
+fn scan_events_bind_authority_and_keep_the_pr_head_as_data() {
+    for (path, workflow) in workflows() {
+        let Some(job) = workflow["jobs"].get("secret-scan") else {
+            continue;
+        };
+        let steps = job["steps"].as_sequence().unwrap();
+        let scan = steps
+            .iter()
+            .find(|step| step["name"].as_str() == Some("gitleaks"))
+            .unwrap();
+        assert_eq!(
+            scan["env"]["TRUSTED_SHA"].as_str(),
+            Some("${{ github.sha }}"),
+            "{path}"
+        );
+        assert_eq!(
+            scan["env"]["SCAN_HEAD"].as_str(),
+            Some("${{ github.event.pull_request.head.sha || github.sha }}"),
+            "{path}"
+        );
+        assert_eq!(
+            scan["env"]["PR_BASE"].as_str(),
+            Some("${{ github.event.pull_request.base.sha || '' }}"),
+            "{path}"
+        );
+        assert_eq!(
+            scan["env"]["SCAN_FROM"].as_str(),
+            Some("${{ github.event.pull_request.base.sha || github.event.before || '' }}"),
+            "{path}"
+        );
+        let run = scan["run"].as_str().unwrap();
+        assert!(
+            run.find("export GIT_NO_REPLACE_OBJECTS=1").unwrap()
+                < run.find("git cat-file").unwrap(),
+            "{path}"
+        );
+        assert!(run.contains("--min-parents=3"), "{path}");
+        assert!(
+            run.contains("log -1 -p --diff-merges=first-parent"),
+            "{path}"
+        );
+        assert!(!run.contains("rm -f .gitleaks"), "{path}");
+        assert!(
+            !run.contains("${{"),
+            "{path}: expressions must enter through env"
+        );
+        if events(&workflow) == ["pull_request_target"] {
+            assert_eq!(job["name"].as_str(), Some("trusted: secret scan"), "{path}");
+            assert!(job.get("if").is_none(), "{path}");
+            assert_eq!(
+                job["env"]["GIT_NO_REPLACE_OBJECTS"].as_str(),
+                Some("1"),
+                "{path}"
+            );
+        } else {
+            assert_eq!(job["name"].as_str(), Some("history scan"), "{path}");
+            assert_eq!(
+                job["if"].as_str(),
+                Some("github.event_name != 'pull_request'"),
+                "{path}"
+            );
+            for event in ["push", "schedule", "workflow_dispatch"] {
+                assert!(
+                    events(&workflow).contains(&event.to_owned()),
+                    "{path}: {event}"
+                );
             }
         }
     }
