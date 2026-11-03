@@ -317,7 +317,7 @@ fn chrome_and_figure_sheets_carry_no_literal_colour() {
     );
 }
 
-/// The kit is one set of eight files, byte-identical in both skills, their
+/// The kit has generated files and a source directory, byte-identical in both skills, their
 /// harness mirrors and the update baselines.
 #[test]
 fn kit_copies_are_byte_identical_across_skills_and_mirrors() {
