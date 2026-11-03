@@ -3756,8 +3756,9 @@ mod old_binary_fence_tests {
         assert!(start.elapsed() < Duration::from_secs(2), "no wait");
         assert_eq!(refused.path, dirs[0].join(LOCK_FILE));
         let message = refused.to_string();
+        let expected_dir = crate::git::display_line(&trimmed_dir(&work.display().to_string()));
         assert!(
-            message.contains(&format!("pid {pid} in {}", work.display())),
+            message.contains(&format!("pid {pid} in {expected_dir}")),
             "{message}"
         );
         assert!(!message.contains("999999"), "{message}");
