@@ -1,0 +1,11 @@
+id = "EPC-032"
+uid = "3311952e-2fb5-4fce-a6fd-ad00d4200e12"
+kind = "EPC"
+title = "Seats run autonomously under their sandboxes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T15:56:37Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
