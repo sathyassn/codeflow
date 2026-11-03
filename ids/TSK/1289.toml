@@ -1,0 +1,11 @@
+id = "TSK-1289"
+uid = "fd7f5f5c-2d99-47c7-b269-52aabfb6b687"
+kind = "TSK"
+title = "The local gate reports a host browser fault as not runnable here, not as a failure"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T16:22:35Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
