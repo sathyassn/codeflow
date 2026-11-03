@@ -1,0 +1,11 @@
+id = "TSK-1281"
+uid = "7a954dc3-10c1-4397-83e3-d77452d9d37e"
+kind = "TSK"
+title = "Local checks name the cargo tests that guard the paths a change touches"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T13:39:25Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
