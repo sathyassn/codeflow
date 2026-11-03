@@ -1,6 +1,7 @@
 #!/bin/sh
-# Add the manual Linux measurement job, commit it and push the task branch.
-# The Director reads this script and releases the push hold before running it.
+# Add the manual Linux measurement job and commit it locally.
+# The Director reads this script before running it. Push is a separate step
+# for the operator after the Director releases the push hold.
 # Pass the reviewed task head and the approved line base as full commit SHAs.
 # Both pins are checked against live refs; a moved ref requires a new review.
 # This prepares the comparison only. It does not switch the integration tier.
@@ -47,7 +48,7 @@ git apply --check target/task-evidence/codeflow-ci.yml.patch
 git apply target/task-evidence/codeflow-ci.yml.patch
 git add .github/workflows/codeflow-ci.yml
 git commit -m 'ci: add manual Linux coverage comparison'
-git push origin "HEAD:refs/heads/$branch"
 printf 'New head: %s\n' "$(git rev-parse HEAD)"
-printf 'Pushed ref: refs/heads/%s\n' "$branch"
 git diff --stat "$expected_head" HEAD
+printf 'Nothing was pushed. After the Director releases the push hold, run:\n'
+printf 'git push origin HEAD:refs/heads/%s\n' "$branch"
