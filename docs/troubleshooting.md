@@ -213,72 +213,42 @@ Direct commands outside the wrapper and other applications also
 consume resources that the job budget does not see. Declared heavy targets
 and reserved commands end their process groups when the controller exits.
 On Unix, other targets can outlive a killed gate; their slot counts as
-busy until they end. Every target of an admitted run inherits the
-gate's hold on `full-gate.lock`, so an older gate (below) stays out while any process of
-the target that kept it still runs.
+busy until they end.
 
 #### Older CodeFlow binaries on the same machine
 
-A 3.1 gate, or a build of the 4.0 line from before TSK-1145 (heavy runs
-share the host by capacity), locks `full-gate.lock` exclusively and runs
-alone. Every 4.0 run with this change holds `full-gate.lock` shared for its
-whole life, in both lock folders, before it takes a slot. So the two never
-run at the same time, in either order:
+A 3.1 gate, or a 4.0 line build from before TSK-1145, locks
+`full-gate.lock` exclusively and runs alone. Every 4.0 run holds it shared
+for its whole life, in both lock folders, before it takes a slot, so the
+two never run at the same time, in either order.
 
-- An older gate started while a 4.0 run is active refuses, as it refuses
-  beside another older gate (an older 4.0 line build told to wait waits
-  instead). It names the holder from its usual record:
-  - A 3.1 gate reads the text inside `full-gate.lock`. 4.0 runs never
-    write it, so while it is empty the 3.1 gate says the holder has not
-    recorded itself; when a killed 3.1 gate left its record there, it names
-    that gate.
-  - An older 4.0 line build reads `full-gate.record`, which names the last
-    admitted 4.0 run. That run may have ended, since no release rewrites
-    the record.
-- So an older gate's refusal can name a run that has ended. To see what is
-  recorded, run `codeflow test --lock-status` with a 4.0 binary, or read
-  the slot records `full-gate-<n>.record` beside `full-gate-<n>.lock`: they
-  show the recorded slots and target groups. The status line for
-  `full-gate.lock` itself says it is the last recorded holder. The stale
-  name goes away when an older gate next gets the lock, once no 4.0 run is
-  active: a 3.1 gate replaces the text inside `full-gate.lock`, and an
-  older 4.0 line build replaces `full-gate.record`.
-- On Unix every target of an admitted 4.0 run inherits the run's shared
-  hold on `full-gate.lock`, so older gates stay out while any process of the
-  target that kept it runs: after the gate ends, after it is killed, and
-  for grandchildren too. Its limits:
-  - A daemon that closes the descriptors it inherited does not keep the
-    hold, so an older gate can start beside it.
-  - A daemon that keeps them (for example a build cache server a target
-    starts) keeps older gates out until it exits. New runs are not
-    affected. Stop the daemon to let an older gate in.
-  - A target that unlocks the inherited descriptor itself releases the
-    hold for every process sharing it.
-  - On NFS, Linux emulates this lock with per-process locks, so the hold
-    ends with the gate even while its targets run.
-- On Windows, a target and all its descendants end when the gate exits or
-  is killed (a kill-on-close job object), so nothing outlives the hold.
-- A 4.0 run started while an older gate is active refuses at once with
-  `an older CodeFlow binary's gate is running on this machine`, naming its
-  last recorded holder. It takes no slot, starts nothing and does not
-  wait; run it again when that gate ends. The same happens while targets a
-  killed older gate started still run, since they run alone as their gate
-  did: the refusal names their process groups.
-- A 4.0 run that cannot open or lock `full-gate.lock` for any other reason
-  refuses with `gate lock unavailable`, naming the file.
+| Situation | What happens |
+|---|---|
+| An older gate starts while a 4.0 run is active | It refuses, as it refuses beside another older gate; an older 4.0 line build told to wait waits instead |
+| A 3.1 gate names the holder | It reads the text inside `full-gate.lock`. 4.0 runs never write it, so the 3.1 gate says the holder has not recorded itself, or names a killed 3.1 gate that left its record there |
+| An older 4.0 line build names the holder | It reads `full-gate.record`, which names the last admitted 4.0 run. That run may have ended, since no release rewrites the record |
+| You want to see what is recorded | Run `codeflow test --lock-status` with a 4.0 binary, or read the slot records `full-gate-<n>.record`: they show the recorded slots and target groups, and the line for `full-gate.lock` says it is the last recorded holder. The stale name goes away when an older gate next gets the lock, once no 4.0 run is active: a 3.1 gate replaces the text inside `full-gate.lock`, and an older 4.0 line build replaces `full-gate.record` |
+| A 4.0 run starts while an older gate is active | It refuses at once with `an older CodeFlow binary's gate is running on this machine`, naming the last recorded holder. It takes no slot, starts nothing and does not wait; run it again when that gate ends |
+| Targets a killed older gate started still run | A 4.0 run refuses the same way and names their process groups, since they run alone as their gate did |
+| A 4.0 run cannot open or lock `full-gate.lock` for any other reason | It refuses with `gate lock unavailable`, naming the file |
 
-A 4.0 line build that includes TSK-1145 but not this change is not fenced
-out. When it finds `full-gate.lock` busy, it takes a later slot instead,
-so it runs beside a 4.0 run with this change. Before running a build with
-this change on a machine, let every run of such a build end, or rebuild
-those binaries from a line that has this change. No released version is
-such a build.
+The hold lasts as long as the targets of the run that took it:
 
-Upgrading needs no other cleanup. The lock files and records an earlier
-4.0 line build left, `full-gate.lock`, `full-gate.record` and the slot
-files, are read as they are: stale records are reclaimed, and a run of that
-build still holding a slot from 1 up counts as a run. A run of that build
-holding `full-gate.lock` itself is treated as an older gate.
+| Case | Effect on older gates |
+|---|---|
+| Unix: every target of an admitted 4.0 run | Inherits the run's shared hold on `full-gate.lock`, so older gates stay out while any process of the target that kept it runs: after the gate ends, after it is killed, and for grandchildren too |
+| Windows | A target and all its descendants end when the gate exits or is killed (a kill-on-close job object), so nothing outlives the hold |
+| A daemon that closes the descriptors it inherited | It does not keep the hold, so an older gate can start beside it |
+| A daemon that keeps them, such as a build cache server a target starts | Older gates stay out until it exits; new runs are not affected. Stop the daemon to let an older gate in |
+| A target that unlocks the inherited descriptor itself | The hold ends for every process sharing it |
+| A lock folder on NFS | Linux emulates this lock with per-process locks, so the hold ends with the gate even while its targets run |
+
+Upgrading from an earlier 4.0 line build:
+
+| Case | What to do |
+|---|---|
+| A build that includes TSK-1145 but not this change | It is not fenced out: when it finds `full-gate.lock` busy it takes a later slot, so it runs beside this version. Let every run of such a build end, or rebuild it from a line that has this change, before running this version on the machine. No released version is such a build |
+| Lock files and records such a build left | No cleanup: `full-gate.lock`, `full-gate.record` and the slot files are read as they are. Stale records are reclaimed, a run of that build still holding a slot from 1 up counts as a run, and one holding `full-gate.lock` itself is treated as an older gate |
 
 ### Fix a failing check
 

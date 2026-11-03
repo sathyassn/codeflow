@@ -1130,7 +1130,9 @@ pub struct HostExclusive {
     /// called this (TSK-1256). The target inherits it ([`fence_copies`]);
     /// it closes after the host, never unlocked.
     fences: Vec<(PathBuf, FenceFile)>,
-    /// This hold's entry in the registry [`fence_copies`] reads.
+    /// This hold's entry in the registry [`fence_copies`] reads; Unix only,
+    /// since targets inherit fences only there.
+    #[cfg(unix)]
     id: u64,
 }
 
@@ -1324,6 +1326,7 @@ fn held_exclusively(
     let mut hold = HostExclusive {
         files: taken,
         fences,
+        #[cfg(unix)]
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
     };
     for (_, fence) in &mut hold.fences {
@@ -2210,14 +2213,24 @@ fn parse_record(text: &str, trusted: &[String]) -> Result<String, String> {
     Ok(out)
 }
 
+/// The record a run writes beside its slot and fence. A project path that
+/// holds a control character, such as a line break, is left out: written
+/// raw it would split the record into lines that every reader, this
+/// binary's included, refuses as unreadable, and the slot could not be
+/// cleared or taken again. Readers show a missing folder as unknown.
 fn holder_record(project_dir: &Path, mode: &str) -> String {
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
+    let dir = project_dir.display().to_string();
+    let dir = if dir.is_empty() || dir.chars().any(char::is_control) {
+        String::new()
+    } else {
+        format!("dir={dir}\n")
+    };
     format!(
-        "pid={}\nstarted={started}\ndir={}\nmode={mode}\n",
-        std::process::id(),
-        project_dir.display()
+        "pid={}\nstarted={started}\n{dir}mode={mode}\n",
+        std::process::id()
     )
 }
 
@@ -2755,6 +2768,23 @@ mod tests {
         );
         let record = std::fs::read_to_string(record_path(&dir.join(slot_file(1)))).unwrap();
         assert!(record.contains(&format!("pid={}", std::process::id())));
+    }
+
+    /// A project path with a line break must not leave a record that the
+    /// next run, which reads every record and fails closed, cannot parse:
+    /// the run's own release and the next admission both read it.
+    #[test]
+    fn a_project_path_with_a_line_break_leaves_a_record_the_next_run_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("locks");
+        std::fs::create_dir_all(&dir).unwrap();
+        let hostile = Path::new("/w/ev\ncodeflow test: passed");
+        let record = holder_record(hostile, "full");
+        assert!(parse_record(&record, &[]).is_ok(), "{record:?}");
+        let first = acquire_full_gate_lock(std::slice::from_ref(&dir), hostile).unwrap();
+        drop(first);
+        let next = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"));
+        assert!(next.is_ok(), "{:?}", next.err());
     }
 
     #[cfg(unix)]
