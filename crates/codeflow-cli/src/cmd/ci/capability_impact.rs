@@ -200,17 +200,33 @@ fn join_legacy_identities(
             continue;
         }
         // Unconverted legacy entries keep their existing identity.
-        if after.records.iter().any(|record| {
-            record.uid.is_none() && record.entry.id == previous.entry.id
-        }) {
+        if after
+            .records
+            .iter()
+            .any(|record| record.uid.is_none() && record.entry.id == previous.entry.id)
+        {
             continue;
         }
-        let candidates: Vec<_> = after.records.iter().filter(|record| {
-            record.uid.is_some() && (record.entry.id == previous.entry.id
-                || record.former_ids.contains(&previous.entry.id))
-        }).collect();
-        if candidates.len() != 1 {
-            return Err(format!("{} identity removed or replaced; migration needs exactly one matching record", previous.entry.id));
+        let candidates: Vec<_> = after
+            .records
+            .iter()
+            .filter(|record| {
+                record.uid.is_some()
+                    && (record.entry.id == previous.entry.id
+                        || record.former_ids.contains(&previous.entry.id))
+            })
+            .collect();
+        if candidates.is_empty() {
+            return Err(format!(
+                "{} identity removed or replaced; deprecate it instead of deleting it",
+                previous.entry.id
+            ));
+        }
+        if candidates.len() > 1 {
+            return Err(format!(
+                "{} migration is ambiguous: several records claim its legacy identity",
+                previous.entry.id
+            ));
         }
         // Retarget preserves UID but binds the new number; former_ids supplies
         // the old-to-current ID edge, never a substitute for the UID binding.
@@ -224,17 +240,29 @@ fn join_legacy_identities(
     }
     let numbers: Vec<_> = pending.iter().map(|(_, number, _)| *number).collect();
     let (sha, bindings) = codeflow_core::capability::impact::registry_bindings(root, &numbers)?;
-    let mut identities: BTreeSet<_> = before.records.iter().filter_map(|record| record.uid.clone()).collect();
+    let mut identities: BTreeSet<_> = before
+        .records
+        .iter()
+        .filter_map(|record| record.uid.clone())
+        .collect();
+    let mut joins = Vec::new();
     for ((index, _, candidate), uid) in pending.into_iter().zip(bindings) {
         if candidate.uid.as_ref() != Some(&uid) {
-            return Err(format!("{} migration UID disagrees with registry at {sha}", before.records[index].entry.id));
+            return Err(format!(
+                "{} migration UID disagrees with registry at {sha}",
+                before.records[index].entry.id
+            ));
         }
         if !identities.insert(uid.clone()) {
             return Err(format!("duplicate migration UID {uid} at registry {sha}"));
         }
+        joins.push(format!(
+            "join {} -> {} uid {uid} registry {sha}",
+            before.records[index].entry.id, candidate.entry.id
+        ));
         before.records[index].uid = Some(uid);
     }
-    Ok(Some(sha))
+    Ok(Some(format!("{sha}; {}", joins.join("; "))))
 }
 
 fn normalize(value: &str) -> String {

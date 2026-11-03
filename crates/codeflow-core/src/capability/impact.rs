@@ -148,36 +148,50 @@ pub fn registry_bindings(root: &Path, numbers: &[u64]) -> Result<(String, Vec<St
             .get_name(directory)
             .ok_or_else(|| format!("registry at {sha} lacks {directory}"))?;
         if entry.filemode() != 0o040_000 {
-            return Err(format!("registry at {sha}: {directory} must be a directory"));
+            return Err(format!(
+                "registry at {sha}: {directory} must be a directory"
+            ));
         }
         let id = entry.id();
         drop(entry);
-        tree = super::bounded_catalog_tree(&repo, id, directory)
-            .map_err(|error| error.to_string())?;
+        tree =
+            super::bounded_catalog_tree(&repo, id, directory).map_err(|error| error.to_string())?;
     }
     let mut bindings = Vec::with_capacity(numbers.len());
     let mut total_bytes = 0usize;
     for &number in numbers {
         let path = crate::ids::RegId::canonical(crate::ids::Kind::Cap, number).registry_path();
-        let filename = path.rsplit('/').next().ok_or("invalid capability registry path")?;
+        let filename = path
+            .rsplit('/')
+            .next()
+            .ok_or("invalid capability registry path")?;
         let entry = tree
             .get_name(filename)
             .ok_or_else(|| format!("registry at {sha} lacks {path}"))?;
         if entry.filemode() != 0o100_644 {
             return Err(format!("registry at {sha}: {path} must be a regular blob"));
         }
-        let (size, kind) = repo.odb().and_then(|odb| odb.read_header(entry.id()))
+        let (size, kind) = repo
+            .odb()
+            .and_then(|odb| odb.read_header(entry.id()))
             .map_err(|error| error.to_string())?;
-        if kind != git2::ObjectType::Blob || size > crate::ids::entry::CAPABILITY_BINDING_MAX_BYTES {
-            return Err(format!("registry at {sha}: {path} exceeds the binding blob limit"));
+        if kind != git2::ObjectType::Blob || size > crate::ids::entry::CAPABILITY_BINDING_MAX_BYTES
+        {
+            return Err(format!(
+                "registry at {sha}: {path} exceeds the binding blob limit"
+            ));
         }
         total_bytes = total_bytes.saturating_add(size);
         if total_bytes > super::CAPABILITY_MAX_TREE_BYTES {
             return Err("capability bindings exceed the aggregate catalog byte limit".into());
         }
-        let blob = repo.find_blob(entry.id()).map_err(|error| error.to_string())?;
-        bindings.push(crate::ids::capability_uid_from_blob(number, blob.content())
-            .map_err(|error| format!("registry at {sha}: {path}: {error}"))?);
+        let blob = repo
+            .find_blob(entry.id())
+            .map_err(|error| error.to_string())?;
+        bindings.push(
+            crate::ids::capability_uid_from_blob(number, blob.content())
+                .map_err(|error| format!("registry at {sha}: {path}: {error}"))?,
+        );
     }
     Ok((sha, bindings))
 }
