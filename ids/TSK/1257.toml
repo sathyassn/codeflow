@@ -1,0 +1,11 @@
+id = "TSK-1257"
+uid = "023adb2b-fe73-4211-947a-d7f4dd28110b"
+kind = "TSK"
+title = "codeflow ci judges task records from the commits under judgment, not the working tree"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T00:30:43Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
