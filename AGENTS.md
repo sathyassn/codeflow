@@ -143,13 +143,13 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
   - The candidate lands when its own hosted "codeflow gates" and "windows"
     verdicts are green and the line's current tip, which it was built on,
     has green verdicts too.
-  - Recovery exception: while the tip is red or lacks evidence, the only
-    candidate allowed is one that carries the repair of the failure, or the
-    work needed to produce the evidence, such as a workflow fix without
-    which the jobs cannot run. Such a fix does not skip, weaken or remove
-    the failing check, and it still takes its own review. That candidate
-    lands on its own green verdicts; other ready pull requests may ride on
-    it.
+  - Recovery exception: while the tip is red or lacks evidence, a candidate
+    may carry only the repair of the failure and the work needed to produce
+    the evidence, such as a workflow fix without which the jobs cannot run;
+    other ready pull requests wait for the next candidate. Such a fix does
+    not skip, weaken or remove the failing check, and it still takes its own
+    review and its candidate's full gate. After such a landing, the next
+    candidate waits for green verdicts on the new tip.
   - Pending (a run still in progress) is not green: wait for it.
   - Cancelled, skipped and missing (no run for the candidate or the tip) are
     not green: start or rerun the run. A skip counts only when it is a reuse
