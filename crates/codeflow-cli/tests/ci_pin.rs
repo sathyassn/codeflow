@@ -2037,16 +2037,9 @@ fn judge_a_forged_head(head_pin: &str) {
     let call = "--policy-from \"$AUTHORITY_SHA\" --baseline-from \"$AUTHORITY_SHA\"\n";
     let end = start + POLICY[start..].find(call).expect("the verdict call") + call.len();
     assert!(POLICY[start..end].contains("\n          codeflow ci --base \"$BASE_SHA\""));
-    let forged = format!(
-        "{}        run: exit 0\n{}",
-        &POLICY[..start],
-        &POLICY[end..]
-    );
+    let forged = [&POLICY[..start], "        run: exit 0\n", &POLICY[end..]].concat();
     assert_ne!(forged, POLICY);
-    assert!(
-        !forged.contains("codeflow ci --base"),
-        "the forged head never judges"
-    );
+    assert!(!forged.contains("codeflow ci --base"), "never judges");
     std::fs::write(origin.join(".github/workflows/codeflow-policy.yml"), forged).unwrap();
     std::fs::write(
         origin.join(".codeflow/project.toml"),
