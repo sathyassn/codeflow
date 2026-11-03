@@ -982,9 +982,14 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
             self.BROWSERS, "if timeout --kill-after=30s 10m echo skip; npx playwright install chromium"))
 
     def test_an_added_install_through_a_variable_is_refused(self):
-        self.assertEqual(WORKFLOW.count(self.CLI), 1)
-        self.assert_unpinned(WORKFLOW.replace(
-            self.CLI, self.CLI + '          PW=playwright\n          npx "$PW" install chromium\n'))
+        jobs = parity.jobs_section(WORKFLOW)
+        for name in ("gates", "gates-release"):
+            with self.subTest(job=name):
+                job = jobs[name]
+                self.assertEqual(job.count(self.CLI), 1)
+                changed = job.replace(
+                    self.CLI, self.CLI + '          PW=playwright\n          npx "$PW" install chromium\n')
+                self.assert_unpinned(WORKFLOW.replace(job, changed))
 
     def test_a_new_step_naming_playwright_is_refused(self):
         step = ("      - name: Warm the Playwright cache\n        if: matrix.part == 'present'\n"
@@ -1049,6 +1054,47 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
         self.assertEqual(WORKFLOW.count(windows), 1)
         self.assert_problem(WORKFLOW.replace(windows, "      - name: Install Playwright\n        run: npx playwright-core install\n" + windows),
                             "job 'windows-tests'", "Playwright step")
+
+
+class LineAptCacheControls(unittest.TestCase):
+    """TSK-1263: the line produces the exact apt cache the decider needs."""
+
+    def test_line_present_produces_the_release_apt_key(self):
+        jobs = parity.jobs_section(WORKFLOW)
+        line = jobs["gates"]
+        release = jobs["gates-release"]
+        key = "key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}"
+        self.assertIn(key, line)
+        self.assertIn(key, release)
+        self.assertIn("path: ~/.cache/playwright-apt", line)
+        self.assertIn('echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}"', line)
+        self.assertIn("packages['node_modules/playwright-core'].version", line)
+        self.assertEqual(parity.playwright_problems(WORKFLOW), [])
+
+    def test_line_install_is_bounded_and_installs_only_system_dependencies(self):
+        steps = parity.LINE_APT_STEPS
+        self.assertEqual(len(steps), 3)
+        for step in steps:
+            self.assertIn("matrix.part == 'present' && github.event_name == 'push'", step)
+            self.assertIn("startsWith(github.ref, 'refs/heads/integration/')", step)
+            self.assertNotIn("restore-keys:", step)
+        install = steps[-1]
+        self.assertIn("steps.line-apt.outputs.cache-hit != 'true'", install)
+        self.assertIn("timeout-minutes: 25", install)
+        self.assertIn("for attempt in 1 2; do", install)
+        self.assertIn('sudo timeout --kill-after=30s 10m "$node" "$cli" install-deps chromium firefox webkit', install)
+        self.assertNotIn('"$cli" install ', install)
+        self.assertNotIn('--with-deps', install)
+        self.assertIn('sudo chown -R', install)
+
+    def test_missing_or_broadened_line_cache_preparation_is_refused(self):
+        step = parity.LINE_APT_STEPS[-1]
+        self.assertIn(step, WORKFLOW)
+        for replacement in ("", step.replace("github.event_name == 'push'", "true"),
+                            step.replace("10m", "60m"),
+                            step.replace("install-deps", "install")):
+            with self.subTest(replacement=replacement):
+                self.assertTrue(parity.playwright_problems(WORKFLOW.replace(step, replacement)))
 
 
 class EveryWorkflowTimeoutControls(unittest.TestCase):
