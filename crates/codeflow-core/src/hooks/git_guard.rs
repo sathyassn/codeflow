@@ -384,7 +384,7 @@ impl HookPayload {
     pub fn shell_command(&self) -> Option<&str> {
         if matches!(
             self.tool_name.as_str(),
-            "Bash" | "PowerShell" | "run_terminal_command"
+            "Bash" | "PowerShell" | "Monitor" | "run_terminal_command"
         ) {
             self.tool_input.command.as_deref()
         } else {
@@ -15680,6 +15680,16 @@ mod tests {
         let p = HookPayload::parse(json).unwrap();
         assert_eq!(p.shell_command(), Some("git status"));
         assert_eq!(p.cwd.as_deref(), Some(std::path::Path::new("/repo")));
+    }
+
+    #[test]
+    fn test_payload_parse_monitor_command_and_url_forms() {
+        let json = r#"{"tool_name":"Monitor","tool_input":{"command":"git status","description":"d","timeout_ms":1000,"persistent":false},"cwd":"/x"}"#;
+        let p = HookPayload::parse(json).unwrap();
+        assert_eq!(p.shell_command(), Some("git status"));
+        // A socket watch carries no shell text.
+        let json = r#"{"tool_name":"Monitor","tool_input":{"url":"wss://x.invalid/e"},"cwd":"/x"}"#;
+        assert_eq!(HookPayload::parse(json).unwrap().shell_command(), None);
     }
 
     #[test]
