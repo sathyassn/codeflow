@@ -451,3 +451,104 @@ fn git_operand_bodies_take_the_rule_of_the_call() {
         assert!(out.status.success(), "{out:?}");
     }
 }
+
+/// TSK-1052: readable sandbox settings and a relaxed text policy do not
+/// establish containment. These payloads are judged only; no fixture
+/// command is executed. This is protocol coverage, not a live harness run.
+#[test]
+fn same_line_writes_refuse_unread_runners_in_both_guards() {
+    let routes = [
+        "xargs python3 <<< fixture/out/helper.py",
+        "find fixture/out -name helper.py -exec python3 {} \\;",
+        "uv run python3 fixture/out/helper.py",
+        "poetry run python3 fixture/out/helper.py",
+        "bundle exec ruby fixture/out/helper.rb",
+        "npm exec -- node fixture/out/helper.js",
+        "setsid python3 fixture/out/helper.py",
+        "npx fixture_tool",
+        "awk 'BEGIN{system(\"fixture_tool\")}'",
+        "gawk 'BEGIN{system(\"fixture_tool\")}'",
+        "sed -e '1e fixture_tool' notes.txt",
+        "make -f fixture/out/Makefile",
+        "fixture_tool",
+    ];
+    let mut commands = Vec::new();
+    for runner in routes {
+        commands.push(format!("printf x > run; {runner}"));
+        commands.push(format!("cat > run <<'BODY'\nx\nBODY\n{runner}"));
+    }
+    commands.extend(
+        [
+            "cp -r fixture/src fixture/out; xargs python3 <<< fixture/out/helper.py",
+            "tar xf fixture/archive.tar -C fixture/out; python3 fixture/out/helper.py",
+            "unzip fixture/archive.zip -d fixture/out; python3 fixture/out/helper.py",
+            "ditto fixture/src fixture/out; python3 fixture/out/helper.py",
+            "cp fixture/source fixture/run; hash -p ./fixture/run fixture_tool; fixture_tool",
+            "printf x > run; chmod +x run; PATH=.:$PATH xargs run <<< a",
+            "printf x > run; PATH=.:$PATH xargs -I{} run {} <<< a",
+            "fixture_writer; fixture_tool",
+        ]
+        .map(str::to_owned),
+    );
+    let mut wrong = Vec::new();
+    for policy in [DEFAULT, RELAXED] {
+        for (case, tool, retry) in [
+            ("codex-readable-profile", "Bash", false),
+            ("claude-unverified-retry-field", "Bash", false),
+            ("claude-readable-sandbox-settings", "Bash", false),
+            ("claude-marked-retry", "Bash", true),
+            ("grok-shell-payload", "run_terminal_command", false),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            published(root, policy);
+            if case == "claude-readable-sandbox-settings" {
+                std::fs::create_dir_all(root.join(".claude")).unwrap();
+                std::fs::write(
+                    root.join(".claude/settings.json"),
+                    r#"{"sandbox":{"enabled":true,"failIfUnavailable":true}}"#,
+                )
+                .unwrap();
+            }
+            if case == "codex-readable-profile" {
+                std::fs::create_dir_all(root.join(".codex")).unwrap();
+                std::fs::write(
+                    root.join(".codex/config.toml"),
+                    "default_permissions = \"cf-guard\"\n[permissions.cf-guard]\n",
+                )
+                .unwrap();
+            }
+            for hook in ["git-guard", "exec-guard"] {
+                for command in &commands {
+                    let mut input = serde_json::json!({ "command": command });
+                    if retry {
+                        input["dangerouslyDisableSandbox"] = serde_json::json!(true);
+                    }
+                    let payload = serde_json::json!({
+                        "tool_name": tool,
+                        "tool_input": input,
+                        "cwd": root,
+                    });
+                    let out = run_with_stdin(
+                        codeflow()
+                            .args(["hook", hook, "--contract", "3"])
+                            .current_dir(root)
+                            .env("SHELL", "/bin/bash")
+                            .env_remove("CLAUDE_PROJECT_DIR"),
+                        &payload.to_string(),
+                    );
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    if out.status.code() != Some(2)
+                        || !stderr.contains("cannot verify")
+                        || !stderr.contains("containment")
+                    {
+                        wrong.push(format!(
+                            "{hook} {case} policy={policy} command={command:?}: {out:?}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
