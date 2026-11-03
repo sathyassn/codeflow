@@ -270,7 +270,9 @@ fn transfer_destination_cli_needs_complete_moved_tasks_and_the_journey() {
                 .replacen("epic_id: EPC-001", "epic_id: EPC-002", 1),
             );
         }
-        commit(root, "docs: serving task evidence");
+        if complete || native != "none" {
+            commit(root, "docs: serving task evidence");
+        }
         let result = close_transfer(root, "EPC-002", "verified | own proof");
         assert_eq!(
             result.0,
