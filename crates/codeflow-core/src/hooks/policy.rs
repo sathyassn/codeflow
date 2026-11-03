@@ -33,11 +33,11 @@ pub const INTEGRATION_BRANCH_PREFIX: &str = "integration/";
 pub const NON_UTF8_BRANCH: &str = "\0not-valid-utf8";
 
 /// The status checks a protected branch requires when the policy names
-/// none: the job `name:` values of the shipped `codeflow-ci.yml`, the
+/// none: the job `name:` values of the shipped GitHub workflows, the
 /// default of [`GitPolicy::required_checks`].
 pub const DEFAULT_REQUIRED_CHECKS: &[&str] = &[
     "codeflow gates",
-    "secret scan",
+    "trusted: secret scan",
     "security review",
     "trusted: commit standards",
 ];

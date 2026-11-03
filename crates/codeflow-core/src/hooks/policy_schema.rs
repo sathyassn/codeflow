@@ -411,7 +411,7 @@ pub const SCHEMA: [KeySpec; 78] = [
         kind: KeyKind::StringList,
         valid: "a non-empty array of status check names, none blank",
         purpose: "Status checks a protected branch requires before merging, on a branch that is up to date with its base.",
-        notes: "Defaults to the shipped CI job names: codeflow gates, secret scan, \
+        notes: "Defaults to the shipped CI job names: codeflow gates, trusted: secret scan, \
                 security review and trusted: commit standards. `codeflow remote protect` \
                 requires them, on an up-to-date branch, on each protected branch \
                 other than the default branch, whose own rulesets require the \
@@ -1901,7 +1901,7 @@ mod tests {
             policy.git.required_checks,
             [
                 "codeflow gates",
-                "secret scan",
+                "trusted: secret scan",
                 "security review",
                 "trusted: commit standards"
             ]
