@@ -1557,6 +1557,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:catalog-frontmatter",
     ),
+    (
+        "crates/codeflow-core/src/capability.rs",
+        "frontmatter_fence",
+        "trim_end_matches",
+        1,
+        "grammar:yaml-frontmatter-fence",
+    ),
     // Only rejects empty summary, measurement and evidence text; accepted values
     // remain unchanged and reference targets are never opened here.
     (

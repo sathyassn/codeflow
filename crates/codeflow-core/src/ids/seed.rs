@@ -558,9 +558,15 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
     let text =
         String::from_utf8(bytes).map_err(|error| IdsError::Invalid(format!("{rel}: {error}")))?;
     let uid = frontmatter_value(&text, "uid").ok_or_else(|| {
-        IdsError::Invalid(format!(
-            "{from} has no uid; run `codeflow ids backfill` first"
-        ))
+        if from.kind() == Kind::Cap {
+            IdsError::Invalid(format!(
+                "{from} has no uid; migrate the legacy fence to a folder record with a registry-bound uid before retargeting"
+            ))
+        } else {
+            IdsError::Invalid(format!(
+                "{from} has no uid; run `codeflow ids backfill` first"
+            ))
+        }
     })?;
     for (refname, sha) in inventory::code_refs(&git)? {
         if !is_landing_branch(branch_name(&refname)) {

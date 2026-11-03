@@ -360,11 +360,11 @@ fn retarget_repairs_a_two_clone_capability_collision() {
     let before = codeflow_core::capability::load_capability_catalog(second.path()).unwrap();
     let uid = before.records[0].uid.clone().unwrap();
     std::fs::write(
-        second.path().join("README.md"),
+        second.path().join("docs/links.md"),
         "See [CAP-001](docs/capabilities/CAP-001-second.md).\n",
     )
     .unwrap();
-    git(second.path(), &["add", "README.md"]);
+    git(second.path(), &["add", "docs/links.md"]);
     success(cli(first.path(), &["ids", "sync"]));
     let collision = cli(second.path(), &["ids", "sync"]);
     assert!(!collision.status.success());
@@ -382,7 +382,7 @@ fn retarget_repairs_a_two_clone_capability_collision() {
         .join("docs/capabilities/CAP-001-second.md")
         .exists());
     assert_eq!(
-        std::fs::read_to_string(second.path().join("README.md")).unwrap(),
+        std::fs::read_to_string(second.path().join("docs/links.md")).unwrap(),
         "See [CAP-002](docs/capabilities/CAP-002-second.md).\n"
     );
     let bound = git(
@@ -418,4 +418,23 @@ fn retarget_refuses_a_capability_already_bound_to_its_uid() {
         error.contains("already binds CAP-001 to this record"),
         "{error}"
     );
+}
+
+#[test]
+fn retarget_legacy_capability_requires_migration() {
+    let dir = repo();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(
+        dir.path().join("docs/capabilities.md"),
+        "```yaml\nid: CAP-017\nname: legacy\nstatus: shipped\n```\n",
+    )
+    .unwrap();
+    let output = cli(dir.path(), &["ids", "retarget", "CAP-017"]);
+    assert!(!output.status.success());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        error.contains("migrate the legacy fence to a folder record"),
+        "{error}"
+    );
+    assert!(!error.contains("backfill"), "{error}");
 }
