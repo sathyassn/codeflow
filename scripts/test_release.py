@@ -1143,35 +1143,76 @@ class PullRequestTests(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "requires Impact of at least major"):
             self.run_check(base, head, self.repo.body("minor", breaking="yes"))
 
-    def test_concurrent_clean_stale_merges_fail_in_both_orders(self) -> None:
-        for work_name, target_name in [("alpha", "beta"), ("beta", "alpha")]:
+    def behind_target(self, repo: Repository, work_name: str, advance: dict[str, str]) -> tuple[str, str, str]:
+        """A head forked from the target that adds one patch entry, and a
+        target then advanced by `advance` (path to text); return the fork
+        point, the head and the advanced target."""
+        base = repo.target
+        command(repo.root, "git", "switch", "-q", "-c", work_name)
+        repo.pending("2.0.1", [("patch", f"{work_name} fix")])
+        head = repo.commit(f"fix: {work_name}")
+        command(repo.root, "git", "switch", "-q", "main")
+        for path, text in advance.items():
+            repo.write(path, text)
+        target = repo.commit("chore: land other work first")
+        merged = command(repo.root, "git", "merge-tree", "--write-tree", target, head)
+        self.assertRegex(merged.splitlines()[0], r"^[0-9a-f]{40}$")
+        return base, head, target
+
+    def check_behind(self, repo: Repository, base: str, head: str, target: str) -> None:
+        body_path = repo.root / "body.md"
+        body_path.write_text(repo.body("patch"))
+        release.check_pr(
+            repo.args(base=base, head=head, target_ref=target, body_file=body_path, body_env=None)
+        )
+
+    def test_a_head_behind_an_unrelated_landing_is_judged_on_its_merge(self) -> None:
+        # Pull requests landed together on a line: one lands, the other's
+        # check reruns with the event base at the old or the new tip, and
+        # its verdict is computed on the merge with the current tip.
+        for work_name, other_name in [("alpha", "beta"), ("beta", "alpha")]:
             repo = Repository(self.carrier)
             try:
-                base = repo.target
-                command(repo.root, "git", "switch", "-q", "-c", work_name)
-                repo.pending("2.0.1", [("patch", f"{work_name} fix")])
-                head = repo.commit(f"fix: {work_name}")
-                command(repo.root, "git", "switch", "-q", "main")
-                repo.write(f"{target_name}.txt", "other work advanced main\n")
-                target = repo.commit(f"chore: merge {target_name} first")
-                merged = command(repo.root, "git", "merge-tree", "--write-tree", target, head)
-                self.assertRegex(merged.splitlines()[0], r"^[0-9a-f]{40}$")
+                base, head, target = self.behind_target(
+                    repo, work_name, {f"{other_name}.txt": "other work advanced main\n"}
+                )
+                for event_base in [base, target]:
+                    with self.subTest(first=other_name, second=work_name, event_base=event_base):
+                        self.check_behind(repo, event_base, head, target)
                 body_path = repo.root / "body.md"
-                body_path.write_text(repo.body("patch"))
-                with self.subTest(first=target_name, second=work_name), self.assertRaisesRegex(
-                    release.ReleaseError, "stale"
-                ):
-                    release.check_pr(
-                        repo.args(
-                            base=base,
-                            head=head,
-                            target_ref=target,
-                            body_file=body_path,
-                            body_env=None,
-                        )
-                    )
+                body_path.write_text(repo.body("none"))
+                with self.assertRaisesRegex(release.ReleaseError, "must equal|below marker floor"):
+                    release.check_pr(repo.args(
+                        base=target, head=head, target_ref=target, body_file=body_path, body_env=None
+                    ))
             finally:
                 repo.cleanup()
+
+    def test_a_target_whose_release_record_moved_stays_stale(self) -> None:
+        for path in ["CHANGELOG.md", ".release/config.json"]:
+            repo = Repository(self.carrier)
+            try:
+                moved = (repo.root / path).read_text() + "\n"
+                base, head, target = self.behind_target(repo, "alpha", {path: moved})
+                for event_base in [base, target]:
+                    with self.subTest(path=path, event_base=event_base), self.assertRaisesRegex(
+                        release.ReleaseError, f"stale.*{re.escape(path)}"
+                    ):
+                        self.check_behind(repo, event_base, head, target)
+            finally:
+                repo.cleanup()
+
+    def test_a_base_the_target_no_longer_contains_stays_stale(self) -> None:
+        repo = Repository(self.carrier)
+        try:
+            base, head, target = self.behind_target(repo, "alpha", {"beta.txt": "other work\n"})
+            command(repo.root, "git", "switch", "-q", "-c", "elsewhere", base)
+            repo.write("gamma.txt", "a base the target never took\n")
+            foreign = repo.commit("chore: unrelated base")
+            with self.assertRaisesRegex(release.ReleaseError, "stale.*no longer contains"):
+                self.check_behind(repo, foreign, head, target)
+        finally:
+            repo.cleanup()
 
     def test_withdrawal_requires_rationale_and_can_lower_remaining_state(self) -> None:
         self.repo.pending("3.0.0", [("major", "withdraw me"), ("patch", "keep me")])
