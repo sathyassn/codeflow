@@ -181,7 +181,9 @@ try {
   recordBrowserVersion(context);
   observeContext(context, requests, responses, consoleErrors, observerTasks);
   const browserProcessesV1 = await waitForProfileProcess(browserProfileV1);
-  await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+  // Trace DOM snapshots run scripts in every frame, which scriptless measuring
+  // sandboxes refuse. They are diagnostic, not an assertion; keep screenshots.
+  await context.tracing.start({ screenshots: true, snapshots: false, sources: false });
   tracingStarted = true;
   const page = context.pages()[0] ?? await context.newPage();
   await openAuthenticatedPresentation(page, bootstrapPath, port);
@@ -318,7 +320,9 @@ try {
   recordBrowserVersion(context);
   observeContext(context, requests, responses, consoleErrors, observerTasks);
   const browserProcessesV2 = await waitForProfileProcess(browserProfileV2);
-  await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+  // Trace DOM snapshots run scripts in every frame, which scriptless measuring
+  // sandboxes refuse. They are diagnostic, not an assertion; keep screenshots.
+  await context.tracing.start({ screenshots: true, snapshots: false, sources: false });
   tracingStarted = true;
   const revisedPage = context.pages()[0] ?? await context.newPage();
   await openAuthenticatedPresentation(revisedPage, secondBootstrapPath, port);
