@@ -47,6 +47,11 @@ fn repo(tier: &str) -> tempfile::TempDir {
         "schema_version = 1\ntier = '{tier}'\nscaffold_version = '4.0.0'\nstack = 'python'\nareas = ['engine']\npolicy_armed = false\ngit_hooks = 'unwired'\npermission_preset = 'default'\n"
     )).unwrap();
     fs::write(
+        root.join(".gitignore"),
+        include_str!("../../../assets/base/gitignore"),
+    )
+    .unwrap();
+    fs::write(
         root.join("search.py"),
         "def search(items, term):\n    return [item for item in items if term in item]\n",
     )
@@ -70,23 +75,39 @@ fn bootstrap(root: &Path) -> String {
     success(cli(root, &["capability", "bootstrap"]))
 }
 
+fn validate(root: &Path) {
+    let result = success(cli(root, &["validate", "--docs"]));
+    assert!(result.contains("doc graph clean"), "{result}");
+}
+
+// These acceptance results are synthetic fixture state, never an independent
+// review of an actual adopting project's catalog.
+fn complete_stage(root: &Path, path: &Path) {
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["commit", "-qm", "chore: record fixture stage outputs"],
+    );
+    let reviewed = git(root, &["rev-parse", "HEAD"]);
+    let text = fs::read_to_string(path)
+        .unwrap()
+        .replace("status: todo", "status: complete");
+    let acceptance = format!("\n```yaml\nacceptance:\n  reviewed: {}\n  review: https://example.test/bootstrap-fixture-review\n  criteria:\n    AC-1: verified | scripted stage output and validation\n  journey: verified | scripted capability bootstrap fixture\n  not_verified: live independent review\n  follow_ups: none: fixture only\n  verdict: approved\n```\n", reviewed.trim());
+    fs::write(path, text + &acceptance).unwrap();
+    validate(root);
+}
+
 #[test]
-fn standard_with_tracking_creates_ordered_work_and_resumes_each_boundary() {
+fn fresh_standard_enables_tracking_and_resumes_each_boundary() {
     let dir = repo("standard");
     let root = dir.path();
-    // Standard projects activate durable tracking when they carry a task.
-    success(cli(
-        root,
-        &[
-            "task",
-            "new",
-            "--standalone-reason",
-            "Establish sample work tracking",
-            "Seed sample tracking",
-        ],
-    ));
     let result = bootstrap(root);
     assert!(result.contains("next stage: inventory"), "{result}");
+    assert!(result.contains("tracking enabled"), "{result}");
+    assert!(result.contains("policy unchanged"), "{result}");
+    assert!(codeflow_core::workgraph::durable_work_tracking_enabled(root).unwrap());
+    assert!(!root.join("docs/capability-bootstrap.md").exists());
+    validate(root);
     let epics = files(root, "epics");
     assert_eq!(epics.len(), 1);
     let epic = fs::read_to_string(&epics[0]).unwrap();
@@ -123,33 +144,42 @@ fn standard_with_tracking_creates_ordered_work_and_resumes_each_boundary() {
         fs::write(path, &text).unwrap();
         assert!(bootstrap(root).contains(&format!("next stage: {}", names[index])));
         assert_eq!(fs::read_to_string(path).unwrap(), text);
-        fs::write(path, text.replace("status: todo", "status: complete")).unwrap();
-        let next = names[(index + 1).min(3)];
-        assert!(bootstrap(root).contains(&format!("next stage: {next}")));
+        complete_stage(root, path);
+        let result = bootstrap(root);
+        if index + 1 < names.len() {
+            assert!(
+                result.contains(&format!("next stage: {}", names[index + 1])),
+                "{result}"
+            );
+        } else {
+            assert!(
+                result.contains("all stages complete; set `inventory: complete`"),
+                "{result}"
+            );
+        }
+        validate(root);
         assert_eq!(files(root, "epics"), epics);
-        assert_eq!(files(root, "tasks").len(), 5);
+        assert_eq!(files(root, "tasks").len(), 4);
     }
 }
 
 #[test]
-fn fresh_standard_and_explicit_minimal_get_a_resumable_checklist() {
-    for tier in ["standard", "minimal"] {
-        let dir = repo(tier);
-        let root = dir.path();
-        assert!(!root.join("docs/capability-bootstrap.md").exists());
-        let result = bootstrap(root);
-        assert!(result.contains("tracking is not enabled"), "{result}");
-        assert!(!root.join("project-management/tasks").exists());
-        let path = root.join("docs/capability-bootstrap.md");
-        let original = fs::read_to_string(&path).unwrap();
-        for name in ["inventory", "classification", "evidence", "review"] {
-            assert!(original.contains(&format!("- [ ] {name}")));
-        }
-        let progress = original.replace("- [ ] inventory", "- [x] inventory");
-        fs::write(&path, &progress).unwrap();
-        assert!(bootstrap(root).contains("next stage: classification"));
-        assert_eq!(fs::read_to_string(&path).unwrap(), progress);
+fn explicit_minimal_gets_a_resumable_checklist() {
+    let dir = repo("minimal");
+    let root = dir.path();
+    assert!(!root.join("docs/capability-bootstrap.md").exists());
+    let result = bootstrap(root);
+    assert!(result.contains("tracking is not enabled"), "{result}");
+    assert!(!root.join("project-management/tasks").exists());
+    let path = root.join("docs/capability-bootstrap.md");
+    let original = fs::read_to_string(&path).unwrap();
+    for name in ["inventory", "classification", "evidence", "review"] {
+        assert!(original.contains(&format!("- [ ] {name}")));
     }
+    let progress = original.replace("- [ ] inventory", "- [x] inventory");
+    fs::write(&path, &progress).unwrap();
+    assert!(bootstrap(root).contains("next stage: classification"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), progress);
 }
 
 #[test]
@@ -173,6 +203,7 @@ fn incomplete_existing_catalog_seeds_inventory_without_recreating_records() {
     let path = root.join("docs/capabilities/CAP-001-search.md");
     let before = fs::read(&path).unwrap();
     assert!(bootstrap(root).contains("next stage: inventory"));
+    validate(root);
     assert_eq!(fs::read(path).unwrap(), before);
     assert_eq!(files(root, "epics").len(), 1);
     assert_eq!(files(root, "tasks").len(), 4);
@@ -183,6 +214,7 @@ fn non_rust_sample_reaches_its_first_valid_catalog_through_four_tasks() {
     let dir = repo("full");
     let root = dir.path();
     println!("bootstrap: {}", bootstrap(root));
+    validate(root);
     let tasks = files(root, "tasks");
     assert_eq!(files(root, "epics").len(), 1);
     assert_eq!(tasks.len(), 4);
@@ -211,11 +243,7 @@ fn non_rust_sample_reaches_its_first_valid_catalog_through_four_tasks() {
     {
         let text = fs::read_to_string(&tasks[index]).unwrap();
         assert!(text.contains(&format!("codeflow:capability-bootstrap v1 {stage}")));
-        fs::write(
-            &tasks[index],
-            text.replace("status: todo", "status: complete"),
-        )
-        .unwrap();
+        complete_stage(root, &tasks[index]);
         println!("{stage}: {}", bootstrap(root));
     }
     // A planned capability makes no shipped-evidence or maturity assertion.
@@ -235,11 +263,12 @@ fn non_rust_sample_reaches_its_first_valid_catalog_through_four_tasks() {
     .unwrap();
     let text = fs::read_to_string(&tasks[3]).unwrap();
     assert!(text.contains("codeflow:capability-bootstrap v1 review"));
-    fs::write(&tasks[3], text.replace("status: todo", "status: complete")).unwrap();
+    complete_stage(root, &tasks[3]);
     let output = bootstrap(root);
     println!("review: {output}");
     assert!(output.contains("inventory is complete"));
     assert_eq!(files(root, "tasks"), tasks);
+    validate(root);
     assert!(codeflow_core::capability::load_capability_catalog(root).is_ok());
 }
 
@@ -300,4 +329,81 @@ fn complete_inventory_suppresses_the_offer_and_creates_no_bootstrap() {
     );
     assert!(bootstrap(root).contains("inventory is complete"));
     assert!(!root.join("project-management/tasks").exists());
+}
+
+#[test]
+fn a_legacy_standard_checklist_is_not_forgotten_when_tracking_appears() {
+    let dir = repo("standard");
+    let root = dir.path();
+    fs::create_dir_all(root.join("docs")).unwrap();
+    let checklist = "# Initial catalog\n\n<!-- codeflow:capability-bootstrap v1 checklist -->\n\n- [x] inventory\n- [ ] classification\n- [ ] evidence\n- [ ] review\n";
+    fs::write(root.join("docs/capability-bootstrap.md"), checklist).unwrap();
+    success(cli(
+        root,
+        &[
+            "task",
+            "new",
+            "--standalone-reason",
+            "Track sample work",
+            "Sample work",
+        ],
+    ));
+    let result = cli(root, &["capability", "bootstrap"]);
+    assert!(!result.status.success());
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(error.contains("docs/capability-bootstrap.md"), "{error}");
+    assert!(error.contains("reconcile"), "{error}");
+    assert!(error.contains("no epic or task was created"), "{error}");
+    assert_eq!(
+        fs::read_to_string(root.join("docs/capability-bootstrap.md")).unwrap(),
+        checklist
+    );
+    assert_eq!(files(root, "tasks").len(), 1);
+    assert!(!root.join("project-management/epics/EPC-001.md").exists());
+}
+
+#[test]
+fn installed_stage_templates_control_the_generated_records() {
+    let dir = repo("standard");
+    let root = dir.path();
+    success(cli(root, &["init", "--standard", "--yes"]));
+    let template = root.join(".codeflow/templates/capability-bootstrap/review.md");
+    let text = fs::read_to_string(&template).unwrap();
+    fs::write(
+        template,
+        text.replace(
+            "Review the catalog independently",
+            "Review the catalog independently under the sample reviewer convention",
+        ),
+    )
+    .unwrap();
+    bootstrap(root);
+    let review = fs::read_to_string(root.join("project-management/tasks/TSK-004.md")).unwrap();
+    assert!(review.contains("sample reviewer convention"));
+    validate(root);
+    assert_eq!(
+        git(
+            root,
+            &["check-ignore", ".codeflow/capability-bootstrap.lock"]
+        )
+        .trim(),
+        ".codeflow/capability-bootstrap.lock"
+    );
+}
+
+#[test]
+fn complete_checklist_names_the_remaining_inventory_confirmation() {
+    let dir = repo("minimal");
+    let root = dir.path();
+    bootstrap(root);
+    let path = root.join("docs/capability-bootstrap.md");
+    let text = fs::read_to_string(&path).unwrap().replace("- [ ]", "- [x]");
+    fs::write(path, text).unwrap();
+    let result = bootstrap(root);
+    assert!(
+        result.contains("all stages complete; set `inventory: complete`"),
+        "{result}"
+    );
+    assert!(!result.contains("next stage: review"), "{result}");
+    assert!(!result.contains("inventory is complete"), "{result}");
 }

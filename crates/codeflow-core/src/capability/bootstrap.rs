@@ -77,6 +77,7 @@ pub struct Progress {
     pub epic: Option<String>,
     pub next: Option<Stage>,
     pub checklist: bool,
+    pub inventory_complete: bool,
 }
 
 /// Whether the catalog has a nonempty, explicitly complete inventory.
@@ -85,20 +86,44 @@ pub struct Progress {
 /// Returns catalog parsing and vocabulary errors instead of masking them.
 pub fn complete(root: &Path) -> Result<bool, String> {
     let catalog = super::load_capability_catalog(root).map_err(|error| error.to_string())?;
-    Ok(!catalog.records.is_empty()
+    Ok(complete_for(&catalog))
+}
+
+/// Inventory completeness for a catalog the caller already loaded.
+#[must_use]
+pub fn complete_for(catalog: &super::CapabilityCatalog) -> bool {
+    !catalog.records.is_empty()
         && catalog
             .vocabulary
             .as_ref()
-            .is_some_and(|v| v.inventory == "complete"))
+            .is_some_and(|v| v.inventory == "complete")
+}
+
+/// Offer for a catalog the caller already loaded; never changes project state.
+#[must_use]
+pub fn offer_for(catalog: &super::CapabilityCatalog) -> Option<&'static str> {
+    (!complete_for(catalog)).then_some("capability inventory incomplete; run `codeflow capability bootstrap` to start or resume inventory, classification, evidence and review")
 }
 
 /// Offer only; never allocates records or changes the project's policy.
 #[must_use]
 pub fn offer(root: &Path) -> Option<&'static str> {
-    match complete(root) {
-        Ok(false) => Some("capability inventory incomplete; run `codeflow capability bootstrap` to start or resume inventory, classification, evidence and review"),
-        _ => None,
+    super::load_capability_catalog(root)
+        .ok()
+        .and_then(|catalog| offer_for(&catalog))
+}
+
+/// Read an installed bootstrap body before falling back to its shipped copy.
+///
+/// # Errors
+/// Refuses unknown template names, links, oversized files and invalid UTF-8.
+pub fn load_body(root: &Path, name: &str, embedded: &str) -> Result<String, String> {
+    if name != "epic" && !Stage::ALL.iter().any(|stage| stage.name() == name) {
+        return Err("unknown capability bootstrap template".into());
     }
+    let tree = Tree::open(root).map_err(|error| error.to_string())?;
+    let path = format!(".codeflow/templates/capability-bootstrap/{name}.md");
+    Ok(read_optional(&tree, &path)?.unwrap_or_else(|| embedded.to_string()))
 }
 
 #[derive(Debug)]
@@ -247,7 +272,7 @@ fn existing_work(tree: &Tree) -> Result<(Option<Existing>, Vec<Option<Existing>>
                 .zip(&stages)
                 .any(|(stage, record)| pending.trim() == stage.marker() && record.is_some());
         if !recovered {
-            return Err(format!("bootstrap allocation was interrupted before its record was confirmed ({pending}); recover its registry reservation using the allocation diagnostic before removing {PENDING} and rerunning; no new id was allocated"));
+            return Err(format!("bootstrap allocation was interrupted before its record was confirmed ({pending}); recover its registry reservation using the allocation diagnostic before removing {PENDING} and rerunning; this visible crash marker is intentionally not ignored so the interrupted allocation is not lost; no new id was allocated"));
         }
         tree.remove(PENDING).map_err(|error| error.to_string())?;
     }
@@ -279,10 +304,14 @@ pub fn run(
             epic: None,
             next: None,
             checklist: false,
+            inventory_complete: true,
         });
     }
     if !tracking {
         return checklist(&tree, templates);
+    }
+    if read_optional(&tree, CHECKLIST)?.is_some() {
+        return Err(format!("{CHECKLIST} already records bootstrap progress; resume that checklist or reconcile it explicitly before removing it and starting tracked bootstrap work; no epic or task was created"));
     }
     let (mut epic, mut stages) = existing_work(&tree)?;
     if epic.is_none() {
@@ -349,8 +378,9 @@ pub fn run(
     }
     Ok(Progress {
         epic: Some(epic_id.clone()),
-        next: next.or(Some(Stage::Review)),
+        next,
         checklist: false,
+        inventory_complete: false,
     })
 }
 
@@ -383,8 +413,9 @@ fn checklist(tree: &Tree, templates: &Templates) -> Result<Progress, String> {
     });
     Ok(Progress {
         epic: None,
-        next: next.or(Some(Stage::Review)),
+        next,
         checklist: true,
+        inventory_complete: false,
     })
 }
 
@@ -556,5 +587,40 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), dir.path().join("docs")).unwrap();
         assert!(run(dir.path(), false, &templates(), |_| panic!("no allocation")).is_err());
         assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn installed_bodies_override_embedded_defaults_and_invalid_reads_refuse() {
+        let dir = repo();
+        let root = dir.path();
+        assert_eq!(
+            load_body(root, "review", "shipped body").unwrap(),
+            "shipped body"
+        );
+        let folder = root.join(".codeflow/templates/capability-bootstrap");
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("review.md");
+        std::fs::write(&path, "project review convention").unwrap();
+        assert_eq!(
+            load_body(root, "review", "shipped body").unwrap(),
+            "project review convention"
+        );
+        std::fs::write(path, [0xff]).unwrap();
+        assert!(load_body(root, "review", "shipped body").is_err());
+        assert!(load_body(root, "../../outside", "shipped body").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_body_links_are_refused_instead_of_using_fallbacks() {
+        let dir = repo();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("review.md");
+        std::fs::write(&target, "outside body").unwrap();
+        let folder = dir.path().join(".codeflow/templates/capability-bootstrap");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::os::unix::fs::symlink(&target, folder.join("review.md")).unwrap();
+        assert!(load_body(dir.path(), "review", "shipped body").is_err());
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "outside body");
     }
 }

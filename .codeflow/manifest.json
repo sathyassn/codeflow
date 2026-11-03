@@ -1793,7 +1793,7 @@
     ".codeflow/templates/capability-bootstrap/epic.md": {
       "src": "pm/capability-bootstrap/epic.md",
       "ownership": "managed",
-      "sha256": "88c259cec549242471a11b39eff112ff88685c83508c4e85b7a5bb6dc0886683",
+      "sha256": "d3ddd230a35aa2938912aa3e8a0132c880fc6dc6f72a4d887fc69f3c4742e87b",
       "exec": false
     },
     ".codeflow/templates/capability-bootstrap/evidence.md": {
@@ -1853,7 +1853,7 @@
     ".gitignore": {
       "src": "gitignore",
       "ownership": "managed-region",
-      "sha256": "e623b22f663c47c5aabf9d9faa4e965b70b2de7701de5c7c69772acd844d26c2",
+      "sha256": "fbe0e546e55555928ac114226347e07d5366f7e21dfb068f53814aaf2cace59f",
       "exec": false
     },
     ".grok/hooks/codeflow.json": {

@@ -374,7 +374,7 @@ fn check_capabilities(opts: &Options) -> CheckResult {
     let (status, message) = match crate::capability::load_capability_catalog(root) {
         Ok(catalog) => {
             let mut message = crate::capability::coverage::line(&catalog);
-            if let Some(offer) = crate::capability::bootstrap::offer(root) {
+            if let Some(offer) = crate::capability::bootstrap::offer_for(&catalog) {
                 message.push_str("; ");
                 message.push_str(offer);
             }

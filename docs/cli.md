@@ -172,6 +172,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--topic <TOPIC>` | Only items of this topic. |
 | | `--json` | Print the items as JSON, with every field. |
 | | `--write` | Write project-management/feedback/INDEX.md from every item. A written index is optional; `validate --docs` warns when it goes stale. |
+| `codeflow capability bootstrap` | | Start or resume the initial catalog through inventory, classification, evidence and review |
 | `codeflow capability new <NAME>` | | Create a planned capability with a reserved id and stable uid |
 | | `<NAME>` | Lowercase capability slug, used in its filename. |
 | | `--summary <SUMMARY>` | One sentence describing the capability for its reader. Required. |
@@ -630,6 +631,19 @@ its remotes live, so a narrow fetch cannot hide work.
 | `present update --expected-revision` | Exits 8 when another revision is current |
 
 ### Create and inspect a capability
+
+`codeflow capability bootstrap` creates an epic and four ordered tasks at standard
+and full tier. On a fresh standard project, it enables durable tracking by
+creating the work records and reports that change. At minimal tier, an explicit
+invocation creates a checklist when tracking is absent; init, update and doctor
+only offer the command. Existing capability records seed the inventory.
+
+Reruns retain progress and report the first open stage. An existing checklist
+must be reconciled before tracked work can replace it. The verb reads installed
+stage templates from `.codeflow/templates/capability-bootstrap/`, with shipped
+fallbacks, and preserves the project's policy. It creates no minimal-tier
+bootstrap records without an explicit invocation. The stage guide is
+`.codeflow/rules/capabilities.md`.
 
 Create a planned record with a stable UUID and the next available CAP number:
 

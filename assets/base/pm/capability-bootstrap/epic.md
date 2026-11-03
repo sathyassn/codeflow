@@ -14,7 +14,7 @@ After this merges, users, contributors and agents can find the project's capabil
 
 ## Acceptance Criteria
 
-- AC-1 Every product surface, internal and technical surface, and promised functional or non-functional behavior has a capability entry or a justified exclusion in `docs/capability-inventory.md`; records have valid facets and honest evidence or declared gaps; a recorded independent review in `docs/capability-review.md` confirms comprehensive coverage before `docs/capabilities/vocabulary.yaml` sets `inventory: complete`. Evidence: the inventory, catalog validation and review record.
+- AC-1 Every product surface, internal and technical surface, and promised functional or non-functional behavior has a capability entry or a justified exclusion in `docs/capability-inventory.md`; records have valid facets and honest evidence or declared gaps; a recorded independent review in `docs/capability-review.md` confirms comprehensive coverage before `docs/capabilities/vocabulary.yaml` sets `inventory: complete`. Evidence: the inventory, catalog validation and review record. (journey)
 
 ## Out of scope
 

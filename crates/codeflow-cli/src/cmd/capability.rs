@@ -118,8 +118,10 @@ fn run_bootstrap(root: &std::path::Path) -> i32 {
                     stage.name(),
                     codeflow_core::capability::bootstrap::GUIDE
                 );
-            } else {
+            } else if progress.inventory_complete {
                 println!("capability inventory is complete; no bootstrap work created");
+            } else {
+                println!("all stages complete; set `inventory: complete` in docs/capabilities/vocabulary.yaml after the review");
             }
             0
         }
@@ -142,10 +144,15 @@ fn bootstrap(
             .read(&asset)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| format!("bootstrap template {asset} is absent"))?;
-        String::from_utf8(bytes).map_err(|error| error.to_string())
+        let embedded = String::from_utf8(bytes).map_err(|error| error.to_string())?;
+        bootstrap::load_body(root, name, &embedded)
     };
     let tracking = codeflow_core::workgraph::durable_work_tracking_enabled(root)
         .map_err(|error| error.to_string())?;
+    let tier = codeflow_core::scaffold::state::ProjectState::load(root)
+        .map_err(|error| error.to_string())?
+        .tier;
+    let enable_tracking = !tracking && tier >= codeflow_core::scaffold::Tier::Standard;
     let templates = Templates {
         epic: super::new::load_template("base/pm/epic.md.tmpl")?,
         task: super::new::load_template("base/pm/task.md.tmpl")?,
@@ -157,7 +164,7 @@ fn bootstrap(
             body(Stage::Review.name())?,
         ],
     };
-    bootstrap::run(root, tracking, &templates, |creation| {
+    let progress = bootstrap::run(root, tracking || enable_tracking, &templates, |creation| {
         if creation.stage.is_some() {
             super::new::create_task_record(
                 root,
@@ -170,5 +177,9 @@ fn bootstrap(
         } else {
             super::new::create_epic_record(root, &creation.template, creation.title)
         }
-    })
+    })?;
+    if enable_tracking && progress.epic.is_some() {
+        println!("tracking enabled: bootstrap created project-management/epics and project-management/tasks; policy unchanged");
+    }
+    Ok(progress)
 }
