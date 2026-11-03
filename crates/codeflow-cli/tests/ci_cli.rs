@@ -1140,7 +1140,11 @@ fn ci_scaffold_range_skips_unmodified_managed_files() {
     // The only findings are the warnings that the range adds the managed
     // workflows, which change who judges pull requests (TSK-336 AC-11).
     assert!(all.contains("3 warning(s) only"), "{all}");
-    assert_eq!(all.matches("warning — ci.workflow_change").count(), 3, "{all}");
+    assert_eq!(
+        all.matches("warning — ci.workflow_change").count(),
+        3,
+        "{all}"
+    );
 }
 
 #[test]

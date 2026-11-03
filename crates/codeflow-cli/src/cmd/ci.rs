@@ -552,13 +552,7 @@ pub fn run(args: &CiArgs) -> i32 {
     // What this change does to the workflows is base..head; the wider
     // commit range `--commits-from` selects (pre-push) also holds commits
     // the target already carries, whose workflow edits are not this one's.
-    workflow_change::dispatch(
-        &root,
-        base_sha.as_deref(),
-        &head,
-        &mut tagged,
-        &mut ran,
-    );
+    workflow_change::dispatch(&root, base_sha.as_deref(), &head, &mut tagged, &mut ran);
 
     match codeflow_core::hooks::path_policy::PathPolicy::from_git(configured).and_then(|paths| {
         let size_and_ignore = judging::content_rules(&root, authority.as_ref())?;

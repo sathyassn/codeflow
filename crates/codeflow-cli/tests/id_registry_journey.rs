@@ -762,7 +762,10 @@ fn the_enforcing_registry_workflow_cannot_be_changed_by_the_pull_request_it_judg
         "never from the PR's own workflow file"
     );
     for event in ["push", "schedule", "workflow_dispatch"] {
-        assert!(on.get(event).is_none(), "{event} starts the registry workflow");
+        assert!(
+            on.get(event).is_none(),
+            "{event} starts the registry workflow"
+        );
     }
     let registry: serde_yaml::Value = serde_yaml::from_str(include_str!(
         "../../../assets/base/ci/codeflow-registry.yml"
