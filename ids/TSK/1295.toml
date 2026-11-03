@@ -1,0 +1,11 @@
+id = "TSK-1295"
+uid = "73a1b9e7-1c08-4acd-a5be-edac27cc0b50"
+kind = "TSK"
+title = "A model and effort chosen in the harness run unchanged"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T19:37:47Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
