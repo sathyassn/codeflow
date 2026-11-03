@@ -1,0 +1,11 @@
+id = "TSK-1308"
+uid = "a40d93c9-62e5-46ff-bba7-5c363259ebe3"
+kind = "TSK"
+title = "A landed candidate branch is removed by tree-equality proof"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T21:43:16Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
