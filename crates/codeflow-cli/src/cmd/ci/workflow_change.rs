@@ -78,11 +78,9 @@ pub(super) fn dispatch(
 /// The finding as `codeflow ci` prints it: a warning with no policy key,
 /// whose authority is the default branch's workflow.
 pub(super) fn render(violation: &Violation, plane: &str) -> String {
-    format!(
-        "codeflow {plane}: warning — {rule} (warn)\n  {msg}\n  sanctioned: {remedy}\n  authority: the default branch's copy of each workflow, which judges every pull request (ADR-0091)",
-        rule = violation.rule,
-        msg = codeflow_core::git::display_message(&violation.message),
-        remedy = codeflow_core::git::display_message(&violation.remedy),
+    violation.render_with_authority(
+        plane,
+        "the default branch's copy of each workflow, which judges every pull request (ADR-0091)",
     )
 }
 
