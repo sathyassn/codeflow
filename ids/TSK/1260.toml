@@ -1,0 +1,11 @@
+id = "TSK-1260"
+uid = "cd09ad6c-c2be-44ff-ab95-c1b096dd2569"
+kind = "TSK"
+title = "A target may report skipped through a reserved exit code"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T00:39:30Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
