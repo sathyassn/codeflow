@@ -1333,6 +1333,13 @@ jobs:
               # Only committed dependency blobs vary; the checkout cannot supply config.
               base_inputs = dependency_tree(trusted_sha, work / "base-inputs")
               head_inputs = dependency_tree("HEAD", work / "head-inputs")
+              base_paths = {path.relative_to(base_inputs).as_posix()
+                            for path in base_inputs.rglob("*") if path.is_file()}
+              head_paths = {path.relative_to(head_inputs).as_posix()
+                            for path in head_inputs.rglob("*") if path.is_file()}
+              for path in sorted(base_paths - head_paths):
+                  print(f"::warning::base dependency input missing at head: {json.dumps(path)}; "
+                        "deletion or rename can make its advisories absent from the head scan")
               base = scan(scanner, base_inputs, config)
               head = scan(scanner, head_inputs, config)
               today = datetime.datetime.now(datetime.timezone.utc).date()

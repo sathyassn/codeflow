@@ -309,9 +309,10 @@ Since 3.1.0 a policy without both keys fails this job. Because the job reads
 the keys from the base, land them first under your current workflow, then
 land the 3.1.0 workflow; keys added alongside it are not on the base yet.
 Add a missing key by hand: `codeflow update` adds the keys only to a policy
-from before 3.0.0 and does not restore a key a later policy deleted. A first CodeFlow adoption has no policy on its base, so its security
-review fails until the policy lands; merge that pull request over the
-failing check, or land the policy alone first.
+from before 3.0.0 and does not restore a key a later policy deleted. A first
+CodeFlow adoption has no policy or workflow on its base, so its security
+review fails until both land; merge that pull request over the failing
+check, or land the policy and workflow first.
 
 ## Project exception hook
 

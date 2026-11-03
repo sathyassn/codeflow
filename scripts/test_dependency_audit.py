@@ -1,5 +1,7 @@
 """TSK-450: the severity table and shared exception validator."""
 import datetime
+import contextlib
+import io
 import importlib.util
 import json
 import tempfile
@@ -169,6 +171,32 @@ class Precedence(unittest.TestCase):
                             audit.scan(Path("/scanner"), Path("/scan"), Path("/config"))
         with patch.object(audit.subprocess, "run", side_effect=AssertionError("off must not scan")):
             self.assertEqual(audit.run(Path("/scanner"), "base", "off", Path("/work")), 0)
+
+    def test_missing_base_inputs_warn_without_changing_expiry_verdict(self):
+        for level in ("warn", "block"):
+            with tempfile.TemporaryDirectory() as temp:
+                work = Path(temp)
+                base = work / "base-inputs"
+                head = work / "head-inputs"
+                base.mkdir()
+                head.mkdir()
+                for name in ["Cargo.lock", "yarn.lock", "go.mod"]:
+                    (base / name).write_text("dependency input")
+                # Delete Cargo.lock, rename yarn.lock, retain go.mod.
+                for name in ["package-lock.json", "go.mod"]:
+                    (head / name).write_text("dependency input")
+                output = io.StringIO()
+                with patch.object(audit.subprocess, "run"), \
+                     patch.object(audit, "dependency_tree", side_effect=[base, head]), \
+                     patch.object(audit, "scan", return_value=[]), \
+                     patch.object(audit, "trusted_exceptions", return_value=([entry(expiry="2000-01-01")], [])), \
+                     contextlib.redirect_stdout(output):
+                    self.assertEqual(audit.run(Path("/scanner"), "base", level, work), 0)
+                warnings = [line for line in output.getvalue().splitlines() if line.startswith("::warning::")]
+                self.assertEqual(len(warnings), 2)
+                self.assertIn('"Cargo.lock"', warnings[0])
+                self.assertIn('"yarn.lock"', warnings[1])
+                self.assertIn("::notice::expired triage entry", output.getvalue())
 
     def test_workflows_embed_the_same_judge(self):
         root = Path(__file__).resolve().parent.parent
