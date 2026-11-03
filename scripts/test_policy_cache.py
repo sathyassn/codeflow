@@ -123,10 +123,14 @@ class PolicyCache(unittest.TestCase):
             ('prefix-key: ' + DEPS_NAMESPACE, 'prefix-key: shared'),
         )
         for before, after in mutations:
-            with self.subTest(mutation=after):
-                self.assertIn(before, self.workflow)
-                with self.assertRaises(AssertionError):
-                    cache_contract(self.workflow.replace(before, after))
+            self.assertIn(before, self.workflow)
+            offset = self.workflow.find(before)
+            while offset != -1:
+                with self.subTest(mutation=after, offset=offset):
+                    mutated = self.workflow[:offset] + after + self.workflow[offset + len(before):]
+                    with self.assertRaises(AssertionError):
+                        cache_contract(mutated)
+                offset = self.workflow.find(before, offset + len(before))
 
     @unittest.skipIf(os.name == "nt", "the target-cache script runs in Linux bash")
     def test_identity_mismatch_miss_and_exact_hit(self):

@@ -22,7 +22,7 @@ check_digest() {
 check_digest "$repo/.github/workflows/codeflow-policy.yml" 8b3b7b2ca94ac31b1bfe021b1ebf64e0b0cb559f7aa5ac331c3543094325014a
 check_digest "$patch_dir/TSK-1240-codeflow-policy.proposed.yml" 97b8d65e39038077d57fb00e09c870fc790440b256273825e0328040fc341066
 check_digest "$patch_dir/TSK-1240-codeflow-policy.patch" fc2e0c50a71214f8382d9f40346f4fbeadf8794b503f3a825690b65dc6ce08d3
-check_digest "$repo/scripts/test_policy_cache.py" 26ddcb56ef74e8a8667b8130c32f91405fb774b187699054310a6eeffe009ee9
+check_digest "$repo/scripts/test_policy_cache.py" 816e5190be78e315777e610698a27cfefe72b0f2facdb257e7f0877e7c3bf40d
 check_digest "$repo/scripts/test_gate_contracts.py" 2484f535de50c5c443e60c07d8532e62b1cc4a50afde04fa12b3d6e6e8cc3fb6
 check_digest "$repo/scripts/ci-reuse.py" 5e4005a5b295d99e3d0c29c9bba133f9b3fb308efbb93d8114a56313f0c482e1
 git -C /Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1240 apply --check "$patch_dir/TSK-1240-codeflow-policy.patch"
