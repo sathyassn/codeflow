@@ -152,7 +152,10 @@ pub struct CiArgs {
     /// or eligible epic line at the base commit, then the repository default).
     /// An ambiguous commit-ID base requires --into or --branch. A range whose head
     /// or target matches the release pattern is judged as a
-    /// release range (SPC-013 R-120).
+    /// release range (SPC-013 R-120). Deciding that asks the destination for
+    /// its default branch and that branch's policy, so on a private
+    /// repository the job running codeflow ci needs read access to it (for
+    /// actions/checkout, `persist-credentials: true`).
     #[arg(long, value_name = "BRANCH")]
     pub into: Option<String>,
 
