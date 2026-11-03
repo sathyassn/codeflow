@@ -76,11 +76,20 @@ pub struct ExecutionConfig {
     #[serde(default, skip_serializing_if = "QuickTargetClass::is_light")]
     pub quick_default_class: QuickTargetClass,
 
-    /// Maximum wait for heavy quick targets to acquire the shared gate lock.
-    #[serde(default, skip_serializing_if = "is_zero")]
+    /// Maximum wait for a host-exclusive target: for a heavy run while one
+    /// holds the host, and for one while other heavy runs hold it. Set only
+    /// by `codeflow test --wait-seconds`, never by the config file; heavy
+    /// runs never wait for each other (TSK-1145).
+    #[serde(skip)]
     pub heavy_wait_seconds: u64,
 
-    /// Total workers shared by concurrent heavy targets. Omitted leaves tools unchanged.
+    /// Jobs all heavy runs on this host share. Omitted computes it from the
+    /// logical cores and available memory (`testing::capacity`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_jobs: Option<usize>,
+
+    /// Workers one run shares among its concurrent heavy targets, capped at
+    /// the host job budget. Omitted, a run uses the host budget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_budget: Option<usize>,
 
@@ -188,7 +197,8 @@ pub struct TargetConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heavy: Option<bool>,
 
-    /// Workers this heavy target needs from `execution.worker_budget` before it starts.
+    /// Workers this heavy target needs from `execution.worker_budget` before it starts;
+    /// under a lower run budget it runs at that budget.
     /// Omitted targets divide the currently available workers among ready heavy targets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workers: Option<usize>,
@@ -196,6 +206,12 @@ pub struct TargetConfig {
     /// Run with no other target alongside it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub exclusive: bool,
+
+    /// Run alone on the host: no other target of this run and no other
+    /// heavy run on the machine beside it (TSK-1145). Only for a target that
+    /// cannot share the host, such as a timing-sensitive one.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub host_exclusive: bool,
 
     /// Runner type.
     pub runner: RunnerType,
@@ -507,11 +523,6 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires a reference
-fn is_zero(value: &u64) -> bool {
-    *value == 0
-}
-
 fn default_true() -> bool {
     true
 }
@@ -539,6 +550,7 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
         "input_class",
         "evidence",
         "exclusive",
+        "host_exclusive",
         "heavy",
         "workers",
     ];
@@ -603,6 +615,12 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
         return Err(TestingError::ConfigInvalid {
             path: path.to_path_buf(),
             message: "worker_budget must be positive".into(),
+        });
+    }
+    if config.execution.host_jobs == Some(0) {
+        return Err(TestingError::ConfigInvalid {
+            path: path.to_path_buf(),
+            message: "host_jobs must be positive".into(),
         });
     }
     if config.execution.max_parallel == Some(0) {
@@ -1152,6 +1170,7 @@ mod tests {
                 input_class: None,
                 evidence: None,
                 exclusive: false,
+                host_exclusive: false,
                 heavy: None,
                 workers: None,
                 runner: RunnerType::Custom,
