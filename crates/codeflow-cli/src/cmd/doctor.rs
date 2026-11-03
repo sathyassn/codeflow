@@ -21,11 +21,12 @@ pub struct DoctorArgs {
     /// readiness is not established and the exit stays 0.
     #[arg(long, conflicts_with_all = ["check", "list"])]
     pub preflight: bool,
-    /// Internal (TSK-337): print whether this process can write each folder
-    /// a Codex builder seat writes outside its worktree, one line each, and
-    /// exit 1 when one is denied. The preflight runs it inside `codex
-    /// sandbox` under the builder launch.
-    #[arg(long, hide = true, conflicts_with_all = ["check", "list", "preflight"])]
+    /// Print whether this process can write each folder a Codex builder seat
+    /// writes outside its worktree, then whether it can open the shared git
+    /// config file for writing (one line each, never changing it), and exit 1
+    /// when a folder is denied. The preflight runs it inside `codex sandbox`
+    /// under the builder launch.
+    #[arg(long, conflicts_with_all = ["check", "list", "preflight"])]
     pub builder_write_probe: bool,
     /// With `--check remote-perimeter`: compare the rulesets `codeflow
     /// remote protect` owns with this profile (solo-administrator or
@@ -88,7 +89,7 @@ pub fn run(args: &DoctorArgs) -> i32 {
                 let _ = term_writeln!(out, "git-config writable {config}");
                 let _ = term_writeln!(
                     out,
-                    "git-config unverified the rename of a new file onto it is not tried, so the file is never replaced"
+                    "git-config unverified: the rename of a new file onto it is not tried, so the file is never replaced"
                 );
             }
             Err(error) => {
