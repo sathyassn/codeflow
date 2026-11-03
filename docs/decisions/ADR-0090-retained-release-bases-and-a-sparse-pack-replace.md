@@ -74,10 +74,10 @@ on a manifest it cannot read (v3.0.0 `doctor/mod.rs:2383-2384`); at v2.0.0
 and v2.1.0 it passes, since it only parses `.codeflow/` files as JSON
 (`SPC-015` R-4). No published binary has a pin check; this line's
 `check_write_version` first ships in 4.0.0.
-The change ships
-as 4.0.0 with one migration step. `SPC-015` pins the formats, the outcome of
-every decision arm and the edge cases; TSK-1086 builds the retained bases,
-TSK-1087 the switch and the migration, TSK-247 the read-only preview.
+The change ships as 4.0.0 with one migration step. `SPC-015` pins the
+formats, the outcome of every decision arm and the edge cases; TSK-1086
+builds the retained bases, TSK-1087 the switch and the migration, TSK-247
+the read-only preview.
 
 Displaced alternatives:
 
@@ -112,7 +112,9 @@ Displaced alternatives:
   published binary removes each entry it can reproduce.
 - The trust surface shrinks: a base read from the binary cannot be edited by
   an agent session, where a committed baseline copy could be. The pack and
-  the pending resolution records stay protected paths, as the baseline was
+  the pending resolution records become protected paths when TSK-1087 adds
+  them (`SPC-015` R-29); the current default protects installed bases under
+  `.codeflow/.baseline/**`
   (`crates/codeflow-core/src/security/policy.rs:48`).
 - The binary grows by the compressed pack, 0.59 MB today, and by at most the
   changed assets of each future release. The advisory budget is 2 MB; the
