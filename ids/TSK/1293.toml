@@ -1,0 +1,11 @@
+id = "TSK-1293"
+uid = "16e4ecc5-0aa9-4e36-bdbf-7c6d862f007c"
+kind = "TSK"
+title = "A project adds its own model lines in the model selection file"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T19:36:32Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
