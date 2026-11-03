@@ -1,0 +1,11 @@
+id = "EPC-037"
+uid = "1491c8a2-bb7b-494f-8eb5-b0c63a07423e"
+kind = "EPC"
+title = "Host qualification and relaxed text rules"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T15:57:30Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
