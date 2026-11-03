@@ -1,4 +1,5 @@
 //! Linux CPU accounting in an already delegated subtree; never provisions delegation.
+use std::cell::Cell;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -66,6 +67,7 @@ pub(super) struct Cgroup {
     name: String,
     pub path: PathBuf,
     launched: bool,
+    membership_uncertain: Cell<bool>,
     events: File,
     membership: PathBuf,
 }
@@ -171,6 +173,7 @@ impl Cgroup {
             directory,
             name,
             launched: false,
+            membership_uncertain: Cell::new(false),
         })
     }
 
@@ -178,8 +181,21 @@ impl Cgroup {
         self.launched = true;
         // Acknowledge the runner's own empty-to-populated launch transition.
         // Later populated transitions with a live launch child are unexpected.
-        validate_population(false, self.read_events()?)?;
-        self.check_membership(pid)
+        self.remember_membership((|| {
+            validate_population(false, self.read_events()?)?;
+            self.check_membership(pid)
+        })())
+    }
+
+    fn remember_membership<T>(&self, result: io::Result<T>) -> io::Result<T> {
+        if result.is_err() {
+            self.membership_uncertain.set(true);
+        }
+        result
+    }
+
+    pub fn termination_uncertain(&self) -> bool {
+        self.membership_uncertain.get()
     }
 
     fn read_events(&self) -> io::Result<bool> {
@@ -221,11 +237,11 @@ impl Cgroup {
     }
 
     pub fn sample(&self, pid: u32) -> io::Result<u64> {
-        self.verify()?;
-        // Migration can cause a false failure, never a pass. Honest tests do
-        // not migrate; observed population/membership anomalies disable stalls.
-        validate_population(self.population_changed()?, self.read_events()?)?;
-        self.check_membership(pid)?;
+        self.remember_membership((|| {
+            self.verify()?;
+            validate_population(self.population_changed()?, self.read_events()?)?;
+            self.check_membership(pid)
+        })())?;
         self.cpu()
     }
 
@@ -235,15 +251,17 @@ impl Cgroup {
     }
 
     fn verify(&self) -> io::Result<()> {
-        let named = self
-            .parent
-            .at(&self.name, libc::O_RDONLY | libc::O_DIRECTORY)?
-            .metadata()?;
-        let held = self.directory.0.metadata()?;
-        if (named.dev(), named.ino()) != (held.dev(), held.ino()) {
-            return Err(io::Error::other("cgroup identity changed"));
-        }
-        Ok(())
+        self.remember_membership((|| {
+            let named = self
+                .parent
+                .at(&self.name, libc::O_RDONLY | libc::O_DIRECTORY)?
+                .metadata()?;
+            let held = self.directory.0.metadata()?;
+            if (named.dev(), named.ino()) != (held.dev(), held.ino()) {
+                return Err(io::Error::other("cgroup identity changed"));
+            }
+            Ok(())
+        })())
     }
 
     /// Runs after the watcher pre-exec hook. Only the inert launch child moves;
@@ -269,12 +287,14 @@ impl Cgroup {
     }
 
     pub fn populated(&self) -> io::Result<bool> {
-        self.verify()?;
-        match counter(&self.directory.text("cgroup.events")?, "populated")? {
-            0 => Ok(false),
-            1 => Ok(true),
-            _ => Err(io::Error::other("invalid cgroup populated value")),
-        }
+        self.remember_membership((|| {
+            self.verify()?;
+            match counter(&self.directory.text("cgroup.events")?, "populated")? {
+                0 => Ok(false),
+                1 => Ok(true),
+                _ => Err(io::Error::other("invalid cgroup populated value")),
+            }
+        })())
     }
 
     pub fn kill(&self) -> io::Result<()> {
@@ -541,7 +561,16 @@ time.sleep(10)
                 Ok(_) => Err(io::Error::other(
                     "unobserved population transition accepted",
                 )),
-                Err(error) => Ok(error.to_string()),
+                Err(error) => {
+                    let reason = error.to_string();
+                    group.sample(child.id())?;
+                    if !group.termination_uncertain() {
+                        return Err(io::Error::other(
+                            "healthy accounting cleared migration uncertainty",
+                        ));
+                    }
+                    Ok(reason)
+                }
             }
         })();
         let _ = child.kill();

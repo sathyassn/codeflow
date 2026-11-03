@@ -81,9 +81,11 @@ pub(super) fn run_observed(
 
     let start = Instant::now();
     let mut child = cmd.spawn().map_err(spawn_err)?;
+    let mut membership_uncertain: Option<String> = None;
     #[cfg(target_os = "linux")]
     if let Some(group) = &mut cgroup {
         if let Err(error) = group.mark_launched(child.id()) {
+            membership_uncertain = Some(error.to_string());
             deadline.unavailable(error.to_string());
         }
     }
@@ -93,8 +95,15 @@ pub(super) fn run_observed(
         watcher.spawned();
     }
     #[cfg(unix)]
-    if let Err(error) = crate::testing::gate_guard::target_group_started(child.id()) {
-        deadline.info.cleanup_details.push(error);
+    {
+        let pid = child.id();
+        // Metadata must not postpone observing this already-running child.
+        let record_by = start + deadline.ceiling.min(CLEANUP_GRACE);
+        if let Err(error) = complete_bookkeeping_before(record_by, move |until| {
+            crate::testing::gate_guard::target_group_started_before(pid, until)
+        }) {
+            deadline.info.cleanup_details.push(error);
+        }
     }
     #[cfg(windows)]
     let mut adoption_error = None;
@@ -183,21 +192,33 @@ pub(super) fn run_observed(
                         .ok_or_else(|| "job accounting unavailable".into())
                         .and_then(|job| job.accounting().map(|v| v.0).map_err(|e| e.to_string()));
                     #[cfg(target_os = "linux")]
-                    let cpu = cgroup.as_ref().map_or_else(
-                        || Err("no delegated cgroup".into()),
-                        |group| group.sample(child.id()).map_err(|e| e.to_string()),
+                    let (cpu, lost_membership) = cgroup.as_ref().map_or_else(
+                        || (Err("no delegated cgroup".into()), false),
+                        |group| {
+                            let cpu = group.sample(child.id()).map_err(|e| e.to_string());
+                            (cpu, group.termination_uncertain())
+                        },
                     );
                     #[cfg(not(any(windows, target_os = "linux")))]
                     let cpu = Err("platform complete accounting unavailable".into());
+                    #[cfg(not(target_os = "linux"))]
+                    let lost_membership = false;
                     CpuObservation {
                         cpu,
-                        membership_uncertain: false,
+                        membership_uncertain: lost_membership,
                     }
                 });
             let old_reason = deadline.info.early_stall_unavailable.is_some();
-            // The regression baseline preserves the existing accounting-only
-            // response; the repair must retain this separate uncertainty.
-            let _ = observation.membership_uncertain;
+            if observation.membership_uncertain {
+                membership_uncertain.get_or_insert_with(|| {
+                    observation
+                        .cpu
+                        .as_ref()
+                        .err()
+                        .cloned()
+                        .unwrap_or_else(|| "target cgroup membership became uncertain".into())
+                });
+            }
             deadline.cpu(now, observation.cpu);
             if !old_reason {
                 if let Some(reason) = &deadline.info.early_stall_unavailable {
@@ -296,7 +317,20 @@ pub(super) fn run_observed(
             if let Some(group) = &cgroup {
                 termination_confirmed &= group.populated().is_ok_and(|populated| !populated);
             }
-            if termination_confirmed && stdout.finished() && stderr.finished() {
+            #[cfg(target_os = "linux")]
+            if cgroup
+                .as_ref()
+                .is_some_and(super::cgroup::Cgroup::termination_uncertain)
+            {
+                membership_uncertain
+                    .get_or_insert_with(|| "target cgroup membership became uncertain".into());
+            }
+            let scoped_processes_ended = termination_confirmed;
+            termination_confirmed &= membership_uncertain.is_none();
+            // An empty original scope cannot account for observed escapes.
+            // Once that scope and its pipes end there is no more proof to wait
+            // for here; return unconfirmed and retain the group evidence.
+            if scoped_processes_ended && stdout.finished() && stderr.finished() {
                 if start.elapsed() >= deadline.ceiling
                     && deadline.info.status == TargetStatus::Passed
                 {
@@ -324,26 +358,29 @@ pub(super) fn run_observed(
     {
         cleanup_errors.push(format!("output collection: {error}"));
     }
+    if let Some(reason) = &membership_uncertain {
+        cleanup_errors.push(format!("termination membership uncertain: {reason}"));
+    }
     if !termination_confirmed {
         cleanup_errors.push("process-tree termination unconfirmed".into());
     }
     #[cfg(unix)]
     if termination_confirmed {
-        let now = start.elapsed();
-        let remaining = CLEANUP_GRACE
-            .saturating_sub(now.saturating_sub(stop.expect("cleanup follows a stop")))
-            .min(
-                deadline
-                    .ceiling
-                    .saturating_add(CLEANUP_GRACE)
-                    .saturating_sub(now),
-            );
-        let finish_by = Instant::now() + remaining;
+        let finish_by = start
+            .checked_add(
+                stop.expect("cleanup follows a stop")
+                    .min(deadline.ceiling)
+                    .saturating_add(CLEANUP_GRACE),
+            )
+            .unwrap_or_else(Instant::now);
         let pid = child.id();
         #[cfg(target_os = "linux")]
         let group = cgroup.take();
-        if let Err(error) = finish_cleanup_before(finish_by, move |finish_by| {
+        if let Err(error) = complete_bookkeeping_before(finish_by, move |finish_by| {
             let mut failures = Vec::new();
+            if Instant::now() >= finish_by {
+                return Err("target group bookkeeping reached the shared deadline".into());
+            }
             #[cfg(target_os = "linux")]
             if let Some(group) = group {
                 if let Err(error) = group.remove_empty() {
@@ -382,7 +419,9 @@ pub(super) fn run_observed(
     if let Some(error) = adoption_error {
         cleanup_errors.push(error);
     }
-    if !cleanup_errors.is_empty() && deadline.info.status == TargetStatus::Passed {
+    if deadline.info.status == TargetStatus::Passed
+        && (!cleanup_errors.is_empty() || !deadline.info.cleanup_details.is_empty())
+    {
         deadline.info.status = TargetStatus::CleanupIncomplete;
     }
     deadline.info.cleanup_details.extend(cleanup_errors);
@@ -419,12 +458,36 @@ pub(super) fn run_observed(
     })
 }
 
-/// One absolute cleanup budget covers every held record and its mutex.
+/// One absolute wait budget covers bookkeeping, every record and its mutex.
 #[cfg(unix)]
-pub(crate) fn finish_cleanup_before(
+pub(crate) fn complete_bookkeeping_before(
     finish_by: Instant,
-    cleanup: impl FnOnce(Instant) -> Result<(), String> + Send + 'static,
+    bookkeeping: impl FnOnce(Instant) -> Result<(), String> + Send + 'static,
 ) -> Result<(), String> {
-    // Preserve synchronous behavior in the regression baseline.
-    cleanup(finish_by)
+    if Instant::now() >= finish_by {
+        return Err("target group bookkeeping reached the shared deadline".into());
+    }
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    // Filesystem I/O cannot be interrupted safely. Never wait for it beyond
+    // the supervisor's remaining budget, or join its worker on return.
+    std::thread::Builder::new()
+        .name("codeflow-group-records".into())
+        .spawn(move || {
+            let _ = send.send(bookkeeping(finish_by));
+        })
+        .map_err(|error| format!("cannot start target group bookkeeping: {error}"))?;
+    let result = receive
+        .recv_timeout(finish_by.saturating_duration_since(Instant::now()))
+        .map_err(|error| match error {
+            std::sync::mpsc::RecvTimeoutError::Timeout => {
+                "target group bookkeeping incomplete at shared deadline".to_string()
+            }
+            std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                "target group bookkeeping worker ended without confirmation".to_string()
+            }
+        })?;
+    if Instant::now() >= finish_by {
+        return Err("target group bookkeeping completed after the shared deadline".into());
+    }
+    result
 }

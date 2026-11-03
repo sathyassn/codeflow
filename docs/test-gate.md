@@ -124,7 +124,17 @@ An exit first observed after the ceiling cannot pass. Termination and pipe
 collection have a fixed five-second cleanup grace, including a descendant
 that keeps a pipe open. Incomplete cleanup remains a failure. Target summaries
 and saved `result.json` reports retain monitoring mode, deadline cause and
-`termination_unconfirmed`. Related task TSK-1279 retains allocation and lease
+`termination_unconfirmed`. Once membership or population evidence becomes
+uncertain, a direct-child exit, closed pipes and an empty original group do
+not prove escaped descendants ended. The run retains that uncertainty and
+fails with unconfirmed termination. CPU-counter unavailability alone is a
+separate ceiling fallback.
+
+Group-record bookkeeping shares the remaining cleanup deadline across its
+mutex and all record locks. Deferred filesystem work is not joined after
+that deadline; an unconfirmed write remains a cleanup failure. Missed writes
+leave stale records conservatively; a late completion cannot turn the result
+into a pass. Related task TSK-1279 retains allocation and lease
 for an unconfirmed target until termination is confirmed or the gate exits.
 
 Tool and membership probes run in the target's working directory with its

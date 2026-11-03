@@ -1303,14 +1303,76 @@ pub fn target_group_finished(pgid: u32) -> Result<(), String> {
     })
 }
 
-/// Pass the supervisor's shared cleanup deadline into group bookkeeping.
+/// Remove a confirmed target group using one deadline for the registry and
+/// every record lock. Callers defer this function: filesystem I/O itself is
+/// not interruptible. A missed write leaves the on-disk record conservative.
 pub(crate) fn target_group_finished_before(
     pgid: u32,
     finish_by: std::time::Instant,
 ) -> Result<(), String> {
-    // Preserve synchronous behavior in the regression baseline.
-    let _ = finish_by;
-    target_group_finished(pgid)
+    update_groups_before(pgid, false, finish_by)
+}
+
+/// Bound initial target records as well as final cleanup records. Filesystem
+/// I/O is deferred by the caller, under the same absolute wait budget.
+pub(crate) fn target_group_started_before(
+    pgid: u32,
+    finish_by: std::time::Instant,
+) -> Result<(), String> {
+    update_groups_before(pgid, true, finish_by)
+}
+
+fn update_groups_before(
+    pgid: u32,
+    running: bool,
+    finish_by: std::time::Instant,
+) -> Result<(), String> {
+    let mut locks = loop {
+        if std::time::Instant::now() >= finish_by {
+            return Err(
+                "target group bookkeeping reached the shared deadline waiting for held records"
+                    .into(),
+            );
+        }
+        match HELD.try_lock() {
+            Ok(locks) => break locks,
+            Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                std::thread::sleep(
+                    std::time::Duration::from_millis(2)
+                        .min(finish_by.saturating_duration_since(std::time::Instant::now())),
+                );
+            }
+        }
+    };
+    let mut failures = Vec::new();
+    for lock in locks.iter_mut() {
+        if running {
+            lock.groups.insert(pgid);
+        } else {
+            lock.groups.remove(&pgid);
+        }
+        lock.recorded.extend(lock.groups.iter().copied());
+        for path in &lock.paths {
+            if std::time::Instant::now() >= finish_by {
+                failures.push("target group bookkeeping reached the shared deadline; remaining records retained".into());
+                return Err(failures.join("; "));
+            }
+            match with_record_lock_before(path, finish_by, || rewrite_record(lock, path)) {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => failures.push(error),
+                Err(error) => failures.push(format!(
+                    "target group record beside {} was retained: {error}",
+                    crate::git::display_path(path),
+                )),
+            }
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
 }
 
 fn update_groups(change: impl Fn(&mut BTreeSet<u32>)) -> Result<(), String> {
@@ -1399,23 +1461,50 @@ fn rewrite_serialized(lock: &Held, path: &Path) -> Vec<String> {
 /// to finish. A holder keeps it only for one read, merge and rename, and
 /// the OS releases it if that process dies.
 fn with_record_lock<T>(lock: &Path, rewrite: impl FnOnce() -> T) -> std::io::Result<T> {
+    with_record_lock_before(
+        lock,
+        std::time::Instant::now() + std::time::Duration::from_secs(5),
+        rewrite,
+    )
+}
+
+fn with_record_lock_before<T>(
+    lock: &Path,
+    finish_by: std::time::Instant,
+    rewrite: impl FnOnce() -> T,
+) -> std::io::Result<T> {
+    let expired = || {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "shared record bookkeeping deadline reached",
+        )
+    };
+    if std::time::Instant::now() >= finish_by {
+        return Err(expired());
+    }
     let mut record_lock = record_path(lock).into_os_string();
     record_lock.push(".lock");
     let record_lock = PathBuf::from(record_lock);
     let (anchor, relative) = lock_anchor(&record_lock)?;
     let guard = crate::contained::Tree::open(anchor)?.create_read_only(&relative)?;
-    let start = std::time::Instant::now();
     loop {
+        if std::time::Instant::now() >= finish_by {
+            return Err(expired());
+        }
         match os_lock::try_lock(&guard) {
             Ok(()) => break,
-            Err(error)
-                if os_lock::is_contended(&error)
-                    && start.elapsed() < std::time::Duration::from_secs(5) =>
-            {
-                std::thread::sleep(std::time::Duration::from_millis(2));
+            Err(error) if os_lock::is_contended(&error) => {
+                std::thread::sleep(
+                    std::time::Duration::from_millis(2)
+                        .min(finish_by.saturating_duration_since(std::time::Instant::now())),
+                );
             }
             Err(error) => return Err(error),
         }
+    }
+    if std::time::Instant::now() >= finish_by {
+        os_lock::unlock(&guard);
+        return Err(expired());
     }
     let result = rewrite();
     os_lock::unlock(&guard);

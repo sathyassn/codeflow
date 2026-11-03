@@ -23,7 +23,7 @@ mod output;
 mod process;
 use deadline::{Supervision, TargetStatus, WorkerGrant};
 #[cfg(all(test, unix))]
-pub(crate) use process::finish_cleanup_before;
+pub(crate) use process::complete_bookkeeping_before as finish_cleanup_before;
 
 #[cfg(unix)]
 mod group_watch;
