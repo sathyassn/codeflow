@@ -801,8 +801,8 @@ pub const SCHEMA: [KeySpec; 78] = [
         kind: KeyKind::Enum(&["trusted", "never"]),
         valid: "trusted | never",
         purpose: "Inline gitleaks:allow handling in the managed CI secret scan.",
-        notes: "Read from the trusted commit (the pull request base, or the pushed \
-                commit). Missing means trusted: only allows on commits it already \
+        notes: "Read from the trusted commit (the default-branch authority for a pull request, \
+                or the pushed commit). Missing means trusted: only allows on commits it already \
                 holds count. With never, every inline allow is ignored; other \
                 trusted exemptions still apply. A pull request's head-only policy \
                 change cannot change its own scan. This key does not affect the pre-commit scan. \
