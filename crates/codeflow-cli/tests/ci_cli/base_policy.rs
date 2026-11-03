@@ -158,6 +158,63 @@ fn a_head_that_changes_the_setup_hook_is_named() {
     assert!(!String::from_utf8_lossy(&out.stderr).contains("this change adds"));
 }
 
+/// TSK-336 AC-11: a head that changes a managed workflow or the release
+/// workflow gets a warning naming the triggers, permissions and jobs it
+/// changes. It never blocks: the default branch's copy keeps judging.
+#[test]
+fn a_head_that_changes_a_workflow_is_warned_by_name() {
+    const POLICY_WF: &str = ".github/workflows/codeflow-policy.yml";
+    const RELEASE_WF: &str = ".github/workflows/codeflow-release.yml";
+    let base_policy = "name: codeflow-policy\non:\n  pull_request_target:\npermissions:\n  contents: read\njobs:\n  commit-lint:\n    name: 'trusted: commit standards'\n    permissions:\n      contents: read\n    runs-on: ubuntu-24.04\n    steps:\n      - run: codeflow ci\n";
+    let dir = fixture(Some("{}"));
+    let root = dir.path();
+    git(root, &["switch", "-q", "main"]);
+    write(root, POLICY_WF, base_policy);
+    write(root, RELEASE_WF, "on: pull_request\njobs:\n  release-impact:\n    name: release impact\n    runs-on: ubuntu-24.04\n    steps:\n      - run: true\n");
+    commit(root, "ci: add the workflows");
+    git(root, &["switch", "-q", "feat/x"]);
+    git(root, &["merge", "-q", "--ff-only", "main"]);
+    let quiet = said(&ci(root));
+    assert!(!quiet.contains("ci.workflow_change"), "{quiet}");
+
+    let widened = base_policy
+        .replace("on:\n  pull_request_target:\n", "on:\n  pull_request_target:\n  push:\n")
+        .replace("    permissions:\n      contents: read\n", "    permissions:\n      contents: write\n")
+        + "  forged:\n    name: 'trusted: secret scan'\n    runs-on: ubuntu-24.04\n    steps:\n      - run: true\n";
+    write(root, POLICY_WF, &widened);
+    std::fs::remove_file(root.join(RELEASE_WF)).unwrap();
+    commit(root, "ci: widen the policy workflow");
+    let out = ci(root);
+    let text = said(&out);
+    assert!(text.contains("warning — ci.workflow_change"), "{text}");
+    assert!(
+        text.contains(&format!("this change edits {POLICY_WF}")),
+        "{text}"
+    );
+    assert!(text.contains("adds triggers push"), "{text}");
+    assert!(
+        text.contains("adds jobs forged ('trusted: secret scan')"),
+        "{text}"
+    );
+    assert!(
+        text.contains("changes the permissions of jobs commit-lint ('trusted: commit standards')"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("this change edits {RELEASE_WF}")),
+        "{text}"
+    );
+    assert!(
+        text.contains("removes it: triggers pull_request; jobs release-impact ('release impact')"),
+        "{text}"
+    );
+    assert!(
+        text.contains("authority: the default branch's copy of each workflow"),
+        "{text}"
+    );
+    assert_ne!(out.status.code(), Some(1), "a warning never blocks: {text}");
+}
+
 #[test]
 fn the_base_policy_also_lets_through_what_it_allows() {
     let dir = fixture(Some(LOOSER));
