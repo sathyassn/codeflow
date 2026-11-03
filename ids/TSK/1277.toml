@@ -1,0 +1,11 @@
+id = "TSK-1277"
+uid = "196f4063-ec02-408e-9bab-c7a12e51f2a4"
+kind = "TSK"
+title = "A landing candidate's check judges each member at its own reviewed head"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T05:44:04Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
