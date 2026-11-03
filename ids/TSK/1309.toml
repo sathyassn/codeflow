@@ -1,0 +1,11 @@
+id = "TSK-1309"
+uid = "1fbfc2a2-5178-4275-826f-d2175fa6a0dc"
+kind = "TSK"
+title = "A reviewed head vouches only for that task's own work"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T22:04:39Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
