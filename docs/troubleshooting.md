@@ -87,7 +87,7 @@ Each row below is one check, in the order doctor prints it.
 | `startup-files` | The shell startup class (issue 86) and the default git configuration files in `.claude/settings.json` (the `Edit` denies and the sandbox `denyWrite` entries) and in the profile `.codex/config.toml` selects and in `cf-builder`, read through `extends` with the nearest entry winning, as listed rules; whether `ZDOTDIR` or `XDG_CONFIG_HOME` is moved from its default; then the `source` and `.` lines of `~/.bashrc`, `~/.bash_profile`, `~/.profile`, `~/.zshenv`, `~/.zprofile` and `~/.zshrc`, each read once up to 256 KiB and never followed | Warn: a settings file is absent, unreadable or lacks entries of the class, or the Codex config selects another profile, sets `sandbox_mode`, or lets the selected profile or `cf-builder` write a class path or a path above or below one, in any spelling of the home, so that harness's sandbox does not deny every startup write. Warn: `ZDOTDIR` or `XDG_CONFIG_HOME` is moved or relative, so the startup files there have no generated deny. Warn: a startup file sources a literal path outside the class, or a path the check cannot read (a variable other than `$HOME`, a glob or a substitution), where an agent could plant a definition no rule protects. This check never fails doctor, and it cannot observe whether a harness enforces the rules it lists | For the settings, run `codeflow update`, resolving any `.new` file it writes. For a write grant in a profile, remove it from `.codex/config.toml`. For a moved directory, add deny rules for it to the harness settings yourself, or set the variable back to its default. All findings print together. For a sourced file, move what the named line sources into a protected startup path such as `~/.zsh/`, `~/.bashrc.d/` or `~/.config/fish/conf.d/`, or inline it |
 | `sandbox` | The text rule the exec guard applies (ADR-0088), through the function the hook uses, for a session started at the project root; the policy; the CodeFlow state root against the project, the temporary directory and every Claude settings layer's `allowWrite` and `additionalDirectories` | Fail: the policy cannot be read, or a Claude write grant reaches the state root. Note: `text rule: strict` with the reason, or `text rule: relaxed by operator choice, not verified` with the ref it was read from, which is the remote-tracking state as last fetched; either way, the level each kind of finding takes; Codex and Grok write grants are not checked | Nothing for the strict rule. To relax it, the operator lands `security.text_guard: relaxed` in `.codeflow/policy.json` on every protected ref the hook reads, then fetches; a `relaxed` in the working copy, a local branch or tag, or a repository without a remote is not honoured |
 | `config` | Every `.json` file under `.codeflow/`, parsed recursively | Warn: `.codeflow/` does not exist. Fail: a listed file does not parse, or the directory could not be scanned | Run `codeflow init` when the directory is missing. Repair the JSON in each listed file |
-| `permissions` | The owner write bit on `.codeflow/`, on Unix only, then whether this process can write the directories essential and full gates write outside the worktree: the lock directories (`locks/` under the CodeFlow home and `codeflow/` under the git common directory) and `gate-runs/` under the CodeFlow home. Says so when it runs inside the Claude Code sandbox (`SANDBOX_RUNTIME` set). Also reports what the `cf-builder` and `cf-guard` profiles in `.codex/config.toml` grant on `~/.codeflow/locks` and `~/.codeflow/gate-runs`, following `extends` and counting a grant on a covering folder; that report reads configuration and never changes the result. Inside a Codex seat (`CODEX_SANDBOX` set), an unwritable `gate-runs/` is reported as by design: the seat can take a heavy-run slot under its `~/.codeflow/locks` grant, but a full gate that keeps its evidence runs outside the seat (issue 254) | Fail: `.codeflow/` is not writable. Warn: a named gate directory is not writable, so essential and full gates, heavy quick targets and `codeflow reserve` refuse with `gate lock unavailable` before taking a heavy-run slot, or a gate fails to keep its evidence | Give the owner write permission on `.codeflow/`. For a gate directory, inside the Claude sandbox the operator adds `~/.codeflow/locks` to `sandbox.filesystem.allowWrite` (the shipped presets allow it, and `codeflow update` adds it). No preset grants `~/.codeflow/gate-runs`, so a full gate that keeps its evidence runs outside the sandbox, in the operator's terminal or as an approved unsandboxed run; a builder completing its own full run is a separate approved task (issue 254). Inside a Codex seat (`CODEX_SANDBOX` set), a review seat writes neither folder by design, so `codeflow reserve` and quick-mode heavy targets run in a builder seat relaunched with the builder launch in cf-model-orchestrator's `resources/routing/transport.md`; `codeflow doctor --preflight` checks that launch |
+| `permissions` | The owner write bit on `.codeflow/`, on Unix only, then whether this process can write the directories essential and full gates write outside the worktree: the lock directories (`locks/` under the CodeFlow home and `codeflow/` under the git common directory) and `gate-runs/` under the CodeFlow home. Says so when it runs inside the Claude Code sandbox (`SANDBOX_RUNTIME` set). Also reports what the `cf-builder` and `cf-guard` profiles in `.codex/config.toml` grant on `~/.codeflow/locks` and `~/.codeflow/gate-runs`, following `extends` and counting a grant on a covering folder; that report reads configuration and never changes the result. Inside a Codex seat (`CODEX_SANDBOX` set), an unwritable `gate-runs/` is reported with the words "only a full gate copies its record there, so quick and essential gates are not stopped (a grant on it is the operator's decision)", and the check adds the builder seat's limits, which begin "shipped defaults, not measured for this seat": the seat can write its worktree, commit, push branches, claim a task, take the gate lock folders and run `codeflow reserve`, quick and essential gates, and cannot write the shared git config file or `~/.codeflow/gate-runs` (only a full run copies its record there). The seat can take a heavy-run slot under its `~/.codeflow/locks` grant, and a full gate that keeps its evidence runs outside the seat (issue 254) | Fail: `.codeflow/` is not writable. Warn: a named gate directory is not writable, so essential and full gates, heavy quick targets and `codeflow reserve` refuse with `gate lock unavailable` before taking a heavy-run slot, or a gate fails to keep its evidence | Give the owner write permission on `.codeflow/`. For a gate directory, inside the Claude sandbox the operator adds `~/.codeflow/locks` to `sandbox.filesystem.allowWrite` (the shipped presets allow it, and `codeflow update` adds it). No preset grants `~/.codeflow/gate-runs`, so a full gate that keeps its evidence runs outside the sandbox, in the operator's terminal or as an approved unsandboxed run; a builder completing its own full run is a separate approved task (issue 254). Inside a Codex seat (`CODEX_SANDBOX` set), a review seat writes neither folder by design, so `codeflow reserve` and quick-mode heavy targets run in a builder seat relaunched with the builder launch in cf-model-orchestrator's `resources/routing/transport.md`; `codeflow doctor --preflight` checks that launch |
 | `policy-source` | Where the agent guards read `.codeflow/policy.json` and `.codeflow/project.toml`: the remote's default branch as last fetched, named by `refs/remotes/<remote>/HEAD`, at one commit; `HEAD` (or the working copy on an unborn `HEAD`) only for initialization, a remote that advertises no refs, or local only, no remote. It never fetches; with no tracking refs it asks the remote whether it has any | Fail: the source cannot be read, such as several remotes without an `origin`, an unset remote HEAD or one that names no tracking branch, a dangling remote HEAD, or no tracking refs for a remote that has refs. Ok names the authority ref and its commit, or the labelled state, and any local policy drift | Run `git fetch`. For an unset remote HEAD, the operator runs `git remote set-head <remote> -a` ([enforcement planes](architecture/enforcement-planes.md#in-session-guards)) |
 | `secret-engine` | `git.secret_scan_engine` and `git.secret_scan` in the effective policy; with `gitleaks`, the absolute folders on PATH in order, the first `gitleaks` found, its SHA-256, and its version when the checksum is the pinned one. It runs only a binary whose checksum matches | Fail at `block`, warn at `warn`: no binary is pinned for this platform, gitleaks is not on PATH, the file found is not the pinned binary (it is never run), or the pinned binary reports another version. Ok with `builtin`, with the scan off, or with the pinned binary; each message names the folders searched and the pin | Download the gitleaks 8.30.1 release archive for this platform, check it against the release's checksums file and put its binary on PATH; a package manager's build has another checksum. Or set `git.secret_scan_engine` back to `builtin` ([policy reference](policy-reference.md#the-commit-time-gitleaks-engine)) |
 | `network` | Whether `host` is on PATH, then a two-second lookup of github.com. When `SANDBOX_RUNTIME` is set, as in the Claude Code sandbox, which has no direct DNS and carries traffic through its proxy, an HTTPS request to github.com with `curl` instead, which passes only on an HTTP 2xx or 3xx answer | Warn: the probe tool is missing so the probe was skipped, or the probe failed; the message quotes the error or the HTTP status, such as a 403 from a proxy that refuses the host | Nothing is required. Install the probe tool to enable the probe, or restore the connection |
@@ -111,10 +111,12 @@ Heavy runs share the host by capacity; none waits for another. Essential
 and full gates, heavy quick targets and `codeflow reserve` each take one
 free slot in both lock folders for the run: `locks/` under the CodeFlow
 home, which spans repositories, and `codeflow/` under the git common
-directory, which spans a repository's worktrees. Slot 0 is
-`full-gate.lock`; slot `n` is `full-gate-<n>.lock`, with its record
-`full-gate-<n>.record` beside it. Each run also holds the folder's
-`host.lock` shared. Gates in several worktrees and projects run at once.
+directory, which spans a repository's worktrees. Slot `n` is
+`full-gate-<n>.lock`, from 1 up, with its record `full-gate-<n>.record`
+beside it. Each run also holds the folder's `host.lock` shared, and
+`full-gate.lock` shared as the fence for older binaries (see "Older
+CodeFlow binaries on the same machine" below). Gates in several worktrees
+and projects run at once.
 A folder has no fixed number of slots: a run that finds every slot busy
 creates the next one.
 `gate lock unavailable` means a folder or lock cannot be opened or a record
@@ -163,8 +165,8 @@ a configured quick mode use `execution.quick_default_class`, which accepts
 precedence. When there are no quick targets and quick falls back to
 essential, undeclared targets are heavy. Light targets take no slot.
 
-Read each slot's and the host lock's holder with `codeflow test
---lock-status`. This reads the records without taking a lock, changing a
+Read the holders of the host lock, the fence and each slot with
+`codeflow test --lock-status`. This reads the records without taking a lock, changing a
 record or starting a target. A killed gate can leave a stale record; the
 next run that takes that slot reclaims it. A free slot whose record names a
 live target group counts as busy, so a target that outlived its gate still
@@ -191,11 +193,11 @@ host-exclusive target runs, and an unreadable slot record refuses it. The nested
 its targets' process groups to the holder's record and leaves those still
 running there when it ends, so a target that survives a killed nested run
 keeps the slot busy until it exits. Each rewrite of a slot's record holds
-the OS lock of the record lock beside it (`full-gate.record.lock` for slot
-0) from read to rename, so the reserve and the nested run never drop a
+the OS lock of the record lock beside it (`full-gate-1.record.lock` for
+slot 1) from read to rename, so the reserve and the nested run never drop a
 group line the other just added. If that lock cannot be taken within five
-seconds, the rewrite runs without it and the gate reports the missed
-serialization. Full and essential gates under a reserve take a slot of
+seconds, the record is left as it is and the gate reports it; a rewrite
+never runs without the lock. Full and essential gates under a reserve take a slot of
 their own. On Windows a nested quick run takes a slot of its own.
 
 `execution.worker_budget`, when configured, divides workers among ready
@@ -214,13 +216,46 @@ Each Cargo producer takes the full budget to avoid package-cache and
 build-directory waits, and timing-sensitive `read-benchmark` requests host
 exclusivity.
 
-A 3.x binary on the same machine locks `full-gate.lock` exclusively, so it
-refuses while a 4.0 run holds slot 0; a 4.0 run beside it takes the next
-slot. Direct commands outside the wrapper and other applications also
+Direct commands outside the wrapper and other applications also
 consume resources that the job budget does not see. Declared heavy targets
 and reserved commands end their process groups when the controller exits.
 On Unix, other targets can outlive a killed gate; their slot counts as
 busy until they end.
+
+#### Older CodeFlow binaries on the same machine
+
+A 3.1 gate, or a 4.0 line build from before TSK-1145, locks
+`full-gate.lock` exclusively and runs alone. Every 4.0 run holds it shared
+for its whole life, in both lock folders, before it takes a slot, so the
+two never run at the same time, in either order.
+
+| Situation | What happens |
+|---|---|
+| An older gate starts while a 4.0 run is active | It refuses, as it refuses beside another older gate; an older 4.0 line build told to wait waits instead |
+| A 3.1 gate names the holder | It reads the text inside `full-gate.lock`. 4.0 runs never write it, so the 3.1 gate says the holder has not recorded itself, or names a killed 3.1 gate that left its record there |
+| An older 4.0 line build names the holder | It reads `full-gate.record`, which names the last admitted 4.0 run. That run may have ended, since no release rewrites the record |
+| You want to see what is recorded | Run `codeflow test --lock-status` with a 4.0 binary, or read the slot records `full-gate-<n>.record`: they show the recorded slots and target groups, and the line for `full-gate.lock` says it is the last recorded holder. The stale name goes away when an older gate next gets the lock, once no 4.0 run is active: a 3.1 gate replaces the text inside `full-gate.lock`, and an older 4.0 line build replaces `full-gate.record` |
+| A 4.0 run starts while an older gate is active | It refuses at once with `an older CodeFlow binary's gate is running on this machine`, naming the last recorded holder. It takes no slot, starts nothing and does not wait; run it again when that gate ends |
+| Targets a killed older gate started still run | A 4.0 run refuses the same way and names their process groups, since they run alone as their gate did |
+| A 4.0 run cannot open or lock `full-gate.lock` for any other reason | It refuses with `gate lock unavailable`, naming the file |
+
+The hold lasts as long as the targets of the run that took it:
+
+| Case | Effect on older gates |
+|---|---|
+| Unix: every target of an admitted 4.0 run | Inherits the run's shared hold on `full-gate.lock`, so older gates stay out while any process of the target that kept it runs: after the gate ends, after it is killed, and for grandchildren too |
+| Windows | A target and all its descendants end when the gate exits or is killed (a kill-on-close job object), so nothing outlives the hold |
+| A daemon that closes the descriptors it inherited | It does not keep the hold, so an older gate can start beside it |
+| A daemon that keeps them, such as a build cache server a target starts | Older gates stay out until it exits; new runs are not affected. Stop the daemon to let an older gate in |
+| A target that unlocks the inherited descriptor itself | The hold ends for every process sharing it |
+| A lock folder on NFS | Linux emulates this lock with per-process locks, so the hold ends with the gate even while its targets run |
+
+Upgrading from an earlier 4.0 line build:
+
+| Case | What to do |
+|---|---|
+| A build that includes TSK-1145 but not this change | It is not fenced out: when it finds `full-gate.lock` busy it takes a later slot, so it runs beside this version. Let every run of such a build end, or rebuild it from a line that has this change, before running this version on the machine. No released version is such a build |
+| Lock files and records such a build left | No cleanup: `full-gate.lock`, `full-gate.record` and the slot files are read as they are. Stale records are reclaimed, a run of that build still holding a slot from 1 up counts as a run, and one holding `full-gate.lock` itself is treated as an older gate |
 
 ### Fix a failing check
 

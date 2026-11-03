@@ -657,6 +657,7 @@ pub fn run_dependency_targets_with_admission(
             let run_dir = run_dir.to_path_buf();
             std::thread::spawn(move || {
                 announce_start(&target, &mode);
+                let unconfirmed = std::sync::atomic::AtomicBool::new(false);
                 let result = std::panic::catch_unwind(|| {
                     run_owed_target(
                         &target,
@@ -666,6 +667,7 @@ pub fn run_dependency_targets_with_admission(
                         &run_dir,
                         &declarations,
                         worker_note.as_deref(),
+                        &unconfirmed,
                     )
                 })
                 .unwrap_or_else(|_| {
@@ -674,6 +676,8 @@ pub fn run_dependency_targets_with_admission(
                         message: "target worker panicked".into(),
                     })
                 });
+                let unconfirmed = unconfirmed.load(std::sync::atomic::Ordering::SeqCst);
+                let result = keep_unconfirmed(&target, result, unconfirmed);
                 let _ = tx.send((index, result));
             });
             if exclusive_running {
@@ -698,17 +702,21 @@ pub fn run_dependency_targets_with_admission(
         } else {
             rx.recv().ok()
         };
-        let Some((index, mut result)) = received else {
+        let Some((index, result)) = received else {
             if waiting {
                 continue;
             }
             break;
         };
         let unconfirmed = result
-            .as_mut()
+            .as_ref()
             .is_ok_and(|run| retain_if_unconfirmed(project_dir, run, &mut host_hold));
         if unconfirmed {
             termination_unconfirmed = true;
+            progress!(
+                "[codeflow test] {}: termination unconfirmed; allocation and host lease kept until this gate exits",
+                targets[index].name
+            );
         }
         running.remove(&index);
         if !unconfirmed {
@@ -741,21 +749,35 @@ pub fn run_dependency_targets_with_admission(
     results.into_values().collect()
 }
 
+/// A failure after the command ran (saving its evidence, or a worker panic)
+/// must not lose unconfirmed termination, or the scheduler would release the
+/// reservations of processes that may still run.
+fn keep_unconfirmed(
+    target: &TargetConfig,
+    result: Result<TargetRunResult, TestingError>,
+    unconfirmed: bool,
+) -> Result<TargetRunResult, TestingError> {
+    match result {
+        Err(error) if unconfirmed => {
+            let mut run = runner_failure(target, &error);
+            run.termination_unconfirmed = true;
+            Ok(run)
+        }
+        other => other,
+    }
+}
+
+/// The one consumer of [`TargetRunResult::termination_unconfirmed`]. It reads
+/// the result and keeps the reservations; the runner owns the result's status.
 pub(crate) fn retain_if_unconfirmed(
     root: &Path,
-    run: &mut TargetRunResult,
+    run: &TargetRunResult,
     exclusive: &mut Option<(usize, super::gate_guard::HostExclusive)>,
 ) -> bool {
     if !run.termination_unconfirmed {
         return false;
     }
     super::gate_guard::retain_unconfirmed(root, exclusive.take().map(|(_, hold)| hold));
-    if run.exit_code == 0 {
-        run.exit_code = -1;
-    }
-    run.error.get_or_insert_with(|| {
-        "termination unconfirmed; reservation retained until gate exit".into()
-    });
     true
 }
 
@@ -795,7 +817,7 @@ fn not_run(target: &TargetConfig, reason: &str) -> TargetRunResult {
 
 // The two merged gate changes (TSK-331 admission, TSK-411 failure detail)
 // meet here; one flow keeps each outcome next to the step that causes it.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn run_owed_target(
     target: &TargetConfig,
     mode: &str,
@@ -804,6 +826,7 @@ fn run_owed_target(
     run_dir: &Path,
     declarations: &[TargetConfig],
     worker_note: Option<&str>,
+    unconfirmed: &std::sync::atomic::AtomicBool,
 ) -> Result<TargetRunResult, TestingError> {
     // Paths a target names are reached through the anchored walk, never
     // following a link or junction at any component (TSK-1044).
@@ -838,6 +861,10 @@ fn run_owed_target(
     let mut result = run_target(target, mode, root).map_err(|error| {
         super::delivery::invalid(root, super::evidence::redact(declared, &error.to_string()))
     })?;
+    unconfirmed.store(
+        result.termination_unconfirmed,
+        std::sync::atomic::Ordering::SeqCst,
+    );
     let after = super::evidence::observe(root, declared, declarations, home.as_deref());
     result.evidence = Some(serde_json::to_value(super::evidence::Execution {
         name: target.name.clone(),
@@ -1278,6 +1305,89 @@ fn this_binary_if_same(program: &std::ffi::OsStr, cwd: &Path) -> Option<std::pat
 // The two merged gate changes (TSK-331 admission, TSK-411 failure detail)
 // meet here; one flow keeps each outcome next to the step that causes it.
 #[allow(clippy::too_many_lines)]
+/// Make `descriptors` survive the exec of `cmd`'s program, in the child
+/// only: this process's copies stay close-on-exec, so no other command
+/// inherits them. A descriptor whose flag cannot be cleared fails the spawn,
+/// and the program never runs.
+#[cfg(unix)]
+fn inherit_descriptors(cmd: &mut Command, descriptors: Vec<std::os::fd::RawFd>) {
+    use std::os::unix::process::CommandExt;
+    if descriptors.is_empty() {
+        return;
+    }
+    // SAFETY: the closure runs between fork and exec and calls only fcntl,
+    // which is async-signal-safe; it allocates nothing.
+    unsafe {
+        cmd.pre_exec(move || {
+            for &fd in &descriptors {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
+/// Give the target its own process tree: on Unix its own process group, so
+/// a timeout can kill the WHOLE tree. `sh -c` may fork the real command as a
+/// grandchild that inherits the pipe write-ends; killing only `sh` then
+/// leaves the reader threads blocked until the orphan exits (observed on
+/// Linux CI: a timed-out `sleep 30` held the gate for the full 30s). The
+/// trade: a terminal Ctrl-C no longer reaches the test child automatically,
+/// which is acceptable, since the deadline reaps the whole group either way.
+/// On Windows the target starts suspended so it joins its job object before
+/// it can start a child of its own (TSK-142 AC-3).
+fn isolate_tree(cmd: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(target_job::CREATE_SUSPENDED);
+    }
+}
+
+/// Spawn `cmd`. On Unix the target inherits the fences this process holds,
+/// so the fence lasts while any process of the target lives, a killed
+/// gate's grandchildren included, and older binaries' gates stay out
+/// (TSK-1256). This process's copies close after the spawn; a fence is
+/// never unlocked here, which would release it for the target too.
+///
+/// A `hand_over` command (this binary under `codeflow reserve`) gets no
+/// extra copy: it receives the fence among the named lock copies, which it
+/// keeps for its life and makes close-on-exec, and it takes a fence of its
+/// own for its targets. An unnamed copy would stay inheritable in it and
+/// reach every child it starts, helpers included.
+fn spawn_inheriting_fences(
+    cmd: &mut Command,
+    hand_over: bool,
+) -> std::io::Result<std::process::Child> {
+    #[cfg(unix)]
+    {
+        if hand_over {
+            return cmd.spawn();
+        }
+        let fences = crate::testing::gate_guard::fence_copies()?;
+        inherit_descriptors(
+            cmd,
+            fences.iter().map(std::os::fd::AsRawFd::as_raw_fd).collect(),
+        );
+        let child = cmd.spawn();
+        drop(fences);
+        child
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = hand_over;
+        cmd.spawn()
+    }
+}
+
 fn spawn_prepared(
     mut cmd: Command,
     target_name: &str,
@@ -1286,8 +1396,6 @@ fn spawn_prepared(
     supervised: bool,
     hand_over: bool,
 ) -> Result<CommandOutcome, TestingError> {
-    #[cfg(not(unix))]
-    let _ = hand_over;
     // Pipe output so it can be captured while we poll for the timeout. Reader
     // threads drain the pipes concurrently — without them a chatty command
     // could fill the pipe buffer and deadlock while we sit in try_wait().
@@ -1298,25 +1406,7 @@ fn spawn_prepared(
         message: format!("{e}"),
     };
 
-    // Run the command in its own process group (Unix) so a timeout can kill
-    // the WHOLE tree. `sh -c` may fork the real command as a grandchild that
-    // inherits the pipe write-ends; killing only `sh` then leaves the reader
-    // threads blocked until the orphan exits (observed on Linux CI: a
-    // timed-out `sleep 30` held the gate for the full 30s). The trade: a
-    // terminal Ctrl-C no longer reaches the test child automatically —
-    // acceptable, since the deadline below reaps the whole group either way.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-    // On Windows the target starts suspended so it joins its job object
-    // before it can start a child of its own (TSK-142 AC-3).
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(target_job::CREATE_SUSPENDED);
-    }
+    isolate_tree(&mut cmd);
 
     #[cfg(unix)]
     let mut watcher = if supervised {
@@ -1324,7 +1414,7 @@ fn spawn_prepared(
     } else {
         None
     };
-    let mut child = cmd.spawn().map_err(spawn_err)?;
+    let mut child = spawn_inheriting_fences(&mut cmd, hand_over).map_err(spawn_err)?;
     #[cfg(unix)]
     if let Some(watcher) = &mut watcher {
         watcher.spawned();
@@ -1640,6 +1730,26 @@ pub fn check_balanced_quotes(command: &str) -> Result<(), TestingError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_failure_after_the_command_keeps_unconfirmed_termination() {
+        let target: TargetConfig = serde_json::from_value(serde_json::json!({
+            "name": "sample", "runner": "custom",
+            "modes": {"full": {"command": "true"}}
+        }))
+        .unwrap();
+        let failed = || {
+            Err(TestingError::ParallelExecutionError {
+                target: "sample".into(),
+                message: "evidence could not be saved".into(),
+            })
+        };
+        let kept = keep_unconfirmed(&target, failed(), true).unwrap();
+        assert!(kept.termination_unconfirmed);
+        assert_ne!(kept.exit_code, 0);
+        assert!(kept.error.is_some());
+        assert!(keep_unconfirmed(&target, failed(), false).is_err());
+    }
+
     use super::*;
     use crate::testing::config::{ModeCommand, RunnerType};
     use std::collections::BTreeMap;
@@ -2852,5 +2962,47 @@ mod report_open_tests {
         std::fs::hard_link(&near, other.join("junit.xml")).unwrap();
         let error = open_report(root.path(), &other.join("junit.xml")).unwrap_err();
         assert!(error.to_string().contains("hard link"), "{error}");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod fence_inheritance_tests {
+    use super::*;
+
+    /// TSK-1256 R5: a descriptor whose close-on-exec flag cannot be cleared
+    /// fails the spawn itself, so the program never runs without its fence.
+    #[test]
+    fn a_fence_that_cannot_be_inherited_refuses_the_spawn() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("ran");
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "touch ran"]).current_dir(dir.path());
+        // No process has this descriptor open.
+        inherit_descriptors(&mut cmd, vec![i32::MAX - 1]);
+        let error = cmd.spawn().expect_err("the spawn refuses");
+        assert_eq!(error.raw_os_error(), Some(libc::EBADF), "{error}");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!marker.exists(), "the program never ran");
+    }
+
+    /// The child inherits a cleared descriptor; this process's copy stays
+    /// close-on-exec.
+    #[test]
+    fn an_inherited_descriptor_reaches_the_child_only() {
+        use std::os::fd::AsRawFd;
+        let dir = tempfile::tempdir().unwrap();
+        let file = std::fs::File::open(dir.path()).unwrap();
+        let fd = file.as_raw_fd();
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", &format!("test -e /dev/fd/{fd}")]);
+        inherit_descriptors(&mut cmd, vec![fd]);
+        assert!(cmd.status().unwrap().success(), "the child has it");
+        // SAFETY: F_GETFD only reads this process's descriptor flags.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert_ne!(
+            flags & libc::FD_CLOEXEC,
+            0,
+            "the parent's copy is unchanged"
+        );
     }
 }

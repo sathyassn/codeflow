@@ -61,6 +61,7 @@ fn blocked(dir: &Path, record: String) -> LockHeld {
         holder: record,
         running_groups: Vec::new(),
         exclusive: true,
+        older_binary: false,
     }
 }
 
@@ -689,7 +690,7 @@ mod tests {
             )
             .unwrap();
             let mut exclusive = Some((0, hold));
-            let mut result = crate::testing::runner::TargetRunResult {
+            let result = crate::testing::runner::TargetRunResult {
                 target_name: "incomplete-cleanup".into(),
                 termination_unconfirmed: true,
                 exit_code: 0,
@@ -705,10 +706,27 @@ mod tests {
             };
             assert!(crate::testing::runner::retain_if_unconfirmed(
                 &root,
-                &mut result,
+                &result,
                 &mut exclusive
             ));
-            assert_ne!(result.exit_code, 0);
+            std::fs::write(root.join("ready"), b"retained").unwrap();
+            loop {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        } else if action == "exclusive-only" {
+            drop(
+                super::super::hold_host_exclusive_in(
+                    &domain(&root),
+                    &root,
+                    Duration::from_secs(10),
+                )
+                .unwrap(),
+            );
+        } else if action == "unconfirmed-shared" {
+            let lock = super::super::acquire_gate_lock(&domain(&root), &root, "full").unwrap();
+            super::super::retain_unconfirmed_in(Ok(domain(&root)), None);
+            // The scheduler returns and drops its admission after retaining it.
+            drop(lock);
             std::fs::write(root.join("ready"), b"retained").unwrap();
             loop {
                 std::thread::sleep(Duration::from_millis(10));
@@ -951,6 +969,44 @@ mod tests {
         std::fs::write(root.join(format!("release-{second}")), "").unwrap();
         assert!(a.0.wait().unwrap().success());
         assert!(b.0.wait().unwrap().success());
+    }
+
+    /// What an older binary's gate does: take the fence exclusively.
+    fn older_binary_refused(dirs: &[PathBuf]) -> bool {
+        let fence = open_lock_file(&dirs[0].join(super::super::LOCK_FILE)).unwrap();
+        match super::super::os_lock::try_lock(&fence) {
+            Ok(()) => {
+                super::super::os_lock::unlock(&fence);
+                false
+            }
+            Err(error) => {
+                assert!(super::super::os_lock::is_contended(&error), "{error}");
+                true
+            }
+        }
+    }
+
+    #[test]
+    fn retained_admission_keeps_older_binaries_out_until_gate_exit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = domain(tmp.path());
+        let mut child = stopped_owner(tmp.path(), Point::Disabled, "unconfirmed-shared");
+        assert!(older_binary_refused(&dirs), "the fence closed with the run");
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        assert!(!older_binary_refused(&dirs));
+    }
+
+    #[test]
+    fn a_queued_exclusive_request_keeps_older_binaries_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = domain(tmp.path());
+        // Stopped with its ticket published, before it tries the host.
+        let mut child = stopped_owner(tmp.path(), Point::Published, "exclusive-only");
+        assert!(older_binary_refused(&dirs), "no fence while queued");
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        assert!(!older_binary_refused(&dirs));
     }
 
     #[test]
