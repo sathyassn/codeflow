@@ -544,6 +544,20 @@ fn ci(root: &Path, extra: &[&str]) -> String {
     codeflow(root, &args)
 }
 
+/// [`ci`] with the exit status kept, for a test that must tell a clean run
+/// from one that stopped early.
+fn ci_status(root: &Path, extra: &[&str]) -> (Option<i32>, String) {
+    let mut args = vec![
+        "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x",
+    ];
+    args.extend(extra);
+    let out = command(exe().to_str().unwrap(), root)
+        .args(&args)
+        .output()
+        .unwrap();
+    (out.status.code(), text(&out))
+}
+
 /// A fresh `codeflow init --yes <tier>` project, made once per tier, kept
 /// until the process exits, and copied for each test.
 fn scaffolded(tier: &str) -> tempfile::TempDir {
@@ -1198,8 +1212,21 @@ fn clears_ci_workflow_changed() {
             root,
             &["commit", "-q", "-m", "ci: restore the policy workflow"],
         );
-        let after = ci(root, &[]);
+        // The after run must succeed and name the workflow check among the
+        // checks it ran, so an early error or an empty run cannot pass.
+        let (status, after) = ci_status(root, &[]);
+        assert_eq!(status, Some(0), "{after}");
         assert!(!after.contains("ci.workflow_change"), "{after}");
+        let clean = after
+            .lines()
+            .find(|line| line.starts_with("codeflow ci: clean — "))
+            .unwrap_or_else(|| panic!("no clean report in:\n{after}"));
+        assert!(
+            clean
+                .split(['—', ','])
+                .any(|check| check.trim().starts_with("workflow-change")),
+            "the workflow check did not run: {clean}"
+        );
     }
 }
 
