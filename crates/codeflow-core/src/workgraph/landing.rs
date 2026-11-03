@@ -1900,6 +1900,177 @@ mod tests {
         refuses_both_orders(dir.path(), "different versions");
     }
 
+    const SIDE: &str = "When run, the system shall stop.";
+
+    /// The current branch merges `side` and keeps its own tree.
+    fn keep_against(root: &std::path::Path, side: &str) {
+        git(root, &["merge", "-q", "-s", "ours", "-m", "keep", side]);
+    }
+
+    /// A new branch `side` off `from` holds `text` as the record, or deletes it
+    /// when `None`; then `main` merges it and keeps its own version of the
+    /// record.
+    fn main_keeps_against_side(root: &std::path::Path, from: &str, text: Option<&str>) {
+        git(root, &["switch", "-q", "-c", "side", from]);
+        match text {
+            Some(text) => save(root, RECORD, text),
+            None => {
+                git(root, &["rm", "-q", RECORD]);
+                git(root, &["commit", "-q", "-m", "delete on the side"]);
+            }
+        }
+        git(root, &["switch", "-q", "main"]);
+        keep_against(root, "side");
+    }
+
+    /// The points' criteria, in both orders, are those of [`LINE_V`].
+    fn newest_is_fast(root: &std::path::Path, first: &str, second: &str) {
+        for points in [[first, second], [second, first]] {
+            match judge_at(root, &points).criteria {
+                Authority::Held(held) => assert!(held.content.contains("work fast"), "{points:?}"),
+                Authority::Unknown(reason) => panic!("{points:?}: {reason}"),
+                Authority::Absent => panic!("{points:?}: absent"),
+            }
+        }
+    }
+
+    /// TSK-1185 AC-1: the line's edit forked before main's merge, which kept
+    /// the version the edit replaced against another version on a side
+    /// branch. The merge never saw the edit, and the edit's line never held
+    /// the side's version, so only one side edited.
+    fn kept_merge_then_early_fork() -> tempfile::TempDir {
+        let dir = positive_shape();
+        let root = dir.path();
+        let fork = git(root, &["rev-parse", &format!("{LINE}~1")]);
+        main_keeps_against_side(root, fork.trim(), Some(&with_criterion(SIDE)));
+        git(root, &["switch", "-q", LINE]);
+        dir
+    }
+
+    #[test]
+    fn a_merge_that_kept_a_version_yields_to_an_edit_forked_before_it() {
+        let dir = kept_merge_then_early_fork();
+        newest_is_fast(dir.path(), LINE, "main");
+    }
+
+    /// TSK-1185 AC-3: swapping the branch names changes nothing.
+    #[test]
+    fn the_order_does_not_read_which_branch_is_named_like_a_line() {
+        let dir = kept_merge_then_early_fork();
+        let root = dir.path();
+        git(root, &["branch", "-m", "main", "moved"]);
+        git(root, &["branch", "-m", LINE, "main"]);
+        git(root, &["branch", "-m", "moved", LINE]);
+        newest_is_fast(root, LINE, "main");
+    }
+
+    /// When neither point holds the record, the lines of the history are
+    /// ordered the same way.
+    #[test]
+    fn a_recovered_line_orders_a_kept_merge_the_same_way() {
+        let dir = kept_merge_then_early_fork();
+        let root = dir.path();
+        git(root, &["rm", "-q", RECORD]);
+        git(root, &["commit", "-q", "-m", "retire on the line"]);
+        git(root, &["switch", "-q", "main"]);
+        git(root, &["rm", "-q", RECORD]);
+        git(root, &["commit", "-q", "-m", "retire on main"]);
+        newest_is_fast(root, LINE, "main");
+    }
+
+    /// TSK-1012's shape: the kept version replaced an older one, the side
+    /// still holds the older one, and the common base holds it too. The
+    /// newer edit read the kept version.
+    #[test]
+    fn a_merge_that_kept_a_version_against_an_older_one_yields_to_a_later_edit() {
+        let kept = with_criterion("When run, the system shall work well.");
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::Note],
+            vec![Step::File(RECORD, kept)],
+        );
+        let root = dir.path();
+        git(root, &["merge", "-q", "--no-ff", "-X", "ours", "-m", "sync", "main"]);
+        git(root, &["switch", "-q", "-c", "plan"]);
+        save(root, RECORD, &with_criterion(LINE_V));
+        git(root, &["switch", "-q", "main"]);
+        save(root, "later.txt", "main advanced\n");
+        git(root, &["switch", "-q", LINE]);
+        git(root, &["merge", "-q", "--no-ff", "-X", "ours", "-m", "sync", "main"]);
+        newest_is_fast(root, LINE, "plan");
+    }
+
+    /// TSK-1132's shape: the side never held the record, so a merge keeping
+    /// the version against it decided nothing about the criteria.
+    #[test]
+    fn a_merge_against_a_side_that_never_held_the_record_yields_to_a_later_edit() {
+        let dir = diverged(
+            Step::Note,
+            vec![Step::Note],
+            vec![Step::File(RECORD, record(UID))],
+        );
+        let root = dir.path();
+        git(root, &["switch", "-q", "-c", "plan"]);
+        save(root, RECORD, &with_criterion(LINE_V));
+        git(root, &["switch", "-q", LINE]);
+        git(root, &["merge", "-q", "--no-ff", "-m", "sync", "main"]);
+        newest_is_fast(root, LINE, "plan");
+    }
+
+    /// Main rejected the side's version, and the line built on that version.
+    /// A merge of those two conflicts, so neither is older.
+    #[test]
+    fn a_kept_merge_competes_with_an_edit_built_on_what_it_rejected() {
+        let dir = diverged(Step::File(RECORD, record(UID)), vec![], vec![]);
+        let root = dir.path();
+        git(root, &["switch", "-q", "main"]);
+        main_keeps_against_side(root, "main", Some(&with_criterion(SIDE)));
+        git(root, &["branch", "-f", LINE, "side"]);
+        git(root, &["switch", "-q", LINE]);
+        save(root, RECORD, &with_criterion(LINE_V));
+        refuses_both_orders(root, "different versions");
+    }
+
+    /// Main rejected the side's version, and the line wrote the same criteria
+    /// again from before that merge. A second copy does not undo the merge.
+    #[test]
+    fn a_kept_merge_competes_with_another_copy_of_what_it_rejected() {
+        let dir = positive_shape();
+        let root = dir.path();
+        let fork = git(root, &["rev-parse", &format!("{LINE}~1")]);
+        main_keeps_against_side(root, fork.trim(), Some(&with_criterion(LINE_V)));
+        refuses_both_orders(root, "different versions");
+    }
+
+    /// Main kept the record against a deletion, and the line built on the
+    /// deletion before writing it again.
+    #[test]
+    fn a_kept_merge_competes_with_an_edit_built_on_a_deletion_it_rejected() {
+        let dir = diverged(Step::File(RECORD, record(UID)), vec![], vec![]);
+        let root = dir.path();
+        git(root, &["switch", "-q", "main"]);
+        main_keeps_against_side(root, "main", None);
+        git(root, &["branch", "-f", LINE, "side"]);
+        git(root, &["switch", "-q", LINE]);
+        std::fs::create_dir_all(root.join(RECORD).parent().unwrap()).unwrap();
+        std::fs::write(root.join(RECORD), with_criterion(LINE_V)).unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-q", "-m", "write it again"]);
+        refuses_both_orders(root, "different versions");
+    }
+
+    /// A commit that writes the old version again is an edit, even after a
+    /// merge kept that version: both sides edited.
+    #[test]
+    fn a_kept_merge_does_not_excuse_a_later_edit_back_to_the_version() {
+        let dir = kept_merge_then_early_fork();
+        let root = dir.path();
+        git(root, &["switch", "-q", "main"]);
+        save(root, RECORD, &with_criterion(SIDE));
+        save(root, RECORD, &record(UID));
+        refuses_both_orders(root, "different versions");
+    }
+
     /// Introductions are traced by criteria signature (SEC-306-01), so an
     /// edit on main that keeps v1's criteria decides nothing about them:
     /// main still holds the criteria the line replaced.
