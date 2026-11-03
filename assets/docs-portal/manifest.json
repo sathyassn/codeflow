@@ -387,6 +387,10 @@
       "ownership": "managed"
     },
     {
+      "path": "tests/fixtures/pre-paint-script.json",
+      "ownership": "managed"
+    },
+    {
       "path": "tests/fixtures/route-contract.json",
       "ownership": "managed"
     },

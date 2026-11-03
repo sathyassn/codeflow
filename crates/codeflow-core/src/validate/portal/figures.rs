@@ -1257,9 +1257,18 @@ fn verify_rendered_figures(
 pub(super) const RUNTIME_SCRIPTS_FILE: &str = "scripts/runtime-scripts.json";
 const REGENERATE: &str = "npm run build && node scripts/runtime-scripts.mjs dist";
 
+/// The version of the runtime script list this validator reads. Version 2
+/// records the pre-paint script's hash for every theme; version 1 recorded
+/// only its template, which the validator would have to rebuild.
+const RUNTIME_SCRIPTS_SCHEMA: u64 = 2;
+
 /// The hashes an inline script outside the page content may have: the
-/// runtime's fixed scripts as committed, and the pre-paint display script the
-/// configuration's theme writes into the committed template.
+/// runtime's fixed scripts as committed, and the pre-paint display script's
+/// hash for the configured theme as the portal's own generator
+/// (`scripts/runtime-scripts.mjs`) recorded it. The validator never rebuilds
+/// the pre-paint script, so the generator stays its one source. An older
+/// list, a theme map that is not exactly the configurable themes, or a
+/// missing or malformed hash fails closed.
 pub(super) fn runtime_inline_scripts(
     list: &[u8],
     config: &[u8],
@@ -1272,10 +1281,37 @@ pub(super) fn runtime_inline_scripts(
         .get("theme")
         .and_then(serde_json::Value::as_str)
         .ok_or("the configuration names no theme")?;
-    let template = list
-        .get("pre_paint_template")
+    let schema = list
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64);
+    if schema != Some(RUNTIME_SCRIPTS_SCHEMA) {
+        return Err(format!(
+            "it has schema_version {}, and this codeflow reads version {RUNTIME_SCRIPTS_SCHEMA}; regenerate it: {REGENERATE}",
+            schema.map_or_else(|| "none".to_string(), |version| version.to_string())
+        ));
+    }
+    let hashes = list
+        .get("pre_paint_sha256")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| {
+            format!("it records no pre-paint script hashes; regenerate it: {REGENERATE}")
+        })?;
+    let recorded: BTreeSet<&str> = hashes.keys().map(String::as_str).collect();
+    let themes: BTreeSet<&str> = super::PORTAL_THEMES.into_iter().collect();
+    if recorded != themes {
+        return Err(format!(
+            "its pre-paint script hashes name the themes {}, not {}; regenerate it: {REGENERATE}",
+            recorded.into_iter().collect::<Vec<_>>().join(", "),
+            themes.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    let pre_paint = hashes
+        .get(theme)
         .and_then(serde_json::Value::as_str)
-        .ok_or("it has no pre-paint template")?;
+        .filter(|sha| valid_sha256(sha))
+        .ok_or_else(|| {
+            format!("it records no pre-paint script hash for the theme {theme:?}; regenerate it: {REGENERATE}")
+        })?;
     let mut allowed: BTreeSet<String> = list
         .get("scripts")
         .and_then(serde_json::Value::as_array)
@@ -1290,10 +1326,7 @@ pub(super) fn runtime_inline_scripts(
                 .ok_or_else(|| "a script entry has no sha256".to_string())
         })
         .collect::<Result<_, _>>()?;
-    let theme = serde_json::to_string(theme).map_err(|error| error.to_string())?;
-    allowed.insert(sha256_hex(
-        template.replacen("__THEME__", &theme, 1).as_bytes(),
-    ));
+    allowed.insert(pre_paint.to_string());
     Ok(allowed)
 }
 
@@ -3022,29 +3055,41 @@ mod tests {
     }
 
     /// Every inline script outside the content is one the runtime emits: the
-    /// committed fixed scripts, and the pre-paint script the configured theme
-    /// writes into the committed template. Any other names the regeneration.
+    /// committed fixed scripts, and the pre-paint script for the configured
+    /// theme. The expected pre-paint script and its hash come from the
+    /// fixture the portal's generator writes (`scripts/runtime-scripts.mjs`),
+    /// never from this crate, so a validator that rebuilt or hashed the
+    /// script differently from the generator fails here. Any other script
+    /// names the regeneration.
     #[test]
     fn inline_scripts_are_held_to_the_runtime_list() {
-        let list = std::fs::read(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../docs-portal/scripts/runtime-scripts.json"),
+        let portal = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs-portal");
+        let list = std::fs::read(portal.join("scripts/runtime-scripts.json")).unwrap();
+        let committed: serde_json::Value = serde_json::from_slice(&list).unwrap();
+        let fixture: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(portal.join("tests/fixtures/pre-paint-script.json")).unwrap(),
         )
         .unwrap();
-        let committed: serde_json::Value = serde_json::from_slice(&list).unwrap();
-        let allowed = runtime_inline_scripts(&list, br#"{"theme": "signal"}"#).unwrap();
+        let theme = fixture["theme"].as_str().unwrap();
+        let pre_paint = fixture["script"].as_str().unwrap().to_string();
+        // The generator's hash is the hash of the script it wrote, on this
+        // side too, and the list records it for that theme.
+        assert_eq!(
+            sha256_hex(pre_paint.as_bytes()),
+            fixture["sha256"].as_str().unwrap()
+        );
+        assert_eq!(committed["pre_paint_sha256"][theme], fixture["sha256"]);
+        let config = format!("{{\"theme\": {theme:?}}}");
+        let allowed = runtime_inline_scripts(&list, config.as_bytes()).unwrap();
         assert_eq!(
             allowed.len(),
             committed["scripts"].as_array().unwrap().len() + 1
         );
-        let pre_paint = committed["pre_paint_template"].as_str().unwrap().replacen(
-            "__THEME__",
-            "\"signal\"",
-            1,
-        );
         assert!(allowed.contains(&sha256_hex(pre_paint.as_bytes())));
+        // Another theme admits its own pre-paint script, not this one.
         let folio = runtime_inline_scripts(&list, br#"{"theme": "folio"}"#).unwrap();
         assert!(!folio.contains(&sha256_hex(pre_paint.as_bytes())));
+        assert!(folio.contains(committed["pre_paint_sha256"]["folio"].as_str().unwrap()));
         let built = |head: &str| {
             format!("<!doctype html><html><head><script>{pre_paint}</script>{head}</head><body><main><div class=\"sl-markdown-content\"><p>Text.</p></div></main></body></html>")
         };
@@ -3067,6 +3112,78 @@ mod tests {
         assert_eq!(report.issues.len(), 1, "{:?}", report.issues);
         assert!(report.issues[0].starts_with("built page dist/a/index.html carries inline scripts the site's runtime does not emit (sha256 "));
         assert!(report.issues[0].ends_with("if the runtime changed, regenerate scripts/runtime-scripts.json: npm run build && node scripts/runtime-scripts.mjs dist"));
+    }
+
+    /// A list the validator cannot read exactly fails closed and names the
+    /// regeneration: the version 1 format that held only the template, a
+    /// list with no pre-paint hashes, a theme map that is not exactly the
+    /// configurable themes, an unknown configured theme and a malformed hash.
+    #[test]
+    fn runtime_script_list_fails_closed_on_an_old_or_incomplete_list() {
+        let list: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../docs-portal/scripts/runtime-scripts.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let read = |list: &serde_json::Value, theme: &str| {
+            runtime_inline_scripts(
+                &serde_json::to_vec(list).unwrap(),
+                format!("{{\"theme\": {theme:?}}}").as_bytes(),
+            )
+        };
+        for theme in super::super::PORTAL_THEMES {
+            assert!(read(&list, theme).is_ok(), "{theme}");
+        }
+        let regenerate = "regenerate it: npm run build && node scripts/runtime-scripts.mjs dist";
+        let mut old = list.clone();
+        old["schema_version"] = 1.into();
+        old.as_object_mut().unwrap().remove("pre_paint_sha256");
+        let error = read(&old, "signal").unwrap_err();
+        assert!(
+            error.starts_with("it has schema_version 1, and this codeflow reads version 2; "),
+            "{error}"
+        );
+        assert!(error.ends_with(regenerate), "{error}");
+        let mut unversioned = list.clone();
+        unversioned
+            .as_object_mut()
+            .unwrap()
+            .remove("schema_version");
+        assert!(read(&unversioned, "signal")
+            .unwrap_err()
+            .starts_with("it has schema_version none,"));
+        let mut missing = list.clone();
+        missing.as_object_mut().unwrap().remove("pre_paint_sha256");
+        assert_eq!(
+            read(&missing, "signal").unwrap_err(),
+            format!("it records no pre-paint script hashes; {regenerate}")
+        );
+        let mut short = list.clone();
+        short["pre_paint_sha256"]
+            .as_object_mut()
+            .unwrap()
+            .remove("folio");
+        let error = read(&short, "signal").unwrap_err();
+        assert!(error.starts_with("its pre-paint script hashes name the themes graphite, sage, signal, slate, not folio, graphite, sage, signal, slate; "), "{error}");
+        let mut extra = list.clone();
+        extra["pre_paint_sha256"]["ink"] = "0".repeat(64).into();
+        assert!(read(&extra, "ink")
+            .unwrap_err()
+            .starts_with("its pre-paint script hashes name the themes "));
+        let error = read(&list, "ink").unwrap_err();
+        assert_eq!(
+            error,
+            format!("it records no pre-paint script hash for the theme \"ink\"; {regenerate}")
+        );
+        let mut malformed = list.clone();
+        malformed["pre_paint_sha256"]["signal"] = "92209de7214f".into();
+        assert_eq!(
+            read(&malformed, "signal").unwrap_err(),
+            format!("it records no pre-paint script hash for the theme \"signal\"; {regenerate}")
+        );
     }
 
     #[test]

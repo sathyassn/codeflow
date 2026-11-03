@@ -5,8 +5,10 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { portalSkinOrder, validatePortalConfig } from "../scripts/lib.mjs";
 import { buildFixture, commitFixture, configureFixture, runLocalAdapter, selfContainedPortalFixture } from "./portal-fixture.mjs";
-import { inlineScripts, allowedInlineScripts, scriptSha256 } from "../scripts/runtime-scripts.mjs";
+import { inlineScripts, allowedInlineScripts, scriptSha256, prePaintHashes, PRE_PAINT_FIXTURE_FILE, REGENERATE } from "../scripts/runtime-scripts.mjs";
 import { prePaintScript } from "../scripts/runtime-scripts.mjs";
+import { PORTAL_THEMES } from "../scripts/lib.mjs";
+import committedScripts from "../scripts/runtime-scripts.json" with { type: "json" };
 
 function paint(theme, stored = {}) {
   const attributes = {};
@@ -37,6 +39,25 @@ test('pre-paint restores bounded panel preferences and ignores malformed values'
   assert.equal(actual['data-cf-toc'], 'collapsed');
 });
 
+// The committed pre-paint hashes are what this generator writes now, for
+// every configurable theme, so a token or template change that was not
+// regenerated fails here before `validate --portal` refuses every page. The
+// fixture the Rust validator's tests hash is the generator's too.
+test('the committed pre-paint hashes and fixture are the generator output for every theme', async () => {
+  assert.equal(committedScripts.schema_version, 2);
+  assert.deepEqual(Object.keys(committedScripts.pre_paint_sha256), [...PORTAL_THEMES]);
+  assert.deepEqual(committedScripts.pre_paint_sha256, prePaintHashes(), `scripts/runtime-scripts.json is stale against the tokens; run: ${REGENERATE}`);
+  const fixture = JSON.parse(await readFile(path.join(import.meta.dirname, '..', PRE_PAINT_FIXTURE_FILE), 'utf8'));
+  assert.equal(fixture.script, prePaintScript(fixture.theme));
+  assert.equal(fixture.sha256, scriptSha256(fixture.script));
+  assert.equal(fixture.sha256, committedScripts.pre_paint_sha256[fixture.theme]);
+  for (const theme of PORTAL_THEMES) assert.ok(allowedInlineScripts(theme).has(scriptSha256(prePaintScript(theme))), theme);
+  assert.throws(() => allowedInlineScripts('ink'), /records no pre-paint script hash for theme "ink"; regenerate it: /);
+  assert.throws(() => allowedInlineScripts('__proto__'), /records no pre-paint script hash for theme "__proto__"/);
+  const { pre_paint_sha256: _, ...old } = committedScripts;
+  assert.throws(() => allowedInlineScripts('signal', { ...old, schema_version: 1 }), /has schema_version 1, not 2; regenerate it: /);
+  assert.throws(() => allowedInlineScripts('signal', { ...committedScripts, pre_paint_sha256: { ...committedScripts.pre_paint_sha256, signal: 'abc' } }), /records no pre-paint script hash for theme "signal"/);
+});
 
 test('canonical and compatibility portal themes build the same skin order', { timeout: 120_000 }, async () => {
   const root = await selfContainedPortalFixture();
@@ -51,6 +72,8 @@ test('canonical and compatibility portal themes build the same skin order', { ti
       buildFixture(root);
       const html = await readFile(path.join(root, 'dist/reference/seed/index.html'), 'utf8');
       assert.ok(inlineScripts(html).includes(prePaintScript(theme)), `${theme}: built page carries the configured pre-paint script`);
+      // The hash the validators look up is the hash of what the build inlined.
+      assert.ok(inlineScripts(html).map(scriptSha256).includes(committedScripts.pre_paint_sha256[theme]), `${theme}: built pre-paint script has the committed hash`);
       assert.equal(paint(theme)['data-cfp-skin'], skin);
       assert.equal(paint(theme)['data-cfp-typeface'], 'inter');
     }
