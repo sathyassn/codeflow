@@ -1,0 +1,11 @@
+id = "TSK-1300"
+uid = "910bd503-4ab4-4510-b9f1-7c283a6d3851"
+kind = "TSK"
+title = "The shipped test configuration template sets explicit timeouts"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T19:42:14Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
