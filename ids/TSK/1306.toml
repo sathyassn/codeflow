@@ -1,0 +1,11 @@
+id = "TSK-1306"
+uid = "8a4966a2-0a9c-4bb8-97c5-b9ee93840d55"
+kind = "TSK"
+title = "The landing gate is chosen by what the candidate changes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T21:41:26Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
