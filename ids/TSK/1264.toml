@@ -1,0 +1,11 @@
+id = "TSK-1264"
+uid = "88685342-8b45-4989-9376-565c3b887c2d"
+kind = "TSK"
+title = "The head-built release impact job is removed in the last change before main"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T00:45:49Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
