@@ -1,0 +1,11 @@
+id = "TSK-1310"
+uid = "148679ae-9a25-41d1-9981-769cffe00d72"
+kind = "TSK"
+title = "The checkpoint pull request to main shows only the commit standards items the line clears"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T22:07:36Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
