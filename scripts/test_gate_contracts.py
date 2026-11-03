@@ -18,11 +18,11 @@ _CACHE_SPEC = importlib.util.spec_from_file_location('policy_cache', Path(__file
 _CACHE = importlib.util.module_from_spec(_CACHE_SPEC)
 _CACHE_SPEC.loader.exec_module(_CACHE)
 _CACHE.ROOT = ROOT
-_CACHE.WORKFLOW = ROOT / 'operator-patches/TSK-1240-codeflow-policy.proposed.yml'
+_CACHE.WORKFLOW = ROOT / '.github/workflows/codeflow-policy.yml'
 PolicyCache = _CACHE.PolicyCache
 def read(path):
     if path == '.github/workflows/codeflow-policy.yml':
-        return _CACHE.proposed_workflow()
+        return _CACHE.policy_workflow()
     return (ROOT / path).read_text()
 
 class GateContracts(unittest.TestCase):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the pinned main-only cache proposal, not the withdrawn dispatcher."""
+"""Check the operator-applied main-only cache workflow."""
 import hashlib
 import os
 from pathlib import Path
@@ -8,16 +8,16 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = ROOT / 'operator-patches/TSK-1240-codeflow-policy.proposed.yml'
-PROPOSED_SHA256 = '97b8d65e39038077d57fb00e09c870fc790440b256273825e0328040fc341066'
+WORKFLOW = ROOT / '.github/workflows/codeflow-policy.yml'
+APPLIED_SHA256 = '97b8d65e39038077d57fb00e09c870fc790440b256273825e0328040fc341066'
 NAMESPACE = 'codeflow-policy-main-binary-v2-'
 DEPS_NAMESPACE = 'codeflow-policy-main-deps-v2'
 MAIN_PUSH = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
 
 
-def proposed_workflow():
+def policy_workflow():
     data = WORKFLOW.read_bytes()
-    assert hashlib.sha256(data).hexdigest() == PROPOSED_SHA256, 'proposed workflow drift'
+    assert hashlib.sha256(data).hexdigest() == APPLIED_SHA256, 'operator-applied workflow drift'
     return data.decode()
 
 
@@ -74,25 +74,7 @@ def cache_contract(workflow):
 
 class PolicyCache(unittest.TestCase):
     def setUp(self):
-        self.workflow = proposed_workflow()
-
-    def test_pinned_proposal_matches_operator_patch(self):
-        patch = (ROOT / 'operator-patches/TSK-1240-codeflow-policy.patch').read_bytes()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            target = root / '.github/workflows/codeflow-policy.yml'
-            target.parent.mkdir(parents=True)
-            target.write_bytes(subprocess.check_output(
-                ['git', '-C', str(ROOT), 'show',
-                 '59c9ae96547aaf8241e0c66029c809b80d748f51:.github/workflows/codeflow-policy.yml']))
-            subprocess.run(['git', 'apply', '--check', '-'], input=patch, cwd=root, check=True)
-            subprocess.run(['git', 'apply', '-'], input=patch, cwd=root, check=True)
-            self.assertEqual(target.read_text(), self.workflow)
-        actual = (ROOT / '.github/workflows/codeflow-policy.yml').read_bytes()
-        baseline = subprocess.check_output(['git', '-C', str(ROOT), 'show',
-            '59c9ae96547aaf8241e0c66029c809b80d748f51:.github/workflows/codeflow-policy.yml'])
-        self.assertIn(actual, (baseline, self.workflow.encode()),
-                      'real workflow must be the pinned line or identical operator-applied proposal')
+        self.workflow = policy_workflow()
 
     def test_cache_authority(self):
         cache_contract(self.workflow)
