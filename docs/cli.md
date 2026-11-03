@@ -172,7 +172,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--topic <TOPIC>` | Only items of this topic. |
 | | `--json` | Print the items as JSON, with every field. |
 | | `--write` | Write project-management/feedback/INDEX.md from every item. A written index is optional; `validate --docs` warns when it goes stale. |
-| `codeflow capability bootstrap` | | Start or resume the initial catalog through inventory, classification, evidence and review |
+| `codeflow capability bootstrap` | | Start or resume the four-stage initial capability catalog |
 | `codeflow capability new <NAME>` | | Create a planned capability with a reserved id and stable uid |
 | | `<NAME>` | Lowercase capability slug, used in its filename. |
 | | `--summary <SUMMARY>` | One sentence describing the capability for its reader. Required. |
