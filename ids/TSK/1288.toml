@@ -1,0 +1,11 @@
+id = "TSK-1288"
+uid = "73c3bd8e-836e-4b51-8998-7cde397b612b"
+kind = "TSK"
+title = "Reasoning effort is set per coordination tier"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T15:58:14Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
