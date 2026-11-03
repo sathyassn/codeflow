@@ -1868,7 +1868,6 @@ fn push_check(root: &Path, branch: &str, head: &str, bin: &Path) -> Output {
     )
 }
 
-#[cfg(unix)]
 fn text(out: &Output) -> String {
     format!(
         "{}{}",
