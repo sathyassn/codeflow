@@ -1903,7 +1903,7 @@ mod tests {
                 "codeflow gates",
                 "secret scan",
                 "security review",
-                "commit standards"
+                "trusted: commit standards"
             ]
         );
         // A set list replaces the default.

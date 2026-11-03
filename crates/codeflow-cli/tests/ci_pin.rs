@@ -284,7 +284,11 @@ fn every_install_step_is_the_same_verified_script() {
     let mut blocks = run_blocks(CI, "Install codeflow");
     blocks.extend(run_blocks(CI, "Install candidate codeflow"));
     blocks.extend(run_blocks(POLICY, "Install codeflow"));
-    assert_eq!(blocks.len(), 3, "gates, candidate and the enforcing job");
+    assert_eq!(
+        blocks.len(),
+        4,
+        "gates, candidate, the verdict job and the registry check"
+    );
     assert!(blocks.iter().all(|b| b == &blocks[0]));
     assert!(blocks[0].contains("sha256.sum"));
     for workflow in [CI, POLICY] {
@@ -1680,11 +1684,10 @@ fn job<'w>(workflow: &'w str, id: &str) -> &'w str {
 /// The expression that selects the pull request's base commit.
 const BASE_SHA_REF: &str = "${{ github.event.pull_request.base.sha }}";
 
-/// The checkout of the enforcing job: the pull request's base commit, and
-/// the event's own commit for the registry's push, schedule and dispatch
-/// runs.
-const TARGET_REF: &str =
-    "${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}";
+/// The checkout of the verdict job (TSK-336): the run's own commit, which
+/// on `pull_request_target` is the default branch's tip whatever the pull
+/// request targets.
+const AUTHORITY_REF: &str = "${{ github.sha }}";
 
 /// The `with:` block of the first checkout step in `job_text`.
 fn checkout_block(job_text: &str) -> &str {
@@ -1706,12 +1709,18 @@ fn checkout_ref(checkout: &str) -> Option<String> {
 /// What a workflow's checkout `ref:` resolves to for `event`: the commit a
 /// run checks out, or `None` for GitHub's default checkout. Only the forms
 /// the shipped workflows use are understood; anything else fails the test.
-fn resolve_ref(expr: Option<&str>, event: &str, base_sha: &str) -> Option<String> {
+fn resolve_ref(
+    expr: Option<&str>,
+    event: &str,
+    base_sha: &str,
+    authority_sha: &str,
+) -> Option<String> {
     match expr {
         None => None,
         Some(e) if e == BASE_SHA_REF => Some(base_sha.to_string()),
-        Some(e) if e == TARGET_REF => {
-            (event == "pull_request_target").then(|| base_sha.to_string())
+        Some(e) if e == AUTHORITY_REF => {
+            assert_eq!(event, "pull_request_target", "the verdict job's only event");
+            Some(authority_sha.to_string())
         }
         Some(other) => panic!("unrecognised checkout ref {other}"),
     }
@@ -1758,25 +1767,37 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     assert!(POLICY.contains("CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}"));
     assert!(POLICY.contains("/pulls/${PR_NUMBER}\" -o \"${RUNNER_TEMP}/pull.json\""));
 
+    // TSK-336: the verdict job runs only on pull_request_target, under its
+    // trusted name; push, schedule and dispatch run the registry check under
+    // a name of its own, so no such run can stand in for the verdict.
     let enforcing = job(POLICY, "commit-lint");
-    assert!(enforcing.contains("name: commit standards"));
-    // GitHub's default checkout for pull_request_target is the default
-    // branch, whatever the pull request targets, so the job names the pull
-    // request's base commit; nothing points the checkout at the head.
+    assert!(enforcing.contains("    name: \"trusted: commit standards\"\n"));
+    assert!(enforcing.contains("    if: github.event_name == 'pull_request_target'\n"));
+    let registry = job(POLICY, "registry-check");
+    assert!(registry.contains("    name: registry check\n"));
+    assert!(registry.contains("    if: github.event_name != 'pull_request_target'\n"));
+    assert!(!POLICY.contains("name: commit standards"));
+    // The checkout is the run's own commit, the default branch's tip on
+    // pull_request_target, never the base or the head.
     let checkout = checkout_block(enforcing);
     assert_eq!(
         checkout_ref(checkout).as_deref(),
-        Some(TARGET_REF),
+        Some(AUTHORITY_REF),
         "{checkout}"
     );
     assert!(
         !checkout.contains("head") && !checkout.contains("repository:"),
         "{checkout}"
     );
-    // The pin is read from the target checkout.
+    // The pin is read from the authority checkout, and the policy and the
+    // work-record baseline are the authority's.
     assert!(enforcing.contains("PIN_REF: HEAD"));
-    // The head is fetched as a ref and only named by sha to codeflow ci.
+    assert!(
+        enforcing.contains("--policy-from \"$AUTHORITY_SHA\" --baseline-from \"$AUTHORITY_SHA\"")
+    );
+    // The base and the head are fetched as refs and only named by sha.
     assert!(enforcing.contains("refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"));
+    assert!(enforcing.contains("\"+${BASE_SHA}:refs/codeflow/pr-base\""));
     for forbidden in [
         "git checkout",
         "git switch",
@@ -1795,6 +1816,149 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     // No skipped twin: no other workflow defines the enforcing check name.
     assert!(!CI.contains("name: commit standards"));
     assert!(!CI.contains("  pull_request_target:"));
+}
+
+/// The step names of `job_text` in order, with `uses:` steps by action.
+fn step_names(job_text: &str) -> Vec<String> {
+    job_text
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            line.strip_prefix("- name: ")
+                .map(str::to_owned)
+                .or_else(|| {
+                    line.strip_prefix("- uses: ")
+                        .map(|action| action.split('@').next().unwrap_or("").to_owned())
+                })
+        })
+        .collect()
+}
+
+const ASSERT_STEP: &str = "Assert the authority checkout";
+
+/// TSK-336 AC-1: the verdict job resolves the default branch first, and
+/// after the checkout asserts after every step that the checkout is still
+/// that commit with no tracked file changed. Each assertion is the same
+/// script, and each refuses a moved or edited checkout.
+#[test]
+fn the_verdict_job_asserts_the_authority_after_every_step() {
+    let enforcing = job(POLICY, "commit-lint");
+    let names = step_names(enforcing);
+    assert_eq!(names[0], "Resolve the authority", "{names:?}");
+    assert_eq!(names[1], "actions/checkout", "{names:?}");
+    for pair in names[1..].chunks(2) {
+        assert_eq!(
+            pair.get(1).map(String::as_str),
+            Some(ASSERT_STEP),
+            "{names:?}"
+        );
+    }
+    let asserts = run_blocks(enforcing, ASSERT_STEP);
+    assert_eq!(asserts.len(), names.len() / 2, "{names:?}");
+    assert!(asserts.iter().all(|block| block == &asserts[0]));
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+    git(repo, &["add", "."]);
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@e",
+            "commit",
+            "-q",
+            "-m",
+            "a",
+        ],
+    );
+    let authority = git(repo, &["rev-parse", "HEAD"]);
+    let check = |sha: &str| {
+        Command::new("bash")
+            .args(["-c", &asserts[0]])
+            .current_dir(repo)
+            .env("AUTHORITY_SHA", sha)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap()
+    };
+    assert!(check(&authority).status.success());
+    // Another commit checked out, or a tracked file edited, fails closed.
+    std::fs::write(repo.join("a.txt"), "b\n").unwrap();
+    let edited = check(&authority);
+    assert_eq!(edited.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&edited.stdout).contains("nothing is judged"));
+    git(repo, &["checkout", "-q", "--", "a.txt"]);
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@e",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "b",
+        ],
+    );
+    assert_eq!(check(&authority).status.code(), Some(1));
+}
+
+/// TSK-336 AC-1: the verdict job refuses a run that is not for the default
+/// branch on `pull_request_target`, or whose commit is not a full id, before
+/// anything is checked out.
+#[test]
+fn the_verdict_job_refuses_a_run_not_for_the_default_branch() {
+    let script = run_blocks(job(POLICY, "commit-lint"), "Resolve the authority")
+        .into_iter()
+        .next()
+        .expect("the resolve step");
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    let dir = tempfile::tempdir().unwrap();
+    let summary = dir.path().join("summary");
+    let resolve = |event: &str, default: &str, gh_ref: &str, sha: &str| {
+        Command::new("bash")
+            .args(["-c", &script])
+            .env("EVENT", event)
+            .env("DEFAULT_BRANCH", default)
+            .env("GITHUB_REF", gh_ref)
+            .env("AUTHORITY_SHA", sha)
+            .env("GITHUB_STEP_SUMMARY", &summary)
+            .output()
+            .unwrap()
+    };
+    let ok = resolve("pull_request_target", "main", "refs/heads/main", sha);
+    assert!(
+        ok.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ok.stdout)
+    );
+    assert!(String::from_utf8_lossy(&ok.stdout).contains(&format!("judged by main@{sha}")));
+    for (event, default, gh_ref, commit) in [
+        // The pull request's target, a line, as the run's ref.
+        (
+            "pull_request_target",
+            "main",
+            "refs/heads/integration/x",
+            sha,
+        ),
+        // A lookalike nested branch.
+        ("pull_request_target", "main", "refs/heads/main/x", sha),
+        ("pull_request_target", "", "refs/heads/main", sha),
+        ("pull_request", "main", "refs/heads/main", sha),
+        ("workflow_dispatch", "main", "refs/heads/main", sha),
+        ("pull_request_target", "main", "refs/heads/main", "main"),
+    ] {
+        let out = resolve(event, default, gh_ref, commit);
+        assert_eq!(out.status.code(), Some(1), "{event} {gh_ref} {commit}");
+        assert!(String::from_utf8_lossy(&out.stdout).contains("nothing is judged"));
+    }
 }
 
 /// A pull request that edits the enforcing workflow to pass, raises the pin
@@ -1837,7 +2001,7 @@ fn judge_a_forged_head(head_pin: &str) {
     // a commit that breaks the target's format rule.
     git(&origin, &["checkout", "-b", "feat/x"]);
     let forged = POLICY.replace(
-        "run: codeflow ci --base \"$BASE_SHA\" --head \"$HEAD_SHA\" --branch \"$HEAD_REF\" --actor \"$ACTOR\"",
+        "run: codeflow ci --base \"$BASE_SHA\" --head \"$HEAD_SHA\" --branch \"$HEAD_REF\" --actor \"$ACTOR\" --policy-from \"$AUTHORITY_SHA\" --baseline-from \"$AUTHORITY_SHA\"",
         "run: exit 0",
     );
     assert_ne!(forged, POLICY);
@@ -1897,7 +2061,16 @@ fn judge_a_forged_head(head_pin: &str) {
             .output()
             .unwrap()
     };
-    let enforced = verdict(&target);
+    // The verdict step as the default branch's workflow writes it, with
+    // the default branch as the authority.
+    let enforced = run_verdict_step(
+        &target,
+        &dir.path().join("home"),
+        &base,
+        &base,
+        &head,
+        "feat/x",
+    );
     let text = String::from_utf8_lossy(&enforced.stderr);
     assert_eq!(enforced.status.code(), Some(1), "{text}");
     assert!(text.contains("git.commit_format"), "{text}");
@@ -1949,22 +2122,81 @@ fn default_and_integration_targets(origin: &Path) -> (String, String) {
     (base, head)
 }
 
-/// A pull request into a target that is not the default branch is judged by
-/// that target. GitHub runs the enforcing workflow from the default branch
-/// and its default checkout is the default branch too, so only the explicit
-/// base-commit checkout makes the pin and the policy the target's. The
-/// default branch allows a 50-character description, the integration target
-/// 10; the head's 24-character description must fail as the target says.
+/// The verdict step of the enforcing job exactly as the workflow writes
+/// it, run from `checkout` with the event's values.
+fn run_verdict_step(
+    checkout: &Path,
+    home: &Path,
+    authority: &str,
+    base: &str,
+    head: &str,
+    branch: &str,
+) -> Output {
+    let step = run_blocks(job(POLICY, "commit-lint"), "codeflow ci (")
+        .into_iter()
+        .next()
+        .expect("the verdict step");
+    let bin = Path::new(env!("CARGO_BIN_EXE_codeflow")).parent().unwrap();
+    Command::new("bash")
+        .args(["-c", &step])
+        .current_dir(checkout)
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .env("AUTHORITY_SHA", authority)
+        .env("BASE_SHA", base)
+        .env("HEAD_SHA", head)
+        .env("HEAD_REF", branch)
+        .env("ACTOR", "unknown")
+        .env("CODEFLOW_HOME", home)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_ACTIONS")
+        .env_remove("GITHUB_EVENT_NAME")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("GIT_DIR")
+        .output()
+        .unwrap()
+}
+
+/// TSK-336 AC-1: a pull request into a line is judged by the default
+/// branch, never by the line. GitHub runs the enforcing workflow from the
+/// default branch with `GITHUB_SHA` at its tip; the job checks out exactly
+/// that commit and passes it as the policy and baseline authority, so the
+/// line's stricter policy and its own pin judge nothing. The default branch
+/// allows a 50-character description and pins 1.2.3; the line allows 10
+/// and pins 1.2.4. Before TSK-336 the job checked out the line and failed
+/// the head's 24-character description; the default branch's verdict
+/// passes it.
 #[test]
-fn a_pull_request_into_a_non_default_target_is_judged_by_that_target() {
+fn a_pull_request_into_a_line_is_judged_by_the_default_branch() {
     let dir = tempfile::tempdir().unwrap();
     let releases = dir.path().join("releases");
     publish(&releases, "1.2.3");
     publish(&releases, "1.2.4");
     let origin = dir.path().join("origin");
     let (base, head) = default_and_integration_targets(&origin);
+    let authority = git(&origin, &["rev-parse", "main"]);
 
-    // The run's working tree: GitHub's default checkout, the default branch.
+    // The checkout the workflow names for every pull request is the run's
+    // own commit, the default branch's tip, whatever the target.
+    let policy_ref = checkout_ref(checkout_block(job(POLICY, "commit-lint")));
+    for target in [&base, &authority] {
+        assert_eq!(
+            resolve_ref(
+                policy_ref.as_deref(),
+                "pull_request_target",
+                target,
+                &authority
+            )
+            .as_deref(),
+            Some(authority.as_str()),
+            "the line's commit never selects the checkout"
+        );
+    }
+
     let target = dir.path().join("target");
     codeflow_fixture::clone(
         dir.path(),
@@ -1974,74 +2206,37 @@ fn a_pull_request_into_a_non_default_target_is_judged_by_that_target() {
     .env("GIT_CONFIG_GLOBAL", "/dev/null")
     .env("GIT_CONFIG_SYSTEM", "/dev/null")
     .run();
-    assert_eq!(git(&target, &["branch", "--show-current"]), "main");
+    git(&target, &["checkout", "-q", "--detach", &authority]);
     git(
         &target,
         &["fetch", "-q", "origin", "feat/longer:refs/codeflow/pr-head"],
     );
-    let verdict = |cwd: &Path| {
-        Command::new(env!("CARGO_BIN_EXE_codeflow"))
-            .args([
-                "ci",
-                "--base",
-                &base,
-                "--head",
-                &head,
-                "--branch",
-                "feat/longer",
-                "--actor",
-                "unknown",
-            ])
-            .current_dir(cwd)
-            .env("CODEFLOW_HOME", dir.path().join("home"))
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env_remove("CODEFLOW_PR_BODY")
-            .env_remove("GITHUB_ACTIONS")
-            .env_remove("GITHUB_EVENT_NAME")
-            .env_remove("GITHUB_EVENT_PATH")
-            .env_remove("GIT_DIR")
-            .output()
-            .unwrap()
-    };
-    // From the default checkout the policy is still the base's, read as
-    // git data (sathyassn/codeflow#22), so the verdict no longer depends on
-    // the checkout; the pin still does, which is why the workflow checks
-    // out the base: without it the default branch's pin would be installed.
-    let from_default = verdict(&target);
-    let from_default_text = String::from_utf8_lossy(&from_default.stderr);
-    assert_eq!(from_default.status.code(), Some(1), "{from_default_text}");
-    assert!(
-        from_default_text.contains("over the 10-char limit"),
-        "{from_default_text}"
-    );
-    let default_pin = run_install(&install_script(POLICY), &target, "HEAD", &releases);
-    assert_eq!(
-        default_pin.installed_version().as_deref(),
-        Some("codeflow 1.2.3")
-    );
-
-    // The enforcing workflow selects the base commit for a pull request;
-    // the registry's push, schedule and dispatch runs keep their own commit.
-    let policy_ref = checkout_ref(checkout_block(POLICY));
-    let selected = resolve_ref(policy_ref.as_deref(), "pull_request_target", &base);
-    assert_eq!(selected.as_deref(), Some(base.as_str()));
-    for event in ["push", "schedule", "workflow_dispatch"] {
-        assert_eq!(resolve_ref(policy_ref.as_deref(), event, &base), None);
-    }
-
-    // The run as the workflows specify it: the base commit checked out.
-    git(&target, &["checkout", "-q", "--detach", &base]);
     let install = run_install(&install_script(POLICY), &target, "HEAD", &releases);
     assert!(install.out.status.success(), "{}", install.stderr());
     assert_eq!(
         install.installed_version().as_deref(),
-        Some("codeflow 1.2.4"),
-        "the target's pin"
+        Some("codeflow 1.2.3"),
+        "the default branch's pin, never the line's"
     );
-    let enforced = verdict(&target);
-    let text = String::from_utf8_lossy(&enforced.stderr);
-    assert_eq!(enforced.status.code(), Some(1), "{text}");
-    assert!(text.contains("git.commit_format"), "{text}");
-    assert!(text.contains("over the 10-char limit"), "{text}");
+
+    let home = dir.path().join("home");
+    let judged = run_verdict_step(&target, &home, &authority, &base, &head, "feat/longer");
+    let text = String::from_utf8_lossy(&judged.stderr);
+    let said = String::from_utf8_lossy(&judged.stdout);
+    assert_eq!(judged.status.code(), Some(0), "{said}{text}");
+    assert!(!text.contains("over the 10-char limit"), "{text}");
+    assert!(
+        said.contains(&format!(
+            "verifying against .codeflow/policy.json at {}",
+            &authority[..8]
+        )),
+        "{said}"
+    );
+
+    // The same step given the line as its authority shows what the line's
+    // policy would have refused.
+    let by_line = run_verdict_step(&target, &home, &base, &base, &head, "feat/longer");
+    let line_text = String::from_utf8_lossy(&by_line.stderr);
+    assert_eq!(by_line.status.code(), Some(1), "{line_text}");
+    assert!(line_text.contains("over the 10-char limit"), "{line_text}");
 }

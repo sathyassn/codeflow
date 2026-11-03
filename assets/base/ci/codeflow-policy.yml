@@ -1,31 +1,33 @@
 # codeflow policy: the enforcing CodeFlow check for pull requests. Written by
 # `codeflow init` and managed by `codeflow update`.
 #
-# It runs on `pull_request_target`, so GitHub runs this file from the
-# repository's default branch, never from the pull request: a pull request
-# that edits this workflow cannot change the job that judges it. GitHub's
-# default checkout for this event is also the default branch, whatever the
-# pull request targets, so the job checks out the pull request's base commit
-# explicitly. From that target checkout it installs the codeflow version the
-# target pins in .codeflow/project.toml (`scaffold_version`), verified against
-# the archive digests the target pins beside it ([scaffold_sha256]) and the
-# release's published sha256.sum (SPC-013 R-113), and reads the target's
-# policy. It fetches the pull request head only as git data and never runs
-# its code. The token is read-only and no secret is used. Builds and tests of
-# the head run in codeflow-ci.yml on `pull_request`.
+# The verdict job, `trusted: commit standards`, runs on `pull_request_target`
+# for every pull request, whatever it targets. GitHub runs this file from the
+# repository's default branch, never from the pull request or its target,
+# and sets GITHUB_REF to that branch and GITHUB_SHA to its tip. The job
+# checks that, checks out exactly GITHUB_SHA (the authority), installs the
+# codeflow version the authority pins in .codeflow/project.toml
+# (`scaffold_version`), verified against the archive digests pinned beside it
+# ([scaffold_sha256]) and the release's published sha256.sum (SPC-013
+# R-113), and judges with the authority's policy, never the target's. The
+# pull request's base and head are fetched only as git data and never run.
+# After every step the job asserts that the checkout is still the authority.
+# The token is read-only and no secret is used. Builds and tests of the head
+# run in codeflow-ci.yml on `pull_request`.
 #
 # `codeflow ci` runs the SAME commit-format, no-AI-attribution, no-emoji,
 # breaking-footer, branch-naming and PR-body checks as the git hooks and the
-# Claude git-guard, reading the target's .codeflow/policy.json (CodeFlow
-# ADR-0017). `edited` reruns it when the PR body changes. Trusted automation
-# profiles (git.automation_profiles) apply only for the actor passed here, and
-# never on a fork pull request.
+# Claude git-guard, reading the authority's .codeflow/policy.json (CodeFlow
+# ADR-0017, ADR-0091). `edited` reruns it when the PR body changes. Trusted
+# automation profiles (git.automation_profiles) apply only for the actor
+# passed here, and never on a fork pull request.
 #
-# The same job is the enforcing check of the shared id registry (SPC-013
-# R-14, R-20, R-109; ADR-0072), so one target build serves both. Push,
-# schedule and dispatch runs keep their own event's commit and run only the
-# registry check; with durable work tracking off, `codeflow ids check` passes
-# with a note.
+# The verdict job is also the enforcing check of the shared id registry for
+# the pull request (SPC-013 R-14, R-20, R-109; ADR-0072). Push, schedule and
+# dispatch runs keep their own event's commit and run only the registry
+# check, under their own name, `registry check`, so no such run can stand in
+# for the verdict; with durable work tracking off, `codeflow ids check`
+# passes with a note.
 #
 # Pull request runs share one concurrency group per pull request, so a newer
 # event (a push, then a body edit seconds later) cancels the run it
@@ -54,21 +56,305 @@ concurrency:
 
 jobs:
   commit-lint:
-    name: commit standards
+    name: "trusted: commit standards"
+    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    # Read access to pull requests serves the body step below and nothing
-    # else; the token stays read-only.
+    # Read access to pull requests serves the body step and nothing else;
+    # the token stays read-only.
     permissions:
       contents: read
       pull-requests: read
     steps:
-      # The target, never the pull request head: for a pull request its base
-      # commit, otherwise the event's own commit. The binary, the pin and the
-      # policy all come from this checkout.
+      # The authority is the default branch at the one commit this run was
+      # started for. A run whose ref is not the default branch (an older
+      # host's pull_request_target semantics, or any other event) fails
+      # closed rather than judge with another branch's code.
+      - name: Resolve the authority
+        env:
+          EVENT: ${{ github.event_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != pull_request_target ] || [ -z "$DEFAULT_BRANCH" ] || [ "$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+            echo "::error::this run is for ${GITHUB_REF} on ${EVENT}, not the default branch ${DEFAULT_BRANCH:-(unknown)} on pull_request_target; nothing is judged"; exit 1
+          fi
+          if ! printf '%s\n' "$AUTHORITY_SHA" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error::the run's commit '${AUTHORITY_SHA}' is not a full commit id; nothing is judged"; exit 1
+          fi
+          echo "judged by ${DEFAULT_BRANCH}@${AUTHORITY_SHA}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The authority, never the pull request's head or its target. The
+      # binary, the pin and the policy all come from this checkout.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      - name: Install codeflow (target-pinned, checksum-verified)
+        env:
+          PIN_REF: HEAD
+        run: |
+          # SPC-013 R-113: install the codeflow version the target pins in
+          # .codeflow/project.toml (scaffold_version). When the same file pins
+          # the release's archive digests ([scaffold_sha256], written by
+          # `codeflow update --pin`), the archive must match the digest reviewed
+          # there for that version; a table for another version, a missing entry
+          # or a mismatch fails closed. The release's published sha256.sum is
+          # checked too, and is the only check while no digest is pinned: a
+          # missing checksum file, a missing entry or a mismatch fails closed.
+          # Nothing unverified is installed.
+          set -euo pipefail
+          state=$(git show "${PIN_REF}:.codeflow/project.toml" 2>/dev/null | LC_ALL=C tr '\000' '\001') || {
+            echo "::error::cannot read .codeflow/project.toml at ${PIN_REF}; no pinned codeflow version"; exit 1; }
+          version=$(printf '%s\n' "$state" | sed -n 's/^scaffold_version[[:space:]]*=[[:space:]]*"\([0-9A-Za-z.+-]*\)".*/\1/p' | head -n 1)
+          if [ -z "$version" ]; then
+            echo "::error::no scaffold_version pinned in .codeflow/project.toml at ${PIN_REF}"; exit 1
+          fi
+          triple=x86_64-unknown-linux-gnu
+          asset="codeflow-cli-${triple}.tar.xz"
+          # The [scaffold_sha256] table as "<version> <digest>" for this triple,
+          # with "-" for a missing value, or nothing when no table is pinned.
+          pinned=$(printf '%s\n' "$state" | LC_ALL=C awk -v want="$triple" -v sq="'" '
+            function fail(why) { if (bad == "") bad = why }
+            /\r[^\n]/ { fail("may be hidden by a carriage return inside a line, which the CI installers do not read as a line break"); next }
+            /[\001-\010\013\014\016-\037\177]/ { fail("may be hidden by a control character, which the CI installers do not read"); next }
+            /^[[:space:]]*#/ { next }
+            /^[[:space:]]*[^[:space:] -~]/ { fail("may be hidden by a line that starts with a character the CI installers do not read"); next }
+            index($0, "\"\"\"") || index($0, sq sq sq) { fail("may be hidden by a multi-line string, which the CI installers do not read") }
+            /^[[:space:]]*\[/ {
+              inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)
+              if (inside && table) fail("is declared twice")
+              name = $0; sub(/\].*/, "", name)
+              if (!inside && name ~ /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
+              if (!inside && name ~ /\\/) fail("may be hidden behind an escaped key, which the CI installers do not read")
+              if (!inside && name ~ /[^ -~\t]/) fail("may be hidden behind a name with a character outside printable ASCII, which the CI installers do not read")
+              if (inside) table = 1
+              next
+            }
+            /=/ {
+              name = $0; sub(/=.*/, "", name)
+              if (name ~ /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
+              if (name ~ /\\/) fail("may be hidden behind an escaped key, which the CI installers do not read")
+              if (name ~ /[^ -~\t]/) fail("may be hidden behind a name with a character outside printable ASCII, which the CI installers do not read")
+            }
+            inside && /[^[:space:]]/ {
+              if ($0 !~ /^[[:space:]]*"?[0-9A-Za-z_-]+"?[[:space:]]*=[[:space:]]*"[^"\\]*"[[:space:]]*(#.*)?$/) {
+                fail("holds a line other than key = \"value\", which the CI installers do not read"); next
+              }
+              key = $0; sub(/^[[:space:]]*"?/, "", key); sub(/"?[[:space:]]*=.*/, "", key)
+              if (key in seen) fail("lists " key " twice")
+              seen[key] = 1
+              value = $0; sub(/^[^=]*=[[:space:]]*"/, "", value); sub(/".*/, "", value)
+              if (key == "version") version = value
+              if (key == want) digest = value
+            }
+            END { if (bad != "") print "!", bad; else if (table) print (version == "" ? "-" : version), (digest == "" ? "-" : digest) }')
+          digest=
+          case "$pinned" in
+            "!"*) echo "::error::the [scaffold_sha256] table in .codeflow/project.toml at ${PIN_REF} ${pinned#! }, so nothing is installed; write it as the plain table \`codeflow update --pin ${version}\` writes"; exit 1 ;;
+          esac
+          if [ -n "$pinned" ]; then
+            if [ "${pinned%% *}" != "$version" ]; then
+              echo "::error::the [scaffold_sha256] table in .codeflow/project.toml at ${PIN_REF} pins the digests of codeflow ${pinned%% *}, not ${version}; run \`codeflow update --pin ${version}\` and land it with the pin"; exit 1
+            fi
+            digest=${pinned#* }
+            if ! printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$'; then
+              echo "::error::the [scaffold_sha256] table in .codeflow/project.toml at ${PIN_REF} lists no digest for ${triple}; run \`codeflow update --pin ${version}\` and land it with the pin"; exit 1
+            fi
+          else
+            echo "::warning::no release digest is pinned in .codeflow/project.toml at ${PIN_REF}, so codeflow ${version} is checked only against its release's own sha256.sum; run \`codeflow update --pin ${version}\` and land it to pin the reviewed digest"
+          fi
+          base="${CODEFLOW_RELEASE_URL:-https://github.com/sathyassn/codeflow/releases/download}/v${version}"
+          # The download folder sits in the runner's temp directory, and the
+          # exit trap removes it whether the step passes, fails or is stopped.
+          work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/codeflow-install.XXXXXX")
+          trap 'rm -rf "$work" || true' EXIT
+          if ! curl -fsSL "${base}/sha256.sum" -o "${work}/sha256.sum"; then
+            echo "::error::codeflow ${version} has no published checksum file (sha256.sum); refusing an unverified binary"; exit 1
+          fi
+          expected=$(awk -v a="$asset" '{n=$2; sub(/^\*/, "", n)} n == a {print $1; exit}' "${work}/sha256.sum")
+          if [ -z "$expected" ]; then
+            echo "::error::sha256.sum for codeflow ${version} lists no checksum for ${asset}; refusing an unverified binary"; exit 1
+          fi
+          if ! curl -fsSL "${base}/${asset}" -o "${work}/${asset}"; then
+            echo "::error::cannot download ${asset} for codeflow ${version}"; exit 1
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "${work}/${asset}" | cut -d ' ' -f 1)
+          else
+            actual=$(shasum -a 256 "${work}/${asset}" | cut -d ' ' -f 1)
+          fi
+          if [ -n "$digest" ] && [ "$actual" != "$digest" ]; then
+            echo "::error::${asset} for codeflow ${version} does not match the digest pinned in .codeflow/project.toml at ${PIN_REF} (pinned ${digest}, got ${actual}); refusing it"; exit 1
+          fi
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::checksum mismatch for ${asset} (codeflow ${version}): expected ${expected}, got ${actual}; refusing it"; exit 1
+          fi
+          tar -xJf "${work}/${asset}" -C "$work"
+          mkdir -p "$HOME/.codeflow/bin"
+          cp "${work}/codeflow-cli-${triple}/codeflow" "$HOME/.codeflow/bin/codeflow"
+          chmod +x "$HOME/.codeflow/bin/codeflow"
+          echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
+          verified=sha256.sum
+          if [ -n "$digest" ]; then verified="the digest pinned in .codeflow/project.toml and sha256.sum"; fi
+          echo "codeflow ${version} installed and verified against ${verified}"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      # The base and the head are git data: fetched to refs, never checked
+      # out or run. Each must be the commit the event names.
+      - name: Fetch the pull request's base and head as data
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"
+          fetched=$(git rev-parse refs/codeflow/pr-head)
+          if [ "$fetched" != "$HEAD_SHA" ]; then
+            echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); this run belongs to an older event, so it fails; re-run the check for the current head"; exit 1
+          fi
+          git fetch --no-tags origin "+${BASE_SHA}:refs/codeflow/pr-base"
+          if [ "$(git rev-parse refs/codeflow/pr-base)" != "$BASE_SHA" ]; then
+            echo "::error::cannot fetch the pull request's base ${BASE_SHA}; nothing is judged"; exit 1
+          fi
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      # The body is read when the job runs, never taken from the event. An
+      # event carries the body as it was when the event fired, and the run
+      # that survives the concurrency group can belong to an older event (one
+      # delivered late, or a re-run), so only the current body is the newest.
+      # The text is written as a step output under a random delimiter and is
+      # never interpolated into a script.
+      - name: Read the pull request's current body
+        id: body
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --max-time 60 \
+            -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull.json"
+          delimiter="codeflow_body_$(openssl rand -hex 16)"
+          {
+            echo "text<<${delimiter}"
+            jq -r '.body // ""' "${RUNNER_TEMP}/pull.json"
+            echo "${delimiter}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      # The PR body reaches `codeflow ci` through `env:`, never interpolated
+      # into the script, so an untrusted body cannot inject shell. The
+      # policy and the work-record baseline are the authority's
+      # (--policy-from, --baseline-from), never the target's.
+      - name: codeflow ci (commit + branch + PR-body standards)
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}
+          ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
+        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR" --policy-from "$AUTHORITY_SHA" --baseline-from "$AUTHORITY_SHA"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      # The registry is fetched explicitly with full history, never forced
+      # (R-20).
+      - name: Fetch the shared registry
+        run: |
+          if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
+            git fetch --no-tags origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+          else
+            echo "codeflow/registry is not on origin; the check reports it when records are tracked"
+          fi
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      - name: codeflow ids check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: codeflow ids check --base "$BASE_SHA" --head refs/codeflow/pr-head
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+  # Push, schedule and dispatch: the registry check of the event's own
+  # commit, under its own name. It is never a pull request verdict.
+  registry-check:
+    name: registry check
+    if: github.event_name != 'pull_request_target'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
           fetch-depth: 0
 
       - name: Install codeflow (target-pinned, checksum-verified)
@@ -180,56 +466,8 @@ jobs:
           if [ -n "$digest" ]; then verified="the digest pinned in .codeflow/project.toml and sha256.sum"; fi
           echo "codeflow ${version} installed and verified against ${verified}"
 
-      - name: Fetch the pull request head as data
-        if: github.event_name == 'pull_request_target'
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"
-          fetched=$(git rev-parse refs/codeflow/pr-head)
-          if [ "$fetched" != "$HEAD_SHA" ]; then
-            echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); this run belongs to an older event, so it fails; re-run the check for the current head"; exit 1
-          fi
-
-      # The body is read when the job runs, never taken from the event. An
-      # event carries the body as it was when the event fired, and the run
-      # that survives the concurrency group can belong to an older event (one
-      # delivered late, or a re-run), so only the current body is the newest.
-      # The text is written as a step output under a random delimiter and is
-      # never interpolated into a script.
-      - name: Read the pull request's current body
-        id: body
-        if: github.event_name == 'pull_request_target'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          curl -fsSL --retry 3 --max-time 60 \
-            -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
-            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull.json"
-          delimiter="codeflow_body_$(openssl rand -hex 16)"
-          {
-            echo "text<<${delimiter}"
-            jq -r '.body // ""' "${RUNNER_TEMP}/pull.json"
-            echo "${delimiter}"
-          } >> "$GITHUB_OUTPUT"
-
-      # The PR body reaches `codeflow ci` through `env:`, never interpolated
-      # into the script, so an untrusted body cannot inject shell.
-      - name: codeflow ci (commit + branch + PR-body standards)
-        if: github.event_name == 'pull_request_target'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}
-          ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
-        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"
-
       # The registry is fetched explicitly with full history, never forced
-      # (R-20); the pull request head above was fetched as data only.
+      # (R-20).
       - name: Fetch the shared registry
         run: |
           if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
@@ -239,12 +477,4 @@ jobs:
           fi
 
       - name: codeflow ids check
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          if [ "$EVENT" = pull_request_target ]; then
-            codeflow ids check --base "$BASE_SHA" --head refs/codeflow/pr-head
-          else
-            codeflow ids check
-          fi
+        run: codeflow ids check

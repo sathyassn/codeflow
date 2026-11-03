@@ -155,10 +155,15 @@ when the checkout changes the table. Requiring the
 table there would leave a fresh `codeflow init`, and the first upgrade that
 adds it, unable to pass, since the target they are judged by has no table
 yet. A missing checksum file, a missing entry or a mismatch fails the job;
-nothing unverified is installed. The enforcing jobs run on
-`pull_request_target`, which takes the workflow from the default branch; they
-check out the pull request's base commit, so the target's pin and policy
-apply, and read the pull request head only as git data.
+nothing unverified is installed. The verdict job, `trusted: commit
+standards`, runs on `pull_request_target`, which takes the workflow from the
+default branch for every pull request whatever it targets. It checks that
+the run is for the default branch, checks out exactly that commit
+(`github.sha`), so the default branch's pin and policy apply to a pull
+request into a line too (ADR-0091), fetches the pull request's base and head
+only as git data, and asserts after every step that the checkout has not
+moved. Push, schedule and dispatch runs only check the id registry, under
+their own name, `registry check`.
 
 The GitLab, Bitbucket and generic wrappers run one shared script (the text
 between the `codeflow pinned run` markers is the same in all three). It reads

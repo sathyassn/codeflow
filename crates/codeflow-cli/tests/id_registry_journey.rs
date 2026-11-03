@@ -740,8 +740,8 @@ fn a_follow_up_task_takes_its_number_from_the_registry() {
 
 /// The enforcing registry check is a step of the policy workflow (TSK-184:
 /// one target build serves both). It must run on `pull_request_target`
-/// (its workflow from the default branch, never the PR), check out the PR's
-/// target, read the PR head only as git data, and hold a read-only token:
+/// (its workflow from the default branch, never the PR), check out the
+/// default branch's commit (TSK-336), read the PR head only as git data, and hold a read-only token:
 /// then a PR that edits this file changes nothing about the verdict it
 /// receives. GitHub's own dispatch is not exercised here.
 #[test]
@@ -774,17 +774,15 @@ fn the_enforcing_registry_workflow_cannot_be_changed_by_the_pull_request_it_judg
     let raw = std::fs::read_to_string(&asset).unwrap();
     assert!(!raw.contains("secrets."), "no secret reaches the job");
     for step in job["steps"].as_sequence().unwrap() {
-        // GitHub's default checkout for pull_request_target is the default
-        // branch, so a pull request's run checks out its base commit; other
-        // events keep their own commit. Nothing selects the head.
+        // The job runs only on pull_request_target, whose `github.sha` is the
+        // default branch's tip (TSK-336): the checkout is that authority,
+        // never the pull request's base or head.
         if let Some(with) = step.get("with") {
             if let Some(selected) = with.get("ref") {
                 assert_eq!(
                     selected.as_str(),
-                    Some(
-                        "${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}"
-                    ),
-                    "checkout selects the target: {step:?}"
+                    Some("${{ github.sha }}"),
+                    "checkout selects the default branch's authority: {step:?}"
                 );
             }
             assert!(with.get("repository").is_none(), "{step:?}");
@@ -794,6 +792,15 @@ fn the_enforcing_registry_workflow_cannot_be_changed_by_the_pull_request_it_judg
         if step.get("name").and_then(serde_yaml::Value::as_str)
             == Some("Install codeflow (target-pinned, checksum-verified)")
         {
+            continue;
+        }
+        // The authority resolution and the checkout assertion are pinned
+        // byte for byte by `ci_pin.rs` (TSK-336); they run only git
+        // plumbing and shell tests.
+        if matches!(
+            step.get("name").and_then(serde_yaml::Value::as_str),
+            Some("Resolve the authority" | "Assert the authority checkout")
+        ) {
             continue;
         }
         let run = step
@@ -820,9 +827,7 @@ fn the_enforcing_registry_workflow_cannot_be_changed_by_the_pull_request_it_judg
             assert!(allowed, "unexpected command in the enforcing job: {line}");
         }
     }
-    assert!(raw.contains(
-        "ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}"
-    ));
+    assert!(raw.contains("ref: ${{ github.sha }}"));
     assert!(raw.contains("refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"));
     assert!(raw.contains("codeflow ids check --base \"$BASE_SHA\" --head refs/codeflow/pr-head"));
 }
