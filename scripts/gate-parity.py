@@ -1197,8 +1197,8 @@ def dist_problems(config_path: Path | None = None, release: Path | None = None) 
             "timeouts; otherwise `dist plan` rejects the file and `dist generate` rewrites it without them"]
 
 
-# TSK-254: only the present part launches a browser, so only it touches
-# Playwright, and its install is bounded and retried: the apt download of the
+# TSK-254: only the release present part launches a browser. Its Playwright
+# install is bounded and retried: the apt download of the
 # browsers' system libraries stalled for up to three hours with no timeout
 # (AC-2: each attempt under a 10 minute `timeout`, two attempts, a step
 # timeout, no `--with-deps`). Text checks for "a bounded install line" were
@@ -1262,37 +1262,88 @@ PLAYWRIGHT_STEPS = (
 """,
 )
 PIN_FIX = ("to change a Playwright step on purpose, make the same edit in .github/workflows/codeflow-ci.yml "
-           "and in PLAYWRIGHT_STEPS in scripts/gate-parity.py (one entry per step, in workflow order), keep "
+           "and in PLAYWRIGHT_STEPS or LINE_APT_STEPS in scripts/gate-parity.py (one entry per step, in workflow order), keep "
            "each install attempt under a `timeout` of at most 10 minutes, two attempts, the step's "
            "`timeout-minutes` and `if: matrix.part == 'present'` (TSK-254 AC-2), then run "
            "`python3 -B -m unittest scripts.test_gate_parity`")
 
 
+# TSK-1263: integration pushes prepare only apt archives, with the same
+# key and bounded install as the release job. Pin each step and its trigger.
+LINE_APT_STEPS = (
+    r"""      - name: Read the locked Playwright version
+        if: matrix.part == 'present' && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/')
+        id: playwright
+        run: |
+          present=$(node -p "require('./crates/codeflow-present/web/package-lock.json').packages['node_modules/playwright-core'].version")
+          portal=$(node -p "require('./docs-portal/package-lock.json').packages['node_modules/playwright-core'].version")
+          test "$present" = "$portal" || { echo "playwright-core differs: present $present, portal $portal"; exit 1; }
+          echo "version=$present" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+""",
+    r"""      - name: Cache Playwright apt archives on the integration line
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: matrix.part == 'present' && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/')
+        id: line-apt
+        with:
+          path: ~/.cache/playwright-apt
+          key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}
+""",
+    r"""      - name: Prepare Playwright apt archives for line verdict reuse
+        if: matrix.part == 'present' && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/') && steps.line-apt.outputs.cache-hit != 'true'
+        timeout-minutes: 25
+        run: |
+          npm ci --ignore-scripts --prefix crates/codeflow-present/web
+          node=$(command -v node)
+          cli=crates/codeflow-present/web/node_modules/playwright-core/cli.js
+          archives="$HOME/.cache/playwright-apt"
+          mkdir -p "$archives/partial"
+          printf 'Dir::Cache::Archives "%s/";\nAPT::Keep-Downloaded-Packages "true";\n' "$archives" |
+            sudo tee /etc/apt/apt.conf.d/90codeflow-playwright-archives >/dev/null
+          echo "apt archives restored: $(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)"
+          for attempt in 1 2; do
+            if sudo timeout --kill-after=30s 10m "$node" "$cli" install-deps chromium firefox webkit; then
+              sudo apt-get autoclean || echo "::warning::apt-get autoclean failed; the cache keeps stale archives"
+              sudo chown -R "$(id -u):$(id -g)" "$archives" || echo "::warning::the apt archives may not be saved"
+              echo "apt archives kept: $(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)"
+              exit 0
+            fi
+            echo "::warning::Playwright install attempt ${attempt} failed or ran past 10 minutes"
+            sudo dpkg --configure -a || true
+          done
+          echo "::error::the Playwright install failed twice; see the attempts above"
+          exit 1
+""",
+)
+
+
 def playwright_problems(workflow: str) -> list[str]:
-    """Every step that names Playwright is in the gates job and is one of
-    PLAYWRIGHT_STEPS, each once and in order."""
+    """Pin browser installation in release and apt preparation on line pushes."""
     problems = []
-    found: list[list[str]] = []
+    expected = {"gates-release": PLAYWRIGHT_STEPS, "gates": LINE_APT_STEPS}
+    found = {name: [] for name in expected}
     for name, text in jobs_section(workflow).items():
         for step in re.split(r"\n(?= {6}- )", text):
             lines = norm_job(step)
             if "playwright" not in "\n".join(lines).lower():
                 continue
-            if name != "gates-release":
-                problems.append(f"job '{name}' has a Playwright step ({lines[0].strip()}); only the gates-release "
-                                "job's present part launches a browser (TSK-449)")
+            if name not in expected:
+                problems.append(f"job '{name}' has a Playwright step ({lines[0].strip()}); "
+                                "only gates-release installs browsers and gates prepares apt archives")
                 continue
-            found.append(lines)
-    pinned = [norm_job(step) for step in PLAYWRIGHT_STEPS]
-    for lines in found:
-        if lines not in pinned:
-            problems.append(f"the gates step `{lines[0].strip()}` names Playwright but matches no pinned step "
-                            f"in PLAYWRIGHT_STEPS; {PIN_FIX}")
-    for step, lines in zip(PLAYWRIGHT_STEPS, pinned):
-        if lines not in found:
-            problems.append(f"the gates job lacks this pinned Playwright step, or changed it:\n{step}{PIN_FIX}")
-    if found != pinned and all(lines in pinned for lines in found) and all(lines in found for lines in pinned):
-        problems.append(f"the gates job's Playwright steps repeat or reorder the pinned steps; {PIN_FIX}")
+            found[name].append(lines)
+    for name, steps in expected.items():
+        pinned = [norm_job(step) for step in steps]
+        for lines in found[name]:
+            if lines not in pinned:
+                problems.append(f"the {name} step `{lines[0].strip()}` names Playwright but matches no pinned "
+                                f"step in PLAYWRIGHT_STEPS or LINE_APT_STEPS; {PIN_FIX}")
+        for step, lines in zip(steps, pinned):
+            if lines not in found[name]:
+                problems.append(f"the {name} job lacks this pinned Playwright step, or changed it:\n{step}{PIN_FIX}")
+        if (found[name] != pinned and all(lines in pinned for lines in found[name])
+                and all(lines in found[name] for lines in pinned)):
+            problems.append(f"the {name} job's Playwright steps repeat or reorder the pinned steps; {PIN_FIX}")
     return problems
 
 
