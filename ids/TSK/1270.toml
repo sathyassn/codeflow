@@ -1,0 +1,11 @@
+id = "TSK-1270"
+uid = "94bff648-fc3a-4f65-b7b0-857884070b20"
+kind = "TSK"
+title = "Hosted adversarial proof of the trusted verdict on main"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T03:32:18Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
