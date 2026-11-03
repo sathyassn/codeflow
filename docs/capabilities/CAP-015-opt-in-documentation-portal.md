@@ -24,6 +24,9 @@ the result without trusting the adapter:
 - The Rust validator re-derives the byte claims.
 - The browser gate measures the rendered pages.
 
+The capability summary combines folder records and legacy fences. The Rust
+validator checks the combined row count.
+
 ```text
   committed snapshot (HEAD)
             |

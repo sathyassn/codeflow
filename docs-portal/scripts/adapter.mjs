@@ -3,7 +3,7 @@ import { TextDecoder } from "node:util";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
-  amendmentHeadings, capabilityFenceRecords, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareBacklinks, compareDeterministicText, compareIdAwareText, decorateAltitude, excerptFor, extractPageRelationships,
+  amendmentHeadings, capabilityFenceRecords, capabilityFrontmatterRecord, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareBacklinks, compareDeterministicText, compareIdAwareText, decorateAltitude, excerptFor, extractPageRelationships,
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown, placeCapabilityTable,
   pinnedSourceUrl as providerSourceUrl, recordFilesFor, referencedIds, renderCapabilityFences, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
   recoverUnavailableIds, renderStageFences, strictUrlSegment, stripLeadingTitleHeading, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
@@ -176,7 +176,27 @@ for (const folder of recordFolders) {
 
 const pages = [];
 const sourceAnchors = new Map();
+// Excluded record pages still contribute to the catalog lookup. Reuse the
+// source snapshot for published records; read only the excluded ones here.
+const isCapabilityRecord = (file) => /^docs\/capabilities\/CAP-\d{3,}-[^/]+\.md$/.test(file);
+const catalogRecords = [...repositoryFiles.keys()].filter((file) => isCapabilityRecord(file) && !sourceBlobs.has(file))
+  .map((file) => git.requireRegular(file, ["100644"], "capability catalog"));
+const catalogBlobs = git.readBlobs(catalogRecords, { perObjectBytes: MAX_SOURCE_BYTES, totalBytes: MAX_TOTAL_SOURCE_BYTES, label: "capability catalog" });
+if (catalogRecords.length) {
+  snapshotPaths.push("docs/capabilities");
+  git.assertClean(snapshotPaths);
+  await assertWorktreeMatchesCommit(catalogRecords, catalogBlobs, MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES, "capability catalog");
+}
 const capabilityRows = [];
+for (const { path: file } of catalogRecords) {
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(catalogBlobs.get(file));
+  // Legacy catalogs may have prose-only companion pages in this folder.
+  if (!/^---[ \t]*\r?\n/.test(text)) continue;
+  const { frontmatter } = parseMarkdown(text, file);
+  const record = capabilityFrontmatterRecord(frontmatter, file);
+  if (record === null) throw new Error(`${file}: capability record declares no valid id`);
+  capabilityRows.push(record);
+}
 for (const sourcePath of sources) {
   const bytes = sourceBlobs.get(sourcePath);
   const sourceHash = sha256(bytes);
@@ -193,6 +213,12 @@ for (const sourcePath of sources) {
     if (ids.length > EVIDENCE_LIMITS.idsPerPage) throw new Error(`${sourcePath}: identity count exceeds ${EVIDENCE_LIMITS.idsPerPage}`);
     if (relationships.length > EVIDENCE_LIMITS.relationshipsPerPage) throw new Error(`${sourcePath}: relationship count exceeds ${EVIDENCE_LIMITS.relationshipsPerPage}`);
     if (sourcePath === CAPABILITY_REGISTRY) capabilityRows.push(...capabilityFenceRecords(body, sourcePath));
+    else if (isCapabilityRecord(sourcePath) && /^---[ \t]*\r?\n/.test(text)) {
+      git.requireRegular(sourcePath, ["100644"], "capability catalog");
+      const record = capabilityFrontmatterRecord(frontmatter, sourcePath);
+      if (record === null) throw new Error(`${sourcePath}: capability record declares no valid id`);
+      capabilityRows.push(record);
+    }
     const excerpt = excerptFor(text);
     const pageClass = pageClassFor(config, sourcePath);
     pages.push({ source_path: sourcePath, source_sha256: sourceHash, built_from_commit: commit, route, layer: layer.id, title, frontmatter, body, ids, unavailable_ids: [], lookup_ids: ids, relationships, backlinks: [], stale: false, searchable: true, excerpt, page_class: pageClass.pageClass, class_reason: pageClass.reason, class_note: pageClass.note, derive: pageClass.derive, altitude_words: pageClass.pageClass === PAGE_CLASSES.explanatory.id ? altitudeWords(text) : null });
@@ -206,8 +232,14 @@ await assertWorktreeMatchesCommit(sourceRecords, sourceBlobs, MAX_SOURCE_BYTES, 
 if (primitiveTokenRecord !== null) await assertWorktreeMatchesCommit([primitiveTokenRecord], new Map([[primitiveTokenRecord.path, primitiveTokenBlob]]), MAX_PRIMITIVE_TOKEN_BYTES, MAX_PRIMITIVE_TOKEN_BYTES, "primitive token import");
 await assertWorktreeMatchesCommit(authorityRecords, authorityBlobs, MAX_RUNTIME_FILE_BYTES, MAX_TOTAL_RUNTIME_BYTES, "portal runtime input");
 await assertWorktreeMatchesCommit(figureInputRecords, figureInputBlobs, MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES + MAX_TOTAL_DECLARATION_BYTES, "figure input");
+await assertWorktreeMatchesCommit(catalogRecords, catalogBlobs, MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES, "capability catalog");
 if (git.resolveHead() !== commit) throw new Error("repository HEAD changed while the portal snapshot was being read");
 
+const capabilityIds = new Set();
+for (const row of capabilityRows) {
+  if (capabilityIds.has(row.id)) throw new Error(`duplicate capability identity ${row.id}`);
+  capabilityIds.add(row.id);
+}
 const ownerById = new Map();
 for (const page of pages) {
   for (const id of page.lookup_ids) {
@@ -334,6 +366,7 @@ if (primitiveTokenRecord !== null) await assertWorktreeMatchesCommit([primitiveT
 await assertWorktreeMatchesCommit(mediaRecords, mediaBlobs, MAX_MEDIA_BYTES, MAX_TOTAL_MEDIA_BYTES, "referenced media");
 await assertWorktreeMatchesCommit(authorityRecords, authorityBlobs, MAX_RUNTIME_FILE_BYTES, MAX_TOTAL_RUNTIME_BYTES, "portal runtime input");
 await assertWorktreeMatchesCommit(figureInputRecords, figureInputBlobs, MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES + MAX_TOTAL_DECLARATION_BYTES, "figure input");
+await assertWorktreeMatchesCommit(catalogRecords, catalogBlobs, MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES, "capability catalog");
 if (git.resolveHead() !== commit) throw new Error("repository HEAD changed while referenced media was being read");
 
 const llms = [`# ${escapeMarkdownInline(config.title)}`, "", escapeMarkdownInline(config.description), "", `Repository commit: ${commit}`, ...(config.release_version === null ? [] : [`Release version: ${config.release_version}`]), "", ...pages.filter((page) => !page.stale).map((page) => `- [${escapeMarkdownInline(page.route)}](./markdown/${page.route.split("/").map(strictUrlSegment).join("/")}.md) — ${escapeMarkdownInline(page.source_path)}`), ""].join("\n");
