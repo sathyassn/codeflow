@@ -464,6 +464,9 @@ fn update_writes(
         "capability coverage: {}",
         crate::capability::coverage::report(root)
     ));
+    if let Some(offer) = crate::capability::bootstrap::offer(root) {
+        report.notes.push(Shown::fixed(offer));
+    }
 
     Ok(report)
 }

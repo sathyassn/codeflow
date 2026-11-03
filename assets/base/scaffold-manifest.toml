@@ -2133,3 +2133,33 @@ src = "agents/skills/cf-estimate/references/worked-example.md"
 dest = ".agents/skills/cf-estimate/references/worked-example.md"
 ownership = "managed"
 tiers = ["standard", "full"]
+
+[[entry]]
+src = "pm/capability-bootstrap/epic.md"
+dest = ".codeflow/templates/capability-bootstrap/epic.md"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
+[[entry]]
+src = "pm/capability-bootstrap/inventory.md"
+dest = ".codeflow/templates/capability-bootstrap/inventory.md"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
+[[entry]]
+src = "pm/capability-bootstrap/classification.md"
+dest = ".codeflow/templates/capability-bootstrap/classification.md"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
+[[entry]]
+src = "pm/capability-bootstrap/evidence.md"
+dest = ".codeflow/templates/capability-bootstrap/evidence.md"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
+[[entry]]
+src = "pm/capability-bootstrap/review.md"
+dest = ".codeflow/templates/capability-bootstrap/review.md"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]

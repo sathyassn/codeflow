@@ -372,7 +372,14 @@ fn check_capabilities(opts: &Options) -> CheckResult {
     let start = std::time::Instant::now();
     let root = Path::new(&opts.project_dir);
     let (status, message) = match crate::capability::load_capability_catalog(root) {
-        Ok(catalog) => (Status::Pass, crate::capability::coverage::line(&catalog)),
+        Ok(catalog) => {
+            let mut message = crate::capability::coverage::line(&catalog);
+            if let Some(offer) = crate::capability::bootstrap::offer(root) {
+                message.push_str("; ");
+                message.push_str(offer);
+            }
+            (Status::Pass, message)
+        },
         Err(error) => (Status::Fail, format!("coverage unavailable: {error}")),
     };
     CheckResult {
