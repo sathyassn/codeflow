@@ -44,13 +44,11 @@ fn monitor_runs_the_same_hooks_as_bash_and_allows_ordinary_watching() {
     for output in monitor {
         success(&output);
     }
-    // A Monitor that watches a socket URL carries no shell text; nothing to judge.
-    let socket = project.replay(
-        "claude",
-        "Monitor",
-        json!({"url": "wss://example.invalid/events", "description": "events"}),
-    );
-    for output in socket {
+    // A Monitor call with no `command` field has no shell text to judge. This
+    // is only the missing-command case: the field a socket watch uses is
+    // unconfirmed, so no real socket form is claimed here.
+    let no_command = project.replay("claude", "Monitor", json!({"description": "events"}));
+    for output in no_command {
         success(&output);
     }
 }
