@@ -48,6 +48,7 @@
       "scripts/test_windows_partitions.py",
       "scripts/linux-test-results.py",
       "scripts/test_linux_test_results.py",
+      "scripts/operator/tsk-1241/**",
       "scripts/ci-reuse.py",
       "scripts/test_ci_reuse.py",
       "scripts/coverage-shards.py",
