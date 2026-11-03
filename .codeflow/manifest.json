@@ -665,7 +665,7 @@
     ".agents/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "29e120193c52c10fa5007863af1b0db60c1ffb73a58e7196e616209db7ab0a86",
+      "sha256": "97f1e20a2ec8387ae429c22a77bb687cda15f54305486a909a52cd5410815f26",
       "exec": false
     },
     ".agents/skills/cf-present/agents/openai.yaml": {
@@ -1511,7 +1511,7 @@
     ".claude/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "29e120193c52c10fa5007863af1b0db60c1ffb73a58e7196e616209db7ab0a86",
+      "sha256": "97f1e20a2ec8387ae429c22a77bb687cda15f54305486a909a52cd5410815f26",
       "exec": false
     },
     ".claude/skills/cf-present/agents/openai.yaml": {

@@ -102,10 +102,10 @@ and look at the rendered page before the handoff. The coordination ledger
 presentation, described in `how-presentation-works.md` section 3, is the
 worked example.
 
-Start from
-[present-document.example.json](resources/present-document.example.json)
-as a **shape** (anchor, picture, problem, model, behaviour, decision), not a
-form to pad.
+Use [present-document.example.json](resources/present-document.example.json)
+as the template for an explainer. Follow its anchor, picture, problem, model,
+behaviour and decision; replace its illustrative subject and facts with the
+verified subject of this session.
 
 ## 3. Validate and open
 
