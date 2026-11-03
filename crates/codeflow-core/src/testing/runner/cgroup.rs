@@ -68,6 +68,35 @@ pub(super) struct Cgroup {
     launched: bool,
 }
 
+pub(super) fn prepare(
+    command: &mut Command,
+    deadline: &mut super::deadline::Deadline,
+) -> io::Result<Option<Cgroup>> {
+    configure(Cgroup::discover(), command, deadline)
+}
+
+fn configure(
+    group: io::Result<Cgroup>,
+    command: &mut Command,
+    deadline: &mut super::deadline::Deadline,
+) -> io::Result<Option<Cgroup>> {
+    match group {
+        Ok(group) => {
+            group.prepare(command)?;
+            deadline.info.cgroup = Some(group.path.display().to_string());
+            deadline.info.cpu_source = Some("cgroup v2 cpu.stat usage_usec".into());
+            deadline.info.cgroup_identity = Some(group.identity()?);
+            // Same-user writable delegation does not prove per-target containment.
+            deadline.unavailable("uncertain cgroup containment".into());
+            Ok(Some(group))
+        }
+        Err(error) => {
+            deadline.unavailable(format!("no delegated cgroup ({error})"));
+            Ok(None)
+        }
+    }
+}
+
 impl Cgroup {
     pub fn discover() -> io::Result<Self> {
         let membership = kernel_text("/proc/self/cgroup")?;
@@ -277,5 +306,30 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert!(Cgroup::create(dir.path()).is_err());
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn unavailable_delegation_explicitly_disables_stalls_in_ci() {
+        use super::super::deadline::{Deadline, TargetStatus};
+        use std::time::Duration;
+        let mut deadline = Deadline::new(Duration::from_secs(10), true, 1, None);
+        let group = configure(
+            Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+            &mut Command::new("sh"),
+            &mut deadline,
+        )
+        .unwrap();
+        assert!(group.is_none());
+        assert!(deadline
+            .info
+            .early_stall_unavailable
+            .as_deref()
+            .unwrap()
+            .starts_with("no delegated cgroup"));
+        assert_eq!(deadline.decision(Duration::from_secs(39)), None);
+        assert_eq!(
+            deadline.decision(Duration::from_secs(40)),
+            Some(TargetStatus::TimedOut)
+        );
     }
 }

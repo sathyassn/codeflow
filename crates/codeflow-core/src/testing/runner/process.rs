@@ -39,22 +39,7 @@ pub(super) fn run(
 
     #[cfg(target_os = "linux")]
     let mut cgroup = if deadline.info.heavy {
-        match super::cgroup::Cgroup::discover() {
-            Ok(group) => {
-                group.prepare(&mut cmd).map_err(spawn_err)?;
-                deadline.info.cgroup = Some(group.path.display().to_string());
-                deadline.info.cpu_source = Some("cgroup v2 cpu.stat usage_usec".into());
-                deadline.info.cgroup_identity = Some(group.identity().map_err(spawn_err)?);
-                // Writable same-user delegation does not prevent sibling migration.
-                // Without a lossless migration monitor, never claim complete inactivity.
-                deadline.unavailable("uncertain cgroup containment".into());
-                Some(group)
-            }
-            Err(error) => {
-                deadline.unavailable(format!("no delegated cgroup ({error})"));
-                None
-            }
-        }
+        super::cgroup::prepare(&mut cmd, &mut deadline).map_err(spawn_err)?
     } else {
         None
     };
