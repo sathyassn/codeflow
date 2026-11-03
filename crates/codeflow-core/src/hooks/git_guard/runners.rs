@@ -604,8 +604,15 @@ fn configured_commands(
         return Ok(Vec::new());
     };
     let settings = configuration_options(args)?;
+    crate::security::git_config::inherited_location_is_own(
+        cwd,
+        &settings,
+        &config_environment(env),
+        &crate::security::git_config::process_location()?,
+    )?;
     let config = crate::security::git_config::read(cwd, &settings, &config_environment(env))?;
     transport(args, &config)?;
+    repository_owned_hooks_path(&config)?;
     for path in config
         .sources
         .iter()
@@ -797,6 +804,30 @@ fn transport(
         return Err("an ext:: transport command requires unclassified percent expansion".into());
     }
     Ok(())
+}
+
+/// Refuse a `core.hooksPath` that does not come from the repository's own
+/// configuration (TSK-1130). Git runs hooks from the directory the
+/// effective value names, and the enforcement plane installs its hooks in
+/// the repository. A value from the command scope (`-c`, `GIT_CONFIG_COUNT`,
+/// `GIT_CONFIG_PARAMETERS`) replaces them for the call. A value from the
+/// global or system scope can replace them too, and the process
+/// environment selects those files (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
+/// `HOME`, `XDG_CONFIG_HOME`, and any include in them), so Git's scope label
+/// does not show who chose the file. Only an absent value (Git's default
+/// hooks directory) or a value from the `local` or `worktree` scope, files
+/// inside the repository, passes. The directory it names is not read: a
+/// path the caller chose can gain a hook between this check and the run.
+fn repository_owned_hooks_path(
+    config: &crate::security::git_config::EffectiveConfig,
+) -> Result<(), String> {
+    // Git lists values in precedence order, so the last one is in force.
+    match config.get_all("core.hooksPath").last() {
+        None | Some(("local" | "worktree", _, _)) => Ok(()),
+        Some((scope, _, _)) => Err(format!(
+            "core.hooksPath comes from the {scope} configuration, which the environment or the command can select and which replaces the repository hooks; set it in the repository's own configuration or unset it"
+        )),
+    }
 }
 
 const FOREACH_OPTIONS: OptionSpec = OptionSpec {
@@ -2318,6 +2349,254 @@ mod tests {
     fn written(verb: &str, line: &str) -> Vec<String> {
         let rest: Vec<String> = line.split_whitespace().map(str::to_string).collect();
         restored_paths(verb, &rest).unwrap()
+    }
+
+    fn repository() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        let init = crate::git::command()
+            .args(["init", "-q"])
+            .current_dir(root.path())
+            .status()
+            .unwrap();
+        assert!(init.success());
+        root
+    }
+
+    fn call_with(
+        root: &Path,
+        words: &[&str],
+        environment: &[(&str, &str)],
+    ) -> Result<Vec<String>, String> {
+        let args: Vec<String> = words.iter().map(ToString::to_string).collect();
+        let environment: crate::security::git_config::Environment = environment
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+            .collect();
+        configured_commands(&args, root, &environment, &[])
+    }
+
+    fn call(root: &Path, words: &[&str]) -> Result<Vec<String>, String> {
+        call_with(root, words, &[])
+    }
+
+    /// A configuration file that sets the hooks path, outside the repository.
+    fn hostile_file(dir: &Path, name: &str) -> String {
+        let file = dir.join(name);
+        std::fs::write(&file, "[core]\n\thooksPath = /elsewhere\n").unwrap();
+        file.to_string_lossy().into_owned()
+    }
+
+    fn set_local_hooks_path(root: &Path) {
+        let set = crate::git::command()
+            .args(["config", "core.hooksPath", "/repository-owned"])
+            .current_dir(root)
+            .status()
+            .unwrap();
+        assert!(set.success());
+    }
+
+    #[test]
+    fn a_hooks_path_in_the_command_scope_refuses() {
+        let root = repository();
+        let refused = call(root.path(), &["-c", "core.hooksPath=/elsewhere", "status"])
+            .expect_err("a command-scope hooks path replaces the repository hooks");
+        assert!(refused.contains("command"), "{refused}");
+    }
+
+    #[test]
+    fn a_hooks_path_chosen_by_the_environment_refuses_in_every_file_scope() {
+        let root = repository();
+        let outside = tempfile::tempdir().unwrap();
+        let file = hostile_file(outside.path(), "hostile");
+        // An explicit global or system file.
+        assert!(call_with(root.path(), &["status"], &[("GIT_CONFIG_GLOBAL", &file)]).is_err());
+        assert!(call_with(root.path(), &["status"], &[("GIT_CONFIG_SYSTEM", &file)]).is_err());
+        // A home directory the caller picked.
+        let home = outside.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            home.join(".gitconfig"),
+            "[core]\n\thooksPath = /elsewhere\n",
+        )
+        .unwrap();
+        let home_text = home.to_string_lossy().into_owned();
+        assert!(call_with(root.path(), &["status"], &[("HOME", &home_text)]).is_err());
+        // An XDG directory the caller picked, with no file in the home.
+        let xdg = outside.path().join("xdg");
+        std::fs::create_dir_all(xdg.join("git")).unwrap();
+        std::fs::write(xdg.join("git/config"), "[core]\n\thooksPath = /elsewhere\n").unwrap();
+        let xdg_text = xdg.to_string_lossy().into_owned();
+        let bare = outside.path().join("bare");
+        std::fs::create_dir_all(&bare).unwrap();
+        let bare_text = bare.to_string_lossy().into_owned();
+        assert!(call_with(
+            root.path(),
+            &["status"],
+            &[("HOME", &bare_text), ("XDG_CONFIG_HOME", &xdg_text)]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn an_included_hooks_path_keeps_the_scope_of_the_file_that_includes_it() {
+        let root = repository();
+        let outside = tempfile::tempdir().unwrap();
+        let target = hostile_file(outside.path(), "included");
+        // Direct include from a global file the caller selected.
+        let direct = outside.path().join("direct");
+        std::fs::write(&direct, format!("[include]\n\tpath = {target}\n")).unwrap();
+        let direct_text = direct.to_string_lossy().into_owned();
+        assert!(call_with(
+            root.path(),
+            &["status"],
+            &[("GIT_CONFIG_GLOBAL", &direct_text)]
+        )
+        .is_err());
+        // Conditional include whose condition matches this repository.
+        let conditional = outside.path().join("conditional");
+        std::fs::write(
+            &conditional,
+            format!(
+                "[includeIf \"gitdir:{}/\"]\n\tpath = {target}\n",
+                root.path().canonicalize().unwrap().to_string_lossy()
+            ),
+        )
+        .unwrap();
+        let conditional_text = conditional.to_string_lossy().into_owned();
+        assert!(call_with(
+            root.path(),
+            &["status"],
+            &[("GIT_CONFIG_GLOBAL", &conditional_text)]
+        )
+        .is_err());
+        // An include named on the command line keeps the command scope.
+        let include = format!("include.path={target}");
+        assert!(call(root.path(), &["-c", &include, "status"]).is_err());
+    }
+
+    #[test]
+    fn a_local_hooks_path_overrides_an_injected_one() {
+        let root = repository();
+        let outside = tempfile::tempdir().unwrap();
+        let file = hostile_file(outside.path(), "hostile");
+        set_local_hooks_path(root.path());
+        // The repository's own value is the last one Git reads, so the
+        // injected global value is ineffective and the call is not refused.
+        assert!(call_with(root.path(), &["status"], &[("GIT_CONFIG_GLOBAL", &file)]).is_ok());
+        assert!(call(root.path(), &["status"]).is_ok());
+        assert!(call(root.path(), &["-c", "user.name=x", "status"]).is_ok());
+    }
+
+    fn location_verdict(root: &Path, variables: &[(&str, &str)]) -> Result<(), String> {
+        let inherited: crate::security::git_config::Environment = variables
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+            .collect();
+        crate::security::git_config::inherited_location_is_own(
+            root,
+            &[],
+            &crate::security::git_config::Environment::new(),
+            &inherited,
+        )
+    }
+
+    #[test]
+    fn a_repository_location_the_caller_chose_refuses() {
+        let root = repository();
+        let other = repository();
+        let other_git = other.path().join(".git").to_string_lossy().into_owned();
+        let other_tree = other.path().to_string_lossy().into_owned();
+        for (name, value) in [
+            ("GIT_DIR", other_git.as_str()),
+            ("GIT_COMMON_DIR", other_git.as_str()),
+            ("GIT_WORK_TREE", other_tree.as_str()),
+        ] {
+            let refused = location_verdict(root.path(), &[(name, value)]).expect_err(name);
+            assert!(refused.contains(name), "{refused}");
+        }
+        assert!(call(root.path(), &["status"]).is_ok());
+    }
+
+    #[test]
+    fn only_the_exact_path_git_prints_for_this_repository_is_allowed() {
+        let root = repository();
+        let real = root.path().canonicalize().unwrap();
+        let tree = real.to_string_lossy().into_owned();
+        let git_dir = real.join(".git").to_string_lossy().into_owned();
+        // The absolute path Git prints, for each variable.
+        for variables in [
+            vec![("GIT_DIR", git_dir.as_str())],
+            vec![("GIT_COMMON_DIR", git_dir.as_str())],
+            vec![("GIT_WORK_TREE", tree.as_str())],
+            vec![("GIT_DISCOVERY_ACROSS_FILESYSTEM", "1")],
+        ] {
+            location_verdict(root.path(), &variables)
+                .unwrap_or_else(|why| panic!("{variables:?}: {why}"));
+        }
+        // A link to this repository resolves again when the command runs.
+        #[cfg(unix)]
+        {
+            let scratch = tempfile::tempdir().unwrap();
+            let link = scratch.path().join("link");
+            std::os::unix::fs::symlink(real.join(".git"), &link).unwrap();
+            let link_text = link.to_string_lossy().into_owned();
+            let refused = location_verdict(root.path(), &[("GIT_DIR", link_text.as_str())])
+                .expect_err("a link to this repository");
+            assert!(refused.contains("exactly"), "{refused}");
+        }
+        // A relative spelling and a trailing separator are other spellings.
+        for (name, value) in [
+            ("GIT_DIR", ".git"),
+            ("GIT_DIR", &format!("{git_dir}/")),
+            ("GIT_WORK_TREE", "."),
+            ("GIT_WORK_TREE", &format!("{tree}/.")),
+        ] {
+            location_verdict(root.path(), &[(name, value)]).expect_err(&format!("{name}={value}"));
+        }
+    }
+
+    #[test]
+    fn discovery_that_cannot_be_compared_refuses() {
+        // No repository here: the probe fails with and without the variable.
+        let empty = tempfile::tempdir().unwrap();
+        assert!(
+            location_verdict(empty.path(), &[("GIT_DISCOVERY_ACROSS_FILESYSTEM", "1")]).is_err()
+        );
+    }
+
+    #[test]
+    fn a_worktree_hooks_path_is_repository_owned() {
+        let root = repository();
+        for args in [
+            vec!["config", "extensions.worktreeConfig", "true"],
+            vec![
+                "config",
+                "--worktree",
+                "core.hooksPath",
+                "/repository-owned",
+            ],
+        ] {
+            let set = crate::git::command()
+                .args(&args)
+                .current_dir(root.path())
+                .status()
+                .unwrap();
+            assert!(set.success(), "{args:?}");
+        }
+        assert!(call(root.path(), &["status"]).is_ok());
+    }
+
+    #[test]
+    fn no_hooks_path_is_not_judged() {
+        let root = repository();
+        assert!(call(root.path(), &["status"]).is_ok());
+    }
+
+    #[test]
+    fn an_unreadable_configuration_refuses() {
+        let root = repository();
+        std::fs::write(root.path().join(".git/config"), b"[broken\n").unwrap();
+        assert!(call(root.path(), &["status"]).is_err());
     }
 
     #[test]

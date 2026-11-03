@@ -447,6 +447,148 @@ pub(crate) fn repository_of(
     }
 }
 
+/// The variables that move Git's repository, common directory or work tree,
+/// or the way Git discovers the repository from the working directory.
+const LOCATION_VARIABLES: [&str; 4] = [
+    "GIT_DIR",
+    "GIT_COMMON_DIR",
+    "GIT_WORK_TREE",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+];
+
+/// The location variables this process inherited, with their values.
+/// A value that is not text refuses, since it cannot be compared.
+pub(crate) fn process_location() -> Result<Environment, String> {
+    let mut found = Environment::new();
+    for name in LOCATION_VARIABLES {
+        if let Some(value) = std::env::var_os(name) {
+            let text = value
+                .into_string()
+                .map_err(|_| format!("cannot verify the repository: {name} is not text"))?;
+            found.insert(name.to_string(), text);
+        }
+    }
+    Ok(found)
+}
+
+/// Refuse a call whose repository location the caller chose (TSK-1130). The
+/// repository whose `local` and `worktree` configuration the guards trust is
+/// the one Git finds from the working directory. When `inherited` says the
+/// process environment sets one of the location variables, Git may read
+/// another repository's configuration and hooks. Two checks, both failing
+/// closed:
+///
+/// 1. Git is asked for the Git directory, common directory and work tree with
+///    and without those variables, and the answers must match.
+/// 2. `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` must also be byte for
+///    byte the absolute path Git printed without them. A symlink, a relative
+///    path or another spelling of the same place resolves again when the
+///    command runs, so it is never accepted on what it resolves to now.
+///
+/// A probe that fails refuses.
+pub(crate) fn inherited_location_is_own(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+    inherited: &Environment,
+) -> Result<(), String> {
+    // A name the command itself assigns is the command's own choice, which
+    // the target resolution judges; only the inherited ones are judged here.
+    let set: Vec<&str> = LOCATION_VARIABLES
+        .iter()
+        .copied()
+        .filter(|name| inherited.contains_key(*name) && !environment.contains_key(*name))
+        .collect();
+    if set.is_empty() {
+        return Ok(());
+    }
+    let mut given = inherited.clone();
+    given.extend(
+        environment
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone())),
+    );
+    let as_given = location(cwd, globals, &given, false)?;
+    let own = location(cwd, globals, environment, true)?;
+    let canonical = |lines: &[String]| -> Vec<PathBuf> {
+        lines
+            .iter()
+            .map(|line| std::fs::canonicalize(line).unwrap_or_else(|_| PathBuf::from(line)))
+            .collect()
+    };
+    if canonical(&as_given) != canonical(&own) {
+        return Err(format!(
+            "{} in the environment moves the repository Git uses away from the one the guard found from the working directory; unset it",
+            set.join(", ")
+        ));
+    }
+    for (name, at) in [("GIT_DIR", 0), ("GIT_COMMON_DIR", 1), ("GIT_WORK_TREE", 2)] {
+        if set.contains(&name) && inherited.get(name) != own.get(at) {
+            return Err(format!(
+                "{name} in the environment is not exactly the absolute path Git finds from the working directory; a link, a relative path or another spelling can point elsewhere by the time the command runs; unset it"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Git's answer for the repository location from `cwd`, as Git prints it:
+/// the Git directory, the common directory and the work tree (empty when
+/// there is none), with the location variables kept (`clean` false) or
+/// removed (`clean` true).
+fn location(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+    clean: bool,
+) -> Result<Vec<String>, String> {
+    let run = |tail: &[&str]| -> Result<Vec<u8>, String> {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut command = crate::git::command();
+        command.current_dir(cwd).stdin(Stdio::null());
+        command.env_remove("GIT_CONFIG");
+        for (name, value) in environment {
+            if !(clean && LOCATION_VARIABLES.contains(&name.as_str())) {
+                command.env(name, value);
+            }
+        }
+        if clean {
+            for name in LOCATION_VARIABLES {
+                command.env_remove(name);
+            }
+        }
+        with_globals(&mut command, cwd, globals)?;
+        command.arg("--no-pager").args(tail);
+        bounded_output(&mut command, deadline)
+    };
+    let text = |bytes: Vec<u8>| {
+        String::from_utf8(bytes).map_err(|_| "cannot read the Git repository paths".to_string())
+    };
+    let dirs = text(run(&[
+        "rev-parse",
+        "--absolute-git-dir",
+        "--path-format=absolute",
+        "--git-common-dir",
+    ])?)?;
+    // A repository with no work tree has no top level; that answer is part
+    // of the comparison, not an error.
+    let top = run(&["rev-parse", "--show-toplevel"])
+        .and_then(text)
+        .unwrap_or_default();
+    let mut lines: Vec<String> = dirs
+        .strip_suffix('\n')
+        .unwrap_or(&dirs)
+        .split('\n')
+        .map(str::to_string)
+        .collect();
+    lines.push(top.strip_suffix('\n').unwrap_or(&top).to_string());
+    if lines.len() == 3 {
+        Ok(lines)
+    } else {
+        Err("cannot read the Git repository paths".into())
+    }
+}
+
 pub(crate) fn bounded_output(
     command: &mut std::process::Command,
     deadline: Instant,

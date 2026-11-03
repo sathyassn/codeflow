@@ -123,6 +123,302 @@ fn refused(out: &Output) -> bool {
         && String::from_utf8_lossy(&out.stderr).contains("git.hook_integrity")
 }
 
+/// TSK-1130: a `core.hooksPath` the hook process inherits through
+/// `GIT_CONFIG_COUNT` or `GIT_CONFIG_PARAMETERS` replaces the repository
+/// hooks for every git call, as the same assignment written in the command
+/// does. Both guards refuse a git call under it, and still allow the same
+/// call under no such variable, under an unrelated inherited key, and a line
+/// that runs no git.
+#[test]
+fn tsk1130_an_inherited_hooks_path_refuses_git_in_both_guards() {
+    let f = Fixture::new();
+    let hooks = f.temp.path().join("env-hooks");
+    std::fs::create_dir(&hooks).unwrap();
+    std::fs::write(hooks.join("post-index-change"), "#!/bin/sh\nexit 0\n").unwrap();
+    let dir = shell_path(&hooks);
+    let run = |hook: &str, cwd: &Path, command: &str, env: &[(&str, &str)]| {
+        let mut cmd = f.guard_command(cwd, hook);
+        for (name, value) in env {
+            cmd.env(name, value);
+        }
+        run_with_stdin(&mut cmd, &guard_payload(command, cwd))
+    };
+    let parameters = format!("'core.hookspath'='{dir}'");
+    let inherited: [Vec<(&str, &str)>; 2] = [
+        vec![
+            ("GIT_CONFIG_COUNT", "1"),
+            ("GIT_CONFIG_KEY_0", "core.hooksPath"),
+            ("GIT_CONFIG_VALUE_0", dir.as_str()),
+        ],
+        vec![("GIT_CONFIG_PARAMETERS", parameters.as_str())],
+    ];
+    for hook in ["git-guard", "exec-guard"] {
+        for cwd in [&f.root, &f.linked] {
+            for env in &inherited {
+                for command in ["git status", "git log -1"] {
+                    let out = run(hook, cwd, command, env);
+                    assert!(refused(&out), "{hook} {command} {env:?}: {out:?}");
+                    assert!(
+                        String::from_utf8_lossy(&out.stderr).contains("core.hooksPath"),
+                        "{hook} {command}: {out:?}"
+                    );
+                }
+            }
+            let benign = [
+                ("GIT_CONFIG_COUNT", "1"),
+                ("GIT_CONFIG_KEY_0", "user.name"),
+                ("GIT_CONFIG_VALUE_0", "someone"),
+            ];
+            for (command, env) in [
+                ("git status", &[][..]),
+                ("git status", &benign[..]),
+                ("echo ok", &inherited[0][..]),
+            ] {
+                let out = run(hook, cwd, command, env);
+                assert!(line_allows(&out), "{hook} {command} {env:?}: {out:?}");
+            }
+        }
+    }
+}
+
+/// TSK-1130: a configuration file the hook process can select through its
+/// environment (an explicit global or system file, a home or XDG directory,
+/// a direct or conditional include from such a file) is not the
+/// repository's own configuration. A `core.hooksPath` read from one replaces
+/// the repository hooks, so both guards refuse git under it. The control
+/// proves the hostile hook really runs under that environment, and a
+/// repository-owned `core.hooksPath` makes the injected value ineffective, so
+/// the guards allow it.
+#[cfg(unix)]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn tsk1130_a_hooks_path_in_an_environment_selected_file_refuses_git() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let outside = f.temp.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    let hooks = outside.join("hooks");
+    std::fs::create_dir(&hooks).unwrap();
+    let marker = outside.join("ran");
+    let hook = hooks.join("post-index-change");
+    std::fs::write(
+        &hook,
+        format!("#!/bin/sh\necho ran > '{}'\n", shell_path(&marker)),
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let setting = format!("[core]\n\thooksPath = {}\n", shell_path(&hooks));
+    let global = outside.join("global");
+    std::fs::write(&global, &setting).unwrap();
+    let global_text = shell_path(&global);
+    let included = outside.join("includes");
+    std::fs::write(&included, format!("[include]\n\tpath = {global_text}\n")).unwrap();
+    let conditional = outside.join("conditional");
+    std::fs::write(
+        &conditional,
+        format!(
+            "[includeIf \"gitdir:{}/\"]\n\tpath = {global_text}\n",
+            shell_path(&f.root)
+        ),
+    )
+    .unwrap();
+    let home = outside.join("home");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::write(home.join(".gitconfig"), &setting).unwrap();
+    let xdg = outside.join("xdg");
+    std::fs::create_dir_all(xdg.join("git")).unwrap();
+    std::fs::write(xdg.join("git/config"), &setting).unwrap();
+    let bare = outside.join("bare");
+    std::fs::create_dir(&bare).unwrap();
+    let (home_text, xdg_text, bare_text) = (shell_path(&home), shell_path(&xdg), shell_path(&bare));
+    let (included_text, conditional_text) = (shell_path(&included), shell_path(&conditional));
+    let sources: Vec<(&str, Vec<(&str, &str)>)> = vec![
+        (
+            "global file",
+            vec![("GIT_CONFIG_GLOBAL", global_text.as_str())],
+        ),
+        (
+            "system file",
+            vec![("GIT_CONFIG_SYSTEM", global_text.as_str())],
+        ),
+        ("home directory", vec![("HOME", home_text.as_str())]),
+        (
+            "xdg directory",
+            vec![
+                ("HOME", bare_text.as_str()),
+                ("XDG_CONFIG_HOME", xdg_text.as_str()),
+            ],
+        ),
+        (
+            "direct include",
+            vec![("GIT_CONFIG_GLOBAL", included_text.as_str())],
+        ),
+        (
+            "conditional include",
+            vec![("GIT_CONFIG_GLOBAL", conditional_text.as_str())],
+        ),
+    ];
+    let run = |hook: &str, cwd: &Path, command: &str, env: &[(&str, &str)]| {
+        let mut cmd = f.guard_command(cwd, hook);
+        // The fixture pins the global file to /dev/null; an attacker who
+        // selects the home or XDG directory leaves that variable unset.
+        cmd.env_remove("GIT_CONFIG_GLOBAL");
+        for (name, value) in env {
+            cmd.env(name, value);
+        }
+        run_with_stdin(&mut cmd, &guard_payload(command, cwd))
+    };
+    // Control: git really runs the hostile hook under this environment.
+    std::fs::write(f.root.join("probe.txt"), "probe\n").unwrap();
+    let mut add = git_command();
+    add.args(["add", "probe.txt"]).current_dir(&f.root);
+    for (name, value) in &sources[0].1 {
+        add.env(name, value);
+    }
+    assert!(add.output().unwrap().status.success());
+    assert!(marker.exists(), "the injected hook did not run");
+    for (label, env) in &sources {
+        for hook in ["git-guard", "exec-guard"] {
+            for cwd in [&f.root, &f.linked] {
+                let out = run(hook, cwd, "git status", env);
+                assert!(refused(&out), "{label} {hook}: {out:?}");
+                assert!(
+                    String::from_utf8_lossy(&out.stderr).contains("core.hooksPath"),
+                    "{label} {hook}: {out:?}"
+                );
+            }
+        }
+    }
+    // Negative control: the repository's own value is the one in force, so
+    // the injected file is ineffective and the call is allowed.
+    git(
+        &f.root,
+        &[
+            "config",
+            "core.hooksPath",
+            &shell_path(&f.root.join(".git/hooks")),
+        ],
+    );
+    std::fs::remove_file(&marker).unwrap();
+    std::fs::write(f.root.join("probe2.txt"), "probe\n").unwrap();
+    let mut add = git_command();
+    add.args(["add", "probe2.txt"]).current_dir(&f.root);
+    for (name, value) in &sources[0].1 {
+        add.env(name, value);
+    }
+    assert!(add.output().unwrap().status.success());
+    assert!(
+        !marker.exists(),
+        "the injected hook ran despite the local value"
+    );
+    for (label, env) in &sources {
+        for hook in ["git-guard", "exec-guard"] {
+            for cwd in [&f.root, &f.linked] {
+                let out = run(hook, cwd, "git status", env);
+                assert!(line_allows(&out), "{label} {hook}: {out:?}");
+            }
+        }
+    }
+}
+
+/// TSK-1130: the repository whose `local` and `worktree` configuration the
+/// guards trust is the one Git finds from the working directory. A
+/// `GIT_DIR`, `GIT_COMMON_DIR` or `GIT_WORK_TREE` the hook process inherits
+/// can move Git to another repository, so both guards refuse git under any of
+/// them, from the root checkout and a linked worktree. The same variable
+/// naming the repository the guard found itself, and no variable, are
+/// allowed.
+#[test]
+fn tsk1130_an_inherited_repository_location_refuses_git_in_both_guards() {
+    let f = Fixture::new();
+    let other = f.temp.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    git(&other, &["init", "-q"]);
+    let other_git = shell_path(&other.join(".git"));
+    let other_tree = shell_path(&other);
+    let run = |hook: &str, cwd: &Path, env: &[(&str, &str)]| {
+        let mut cmd = f.guard_command(cwd, hook);
+        for (name, value) in env {
+            cmd.env(name, value);
+        }
+        run_with_stdin(&mut cmd, &guard_payload("git status", cwd))
+    };
+    let moved = [
+        ("GIT_DIR", other_git.as_str()),
+        ("GIT_COMMON_DIR", other_git.as_str()),
+        ("GIT_WORK_TREE", other_tree.as_str()),
+    ];
+    let own = [
+        (&f.root, shell_path(&f.root.join(".git"))),
+        (&f.linked, shell_path(&f.root.join(".git/worktrees/w"))),
+    ];
+    let common = shell_path(&f.root.join(".git"));
+    // A link to this repository's own Git directory, retargeted later to
+    // another repository whose hook is executable, is the same variable: the
+    // guard must refuse it before any retarget, since Git resolves it again
+    // when the command runs.
+    #[cfg(unix)]
+    let link = {
+        use std::os::unix::fs::PermissionsExt;
+        let hook = other.join(".git/hooks/post-index-change");
+        std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        std::fs::write(&hook, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        f.temp.path().join("git-dir-link")
+    };
+    for hook in ["git-guard", "exec-guard"] {
+        for (cwd, own_git) in &own {
+            for (name, value) in moved {
+                let out = run(hook, cwd, &[(name, value)]);
+                assert!(refused(&out), "{hook} {name}: {out:?}");
+                assert!(
+                    String::from_utf8_lossy(&out.stderr).contains(name),
+                    "{hook} {name}: {out:?}"
+                );
+            }
+            let tree = shell_path(cwd);
+            let allowed: [&[(&str, &str)]; 6] = [
+                &[],
+                &[("GIT_DIR", own_git.as_str())],
+                &[("GIT_COMMON_DIR", common.as_str())],
+                &[("GIT_WORK_TREE", tree.as_str())],
+                &[("GIT_DISCOVERY_ACROSS_FILESYSTEM", "1")],
+                &[
+                    ("GIT_DIR", own_git.as_str()),
+                    ("GIT_WORK_TREE", tree.as_str()),
+                ],
+            ];
+            for env in allowed {
+                let out = run(hook, cwd, env);
+                assert!(line_allows(&out), "{hook} {env:?}: {out:?}");
+            }
+            // Other spellings of this repository refuse.
+            let relative = [("GIT_DIR", ".git")];
+            let trailing = format!("{own_git}/");
+            for env in [&relative[..], &[("GIT_DIR", trailing.as_str())][..]] {
+                let out = run(hook, cwd, env);
+                assert!(refused(&out), "{hook} {env:?}: {out:?}");
+            }
+            #[cfg(unix)]
+            {
+                let _ = std::fs::remove_file(&link);
+                std::os::unix::fs::symlink(own_git, &link).unwrap();
+                let link_text = shell_path(&link);
+                let env = [("GIT_DIR", link_text.as_str())];
+                let before = run(hook, cwd, &env);
+                assert!(
+                    refused(&before),
+                    "{hook} link to this repository: {before:?}"
+                );
+                std::fs::remove_file(&link).unwrap();
+                std::os::unix::fs::symlink(other.join(".git"), &link).unwrap();
+                let after = run(hook, cwd, &env);
+                assert!(refused(&after), "{hook} link retargeted: {after:?}");
+            }
+        }
+    }
+}
+
 /// Issue #342 commands are classified from a linked task worktree. None of
 /// the payloads run, including the absolute temporary destinations.
 #[test]
