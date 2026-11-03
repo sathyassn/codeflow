@@ -1,0 +1,11 @@
+id = "TSK-1297"
+uid = "d47162a1-3802-4323-bace-a6e5c98e11e0"
+kind = "TSK"
+title = "Coordination check and heartbeat timing are project settings"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T19:40:29Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
