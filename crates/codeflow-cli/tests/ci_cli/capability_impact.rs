@@ -418,7 +418,10 @@ fn capability_unbound_legacy_conversion_fails_closed() {
     );
     std::fs::remove_file(root.join(FILE)).unwrap();
     commit(root);
-    refuse(&ci(root, Some(NONE), &[]), "deprecate it instead of deleting it");
+    refuse(
+        &ci(root, Some(NONE), &[]),
+        "deprecate it instead of deleting it",
+    );
 }
 
 #[test]
@@ -1089,7 +1092,10 @@ fn capability_registry_join_preserves_renumbered_identity_and_refuses_bad_bindin
             let second = std::fs::read_to_string(root.join("docs/capabilities/CAP-202-catalog.md"))
                 .unwrap()
                 .replace("id: CAP-202", "id: CAP-203")
-                .replace("3b9e7c2a-51d4-4f0e-9a6b-0c2d8e417f55", "a7fb4faa-c84d-45ca-ad4d-24d039e0919b");
+                .replace(
+                    "3b9e7c2a-51d4-4f0e-9a6b-0c2d8e417f55",
+                    "a7fb4faa-c84d-45ca-ad4d-24d039e0919b",
+                );
             write(root, "docs/capabilities/CAP-203-catalog.md", &second);
         }
         commit(root);
@@ -1153,9 +1159,8 @@ fn capability_registry_join_preserves_renumbered_identity_and_refuses_bad_bindin
         match case {
             "valid" => {
                 pass(&out);
-                assert!(said(&out).contains(&format!(
-                    "join CAP-101 -> CAP-202 uid {uid} registry {sha}"
-                )));
+                assert!(said(&out)
+                    .contains(&format!("join CAP-101 -> CAP-202 uid {uid} registry {sha}")));
                 refuse(
                     &ci(root, Some(&declaration.replace("Changed", "Added")), &[]),
                     "disagrees",
