@@ -83,9 +83,27 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 ## Security keys
 
+Both shell guards refuse destruction of home-qualified secret stores from
+the permission action table under `security.dangerous_commands`. This
+includes plain and recursive removals, modeled launchers and input streams,
+find deletion, destructive rsync, moves, truncation, output redirections and
+git clean. Removing a parent of a configured store is also refused. The
+message names the store; an intentional deletion belongs to the operator
+outside the agent session.
+
+Unsupported deletion options, unread input, unresolved paths and unknown
+launchers carrying a visible deletion refuse as cannot verify, including
+when a visible operand is ordinary. Opaque program internals remain outside
+this shell reader: an arbitrary program or sourced file can delete without
+exposing a deletion command in the payload. This is local feedback, not a
+filesystem sandbox. The rule adds no blanket harness-folder patterns;
+TSK-395 owns that separate boundary. Ordinary cleanup such as
+`rm -rf ./target` and `rm ./*.log` remains allowed. Home-spelled ordinary
+paths also remain subject to the independent strict text rule.
+
 | Key | Type | Default | Valid values | Purpose | Notes |
 |---|---|---|---|---|---|
-| `security.dangerous_commands` | enum | `block` | block | Destructive commands the exec-guard catches (rm -rf on system paths, dd to devices, mkfs, fork bombs). | Non-relaxable safety floor: stale or hand-edited weaker values are ignored by enforcement and rejected by validation. |
+| `security.dangerous_commands` | enum | `block` | block | Destructive commands the exec-guard catches (rm -rf on system paths, dd to devices, mkfs, fork bombs), and configured secret-store destruction checked by both shell guards. | Non-relaxable safety floor: stale or hand-edited weaker values are ignored by enforcement and rejected by validation. |
 | `security.privilege_escalation` | Level | `block` | off \| warn \| allow \| block | Privilege escalation the exec-guard catches (Unix sudo/su/doas/pkexec, Windows gsudo/runas/elevated PowerShell, LD_PRELOAD/PATH injection). | Default block (ADR-0075 D5): the presets deny the plain forms without a prompt, the guard refuses the wrapped ones, and the operator runs privileged commands. `codeflow update` moves a project still at the old warn default to block. |
 | `security.headless_peer_runs` | Level | `block` | off \| warn \| allow \| block | Headless peer runs the exec-guard catches (claude -p, codex exec, grok -p); peer seats run interactively (cf-delegate). | Default block (ADR-0075 D4): a project that needs a headless run sets security.headless_peer_runs to warn or off. `codeflow update` moves a project still at the old warn default to block. |
 | `security.script_bypass` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value. |

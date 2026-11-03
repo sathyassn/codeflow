@@ -2,6 +2,34 @@
 //! fixtures: replay does not establish a harness's live dispatch or sandbox.
 use super::*;
 
+#[test]
+fn installed_hooks_refuse_secret_store_destruction_without_execution() {
+    let project = Project::new();
+    let victim = project.home.join(".ssh/id_rsa");
+    std::fs::create_dir_all(victim.parent().unwrap()).unwrap();
+    std::fs::write(&victim, "planted credential fixture\n").unwrap();
+    for harness in ["claude", "codex", "grok"] {
+        for command in [
+            "rm -rf ~/.ssh",
+            "echo ~/.ssh | xargs rm -rf",
+            "unlink ~/.ssh/id_rsa",
+            ": > ~/.ssh/id_rsa",
+            "xargs --arg-file=paths rm -rf ./target",
+        ] {
+            project.shell(
+                harness,
+                &format!("{command}; touch command-ran"),
+                Some("security.dangerous_commands"),
+            );
+            assert!(!project.root.join("command-ran").exists());
+            assert_eq!(
+                std::fs::read_to_string(&victim).unwrap(),
+                "planted credential fixture\n"
+            );
+        }
+    }
+}
+
 /// A control the line's rules allow may meet only the strict rule's own
 /// finding. Any finding from a line rule still fails the control.
 fn line_allows(out: &Output) -> bool {

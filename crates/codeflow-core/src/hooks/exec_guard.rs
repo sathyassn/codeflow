@@ -193,6 +193,10 @@ pub fn evaluate_ruled(
     // `~` and `$HOME` name the home the line assigns before them (TSK-379).
     let line_home = super::git_guard::line_home::read(command);
     let _home = super::git_guard::line_home::Scope::enter(command, &line_home);
+    // Destructive output redirects are checked even for certified prose.
+    if let Some(finding) = crate::security::secret_stores::violation(command, Some(cwd)) {
+        violations.push(finding);
+    }
     // Shell startup files: always blocking, no policy key (TSK-242); the
     // default user and system git configuration files by the same check,
     // under `git.hook_integrity` at its level. A command the catastrophic

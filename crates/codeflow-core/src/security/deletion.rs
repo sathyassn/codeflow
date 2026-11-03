@@ -117,6 +117,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use super::dangerous::{
     dangerous_rm_target, normalize_path, program_name, protected_names, recursive_rm_operands,
@@ -161,9 +162,23 @@ pub(super) fn composed_deletion_in(command: &str, base: Option<&Path>) -> Option
 /// with `rooted_unplaced`, as on native Windows, a `/`-rooted path is
 /// placed nowhere, so deleting below one is unproven.
 fn read_deletion(command: &str, base: Option<&Path>, rooted_unplaced: bool) -> Option<Found> {
+    read_deletion_mode(command, base, rooted_unplaced, false)
+}
+
+pub(super) fn secret_deletion_in(command: &str, base: Option<&Path>) -> Option<Found> {
+    read_deletion_mode(command, base, cfg!(windows), true)
+}
+
+fn read_deletion_mode(
+    command: &str,
+    base: Option<&Path>,
+    rooted_unplaced: bool,
+    stores: bool,
+) -> Option<Found> {
     let mut reader = Reader {
         base,
         rooted_unplaced,
+        stores: stores.then(OnceLock::new),
         found: None,
         depth: 0,
         pipe_input: None,
@@ -2529,6 +2544,8 @@ impl Output {
 
 struct Reader<'a> {
     base: Option<&'a Path>,
+    /// The secret-store target policy; absent for the catastrophic-root pass.
+    stores: Option<OnceLock<super::secret_stores::Stores>>,
     /// Set on native Windows: a `/`-rooted path names no fixed place.
     rooted_unplaced: bool,
     found: Option<Found>,
@@ -3228,6 +3245,16 @@ impl Reader<'_> {
     /// each vector's values, so a variable naming one is followed too;
     /// each program it may be is read on its own and the states joined.
     fn dispatch(&mut self, call: &Call, variants: &[Vec<String>], st: &mut State) {
+        if self.stores.is_some()
+            && variants
+                .iter()
+                .any(|argv| visible_destructor(argv) && secret_launcher_options_unread(argv))
+        {
+            self.secret_unproven(
+                "deletion launcher options the guard does not model",
+                call.ambiguous,
+            );
+        }
         type Group = (Option<(usize, bool)>, String, Vec<Vec<String>>);
         let mut groups: Vec<Group> = Vec::new();
         for argv in variants {
@@ -3289,6 +3316,20 @@ impl Reader<'_> {
     ) {
         // `command -v` only prints.
         let Some((skip, functions)) = prefix else {
+            if self.stores.is_some()
+                && variants.iter().any(|argv| {
+                    visible_destructor(argv)
+                        && !(argv.first().is_some_and(|p| p == "command")
+                            && argv
+                                .get(1)
+                                .is_some_and(|flag| matches!(flag.as_str(), "-v" | "-V")))
+                })
+            {
+                self.secret_unproven(
+                    "a command launcher the guard cannot resolve",
+                    call.ambiguous,
+                );
+            }
             return;
         };
         if program.is_empty() {
@@ -4040,6 +4081,16 @@ impl Reader<'_> {
         for redir in redirs {
             if let Some(target) = &redir.target {
                 self.part_effects(&target.parts, st);
+                if self.stores.is_some()
+                    && matches!(
+                        redir.op.as_str(),
+                        ">" | ">|" | "&>" | "&>|" | "<>" | ">>" | "&>>"
+                    )
+                {
+                    for fields in self.fields(target, st) {
+                        self.judge_paths(fields.iter().map(String::as_str), st, false);
+                    }
+                }
             }
             if let (Some(body), true) = (&redir.body, redir.expand) {
                 self.part_effects(&heredoc_word(body).parts, st);
@@ -4313,6 +4364,9 @@ impl Reader<'_> {
             return;
         }
         if self.depth > MAX_DEPTH {
+            if self.stores.is_some() && visible_destructor(argv) {
+                self.secret_unproven("a deletion beyond the shell-reading budget", ambiguous);
+            }
             if st.wild == Some(why::SCRIPT_READINGS) {
                 self.report(
                     Judged::Unproven(Unproven {
@@ -4325,6 +4379,9 @@ impl Reader<'_> {
             return;
         }
         let Some(run) = unwrap(argv) else {
+            if self.stores.is_some() && visible_destructor(argv) {
+                self.secret_unproven("a deletion launcher the guard cannot resolve", ambiguous);
+            }
             return;
         };
         let mut st = st.clone();
@@ -4369,18 +4426,38 @@ impl Reader<'_> {
                 self.child_script(&super::composed::paths::eval_body(&argv[1..]), &mut child);
             }
             "rm" => self.judge_rm(&argv, &st, forced, ambiguous),
-            "rmdir" | "unlink" | "shred" | "srm" if forced => {
+            "rmdir" | "unlink" | "shred" | "srm" if forced || self.stores.is_some() => {
                 self.judge_rm(&argv, &st, true, ambiguous);
             }
+            "mv" | "truncate" if self.stores.is_some() => {
+                self.judge_rm(&argv, &st, true, ambiguous);
+            }
+            "git" if self.stores.is_some() => self.judge_git_clean(&argv, &st, ambiguous),
             "find" => self.judge_find(&argv[1..], &st, ambiguous),
             "xargs" => self.judge_xargs(&argv[1..], &st, input, ambiguous),
             "parallel" => self.judge_parallel(&argv[1..], &st, input, ambiguous),
             "rsync" => self.judge_rsync(&argv[1..], &st, ambiguous),
+            name if self.stores.is_some()
+                && !matches!(
+                    name,
+                    "echo" | "printf" | "test" | "[" | "true" | "false" | ":"
+                )
+                && visible_destructor(&argv[1..]) =>
+            {
+                self.secret_unproven("an unknown launcher carrying a deletion command", ambiguous);
+            }
             _ => {}
         }
     }
 
     fn judge_rm(&mut self, words: &[String], st: &State, forced: bool, ambiguous: bool) {
+        if self.stores.is_some() {
+            match secret_operands(words) {
+                Ok(operands) => self.judge_paths(operands, st, ambiguous),
+                Err(reason) => self.secret_unproven(&reason, ambiguous),
+            }
+            return;
+        }
         let args = &words[1..];
         let operands: Vec<&str> = match recursive_rm_operands(args) {
             Some(operands) => operands,
@@ -4394,11 +4471,94 @@ impl Reader<'_> {
         self.judge_paths(operands, st, ambiguous);
     }
 
+    fn secret_unproven(&mut self, reason: &str, ambiguous: bool) {
+        self.report(
+            Judged::Unproven(Unproven {
+                reason: reason.into(),
+                cwd: false,
+            }),
+            ambiguous,
+        );
+    }
+
+    /// Only `clean` removes untracked files. Its target set includes the
+    /// effective working directory when no pathspec is given. Unsupported
+    /// global options and pathspec magic cannot prove an ordinary target.
+    fn judge_git_clean(&mut self, argv: &[String], st: &State, ambiguous: bool) {
+        let mut at = 1;
+        let mut st = st.clone();
+        while argv.get(at).is_some_and(|arg| arg.starts_with('-')) {
+            if argv[at] == "-C" {
+                let Some(dir) = argv.get(at + 1) else {
+                    self.secret_unproven("a missing git -C directory", ambiguous);
+                    return;
+                };
+                st.cwd = st
+                    .cwd
+                    .iter()
+                    .map(|cwd| resolve(cwd, dir).unwrap_or_else(|r| taint(&r)))
+                    .collect();
+                at += 2;
+            } else {
+                if argv.iter().any(|arg| arg == "clean") {
+                    self.secret_unproven(
+                        "git clean global options the guard does not model",
+                        ambiguous,
+                    );
+                }
+                return;
+            }
+        }
+        if argv.get(at).map(String::as_str) != Some("clean") {
+            return;
+        }
+        let mut operands = Vec::new();
+        let mut only_operands = false;
+        for arg in &argv[at + 1..] {
+            if !only_operands && arg == "--" {
+                only_operands = true;
+                continue;
+            }
+            if !only_operands && arg.starts_with('-') {
+                if arg == "--dry-run" || (!arg.starts_with("--") && arg[1..].contains('n')) {
+                    return;
+                }
+                if matches!(arg.as_str(), "--force" | "--quiet")
+                    || (!arg.starts_with("--") && arg[1..].chars().all(|c| "fdxXq".contains(c)))
+                {
+                    continue;
+                }
+                self.secret_unproven("git clean options the guard does not model", ambiguous);
+                return;
+            }
+            if arg.starts_with(':') {
+                self.secret_unproven("git clean pathspec magic", ambiguous);
+                return;
+            }
+            operands.push(arg.as_str());
+        }
+        if operands.is_empty() {
+            operands.push(".");
+        }
+        self.judge_paths(operands, &st, ambiguous);
+    }
+
     /// `find`: a deletion over a protected start is refused whatever its
     /// tests (`-name` selects within the tree, it never proves the tree
     /// safe), and each command it runs is judged on its own with `{}` as
     /// each start.
     fn judge_find(&mut self, args: &[String], st: &State, ambiguous: bool) {
+        if self.stores.is_some()
+            && args
+                .iter()
+                .any(|arg| arg == "-L" || arg == "-follow" || arg.starts_with("-files0-from"))
+        {
+            self.secret_unproven(
+                "find input lists or link traversal the guard does not model",
+                ambiguous,
+            );
+            return;
+        }
         let mut at = 0;
         while let Some(arg) = args.get(at) {
             match arg.as_str() {
@@ -4441,6 +4601,12 @@ impl Reader<'_> {
             return;
         }
         let inner = options.command;
+        if self.stores.is_some()
+            && visible_destructor(inner)
+            && input.is_none_or(|fed| !fed.complete)
+        {
+            self.secret_unproven("xargs input the guard cannot read completely", ambiguous);
+        }
         self.exec(inner, st, None, false, ambiguous);
         for item in items(input, options.delimiter) {
             let line: Vec<String> = match &options.replace {
@@ -4514,6 +4680,12 @@ impl Reader<'_> {
             })
             .collect();
         if sources.is_empty() {
+            if self.stores.is_some()
+                && visible_destructor(command)
+                && input.is_none_or(|fed| !fed.complete)
+            {
+                self.secret_unproven("parallel input the guard cannot read completely", ambiguous);
+            }
             entries.extend(items(input, options.delimiter));
         }
         self.exec(command, st, None, false, ambiguous);
@@ -4544,6 +4716,45 @@ impl Reader<'_> {
     /// `rsync --delete…` deletes in its destination, and
     /// `--remove-source-files` in its sources.
     fn judge_rsync(&mut self, args: &[String], st: &State, ambiguous: bool) {
+        if self.stores.is_some()
+            && args
+                .iter()
+                .any(|arg| arg.starts_with("--del") || arg == "--remove-source-files")
+        {
+            // File lists, remote options and unmodelled switches can change
+            // effective targets. Only this bounded local option set is proven.
+            let mut at = 0;
+            let mut end = false;
+            while let Some(arg) = args.get(at) {
+                at += 1;
+                if end || !arg.starts_with('-') {
+                    continue;
+                }
+                if arg == "--" {
+                    end = true;
+                    continue;
+                }
+                if matches!(
+                    arg.as_str(),
+                    "--delete"
+                        | "--delete-before"
+                        | "--delete-during"
+                        | "--delete-delay"
+                        | "--delete-after"
+                        | "--delete-excluded"
+                        | "--remove-source-files"
+                ) || (!arg.starts_with("--")
+                    && arg[1..].chars().all(|c| "avrlptgoDzqHAXR".contains(c)))
+                {
+                    continue;
+                }
+                self.secret_unproven(
+                    "rsync deletion options or input lists the guard does not model",
+                    ambiguous,
+                );
+                return;
+            }
+        }
         const WITH_VALUE: &[&str] = &[
             "-e",
             "--rsh",
@@ -4625,6 +4836,13 @@ impl Reader<'_> {
     /// glob in it may land; unproven when it holds an unknown value or is
     /// relative to an unknown directory.
     fn judge_path(&self, operand: &str, st: &State) -> Judged {
+        if let Some(stores) = &self.stores {
+            return self.judge_secret_path(
+                operand,
+                st,
+                stores.get_or_init(|| super::secret_stores::Stores::new(real_prefix_checked)),
+            );
+        }
         if operand.is_empty() {
             return Judged::Clear;
         }
@@ -4716,6 +4934,111 @@ impl Reader<'_> {
         pending.map_or(Judged::Clear, Judged::Unproven)
     }
 
+    fn judge_secret_path(
+        &self,
+        operand: &str,
+        st: &State,
+        stores: &super::secret_stores::Stores,
+    ) -> Judged {
+        if operand.is_empty() {
+            return Judged::Clear;
+        }
+        let unknown = |reason: &str, cwd| Unproven {
+            reason: reason.into(),
+            cwd,
+        };
+        if let Some(reason) = unproven(operand) {
+            return Judged::Unproven(unknown(reason, false));
+        }
+        // Unknown expansions are retained as text by the shared reader.
+        // They must not become literal, ordinary filenames in this policy.
+        if operand.contains(['$', '`']) {
+            return Judged::Unproven(unknown("an unresolved deletion operand", false));
+        }
+        let mut pending = None;
+        for cwd in &st.cwd {
+            let absolute_operand = Path::new(operand).is_absolute() || operand.starts_with('~');
+            if !absolute_operand && (unproven(cwd).is_some() || cwd.contains(['$', '`'])) {
+                pending.get_or_insert_with(|| {
+                    unknown("an unresolved deletion working directory", true)
+                });
+                continue;
+            }
+            // Preserve parent components until physical_join has checked
+            // intermediate symlinks. resolve's lexical collapse is suitable
+            // for shell cd -L, but not for a remover's path traversal.
+            let raw = if absolute_operand || cwd.is_empty() {
+                operand.to_string()
+            } else {
+                format!("{cwd}/{operand}")
+            };
+            let Some(absolute) = self.absolute(&raw) else {
+                pending.get_or_insert_with(|| {
+                    unknown("a deletion path the guard cannot place", false)
+                });
+                continue;
+            };
+            if super::outward::remote_or_namespace_operand(&raw) {
+                pending
+                    .get_or_insert_with(|| unknown("a remote or namespace deletion path", false));
+                continue;
+            }
+            let Some(physical) = super::outward::physical_join(Path::new(""), &absolute) else {
+                pending.get_or_insert_with(|| {
+                    unknown("a deletion path with unresolved parent traversal", false)
+                });
+                continue;
+            };
+            let mut candidates = vec![physical.clone()];
+            match real_prefix_checked(&physical) {
+                Ok(Some(real)) => candidates.push(PathBuf::from(real)),
+                Ok(None) | Err(()) => {
+                    pending.get_or_insert_with(|| {
+                        unknown("a deletion path with unresolved filesystem identity", false)
+                    });
+                }
+            }
+            // Pattern intersection protects even absent configured stores;
+            // enumeration additionally discovers aliases under a glob.
+            if let Some(spelling) = physical.to_str() {
+                match self.glob_paths(spelling) {
+                    Some(paths) => {
+                        for path in paths {
+                            match real_prefix_checked(Path::new(&path)) {
+                                Ok(Some(real)) => candidates.push(PathBuf::from(real)),
+                                Ok(None) | Err(()) => {
+                                    pending.get_or_insert_with(|| {
+                                        unknown("an unresolved glob target", false)
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        pending.get_or_insert_with(|| {
+                            unknown("a deletion glob the guard cannot enumerate", false)
+                        });
+                    }
+                }
+            }
+            for candidate in candidates {
+                match stores.target(&candidate) {
+                    Ok(Some(store)) => return Judged::Protected(store),
+                    Ok(None) => {}
+                    Err(()) => {
+                        pending.get_or_insert_with(|| {
+                            unknown(
+                                "a configured store or path pattern the guard cannot resolve",
+                                false,
+                            )
+                        });
+                    }
+                }
+            }
+        }
+        pending.map_or(Judged::Clear, Judged::Unproven)
+    }
+
     /// `path` as an absolute path; `None` for one the reader cannot place.
     fn absolute(&self, path: &str) -> Option<PathBuf> {
         if path.contains(['$', '`']) {
@@ -4730,7 +5053,7 @@ impl Reader<'_> {
             let mut absolute = crate::portable_path::user_home()?.into_os_string();
             absolute.push(rest);
             Some(PathBuf::from(absolute))
-        } else if path.starts_with('/') {
+        } else if Path::new(path).is_absolute() || path.starts_with('/') {
             Some(PathBuf::from(path))
         } else {
             Some(self.base?.join(path))
@@ -6888,6 +7211,180 @@ fn exec_bodies(expression: &[String]) -> Vec<Vec<String>> {
 
 /// Whether a command removes files: a remover, possibly behind launchers,
 /// `xargs`, or a shell whose script runs one.
+fn visible_destructor(argv: &[String]) -> bool {
+    runs_remover(argv, 0)
+        || argv.iter().any(|word| {
+            matches!(
+                program_name(word).as_str(),
+                "rm" | "rmdir" | "unlink" | "shred" | "srm" | "mv" | "truncate" | "find" | "rsync"
+            )
+        })
+        || argv.iter().any(|word| word == "clean")
+}
+
+/// The shell reader historically skips launcher switches for its root
+/// floor. Secret-store proof cannot silently inherit unknown switches.
+/// This checks only the prefix; utility operand options are checked below.
+fn secret_launcher_options_unread(argv: &[String]) -> bool {
+    secret_launcher_options_unread_at(argv, 0)
+}
+
+fn secret_launcher_options_unread_at(argv: &[String], depth: usize) -> bool {
+    if depth > MAX_DEPTH {
+        return true;
+    }
+    let Some(first) = argv.first() else {
+        return false;
+    };
+    let name = program_name(first);
+    let mut at = 1;
+    match name.as_str() {
+        "command" | "builtin" | "nohup" | "exec" => {
+            while let Some(arg) = argv.get(at).filter(|arg| arg.starts_with('-')) {
+                at += 1;
+                if arg == "--" {
+                    break;
+                }
+                match (name.as_str(), arg.as_str()) {
+                    ("command", "-p" | "-v" | "-V") | ("exec", "-c" | "-l") => {}
+                    ("exec", "-a") => {
+                        at += 1;
+                    }
+                    _ => return true,
+                }
+            }
+        }
+        "env" => {
+            while let Some(arg) = argv.get(at) {
+                if arg == "--" {
+                    at += 1;
+                    break;
+                }
+                if arg.split_once('=').is_some_and(|(name, _)| is_name(name)) {
+                    at += 1;
+                    continue;
+                }
+                if !arg.starts_with('-') {
+                    break;
+                }
+                at += 1;
+                match arg.as_str() {
+                    "-i" | "--ignore-environment" | "-0" | "--null" | "-v" | "--debug" => {}
+                    "-u" | "--unset" | "-C" | "--chdir" => at += 1,
+                    // env -S introduces a separately split command. Until
+                    // that transformation is proven here it stays closed.
+                    _ => return true,
+                }
+            }
+        }
+        "nice" | "ionice" | "stdbuf" | "chrt" | "taskset" | "timeout" | "sudo" | "doas"
+        | "pkexec" | "gsudo" | "caffeinate" | "time" | "setsid" | "unbuffer" | "busybox" => {
+            if argv.get(at).is_some_and(|arg| arg.starts_with('-')) {
+                return true;
+            }
+        }
+        _ => return false,
+    }
+    secret_launcher_options_unread_at(argv.get(at..).unwrap_or_default(), depth + 1)
+}
+
+/// Known operand grammar of destructive utilities. Unknown switches are
+/// not discarded: a switch may consume a path or introduce unseen input.
+fn secret_operands(words: &[String]) -> Result<Vec<&str>, String> {
+    let name = program_name(&words[0]);
+    let mut operands = Vec::new();
+    let mut at = 1;
+    let mut end = false;
+    while let Some(arg) = words.get(at) {
+        at += 1;
+        if end || !arg.starts_with('-') || arg == "-" {
+            operands.push(arg.as_str());
+            continue;
+        }
+        if arg == "--" {
+            end = true;
+            continue;
+        }
+        if matches!(arg.as_str(), "--help" | "--version") {
+            return Ok(Vec::new());
+        }
+        let takes_value = match name.as_str() {
+            "truncate" => matches!(arg.as_str(), "-s" | "--size" | "-r" | "--reference"),
+            "shred" => matches!(
+                arg.as_str(),
+                "-n" | "--iterations" | "-s" | "--size" | "--random-source"
+            ),
+            _ => false,
+        };
+        if takes_value {
+            if words.get(at).is_none() {
+                return Err(format!("a missing value for {name} {arg}"));
+            }
+            at += 1;
+            continue;
+        }
+        let known = match name.as_str() {
+            "rm" => {
+                matches!(
+                    arg.as_str(),
+                    "--force"
+                        | "--recursive"
+                        | "--dir"
+                        | "--verbose"
+                        | "--interactive"
+                        | "--one-file-system"
+                        | "--preserve-root"
+                        | "--no-preserve-root"
+                ) || arg.starts_with("--interactive=")
+                    || arg.starts_with("--preserve-root=")
+                    || (!arg.starts_with("--") && arg[1..].chars().all(|c| "frRdiIvPW".contains(c)))
+            }
+            // --parents can remove directories beyond the given operand.
+            "rmdir" => matches!(
+                arg.as_str(),
+                "--ignore-fail-on-non-empty" | "--verbose" | "-v"
+            ),
+            "unlink" => false,
+            "shred" => {
+                matches!(
+                    arg.as_str(),
+                    "--force" | "--remove" | "--verbose" | "--zero" | "--exact"
+                ) || arg.starts_with("--remove=")
+                    || arg.starts_with("--iterations=")
+                    || arg.starts_with("--size=")
+                    || (!arg.starts_with("--") && arg[1..].chars().all(|c| "fuvzx".contains(c)))
+            }
+            "srm" => {
+                matches!(
+                    arg.as_str(),
+                    "--force" | "--recursive" | "--verbose" | "--simple" | "--medium" | "--zero"
+                ) || (!arg.starts_with("--") && arg[1..].chars().all(|c| "frRivszm".contains(c)))
+            }
+            "mv" => {
+                matches!(
+                    arg.as_str(),
+                    "--force"
+                        | "--interactive"
+                        | "--no-clobber"
+                        | "--verbose"
+                        | "--no-target-directory"
+                ) || (!arg.starts_with("--") && arg[1..].chars().all(|c| "finvT".contains(c)))
+            }
+            "truncate" => {
+                matches!(arg.as_str(), "--no-create" | "--io-blocks" | "-c" | "-o")
+                    || arg.starts_with("--size=")
+                    || arg.starts_with("--reference=")
+                    || arg.strip_prefix("-s").is_some_and(|size| !size.is_empty())
+            }
+            _ => false,
+        };
+        if !known {
+            return Err(format!("an unsupported {name} deletion option `{arg}`"));
+        }
+    }
+    Ok(operands)
+}
+
 fn runs_remover(argv: &[String], depth: usize) -> bool {
     if depth > MAX_DEPTH {
         return false;
@@ -7412,45 +7909,81 @@ fn read_glob_entries<T>(
 }
 
 fn real_prefix_checked(path: &Path) -> Result<Option<String>, ()> {
-    // OS text rule (issue 79): a component that is not valid UTF-8 cannot be
-    // placed as text, so the path is unplaced (unproven), never a lossy lookalike.
-    let mut parts: Vec<String> = Vec::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Normal(p) => parts.push(p.to_str().ok_or(())?.to_string()),
-            std::path::Component::ParentDir => parts.push("..".to_string()),
-            _ => {}
+    #[cfg(windows)]
+    {
+        // Preserve the drive when resolving a native path. The historical
+        // POSIX reader below intentionally places rooted paths at `/`.
+        if !path.is_absolute() {
+            return Ok(None);
         }
-    }
-    let globbed = parts
-        .iter()
-        .position(|p| p.contains(['*', '?', '[']))
-        .unwrap_or(parts.len());
-    for existing in (0..=globbed).rev() {
-        let prefix = format!("/{}", parts[..existing].join("/"));
-        if crate::absence::symlink_metadata_optional(Path::new(&prefix))
-            .map_err(|_| ())?
-            .is_none()
-        {
-            continue;
-        }
-        let real = std::fs::canonicalize(&prefix).map_err(|_| ())?;
-        let mut joined = real.to_str().ok_or(())?.to_string();
-        for part in &parts[existing..] {
-            if !joined.ends_with('/') {
-                joined.push('/');
+        let parts: Vec<_> = path.components().collect();
+        let globbed = parts
+            .iter()
+            .position(|part| {
+                part.as_os_str()
+                    .to_str()
+                    .is_none_or(|text| text.contains(['*', '?', '[']))
+            })
+            .unwrap_or(parts.len());
+        for existing in (1..=globbed).rev() {
+            let prefix: PathBuf = parts[..existing].iter().collect();
+            if crate::absence::symlink_metadata_optional(&prefix)
+                .map_err(|_| ())?
+                .is_none()
+            {
+                continue;
             }
-            joined.push_str(part);
+            let mut real = crate::portable_path::canonicalize(&prefix).map_err(|_| ())?;
+            for part in &parts[existing..] {
+                real.push(part.as_os_str());
+            }
+            let real = super::outward::lexical_join(Path::new(""), &real);
+            return Ok(Some(crate::portable_path::slashed(&real)));
         }
-        let joined = normalize_path(&joined);
-        let served = match joined.strip_prefix("/System/Volumes/Data") {
-            Some("") => "/".to_string(),
-            Some(rest) if rest.starts_with('/') => rest.to_string(),
-            _ => joined,
-        };
-        return Ok(Some(served));
+        return Ok(None);
     }
-    Ok(None)
+    #[cfg(not(windows))]
+    {
+        // OS text rule (issue 79): a component that is not valid UTF-8 cannot be
+        // placed as text, so the path is unplaced (unproven), never a lossy lookalike.
+        let mut parts: Vec<String> = Vec::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::Normal(p) => parts.push(p.to_str().ok_or(())?.to_string()),
+                std::path::Component::ParentDir => parts.push("..".to_string()),
+                _ => {}
+            }
+        }
+        let globbed = parts
+            .iter()
+            .position(|p| p.contains(['*', '?', '[']))
+            .unwrap_or(parts.len());
+        for existing in (0..=globbed).rev() {
+            let prefix = format!("/{}", parts[..existing].join("/"));
+            if crate::absence::symlink_metadata_optional(Path::new(&prefix))
+                .map_err(|_| ())?
+                .is_none()
+            {
+                continue;
+            }
+            let real = std::fs::canonicalize(&prefix).map_err(|_| ())?;
+            let mut joined = real.to_str().ok_or(())?.to_string();
+            for part in &parts[existing..] {
+                if !joined.ends_with('/') {
+                    joined.push('/');
+                }
+                joined.push_str(part);
+            }
+            let joined = normalize_path(&joined);
+            let served = match joined.strip_prefix("/System/Volumes/Data") {
+                Some("") => "/".to_string(),
+                Some(rest) if rest.starts_with('/') => rest.to_string(),
+                _ => joined,
+            };
+            return Ok(Some(served));
+        }
+        Ok(None)
+    }
 }
 
 /// Brace expansion over a word's pieces: a `{a,b}` list or a `{x..y}`
@@ -7902,6 +8435,7 @@ mod tests {
             let reader = super::Reader {
                 base: None,
                 rooted_unplaced: false,
+                stores: None,
                 found: None,
                 depth: 0,
                 pipe_input: None,
@@ -8223,6 +8757,7 @@ mod tests {
         let mut reader = super::Reader {
             base: None,
             rooted_unplaced: false,
+            stores: None,
             found: None,
             depth: 0,
             pipe_input: None,
@@ -8275,6 +8810,7 @@ mod tests {
         let mut reader = super::Reader {
             base: None,
             rooted_unplaced: false,
+            stores: None,
             found: None,
             depth: 0,
             pipe_input: None,
@@ -8326,6 +8862,7 @@ mod tests {
         let mut reader = super::Reader {
             base: None,
             rooted_unplaced: false,
+            stores: None,
             found: None,
             depth: 0,
             pipe_input: None,

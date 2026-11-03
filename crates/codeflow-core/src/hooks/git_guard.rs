@@ -917,6 +917,9 @@ fn evaluate_report_with_runners(
     let home = line_home::read(command);
     let _home = line_home::Scope::enter(command, &home);
     let mut report = Evaluation::default();
+    if let Some(finding) = crate::security::secret_stores::violation(command, Some(cwd)) {
+        report.violations.push(finding);
+    }
     // A program Git runs from an environment variable is judged as a
     // command of its own in each directory Git may run it in, or refuses
     // when its value or that directory cannot be established (TSK-1002
