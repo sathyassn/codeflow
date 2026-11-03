@@ -1,7 +1,7 @@
 //! Conservative literal inspection inside interpreter code, never ordinary
 //! data, and of the arguments an interpreter is given (TSK-302).
 use super::search_pattern::CommandLine;
-use super::{actions, outward, pattern::matches_extended_glob};
+use super::{actions, outward, pattern::glob_covers_or_refuses};
 use crate::hooks::{PolicyLevel, SecuritySection, Violation};
 use std::path::{Path, PathBuf};
 
@@ -1474,7 +1474,7 @@ fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -
                     else {
                         return false;
                     };
-                    matches_extended_glob(word, pattern)
+                    glob_covers_or_refuses(word, pattern)
                         || reader.is_some_and(|expands| secret_prefix(word, pattern, expands))
                 })
         })

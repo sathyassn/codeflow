@@ -8,7 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use serde_json::{Map, Value};
 
 use super::{PolicyLevel, Violation};
-use crate::security::{actions, pattern::matches_extended_glob};
+use crate::security::{actions, pattern::glob_covers_or_refuses};
 
 /// An input which the edit guard cannot safely interpret.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -399,7 +399,7 @@ fn resolved_pattern(base: &Path, relative: &str, resolve: bool) -> Result<String
 }
 
 fn covers(path: &str, pattern: &str) -> bool {
-    matches_extended_glob(path, pattern)
+    glob_covers_or_refuses(path, pattern)
         || pattern
             .strip_suffix("/**")
             .is_some_and(|parent| path == parent)

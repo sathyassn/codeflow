@@ -86,35 +86,101 @@ pub fn is_path_targeted(cmd: &str, path: &str) -> bool {
 /// Most compiled glob patterns kept at once.
 const GLOB_CACHE_ENTRIES: usize = 128;
 
-/// Match a path against an extended glob pattern supporting `**`.
+/// Longest glob pattern the matcher compiles. Shipped policy patterns are far
+/// shorter; a longer one is refused, never compiled.
+pub const MAX_GLOB_PATTERN_BYTES: usize = 1024;
+/// Longest path the matcher scans against one pattern.
+pub const MAX_GLOB_PATH_BYTES: usize = 32 * 1024;
+/// Largest compiled program, in bytes, for one glob. Compile work grows with
+/// this size, so it is the step bound for compilation.
+const GLOB_COMPILED_BYTES: usize = 256 * 1024;
+
+/// The result of matching a path against a glob under the bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlobMatch {
+    /// The path is in the glob's language.
+    Match,
+    /// The path is not in the glob's language.
+    NoMatch,
+    /// The match could not finish inside the bound; the cause is named.
+    /// A guard treats this as a refusal, never as an allow.
+    Unbounded(&'static str),
+}
+
+impl GlobMatch {
+    /// Whether a guard that must fail closed refuses on this result.
+    #[must_use]
+    pub fn refuses(self) -> bool {
+        !matches!(self, Self::NoMatch)
+    }
+}
+
+/// Match a path against an extended glob pattern supporting `**`, inside a
+/// fixed bound on pattern length, compiled size and path length.
 #[must_use]
-pub fn matches_extended_glob(path: &str, pattern: &str) -> bool {
+pub fn match_extended_glob(path: &str, pattern: &str) -> GlobMatch {
+    if pattern.len() > MAX_GLOB_PATTERN_BYTES {
+        return GlobMatch::Unbounded("a glob pattern is longer than the matcher's bound");
+    }
+    if path.len() > MAX_GLOB_PATH_BYTES {
+        return GlobMatch::Unbounded("a path is longer than the glob matcher's bound");
+    }
     // Recursive search checks the same policy patterns for many names. Bound
     // the cache because this utility also accepts caller-provided patterns.
     static CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, Regex>>> =
         OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    if let Ok(entries) = cache.lock() {
-        if let Some(regex) = entries.get(pattern) {
-            return regex.is_match(path);
+    let found = cache
+        .lock()
+        .ok()
+        .and_then(|entries| entries.get(pattern).cloned());
+    let regex = if let Some(regex) = found {
+        regex
+    } else {
+        #[cfg(test)]
+        tests::COMPILES.with(|n| n.set(n.get() + 1));
+        let full_regex = format!("(?s)^{}$", glob_to_regex(pattern));
+        let regex = match regex::RegexBuilder::new(&full_regex)
+            .size_limit(GLOB_COMPILED_BYTES)
+            .dfa_size_limit(GLOB_COMPILED_BYTES)
+            .build()
+        {
+            Ok(regex) => regex,
+            Err(regex::Error::CompiledTooBig(_)) => {
+                return GlobMatch::Unbounded("a glob pattern compiles past the matcher's bound");
+            }
+            Err(_) => return GlobMatch::Unbounded("a glob pattern cannot be compiled"),
+        };
+        if let Ok(mut entries) = cache.lock() {
+            // A full cache is emptied, not frozen: a frozen cache made every
+            // later pattern compile again on each call (TSK-1258 AC-1).
+            if entries.len() >= GLOB_CACHE_ENTRIES {
+                entries.clear();
+            }
+            entries.insert(pattern.to_owned(), regex.clone());
         }
-    }
-    #[cfg(test)]
-    tests::COMPILES.with(|n| n.set(n.get() + 1));
-    let regex = glob_to_regex(pattern);
-    let full_regex = format!("(?s)^{regex}$");
-    let Ok(regex) = Regex::new(&full_regex) else {
-        return false;
+        regex
     };
-    if let Ok(mut entries) = cache.lock() {
-        // A full cache is emptied, not frozen: a frozen cache made every
-        // later pattern compile again on each call (TSK-1258 AC-1).
-        if entries.len() >= GLOB_CACHE_ENTRIES {
-            entries.clear();
-        }
-        entries.insert(pattern.to_owned(), regex.clone());
+    if regex.is_match(path) {
+        GlobMatch::Match
+    } else {
+        GlobMatch::NoMatch
     }
-    regex.is_match(path)
+}
+
+/// Match a path against an extended glob pattern supporting `**`. A match
+/// that cannot finish inside the bound reports no match; a guard that must
+/// refuse then uses [`match_extended_glob`] or [`glob_covers_or_refuses`].
+#[must_use]
+pub fn matches_extended_glob(path: &str, pattern: &str) -> bool {
+    match_extended_glob(path, pattern) == GlobMatch::Match
+}
+
+/// Whether a guard must treat `path` as covered by `pattern`: a match, or a
+/// match that cannot finish inside the bound (fail closed).
+#[must_use]
+pub fn glob_covers_or_refuses(path: &str, pattern: &str) -> bool {
+    match_extended_glob(path, pattern).refuses()
 }
 
 /// Whether two glob languages share a path. This is a product walk over
@@ -302,6 +368,35 @@ mod tests {
             compiles <= 1,
             "recompiled {compiles} times in 100 calls with a full cache"
         );
+    }
+
+    /// TSK-1258 AC-2: a pattern or path past the bound is refused with a
+    /// named cause by a guard, and never reads as "no match".
+    #[test]
+    fn glob_past_the_bound_refuses_with_a_cause() {
+        let long_pattern = "a".repeat(MAX_GLOB_PATTERN_BYTES + 1);
+        let long_path = "a".repeat(MAX_GLOB_PATH_BYTES + 1);
+        for (path, pattern) in [("a", long_pattern.as_str()), (long_path.as_str(), "**/a")] {
+            let result = match_extended_glob(path, pattern);
+            assert!(matches!(result, GlobMatch::Unbounded(cause) if !cause.is_empty()));
+            assert!(glob_covers_or_refuses(path, pattern));
+            assert!(!matches_extended_glob(path, pattern));
+        }
+        assert!(!glob_covers_or_refuses("b", "a"));
+        assert!(glob_covers_or_refuses("a", "a"));
+    }
+
+    /// TSK-1258 AC-2: nested and repeated wildcards finish inside the bound,
+    /// and a path the pattern covers is never reported as uncovered.
+    #[test]
+    fn nested_wildcards_stay_bounded_and_never_allow() {
+        let nested = format!("{}z", "**/*a*".repeat(150));
+        let path = format!("{}z", "xa/".repeat(150));
+        assert!(nested.len() <= MAX_GLOB_PATTERN_BYTES);
+        let started = std::time::Instant::now();
+        let covered = glob_covers_or_refuses(&path, &nested);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(covered, "a covered path must not read as uncovered");
     }
 
     #[test]
