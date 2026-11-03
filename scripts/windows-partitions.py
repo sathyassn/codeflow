@@ -79,6 +79,8 @@ Usage: windows-partitions.py filter <partition> [--list <nextest list json>...]
        windows-partitions.py drift --list <nextest list json>...
        windows-partitions.py reports --results <dir> [--list <nextest list json>...]
        windows-partitions.py check --list <nextest list json>... --results <dir>
+       windows-partitions.py coverage --list <nextest list json>... --results <dir>
+       windows-partitions.py time --list <nextest list json>... --results <dir>
        windows-partitions.py measure <junit dir>...
 """
 
@@ -586,7 +588,7 @@ def main(data_path: Path = DATA, prefix: str = RESULTS, source: str = SOURCE, re
         return 0
     base = load(data_path)
     paths = getattr(args, "list", None)
-    if paths and args.command == "check":
+    if paths and args.command in ("check", "coverage", "time"):
         # A sole surviving shard's list is written into the results directory
         # itself, so the lists that exist stand for all of them (they agree).
         paths = [path for path in [*paths, args.results / "tests.json"] if path.exists()]

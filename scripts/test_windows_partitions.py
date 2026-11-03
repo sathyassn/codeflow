@@ -751,6 +751,29 @@ class SeparateChecksTests(unittest.TestCase):
         self.assertNotIn(f"FAILED: {self.TIME}", out)
         self.assertIn("cli::fast x ran in no partition", out)
 
+    def test_coverage_and_time_use_the_sole_surviving_list(self):
+        # Only the list written into the results directory exists.
+        for command in ("coverage", "time"):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "results"
+                root.mkdir()
+                data = Path(directory) / "times.json"
+                data.write_text(json.dumps(DATA))
+                suites = {}
+                for binary, name in self.listed:
+                    suites.setdefault(binary, {"testcases": {}})["testcases"][name] = {"ignored": False}
+                (root / "tests.json").write_text(json.dumps({"rust-suites": suites}))
+                for partition in range(1, self.plan.count + 1):
+                    tests = [t for t in self.listed if self.plan.partition_of(*t) == partition]
+                    report = root / f"windows-junit-{partition}" / "junit.xml"
+                    report.parent.mkdir()
+                    report.write_text(junit(tests, 60.0))
+                missing = str(root / "gone" / "tests.json")
+                argv = ["windows-partitions.py", command, "--list", missing, "--results", str(root)]
+                with patch.object(sys, "argv", argv), redirect_stdout(StringIO()) as out:
+                    code = wp.main(data_path=data, spread=False)
+                self.assertEqual(code, 0, out.getvalue())
+
     def test_a_clean_run_passes_both(self):
         code, out = self.run_check({})
         self.assertEqual(code, 0)
