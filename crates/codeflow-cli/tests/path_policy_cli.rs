@@ -294,7 +294,7 @@ fn an_exception_landed_only_on_the_line_does_not_pass_pre_commit() {
     f.stage(".codeflow/policy.json", 0o100_644, line_policy.as_bytes());
     let line = f.commit(&[main]);
     f.repo
-        .remote("origin", "https://example.invalid/repo.git")
+        .remote("origin", "file:///nonexistent/repo.git")
         .unwrap();
     for (name, id) in [("main", main), ("integration/x", line)] {
         f.repo

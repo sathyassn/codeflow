@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Targeted structural checks for the candidate gate and CI trust boundaries."""
+import ast
 import importlib.util
 import json
 import os
@@ -35,8 +36,15 @@ class GateContracts(unittest.TestCase):
         jobs = dict(zip(parts[1::2], parts[2::2]))
         windows = {key: text for key, text in jobs.items() if key.startswith('windows')}
         gated = ('windows', 'windows-build', 'windows-tests', 'windows-journeys', 'windows-release-journey')
-        self.assertEqual(set(windows), {*gated, 'windows-verdict'})
+        self.assertEqual(set(windows), {*gated, 'windows-verdict', 'windows-image'})
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
+        # TSK-359: `windows-image` only reads the push's Windows runner image
+        # for the reuse decision. It runs on pushes alone and is no gate.
+        image = windows['windows-image']
+        self.assertIn("    if: github.event_name == 'push'\n", image)
+        self.assertNotIn('needs:', image)
+        self.assertNotIn('continue-on-error', image)
+        self.assertNotIn(image.split('name: ', 1)[1].split('\n', 1)[0], checks)
         for key in gated:
             with self.subTest(job=key):
                 job = windows[key]
@@ -395,6 +403,302 @@ class GateContracts(unittest.TestCase):
         self.assertIn('npm run supply-chain', targets['present-supply-chain']['modes']['full']['command'])
         self.assertIn('check-present-binary-delta', targets['present-binary-delta']['modes']['full']['command'])
         self.assertIn('structural', cfg['_description'])
+
+UNITTEST_CASES = {'TestCase', 'IsolatedAsyncioTestCase'}
+UNITTEST_CLASS_DECORATORS = {'skip', 'skipIf', 'skipUnless', 'expectedFailure'}
+SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+
+def collection_problems(source, label):
+    """Tests a module defines that unittest's loader might not run, read from
+    the source alone (TSK-359). Nothing is imported or executed, so checking
+    a file has no side effect such as a build.
+
+    The check fails closed: a test file must use one plain layout, and
+    anything outside it is refused rather than resolved.
+    - A `test*` name outside a function body is bound only by one plain
+      `def` directly in the body of a direct top-level class.
+    - Each top-level class name is bound once in the whole module, at any
+      depth, and is never the first argument of `setattr` or `delattr`.
+    - No attribute of a top-level class is assigned or deleted anywhere,
+      and no attribute named `test*` outside a function body.
+    The one exception is `test_x = None` directly in a top-level class
+    body, which drops a test that class inherits from another class in the
+    file and does not define itself.
+    - A class decorator is `unittest.skip*` or `unittest.expectedFailure`,
+      and a class takes no keywords such as a metaclass.
+    - No `load_tests` and no `from ... import *` anywhere.
+    Within that layout, a test counts as collected when a top-level class
+    whose bases reach `unittest.TestCase` resolves the test's name to that
+    very definition through its method resolution order, so a mixin
+    inherited by a concrete TestCase counts. Loader errors are not judged
+    here: each file runs through unittest.main, which fails on one."""
+    tree = ast.parse(source)
+    problems = []
+
+    def refuse(node, why):
+        problems.append(f'{label}:{node.lineno} {why}')
+
+    parents = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+
+    def in_function(node):
+        node = parents.get(node)
+        while node is not None and not isinstance(node, SCOPES):
+            node = parents.get(node)
+        return node is not None
+
+    def located(node):
+        while not hasattr(node, 'lineno'):
+            node = parents[node]
+        return node
+
+    unittest_modules, case_names = {'unittest'}, set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            unittest_modules |= {a.asname or a.name for a in node.names if a.name == 'unittest'}
+        elif isinstance(node, ast.ImportFrom) and node.module == 'unittest':
+            case_names |= {a.asname or a.name for a in node.names if a.name in UNITTEST_CASES}
+
+    classes = {}
+    for stmt in tree.body:
+        if isinstance(stmt, ast.ClassDef) and stmt.name not in classes:
+            classes[stmt.name] = stmt
+    class_nodes = {id(stmt) for stmt in tree.body if isinstance(stmt, ast.ClassDef)}
+
+    def defined_tests(stmt):
+        return {item.name for item in stmt.body
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith('test')}
+
+    def inherited_tests(stmt, seen=()):
+        names = set()
+        for expr in stmt.bases:
+            if isinstance(expr, ast.Name) and expr.id in classes and expr.id not in seen:
+                base = classes[expr.id]
+                names |= defined_tests(base) | inherited_tests(base, seen + (expr.id,))
+        return names
+
+    # The one allowed exception: `test_x = None` directly in a top-level
+    # class body drops a test the class inherits from a class in this file
+    # and does not define itself. test_release.py uses it where a carrier
+    # has no case to run.
+    opt_outs = {}
+    for stmt in classes.values():
+        for item in stmt.body:
+            if (isinstance(item, ast.Assign) and len(item.targets) == 1
+                    and isinstance(item.targets[0], ast.Name)
+                    and isinstance(item.value, ast.Constant) and item.value.value is None
+                    and item.targets[0].id in inherited_tests(stmt) - defined_tests(stmt)):
+                opt_outs[id(item.targets[0])] = item.targets[0].id
+
+    def bound_names(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return [node.name]
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            return [node.id]
+        if isinstance(node, ast.alias):
+            return [node.asname or node.name.split('.')[0]]
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            return list(node.names)
+        if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)):
+            return [node.name] if node.name else []
+        if isinstance(node, ast.MatchMapping):
+            return [node.rest] if node.rest else []
+        return []
+
+    def plain_method(node):
+        parent = parents.get(node)
+        return (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and id(parent) in class_nodes and node in parent.body)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(a.name == '*' for a in node.names):
+            refuse(node, 'imports * and may rebind any name')
+        if isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del)) and (
+                (isinstance(node.value, ast.Name) and node.value.id in classes)
+                or (node.attr.startswith('test') and not in_function(node))):
+            refuse(node, f'assigns or deletes attribute {node.attr}')
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id in {'setattr', 'delattr'} and node.args \
+                and isinstance(node.args[0], ast.Name) and node.args[0].id in classes:
+            refuse(node, f'{node.func.id} changes class {node.args[0].id}')
+        for name in bound_names(node):
+            if name == 'load_tests':
+                refuse(located(node), 'binds load_tests; the guard cannot judge its collection')
+            elif name in classes and node is not classes[name]:
+                refuse(located(node), f'rebinds top-level class {name}')
+            elif name.startswith('test') and not in_function(node) and not plain_method(node) \
+                    and id(node) not in opt_outs:
+                refuse(located(node), f'{name} is not a plain method of a top-level class')
+
+    def is_unittest_case(expr):
+        if isinstance(expr, ast.Attribute) and isinstance(expr.value, ast.Name):
+            return expr.value.id in unittest_modules and expr.attr in UNITTEST_CASES
+        return isinstance(expr, ast.Name) and expr.id in case_names
+
+    def allowed_decorator(expr):
+        target = expr.func if isinstance(expr, ast.Call) else expr
+        return (isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)
+                and target.value.id in unittest_modules and target.attr in UNITTEST_CLASS_DECORATORS)
+
+    base_case = type('TestCaseRoot', (), {})
+    built = {}
+    for name, stmt in classes.items():
+        for expr in stmt.decorator_list:
+            if not allowed_decorator(expr):
+                refuse(expr, f'class {name} has a decorator that may replace it')
+        if stmt.keywords:
+            refuse(stmt, f'class {name} takes keywords such as a metaclass')
+        methods = {}
+        for item in stmt.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith('test'):
+                if item.name in methods:
+                    refuse(item, f'{name}.{item.name} replaces an earlier definition')
+                methods[item.name] = item
+            elif isinstance(item, ast.Assign) and id(item.targets[0]) in opt_outs:
+                methods[item.targets[0].id] = None
+        bases = [base_case if is_unittest_case(expr) else built[expr.id]
+                 for expr in stmt.bases
+                 if is_unittest_case(expr) or (isinstance(expr, ast.Name) and expr.id in built)]
+        try:
+            built[name] = type(name, tuple(dict.fromkeys(bases)) or (object,), methods)
+        except TypeError as error:
+            refuse(stmt, f'class {name} has no consistent order: {error}')
+    collected = set()
+    for cls in built.values():
+        if issubclass(cls, base_case):
+            collected |= {id(getattr(cls, n)) for n in dir(cls) if n.startswith('test')}
+    for name, stmt in classes.items():
+        for item in stmt.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                    and item.name.startswith('test') and id(item) not in collected:
+                refuse(item, f'{name}.{item.name} is never collected')
+    return sorted(set(problems), key=lambda p: (int(p.split(':')[1].split()[0]), p))
+
+
+def probe_count(source):
+    """The number of tests unittest's own loader collects from probe text."""
+    namespace = {'__name__': 'probe'}
+    exec(compile(source, 'probe.py', 'exec'), namespace)
+    module = type(unittest)('probe')
+    module.__dict__.update(namespace)
+    return unittest.defaultTestLoader.loadTestsFromModule(module).countTestCases()
+
+
+CASE = 'import unittest\nclass Case(unittest.TestCase):\n'
+
+
+class TestCollection(unittest.TestCase):
+    """Every scripts/test_*.py file keeps the plain layout the collection
+    guard accepts, and the guard refuses every other layout probed here
+    (TSK-359). Each refused probe collects fewer tests than it defines when
+    unittest's own loader reads it."""
+
+    def problems(self, source):
+        return collection_problems(source, 'probe.py')
+
+    def assertRefused(self, source, expected, defined=1):
+        self.assertEqual(self.problems(source), expected)
+        self.assertLess(probe_count(source), defined)
+
+    def test_every_scripts_test_file_keeps_the_plain_layout(self):
+        files = sorted(Path(__file__).resolve().parent.glob('test_*.py'))
+        self.assertTrue(files)
+        for path in files:
+            with self.subTest(file=path.name):
+                self.assertEqual(collection_problems(path.read_text(), path.name), [])
+
+    def test_a_test_under_a_plain_class_is_refused(self):
+        self.assertRefused('import unittest\nclass Helper:\n    def test_lost(self):\n        pass\n',
+                           ['probe.py:3 Helper.test_lost is never collected'])
+
+    def test_a_nested_test_case_is_refused(self):
+        source = CASE + ('    def test_runs(self):\n        pass\n    class Inner(unittest.TestCase):\n'
+                         '        def test_lost(self):\n            pass\n')
+        self.assertRefused(source, ['probe.py:6 test_lost is not a plain method of a top-level class'], 2)
+
+    def test_a_class_inside_a_conditional_is_refused(self):
+        source = 'import unittest\nif True:\n    class Helper:\n        def test_lost(self):\n            pass\n'
+        self.assertRefused(source, ['probe.py:4 test_lost is not a plain method of a top-level class'])
+
+    def test_a_class_replaced_by_a_later_one_of_the_same_name_is_refused(self):
+        source = (CASE + '    def test_lost(self):\n        pass\n'
+                  'class Case(unittest.TestCase):\n    def test_kept(self):\n        pass\n')
+        self.assertRefused(source, ['probe.py:5 rebinds top-level class Case'], 2)
+
+    def test_a_method_replaced_in_its_own_class_is_refused(self):
+        source = CASE + '    def test_x(self):\n        pass\n    def test_x(self):\n        pass\n'
+        self.assertRefused(source, ['probe.py:3 Case.test_x is never collected',
+                                    'probe.py:5 Case.test_x replaces an earlier definition'], 2)
+
+    def test_a_test_name_rebound_in_the_class_body_is_refused(self):
+        source = CASE + '    def test_lost(self):\n        pass\n    test_lost = None\n'
+        self.assertRefused(source, ['probe.py:5 test_lost is not a plain method of a top-level class'])
+
+    def test_an_inherited_test_dropped_with_none_is_the_one_exception(self):
+        base = CASE + '    def test_x(self):\n        pass\n'
+        dropped = base + 'class Child(Case):\n    test_x = None\n'
+        self.assertEqual(self.problems(dropped), [])
+        self.assertEqual(probe_count(dropped), 1)
+        self.assertEqual(self.problems(base + 'class Child(Case):\n    test_y = None\n'),
+                         ['probe.py:6 test_y is not a plain method of a top-level class'])
+        self.assertEqual(self.problems(base + 'class Child(Case):\n    test_x = 1\n'),
+                         ['probe.py:6 test_x is not a plain method of a top-level class'])
+
+    def test_a_class_attribute_assigned_from_outside_is_refused(self):
+        source = CASE + '    def test_x(self):\n        pass\ndef f():\n    Case.test_x = None\n'
+        self.assertEqual(self.problems(source), ['probe.py:6 assigns or deletes attribute test_x'])
+
+    def test_a_class_rebound_at_top_level_is_refused(self):
+        source = CASE + '    def test_lost(self):\n        pass\nCase = None\n'
+        self.assertRefused(source, ['probe.py:5 rebinds top-level class Case'])
+
+    def test_a_class_rebound_inside_a_conditional_is_refused(self):
+        source = CASE + '    def test_lost(self):\n        pass\nif True:\n    Case = None\n'
+        self.assertRefused(source, ['probe.py:6 rebinds top-level class Case'])
+
+    def test_a_test_inside_an_except_handler_is_refused(self):
+        source = ('import unittest\ntry:\n    raise ValueError\nexcept ValueError:\n    pass\nelse:\n    pass\n'
+                  'try:\n    pass\nexcept ValueError:\n    class Case(unittest.TestCase):\n'
+                  '        def test_lost(self):\n            pass\n')
+        self.assertRefused(source, ['probe.py:12 test_lost is not a plain method of a top-level class'])
+
+    def test_a_test_inside_a_match_arm_is_refused(self):
+        source = ('import unittest\nmatch 0:\n    case 1:\n        class Case(unittest.TestCase):\n'
+                  '            def test_lost(self):\n                pass\n')
+        self.assertRefused(source, ['probe.py:5 test_lost is not a plain method of a top-level class'])
+
+    def test_a_module_level_test_function_is_refused(self):
+        self.assertRefused('def test_lost():\n    pass\n',
+                           ['probe.py:1 test_lost is not a plain method of a top-level class'])
+
+    def test_load_tests_is_refused(self):
+        source = CASE + '    def test_x(self):\n        pass\ndef load_tests(loader, tests, pattern):\n    return tests\n'
+        self.assertEqual(self.problems(source), ['probe.py:5 binds load_tests; the guard cannot judge its collection'])
+
+    def test_a_replacing_class_decorator_or_setattr_is_refused(self):
+        source = ('import unittest\ndef drop(cls):\n    return None\n@drop\nclass Case(unittest.TestCase):\n'
+                  '    def test_lost(self):\n        pass\nsetattr(Case, "x", 1)\n')
+        self.assertEqual(self.problems(source), ['probe.py:4 class Case has a decorator that may replace it',
+                                                 'probe.py:8 setattr changes class Case'])
+
+    def test_the_plain_layouts_in_use_are_accepted(self):
+        sources = [
+            ('import unittest\nclass Mixin:\n    def test_shared(self):\n        pass\n'
+             'class Concrete(Mixin, unittest.TestCase):\n    pass\n'),
+            ('import unittest as ut\nfrom unittest import TestCase as Base\nclass Root(ut.TestCase):\n    pass\n'
+             'class Child(Root):\n    def test_a(self):\n        pass\nclass Other(Base):\n'
+             '    def test_b(self):\n        pass\n'),
+            ('import unittest\n@unittest.skipIf(False, "reason")\nclass Case(unittest.TestCase):\n'
+             '    def test_x(self):\n        def test_inner():\n            pass\n'),
+        ]
+        for source in sources:
+            with self.subTest(source=source[:40]):
+                self.assertEqual(self.problems(source), [])
+                self.assertGreater(probe_count(source), 0)
+
 
 if __name__ == '__main__':
     unittest.main()

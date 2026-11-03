@@ -4319,6 +4319,61 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // TSK-1145: /proc/meminfo is read by its documented format to size the
+    // host job budget. An unreadable file or a line that does not parse
+    // gives no memory figure, and the budget falls back to the core count;
+    // no admission decision reads it.
+    (
+        "crates/codeflow-core/src/testing/capacity.rs",
+        "platform::available_memory",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/testing/capacity.rs",
+        "platform::available_memory",
+        "obtain-absent:read_to_string",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/testing/capacity.rs",
+        "platform::available_memory",
+        "trim",
+        2,
+        "format-contract",
+    ),
+    // TSK-1256: preserve holder fields from parse_record's validated,
+    // LF-separated output while excluding group fields. No other separator
+    // may change the record's fields.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "fence_live_groups",
+        "split_terminator",
+        1,
+        "format-contract",
+    ),
+    // TSK-1256: all platform implementations read pid fields using the
+    // same exact LF separator as parse_record, without stripping CR or
+    // Unicode whitespace from a process identity.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "holder_alive",
+        "split_terminator",
+        3,
+        "format-contract",
+    ),
+    // TSK-1256: unreadable holder snapshots omit diagnostic details only.
+    // The caller has already refused admission on the held fence; this
+    // best-effort read cannot authorize a run or reclaim a lock.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "fence_holder",
+        "obtain-absent:read",
+        1,
+        "display",
+    ),
     // Formats owner PID/directory and stale-lock notes after lock authority has been decided using the lock itself.
     (
         "crates/codeflow-core/src/testing/gate_guard.rs",
@@ -4330,7 +4385,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Formats owner PID/directory and stale-lock notes after lock authority has been decided using the lock itself.
     (
         "crates/codeflow-core/src/testing/gate_guard.rs",
-        "acquire_gate_lock",
+        "take_slot",
         "trim",
         1,
         "display",
@@ -7031,7 +7086,6 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/repo.rs", "hidden_checkout_under", "is_file", 1, "Marker absence is proven first and metadata errors propagate; its obtained type selects gitfile parsing."),
     ("crates/codeflow-core/src/hooks/repo.rs", "open_checkout", "is_dir", 1, "Marker metadata was obtained with errors propagated; this tests its type, not its existence."),
     ("crates/codeflow-core/src/hooks/repo.rs", "marker", "is_dir", 1, "Records the type of metadata symlink_metadata_optional obtained; a read error leaves the owner without a marker, so it is opened again, and a marker only detects change, so it never removes an owner."),
-    ("crates/codeflow-core/src/hooks/repo.rs", "registered_marker", "is_file", 1, "Registration symlink metadata is read with errors propagated; only a regular file is accepted, so a symlink or another type fails closed before absence is judged."),
     ("crates/codeflow-core/src/hooks/repo.rs", "read_registration", "is_file", 1, "Marker metadata was obtained with errors propagated; the type selects the physical gitfile parent cross-check."),
     ("crates/codeflow-core/src/hooks/session_summary.rs", "unwritten", "ErrorKind::NotADirectory", 1, "Selects repair wording after a ledger write has already failed; the original LedgerUnwritten error remains."),
     ("crates/codeflow-core/src/hooks/session_summary.rs", "unwritten", "exists", 2, "Selects repair wording after a ledger write has already failed; the original LedgerUnwritten error remains."),
@@ -7123,7 +7177,11 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/contained.rs", "Tree::write_with_hook", "ErrorKind::NotFound", 1, "A missing leaf in the held parent is proven by a no-follow stat; the write then goes through a temporary file and rename, and links fail as invalid."),
     ("crates/codeflow-core/src/contained.rs", "Tree::write_with_hook", "is_file", 1, "Type check on metadata from platform::metadata with errors propagated."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_file", "ErrorKind::NotFound", 1, "A no-follow stat not finding the leaf in the held parent proves it missing; the create then opens without following links, and other errors propagate."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "require_repository", "is_file", 1, "Type check on the HEAD metadata read through the held directory; a failure to inspect reads as not a file, which refuses the directory before any file is created."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "require_repository", "is_dir", 1, "Type check on objects and refs metadata read through the held directory (a two-folder loop); a failure to inspect reads as not a directory, which refuses it before any file is created."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "shared_git_tree", "ErrorKind::NotFound", 1, "A no-follow metadata read of commondir in the held administrative directory not finding it means no linked-worktree registration was read; the directory is then returned only after require_repository finds HEAD, objects and refs on that same handle, and every other error refuses."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_file", "is_file", 3, "Type checks on metadata obtained with propagated errors (platform::metadata and the opened file's metadata on each platform)."),
+    ("crates/codeflow-core/src/contained.rs", "platform::open_regular_for_append", "is_file", 2, "Type check on the opened descriptor's metadata, with propagated errors, on each platform; a pipe, device or folder is refused, never read as absent."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_read_only", "is_file", 2, "Type check on the opened file's metadata, with propagated errors, on each platform; a non-regular lock file is refused, never read as absent."),
     ("crates/codeflow-core/src/contained.rs", "platform::open_regular", "is_file", 2, "Type check on the opened file's metadata, with propagated errors, on each platform; a non-regular file is refused, never read as absent."),
     ("crates/codeflow-core/src/contained.rs", "platform::remove", "is_dir", 1, "Windows type check on the metadata of the handle just opened; errors propagate."),
@@ -7152,7 +7210,6 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/testing/config/mod.rs", "load_named_test_config", "ErrorKind::NotFound", 1, "Only a NotFound from symlink_metadata on the named path becomes ConfigNotFound, a refusal; every other error refuses as unreadable (TSK-1020)."),
     ("crates/codeflow-core/src/testing/config/mod.rs", "load_named_test_config", "is_file", 1, "Read from symlink_metadata after links are refused; false refuses the named config as not regular, and the bounded no-follow reader rechecks the opened file (TSK-1020)."),
     ("crates/codeflow-core/src/testing/gate.rs", "copy_folder", "is_dir", 1, "Type check on metadata the anchored walk read without following, errors propagated; a link or special file fails before it, and a file then reopens through open_regular (TSK-1044)."),
-    ("crates/codeflow-core/src/testing/gate_guard.rs", "earliest_waiter", "ErrorKind::NotFound", 2, "The waiter folder is opened through the no-follow contained tree, so not found means no waiter has queued and no earlier ticket exists; any other error refuses as gate lock unavailable (TSK-1128)."),
     ("crates/codeflow-core/src/testing/runner/mod.rs", "this_binary_if_same", "is_file", 1, "Picks the PATH entry the command would run; a missing or non-regular entry is skipped, and a wrong pick only withholds the lock descriptors, since the device and inode must still equal the running binary's (TSK-1128)."),
     ("crates/codeflow-core/src/testing/runner/mod.rs", "open_report", "ErrorKind::NotFound", 1, "The anchored walk refuses a link at any component before it can report not found, so not found is a missing report, which is skipped as before; other errors refuse the copy and fail the target (TSK-1044)."),
     ("crates/codeflow-core/src/testing/runner/mod.rs", "run_owed_target", "ErrorKind::NotFound", 1, "A producer output checked through the anchored walk, which refuses a link at any component before it can report not found, so not found is a missing output and fails the target; other errors are a refused output and fail it too (TSK-1044)."),

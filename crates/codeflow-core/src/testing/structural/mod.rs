@@ -505,6 +505,7 @@ mod tests {
             input_class: None,
             evidence: None,
             exclusive: false,
+            host_exclusive: false,
             heavy: None,
             workers: None,
             runner: RunnerType::Custom,

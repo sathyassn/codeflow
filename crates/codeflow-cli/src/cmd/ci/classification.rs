@@ -621,7 +621,10 @@ pub(super) fn dispatch(
     let amendment_problem =
         |files: &[GitName]| amendment::range_problem_at(root, range.base, range.head, files);
     let epic_problem = |epic: &str| amendment::epic_problem(root, range.base, range.head, epic);
-    let branch_task = match task_id_from_branch(root, branch) {
+    // The branch's task from the judged head under the run's policy
+    // (TSK-350 AC-1), so the class does not depend on the checkout.
+    let judged = codeflow_core::workgraph::judged_task_id;
+    let branch_task = match judged(root, &git.branch_prefixes, branch, range.head) {
         Ok(task) => task,
         Err(error) => {
             push(tagged, RULE, error.to_string(), HINT);
