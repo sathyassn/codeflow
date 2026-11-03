@@ -31,7 +31,10 @@ pub struct GateTargetResult {
     pub supervision: Option<super::runner::deadline::Supervision>,
     pub termination_unconfirmed: bool,
     pub name: String,
-    /// Process exit code; `-1` when the command could not run at all.
+    /// Child exit code when available. `-1` is a runner sentinel for missing
+    /// exit status, failure to start, an unrun target or incomplete cleanup.
+    /// Consult `status`, `error` and cleanup details; `-1` does not imply that
+    /// the child itself failed to start.
     pub exit_code: i32,
     pub duration_ms: u64,
     pub stdout: String,

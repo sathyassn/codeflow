@@ -116,6 +116,10 @@ the gate. No delegation is provisioned and no host configuration changes.
 Without delegation the status says `early stall unavailable: no delegated
 cgroup`. macOS is ceiling-only, an accepted 4.0.0 limitation reported as
 `early stall unavailable: macOS complete descendant accounting unavailable`.
+Without a cgroup, Unix confirmation uses the direct child's exit, watcher
+completion and pipe EOF. An uninterruptible group member with closed pipes
+can outlive those observations; this is a pre-existing known limit, not a
+claim of complete kernel accounting.
 
 A stall reports `stalled: no progress for N s (workers W of M)`. The ceiling
 reports `timed out at the ceiling after S s`. Both fail the gate with target

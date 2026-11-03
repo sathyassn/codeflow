@@ -207,14 +207,13 @@ impl Deadline {
             return None;
         }
         self.next_heartbeat = now.saturating_add(HEARTBEAT_INTERVAL);
+        let observed = self
+            .info
+            .cpu_usec
+            .map_or_else(|| "unknown".into(), |value| format!("{value} us"));
         let cpu = self.info.early_stall_unavailable.as_ref().map_or_else(
-            || format!("{} us (scoped accounting)", self.info.cpu_usec.unwrap_or(0)),
-            |why| {
-                format!(
-                    "early stall unavailable: {why}; observed {:?} us",
-                    self.info.cpu_usec
-                )
-            },
+            || format!("{observed} (scoped accounting)"),
+            |why| format!("early stall unavailable: {why}; observed {observed}"),
         );
         Some(format!(
             "tests done: {tests}; CPU state: {:?}; CPU: {cpu}; elapsed {} s",
@@ -308,10 +307,10 @@ mod tests {
             .unwrap()
             .contains("12 of 20"));
         d.unavailable("no delegated cgroup".into());
-        assert!(d
-            .heartbeat(Duration::from_secs(900), "unknown")
-            .unwrap()
-            .contains("no delegated cgroup"));
+        let line = d.heartbeat(Duration::from_secs(900), "unknown").unwrap();
+        assert!(line.contains("no delegated cgroup"));
+        assert!(line.contains("observed unknown"));
+        assert!(!line.contains("None"));
         assert_eq!(
             d.decision(Duration::from_secs(4000)),
             Some(TargetStatus::TimedOut)

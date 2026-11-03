@@ -1,5 +1,4 @@
 //! Linux CPU accounting in an already delegated subtree; never provisions delegation.
-use std::cell::Cell;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -61,13 +60,59 @@ impl Directory {
     }
 }
 
+/// Exit-sensitive observations are provisional until the child is re-checked.
+/// Positive path or identity mismatches remain evidence even after exit.
+#[derive(Debug)]
+pub(super) struct CgroupError {
+    pub error: io::Error,
+    pub membership_uncertain: bool,
+    pub may_be_exit: bool,
+}
+
+impl CgroupError {
+    fn membership(error: io::Error) -> Self {
+        Self {
+            error,
+            membership_uncertain: true,
+            may_be_exit: false,
+        }
+    }
+
+    fn exit_observation(error: io::Error) -> Self {
+        Self {
+            error,
+            membership_uncertain: true,
+            may_be_exit: true,
+        }
+    }
+
+    fn io(error: io::Error) -> Self {
+        Self {
+            error,
+            membership_uncertain: false,
+            may_be_exit: false,
+        }
+    }
+}
+
+impl std::fmt::Display for CgroupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.error, f)
+    }
+}
+
+impl From<CgroupError> for io::Error {
+    fn from(error: CgroupError) -> Self {
+        error.error
+    }
+}
+
 pub(super) struct Cgroup {
     parent: Directory,
     directory: Directory,
     name: String,
     pub path: PathBuf,
     launched: bool,
-    membership_uncertain: Cell<bool>,
     events: File,
     membership: PathBuf,
 }
@@ -173,29 +218,17 @@ impl Cgroup {
             directory,
             name,
             launched: false,
-            membership_uncertain: Cell::new(false),
         })
     }
 
-    pub fn mark_launched(&mut self, pid: u32) -> io::Result<()> {
+    pub fn mark_launched(&mut self, pid: u32) -> Result<(), CgroupError> {
         self.launched = true;
-        // Acknowledge the runner's own empty-to-populated launch transition.
-        // Later populated transitions with a live launch child are unexpected.
-        self.remember_membership((|| {
-            validate_population(false, self.read_events()?)?;
-            self.check_membership(pid)
-        })())
-    }
-
-    fn remember_membership<T>(&self, result: io::Result<T>) -> io::Result<T> {
-        if result.is_err() {
-            self.membership_uncertain.set(true);
-        }
-        result
-    }
-
-    pub fn termination_uncertain(&self) -> bool {
-        self.membership_uncertain.get()
+        // Acknowledge the runner's own populated transition. Exit-sensitive
+        // errors remain provisional until the controller re-checks its child.
+        self.verify().map_err(CgroupError::membership)?;
+        let populated = self.read_events().map_err(CgroupError::exit_observation)?;
+        validate_population(false, populated).map_err(CgroupError::exit_observation)?;
+        self.check_membership(pid)
     }
 
     fn read_events(&self) -> io::Result<bool> {
@@ -230,18 +263,19 @@ impl Cgroup {
         Ok(fd.revents & (libc::POLLPRI | libc::POLLERR) != 0)
     }
 
-    fn check_membership(&self, pid: u32) -> io::Result<()> {
-        let text = kernel_text(&format!("/proc/{pid}/cgroup"))?;
+    fn check_membership(&self, pid: u32) -> Result<(), CgroupError> {
+        let text =
+            kernel_text(&format!("/proc/{pid}/cgroup")).map_err(CgroupError::exit_observation)?;
         let actual = text.split('\n').find_map(|line| line.strip_prefix("0::"));
-        validate_membership(&self.membership, actual)
+        membership_observation(&self.membership, actual)
     }
 
-    pub fn sample(&self, pid: u32) -> io::Result<u64> {
-        self.remember_membership((|| {
-            self.verify()?;
-            validate_population(self.population_changed()?, self.read_events()?)?;
-            self.check_membership(pid)
-        })())?;
+    pub fn sample(&self, pid: u32) -> Result<u64, CgroupError> {
+        self.verify().map_err(CgroupError::membership)?;
+        let changed = self.population_changed().map_err(CgroupError::membership)?;
+        let populated = self.read_events().map_err(CgroupError::exit_observation)?;
+        validate_population(changed, populated).map_err(CgroupError::exit_observation)?;
+        self.check_membership(pid)?;
         self.cpu()
     }
 
@@ -251,17 +285,15 @@ impl Cgroup {
     }
 
     fn verify(&self) -> io::Result<()> {
-        self.remember_membership((|| {
-            let named = self
-                .parent
-                .at(&self.name, libc::O_RDONLY | libc::O_DIRECTORY)?
-                .metadata()?;
-            let held = self.directory.0.metadata()?;
-            if (named.dev(), named.ino()) != (held.dev(), held.ino()) {
-                return Err(io::Error::other("cgroup identity changed"));
-            }
-            Ok(())
-        })())
+        let named = self
+            .parent
+            .at(&self.name, libc::O_RDONLY | libc::O_DIRECTORY)?
+            .metadata()?;
+        let held = self.directory.0.metadata()?;
+        if (named.dev(), named.ino()) != (held.dev(), held.ino()) {
+            return Err(io::Error::other("cgroup identity changed"));
+        }
+        Ok(())
     }
 
     /// Runs after the watcher pre-exec hook. Only the inert launch child moves;
@@ -281,27 +313,27 @@ impl Cgroup {
         Ok(())
     }
 
-    pub fn cpu(&self) -> io::Result<u64> {
-        self.verify()?;
-        counter(&self.directory.text("cpu.stat")?, "usage_usec")
+    fn cpu(&self) -> Result<u64, CgroupError> {
+        self.verify().map_err(CgroupError::membership)?;
+        let text = self.directory.text("cpu.stat").map_err(CgroupError::io)?;
+        counter(&text, "usage_usec").map_err(CgroupError::io)
     }
 
     pub fn populated(&self) -> io::Result<bool> {
-        self.remember_membership((|| {
-            self.verify()?;
-            match counter(&self.directory.text("cgroup.events")?, "populated")? {
-                0 => Ok(false),
-                1 => Ok(true),
-                _ => Err(io::Error::other("invalid cgroup populated value")),
-            }
-        })())
+        self.verify()?;
+        match counter(&self.directory.text("cgroup.events")?, "populated")? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(io::Error::other("invalid cgroup populated value")),
+        }
     }
 
-    pub fn kill(&self) -> io::Result<()> {
-        self.verify()?;
+    pub fn kill(&self) -> Result<(), CgroupError> {
+        self.verify().map_err(CgroupError::membership)?;
         self.directory
-            .at("cgroup.kill", libc::O_WRONLY)?
-            .write_all(b"1")
+            .at("cgroup.kill", libc::O_WRONLY)
+            .and_then(|mut file| file.write_all(b"1"))
+            .map_err(CgroupError::io)
     }
 
     pub fn remove_empty(&self) -> io::Result<()> {
@@ -340,6 +372,16 @@ fn validate_population(changed: bool, populated: bool) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+fn membership_observation(expected: &Path, actual: Option<&str>) -> Result<(), CgroupError> {
+    validate_membership(expected, actual).map_err(|error| {
+        if actual.is_some() {
+            CgroupError::membership(error)
+        } else {
+            CgroupError::exit_observation(error)
+        }
+    })
 }
 
 fn validate_membership(expected: &Path, actual: Option<&str>) -> io::Result<()> {
@@ -420,6 +462,19 @@ mod tests {
         use super::super::deadline::{Deadline, TargetStatus};
         use std::time::Duration;
         assert!(validate_population(false, true).is_ok());
+        let wrong =
+            membership_observation(Path::new("/delegate/target"), Some("/delegate/sibling"))
+                .unwrap_err();
+        assert!(wrong.membership_uncertain);
+        assert!(
+            !wrong.may_be_exit,
+            "an observed wrong group is not a natural-exit race"
+        );
+        let missing = membership_observation(Path::new("/delegate/target"), None).unwrap_err();
+        assert!(
+            missing.may_be_exit,
+            "missing process data requires an exit re-check"
+        );
         assert!(
             validate_membership(Path::new("/delegate/target"), Some("/delegate/target")).is_ok()
         );
@@ -564,9 +619,9 @@ time.sleep(10)
                 Err(error) => {
                     let reason = error.to_string();
                     group.sample(child.id())?;
-                    if !group.termination_uncertain() {
+                    if !error.membership_uncertain {
                         return Err(io::Error::other(
-                            "healthy accounting cleared migration uncertainty",
+                            "migration was classified as a counter error",
                         ));
                     }
                     Ok(reason)

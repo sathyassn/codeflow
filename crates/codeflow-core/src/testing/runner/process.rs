@@ -4,8 +4,8 @@ use super::{CommandOutcome, TestingError, POLL_INTERVAL};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Scoped CPU observation. A membership anomaly also invalidates termination
-/// evidence from the original group, even when its accounting falls back.
+/// Scoped CPU observation. Exit-sensitive anomalies are re-checked before
+/// they invalidate termination evidence from the original group.
 pub(super) struct CpuObservation {
     pub cpu: Result<u64, String>,
     pub membership_uncertain: bool,
@@ -82,18 +82,33 @@ pub(super) fn run_observed(
     let start = Instant::now();
     let mut child = cmd.spawn().map_err(spawn_err)?;
     let mut membership_uncertain: Option<String> = None;
-    #[cfg(target_os = "linux")]
-    if let Some(group) = &mut cgroup {
-        if let Err(error) = group.mark_launched(child.id()) {
-            membership_uncertain = Some(error.to_string());
-            deadline.unavailable(error.to_string());
-        }
-    }
-    deadline.info.target_pid = child.id();
+    let mut status = None;
     #[cfg(unix)]
     if let Some(watcher) = &mut watcher {
         watcher.spawned();
     }
+    #[cfg(target_os = "linux")]
+    if let Some(group) = &mut cgroup {
+        if let Err(error) = group.mark_launched(child.id()) {
+            let definite = (!error.may_be_exit).then(|| error.to_string());
+            let observation = CpuObservation {
+                cpu: Err(error.to_string()),
+                membership_uncertain: true,
+            };
+            let observation = recheck_observation(&mut child, &mut status, observation);
+            if let Some(reason) = definite {
+                membership_uncertain.get_or_insert(reason);
+            }
+            if let Some(observation) = observation {
+                let reason = observation
+                    .cpu
+                    .expect_err("a failed launch observation carries a reason");
+                membership_uncertain = Some(reason.clone());
+                deadline.unavailable(reason);
+            }
+        }
+    }
+    deadline.info.target_pid = child.id();
     #[cfg(unix)]
     {
         let pid = child.id();
@@ -141,7 +156,6 @@ pub(super) fn run_observed(
     }
     let mut stdout = super::output::Output::new(child.stdout.take());
     let mut stderr = super::output::Output::new(child.stderr.take());
-    let mut status = None;
     let mut stop = None;
     let mut next_sample = Duration::ZERO;
     let mut termination_confirmed;
@@ -182,6 +196,8 @@ pub(super) fn run_observed(
             && status.is_none()
             && (now >= next_sample || deadline.decision(now) == Some(TargetStatus::Stalled))
         {
+            #[cfg(target_os = "linux")]
+            let mut definite_membership = None;
             let observation = observe
                 .as_mut()
                 .and_then(|sample| sample(now))
@@ -194,9 +210,14 @@ pub(super) fn run_observed(
                     #[cfg(target_os = "linux")]
                     let (cpu, lost_membership) = cgroup.as_ref().map_or_else(
                         || (Err("no delegated cgroup".into()), false),
-                        |group| {
-                            let cpu = group.sample(child.id()).map_err(|e| e.to_string());
-                            (cpu, group.termination_uncertain())
+                        |group| match group.sample(child.id()) {
+                            Ok(cpu) => (Ok(cpu), false),
+                            Err(error) => {
+                                if error.membership_uncertain && !error.may_be_exit {
+                                    definite_membership = Some(error.to_string());
+                                }
+                                (Err(error.to_string()), error.membership_uncertain)
+                            }
                         },
                     );
                     #[cfg(not(any(windows, target_os = "linux")))]
@@ -208,21 +229,28 @@ pub(super) fn run_observed(
                         membership_uncertain: lost_membership,
                     }
                 });
-            let old_reason = deadline.info.early_stall_unavailable.is_some();
-            if observation.membership_uncertain {
-                membership_uncertain.get_or_insert_with(|| {
-                    observation
-                        .cpu
-                        .as_ref()
-                        .err()
-                        .cloned()
-                        .unwrap_or_else(|| "target cgroup membership became uncertain".into())
-                });
+            let observation = recheck_observation(&mut child, &mut status, observation);
+            #[cfg(target_os = "linux")]
+            if let Some(reason) = definite_membership {
+                membership_uncertain.get_or_insert(reason);
             }
-            deadline.cpu(now, observation.cpu);
-            if !old_reason {
-                if let Some(reason) = &deadline.info.early_stall_unavailable {
-                    progress!("[codeflow test] {safe_name}: early stall unavailable: {reason}");
+            if let Some(observation) = observation {
+                let old_reason = deadline.info.early_stall_unavailable.is_some();
+                if observation.membership_uncertain {
+                    membership_uncertain.get_or_insert_with(|| {
+                        observation
+                            .cpu
+                            .as_ref()
+                            .err()
+                            .cloned()
+                            .unwrap_or_else(|| "target cgroup membership became uncertain".into())
+                    });
+                }
+                deadline.cpu(now, observation.cpu);
+                if !old_reason {
+                    if let Some(reason) = &deadline.info.early_stall_unavailable {
+                        progress!("[codeflow test] {safe_name}: early stall unavailable: {reason}");
+                    }
                 }
             }
             next_sample = now.saturating_add(Duration::from_secs(1));
@@ -286,6 +314,9 @@ pub(super) fn run_observed(
                 #[cfg(target_os = "linux")]
                 if let Some(group) = &cgroup {
                     if let Err(error) = group.kill() {
+                        if error.membership_uncertain {
+                            membership_uncertain.get_or_insert_with(|| error.to_string());
+                        }
                         cleanup_errors.push(format!("cgroup kill unavailable: {error}"));
                     }
                 }
@@ -315,15 +346,15 @@ pub(super) fn run_observed(
             }
             #[cfg(target_os = "linux")]
             if let Some(group) = &cgroup {
-                termination_confirmed &= group.populated().is_ok_and(|populated| !populated);
-            }
-            #[cfg(target_os = "linux")]
-            if cgroup
-                .as_ref()
-                .is_some_and(super::cgroup::Cgroup::termination_uncertain)
-            {
-                membership_uncertain
-                    .get_or_insert_with(|| "target cgroup membership became uncertain".into());
+                match group.populated() {
+                    Ok(populated) => termination_confirmed &= !populated,
+                    Err(error) => {
+                        membership_uncertain.get_or_insert_with(|| {
+                            format!("cannot confirm target cgroup empty: {error}")
+                        });
+                        termination_confirmed = false;
+                    }
+                }
             }
             let scoped_processes_ended = termination_confirmed;
             termination_confirmed &= membership_uncertain.is_none();
@@ -456,6 +487,38 @@ pub(super) fn run_observed(
         supervision: deadline.info,
         termination_unconfirmed: !termination_confirmed,
     })
+}
+
+/// A child can exit after the loop's first wait and before its membership
+/// observation. Discard only that new observation; previously confirmed
+/// uncertainty belongs to the controller and is never cleared here.
+fn recheck_observation(
+    child: &mut std::process::Child,
+    status: &mut Option<std::process::ExitStatus>,
+    mut observation: CpuObservation,
+) -> Option<CpuObservation> {
+    if status.is_some() {
+        return None;
+    }
+    if observation.membership_uncertain {
+        match child.try_wait() {
+            Ok(Some(exit)) => {
+                *status = Some(exit);
+                return None;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let cause = observation
+                    .cpu
+                    .as_ref()
+                    .err()
+                    .cloned()
+                    .unwrap_or_else(|| "membership uncertain".into());
+                observation.cpu = Err(format!("cannot recheck child exit after membership observation: {error}; observation: {cause}"));
+            }
+        }
+    }
+    Some(observation)
 }
 
 /// One absolute wait budget covers bookkeeping, every record and its mutex.

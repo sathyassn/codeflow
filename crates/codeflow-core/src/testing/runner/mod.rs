@@ -169,6 +169,20 @@ fn run_target_with_workers(
     ) {
         let detail = outcome.supervision.detail();
         let _ = writeln!(stderr, "[codeflow test] {detail}");
+        if matches!(
+            outcome.supervision.status,
+            TargetStatus::Stalled | TargetStatus::TimedOut
+        ) {
+            let name = crate::git::display_text(&target.name);
+            if outcome.supervision.heavy {
+                let _ = writeln!(stderr,
+                    "[codeflow test] target '{name}': check activity before changing stall_timeout_seconds or timeout_seconds (the ceiling is {}x timeout_seconds)",
+                    deadline::HEAVY_TIMEOUT_MULTIPLIER);
+            } else {
+                let _ = writeln!(stderr,
+                    "[codeflow test] target '{name}': check activity before increasing timeout_seconds");
+            }
+        }
         Some(detail)
     } else {
         outcome
@@ -1618,6 +1632,9 @@ mod tests {
         assert_eq!(result.status(), TargetStatus::TimedOut);
         assert_eq!(result.exit_code, TIMEOUT_EXIT_CODE);
         assert!(result.stderr.contains("timed out at the ceiling after 4 s"));
+        assert!(result.stderr.contains("target 'ceiling'"));
+        assert!(result.stderr.contains("stall_timeout_seconds"));
+        assert!(result.stderr.contains("timeout_seconds"));
         assert!(!result.termination_unconfirmed, "{result:?}");
     }
 
@@ -1662,6 +1679,9 @@ mod tests {
         assert_eq!(result.status(), TargetStatus::Stalled, "{result:?}");
         assert_eq!(result.exit_code, TIMEOUT_EXIT_CODE);
         assert!(result.stderr.contains("stalled: no progress for 1 s"));
+        assert!(result.stderr.contains("target 'idle-job'"));
+        assert!(result.stderr.contains("stall_timeout_seconds"));
+        assert!(result.stderr.contains("timeout_seconds"));
     }
 
     #[test]
@@ -1747,7 +1767,7 @@ import os,time
 pid=os.fork()
 if pid:
  while not os.path.exists("escaped.pid"): time.sleep(.01)
- time.sleep(1.5)
+ time.sleep(2.2)
 else:
  os.setsid()
  fd=os.open(os.devnull, os.O_RDWR)
@@ -1761,6 +1781,7 @@ else:
         let observed_pid = pid_file.clone();
         // Inject only the accounting observation boundary. The detached child,
         // closed pipes, direct-child exit and watcher cleanup are real.
+        let mut migration_reported = false;
         let result = process::run_observed(
             command,
             "escaped-closed-pipes",
@@ -1769,7 +1790,17 @@ else:
             true,
             false,
             Some(move |_| {
-                observed_pid.exists().then(|| process::CpuObservation {
+                if !observed_pid.exists() {
+                    return None;
+                }
+                if migration_reported {
+                    return Some(process::CpuObservation {
+                        cpu: Ok(10),
+                        membership_uncertain: false,
+                    });
+                }
+                migration_reported = true;
+                Some(process::CpuObservation {
                     cpu: Err(
                         "cgroup population changed outside the runner while child remained live"
                             .into(),
@@ -1804,6 +1835,79 @@ else:
             .cleanup_details
             .iter()
             .any(|s| s.contains("membership")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_exit_between_wait_and_membership_sample_is_not_an_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("child.pid");
+        let release_file = dir.path().join("exit-now");
+        let script = r#"
+import os,time
+with open("child.pid.pending","w") as out: out.write(str(os.getpid()))
+os.replace("child.pid.pending", "child.pid")
+while not os.path.exists("exit-now"): time.sleep(.01)
+os._exit(0)
+"#;
+        let mut command = Command::new("python3");
+        command.arg("-c").arg(script).current_dir(dir.path());
+        let result = process::run_observed(
+            command,
+            "exit-during-membership-sample",
+            deadline::Deadline::new(Duration::from_secs(5), true, 1, None),
+            false,
+            true,
+            false,
+            Some(move |_| {
+                if !pid_file.exists() {
+                    return None;
+                }
+                let pid = std::fs::read_to_string(&pid_file)
+                    .unwrap()
+                    .parse::<libc::id_t>()
+                    .unwrap();
+                assert!(pid > 1);
+                std::fs::write(&release_file, "exit").unwrap();
+                // Observe real child exit without reaping it. The controller's
+                // second try_wait must do that after this simulated sample.
+                let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
+                loop {
+                    let waited = unsafe {
+                        libc::waitid(
+                            libc::P_PID,
+                            pid,
+                            info.as_mut_ptr(),
+                            libc::WEXITED | libc::WNOWAIT,
+                        )
+                    };
+                    if waited == 0 {
+                        break;
+                    }
+                    let error = std::io::Error::last_os_error();
+                    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted, "{error}");
+                }
+                Some(process::CpuObservation {
+                    cpu: Err("cgroup became unpopulated while child remained live".into()),
+                    membership_uncertain: true,
+                })
+            }),
+        )
+        .unwrap();
+        assert_eq!(result.exit_code, 0, "{:?}", result.supervision);
+        assert_eq!(result.supervision.status, TargetStatus::Passed);
+        assert!(!result.termination_unconfirmed);
+        assert!(!result
+            .supervision
+            .cleanup_details
+            .iter()
+            .any(|detail| detail.contains("membership")));
+        assert!(!result
+            .supervision
+            .early_stall_unavailable
+            .as_deref()
+            .unwrap_or("")
+            .contains("unpopulated"));
     }
 
     /// A target whose command hangs past its `timeout_seconds` is killed and
