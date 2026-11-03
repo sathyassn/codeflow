@@ -210,7 +210,10 @@ fn existing(
 /// Replace the standard sections, keeping project-specific sections intact.
 fn with_body(template: &str, body: &str) -> String {
     let mut result = template.to_string();
-    for section in body.split("\n## ").filter(|s| !s.trim().is_empty()) {
+    for section in body
+        .split("\n## ")
+        .filter(|s| !s.trim_matches([' ', '\t', '\r', '\n']).is_empty())
+    {
         let section = section.strip_prefix("## ").unwrap_or(section);
         let (name, content) = section.split_once('\n').unwrap_or((section, ""));
         let heading = format!("\n## {name}\n");
@@ -219,11 +222,14 @@ fn with_body(template: &str, body: &str) -> String {
             let end = result[content_start..]
                 .find("\n## ")
                 .map_or(result.len(), |n| content_start + n);
-            result.replace_range(content_start..end, &format!("\n{}\n", content.trim()));
+            result.replace_range(
+                content_start..end,
+                &format!("\n{}\n", content.trim_matches(['\r', '\n'])),
+            );
         } else {
             result.push_str(&heading);
             result.push('\n');
-            result.push_str(content.trim());
+            result.push_str(content.trim_matches(['\r', '\n']));
             result.push('\n');
         }
     }
@@ -267,11 +273,11 @@ fn existing_work(tree: &Tree) -> Result<(Option<Existing>, Vec<Option<Existing>>
     if let Some(pending) = read_optional(tree, PENDING)? {
         let recovered = epic
             .as_ref()
-            .is_some_and(|e| pending.trim() == EPIC_MARKER && !e.id.is_empty())
+            .is_some_and(|e| pending == EPIC_MARKER && !e.id.is_empty())
             || Stage::ALL
                 .iter()
                 .zip(&stages)
-                .any(|(stage, record)| pending.trim() == stage.marker() && record.is_some());
+                .any(|(stage, record)| pending == stage.marker() && record.is_some());
         if !recovered {
             return Err(format!("bootstrap allocation was interrupted before its record was confirmed ({pending}); recover its registry reservation using the allocation diagnostic before removing {PENDING} and rerunning; this visible crash marker is intentionally not ignored so the interrupted allocation is not lost; no new id was allocated"));
         }
@@ -624,6 +630,33 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         std::os::unix::fs::symlink(&target, folder.join("review.md")).unwrap();
         assert!(load_body(dir.path(), "review", "shipped body").is_err());
-        assert_eq!(std::fs::read_to_string(target).unwrap(), "outside body");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "outside body");
+        std::fs::remove_file(target).unwrap();
+        assert!(load_body(dir.path(), "review", "shipped body").is_err());
+    }
+
+    #[test]
+    fn template_sections_preserve_indentation_and_non_ascii_spacing() {
+        let body = "## Description\n\n    \u{a0}Meaningful spacing\u{a0}\n";
+        let rendered = with_body(&templates().task, body);
+        assert!(rendered.contains("\n\n    \u{a0}Meaningful spacing\u{a0}\n"));
+    }
+
+    #[test]
+    fn pending_marker_requires_exact_writer_bytes() {
+        let dir = repo();
+        let root = dir.path();
+        let templates = templates();
+        run(root, true, &templates, |creation| create(root, &creation)).unwrap();
+        let pending = format!("\u{a0}{EPIC_MARKER}\u{a0}");
+        std::fs::write(root.join(PENDING), &pending).unwrap();
+        let result = run(root, true, &templates, |_| panic!("must not allocate"));
+        assert!(result
+            .unwrap_err()
+            .contains("recover its registry reservation"));
+        assert_eq!(
+            std::fs::read_to_string(root.join(PENDING)).unwrap(),
+            pending
+        );
     }
 }
