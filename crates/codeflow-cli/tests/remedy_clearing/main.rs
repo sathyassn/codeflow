@@ -7,9 +7,10 @@
 //!
 //! - [`Proof::Runs`]: a test raises the finding, runs the step exactly as
 //!   the output prints it, and sees the finding gone on the next run.
-//! - [`Proof::Confirms`]: the printed step checks a state rather than
-//!   changing it. A test runs the step in both states and shows that its
-//!   output tells them apart; repeating it alone does not clear the finding.
+//! - [`Proof::Confirms`]: the printed step checks a state without performing
+//!   the prerequisite repair. A test runs the step in both states and shows
+//!   that its output tells them apart; repeating it alone does not clear
+//!   the finding.
 //! - [`Proof::Excluded`]: the step acts outside this machine, at a boundary
 //!   from a closed set ([`Boundary`]).
 //!
@@ -37,7 +38,8 @@ enum Proof {
     /// A `clears_<row>` test runs the printed step and sees the finding go.
     Runs,
     /// A `confirms_<row>` test runs the printed confirmation step in both
-    /// states. The step distinguishes them without changing either state.
+    /// states. The step distinguishes them without performing the
+    /// prerequisite repair.
     Confirms,
     /// The step acts beyond this boundary, so no test can take it.
     Excluded(Boundary),

@@ -111,7 +111,9 @@ fn portal_fixture(root: &Path, copy: &str) {
             "# Fixture guide\n\nComplete public validator fixture\n\nRepository commit: {commit}\n\n- [reference/Mixed Case \\+ café](./markdown/reference/Mixed%20Case%20%2B%20caf%C3%A9.md) — docs/Mixed Case \\+ café\\.md\n"
         );
     std::fs::write(root.join("portal/public/llms.txt"), &llms).unwrap();
-    let built = format!("<main data-pagefind-body data-codeflow-search-root=\"reference/Mixed Case + café\"><h1>Guide</h1><p>{copy}</p><h2 id=\"outcome\">Outcome</h2><a href=\"/reference/Mixed%20Case%20%2B%20caf%C3%A9/?view=1#outcome\">Jump</a></main>\n");
+    // Copy checks read paragraphs inside the Starlight content region.
+    // The core integrity fixture alone does not need this region.
+    let built = format!("<main data-pagefind-body data-codeflow-search-root=\"reference/Mixed Case + café\"><h1>Guide</h1><div class=\"sl-markdown-content\"><p>{copy}</p></div><h2 id=\"outcome\">Outcome</h2><a href=\"/reference/Mixed%20Case%20%2B%20caf%C3%A9/?view=1#outcome\">Jump</a></main>\n");
     std::fs::write(
         root.join("portal/dist/reference/Mixed Case + café/index.html"),
         &built,
