@@ -2,6 +2,9 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[cfg(unix)]
+use codeflow_core::workgraph::work_start::REVIEW_LOOKUP_TIMEOUT;
+
 fn git(root: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .args(args)
@@ -364,6 +367,10 @@ fn failed_review_providers(level: &str) {
     let script = bin.path().join("gh");
     let on = format!("TSK-001@{pin}");
     let child = "task/TSK-002-work-tsk-002";
+    let timeout_reason = format!(
+        "provider timed out after {} seconds",
+        REVIEW_LOOKUP_TIMEOUT.as_secs()
+    );
     for (provider, reason, hangs) in [
         ("exit 1", "provider failed", false),
         (
@@ -373,10 +380,10 @@ fn failed_review_providers(level: &str) {
         ),
         (
             "dd if=/dev/zero bs=1048577 count=1 2>/dev/null",
-            "review response too large",
+            "cannot verify review for this pin: review response too large",
             false,
         ),
-        ("sleep 60", "provider timed out after 15 seconds", true),
+        ("sleep 60", timeout_reason.as_str(), true),
     ] {
         std::fs::write(&script, format!("#!/bin/sh\n{provider}\n")).unwrap();
         for command in ["claim", "start"] {
@@ -395,9 +402,12 @@ fn failed_review_providers(level: &str) {
             assert!(!out.status.success(), "{command} admitted {provider}");
             let error = String::from_utf8_lossy(&out.stderr);
             assert!(error.contains(reason), "{command}: {error}");
-            assert!(elapsed < Duration::from_secs(20), "{elapsed:?}");
             if hangs {
-                assert!(elapsed >= Duration::from_secs(15), "{elapsed:?}");
+                assert!(elapsed >= REVIEW_LOOKUP_TIMEOUT, "{elapsed:?}");
+                // Include startup, Git checks and cleanup on a loaded host.
+                assert!(elapsed < Duration::from_secs(30), "{elapsed:?}");
+            } else {
+                assert!(elapsed < Duration::from_secs(20), "{elapsed:?}");
             }
             assert_eq!(git(root, &["rev-parse", "HEAD"]), before);
             assert_eq!(git(root, &["branch", "--show-current"]), branch);

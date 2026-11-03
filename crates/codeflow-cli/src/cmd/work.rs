@@ -10,7 +10,7 @@ use codeflow_core::hooks::policy::Policy;
 use codeflow_core::hooks::PolicyLevel;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::readiness::{self, Backlog, Entry, State};
-use codeflow_core::workgraph::work_start::ReviewedPin;
+use codeflow_core::workgraph::work_start::{ReviewedPin, REVIEW_LOOKUP_TIMEOUT};
 use codeflow_core::workgraph::{
     declared_work_target, durable_work_tracking_enabled, resolve_work_target_checked,
 };
@@ -559,17 +559,20 @@ fn pr_review(
         .spawn()
         .map_err(|error| format!("cannot verify review for this pin: {error}"))?;
     let start = Instant::now();
-    let deadline = Duration::from_secs(15);
     let status = loop {
-        if start.elapsed() >= deadline {
+        if start.elapsed() >= REVIEW_LOOKUP_TIMEOUT {
             break Err(format!(
                 "cannot verify review for this pin: provider timed out after {} seconds",
-                deadline.as_secs()
+                REVIEW_LOOKUP_TIMEOUT.as_secs()
             ));
         }
         match output.metadata() {
             Ok(metadata) if metadata.len() <= 1_048_576 => {}
-            Ok(_) => break Err("review response too large".to_string()),
+            Ok(_) => {
+                break Err(
+                    "cannot verify review for this pin: review response too large".to_string(),
+                );
+            }
             Err(error) => {
                 break Err(format!(
                     "cannot verify review for this pin: cannot inspect provider response: {error}"
@@ -607,7 +610,7 @@ fn pr_review(
         .read_to_end(&mut bytes)
         .map_err(|error| error.to_string())?;
     if bytes.len() > 1_048_576 {
-        return Err("review response too large".into());
+        return Err("cannot verify review for this pin: review response too large".into());
     }
     serde_json::from_slice(&bytes)
         .map_err(|error| format!("cannot parse predecessor review: {error}"))
