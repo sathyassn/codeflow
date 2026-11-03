@@ -649,9 +649,9 @@ one bounded local review surface with anchored feedback.
 
 - The standard and full tiers supply the `cf-present` authoring skill and its
   schemas.
-- The runtime serves an authenticated loopback-only page to an isolated browser
-  profile. It keeps immutable revisions and append-only feedback in
-  owner-private state, and it retains ambiguous state rather than deleting it.
+- The runtime serves an authenticated loopback-only page in an isolated browser
+  profile, with immutable revisions and append-only feedback in owner-private
+  state. It preserves ambiguous state.
 - The `diagram` block was removed with Mermaid. New input carrying one is
   refused with its conversion named. A revision stored with one loads read only,
   with a notice and its escaped source.

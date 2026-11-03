@@ -343,10 +343,7 @@ fn retarget_repairs_a_two_clone_capability_collision() {
     );
     git(first.path(), &["push", "-qu", "origin", "main"]);
     let second = tempfile::tempdir().unwrap();
-    git(
-        second.path(),
-        &["clone", "-q", remote.path().to_str().unwrap(), "."],
-    );
+    codeflow_fixture::clone(second.path(), remote.path(), ".").run();
     git(
         second.path(),
         &["config", "user.name", "Second catalog fixture"],
