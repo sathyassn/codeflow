@@ -159,9 +159,10 @@ enum Text {
     Markdown(String),
     /// A plain string and how its length counts.
     Plain(String, Measure),
-    /// An HTML stage: each text node outside code, scripts and styles is
-    /// its own run, so a zone is never read across an element boundary, and
-    /// the stage's whole visible text is held to [`STAGE_BUDGET`].
+    /// An HTML stage: the inline text of each block element outside code,
+    /// scripts and styles is its own run, so a zone is never read across
+    /// separate blocks or labels, and the stage's whole visible text is
+    /// held to [`STAGE_BUDGET`].
     Html(String),
 }
 
@@ -171,7 +172,7 @@ impl Text {
             Self::Markdown(markdown) => markdown_runs(markdown),
             Self::Plain(text, measure) => vec![Run::plain(text, *measure)],
             Self::Html(html) => {
-                let nodes = html_text_nodes(html);
+                let nodes = html_text_runs(html);
                 let whole = nodes.join(" ");
                 let mut runs: Vec<Run> = nodes
                     .iter()
@@ -571,26 +572,101 @@ fn markdown_runs(markdown: &str) -> Vec<Run> {
     runs
 }
 
-/// Each visible text node of an HTML stage, outside `code`, `pre`, `kbd`,
-/// `samp`, `script`, `style` and the SVG `title` and `desc`, which are not
-/// drawn.
-fn html_text_nodes(source: &str) -> Vec<String> {
+/// Elements whose text is never drawn, or is code.
+const HTML_HIDDEN: [&str; 9] = [
+    "style", "script", "code", "pre", "kbd", "samp", "title", "desc", "template",
+];
+
+/// Elements that start their own text: block boxes, table cells, controls
+/// and SVG text labels. Inline elements such as `strong` or `span` stay in
+/// the text around them.
+const HTML_BLOCKS: [&str; 41] = [
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "button",
+    "caption",
+    "dd",
+    "details",
+    "dialog",
+    "div",
+    "dl",
+    "dt",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hr",
+    "li",
+    "main",
+    "nav",
+    "ol",
+    "option",
+    "p",
+    "section",
+    "summary",
+    "svg",
+    "table",
+    "td",
+    "th",
+    "tr",
+    "ul",
+    "text",
+    "foreignObject",
+];
+
+/// The visible text of an HTML stage as runs: the inline content of each
+/// block element is one run ("Read at <strong>13:41</strong> EST"), and
+/// separate blocks or SVG labels are separate runs, so a zone is never read
+/// across them. Text in code, scripts, styles and the SVG `title` and `desc`
+/// is left out.
+fn html_text_runs(source: &str) -> Vec<String> {
+    fn flush(current: &mut String, runs: &mut Vec<String>) {
+        let run = current.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !run.is_empty() {
+            runs.push(run);
+        }
+        current.clear();
+    }
+    fn walk(element: ElementRef<'_>, current: &mut String, runs: &mut Vec<String>) {
+        for child in element.children() {
+            if let Some(text) = child.value().as_text() {
+                current.push_str(text);
+            } else if let Some(child) = ElementRef::wrap(child) {
+                let name = child.value().name();
+                if HTML_HIDDEN.contains(&name) {
+                    continue;
+                }
+                if name == "br" {
+                    current.push(' ');
+                    continue;
+                }
+                let block = HTML_BLOCKS.contains(&name);
+                if block {
+                    flush(current, runs);
+                }
+                walk(child, current, runs);
+                if block {
+                    flush(current, runs);
+                }
+            }
+        }
+    }
     let fragment = Html::parse_fragment(source);
-    fragment
-        .tree
-        .nodes()
-        .filter(|node| {
-            !node.ancestors().filter_map(ElementRef::wrap).any(|parent| {
-                matches!(
-                    parent.value().name(),
-                    "style" | "script" | "code" | "pre" | "kbd" | "samp" | "title" | "desc"
-                )
-            })
-        })
-        .filter_map(|node| node.value().as_text())
-        .map(|part| part.split_whitespace().collect::<Vec<_>>().join(" "))
-        .filter(|part| !part.is_empty())
-        .collect()
+    let mut runs = Vec::new();
+    let mut current = String::new();
+    walk(fragment.root_element(), &mut current, &mut runs);
+    flush(&mut current, &mut runs);
+    runs
 }
 
 /// The characters a run spends of the budget: its characters, with each
@@ -739,6 +815,12 @@ const NOT_CLOCK_BEFORE: &[&str] = &[
 /// spaced or attached) or `Z` right after it. Ratios and durations ("16:10
 /// aspect ratio", "1:30 min"), versions and out-of-range values are not
 /// times; when the match is unsure there is no finding.
+///
+/// An attached "-HH:MM" reads both as an offset ("08:15-05:00") and as the
+/// end of a range ("09:00-10:00"). It is the offset, and the time is zoned,
+/// when it falls on a whole, half or quarter hour and, read as a time, is
+/// not later than the first; otherwise it ends a range. An overnight range
+/// such as "22:00-02:00" therefore reads as zoned, the conservative side.
 pub(crate) fn bare_clock_time(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
     let mut index = 0;
@@ -751,7 +833,7 @@ pub(crate) fn bare_clock_time(text: &str) -> Option<String> {
             index = clock.end;
             continue;
         }
-        let end = if clock.seconds || clock.iso {
+        let end = if clock.seconds || clock.iso || attached_offset(text, index, clock.end) {
             clock.end
         } else {
             range_end(text, clock.end).unwrap_or(clock.end)
@@ -844,6 +926,24 @@ fn not_a_clock(text: &str, start: usize, end: usize) -> bool {
         .take(3)
         .map(word)
         .any(|before| NOT_CLOCK_BEFORE.contains(&before.as_str()))
+}
+
+/// Whether an attached "-HH:MM" after the clock at `start..end` is its
+/// offset rather than the end of a range: a valid offset at a whole, half
+/// or quarter hour that, read as a time, is not later than the clock.
+fn attached_offset(text: &str, start: usize, end: usize) -> bool {
+    let rest = &text[end..];
+    if !rest.starts_with('-') || offset_len(rest, false) != Some(6) {
+        return false;
+    }
+    let minutes = |clock: &str| -> Option<u32> {
+        let (hour, minute) = clock.split_once(':')?;
+        Some(hour.parse::<u32>().ok()? * 60 + minute.get(..2)?.parse::<u32>().ok()?)
+    };
+    let (Some(first), Some(second)) = (minutes(&text[start..end]), minutes(&rest[1..6])) else {
+        return false;
+    };
+    matches!(second % 60, 0 | 30 | 45) && second <= first
 }
 
 /// The end of a range's second time, when a range connector and another
@@ -954,6 +1054,9 @@ mod tests {
         assert_eq!(bare("13:41 +5"), Some("13:41".into()));
         // The second of two times.
         assert_eq!(bare("13:41 EST and 14:00"), Some("14:00".into()));
+        // A later second time ends a range, so the range still needs a zone.
+        assert_eq!(bare("Meet 08:15-09:00 daily"), Some("08:15-09:00".into()));
+        assert_eq!(bare("Meet 09:00 to 10:00"), Some("09:00 to 10:00".into()));
     }
 
     #[test]
@@ -975,6 +1078,13 @@ mod tests {
             "4:30 PM (PDT)",
             "09:00-10:00 EST",
             "9:00 to 10:30 CET",
+            // An attached negative offset, with and without seconds or a date.
+            "Read at 08:15-05:00 today",
+            "Read at 08:15:30-05:00",
+            "Read on 2026-11-02 08:15-05:00",
+            "Read at 2026-11-02T08:15-05:00",
+            "Read at 08:15-0500",
+            "Read at 13:41-03:30",
         ] {
             assert_eq!(bare(zoned), None, "{zoned}");
         }
@@ -1069,12 +1179,20 @@ mod tests {
     }
 
     #[test]
-    fn html_text_nodes_keep_element_boundaries() {
-        let nodes = html_text_nodes(
+    fn html_text_runs_join_inline_text_and_keep_blocks_apart() {
+        let runs = html_text_runs(
             "<svg><title>Hidden 13:41</title><text>Read 13:41</text><text>EST</text><code>9:00</code></svg>",
         );
-        assert_eq!(nodes, ["Read 13:41", "EST"]);
-        assert_eq!(bare(&nodes[0]), Some("13:41".into()));
+        assert_eq!(runs, ["Read 13:41", "EST"]);
+        assert_eq!(bare(&runs[0]), Some("13:41".into()));
+        // Inline formatting stays in its sentence, so the zone is read.
+        let runs = html_text_runs("<div><p>Read at <strong>13:41</strong> EST</p></div>");
+        assert_eq!(runs, ["Read at 13:41 EST"]);
+        assert_eq!(bare(&runs[0]), None);
+        // Separate boxes are separate runs; a hard break is a space.
+        let runs = html_text_runs("<div><div>Read 13:41</div><div>EST</div>one<br>two</div>");
+        assert_eq!(runs, ["Read 13:41", "EST", "one two"]);
+        assert_eq!(bare(&runs[0]), Some("13:41".into()));
     }
 
     #[test]

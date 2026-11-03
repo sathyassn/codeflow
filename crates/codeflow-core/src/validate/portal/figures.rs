@@ -1944,6 +1944,13 @@ mod tests {
             ]
         );
         assert!(content_blocks("<html><body><p>No content region</p></body></html>").is_empty());
+        // A hard break stays a line break, as present measures it.
+        assert_eq!(
+            content_blocks(
+                "<div class=\"sl-markdown-content\"><p>one<br>two <br/> three\nfour</p></div>"
+            ),
+            [ContentBlock::Paragraph(same("one\ntwo\nthree four"))]
+        );
     }
 
     #[test]

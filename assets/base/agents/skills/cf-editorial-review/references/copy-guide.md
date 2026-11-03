@@ -276,10 +276,10 @@ the rest goes behind a disclosure.
 - Keep each text block outside collapsed detail within 136 characters.
   That is a character budget, not a line count: it approximates two
   desktop lines of a paragraph, list item or lede at the 68ch reading
-  measure, and about five lines on a phone, which is the ceiling. Long
-  words, wide glyphs and narrow table or comparison cells wrap sooner and
-  are held to the same budget. A hard break ends its line. A disclosure, a
-  stage's Details and a code block are exempt.
+  measure, and about five lines on a phone. Long words, wide glyphs and
+  narrow table or comparison cells wrap sooner and are held to the same
+  budget. A hard break ends its line. A disclosure, a stage's Details and
+  a code block are exempt.
 - Put one point in each bullet.
 - Put at most three text blocks in a row; the fourth needs a figure, table
   or status rows before it.

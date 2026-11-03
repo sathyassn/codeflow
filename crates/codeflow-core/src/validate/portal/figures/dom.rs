@@ -181,16 +181,23 @@ fn list_items(list: ElementRef<'_>, items: &mut Vec<super::super::ContentText>) 
     }
 }
 
-/// An element's visible text with its whitespace collapsed, and the same
-/// text with its code blanked: code characters become word joiners
-/// (U+2060), which survive the collapse, then spaces. For a list item,
-/// nested lists are left out.
+/// An element's visible text with its whitespace collapsed and each `<br>`
+/// kept as a hard break, as `present check` measures one (a newline in the
+/// markup is only whitespace), and the same text
+/// with its code blanked: code characters become word joiners (U+2060),
+/// which survive the collapse, then spaces. For a list item, nested lists
+/// are left out.
 fn element_text(element: ElementRef<'_>, skip_lists: bool) -> super::super::ContentText {
+    // A `<br>` is held as U+2028 until the collapse, apart from the
+    // newlines the markup carries.
+    const BREAK: char = '\u{2028}';
     let mut text = String::new();
     let mut prose = String::new();
     for node in element.descendants() {
-        let Node::Text(part) = node.value() else {
-            continue;
+        let (part, line_break) = match node.value() {
+            Node::Text(part) => (&**part, false),
+            Node::Element(child) if child.name() == "br" => ("\u{2028}", true),
+            _ => continue,
         };
         let mut code = false;
         let mut hidden = false;
@@ -209,13 +216,21 @@ fn element_text(element: ElementRef<'_>, skip_lists: bool) -> super::super::Cont
             continue;
         }
         text.push_str(part);
-        if code {
+        if code && !line_break {
             prose.push_str(&"\u{2060}".repeat(part.chars().count()));
         } else {
             prose.push_str(part);
         }
     }
-    let collapse = |value: &str| value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let collapse = |value: &str| {
+        value
+            .split(BREAK)
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim_matches('\n')
+            .to_string()
+    };
     super::super::ContentText {
         text: collapse(&text),
         prose: collapse(&prose).replace('\u{2060}', " "),

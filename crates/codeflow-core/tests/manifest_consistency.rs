@@ -3031,7 +3031,7 @@ fn kit_readme_writing_bullets(readme: &str) -> Vec<String> {
         .collect()
 }
 
-/// TSK-073 AC-5. The kit README keeps its writing bullets (nine since
+/// TSK-073 AC-5. The kit README keeps its writing bullets (ten since
 /// TSK-1255 added the page limits) and names the guide, and the guide
 /// carries them verbatim; the README copies stay byte-identical across the
 /// two skills.

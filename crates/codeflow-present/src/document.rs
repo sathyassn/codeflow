@@ -2246,6 +2246,30 @@ mod tests {
         );
     }
 
+    /// TSK-1255: an attached negative offset and an inline-formatted zone
+    /// name the time's zone; unzoned ranges and a time whose "zone" sits in
+    /// a separate box or figure label still warn.
+    #[test]
+    fn check_reads_attached_offsets_and_inline_zones() {
+        let lines = check_document(&crate::contract_tests::fixture_bytes(
+            "check/v2-copy-clock-controls.json",
+        ));
+        let warned: Vec<_> = lines
+            .iter()
+            .map(|line| (line.block_id.as_deref().unwrap_or_default(), line.rule))
+            .collect();
+        assert_eq!(
+            warned,
+            [
+                ("bare-range-to", "copy-time-zone"),
+                ("bare-range-hyphen", "copy-time-zone"),
+                ("bare-labels", "copy-time-zone"),
+                ("bare-svg-labels", "copy-time-zone"),
+            ],
+            "{lines:?}"
+        );
+    }
+
     #[test]
     fn check_is_quiet_on_prose_and_never_doubles_a_v2_framing_fault() {
         assert!(check_lines("check/v1-prose.json").is_empty());
