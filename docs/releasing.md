@@ -218,6 +218,20 @@ Release impact rules for each PR:
   the `fix:`, `feat:` or breaking marker that describes the resulting release,
   with matching PR impact and curated pending notes.
 
+### Linux coverage measurement
+
+The Linux CI tier split planned by TSK-1241 takes effect only when the
+operator applies the tier-switch workflow change, after a same-commit hosted
+comparison. Integration pull requests will run the full Linux Rust suite
+without instrumentation, with Rust journey evidence and a check that every
+listed test ran exactly once. Pull requests into main and scheduled runs will
+retain the instrumented shards, aggregate coverage floor and once-each check.
+The `codeflow gates` and `windows` verdict names remain unchanged; integration
+skips must be declared in one place. Local full gates retain instrumentation.
+The tracked `scripts/operator/tsk-1241/apply-codeflow-ci.sh` and its
+`linux-measurement-job.yml` currently prepare only the manual comparison;
+applying that script does not activate the tier split.
+
 ## Technical
 
 Work through each section below that your release touches.
