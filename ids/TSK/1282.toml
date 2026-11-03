@@ -1,0 +1,11 @@
+id = "TSK-1282"
+uid = "78cde6e0-5c83-4ddf-ae7f-358828b1450d"
+kind = "TSK"
+title = "A planted process group in a gate lock record has a sanctioned recovery"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T13:50:23Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
