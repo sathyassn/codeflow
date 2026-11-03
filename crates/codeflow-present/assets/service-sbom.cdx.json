@@ -5,45 +5,45 @@
   "components": [
     {
       "type": "file",
-      "bom-ref": "service/app-TULQWPVR.js.br",
-      "name": "service/app-TULQWPVR.js.br",
+      "bom-ref": "service/app-ACDWPIDM.js.br",
+      "name": "service/app-ACDWPIDM.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "340806e8393d10c0a4426c2693c8cf5baccc96aec202db4c9bad693402e589c6"
+          "content": "fe811f46d94d8b15c44bb62468e0c3f34b60c7ac6551bf8b9d2b2c93c4db2c6c"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-TULQWPVR.js.gz",
-      "name": "service/app-TULQWPVR.js.gz",
+      "bom-ref": "service/app-ACDWPIDM.js.gz",
+      "name": "service/app-ACDWPIDM.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "c9e7b27dbc30d735c479bc42afedf2024523f9fd4a93d9ca15dfd33bb13d440c"
+          "content": "bbf57b9919bae7928c1ca977eccbef14d947c23da058f9082ab6a8fa81832f43"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-USBKNT3E.css.br",
-      "name": "service/app-USBKNT3E.css.br",
+      "bom-ref": "service/app-HDL7GOMC.css.br",
+      "name": "service/app-HDL7GOMC.css.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "0779d528d009bf7ee3f852e66f234156e84acec2a8a4e8677ef9c62068b7f99b"
+          "content": "8c9088dd3194cce3e2476e8aa27962ead55600ed8e196db486049eb37b90ada9"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-USBKNT3E.css.gz",
-      "name": "service/app-USBKNT3E.css.gz",
+      "bom-ref": "service/app-HDL7GOMC.css.gz",
+      "name": "service/app-HDL7GOMC.css.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "7a719d5ac8955140b6965404e0818b7f4e90ac639dd3f7328a93a79a7d42512f"
+          "content": "7a4868219991cf4d53381b9df4722968206281ca1d6bef5045288da5c3332ce8"
         }
       ]
     },
