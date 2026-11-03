@@ -27,15 +27,20 @@ for (const [theme, modes] of Object.entries(THEMES)) for (const [mode, t0] of Ob
     const c = k => hex(t[k]); const surface = c('surface'), raised = c('raised'), ground = c('ground');
     const pairs = [
       ['stage todo fill on the figure surface', c('stage-todo'), surface, 3], ['stage todo fill on the page ground', c('stage-todo'), ground, 3], ['stage todo fill on a raised card', c('stage-todo'), raised, 3],
-      ['stage line (accent) on the surface', c('accent'), surface, 3], ['stage main (text) on the surface', c('text'), surface, 3], ['stage blocked (danger) on the surface', c('danger'), surface, 3],
-      ['stage pull request (accent mix) stroke on the surface', c('accent'), surface, 3], ['stage todo against stage main', c('stage-todo'), c('text'), 3],
+      // the stage fills as prototype.html renders them (build.cjs local style: .st-main = accent, .st-line = 55% accent
+      // mixed into the surface, .st-pr = warn-mark, .st-todo = stage-todo, .st-block = danger, .st-now = surface with
+      // an accent stroke; figure strokes are removed), each a non-text fill against the figure surface at 3:1
+      ['stage main (accent) fill on the surface', c('accent'), surface, 3], ['stage line (55% accent in the surface) fill on the surface', mix(c('accent'), surface, .55), surface, 3],
+      ['stage pull request (warn-mark) fill on the surface', c('warn-mark'), surface, 3], ['stage blocked (danger) fill on the surface', c('danger'), surface, 3],
+      ['stage now ring (accent stroke) on the surface', c('accent'), surface, 3],
       ['outline ring (unk-ring) on the surface', c('fig-outline'), surface, 3], ['ok mark on the surface', c('ok'), surface, 3], ['warn mark on the surface', c('warn-mark'), surface, 3], ['figure secondary ink (ink2) on the surface', c('fig-ink-2'), surface, 3],
       ['accent as text (accent-ink) on the surface', c('accent-ink'), surface, 4.5], ['accent as text on the accent wash', c('accent-ink'), c('accent-wash'), 4.5], ['text on the surface', c('text'), surface, 4.5], ['secondary text on the surface', c('text-2'), surface, 4.5], ['tertiary text on the surface', c('text-3'), surface, 4.5],
       ['on-accent text on the accent', c('on-accent') || (mode === 'light' ? [246, 251, 250] : [16, 32, 29]), c('accent'), 4.5], ['focus ring on the surface', c('focus'), surface, 3],
     ];
     for (const [what, a, b, floor] of pairs) { const r = ratio(a, b); const ok = r >= floor; if (!ok) bad++; rows.push([theme, mode, accentName, what, fmt(r), floor + ':1', ok ? 'ok' : 'UNDER']); }
-    const pr = mix(c('accent'), surface, .5); rows.push([theme, mode, accentName, 'stage pull request fill (50% accent in surface) on the surface; its accent stroke carries the floor', fmt(ratio(pr, surface)), 'n/a', 'info']);
-    rows.push([theme, mode, accentName, 'stage todo beside stage line: adjacent fills, separated by a 2 px gap of the surface and by hue', fmt(ratio(c('stage-todo'), c('accent'))), 'n/a', 'info']);
+    // adjacent fills are separated by a 2 px gap of the surface, so each is judged against the surface above; these two rows are information
+    rows.push([theme, mode, accentName, 'stage line beside stage main: adjacent fills of one hue, separated by a 2 px gap of the surface', fmt(ratio(mix(c('accent'), surface, .55), c('accent'))), 'n/a', 'info']);
+    rows.push([theme, mode, accentName, 'stage todo beside stage main: adjacent fills, separated by a 2 px gap of the surface', fmt(ratio(c('stage-todo'), c('accent'))), 'n/a', 'info']);
   }
 }
 const w = [9, 6, 7, 66, 6, 6, 6];

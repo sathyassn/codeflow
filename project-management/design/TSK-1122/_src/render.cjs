@@ -163,6 +163,13 @@ const CHECK = () => {
   await p4.evaluate(() => document.getElementById('saved-changes').scrollIntoView({ block: 'center' })); await p4.waitForTimeout(150); await p4.screenshot({ path: path.join(CAP, 'answers-saved-1440-light.png') }); captures++;
   await p4.click('[data-save="tree"]'); await p4.waitForTimeout(300);
   j.push(['answers: every field has its own Save button and confirmation', (await p4.evaluate(() => document.querySelectorAll('#decisions [data-save]').length)) === 5 && /Saved to/.test(await p4.evaluate(() => document.getElementById('saved-tree').textContent))]);
+  // a draft with quotes, a backslash and two lines survives a reload and Save still works (the restore ran by name)
+  const AWKWARD = 'Use "Overview" first\\ then \'Lanes\'\nsecond line';
+  await p4.fill('#changes', AWKWARD); await p4.waitForTimeout(100); await p4.reload({ waitUntil: 'load' }); await p4.waitForTimeout(300);
+  j.push(['answers: a reload keeps a draft with quotes, a backslash and a newline', await p4.evaluate(a => document.getElementById('changes').value === a && document.querySelector('#decisions input[name=tree][value=approve]').checked, AWKWARD)]);
+  await p4.evaluate(() => { window.__written = {}; }); await p4.click('[data-save="changes"]'); await p4.waitForTimeout(400);
+  const written2 = await p4.evaluate(() => window.__written); let parsed2 = null; try { parsed2 = JSON.parse(written2['coordination/coordinators/visual-docs/published/status-prototype/answers.json']); } catch {}
+  j.push(['answers: after that reload Save still writes the file with the awkward text intact', !!parsed2 && parsed2.answers.some(a => a.id === 'changes' && a.text === AWKWARD)]);
   await ctx4.close();
   // the fallback: no File System Access API, so Save downloads answers.json and says where it went
   const ctx5 = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true }); await ctx5.addInitScript(() => { try { delete window.showDirectoryPicker; } catch {} Object.defineProperty(window, 'showDirectoryPicker', { value: undefined, configurable: true }); });
@@ -172,6 +179,10 @@ const CHECK = () => {
   const conf5 = await p5.evaluate(() => document.getElementById('saved-changes').textContent);
   j.push(['fallback: the confirmation says the file was downloaded and names where to move it: ' + conf5, /downloaded to your browser's download folder at \d\d:\d\d [A-Z]{2,5}/.test(conf5) && /move it to coordination\/coordinators\/visual-docs\/published\/status-prototype\/answers\.json/.test(conf5)]);
   await p5.screenshot({ path: path.join(CAP, 'answers-fallback-1440-light.png') }); captures++;
+  // the same awkward draft on the download path: reload, then Save still downloads
+  await p5.fill('#changes', AWKWARD); await p5.waitForTimeout(100); await p5.reload({ waitUntil: 'load' }); await p5.waitForTimeout(300);
+  const dl2 = p5.waitForEvent('download'); await p5.click('[data-save="changes"]'); const d2 = await dl2; let dlParsed2 = null; try { dlParsed2 = JSON.parse(fs.readFileSync(await d2.path(), 'utf8')); } catch {}
+  j.push(['fallback: after a reload with the awkward draft Save still downloads it intact', !!dlParsed2 && dlParsed2.answers.some(a => a.id === 'changes' && a.text === AWKWARD)]);
   await ctx5.close(); await browser.close();
   console.log(rows.map(r => r.join('  ')).join('\n')); console.log(j.map(([k, ok]) => (ok ? 'PASS ' : 'FAIL ') + k).join('\n'));
   for (const [k, ok] of j) if (!ok) fails.push('journey: ' + k);
