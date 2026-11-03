@@ -383,7 +383,7 @@ impl std::fmt::Display for LockHeld {
             return write!(f, "{} (lock: {lock})", self.holder);
         }
         if self.older_binary {
-            let last = if self.holder.trim().is_empty() {
+            let last = if self.holder.is_empty() {
                 "no recorded holder".to_string()
             } else {
                 format!(
@@ -990,7 +990,10 @@ fn fence_live_groups(
             )
         })?;
         if !live.is_empty() && holder.is_empty() {
-            for line in parsed.lines().filter(|line| !line.starts_with("group=")) {
+            for line in parsed
+                .split_terminator('\n')
+                .filter(|line| !line.starts_with("group="))
+            {
                 let _ = writeln!(holder, "{line}");
             }
         }
@@ -1021,7 +1024,7 @@ fn fence_holder(path: &Path, trusted: &[String]) -> String {
         let text = read_record(&mut opened).ok()?;
         parse_record(&text, trusted)
             .ok()
-            .filter(|record| !record.trim().is_empty())
+            .filter(|record| !record.is_empty())
     };
     read(&record_path(path))
         .filter(|record| holder_alive(record))
@@ -1033,7 +1036,7 @@ fn fence_holder(path: &Path, trusted: &[String]) -> String {
 #[cfg(unix)]
 fn holder_alive(record: &str) -> bool {
     let Some(pid) = record
-        .lines()
+        .split_terminator('\n')
         .find_map(|line| line.strip_prefix("pid="))
         .and_then(|value| libc::pid_t::try_from(value.parse::<u32>().ok()?).ok())
         .filter(|pid| *pid > 1)
@@ -1047,11 +1050,44 @@ fn holder_alive(record: &str) -> bool {
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
-/// Whether the process a holder record names still runs. No check here: a
-/// named holder is shown.
-#[cfg(not(unix))]
+/// Whether the process a holder record names still runs on Windows.
+/// This selects diagnostic text only; the fence has already refused admission.
+#[cfg(windows)]
 fn holder_alive(record: &str) -> bool {
-    record.lines().any(|line| line.starts_with("pid="))
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+
+    let Some(pid) = record
+        .split_terminator('\n')
+        .find_map(|line| line.strip_prefix("pid="))
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|pid| *pid > 1)
+    else {
+        return false;
+    };
+    // SAFETY: request only synchronization access to the named process,
+    // with handle inheritance disabled. This does not change the process.
+    let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if raw.is_null() {
+        // Like Unix EPERM, an inaccessible process may still be the holder.
+        return std::io::Error::last_os_error().raw_os_error()
+            == i32::try_from(ERROR_ACCESS_DENIED).ok();
+    }
+    // SAFETY: OpenProcess returned a valid handle, owned here exactly once.
+    let process = unsafe { OwnedHandle::from_raw_handle(raw) };
+    // SAFETY: the owned process handle stays open throughout the zero-time
+    // probe. A terminated process is signaled even while its handle exists.
+    unsafe { WaitForSingleObject(process.as_raw_handle(), 0) == WAIT_TIMEOUT }
+}
+
+/// Whether the process a holder record names still runs. No check here: a
+/// named holder is shown on platforms without a process-liveness probe.
+#[cfg(not(any(unix, windows)))]
+fn holder_alive(record: &str) -> bool {
+    record
+        .split_terminator('\n')
+        .any(|line| line.starts_with("pid="))
 }
 
 /// Take the first free slot in `dir`: the slot, its path, and how many
@@ -3664,6 +3700,32 @@ mod old_binary_fence_tests {
         for dir in &dirs {
             drop(old_take_eventually(dir));
         }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn holder_liveness_uses_exact_lf_separators() {
+        let pid = std::process::id();
+        assert!(holder_alive(&format!("pid={pid}\n")));
+        assert!(holder_alive(&format!("mode=full\npid={pid}")));
+        for suffix in ["\r\n", "\u{0085}", "\u{2028}", "\u{00a0}"] {
+            assert!(!holder_alive(&format!("pid={pid}{suffix}")));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_exited_windows_holder_is_not_live_with_its_handle_open() {
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit", "/B", "0"])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        assert!(child.wait().unwrap().success());
+        // Retain Child's process handle so this also covers a terminated
+        // process object that OpenProcess can still open.
+        assert!(!holder_alive(&format!("pid={pid}\n")));
+        drop(child);
     }
 
     /// AC-2: while a 3.1 gate holds `full-gate.lock` exclusively, a new run
