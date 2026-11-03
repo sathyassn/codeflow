@@ -1730,10 +1730,19 @@ fn trusted_dirs(project_dir: &Path) -> Vec<String> {
 /// both are compared as `/`.
 fn trimmed_dir(dir: &str) -> std::borrow::Cow<'_, str> {
     let trimmed = dir.trim_end_matches(['/', '\\']);
-    if cfg!(windows) {
-        std::borrow::Cow::Owned(trimmed.replace('\\', "/"))
+    let spelled = if cfg!(windows) {
+        trimmed.replace('\\', "/")
     } else {
-        std::borrow::Cow::Borrowed(trimmed)
+        trimmed.to_string()
+    };
+    // A doubled slash or `.` component is one spelling with the plain
+    // path, on both sides of the comparison (TSK-1035).
+    let folded = crate::portable_path::fold_separators(&spelled);
+    let folded = folded.trim_end_matches('/');
+    if folded == dir {
+        std::borrow::Cow::Borrowed(dir)
+    } else {
+        std::borrow::Cow::Owned(folded.to_string())
     }
 }
 
@@ -1949,6 +1958,15 @@ fn resolve(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TSK-1035: a holder record that spells its directory with `//` is
+    /// the same directory as the plain spelling the reader trusts.
+    #[test]
+    fn a_doubled_slash_directory_matches_its_plain_spelling() {
+        assert_eq!(trimmed_dir("/var/T//cf.ab12/"), "/var/T/cf.ab12");
+        assert_eq!(trimmed_dir("/var/T/./cf.ab12"), trimmed_dir("/var/T/cf.ab12"));
+        assert_eq!(trimmed_dir("/var/T/cf.ab12"), "/var/T/cf.ab12");
+    }
 
     fn dirs(tmp: &Path) -> Vec<PathBuf> {
         vec![tmp.join("home-locks"), tmp.join("repo-locks")]

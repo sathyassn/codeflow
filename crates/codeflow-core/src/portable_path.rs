@@ -70,6 +70,35 @@ pub fn slashed(path: &Path) -> String {
     }
 }
 
+/// `text` with each run of `/` made one, and each `.` component dropped,
+/// so `/Users//x/./y` and `/Users/x/y` compare equal as text. A leading
+/// `//` (a UNC or remote spelling) and a trailing `/` are kept, `..` is
+/// left for the caller, and text with no component is returned as written.
+/// Every text comparison of a path against `HOME` or another root folds
+/// both sides with this first (TSK-1035).
+#[must_use]
+pub fn fold_separators(text: &str) -> String {
+    let unc = text.starts_with("//") && !text.starts_with("///");
+    let parts: Vec<&str> = text
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    if parts.is_empty() {
+        return if text.starts_with('/') { "/".into() } else { text.into() };
+    }
+    let mut out = String::with_capacity(text.len());
+    if unc {
+        out.push_str("//");
+    } else if text.starts_with('/') {
+        out.push('/');
+    }
+    out.push_str(&parts.join("/"));
+    if text.ends_with('/') {
+        out.push('/');
+    }
+    out
+}
+
 /// Win32 accepts backslash separators and ignores trailing dots and spaces
 /// in ordinary path components. Verbatim drive prefixes retain the same
 /// protected-name judgment. Other hosts retain those literal bytes.
@@ -381,7 +410,7 @@ pub fn homes_from(
     // text. One that is not is never a Git Bash drive path, and it equals
     // another home only byte for byte, so two homes never fold into one.
     let fold = |text: &str| {
-        let text = text.replace('\\', "/");
+        let text = fold_separators(&text.replace('\\', "/"));
         let text = text.trim_end_matches('/');
         if windows {
             text.to_lowercase()
@@ -434,6 +463,36 @@ pub fn git_bash_drive_text(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TSK-1035: a doubled slash, a `.` component and a trailing slash fold
+    /// to one spelling; a UNC prefix and `..` are kept.
+    #[test]
+    fn fold_separators_folds_one_spelling() {
+        for (given, folded) in [
+            ("/Users//x", "/Users/x"),
+            ("/Users/./x/", "/Users/x/"),
+            ("/Users///x//y", "/Users/x/y"),
+            ("//host//share", "//host/share"),
+            ("/a/../b", "/a/../b"),
+            ("///", "/"),
+            (".", "."),
+            ("", ""),
+            ("a//b", "a/b"),
+        ] {
+            assert_eq!(fold_separators(given), folded, "{given}");
+        }
+    }
+
+    /// TSK-1035: two spellings of one home count as one home.
+    #[test]
+    fn homes_with_a_doubled_slash_are_one_home() {
+        let homes = homes_from(
+            Some("/Users//x".into()),
+            Some("/Users/x/".into()),
+            false,
+        );
+        assert_eq!(homes.len(), 1, "{homes:?}");
+    }
 
     /// TSK-1002 Windows repair (hosted run 40602309629): a literal
     /// `RUNNER~1` directory is its own long name, and a missing name beneath

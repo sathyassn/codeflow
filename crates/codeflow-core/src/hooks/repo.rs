@@ -1182,12 +1182,12 @@ pub(super) fn absent_registered_checkout(repo: &Repository, target: &Path) -> Re
     let Some(tail) = bytes.get(1..) else {
         return Ok(false);
     };
+    // A repeated separator is one spelling with the plain path (the
+    // normalization below folds it); `.` and `..` stay refused, since they
+    // name a path other than the registered one (TSK-1035).
     if tail
         .split(separator)
         .any(|part| part == b"." || part == b"..")
-        || bytes
-            .windows(2)
-            .any(|pair| separator(&pair[0]) && separator(&pair[1]))
     {
         return Ok(false);
     }
@@ -1213,6 +1213,29 @@ pub(super) fn absent_registered_checkout(repo: &Repository, target: &Path) -> Re
 mod tests {
     /// TSK-381 SF-3: the probe reports the filesystem the git directory is
     /// on, and one that cannot decide counts as case-insensitive.
+    /// TSK-1035: an absent registered worktree is recognized when its path
+    /// is spelled with a repeated separator, as it is with the plain one;
+    /// `.` and `..` components stay refused.
+    #[test]
+    fn absent_registered_checkout_accepts_a_repeated_separator() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(dir.path()).unwrap();
+        let repo = git2::Repository::init(base.join("main")).unwrap();
+        let tree = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree).unwrap();
+        let sig = git2::Signature::now("t", "t@example.test").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "one", &tree, &[]).unwrap();
+        let linked = base.join("linked");
+        repo.worktree("linked", &linked, None).unwrap();
+        std::fs::remove_dir_all(&linked).unwrap();
+        let plain = linked.clone();
+        let doubled = std::path::PathBuf::from(format!("{}//linked", base.display()));
+        let dotted = base.join(".").join("linked");
+        assert_eq!(super::absent_registered_checkout(&repo, &plain), Ok(true));
+        assert_eq!(super::absent_registered_checkout(&repo, &doubled), Ok(true));
+        assert_eq!(super::absent_registered_checkout(&repo, &dotted), Ok(false));
+    }
+
     /// TSK-381 SF-4: a ref is read only under the spelling git lists, and
     /// not at all when another listed spelling folds to it.
     #[test]

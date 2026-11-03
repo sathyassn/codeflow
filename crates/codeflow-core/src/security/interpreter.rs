@@ -1620,9 +1620,13 @@ fn glob_base<'a>(
 }
 
 fn home_spelling(word: &str, home: Option<&Path>) -> String {
-    let word = word.to_ascii_lowercase();
+    // Both sides fold a doubled slash and `.` components, so `HOME=/Users//x`
+    // strips from `/Users/x/.ssh` as the plain spelling does (TSK-1035).
+    let word = crate::portable_path::fold_separators(&word.to_ascii_lowercase());
     home.and_then(|home| {
-        let home = crate::portable_path::slashed(home).to_ascii_lowercase();
+        let home = crate::portable_path::fold_separators(
+            &crate::portable_path::slashed(home).to_ascii_lowercase(),
+        );
         word.strip_prefix(home.trim_end_matches('/'))
             .filter(|tail| tail.is_empty() || tail.starts_with('/'))
             .map(|tail| format!("~{tail}"))
@@ -4754,6 +4758,23 @@ mod tests {
     }
 
     /// Integrity still needs a safe prefix past 4096 entries. B10's larger
+    /// TSK-1035: a `HOME` or word spelled with a doubled slash reads as
+    /// home-relative exactly as the plain spelling does.
+    #[test]
+    fn home_spelling_folds_a_doubled_slash_on_both_sides() {
+        let plain = Path::new("/Users/x");
+        let doubled = Path::new("/Users//x");
+        for word in ["/Users/x/.ssh/id_rsa", "/Users//x/.ssh/id_rsa", "/Users/x//.ssh/id_rsa"] {
+            for home in [plain, doubled, Path::new("/Users/./x/")] {
+                assert_eq!(
+                    home_spelling(word, Some(home)),
+                    "~/.ssh/id_rsa",
+                    "{word} under {home:?}"
+                );
+            }
+        }
+    }
+
     /// secret-read budget fully verifies 5000 ordinary matches; escapes and
     /// held checkouts retain the integrity entry-budget refusal.
     #[test]

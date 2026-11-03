@@ -341,7 +341,10 @@ fn is_home_root_operand(op: &str) -> bool {
 pub(super) fn dangerous_rm_target(raw: &str) -> Option<&'static str> {
     let op = unquote_unescape(raw);
     let op = op.as_str();
-    if is_home_root_operand(op) {
+    // `~//`, `$HOME//*` and `~/.` are the plain spellings (TSK-1035).
+    if is_home_root_operand(op)
+        || is_home_root_operand(&crate::portable_path::fold_separators(op))
+    {
         return Some("home directory");
     }
     let tmpdir = std::env::var_os("TMPDIR").map(PathBuf::from);
@@ -1052,6 +1055,18 @@ fn check_fork_bomb(cmd: &str) -> Option<Verdict> {
 
 #[cfg(test)]
 mod tests {
+
+    /// TSK-1035: a doubled slash or `.` component after `~` or `$HOME` is
+    /// still the home directory.
+    #[test]
+    fn home_root_spelled_with_a_doubled_slash_is_still_home() {
+        for op in [
+            "~", "~/", "~//", "~/./", "~/.", "~//*", "$HOME//", "$HOME/./*", "${HOME}//*",
+        ] {
+            assert_eq!(dangerous_rm_target(op), Some("home directory"), "{op}");
+        }
+        assert_eq!(dangerous_rm_target("~/code/app//build"), None);
+    }
 
     #[test]
     fn unicode_blanks_stay_in_dangerous_operands() {

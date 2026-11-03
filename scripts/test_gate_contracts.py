@@ -314,7 +314,7 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(set(workspace['modes']), {'essential'})
         command = workspace['modes']['essential']['command']
         self.assertEqual(workspace.get('shell'), 'sh')
-        self.assertTrue(command.startswith('run_tmp=$(mktemp -d "${TMPDIR:-/tmp}/cf.XXXXXX") || exit; '))
+        self.assertTrue(command.startswith('run_base=${TMPDIR:-/tmp}; run_tmp=$(mktemp -d "${run_base%/}/cf.XXXXXX") || exit; '))
         self.assertIn('trap \'status=$?; rm -rf -- "$run_tmp" || exit 1; exit "$status"\' EXIT;', command)
         self.assertIn('export TMPDIR="$run_tmp";', command)
         self.assertTrue(command.endswith('cargo nextest run --workspace --no-fail-fast --profile essential && cargo test --workspace --doc'))
