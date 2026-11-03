@@ -31,9 +31,9 @@ fn confirms_portal_copy() {
     assert!(!repaired.contains("warning:"), "{repaired}");
 }
 
-// Based on the core validator's complete commit-anchored portal fixture.
-// Recreate the source, provenance, Markdown twin and artifact hashes together.
-fn portal_fixture(root: &Path, copy: &str) {
+// Write and commit the source inputs before creating derived artifacts.
+// Returns the commit, source hash and configuration hash.
+fn prepare_portal_source(root: &Path, copy: &str) -> (String, String, String) {
     for directory in [
         ".codeflow",
         "docs",
@@ -95,7 +95,13 @@ fn portal_fixture(root: &Path, copy: &str) {
         .unwrap()
         .trim()
         .to_owned();
-    let source_hash = sha256_hex(source);
+    (commit, sha256_hex(source), sha256_hex(config))
+}
+
+// Based on the core validator's complete commit-anchored portal fixture.
+// Recreate the provenance, Markdown twin and artifact hashes together.
+fn portal_fixture(root: &Path, copy: &str) {
+    let (commit, source_hash, config_hash) = prepare_portal_source(root, copy);
     let snippet_hash = sha256_hex(b"# Guide");
     let rendered = format!(
             "---\ntitle: \"Guide\"\n---\n\n<!-- codeflow-page-provenance source_sha256={source_hash} built_from_commit={commit} portal_version=1.0.0 release_version=none -->\n<!-- codeflow-source-snippet sha256={snippet_hash} lines=1-1 -->\n<div class=\"portal-provenance\">Source <code>docs/Mixed Case + café.md</code> at <code>{commit}</code></div>\n<div data-pagefind-body data-codeflow-search-root=\"reference/Mixed Case + café\">\n\n# Guide\n\n{copy}\n\n## Outcome\n\n[Jump](./Mixed%20Case%20%2B%20caf%C3%A9.md?view=1#outcome)\n\n</div>\n"
@@ -126,7 +132,7 @@ fn portal_fixture(root: &Path, copy: &str) {
         "files": {
             "portal.config.json": {
                 "ownership": "user-owned",
-                "pristine_sha256": sha256_hex(config)
+                "pristine_sha256": config_hash
             }
         }
     });
@@ -139,7 +145,7 @@ fn portal_fixture(root: &Path, copy: &str) {
         "schema_version": 1,
         "generator": {"name": "@codeflow/docs-portal", "version": "1.0.0"},
         "repository": {"root": "..", "commit": commit, "release_version": null},
-        "config_sha256": sha256_hex(config),
+        "config_sha256": config_hash,
         "primitive_tokens": null,
         "media": [],
         "pages": [{
