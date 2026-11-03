@@ -1,0 +1,11 @@
+id = "TSK-1291"
+uid = "bfcc3a8d-42ea-4e9f-be19-96c43e567ca9"
+kind = "TSK"
+title = "Ready pull requests and record checks refuse what the retro review found"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T19:35:23Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
