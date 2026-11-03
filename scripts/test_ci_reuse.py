@@ -427,6 +427,17 @@ class AdmissionTests(unittest.TestCase):
         self.assertNotIn("sleep", source)
         self.assertNotIn("--wait", source)
 
+    def test_consumer_template_baseline_and_manifest_keep_the_same_permissions(self):
+        import hashlib
+        template = (ROOT / "assets/base/ci/codeflow-policy.yml").read_bytes()
+        baseline = (ROOT / ".codeflow/.baseline/.github/workflows/codeflow-policy.yml").read_bytes()
+        manifest = json.loads((ROOT / ".codeflow/manifest.json").read_text())
+        self.assertEqual(template, baseline)
+        self.assertEqual(hashlib.sha256(template).hexdigest(),
+                         manifest["files"][".github/workflows/codeflow-policy.yml"]["sha256"])
+        self.assertIn(b"permissions: {}", template)
+        self.assertIn(b"      contents: read\n      pull-requests: read", template)
+
     def test_consumer_template_has_no_admission_mechanism(self):
         template = (ROOT / "assets/base/ci/codeflow-policy.yml").read_text()
         for marker in ("ci-reuse.py", "workflow_run:", "checks: write", "check-runs"):
@@ -491,7 +502,8 @@ class PublisherTests(unittest.TestCase):
         path, pending, method = api.writes[0]
         self.assertEqual((path, method), ("check-runs", "POST"))
         self.assertEqual(pending["head_sha"], HEAD)
-        self.assertEqual(pending["status"], "in_progress")
+        self.assertEqual(pending["status"], "completed")
+        self.assertEqual(pending["conclusion"], "failure")
         payload = api.writes[-1][1]
         self.assertEqual(payload["name"], "commit standards")
         self.assertEqual(payload["conclusion"], "success")
@@ -539,56 +551,71 @@ class PublisherTests(unittest.TestCase):
             self.assertEqual(self.publish(api), "failure")
         self.assertEqual(self.publish(PolicyApi(jobs={77: [job("codeflow gates", "skipped"), job("windows")]})), "failure")
 
-    def test_stale_head_target_attempt_or_completion_never_writes(self):
+    def test_stale_head_target_attempt_or_completion_never_admits(self):
         for changes in ({"head": MAIN}, {"base": "old-target"}, {"attempt": 2},
                         {"run": 78}, {"conclusion": "failure"}):
             with self.subTest(changes=changes):
                 api = PolicyApi()
                 with self.assertRaises(policy.reuse.Skip):
                     self.publish(api, identity={**self.identity(), **changes})
-                self.assertEqual(api.writes, [])
+                self.assertEqual(len(api.writes), 1)
+                self.assertEqual(api.writes[0][1]["conclusion"], "failure")
 
     def test_api_failure_at_each_read_never_writes_success(self):
-        for method in ("pull", "runs", "get", "attempt_jobs", "pages"):
+        for method in ("pull", "runs", "get", "attempt_jobs"):
             api, writer = PolicyApi(), PolicyApi()
             with self.subTest(method=method), mock.patch.object(api, method, side_effect=OSError("API error")):
                 with self.assertRaises(OSError):
                     self.publish(api, writer)
                 self.assertFalse(any(payload.get("conclusion") == "success" for _, payload, _ in writer.writes))
 
-    def test_head_move_after_verdict_read_never_writes(self):
+    def test_initial_read_error_revokes_an_earlier_green_at_the_same_head(self):
+        reader, writer = PolicyApi(), PolicyApi()
+        writer.current_conclusion = "success"
+        def write(path, payload, method):
+            writer.current_conclusion = payload.get("conclusion", "pending")
+            writer.writes.append((path, payload, method))
+            return {"id": 100}
+        with mock.patch.object(reader, "pull", side_effect=OSError("initial read unavailable")), \
+                mock.patch.object(writer, "write", side_effect=write):
+            with self.assertRaises(OSError):
+                self.publish(reader, writer)
+        self.assertEqual(writer.current_conclusion, "failure")
+        self.assertEqual(writer.writes[0][1]["head_sha"], HEAD)
+
+    def test_head_move_after_verdict_read_keeps_failure_at_the_event_head(self):
         class Moving(PolicyApi):
-            def pages(self, path, key):
+            def attempt_jobs(self, run_id, attempt):
                 self.current["head"]["sha"] = MAIN
-                return []
+                return GREEN_JOBS
         api = Moving()
         with self.assertRaises(policy.reuse.Skip):
             self.publish(api)
-        self.assertEqual(api.writes, [])
+        self.assertEqual(len(api.writes), 1)
+        self.assertEqual(api.writes[0][1]["head_sha"], HEAD)
+        self.assertEqual(api.writes[0][1]["conclusion"], "failure")
 
-    def test_rerun_after_verdict_read_never_writes(self):
+    def test_rerun_after_verdict_read_never_writes_success(self):
         class Rerunning(PolicyApi):
-            def pages(self, path, key):
+            def attempt_jobs(self, run_id, attempt):
                 self.run_list = [run(run_attempt=2)]
-                return []
+                return GREEN_JOBS
         api = Rerunning()
         with self.assertRaises(policy.reuse.Skip):
             self.publish(api)
-        self.assertFalse(any(payload.get("conclusion") == "success" for _, payload, _ in api.writes))
+        self.assertEqual(len(api.writes), 1)
+        self.assertEqual(api.writes[0][1]["conclusion"], "failure")
 
-    def test_own_check_is_updated_and_another_apps_check_is_ignored(self):
+    def test_only_the_freshly_created_check_can_be_promoted(self):
         api = PolicyApi()
         api.check_list = [{"id": 200, "name": "commit standards", "app": {"slug": "github-actions"},
                            "external_id": "codeflow-policy:pull:95"},
                           {"id": 201, "name": "commit standards", "app": {"slug": "other"},
                            "external_id": "codeflow-policy:pull:95"}]
-        self.assertEqual(self.publish(api), "success")
-        self.assertEqual((api.writes[0][0], api.writes[0][2]), ("check-runs/200", "PATCH"))
-        api.check_list.append(copy.deepcopy(api.check_list[0]))
-        api.writes.clear()
-        with self.assertRaises(policy.reuse.Skip):
-            self.publish(api)
-        self.assertEqual(api.writes, [])
+        with mock.patch.object(api, "pages", side_effect=AssertionError("existing checks must not be selected")):
+            self.assertEqual(self.publish(api), "success")
+        self.assertEqual([path for path, _, _ in api.writes], ["check-runs", "check-runs/100"])
+        self.assertEqual(api.check_list[0]["id"], 200)
 
     def test_missing_ambiguous_or_wrong_event_identity_refuses(self):
         for field, value in (("pull_requests", []), ("pull_requests", [{"number": 95}, {"number": 96}]),
@@ -624,13 +651,143 @@ class PublisherTests(unittest.TestCase):
 
     def test_publisher_reads_public_metadata_without_its_write_token(self):
         request = None
-        def response(value):
+        def response(value, **kwargs):
             nonlocal request
             request = value
             return io.BytesIO(b'{}')
         with mock.patch.object(policy.reuse.urllib.request, "urlopen", side_effect=response):
             policy.reuse.Api("https://api.github.com", "o/r", "").get("actions/runs/77")
         self.assertIsNone(request.get_header("Authorization"))
+
+    def test_prepare_cli_uses_current_body_and_only_emits_digest(self):
+        api = PolicyApi()
+        api.current["body"] = "body edited after the native event"
+        name, event = policy_event(False)
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory, "event.json")
+            event_path.write_text(json.dumps(event))
+            output_path = Path(directory, "outputs")
+            env = {"GITHUB_REPOSITORY": "o/r", "GITHUB_EVENT_NAME": name,
+                   "GITHUB_EVENT_PATH": str(event_path), "RUNNER_TEMP": directory,
+                   "GITHUB_OUTPUT": str(output_path)}
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, env), mock.patch("sys.argv", ["policy-admission.py", "prepare"]), \
+                    mock.patch.object(policy.reuse, "Api", return_value=api), redirect_stdout(out):
+                self.assertEqual(policy.main(), 0)
+            self.assertEqual(Path(directory, "pr-body.md").read_text(), api.current["body"] + "\n")
+            self.assertIn(f"digest={policy.digest(api.current['body'])}", output_path.read_text())
+            self.assertNotIn(api.current["body"], output_path.read_text() + out.getvalue())
+
+    def test_invalid_created_check_id_cannot_be_promoted(self):
+        for check_id in (None, True, "100", 0):
+            reader, writer = PolicyApi(), PolicyApi()
+            with self.subTest(check_id=check_id), \
+                    mock.patch.object(writer, "write", return_value={"id": check_id}) as write, \
+                    mock.patch.object(reader, "pull", side_effect=AssertionError("no reads before a valid failing check")):
+                with self.assertRaises(policy.reuse.Skip):
+                    self.publish(reader, writer)
+                self.assertEqual(write.call_count, 1)
+                self.assertEqual(write.call_args.args[1]["conclusion"], "failure")
+
+    def test_final_body_or_readiness_change_keeps_the_failing_check(self):
+        for change in ({"body": "last read changed body"}, {"draft": True}, {"state": "closed"}):
+            class Changing(PolicyApi):
+                calls = 0
+                def pull(self, number):
+                    self.calls += 1
+                    if self.calls == 4:
+                        self.current.update(change)
+                    return super().pull(number)
+            api = Changing()
+            with self.subTest(change=change), self.assertRaises(policy.reuse.Skip):
+                self.publish(api)
+            self.assertEqual(len(api.writes), 1)
+            self.assertEqual(api.writes[0][1]["conclusion"], "failure")
+
+    def test_new_run_after_admission_never_promotes_the_old_run(self):
+        class Changing(PolicyApi):
+            calls = 0
+            def pull(self, number):
+                self.calls += 1
+                if self.calls == 4:
+                    self.run_list = [run(id=78, run_number=6)]
+                return super().pull(number)
+        api = Changing()
+        with self.assertRaises(policy.reuse.Skip):
+            self.publish(api, identity=self.identity(False))
+        self.assertEqual(len(api.writes), 1)
+        self.assertEqual(api.writes[0][1]["conclusion"], "failure")
+
+
+class PublisherCliTests(unittest.TestCase):
+    """The real CLI entry, event file, Request encoding and JSON API adapter,
+    with the external HTTP transport controlled. No socket/Actions journey
+    or hosted required-check behavior is claimed by these tests."""
+
+    def journey(self, fail_first_read=False):
+        api = PolicyApi()
+        writes, reads = [], []
+        def transport(request, **kwargs):
+            path = request.full_url.removeprefix("https://api.fixture.invalid")
+            method = request.get_method()
+            auth = request.get_header("Authorization")
+            if method in ("POST", "PATCH"):
+                payload = json.loads(request.data)
+                writes.append((method, path, payload, auth))
+                return io.BytesIO(b'{"id": 100}')
+            reads.append((path, auth))
+            if path.endswith("/pulls/95"):
+                if fail_first_read:
+                    error = policy.reuse.urllib.error.HTTPError(request.full_url, 503, "fixture read unavailable", {}, None)
+                    error.close()
+                    raise error
+                value = api.current
+            elif "/attempts/1/jobs?" in path:
+                value = {"total_count": len(GREEN_JOBS), "jobs": GREEN_JOBS}
+            elif "/actions/runs?" in path:
+                value = {"total_count": 1, "workflow_runs": [run()]}
+            elif path.endswith("/actions/runs/77"):
+                value = run()
+            else:
+                raise AssertionError(path)
+            return io.BytesIO(json.dumps(value).encode())
+
+        with tempfile.TemporaryDirectory() as directory:
+            name, event = policy_event()
+            event_path = Path(directory, "event.json")
+            event_path.write_text(json.dumps(event))
+            env = {"GITHUB_REPOSITORY": "o/r", "GH_TOKEN": "fixture-token",
+                   "GITHUB_API_URL": "https://api.fixture.invalid", "GITHUB_EVENT_NAME": name,
+                   "GITHUB_EVENT_PATH": str(event_path), "GITHUB_SERVER_URL": "https://github.com",
+                   "GITHUB_RUN_ID": "99", "RUNNER_TEMP": directory,
+                   "GITHUB_OUTPUT": str(Path(directory, "outputs")), "VALIDATION_RESULT": "success",
+                   "JUDGED_DIGEST": policy.digest(api.current["body"])}
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, env), mock.patch("sys.argv", ["policy-admission.py", "publish"]), \
+                    mock.patch.object(policy.reuse.urllib.request, "urlopen", side_effect=transport), redirect_stdout(out):
+                code = policy.main()
+        return subprocess.CompletedProcess([], code, out.getvalue(), ""), writes, reads
+
+    def test_success_traverses_cli_entry_and_http_request_encoding(self):
+        done, writes, reads = self.journey()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual([method for method, _, _, _ in writes], ["POST", "PATCH"])
+        self.assertEqual(writes[0][2]["head_sha"], HEAD)
+        self.assertEqual(writes[0][2]["conclusion"], "failure")
+        self.assertEqual(writes[-1][1], "/repos/o/r/check-runs/100")
+        self.assertEqual(writes[-1][2]["conclusion"], "success")
+        self.assertTrue(reads)
+        self.assertTrue(all(auth is None for _, auth in reads))
+        self.assertTrue(all(auth == "Bearer fixture-token" for _, _, _, auth in writes))
+        self.assertNotIn("current body", done.stdout + done.stderr)
+
+    def test_initial_http_error_leaves_the_required_check_failing(self):
+        done, writes, _ = self.journey(fail_first_read=True)
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0][2]["conclusion"], "failure")
+        self.assertIn("refused", done.stdout)
+        self.assertNotIn("current body", done.stdout + done.stderr)
 
 
 class GitTests(unittest.TestCase):

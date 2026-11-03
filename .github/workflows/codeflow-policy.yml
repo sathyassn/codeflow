@@ -6,8 +6,10 @@
 # only the current trusted target; the PR head is fetched solely as git data.
 # The publisher uses no target build, PR checkout, cache or artifact. Its only
 # write permission is checks:write; it reads public API metadata without a token.
-# It rechecks PR number, exact head, target, body digest, newest CI run and exact
-# attempt before updating the required commit standards check on that head.
+# It first writes a failing commit standards check for the native event head.
+# Only that new check can be promoted after rechecking current PR number, exact
+# head, target, body digest, newest CI run and exact attempt. Initial read errors
+# therefore cannot preserve a previous green check at the same head.
 # Missing/ambiguous identities and API errors fail closed. Stale completions
 # cannot publish for a newer head or attempt. Publication has a final-read
 # window: a later change is judged by the event it queues, as in TSK-1040.

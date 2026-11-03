@@ -105,11 +105,23 @@ def prepare(api, identity: dict, directory: Path, actor: str = "unknown") -> dic
 
 
 def publish(reader, writer, identity: dict, judged_digest: str, validation: str, details_url: str) -> str:
-    """Publish only authenticated current identities; stale/unknown data writes nothing.
+    """Create a failing event-head check, then promote only a proven admission.
 
-    A known current failed/pending CI run writes failure. API errors propagate.
-    All policy invocations for a PR are serialized by the workflow queue.
+    The native GitHub event identifies where a negative verdict belongs. No
+    API read is allowed to preserve an earlier green at that same head. Only
+    the fresh returned check id can be promoted, after all current API reads.
+    Missing/ambiguous native event identities are rejected by event_identity
+    before this function is entered. No PR-controlled artifact is consulted.
     """
+    external_id = f"codeflow-policy:pull:{identity['pull']}"
+    refused = {"name": CHECK_NAME, "external_id": external_id, "status": "completed",
+               "conclusion": "failure", "details_url": details_url,
+               "output": {"title": "Admission is not verified",
+                          "summary": "Current PR, policy and CI identities must be verified before admission."}}
+    created = writer.write("check-runs", {**refused, "head_sha": identity["head"]}, "POST")
+    check_id = created["id"]
+    if type(check_id) is not int or check_id < 1:
+        raise reuse.Skip("the check API returned no check identity")
     pull = read_current(reader, identity)
     try:
         run = read_run(reader, identity)
@@ -117,29 +129,7 @@ def publish(reader, writer, identity: dict, judged_digest: str, validation: str,
         if "run" in identity:
             raise
         run = None
-    external_id = f"codeflow-policy:pull:{identity['pull']}"
-    checks = [check for check in reader.pages(
-        f"commits/{identity['head']}/check-runs?check_name=commit%20standards&filter=all", "check_runs")
-        if check.get("name") == CHECK_NAME and check.get("external_id") == external_id
-        and check.get("app", {}).get("slug") == "github-actions"]
-    if len(checks) > 1:
-        raise reuse.Skip("more than one admission check owns this pull request head")
-    before_write = read_current(reader, identity)
-    if (before_write.get("state"), before_write.get("draft"), digest(before_write["body"])) != (
-            pull.get("state"), pull.get("draft"), digest(pull["body"])):
-        raise reuse.Skip("the pull request changed before check initialization")
-    pending = {"name": CHECK_NAME, "external_id": external_id, "status": "in_progress",
-               "details_url": details_url,
-               "output": {"title": "Checking current admission", "summary": "Current policy and CI identities are being rechecked."}}
-    if checks:
-        check_id = checks[0]["id"]
-        writer.write(f"check-runs/{check_id}", pending, "PATCH")
-    else:
-        created = writer.write("check-runs", {**pending, "head_sha": identity["head"]}, "POST")
-        check_id = created["id"]
-    if type(check_id) is not int or check_id < 1:
-        raise reuse.Skip("the check API returned no check identity")
-    # Errors after initialization leave a pending check, never an older green.
+    # Read errors leave the new failing check in place, never an older green.
     conclusion = "failure"
     if (validation == "success" and pull.get("state") == "open" and pull.get("draft") is False
             and digest(pull["body"]) == judged_digest):
@@ -150,7 +140,7 @@ def publish(reader, writer, identity: dict, judged_digest: str, validation: str,
             pass
         else:
             conclusion = "success"
-    # Recheck after all reads and immediately before the only write. GitHub
+    # Recheck after all reads and immediately before the final verdict write. GitHub
     # has no atomic compare-and-publish operation; later events judge changes
     # made after this last read, as with the existing policy final recheck.
     latest = read_current(reader, identity)
