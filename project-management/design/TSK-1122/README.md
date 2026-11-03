@@ -78,7 +78,7 @@ Everything under `_src/` is the build; nothing in it runs in the product.
 | text lines | `node textlines.cjs` | Opens the page from `file://` at 1440 and 1280 px, activates every view with every tab panel shown, and measures the rendered line count of every visible text block; fails on any block over two lines outside a closed disclosure. |
 | render | `node render.cjs` | Opens the page from `file://`; captures 22 views at 1440, 1280, 1200 and 390 px in light and dark to `../captures/` from the top of the page (390 px also full page for the overview, an epic and a task); fails on horizontal scroll, a page error, a wrapped chip, clipped text, or the Comment button over content; checks Graphite, Slate and Sage with the default and large text size at 1200 and 390; checks every one of the 316 views at 1440, 1280, 1200 and 390 px at three scroll positions for the Comment button covering content; drives 49 journeys, among them the collapsed-rail hover (no tooltip, one delay, a passing mouse opens nothing, focus opens at once), Save through a mocked directory handle (file content and confirmation), the download fallback (file content and confirmation) and the draft surviving a reload. |
 | axe | `node axe.cjs` | WCAG 2.x A and AA rules over 17 views at 1440, 1280 and 390 px in both modes, plus Slate and Sage and the large size at 1200; fails on any violation of any impact. |
-| floors | `node floors.cjs` | From the kit's tokens, the sRGB contrast of every stage fill, figure mark and text colour against its surface, per theme, mode and accent. Source-derived numbers, not measurements of the rendered page. |
+| floors | `node floors.cjs` | Chromium resolves every HTML and SVG stage fill, including `.st-line-f`, and its matching main fill across every theme, mode and accent. Requires 3:1 against the surface and OKLab distance ×100 >= 15 for line/main pairs; prints effective colours and the worst separation. Other token contrast pairs remain source-derived. Run `build.cjs` first. |
 
 The facts in the page were read from 2026-11-02 13:40 to 13:41 EST (line
 tip `aa84d8544`, `main` `b2bb61af3`); the record texts were re-read at
@@ -150,7 +150,7 @@ Mocked or absent, and said so on the page:
 | `floors.cjs` | 228 pairs over 3 themes, 2 modes and 2 accents, the stage fills as the page renders them: 220 over, 8 under the 3:1 floor, all the stage line fill (55% accent in the surface) in light mode and in dark mode with plum; reported to the Coordinator, no colour changed |
 | scan of the page text | 19 788 text nodes outside script and style: 0 "..." in content, 0 identifiers as the only label of a link, 0 times without a zone |
 | workspace `textwall-check.cjs` | 0 paragraphs over 3 lines |
-| workspace `nav.test.cjs` on `_src/kit` | 30 of 31 pass; the `tooltip` check expects a tooltip on a collapsed rail icon at 60 ms, which the operator's hover rule of 2 Nov 19:36 EST removes on purpose |
+| workspace `nav.test.cjs` on `_src/kit` | Historical result: 30 of 31 pass. The tooltip assertion now checks the pinned label and absence on the collapsed rail; a passing rerun is pending |
 | workspace `link-check.cjs` | 4 references; the one "missing" is the string `${E(h)}` inside the inlined `cf.js` source, a JavaScript template, not a link |
 
 All runs open the page from `file://`; none starts a server. Run on
