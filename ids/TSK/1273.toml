@@ -1,0 +1,11 @@
+id = "TSK-1273"
+uid = "dc6e7b7d-9773-4c4a-8337-9890d17ab725"
+kind = "TSK"
+title = "The daily exact-SHA Windows run is green on main and its coverage switch can turn on"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T04:52:43Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
