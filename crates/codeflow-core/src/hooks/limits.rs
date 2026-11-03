@@ -6,8 +6,8 @@
 //! the limits registry (TSK-1299, "One limits registry, declared once") can
 //! take these entries as they are: the probe keys
 //! `git.remote_query_timeout_seconds`, `git.remote_query_attempts` and
-//! `git.remote_fetch_timeout_seconds`, and the guard hook timeout, deadline
-//! and network budget.
+//! `git.remote_fetch_timeout_seconds`, and the guard hook timeout, deadline,
+//! network budget, pull request lookup wait and refusal write wait.
 
 /// Whether a limit is tuned for speed or holds a safety property.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,14 +115,42 @@ pub const GUARD_REMOTE_QUERY_BUDGET: Limit = Limit {
     reason: "a 10 s buffer under the 20 s guard deadline for the guard's other work, so a slow remote gets a named fail-closed refusal, never the harness kill; git.remote_query_timeout_seconds does not apply inside a guard, and `git fetch` removes the need to ask",
 };
 
+/// Seconds the git guard waits for `gh pr view` to name a pull request's
+/// base branch, the guard's other network wait.
+pub const GUARD_PR_LOOKUP_WAIT: Limit = Limit {
+    key: None,
+    name: "guard pull request lookup wait",
+    unit: "seconds",
+    default: 5,
+    min: 5,
+    max: Some(5),
+    class: LimitClass::Security,
+    reason: "fits after the guard network budget with a 5 s buffer under the 20 s guard deadline; no answer in time is doubt, and the guard blocks on doubt",
+};
+
+/// Seconds the deadline's refusal waits for its reason to reach stderr
+/// before the guard exits 2 regardless.
+pub const GUARD_REFUSAL_WRITE_WAIT: Limit = Limit {
+    key: None,
+    name: "guard refusal write wait",
+    unit: "seconds",
+    default: 1,
+    min: 1,
+    max: Some(1),
+    class: LimitClass::Security,
+    reason: "a stderr pipe nobody reads must not hold the exit; the exit still comes well inside the 30 s guard hook timeout",
+};
+
 /// Every limit this module declares.
-pub const LIMITS: [Limit; 6] = [
+pub const LIMITS: [Limit; 8] = [
     REMOTE_QUERY_TIMEOUT,
     REMOTE_QUERY_ATTEMPTS,
     REMOTE_FETCH_TIMEOUT,
     GUARD_HOOK_TIMEOUT,
     GUARD_DEADLINE,
     GUARD_REMOTE_QUERY_BUDGET,
+    GUARD_PR_LOOKUP_WAIT,
+    GUARD_REFUSAL_WRITE_WAIT,
 ];
 
 /// The accepted values of `limit`, for messages.
@@ -161,11 +189,65 @@ mod tests {
                 limit.name
             );
         }
-        const { assert!(GUARD_REMOTE_QUERY_BUDGET.default + 5 <= GUARD_DEADLINE.default) };
-        const { assert!(GUARD_DEADLINE.default + 5 <= GUARD_HOOK_TIMEOUT.default) };
+        const {
+            assert!(
+                GUARD_REMOTE_QUERY_BUDGET.default + GUARD_PR_LOOKUP_WAIT.default + 5
+                    <= GUARD_DEADLINE.default
+            );
+        };
+        const {
+            assert!(
+                GUARD_DEADLINE.default + GUARD_REFUSAL_WRITE_WAIT.default + 5
+                    <= GUARD_HOOK_TIMEOUT.default
+            );
+        };
         assert_eq!(
             for_key("git.remote_query_attempts"),
             Some(&REMOTE_QUERY_ATTEMPTS)
         );
+    }
+
+    /// Everything that sets or spends a configured wait stays out of the
+    /// code a guard runs: `QueryLimits::guard` is the only limits a guard
+    /// can build. A text scan, so it pins these names and does not trace
+    /// calls; `no_configured_wait_reaches_a_guard` in the CLI's
+    /// `policy_authority_journey` proves the behaviour.
+    #[test]
+    fn guard_code_names_no_configured_wait() {
+        const CONFIGURED: [&str; 7] = [
+            "QueryLimits::from",
+            "QueryLimits::default",
+            "remote_query::ls_remote",
+            "remote_query::fetch_objects",
+            "release_line::advertisement",
+            "release_line::ask_destination",
+            "release_line::checkout_scope",
+        ];
+        fn scan(path: &std::path::Path, this_file: &std::path::Path, found: &mut Vec<String>) {
+            if path.is_dir() {
+                for entry in std::fs::read_dir(path).unwrap() {
+                    scan(&entry.unwrap().path(), this_file, found);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "rs") && path != this_file {
+                let text = std::fs::read_to_string(path).unwrap();
+                for name in CONFIGURED {
+                    if text.contains(name) {
+                        found.push(format!("{}: {name}", path.display()));
+                    }
+                }
+            }
+        }
+        let core = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let this_file = core.join("src/hooks/limits.rs");
+        let mut found = Vec::new();
+        for root in [
+            core.join("src/hooks"),
+            core.join("src/security"),
+            core.join("../codeflow-cli/src/cmd/hook.rs"),
+        ] {
+            assert!(root.exists(), "{}", root.display());
+            scan(&root, &this_file, &mut found);
+        }
+        assert!(found.is_empty(), "{found:#?}");
     }
 }

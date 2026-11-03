@@ -517,6 +517,76 @@ fn pre_push_waits_as_long_as_the_default_branch_policy_says() {
     assert!(!text.contains("no answer within"), "{text}");
 }
 
+/// TSK-1301 AC-8, the claim behind guard option (b): no configured wait
+/// reaches a guard, whichever way the values point. A 1 s wait would refuse
+/// early if a guard honoured it; a 60 s wait with 5 attempts would run into
+/// the guard's deadline.
+///
+/// Where a guard asks (no tracking refs), the only copy of the keys is the
+/// task branch's own, and the guard still spends exactly its budget, one
+/// attempt, and refuses by name. Where the keys are the authority's (on the
+/// default branch, fetched), the guard asks nothing: a remote that never
+/// answers costs it no wait at all.
+#[cfg(unix)]
+#[test]
+fn no_configured_wait_reaches_a_guard() {
+    use codeflow_core::hooks::guard_deadline::{GUARD_DEADLINE_SECS, GUARD_REMOTE_QUERY_SECS};
+    use std::time::{Duration, Instant};
+    for (seconds, attempts) in [(1, 1), (60, 5)] {
+        let policy = format!(
+            r#"{{"git":{{"force_push_unprotected":"allow","remote_query_timeout_seconds":{seconds},"remote_query_attempts":{attempts}}}}}"#
+        );
+
+        let (a, _) = Adopter::with_line();
+        let payload = json!({"tool_name":"Bash","cwd":a.work(),"tool_input":{"command":"git push --force-with-lease origin task/TSK-007-cert"}})
+            .to_string();
+        let silent = slow_ls_remote(&a, None);
+        a.commit(&[(".codeflow/policy.json", &policy)], "chore: tune waits");
+        for branch in ["HEAD", "main", "integration/line"] {
+            a.git(&[
+                "update-ref",
+                "--no-deref",
+                "-d",
+                &format!("refs/remotes/origin/{branch}"),
+            ]);
+        }
+        let started = Instant::now();
+        let guard = a.codeflow_on(&silent, &["hook", "git-guard"], &payload);
+        let took = started.elapsed();
+        let text = said(&guard);
+        println!("no authority, keys {seconds} s and {attempts} ({took:?}):\n{text}");
+        assert_eq!(guard.status.code(), Some(2), "{text}");
+        assert!(
+            took >= Duration::from_secs(GUARD_REMOTE_QUERY_SECS),
+            "{took:?}"
+        );
+        assert!(took < Duration::from_secs(GUARD_DEADLINE_SECS), "{took:?}");
+        assert!(!text.contains("reached no decision"), "{text}");
+        assert!(
+            text.contains(&format!(
+                "no answer within {GUARD_REMOTE_QUERY_SECS}s per attempt (1 attempt, "
+            )),
+            "{text}"
+        );
+
+        let (a, _) = Adopter::with_line();
+        let payload = json!({"tool_name":"Bash","cwd":a.work(),"tool_input":{"command":"git push --force-with-lease origin task/TSK-007-cert"}})
+            .to_string();
+        let silent = slow_ls_remote(&a, None);
+        a.land_main_policy(&policy);
+        let started = Instant::now();
+        let guard = a.codeflow_on(&silent, &["hook", "git-guard"], &payload);
+        let took = started.elapsed();
+        let text = said(&guard);
+        println!("authority, keys {seconds} s and {attempts} ({took:?}):\n{text}");
+        assert_eq!(guard.status.code(), Some(0), "{text}");
+        assert!(
+            took < Duration::from_secs(GUARD_REMOTE_QUERY_SECS / 2),
+            "{took:?}"
+        );
+    }
+}
+
 /// TSK-1301 AC-8, the guard path: with the remote's tracking refs missing
 /// the guard asks the remote whether it holds any. A remote that never
 /// answers gets the guard's own refusal inside its 10 s network budget,
@@ -555,7 +625,9 @@ fn the_guard_refuses_a_silent_remote_inside_its_budget_and_a_fetch_clears_it() {
     assert!(took < Duration::from_secs(GUARD_DEADLINE_SECS), "{took:?}");
     assert!(!text.contains("reached no decision"), "{text}");
     assert!(
-        text.contains("a session guard waits at most 10s for the network, inside its 20s deadline"),
+        text.contains(&format!(
+            "a session guard waits at most {GUARD_REMOTE_QUERY_SECS}s for the network, inside its {GUARD_DEADLINE_SECS}s deadline"
+        )),
         "{text}"
     );
     assert!(text.contains("run git fetch origin"), "{text}");

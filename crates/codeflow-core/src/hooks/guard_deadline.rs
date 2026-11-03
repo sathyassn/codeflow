@@ -36,6 +36,14 @@ pub const GUARD_DEADLINE_SECS: u64 = super::limits::GUARD_DEADLINE.default;
 /// in time gets a named refusal from the guard, never the harness kill.
 pub const GUARD_REMOTE_QUERY_SECS: u64 = super::limits::GUARD_REMOTE_QUERY_BUDGET.default;
 
+/// Seconds the git guard waits for `gh pr view` to name a pull request's
+/// base branch; no answer in time is doubt, and the guard blocks on doubt.
+pub const GUARD_PR_LOOKUP_SECS: u64 = super::limits::GUARD_PR_LOOKUP_WAIT.default;
+
+/// Seconds the deadline's refusal waits for its reason to be written before
+/// the guard exits 2 regardless.
+pub const GUARD_REFUSAL_WRITE_SECS: u64 = super::limits::GUARD_REFUSAL_WRITE_WAIT.default;
+
 /// The session guards whose hook entries carry these bounds.
 pub const GUARDS: [&str; 3] = ["git-guard", "exec-guard", "edit-guard"];
 
