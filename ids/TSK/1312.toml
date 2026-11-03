@@ -1,0 +1,11 @@
+id = "TSK-1312"
+uid = "0e2244d7-c81d-4117-a36b-d67236d1e425"
+kind = "TSK"
+title = "A sync of main into a line has its own admitted route"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T23:48:26Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
