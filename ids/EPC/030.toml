@@ -1,0 +1,11 @@
+id = "EPC-030"
+uid = "3d2e21bf-46ad-44eb-bae8-91c6b8425823"
+kind = "EPC"
+title = "Baseline replacement and read-only update"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T15:56:15Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
