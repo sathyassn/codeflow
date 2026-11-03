@@ -22,6 +22,8 @@ pub mod deadline;
 mod output;
 mod process;
 use deadline::{Supervision, TargetStatus, WorkerGrant};
+#[cfg(all(test, unix))]
+pub(crate) use process::finish_cleanup_before;
 
 #[cfg(unix)]
 mod group_watch;
@@ -1733,6 +1735,75 @@ mod tests {
             .cleanup_details
             .iter()
             .any(|s| s.contains("drain deadline")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn observed_migration_cannot_pass_with_an_escaped_closed_pipe_descendant() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("escaped.pid");
+        let script = r#"
+import os,time
+pid=os.fork()
+if pid:
+ while not os.path.exists("escaped.pid"): time.sleep(.01)
+ time.sleep(1.5)
+else:
+ os.setsid()
+ fd=os.open(os.devnull, os.O_RDWR)
+ for output in (0,1,2): os.dup2(fd,output)
+ if fd>2: os.close(fd)
+ with open("escaped.pid","w") as out: out.write(str(os.getpid()))
+ time.sleep(60)
+"#;
+        let mut command = Command::new("python3");
+        command.arg("-c").arg(script).current_dir(dir.path());
+        let observed_pid = pid_file.clone();
+        // Inject only the accounting observation boundary. The detached child,
+        // closed pipes, direct-child exit and watcher cleanup are real.
+        let result = process::run_observed(
+            command,
+            "escaped-closed-pipes",
+            deadline::Deadline::new(Duration::from_secs(5), true, 1, None),
+            false,
+            true,
+            false,
+            Some(move |_| {
+                observed_pid.exists().then(|| process::CpuObservation {
+                    cpu: Err(
+                        "cgroup population changed outside the runner while child remained live"
+                            .into(),
+                    ),
+                    membership_uncertain: true,
+                })
+            }),
+        );
+        let pid = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .parse::<i32>()
+            .unwrap();
+        assert!(pid > 1);
+        let survived = unsafe { libc::kill(pid, 0) } == 0;
+        // Always stop the escaped fixture before assertions can fail.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+        let result = result.unwrap();
+        assert!(
+            survived,
+            "the escaped descendant must outlive scoped cleanup"
+        );
+        assert!(
+            result.termination_unconfirmed,
+            "a closed pipe cannot prove termination"
+        );
+        assert_ne!(result.exit_code, 0);
+        assert_eq!(result.supervision.status, TargetStatus::CleanupIncomplete);
+        assert!(result
+            .supervision
+            .cleanup_details
+            .iter()
+            .any(|s| s.contains("membership")));
     }
 
     /// A target whose command hangs past its `timeout_seconds` is killed and

@@ -4,14 +4,41 @@ use super::{CommandOutcome, TestingError, POLL_INTERVAL};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-#[allow(clippy::too_many_lines)]
+/// Scoped CPU observation. A membership anomaly also invalidates termination
+/// evidence from the original group, even when its accounting falls back.
+pub(super) struct CpuObservation {
+    pub cpu: Result<u64, String>,
+    pub membership_uncertain: bool,
+}
+
 pub(super) fn run(
+    cmd: Command,
+    target_name: &str,
+    deadline: Deadline,
+    emit_progress: bool,
+    supervised: bool,
+    hand_over: bool,
+) -> Result<CommandOutcome, TestingError> {
+    run_observed(
+        cmd,
+        target_name,
+        deadline,
+        emit_progress,
+        supervised,
+        hand_over,
+        None::<fn(Duration) -> Option<CpuObservation>>,
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+pub(super) fn run_observed(
     mut cmd: Command,
     target_name: &str,
     mut deadline: Deadline,
     emit_progress: bool,
     supervised: bool,
     hand_over: bool,
+    mut observe: Option<impl FnMut(Duration) -> Option<CpuObservation>>,
 ) -> Result<CommandOutcome, TestingError> {
     let spawn_err = |error: std::io::Error| TestingError::CommandSpawnError {
         target: target_name.into(),
@@ -38,7 +65,7 @@ pub(super) fn run(
     };
 
     #[cfg(target_os = "linux")]
-    let mut cgroup = if deadline.info.heavy {
+    let mut cgroup = if deadline.info.heavy && observe.is_none() {
         super::cgroup::prepare(&mut cmd, &mut deadline).map_err(spawn_err)?
     } else {
         None
@@ -146,25 +173,37 @@ pub(super) fn run(
             && status.is_none()
             && (now >= next_sample || deadline.decision(now) == Some(TargetStatus::Stalled))
         {
-            #[cfg(windows)]
-            deadline.cpu(
-                now,
-                job.as_ref()
-                    .ok_or_else(|| "job accounting unavailable".into())
-                    .and_then(|job| job.accounting().map(|v| v.0).map_err(|e| e.to_string())),
-            );
-            #[cfg(target_os = "linux")]
-            if let Some(group) = &cgroup {
-                let old_reason = deadline.info.early_stall_unavailable.is_some();
-                deadline.cpu(now, group.sample(child.id()).map_err(|e| e.to_string()));
-                if !old_reason {
-                    if let Some(reason) = &deadline.info.early_stall_unavailable {
-                        progress!("[codeflow test] {safe_name}: early stall unavailable: {reason}");
+            let observation = observe
+                .as_mut()
+                .and_then(|sample| sample(now))
+                .unwrap_or_else(|| {
+                    #[cfg(windows)]
+                    let cpu = job
+                        .as_ref()
+                        .ok_or_else(|| "job accounting unavailable".into())
+                        .and_then(|job| job.accounting().map(|v| v.0).map_err(|e| e.to_string()));
+                    #[cfg(target_os = "linux")]
+                    let cpu = cgroup.as_ref().map_or_else(
+                        || Err("no delegated cgroup".into()),
+                        |group| group.sample(child.id()).map_err(|e| e.to_string()),
+                    );
+                    #[cfg(not(any(windows, target_os = "linux")))]
+                    let cpu = Err("platform complete accounting unavailable".into());
+                    CpuObservation {
+                        cpu,
+                        membership_uncertain: false,
                     }
+                });
+            let old_reason = deadline.info.early_stall_unavailable.is_some();
+            // The regression baseline preserves the existing accounting-only
+            // response; the repair must retain this separate uncertainty.
+            let _ = observation.membership_uncertain;
+            deadline.cpu(now, observation.cpu);
+            if !old_reason {
+                if let Some(reason) = &deadline.info.early_stall_unavailable {
+                    progress!("[codeflow test] {safe_name}: early stall unavailable: {reason}");
                 }
             }
-            #[cfg(not(any(windows, target_os = "linux")))]
-            deadline.cpu(now, Err("platform complete accounting unavailable".into()));
             next_sample = now.saturating_add(Duration::from_secs(1));
         }
         if let Some(cause) = deadline
@@ -288,17 +327,40 @@ pub(super) fn run(
     if !termination_confirmed {
         cleanup_errors.push("process-tree termination unconfirmed".into());
     }
-    #[cfg(target_os = "linux")]
-    if let Some(group) = &cgroup {
-        if termination_confirmed {
-            if let Err(error) = group.remove_empty() {
-                cleanup_errors.push(format!("cgroup cleanup: {error}"));
-            }
-        }
-    }
     #[cfg(unix)]
     if termination_confirmed {
-        if let Err(error) = crate::testing::gate_guard::target_group_finished(child.id()) {
+        let now = start.elapsed();
+        let remaining = CLEANUP_GRACE
+            .saturating_sub(now.saturating_sub(stop.expect("cleanup follows a stop")))
+            .min(
+                deadline
+                    .ceiling
+                    .saturating_add(CLEANUP_GRACE)
+                    .saturating_sub(now),
+            );
+        let finish_by = Instant::now() + remaining;
+        let pid = child.id();
+        #[cfg(target_os = "linux")]
+        let group = cgroup.take();
+        if let Err(error) = finish_cleanup_before(finish_by, move |finish_by| {
+            let mut failures = Vec::new();
+            #[cfg(target_os = "linux")]
+            if let Some(group) = group {
+                if let Err(error) = group.remove_empty() {
+                    failures.push(format!("cgroup cleanup: {error}"));
+                }
+            }
+            if let Err(error) =
+                crate::testing::gate_guard::target_group_finished_before(pid, finish_by)
+            {
+                failures.push(error);
+            }
+            if failures.is_empty() {
+                Ok(())
+            } else {
+                Err(failures.join("; "))
+            }
+        }) {
             cleanup_errors.push(error);
         }
     }
@@ -355,4 +417,14 @@ pub(super) fn run(
         supervision: deadline.info,
         termination_unconfirmed: !termination_confirmed,
     })
+}
+
+/// One absolute cleanup budget covers every held record and its mutex.
+#[cfg(unix)]
+pub(crate) fn finish_cleanup_before(
+    finish_by: Instant,
+    cleanup: impl FnOnce(Instant) -> Result<(), String> + Send + 'static,
+) -> Result<(), String> {
+    // Preserve synchronous behavior in the regression baseline.
+    cleanup(finish_by)
 }

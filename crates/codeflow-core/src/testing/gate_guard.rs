@@ -1303,6 +1303,16 @@ pub fn target_group_finished(pgid: u32) -> Result<(), String> {
     })
 }
 
+/// Pass the supervisor's shared cleanup deadline into group bookkeeping.
+pub(crate) fn target_group_finished_before(
+    pgid: u32,
+    finish_by: std::time::Instant,
+) -> Result<(), String> {
+    // Preserve synchronous behavior in the regression baseline.
+    let _ = finish_by;
+    target_group_finished(pgid)
+}
+
 fn update_groups(change: impl Fn(&mut BTreeSet<u32>)) -> Result<(), String> {
     let mut failures = Vec::new();
     let mut held = held();
@@ -2413,6 +2423,89 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dir.join(RECORD_FILE)).unwrap(), "");
         // The lock file itself is never written (TSK-1003).
         assert_eq!(std::fs::read_to_string(dir.join(LOCK_FILE)).unwrap(), "");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn target_cleanup_shares_one_deadline_across_several_held_records() {
+        use std::time::{Duration, Instant};
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = (0..3)
+            .map(|n| tmp.path().join(format!("locks-{n}")))
+            .collect::<Vec<_>>();
+        let lock = acquire_full_gate_lock(&dirs, Path::new("/w")).unwrap();
+        let group = 4_000_013;
+        target_group_started(group).unwrap();
+        let blockers = lock
+            .paths
+            .iter()
+            .map(|path| {
+                let mut name = record_path(path).into_os_string();
+                name.push(".lock");
+                let file = File::open(PathBuf::from(name)).unwrap();
+                os_lock::try_lock(&file).unwrap();
+                file
+            })
+            .collect::<Vec<_>>();
+        let started = Instant::now();
+        let finish_by = started + Duration::from_millis(250);
+        let result = crate::testing::runner::finish_cleanup_before(finish_by, move |until| {
+            target_group_finished_before(group, until)
+        });
+        let elapsed = started.elapsed();
+        // Release every fixture lock before assertions or GateLock::drop.
+        for blocker in blockers {
+            os_lock::unlock(&blocker);
+        }
+        let records = lock
+            .paths
+            .iter()
+            .map(|path| std::fs::read_to_string(record_path(path)).unwrap())
+            .collect::<Vec<_>>();
+        drop(lock);
+        assert!(
+            result.is_err(),
+            "contended bookkeeping must not be called complete"
+        );
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "one budget, not five seconds per record: {elapsed:?}"
+        );
+        assert!(
+            records
+                .iter()
+                .all(|record| record.contains("group=4000013")),
+            "unwritten records remain conservative"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn target_cleanup_does_not_wait_out_the_held_record_mutex() {
+        use std::time::{Duration, Instant};
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _held = held();
+            ready_tx.send(()).unwrap();
+            // A finite release also lets the old implementation finish and
+            // fail the regression rather than deadlocking the test process.
+            let _ = release_rx.recv_timeout(Duration::from_secs(2));
+        });
+        ready_rx.recv().unwrap();
+        let started = Instant::now();
+        let result = crate::testing::runner::finish_cleanup_before(
+            started + Duration::from_millis(250),
+            move |until| target_group_finished_before(4_000_015, until),
+        );
+        let elapsed = started.elapsed();
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        assert!(result.is_err());
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "registry mutex is inside the cleanup budget: {elapsed:?}"
+        );
     }
 
     #[test]
