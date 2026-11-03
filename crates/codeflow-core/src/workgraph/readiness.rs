@@ -2048,7 +2048,8 @@ pub fn claim_on(
     } else {
         git(repo_root, &["branch", &branch, &tip.to_string()])?;
     }
-    super::claim_base::record(repo_root, task_id, &branch, &declared, &selected)?;
+    super::claim_base::record(repo_root, task_id, &branch, &declared, &selected)
+        .map_err(|error| format!("created {branch} locally; recording its base failed: {error}"))?;
     if has_origin {
         // Create only: an existing remote branch of that name is never moved.
         let destination = format!("refs/heads/{branch}");

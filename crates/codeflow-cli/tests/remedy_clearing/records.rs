@@ -578,9 +578,9 @@ fn clears_work_start_reconcile() {
 
 #[test]
 fn clears_work_target_tip() {
+    const BRANCH: &str = "task/TSK-001-work";
     let hosted = Hosted::new();
     let root = &hosted.root;
-    const BRANCH: &str = "task/TSK-001-work";
     hosted.plan_task("plan/work");
     hosted.land("plan/work");
     hosted.branch(BRANCH);

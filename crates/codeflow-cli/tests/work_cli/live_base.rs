@@ -271,6 +271,28 @@ fn wrong_base_is_advisory_when_work_planning_is_warn() {
 }
 
 #[test]
+fn ci_merge_remedy_keeps_shell_metacharacters_in_the_target_literal() {
+    let dir = lines();
+    let root = dir.path();
+    let target = "integration/a$(id)";
+    git(root, &["branch", target, A]);
+    advance(root, target, "needed.txt");
+    git(root, &["switch", "-qc", CHILD, A]);
+    let out = cli(
+        root,
+        &[
+            "ci", "--base", "main", "--head", "HEAD", "--branch", CHILD, "--into", target,
+        ],
+        None,
+    );
+    assert!(
+        text(&out).contains("git merge -- 'integration/a$(id)'"),
+        "{}",
+        text(&out)
+    );
+}
+
+#[test]
 fn ci_warns_until_the_current_target_tip_is_merged_and_reports_unknown_tips() {
     let dir = lines();
     let root = dir.path();

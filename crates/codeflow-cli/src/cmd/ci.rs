@@ -1436,13 +1436,21 @@ fn target_containment_warning(
         Ok(Some(message)) => message,
         Err(error) => format!("target '{target}' tip is unverified: {error}"),
     };
+    let target_arg = if target
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "_./-".contains(c))
+    {
+        target.to_string()
+    } else {
+        format!("'{}'", target.replace('\'', "'\\''"))
+    };
     tagged.push(TaggedViolation {
         sha: None,
         violation: Violation::new(
             "work.target_tip",
             PolicyLevel::Warn,
             message,
-            codeflow_core::remedy::WORK_TARGET_TIP.with(&[("target", target)]),
+            codeflow_core::remedy::WORK_TARGET_TIP.with(&[("target", &target_arg)]),
         ),
     });
 }
