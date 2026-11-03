@@ -6343,19 +6343,28 @@ mod tests {
             .read(ADOPTION_TASK)
             .replace("status: in_progress", "status: complete");
         f.write(ADOPTION_TASK, &record);
-        assert!(f.line_record_source(Transport::TaskLanding, true, true).is_ok());
+        assert!(f
+            .line_record_source(Transport::TaskLanding, true, true)
+            .is_ok());
         f.write(
             ADOPTION_TASK,
             &record.replace("shall work", "shall do something else"),
         );
-        let problem = f.line_record_source(Transport::TaskLanding, true, true).unwrap_err();
-        assert!(problem.contains("outside its status and Closeout"), "{problem}");
+        let problem = f
+            .line_record_source(Transport::TaskLanding, true, true)
+            .unwrap_err();
+        assert!(
+            problem.contains("outside its status and Closeout"),
+            "{problem}"
+        );
     }
 
     fn line_record_refusal(case: LineRecordCase, expected: &str) {
         let f = AdoptionFixture::line_record(case);
         f.complete();
-        let problem = f.line_record_source(Transport::TaskLanding, true, false).unwrap_err();
+        let problem = f
+            .line_record_source(Transport::TaskLanding, true, false)
+            .unwrap_err();
         assert!(problem.contains(expected), "{problem}");
     }
 
@@ -6376,7 +6385,9 @@ mod tests {
     fn line_record_refuses_an_untrusted_receiving_line() {
         let f = AdoptionFixture::line_record(LineRecordCase::Planned);
         f.complete();
-        let problem = f.line_record_source(Transport::TaskLanding, false, false).unwrap_err();
+        let problem = f
+            .line_record_source(Transport::TaskLanding, false, false)
+            .unwrap_err();
         assert!(
             problem.contains("not on the first-parent line of a target this run trusts"),
             "{problem}"
@@ -6392,8 +6403,13 @@ mod tests {
                 .replace("shall work", "shall do something else"),
         );
         f.complete();
-        let problem = f.line_record_source(Transport::TaskLanding, true, false).unwrap_err();
-        assert!(problem.contains("outside its status and Closeout"), "{problem}");
+        let problem = f
+            .line_record_source(Transport::TaskLanding, true, false)
+            .unwrap_err();
+        assert!(
+            problem.contains("outside its status and Closeout"),
+            "{problem}"
+        );
     }
 
     #[test]
@@ -6404,7 +6420,9 @@ mod tests {
         assert!(blob_at(&repo, f.span, ADOPTION_TASK).unwrap().is_none());
         assert_ne!(f.reviewed, f.span);
         f.complete();
-        let problem = f.line_record_source(Transport::TaskLanding, true, false).unwrap_err();
+        let problem = f
+            .line_record_source(Transport::TaskLanding, true, false)
+            .unwrap_err();
         assert!(problem.contains("src/unreviewed.rs"), "{problem}");
     }
 
@@ -6418,8 +6436,13 @@ mod tests {
         let mut f = AdoptionFixture::line_record(LineRecordCase::Planned);
         f.reviewed = f.merge;
         f.complete();
-        let problem = f.line_record_source(Transport::TaskLanding, true, false).unwrap_err();
-        assert!(problem.contains("changed between the reviewed commit"), "{problem}");
+        let problem = f
+            .line_record_source(Transport::TaskLanding, true, false)
+            .unwrap_err();
+        assert!(
+            problem.contains("changed between the reviewed commit"),
+            "{problem}"
+        );
     }
 
     #[test]
