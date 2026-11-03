@@ -729,7 +729,13 @@ fn folder_records_participate_in_docs_graph_and_epic_reciprocity() {
         "project-management/epics/EPC-001.md",
         "---\nid: EPC-001\ncapabilities: [CAP-101]\n---\n",
     );
-    assert!(codeflow_core::validate::docs::lint_docs(dir.path()).is_clean());
+    write(
+        dir.path(),
+        "crates/codeflow-core/tests/capability_catalog.rs",
+        "#[test]\nfn case() {}\n",
+    );
+    let report = codeflow_core::validate::docs::lint_docs(dir.path());
+    assert!(report.is_clean(), "{report:?}");
 }
 
 #[test]

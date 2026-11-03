@@ -16,9 +16,9 @@ pub const EVIDENCE_KINDS: &[&str] = &["test", "journey", "record", "gap"];
 pub const GAP_PROOFS: &[&str] = &["test", "journey", "hosted", "native"];
 /// Where a native or hosted verification record lives.
 pub const VERIFICATION_RECORD_DIR: &str = "docs/verification/";
-/// The largest file read to find a named test. This is a parsing safety bound
-/// on repository-controlled input, not an operating budget a project tunes:
-/// a larger file is refused, and naming the file alone never reads it.
+/// The largest file read to find a named test. A larger file is refused, and
+/// naming the file alone never reads it. This is a constant for now because the
+/// limits registry is not on this line yet (TSK-362 records this).
 pub const CAPABILITY_MAX_EVIDENCE_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 const FORMAT: &str = "expected test: <path>[::<name>], journey: <path>[::<name>], \

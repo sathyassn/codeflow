@@ -696,8 +696,8 @@ Records contain YAML frontmatter and Markdown prose, checked by `validate --docs
   are refused, naming the capability and the entry.
 - Nothing an entry names is run. Files are read through the repository-confined
   reader, and links are refused. `CAPABILITY_MAX_EVIDENCE_FILE_BYTES` (16 MiB)
-  bounds the file read to find a `::<name>`; it guards parsing of
-  repository-controlled input and is not a setting.
+  bounds the file read to find a `::<name>`. It is a constant until the limits
+  registry reaches this line.
 - Where a sandbox denies reading a path, a whole-file entry resolves only when
   the Git index tracks that path.
 - A legacy fence file with no typed entry keeps validating with one warning
