@@ -1133,6 +1133,7 @@ case " $* " in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev
 case ${OSV_FAKE:-} in
   empty) echo 'No package sources found, --help for usage information.'; exit 128 ;;
   broken) echo 'Error during extraction: Cargo.lock: could not extract'; echo 'No package sources found, --help for usage information.'; exit 128 ;;
+  broken_long) echo 'Error during extraction: Cargo.lock: could not extract'; head -c 2097152 /dev/zero | tr '\\0' x; echo; exit 128 ;;
 esac
 if [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi
 case " $* " in
@@ -2044,4 +2045,46 @@ fn a_pull_request_into_a_non_default_target_is_judged_by_that_target() {
     assert_eq!(enforced.status.code(), Some(1), "{text}");
     assert!(text.contains("git.commit_format"), "{text}");
     assert!(text.contains("over the 10-char limit"), "{text}");
+}
+
+/// Long diagnostic output must not turn an incomplete scan into a pass when
+/// the workflow runs under pipefail. Only the scanner output is simulated.
+#[test]
+fn long_scan_errors_fail_closed_under_pipefail() {
+    let baseline = include_str!("../../../.codeflow/.baseline/.github/workflows/codeflow-ci.yml");
+    for workflow in [CI, baseline] {
+        let audit = run_blocks(workflow, "dependency audit").remove(0);
+        let verdict = &audit[audit.find("scan_text=").unwrap_or_else(|| audit.find("if [ \"$rc\" -eq 0 ]; then").unwrap())..];
+        let dir = tempfile::tempdir().unwrap();
+        let scanner = dir.path().join("fake-osv");
+        std::fs::write(&scanner, FAKE_OSV_SCANNER).unwrap();
+        let script = format!(
+            "set +e\nout=$(OSV_FAKE=broken_long sh \"$SCANNER\" scan --no-ignore .); rc=$?\nset -e\ndiag=$out\naccepted_all=\nhook_mode=\nlevel=block\nsr=block\nda=block\n{verdict}"
+        );
+        let output = Command::new("bash")
+            .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", &script])
+            .env("SCANNER", &scanner)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "long extraction error passed");
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("nothing to audit"));
+
+        let start = workflow.find("          plain=$(sed").unwrap();
+        let end = workflow[start..].find("          # The report holds no line text").unwrap() + start;
+        let check = workflow[start..end].lines().map(str::trim_start).collect::<Vec<_>>().join("\n");
+        for diagnostic in ["ERR scan failed", "FTL scan failed", "DBG command aborted"] {
+            let log = dir.path().join("scan.log");
+            std::fs::write(&log, format!("now {diagnostic}\n{}\nnow INF 1 commits scanned.\n", "x".repeat(2 * 1024 * 1024))).unwrap();
+            let report = dir.path().join("report.json");
+            std::fs::write(&report, "[]").unwrap();
+            let output = Command::new("bash")
+                .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", &format!("rc=0\n{check}")])
+                .env("log", &log)
+                .env("report", &report)
+                .output()
+                .unwrap();
+            assert!(!output.status.success(), "long {diagnostic} passed");
+            assert!(String::from_utf8_lossy(&output.stdout).contains("did not complete a scan"));
+        }
+    }
 }
