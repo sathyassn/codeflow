@@ -1001,7 +1001,7 @@ pub fn hold_host_exclusive_in(
         .checked_add(wait)
         .ok_or_else(|| "host-exclusive wait is too large".to_string())?;
     let trusted = trusted_dirs(root);
-    let ticket = queue::Ticket::publish(dirs, root, deadline)?;
+    let ticket = queue::Ticket::publish(dirs, root)?;
     let mut announced = String::new();
     loop {
         if !announced.is_empty() && std::time::Instant::now() >= deadline {

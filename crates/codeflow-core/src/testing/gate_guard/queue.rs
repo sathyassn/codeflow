@@ -18,6 +18,7 @@ mod interleave {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(super) enum Point {
         Disabled,
+        MutexBusy,
         OwnerCreated,
         OwnerLocked,
         SequenceAllocated,
@@ -63,6 +64,13 @@ fn blocked(dir: &Path, record: String) -> LockHeld {
     }
 }
 
+fn invalid_entry(path: &Path, error: impl std::fmt::Display) -> io::Error {
+    io::Error::other(format!(
+        "{error} at {}; stop heavy runs using this lock directory, inspect this entry, and remove it only after confirming it is stray; retry admission afterwards",
+        crate::git::display_path(path)
+    ))
+}
+
 struct Domain {
     tree: Tree,
     base: String,
@@ -86,14 +94,21 @@ impl Domain {
             if names.len() == MAX_ENTRIES {
                 return Err(io::Error::other("too many exclusive queue entries"));
             }
-            let name = entry?
+            let entry = entry?;
+            let path = entry.path();
+            let name = entry
                 .file_name()
                 .into_string()
-                .map_err(|_| io::Error::other("non-Unicode queue entry"))?;
+                .map_err(|_| invalid_entry(&path, "non-Unicode queue entry"))?;
             names.push(name);
         }
         names.sort();
         Ok(names)
+    }
+
+    fn invalid_name(&self, folder: &str, name: &str, error: impl std::fmt::Display) -> io::Error {
+        let path = self.tree.path().join(&self.base).join(folder).join(name);
+        invalid_entry(&path, error)
     }
 
     fn owner(&self, id: &str) -> String {
@@ -146,10 +161,10 @@ impl Domain {
         let mut referenced = std::collections::BTreeSet::new();
         for name in self.names("queue")? {
             if let Some(id) = name.strip_prefix(".tmp-") {
-                validate_id(id)?;
+                validate_id(id).map_err(|error| self.invalid_name("queue", &name, error))?;
                 continue;
             }
-            let id = record_id(&name)?;
+            let id = record_id(&name).map_err(|error| self.invalid_name("queue", &name, error))?;
             referenced.insert(id.to_string());
             let bytes = self.tree.read(&self.record(&name), 8192)?;
             let text = std::str::from_utf8(&bytes).map_err(io::Error::other)?;
@@ -171,8 +186,8 @@ impl Domain {
         for name in self.names("owners")? {
             let id = name
                 .strip_suffix(".lock")
-                .ok_or_else(|| io::Error::other("invalid ownership name"))?;
-            validate_id(id)?;
+                .ok_or_else(|| self.invalid_name("owners", &name, "invalid ownership name"))?;
+            validate_id(id).map_err(|error| self.invalid_name("owners", &name, error))?;
             if referenced.contains(id) {
                 continue;
             }
@@ -244,14 +259,21 @@ fn mutexes(dirs: &[PathBuf]) -> Result<Vec<AcquiredFile>, LockHeld> {
     for dir in dirs {
         match try_open_and_lock(&dir.join(QUEUE_MUTEX), false)? {
             Slot::Taken(file) => locks.push(AcquiredFile(file)),
-            Slot::Busy => return Err(blocked(dir, String::new())),
+            Slot::Busy => {
+                #[cfg(test)]
+                interleave::at(interleave::Point::MutexBusy);
+                return Err(blocked(dir, "pid=unknown\nmode=queue metadata".into()));
+            }
         }
     }
     Ok(locks)
 }
 
-fn wait_mutexes(dirs: &[PathBuf], deadline: Instant) -> Result<Vec<AcquiredFile>, String> {
-    bounded_mutexes(dirs, deadline).map_err(|held| held.to_string())
+fn metadata_mutexes(dirs: &[PathBuf]) -> Result<Vec<AcquiredFile>, String> {
+    // Metadata transactions get their own short bound, even when the caller
+    // requested no wait for a host lease. Handoff must not inherit an expired
+    // admission deadline after taking the exclusive host lease and slot.
+    bounded_mutexes(dirs, Instant::now() + Duration::from_secs(2)).map_err(|held| held.to_string())
 }
 
 fn bounded_mutexes(dirs: &[PathBuf], deadline: Instant) -> Result<Vec<AcquiredFile>, LockHeld> {
@@ -276,7 +298,6 @@ struct Owned {
 /// Stable ownership survives both queueing and the exclusive target's run.
 pub(super) struct Ticket {
     owned: Vec<Owned>,
-    deadline: Instant,
 }
 
 impl std::fmt::Debug for Ticket {
@@ -288,16 +309,9 @@ impl std::fmt::Debug for Ticket {
 }
 
 impl Ticket {
-    pub(super) fn publish(
-        dirs: &[PathBuf],
-        root: &Path,
-        deadline: Instant,
-    ) -> Result<Self, String> {
-        let mut ticket = Self {
-            owned: Vec::new(),
-            deadline,
-        };
-        let locks = wait_mutexes(dirs, deadline)?;
+    pub(super) fn publish(dirs: &[PathBuf], root: &Path) -> Result<Self, String> {
+        let mut ticket = Self { owned: Vec::new() };
+        let locks = metadata_mutexes(dirs)?;
         let id = uuid::Uuid::new_v4().simple().to_string();
         let result = (|| -> io::Result<()> {
             for dir in dirs {
@@ -360,7 +374,7 @@ impl Ticket {
 
     pub(super) fn waiting_for(&self, trusted: &[String]) -> Result<Option<String>, String> {
         let dirs: Vec<_> = self.owned.iter().map(|owner| owner.dir.clone()).collect();
-        let _locks = wait_mutexes(&dirs, self.deadline)?;
+        let _locks = metadata_mutexes(&dirs)?;
         for owned in &self.owned {
             let domain = Domain::open(&owned.dir)
                 .map_err(|error| unavailable(&owned.dir, error).to_string())?;
@@ -382,7 +396,7 @@ impl Ticket {
     /// exist. Ownership stays locked until the target's confirmed completion.
     pub(super) fn admitted(&mut self) -> Result<(), String> {
         let dirs: Vec<_> = self.owned.iter().map(|owner| owner.dir.clone()).collect();
-        let _locks = wait_mutexes(&dirs, self.deadline)?;
+        let _locks = metadata_mutexes(&dirs)?;
         for owned in &mut self.owned {
             if let Some(name) = owned.record.as_ref() {
                 let domain = Domain::open(&owned.dir).map_err(|e| e.to_string())?;
@@ -400,7 +414,7 @@ impl Ticket {
 
     fn cancel(&mut self) -> Result<(), String> {
         let dirs: Vec<_> = self.owned.iter().map(|owner| owner.dir.clone()).collect();
-        let _locks = wait_mutexes(&dirs, Instant::now() + Duration::from_secs(2))?;
+        let _locks = metadata_mutexes(&dirs)?;
         for owned in &mut self.owned {
             let domain = Domain::open(&owned.dir).map_err(|e| e.to_string())?;
             if let Some(name) = owned.record.as_ref() {
@@ -453,10 +467,99 @@ mod tests {
         Instant::now() + Duration::from_secs(10)
     }
 
+    fn with_contended_mutex<T>(dirs: &[PathBuf], action: impl FnOnce() -> T) -> T {
+        let locks = mutexes(dirs).unwrap();
+        let (release, wait) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            wait.recv_timeout(Duration::from_secs(2)).unwrap();
+            drop(locks);
+        });
+        let observed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let seen = observed.clone();
+        let mut release = Some(release);
+        interleave::set(move |point| {
+            if point == Point::MutexBusy {
+                seen.set(true);
+                if let Some(release) = release.take() {
+                    release.send(()).unwrap();
+                }
+            }
+        });
+        let result = action();
+        interleave::clear();
+        holder.join().unwrap();
+        assert!(
+            observed.get(),
+            "the metadata attempt must encounter contention"
+        );
+        result
+    }
+
+    #[test]
+    fn zero_host_wait_still_allows_contended_metadata_transactions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = domain(tmp.path());
+        // Publication has its own metadata bound even at --wait-seconds 0.
+        let hold = with_contended_mutex(&dirs, || {
+            super::super::hold_host_exclusive_in(&dirs, tmp.path(), Duration::ZERO)
+        })
+        .unwrap();
+        drop(hold);
+
+        let mut ticket = Ticket::publish(&dirs, tmp.path()).unwrap();
+        assert!(with_contended_mutex(&dirs, || ticket.waiting_for(&[]))
+            .unwrap()
+            .is_none());
+        with_contended_mutex(&dirs, || ticket.admitted()).unwrap();
+    }
+
+    #[test]
+    fn mutex_timeout_explicitly_reports_an_unknown_holder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = domain(tmp.path());
+        let _locks = mutexes(&dirs).unwrap();
+        let error = bounded_mutexes(&dirs, Instant::now()).unwrap_err();
+        assert!(error.holder.contains("pid=unknown"));
+        assert!(error.to_string().contains("pid unknown"));
+        assert!(error.to_string().contains(QUEUE_MUTEX));
+    }
+
+    #[test]
+    fn invalid_entry_names_name_the_path_and_recovery_without_removing_it() {
+        for (folder, name) in [
+            ("queue", "stray"),
+            ("queue", ".tmp-invalid"),
+            ("queue", "00000000000000000001-invalid"),
+            ("owners", "stray"),
+            ("owners", "invalid.lock"),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let dirs = domain(tmp.path());
+            let domain = Domain::open(&dirs[0]).unwrap();
+            let relative = format!("{}/{folder}/{name}", domain.base);
+            domain.tree.create_new(&relative, b"stray").unwrap();
+            let path = domain.tree.path().join(relative);
+            let message = shared(&dirs, &[]).unwrap_err().to_string();
+            assert!(
+                message.contains(&crate::git::display_path(&path)),
+                "{message}"
+            );
+            assert!(message.contains("stop heavy runs"), "{message}");
+            assert!(
+                message.contains("only after confirming it is stray"),
+                "{message}"
+            );
+            assert!(
+                path.exists(),
+                "invalid entries must not be reclaimed automatically"
+            );
+        }
+    }
+
     fn lifecycle() {
         let tmp = tempfile::tempdir().unwrap();
         let dirs = domain(tmp.path());
-        let mut ticket = Ticket::publish(&dirs, tmp.path(), deadline()).unwrap();
+        let mut ticket = Ticket::publish(&dirs, tmp.path()).unwrap();
         let owner_path = {
             let domain = Domain::open(&dirs[0]).unwrap();
             domain.tree.path().join(domain.owner(&ticket.owned[0].id))
@@ -499,8 +602,8 @@ mod tests {
     fn queued_writers_keep_fifo_order_and_block_sustained_shared_arrivals() {
         let tmp = tempfile::tempdir().unwrap();
         let dirs = domain(tmp.path());
-        let first = Ticket::publish(&dirs, tmp.path(), deadline()).unwrap();
-        let second = Ticket::publish(&dirs, tmp.path(), deadline()).unwrap();
+        let first = Ticket::publish(&dirs, tmp.path()).unwrap();
+        let second = Ticket::publish(&dirs, tmp.path()).unwrap();
         for _ in 0..20 {
             assert!(shared(&dirs, &[]).is_err());
             assert!(second.waiting_for(&[]).unwrap().is_some());
@@ -613,7 +716,7 @@ mod tests {
         } else if action == "reclaim" {
             let _ = shared(&domain(&root), &[]).unwrap();
         } else {
-            let ticket = Ticket::publish(&domain(&root), &root, deadline()).unwrap();
+            let ticket = Ticket::publish(&domain(&root), &root).unwrap();
             drop(ticket);
         }
         panic!("the requested interruption point was not reached");
@@ -697,7 +800,7 @@ mod tests {
             let mut child = stopped_owner(tmp.path(), point, "");
             child.0.kill().unwrap();
             child.0.wait().unwrap();
-            let live = Ticket::publish(&dirs, tmp.path(), deadline()).unwrap();
+            let live = Ticket::publish(&dirs, tmp.path()).unwrap();
             assert!(live.waiting_for(&[]).unwrap().is_none(), "{point:?}");
             assert!(
                 shared(&dirs, &[]).is_err(),
@@ -737,7 +840,7 @@ mod tests {
     fn windows_live_owner_inspection_keeps_read_only_access_semantics() {
         let tmp = tempfile::tempdir().unwrap();
         let dirs = domain(tmp.path());
-        let ticket = Ticket::publish(&dirs, tmp.path(), deadline()).unwrap();
+        let ticket = Ticket::publish(&dirs, tmp.path()).unwrap();
         let domain = Domain::open(&dirs[0]).unwrap();
         assert!(domain.inspect_owner(&ticket.owned[0].id).unwrap().is_none());
         assert!(
@@ -755,7 +858,7 @@ mod tests {
     fn windows_cancellation_closes_before_removing_ownership() {
         let tmp = tempfile::tempdir().unwrap();
         let dirs = domain(tmp.path());
-        let mut ticket = Ticket::publish(&dirs, tmp.path(), deadline()).unwrap();
+        let mut ticket = Ticket::publish(&dirs, tmp.path()).unwrap();
         ticket.cancel().unwrap();
         assert!(Domain::open(&dirs[0])
             .unwrap()
@@ -780,13 +883,13 @@ mod tests {
     fn corrupt_sequence_refuses_instead_of_resetting_arrival_order() {
         let tmp = tempfile::tempdir().unwrap();
         let dirs = domain(tmp.path());
-        drop(Ticket::publish(&dirs, tmp.path(), deadline()).unwrap());
+        drop(Ticket::publish(&dirs, tmp.path()).unwrap());
         let domain = Domain::open(&dirs[0]).unwrap();
         domain
             .tree
             .write(&format!("{}/sequence", domain.base), b"corrupt")
             .unwrap();
-        assert!(Ticket::publish(&dirs, tmp.path(), deadline()).is_err());
+        assert!(Ticket::publish(&dirs, tmp.path()).is_err());
         assert!(domain.names("queue").unwrap().is_empty());
     }
 
@@ -795,13 +898,13 @@ mod tests {
     fn a_dangling_sequence_link_is_not_treated_as_absent() {
         let tmp = tempfile::tempdir().unwrap();
         let dirs = domain(tmp.path());
-        drop(Ticket::publish(&dirs, tmp.path(), deadline()).unwrap());
+        drop(Ticket::publish(&dirs, tmp.path()).unwrap());
         let domain = Domain::open(&dirs[0]).unwrap();
         let relative = format!("{}/sequence", domain.base);
         domain.tree.remove(&relative).unwrap();
         let outside = tmp.path().join("outside-counter");
         std::os::unix::fs::symlink(&outside, domain.tree.path().join(&relative)).unwrap();
-        assert!(Ticket::publish(&dirs, tmp.path(), deadline()).is_err());
+        assert!(Ticket::publish(&dirs, tmp.path()).is_err());
         assert!(!outside.exists());
     }
 
