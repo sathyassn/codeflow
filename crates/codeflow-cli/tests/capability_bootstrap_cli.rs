@@ -179,11 +179,14 @@ fn incomplete_existing_catalog_seeds_inventory_without_recreating_records() {
 }
 
 #[test]
-fn non_rust_sample_reaches_its_first_valid_catalog_through_four_stages() {
-    let dir = repo("standard");
+fn non_rust_sample_reaches_its_first_valid_catalog_through_four_tasks() {
+    let dir = repo("full");
     let root = dir.path();
     println!("bootstrap: {}", bootstrap(root));
-    let checklist = root.join("docs/capability-bootstrap.md");
+    let tasks = files(root, "tasks");
+    assert_eq!(files(root, "epics").len(), 1);
+    assert_eq!(tasks.len(), 4);
+    fs::create_dir_all(root.join("docs")).unwrap();
     // Inventory is a scripted fixture's work, not an independently reviewed adopter catalog.
     fs::write(root.join("docs/capability-inventory.md"),
         "# Sample inventory\n\nsearch.py search: CAP-001. No build, deployment or quality promises beyond this sample.\n").unwrap();
@@ -202,11 +205,15 @@ fn non_rust_sample_reaches_its_first_valid_catalog_through_four_stages() {
         ],
     ));
     println!("inventory: {created}");
-    for stage in ["inventory", "classification", "evidence"] {
-        let text = fs::read_to_string(&checklist).unwrap();
+    for (index, stage) in ["inventory", "classification", "evidence"]
+        .into_iter()
+        .enumerate()
+    {
+        let text = fs::read_to_string(&tasks[index]).unwrap();
+        assert!(text.contains(&format!("codeflow:capability-bootstrap v1 {stage}")));
         fs::write(
-            &checklist,
-            text.replace(&format!("- [ ] {stage}"), &format!("- [x] {stage}")),
+            &tasks[index],
+            text.replace("status: todo", "status: complete"),
         )
         .unwrap();
         println!("{stage}: {}", bootstrap(root));
@@ -226,12 +233,13 @@ fn non_rust_sample_reaches_its_first_valid_catalog_through_four_stages() {
         "inventory: complete\n",
     )
     .unwrap();
-    let text = fs::read_to_string(&checklist).unwrap();
-    fs::write(&checklist, text.replace("- [ ] review", "- [x] review")).unwrap();
+    let text = fs::read_to_string(&tasks[3]).unwrap();
+    assert!(text.contains("codeflow:capability-bootstrap v1 review"));
+    fs::write(&tasks[3], text.replace("status: todo", "status: complete")).unwrap();
     let output = bootstrap(root);
     println!("review: {output}");
     assert!(output.contains("inventory is complete"));
-    assert!(!root.join("project-management/tasks").exists());
+    assert_eq!(files(root, "tasks"), tasks);
     assert!(codeflow_core::capability::load_capability_catalog(root).is_ok());
 }
 
