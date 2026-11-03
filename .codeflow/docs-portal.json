@@ -126,7 +126,7 @@
     },
     "scripts/runtime-scripts.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "9ef88e9877804b944a6441a7bf936f21d030579844d26af8ca8501ef6af89330"
+      "pristine_sha256": "084072fb5006edc72a3deec3abec93bbfbae227e54dd794514bdb5956f60da7f"
     },
     "scripts/site-server.mjs": {
       "ownership": "managed",
@@ -390,7 +390,7 @@
     },
     "tests/fixtures/runtime-scripts-cases.json": {
       "ownership": "managed",
-      "pristine_sha256": "16dcdcad47a668c87f6539eb454042a32f0fb6cc0d7037fd6d399b9da8465e4e"
+      "pristine_sha256": "7d9d62ed6a8c7b45fb90005e0ab337e1b44d9e319557c5f2454cc670c6ceb5ec"
     },
     "tests/page-anatomy-browser.test.mjs": {
       "ownership": "managed",

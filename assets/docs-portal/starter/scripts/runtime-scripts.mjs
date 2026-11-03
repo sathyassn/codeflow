@@ -66,7 +66,9 @@ export function runtimeScriptsFailure(theme, list) {
   if (!hashes || typeof hashes !== "object" || Array.isArray(hashes)) return `it records no pre-paint script hashes; regenerate it: ${REGENERATE}`;
   const recorded = Object.keys(hashes).sort();
   const themes = [...PORTAL_THEMES].sort();
-  if (recorded.join("\n") !== themes.join("\n")) return `its pre-paint script hashes name the themes ${recorded.join(", ")}, not ${themes.join(", ")}; regenerate it: ${REGENERATE}`;
+  // Compared name by name: joining with a delimiter would let one key that
+  // contains the delimiter stand for several themes.
+  if (recorded.length !== themes.length || recorded.some((key, index) => key !== themes[index])) return `its pre-paint script hashes name the themes ${recorded.join(", ")}, not ${themes.join(", ")}; regenerate it: ${REGENERATE}`;
   const prePaint = Object.hasOwn(hashes, theme) ? hashes[theme] : undefined;
   if (typeof prePaint !== "string" || !SHA256.test(prePaint)) return `it records no pre-paint script hash for the theme ${JSON.stringify(theme)}; regenerate it: ${REGENERATE}`;
   if (!Array.isArray(list.scripts)) return "it lists no scripts";

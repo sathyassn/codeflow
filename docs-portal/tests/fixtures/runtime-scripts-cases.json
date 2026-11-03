@@ -79,6 +79,18 @@
       "error": "its pre-paint script hashes name the themes folio, graphite, ink, sage, signal, slate, not folio, graphite, sage, signal, slate; regenerate it: npm run build && node scripts/runtime-scripts.mjs dist"
     },
     {
+      "name": "two theme names joined into one key, the configured one valid",
+      "theme": "signal",
+      "set": {
+        "/pre_paint_sha256/folio\ngraphite": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "remove": [
+        "/pre_paint_sha256/folio",
+        "/pre_paint_sha256/graphite"
+      ],
+      "error": "its pre-paint script hashes name the themes folio\ngraphite, sage, signal, slate, not folio, graphite, sage, signal, slate; regenerate it: npm run build && node scripts/runtime-scripts.mjs dist"
+    },
+    {
       "name": "an unknown configured theme",
       "theme": "ink",
       "error": "it records no pre-paint script hash for the theme \"ink\"; regenerate it: npm run build && node scripts/runtime-scripts.mjs dist"
