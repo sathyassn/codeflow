@@ -255,7 +255,7 @@ pub(super) struct RecordStore<'r> {
     /// task's history is walked once per holder and version in a run. One
     /// store judges every task of a run, so the key carries the task's
     /// whole identity: another task's proof never answers (SEC-306-03).
-    introduced: HashMap<Traced, Result<Vec<Oid>, String>>,
+    introduced: HashMap<Traced, Result<Vec<Introduction>, String>>,
 }
 
 impl<'r> RecordStore<'r> {
@@ -687,9 +687,8 @@ impl<'r> RecordStore<'r> {
     /// The newest version of the task's record in the history of `judged`,
     /// for a task the judged points no longer hold: the newest version on
     /// every line of that history. A line's version is older than another
-    /// line's only when that line inherited it unchanged: every commit that
-    /// introduced it is a proper ancestor of every introduction of the other
-    /// line's version. Lines that hold different versions otherwise give no answer.
+    /// line's only as [`Self::yields`] proves it. Lines that hold different
+    /// versions otherwise give no answer.
     ///
     /// # Errors
     ///
@@ -763,10 +762,16 @@ impl<'r> RecordStore<'r> {
         Ok(Some(kept.clone()))
     }
 
-    /// Whether every introduction of `older`'s version precedes every
-    /// introduction of `newer`'s. Comparing decisions, rather than tips,
-    /// keeps a restored version competing even after its line merged the
-    /// other version.
+    /// Whether `older`'s version was replaced by `newer`'s, by ancestry alone:
+    /// no name or date is read, and any doubt leaves the versions competing.
+    /// Comparing decisions, rather than tips, keeps a restored version
+    /// competing even after its line merged the other version.
+    ///
+    /// Every commit that wrote the older version must be a proper ancestor
+    /// of every commit that wrote the newer one, so the newer edit read the
+    /// older version and a write on the other side is a real divergence. A
+    /// merge that only kept the older version from one parent must also
+    /// decide nothing against the newer one ([`Self::kept_apart`]).
     fn yields(
         &mut self,
         task: &Identity,
@@ -779,8 +784,10 @@ impl<'r> RecordStore<'r> {
         let later = self
             .introductions(task, newer.commit, &newer.version)
             .map_err(|reason| newer.context(&reason))?;
-        for before in earlier {
-            for &after in &later {
+        let wrote_older = written(&earlier).map_err(|reason| older.context(&reason))?;
+        let wrote_newer = written(&later).map_err(|reason| newer.context(&reason))?;
+        for &before in &wrote_older {
+            for &after in &wrote_newer {
                 if before == after
                     || !super::acceptance::is_ancestor_or_same(self.repo, before, after)?
                 {
@@ -788,17 +795,122 @@ impl<'r> RecordStore<'r> {
                 }
             }
         }
+        // The newer version wherever the older line's history held it, which
+        // the newer line's own history need not show.
+        let seen = self
+            .introductions(task, older.commit, &newer.version)
+            .map_err(|reason| older.context(&reason))?;
+        for merge in earlier.iter().filter(|merge| !merge.wrote()) {
+            if !self.kept_apart(task, older, merge, &seen, &wrote_older, &wrote_newer)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Whether a merge that kept `older`'s version from one parent decided
+    /// nothing against the newer version, so it does not compete with it:
+    /// every write of the newer version read the merge's result; or the
+    /// merge never saw the newer version (`seen`), and what it kept the
+    /// version against is no part of what the newer version was written on.
+    /// That second part is what a three-way merge reads: for each parent
+    /// the merge kept the version against, the common base with each newer
+    /// write holds the older version or precedes it ([`Self::precedes`]).
+    fn kept_apart(
+        &mut self,
+        task: &Identity,
+        older: &Holding,
+        merge: &Introduction,
+        seen: &[Introduction],
+        wrote_older: &[Oid],
+        wrote_newer: &[Oid],
+    ) -> Result<bool, String> {
+        let mut read_by_all = true;
+        for &after in wrote_newer {
+            if merge.commit == after
+                || !super::acceptance::is_ancestor_or_same(self.repo, merge.commit, after)?
+            {
+                read_by_all = false;
+                break;
+            }
+        }
+        if read_by_all {
+            return Ok(true);
+        }
+        for introduction in seen {
+            if super::acceptance::is_ancestor_or_same(self.repo, introduction.commit, merge.commit)?
+            {
+                return Ok(false);
+            }
+        }
+        for &side in &merge.kept_against {
+            for &after in wrote_newer {
+                let bases = match history::merge_bases(self.repo, side, after) {
+                    Ok(bases) => bases,
+                    // Unrelated histories have no base to read.
+                    Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(false),
+                    Err(error) => {
+                        return Err(format!("cannot read the history: {}", error.message()))
+                    }
+                };
+                for base in bases {
+                    if !self.precedes(task, base, older, wrote_older)? {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// Whether what `base` holds of the task is `older`'s version or comes
+    /// before it: it holds that version; it holds no record and its history
+    /// never held one; or it holds a version whose every write is a proper
+    /// ancestor of every write of the older version, and it has not seen
+    /// those writes, so it did not choose its version over the older one.
+    fn precedes(
+        &mut self,
+        task: &Identity,
+        base: Oid,
+        older: &Holding,
+        wrote_older: &[Oid],
+    ) -> Result<bool, String> {
+        let mut uids: BTreeSet<String> = task.uid.iter().cloned().collect();
+        let held = self.history_at(task, base, &mut uids)?;
+        if older.version.held(&held, &mut HashMap::new()) {
+            return Ok(true);
+        }
+        let Some((_, record)) = held.records.first() else {
+            return Ok(self.first_holder(task, &[base], &[])?.is_none());
+        };
+        let version = older.version.like(record);
+        let introductions = self.introductions(task, base, &version)?;
+        for &write in &written(&introductions)? {
+            for &before in wrote_older {
+                if write == before
+                    || !super::acceptance::is_ancestor_or_same(self.repo, write, before)?
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        for &before in wrote_older {
+            if super::acceptance::is_ancestor_or_same(self.repo, before, base)? {
+                return Ok(false);
+            }
+        }
         Ok(true)
     }
 
     /// Every introduction of `version` in the complete, unambiguous history
-    /// of `holder`, walked once per holder and version in a run.
+    /// of `holder`, walked once per holder and version in a run; none when
+    /// that history never held it.
     fn introductions(
         &mut self,
         task: &Identity,
         holder: Oid,
         version: &Version,
-    ) -> Result<Vec<Oid>, String> {
+    ) -> Result<Vec<Introduction>, String> {
         let key = Traced {
             id: task.id.clone(),
             uid: task.uid.clone(),
@@ -826,7 +938,7 @@ impl<'r> RecordStore<'r> {
         task: &Identity,
         holder: Oid,
         version: &Version,
-    ) -> Result<Vec<Oid>, String> {
+    ) -> Result<Vec<Introduction>, String> {
         if let Some(overlay) = &self.overlay {
             return Err(overlay.clone());
         }
@@ -849,20 +961,23 @@ impl<'r> RecordStore<'r> {
                 &self.repo.find_commit(commit).map_err(unreadable)?,
             )
             .map_err(unreadable)?;
-            let mut decided = parents.is_empty();
+            let mut against = Vec::new();
             for parent in &parents {
                 let held = self.history_at(task, *parent, &mut uids)?;
                 if !version.held(&held, &mut holds) {
-                    decided = true;
-                    break;
+                    against.push(*parent);
                 }
             }
-            if decided {
-                introduced.push(commit);
+            if parents.is_empty() || !against.is_empty() {
+                // No parent holds it: the commit wrote it, against nothing.
+                if against.len() == parents.len() {
+                    against.clear();
+                }
+                introduced.push(Introduction {
+                    commit,
+                    kept_against: against,
+                });
             }
-        }
-        if introduced.is_empty() {
-            return Err("no introduction of this version could be proved".to_string());
         }
         Ok(introduced)
     }
@@ -1213,6 +1328,48 @@ impl Version {
             .iter()
             .any(|(blob, record)| *seen.entry(*blob).or_insert_with(|| self.is(record)))
     }
+
+    /// The version `record` holds, compared the way this one is.
+    fn like(&self, record: &RecordView) -> Self {
+        if self.standing.is_some() {
+            Self::standing(record)
+        } else {
+            Self::criteria(record)
+        }
+    }
+}
+
+/// A commit that introduces a version into a history.
+#[derive(Clone)]
+struct Introduction {
+    commit: Oid,
+    /// The parents that do not hold the version, when another parent does:
+    /// a merge kept the version against these. Empty when no parent holds
+    /// it, because the commit wrote it.
+    kept_against: Vec<Oid>,
+}
+
+impl Introduction {
+    /// Whether the commit wrote the version, rather than keeping it from a
+    /// parent.
+    fn wrote(&self) -> bool {
+        self.kept_against.is_empty()
+    }
+}
+
+/// The commits among `introductions` that wrote the version. A version in a
+/// history always has one: follow the parents that hold it until none does.
+/// None proves nothing, so the caller refuses.
+fn written(introductions: &[Introduction]) -> Result<Vec<Oid>, String> {
+    let wrote: Vec<Oid> = introductions
+        .iter()
+        .filter(|introduction| introduction.wrote())
+        .map(|introduction| introduction.commit)
+        .collect();
+    if wrote.is_empty() {
+        return Err("no introduction of this version could be proved".to_string());
+    }
+    Ok(wrote)
 }
 
 /// What one walk of [`RecordStore::trace`] answers for: one task, by its
