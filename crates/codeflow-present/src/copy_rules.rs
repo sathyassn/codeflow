@@ -810,17 +810,18 @@ const NOT_CLOCK_BEFORE: &[&str] = &[
 ];
 
 /// The first clock time in `text` that names no zone, such as "13:41" in
-/// "read at 13:41", or a range such as "09:00-10:00". A time is zoned by a
+/// "read at 13:41", or a range such as "09:00 to 10:00". A time is zoned by a
 /// known zone name ("EST", "UTC+1"), a numeric offset ("+05:00", "-0500",
 /// spaced or attached) or `Z` right after it. Ratios and durations ("16:10
 /// aspect ratio", "1:30 min"), versions and out-of-range values are not
 /// times; when the match is unsure there is no finding.
 ///
-/// An attached "-HH:MM" reads both as an offset ("08:15-05:00") and as the
-/// end of a range ("09:00-10:00"). It is the offset, and the time is zoned,
-/// when it falls on a whole, half or quarter hour and, read as a time, is
-/// not later than the first; otherwise it ends a range. An overnight range
-/// such as "22:00-02:00" therefore reads as zoned, the conservative side.
+/// An attached "-HH:MM" can be an offset ("08:15-05:00") or the end of a
+/// range ("09:00-10:00"). Whenever it is a valid offset (up to 14 hours),
+/// it is read as the offset and there is no finding, so a bare hyphenated
+/// range draws no warning. A hyphenated range whose end cannot be an offset
+/// ("09:00-17:00"), a spaced or dashed range ("09:00 - 10:00", "09:00 to
+/// 10:00") and an en dash range are unzoned without one.
 pub(crate) fn bare_clock_time(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
     let mut index = 0;
@@ -833,7 +834,8 @@ pub(crate) fn bare_clock_time(text: &str) -> Option<String> {
             index = clock.end;
             continue;
         }
-        let end = if clock.seconds || clock.iso || attached_offset(text, index, clock.end) {
+        let attached_offset = offset_len(&text[clock.end..], false).is_some();
+        let end = if clock.seconds || clock.iso || attached_offset {
             clock.end
         } else {
             range_end(text, clock.end).unwrap_or(clock.end)
@@ -928,26 +930,8 @@ fn not_a_clock(text: &str, start: usize, end: usize) -> bool {
         .any(|before| NOT_CLOCK_BEFORE.contains(&before.as_str()))
 }
 
-/// Whether an attached "-HH:MM" after the clock at `start..end` is its
-/// offset rather than the end of a range: a valid offset at a whole, half
-/// or quarter hour that, read as a time, is not later than the clock.
-fn attached_offset(text: &str, start: usize, end: usize) -> bool {
-    let rest = &text[end..];
-    if !rest.starts_with('-') || offset_len(rest, false) != Some(6) {
-        return false;
-    }
-    let minutes = |clock: &str| -> Option<u32> {
-        let (hour, minute) = clock.split_once(':')?;
-        Some(hour.parse::<u32>().ok()? * 60 + minute.get(..2)?.parse::<u32>().ok()?)
-    };
-    let (Some(first), Some(second)) = (minutes(&text[start..end]), minutes(&rest[1..6])) else {
-        return false;
-    };
-    matches!(second % 60, 0 | 30 | 45) && second <= first
-}
-
 /// The end of a range's second time, when a range connector and another
-/// clock follow the first ("09:00-10:00", "9:00 to 10:30").
+/// clock follow the first ("09:00-17:00", "9:00 to 10:30").
 fn range_end(text: &str, end: usize) -> Option<usize> {
     let rest = &text[end..];
     for connector in [
@@ -1043,7 +1027,8 @@ mod tests {
         assert_eq!(bare("Read at 13:41 TODO"), Some("13:41".into()));
         assert_eq!(bare("13:41 API check"), Some("13:41".into()));
         // A range is one time, and it needs a zone after its second end.
-        assert_eq!(bare("09:00-10:00"), Some("09:00-10:00".into()));
+        assert_eq!(bare("09:00-17:00"), Some("09:00-17:00".into()));
+        assert_eq!(bare("Meet 09:00 - 10:00"), Some("09:00 - 10:00".into()));
         assert_eq!(bare("9:00 to 10:30 today"), Some("9:00 to 10:30".into()));
         assert_eq!(
             bare("09:00 \u{2013} 10:00"),
@@ -1054,8 +1039,6 @@ mod tests {
         assert_eq!(bare("13:41 +5"), Some("13:41".into()));
         // The second of two times.
         assert_eq!(bare("13:41 EST and 14:00"), Some("14:00".into()));
-        // A later second time ends a range, so the range still needs a zone.
-        assert_eq!(bare("Meet 08:15-09:00 daily"), Some("08:15-09:00".into()));
         assert_eq!(bare("Meet 09:00 to 10:00"), Some("09:00 to 10:00".into()));
     }
 
@@ -1078,7 +1061,15 @@ mod tests {
             "4:30 PM (PDT)",
             "09:00-10:00 EST",
             "9:00 to 10:30 CET",
-            // An attached negative offset, with and without seconds or a date.
+            // An attached negative offset, whatever its size against the
+            // clock, with and without seconds or a date; a bare hyphenated
+            // range reads the same way, so it draws no finding.
+            "Read at 01:00-05:00.",
+            "Read at 05:00-05:00.",
+            "Read at 01:00:00-05:00",
+            "Read on 2026-11-02 01:00-05:00",
+            "09:00-10:00",
+            "Meet 08:15-09:00 daily",
             "Read at 08:15-05:00 today",
             "Read at 08:15:30-05:00",
             "Read on 2026-11-02 08:15-05:00",

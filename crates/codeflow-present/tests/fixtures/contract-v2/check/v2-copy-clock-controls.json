@@ -5,8 +5,8 @@
   "blocks": [
     {
       "type": "narrative",
-      "id": "zoned-offset",
-      "markdown": "Read at 08:15-05:00 today."
+      "id": "zoned-offset-below",
+      "markdown": "Read at 01:00-05:00 today."
     },
     {
       "type": "code",
@@ -16,8 +16,8 @@
     },
     {
       "type": "narrative",
-      "id": "zoned-offset-seconds",
-      "markdown": "Read at 08:15:30-05:00 today."
+      "id": "zoned-offset-below-date",
+      "markdown": "Read on 2026-11-02 01:00-05:00 today."
     },
     {
       "type": "code",
@@ -27,12 +27,78 @@
     },
     {
       "type": "narrative",
-      "id": "zoned-offset-date",
-      "markdown": "Read on 2026-11-02 08:15-05:00 today."
+      "id": "zoned-offset-below-seconds",
+      "markdown": "Read at 01:00:30-05:00 today."
     },
     {
       "type": "code",
       "id": "brk3",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-equal",
+      "markdown": "Read at 05:00-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk4",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-equal-date",
+      "markdown": "Read on 2026-11-02 05:00-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk5",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-equal-seconds",
+      "markdown": "Read at 05:00:30-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk6",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-above",
+      "markdown": "Read at 08:15-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk7",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-above-date",
+      "markdown": "Read on 2026-11-02 08:15-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk8",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-above-seconds",
+      "markdown": "Read at 08:15:30-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk9",
       "language": "text",
       "code": "x"
     },
@@ -43,7 +109,7 @@
     },
     {
       "type": "code",
-      "id": "brk4",
+      "id": "brk10",
       "language": "text",
       "code": "x"
     },
@@ -54,7 +120,18 @@
     },
     {
       "type": "code",
-      "id": "brk5",
+      "id": "brk11",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "quiet-hyphen-range",
+      "markdown": "Meet 09:00-10:00 daily."
+    },
+    {
+      "type": "code",
+      "id": "brk12",
       "language": "text",
       "code": "x"
     },
@@ -65,18 +142,29 @@
     },
     {
       "type": "code",
-      "id": "brk6",
+      "id": "brk13",
       "language": "text",
       "code": "x"
     },
     {
       "type": "narrative",
-      "id": "bare-range-hyphen",
-      "markdown": "Meet 09:00-10:00 daily."
+      "id": "bare-range-spaced",
+      "markdown": "Meet 09:00 - 10:00 daily."
     },
     {
       "type": "code",
-      "id": "brk7",
+      "id": "brk14",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "bare-range-past-offset",
+      "markdown": "Meet 09:00-17:00 daily."
+    },
+    {
+      "type": "code",
+      "id": "brk15",
       "language": "text",
       "code": "x"
     },
@@ -89,7 +177,7 @@
     },
     {
       "type": "code",
-      "id": "brk8",
+      "id": "brk16",
       "language": "text",
       "code": "x"
     },
@@ -102,7 +190,7 @@
     },
     {
       "type": "code",
-      "id": "brk9",
+      "id": "brk17",
       "language": "text",
       "code": "x"
     },

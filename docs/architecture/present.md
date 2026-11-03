@@ -174,9 +174,10 @@ its rules, and this section is their current home:
   `copy-ellipsis` names text that may be cut to "...", outside quotations
   and numeric ranges. `copy-time-zone` names a clock time or range without
   a known zone name, a numeric offset or `Z`; ratios and durations are not
-  times. An attached "-HH:MM" on a whole, half or quarter hour that is not
-  later than the time before it is that time's offset ("08:15-05:00");
-  a later one ends a range ("09:00-10:00"). In an HTML stage, the inline
+  times. An attached "-HH:MM" that is a valid offset is read as one
+  ("08:15-05:00"), so a bare hyphenated range ("09:00-10:00") draws no
+  warning; a spaced or worded range ("09:00 - 10:00", "09:00 to 10:00")
+  without a zone does. In an HTML stage, the inline
   text of one block is read together, and separate blocks and SVG labels
   apart. Code blocks and code spans are exempt, and collapsed detail is
   exempt from the length limits. `codeflow validate --portal` runs the same

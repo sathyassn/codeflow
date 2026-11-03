@@ -2213,7 +2213,7 @@ mod tests {
             "{lines:?}"
         );
         assert!(
-            lines[3].message.contains("09:00-10:00 has no zone"),
+            lines[3].message.contains("09:00 to 10:00 has no zone"),
             "{}",
             lines[3].message
         );
@@ -2246,9 +2246,11 @@ mod tests {
         );
     }
 
-    /// TSK-1255: an attached negative offset and an inline-formatted zone
-    /// name the time's zone; unzoned ranges and a time whose "zone" sits in
-    /// a separate box or figure label still warn.
+    /// TSK-1255: an attached negative offset of any size and an
+    /// inline-formatted zone name the time's zone, and a bare hyphenated
+    /// range is read as an offset; spaced, worded and impossible-offset
+    /// ranges and a time whose "zone" sits in a separate box or figure label
+    /// still warn.
     #[test]
     fn check_reads_attached_offsets_and_inline_zones() {
         let lines = check_document(&crate::contract_tests::fixture_bytes(
@@ -2262,7 +2264,8 @@ mod tests {
             warned,
             [
                 ("bare-range-to", "copy-time-zone"),
-                ("bare-range-hyphen", "copy-time-zone"),
+                ("bare-range-spaced", "copy-time-zone"),
+                ("bare-range-past-offset", "copy-time-zone"),
                 ("bare-labels", "copy-time-zone"),
                 ("bare-svg-labels", "copy-time-zone"),
             ],
