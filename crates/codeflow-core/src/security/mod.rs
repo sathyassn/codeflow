@@ -27,6 +27,7 @@
 
 pub mod actions;
 pub(crate) mod arguments;
+pub(crate) mod awk;
 pub mod composed;
 pub mod dangerous;
 mod deletion;

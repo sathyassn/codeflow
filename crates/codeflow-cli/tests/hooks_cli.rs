@@ -8970,6 +8970,65 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// All supported shell payload names reach the awk reader, including a
+/// custom route that installs exec-guard alone. No awk program is executed.
+#[test]
+fn awk_literal_writes_are_refused_on_each_shell_hook_route() {
+    let temp = tempfile::tempdir().unwrap();
+    enforced_repo(temp.path());
+    let mut commands = Vec::new();
+    for dialect in ["awk", "gawk", "mawk", "nawk", "busybox awk"] {
+        for body in [
+            r#"BEGIN { print "x" > ".claude/settings.json" }"#,
+            r#"BEGIN { print "x" >> ".claude/settings.json" }"#,
+            r#"BEGIN { system("tee .claude/settings.json") }"#,
+            r#"BEGIN { print "x" | "tee .claude/settings.json" }"#,
+            r#"BEGIN { "tee .claude/settings.json" | getline line }"#,
+        ] {
+            commands.push(format!("{dialect} '{body}'"));
+            if dialect == "gawk" {
+                for source in ["-e ", "-e", "--source ", "--source="] {
+                    commands.push(format!("gawk {source}'{body}'"));
+                }
+            }
+        }
+    }
+    for source in ["'{print}'", "-f prog.awk", "-e '{print}'"] {
+        commands.push(format!("gawk -i inplace {source} .claude/settings.json"));
+    }
+    for tool in ["Bash", "PowerShell", "run_terminal_command"] {
+        for command in &commands {
+            let payload = serde_json::json!({
+                "tool_name": tool, "tool_input": {"command": command}, "cwd": temp.path(),
+            })
+            .to_string();
+            let exec = run_with_stdin(
+                codeflow()
+                    .args(["hook", "exec-guard", "--contract", "3"])
+                    .current_dir(temp.path()),
+                &payload,
+            );
+            let git = run_with_stdin(
+                codeflow()
+                    .args(["hook", "git-guard", "--contract", "3"])
+                    .current_dir(temp.path()),
+                &payload,
+            );
+            assert_eq!(exec.status.code(), Some(2), "{tool}: {command}: {exec:?}");
+            assert!(
+                String::from_utf8_lossy(&exec.stderr).contains("git.hook_integrity"),
+                "{tool}: {command}: {exec:?}"
+            );
+            assert!(
+                exec.status.code() == Some(2) || git.status.code() == Some(2),
+                "paired route: {tool}: {command}"
+            );
+        }
+        let reader = exec_guard_tool(temp.path(), tool, "awk '{print $1}' data.txt");
+        assert_eq!(reader.status.code(), Some(0), "{tool}: {reader:?}");
+    }
+}
+
 /// The exec-guard's answer to `command` from `dir` through the hook
 /// contract the harness presets name, `--contract 3`.
 fn exec_guard_contract_3(dir: &Path, command: &str) -> Output {

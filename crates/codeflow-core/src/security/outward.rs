@@ -1471,6 +1471,9 @@ pub(crate) const LEXER_LAUNCHERS: &[&str] = &[
 pub(crate) fn read_line(lexed: &super::shell_lex::Lexed) -> super::shell_lex::Reading {
     let launcher = |program: &str, rest: &[String]| -> Option<usize> {
         let name = crate::hooks::git_guard::launcher_name(program);
+        if name == "busybox" && rest.first().is_some_and(|word| word == "awk") {
+            return Some(0);
+        }
         if !LEXER_LAUNCHERS.contains(&name) {
             return None;
         }
@@ -1504,8 +1507,12 @@ fn program_is_interpreter(word: &str) -> bool {
     !crate::hooks::git_guard::unresolved_word(word)
         && !crate::hooks::git_guard::has_glob(word)
         && !word.contains(['{', '}'])
-        && interpreter_family(word.rsplit('/').next().unwrap_or(word))
-            .is_some_and(|family| matches!(family, "python" | "node" | "nodejs" | "perl" | "ruby"))
+        && interpreter_family(word.rsplit('/').next().unwrap_or(word)).is_some_and(|family| {
+            matches!(
+                family,
+                "python" | "node" | "nodejs" | "perl" | "ruby" | "awk"
+            )
+        })
 }
 
 /// Whether the words after an interpreter call hold a directory-change
@@ -1723,6 +1730,7 @@ fn argv(
         git_alias(rest, cwd, depth, out);
     }
     let inner = match name {
+        "busybox" if rest.first().is_some_and(|word| word == "awk") => Some(rest),
         "env" => {
             // The command also runs in each directory env moves to, read by
             // env's full grammar (`-CDIR`, `-iC DIR`, `--chdir=DIR --`). A
@@ -2415,6 +2423,7 @@ pub(crate) fn interpreter_family(name: &str) -> Option<&'static str> {
         "nodejs" => Some("nodejs"),
         "perl" => Some("perl"),
         "ruby" => Some("ruby"),
+        "awk" | "gawk" | "mawk" | "nawk" => Some("awk"),
         "powershell" | "pwsh" => Some("powershell"),
         "cmd" => Some("cmd"),
         "osascript" => Some("osascript"),
@@ -2742,6 +2751,43 @@ fn record_extended_interpreter(
     true
 }
 
+fn record_awk(rest: &[String], patterns: Option<&[bool]>, cwd: Option<&Path>, out: &mut Parsed) {
+    let sources = super::awk::sources(rest);
+    let mut code = Vec::new();
+    for (at, offset) in sources.code {
+        if let Some(body) = rest.get(at).and_then(|word| word.get(offset..)) {
+            code.push(body.to_string());
+            // Decode awk escapes before the shared literal-path rule.
+            // Each literal remains separate: no runtime concatenation.
+            code.extend(
+                super::awk::literals(body)
+                    .into_iter()
+                    .map(|text| format!("{text:?}")),
+            );
+        }
+    }
+    out.code.extend(code.iter().cloned());
+    let arguments = sources.arguments.into_iter().map(|(at, word)| {
+        (
+            word,
+            patterns.is_none_or(|patterns| patterns.get(at).copied().unwrap_or(true)),
+        )
+    });
+    let (args, patterns) = arguments.unzip();
+    out.calls.push(InterpreterCall {
+        positional_source: out.positional_source,
+        unresolved: Vec::new(),
+        links: Vec::new(),
+        checkouts: Vec::new(),
+        args,
+        patterns,
+        cwd: cwd.map(Path::to_path_buf),
+        chdir: Vec::new(),
+        code,
+        supplier: out.supplier.clone(),
+    });
+}
+
 fn record_interpreter(
     name: &str,
     rest: &[String],
@@ -2750,6 +2796,10 @@ fn record_interpreter(
     out: &mut Parsed,
 ) {
     if let Some(name) = interpreter_family(name) {
+        if name == "awk" {
+            record_awk(rest, patterns, cwd, out);
+            return;
+        }
         if record_extended_interpreter(name, rest, patterns, cwd, out) {
             return;
         }
@@ -2923,6 +2973,9 @@ pub(crate) fn interpreter_arguments(
 /// script operand. The words after the script are the program's own
 /// arguments, which it reads as data.
 pub(crate) fn interpreter_program_files(family: &str, rest: &[String]) -> Vec<String> {
+    if family == "awk" {
+        return super::awk::sources(rest).files;
+    }
     let (with_values, _) = interpreter_argument_roles(family, rest, None, true);
     let (positional, _) = interpreter_argument_roles(family, rest, None, false);
     let values = with_values.len().saturating_sub(positional.len());
@@ -2940,6 +2993,13 @@ pub(crate) fn interpreter_program_files(family: &str, rest: &[String]) -> Vec<St
 /// `-c CODE`, `--eval=CODE`, an attached `-eCODE`). Such a word is program
 /// text, which the code-body checks inspect, not a file operand.
 pub(crate) fn interpreter_code_positions(family: &str, rest: &[String]) -> Vec<usize> {
+    if family == "awk" {
+        return super::awk::sources(rest)
+            .code
+            .into_iter()
+            .map(|(at, _)| at)
+            .collect();
+    }
     let mut code = Vec::new();
     interpreter_roles(family, rest, None, false, &mut code);
     code
@@ -2967,6 +3027,19 @@ fn interpreter_roles(
     option_values: bool,
     code: &mut Vec<usize>,
 ) -> (Vec<(String, bool)>, Vec<String>) {
+    if family == "awk" {
+        let arguments = super::awk::sources(rest)
+            .arguments
+            .into_iter()
+            .map(|(at, word)| {
+                (
+                    word,
+                    patterns.is_none_or(|patterns| patterns.get(at).copied().unwrap_or(true)),
+                )
+            })
+            .collect();
+        return (arguments, Vec::new());
+    }
     let mut args = Vec::new();
     let mut chdir = Vec::new();
     let mut at = 0;
@@ -3503,6 +3576,20 @@ enum Program {
 /// Where an interpreter family of `family` takes its program from, read by
 /// the same option grammar as [`interpreter_arguments`].
 fn family_program(family: &str, rest: &[String]) -> Program {
+    if family == "awk" {
+        let sources = super::awk::sources(rest);
+        return if !sources.code.is_empty() {
+            Program::Inline
+        } else if sources
+            .files
+            .iter()
+            .any(|file| file == "-" || descriptor_program(file))
+        {
+            Program::Stdin
+        } else {
+            Program::Script
+        };
+    }
     if family == "deno" {
         return deno_input(rest).map_or(Program::Inline, |(program, _, _)| program);
     }

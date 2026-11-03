@@ -23,6 +23,15 @@ thread_local! {
     /// Set while a Git runner body is judged: the runner reader already
     /// read every nested body, so a body's own runners are not read again.
     static RUNNER_BODY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static AWK_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+struct AwkDepth(usize);
+
+impl Drop for AwkDepth {
+    fn drop(&mut self) {
+        AWK_DEPTH.set(self.0);
+    }
 }
 
 /// Marks the judging of a Git runner body until dropped.
@@ -231,6 +240,9 @@ pub fn evaluate_ruled(
         command, posix, levels, integrity, cwd, root, outcome,
     ));
     violations.extend(runs);
+    violations.extend(awk_violations(
+        command, posix, levels, integrity, cwd, root, outcome,
+    ));
     if !prose && levels.privilege_escalation.is_active() {
         if let Some(verdict) = PrivilegeModule.check(&ctx) {
             violations.push(privilege_violation(levels.privilege_escalation, &verdict));
@@ -304,6 +316,74 @@ fn program_violations(
             crate::remedy::SECRET_SELECTION.remedy(),
         )],
     }
+}
+
+/// Literal awk command expressions take this guard's own command judgment.
+/// Files and computed expressions are never executed or read by the guard.
+#[allow(clippy::too_many_arguments)]
+fn awk_violations(
+    command: &str,
+    posix: bool,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &std::path::Path,
+    root: &std::path::Path,
+    outcome: &super::sandbox_state::Outcome,
+) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    let home = super::git_guard::line_home::assigned().or_else(crate::portable_path::user_home);
+    for call in crate::security::outward::unwrapped_commands(command, cwd, home.as_deref()) {
+        let Some(program) = call.args.first() else {
+            continue;
+        };
+        let name = super::git_guard::launcher_name(program);
+        if crate::security::outward::interpreter_family(name) != Some("awk") {
+            continue;
+        }
+        let args = &call.args[1..];
+        for (at, offset) in crate::security::awk::sources(args).code {
+            let Some(body) = args.get(at).and_then(|word| word.get(offset..)) else {
+                continue;
+            };
+            for nested in crate::security::awk::commands(body) {
+                let depth = AWK_DEPTH.get();
+                if depth >= 8 {
+                    violations.push(Violation::new(
+                        "git.hook_integrity",
+                        integrity,
+                        "cannot verify an awk command nested beyond the command reader's depth"
+                            .to_string(),
+                        crate::remedy::HOOK_INTEGRITY.remedy(),
+                    ));
+                    continue;
+                }
+                let _depth = AwkDepth(depth);
+                AWK_DEPTH.set(depth + 1);
+                let findings = evaluate_ruled(
+                    &nested,
+                    posix,
+                    levels,
+                    integrity,
+                    call.cwd.as_deref().unwrap_or(cwd),
+                    root,
+                    outcome,
+                );
+                if super::any_blocking(&findings) && integrity.is_active() {
+                    violations.push(Violation::new(
+                        "git.hook_integrity",
+                        integrity,
+                        format!(
+                            "awk runs a literal command the exec guard refuses: {}",
+                            findings[0].message
+                        ),
+                        crate::remedy::HOOK_INTEGRITY.remedy(),
+                    ));
+                }
+                violations.extend(findings);
+            }
+        }
+    }
+    violations
 }
 
 /// Every command a Git call on the line runs itself, read with its

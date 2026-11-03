@@ -2549,6 +2549,13 @@ fn file_operands<'a>(
         .map(|at| expands.is_some_and(|flags| !flags.get(at).copied().unwrap_or(true)))
         .collect();
     let configured = line.names_ripgrep_config();
+    if outward::interpreter_family(name) == Some("awk") {
+        return super::awk::sources(rest)
+            .arguments
+            .into_iter()
+            .map(|(at, word)| (at + 1, word, !literal.get(at).copied().unwrap_or(false)))
+            .collect();
+    }
     if let Some(paths) = super::search_pattern::path_values(name, rest, &literal, configured) {
         return paths
             .into_iter()
