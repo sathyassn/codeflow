@@ -2200,6 +2200,43 @@ mod tests {
     }
 
     #[test]
+    fn stage_small_px_type_is_advisory_and_rem_is_clean() {
+        for (css, warned) in [
+            (".label { font-size:12px }", true),
+            (".label { FONT-SIZE: 12PX }", true),
+            (r".label { font-s\69 ze: 12p\78 }", true),
+            (".label { font: 600 12px/1.4 sans-serif }", true),
+            (".label { font-size: calc(12px + 0.1rem) }", true),
+            (".label { font-size: 0.88rem }", false),
+            (".label { font-size: 13px; padding: 2px }", false),
+            (".label { font-size: 1rem; content: '12px'; /* font-size:12px */ }", false),
+            (".label { font: 16px/12px sans-serif }", false),
+        ] {
+            let stage = Block::Html {
+                id: "stage".into(),
+                html: format!("<style>{css}</style><p>Stage line</p>"),
+                title: Some("Stage".into()),
+                caption: None,
+                legend: None,
+                description: None,
+            };
+            let value = document(vec![Block::Disclosure {
+                id: "details".into(),
+                summary: "More".into(),
+                blocks: vec![stage],
+            }]);
+            let faults = check_document(&serde_json::to_vec(&value).unwrap());
+            let warnings: Vec<_> = faults.iter().filter(|f| f.rule == "stage-type-size").collect();
+            assert_eq!(!warnings.is_empty(), warned, "{css}: {faults:?}");
+            for warning in warnings {
+                assert!(!warning.is_fault());
+                assert_eq!(warning.block_id.as_deref(), Some("stage"));
+                assert!(warning.message.contains("rem"));
+            }
+        }
+    }
+
+    #[test]
     fn html_canonical_text_includes_visible_stage_labels() {
         let block = Block::Html {
             caption: None,
