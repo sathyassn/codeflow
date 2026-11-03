@@ -855,6 +855,7 @@ pub fn validate_portal_with(
                 source_blobs: &source_blobs,
                 rendered: &rendered_by_route,
                 lookup_inputs,
+                has_capability_records: expected.has_capability_records,
             },
             &mut report,
         );
@@ -1838,6 +1839,11 @@ fn expected_portal_pages(
     Some(ExpectedPortalContent {
         pages: derive_expected_routes(&selected, contract, report),
         record_ids: pointed_record_ids(&records, contract),
+        has_capability_records: records.iter().any(|record| {
+            record.path == "docs/capabilities"
+                || (record.path.starts_with("docs/capabilities/")
+                    && record.path != "docs/capabilities/vocabulary.yaml")
+        }),
     })
 }
 
@@ -1887,6 +1893,7 @@ fn digits(value: &str, minimum: usize) -> bool {
 
 #[derive(Default)]
 struct ExpectedPortalContent {
+    has_capability_records: bool,
     pages: BTreeMap<String, String>,
     record_ids: BTreeSet<String>,
 }
@@ -3161,13 +3168,28 @@ fn resolve_source_link(source_path: &str, target: &str) -> Option<String> {
 }
 
 fn markdown_body(value: &str) -> &str {
-    if !value.starts_with("---\n") {
-        return value;
+    frontmatter_parts(value)
+        .ok()
+        .flatten()
+        .map_or(value, |(_, body)| body)
+}
+
+fn frontmatter_parts(value: &str) -> Result<Option<(&str, &str)>, &'static str> {
+    let mut lines = value.split_inclusive('\n');
+    let Some(first) = lines.next().filter(|line| {
+        line.ends_with('\n') && line.trim_end_matches([' ', '\t', '\r', '\n']) == "---"
+    }) else {
+        return Ok(None);
+    };
+    let start = first.len();
+    let mut offset = start;
+    for line in lines {
+        if line.trim_end_matches([' ', '\t', '\r', '\n']) == "---" {
+            return Ok(Some((&value[start..offset], &value[offset + line.len()..])));
+        }
+        offset += line.len();
     }
-    value
-        .get(4..)
-        .and_then(|rest| rest.find("\n---\n").map(|end| &rest[end + 5..]))
-        .unwrap_or(value)
+    Err("unclosed YAML frontmatter")
 }
 
 fn decode_percent(value: &str) -> Option<String> {
@@ -4042,14 +4064,10 @@ fn collect_capability_authority(text: &str, source_path: &str, authority: &mut A
 }
 
 fn parse_frontmatter_mapping(text: &str) -> Result<serde_yaml::Mapping, String> {
-    if !text.starts_with("---\n") {
+    let Some((yaml, _)) = frontmatter_parts(text)? else {
         return Ok(serde_yaml::Mapping::new());
-    }
-    let Some(end) = text[4..].find("\n---\n").map(|index| index + 4) else {
-        return Err("unclosed YAML frontmatter".into());
     };
-    let value: serde_yaml::Value =
-        serde_yaml::from_str(&text[4..end]).map_err(|error| error.to_string())?;
+    let value: serde_yaml::Value = serde_yaml::from_str(yaml).map_err(|error| error.to_string())?;
     value
         .as_mapping()
         .cloned()
