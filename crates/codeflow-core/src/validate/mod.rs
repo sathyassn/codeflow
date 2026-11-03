@@ -628,13 +628,7 @@ pub fn validate_task(
             message: "does not match EPC-NNN".into(),
         });
     }
-    let parent_line = crate::workgraph::line_adoption::PARENT_LINE_FIELD;
-    if data.get(parent_line).is_some_and(|value| !value.is_null()) {
-        errs.push(ValidationError {
-            field: parent_line.into(),
-            message: "only an epic record declares the line it lands on; remove it from the task and declare it on the task's epic".into(),
-        });
-    }
+    errs.extend(task_parent_line_error(&data));
 
     // Enum validations.
     errs.extend(validate_enum(&data, "status", TASK_STATUS_VALUES));
@@ -897,6 +891,18 @@ const EPIC_STATUS_VALUES: &[&str] = &[
 ];
 
 const EPIC_TEMPLATE_SENTINEL_FIELDS: &[&str] = &["id", "title"];
+
+/// A task record never carries `parent_line`: only an epic declares the
+/// line it lands on (TSK-1286).
+fn task_parent_line_error(data: &HashMap<String, serde_yaml::Value>) -> Option<ValidationError> {
+    let field = crate::workgraph::line_adoption::PARENT_LINE_FIELD;
+    data.get(field)
+        .is_some_and(|value| !value.is_null())
+        .then(|| ValidationError {
+            field: field.into(),
+            message: "only an epic record declares the line it lands on; remove it from the task and declare it on the task's epic".into(),
+        })
+}
 
 /// Validate an epic markdown file at the given path.
 ///
@@ -1792,6 +1798,12 @@ Criteria
             ),
             ("EPC-001", Some("not an integration line")),
             ("integration/outcome", Some("names no epic")),
+            ("integration/EPC-001-", Some("has no slug")),
+            (
+                "'integration/EPC-001-bad name'",
+                Some("not a valid branch name"),
+            ),
+            ("integration/EPC-001-a..b", Some("not a valid branch name")),
             (
                 "[integration/EPC-001-outcome]",
                 Some("must be an epic line name"),

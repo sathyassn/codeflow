@@ -1883,7 +1883,7 @@
     "project-management/templates/epic.md": {
       "src": "pm/epic.md.tmpl",
       "ownership": "managed",
-      "sha256": "0a0f98e6b9077fc8ca2d4ce7feab2ee0a26fd02b4b64792a1e88c199521b8230",
+      "sha256": "c8f53bc47b98703c9e743e773f0830d378a467f39491181af7bc839510cddbf6",
       "exec": false
     },
     "project-management/templates/feedback.md": {

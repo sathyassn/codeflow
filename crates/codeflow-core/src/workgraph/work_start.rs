@@ -741,16 +741,43 @@ pub fn epic_line_proof(
             epic.status
         )));
     }
-    // A task of an epic that declares this line as its `parent_line` binds
-    // it too, judged against the epic record in the same record set as the
-    // task (TSK-1286).
-    if !line_has_member_task(&at_head, branch, "the head")
-        && !line_has_member_task(&at_base, branch, "the target")
-    {
-        return Ok(EpicLineProof::NotLine(format!(
-            "no task of {epic_id} targets '{branch}', nor a task of an epic declaring {} '{branch}'",
-            super::line_adoption::PARENT_LINE_FIELD
-        )));
+    let own_task = |records: &BTreeMap<String, Record>| {
+        records.values().any(|record| {
+            record.kind == RecordKind::Task
+                && record.epic_id.as_deref() == Some(epic_id)
+                && record
+                    .integration_target
+                    .as_deref()
+                    .is_some_and(|target| logical_target(target) == branch)
+        })
+    };
+    if !own_task(&at_head) && !own_task(&at_base) {
+        // A task of an epic that declares this line binds it only from the
+        // trusted anchors, the target's tip and the line's fetched tip, never
+        // from the head's records, and a cancellation at any of them or at
+        // the head refuses (TSK-1286).
+        let fetched = super::line_adoption::fetched_tip(repo_root, branch)?;
+        let at_line = match &fetched {
+            Some(tip) => Some(records_at(
+                git2::Oid::from_str(tip).map_err(|error| error.to_string())?,
+            )?),
+            None => None,
+        };
+        let line_place = format!("'origin/{branch}'");
+        let mut anchors = vec![(&at_base, "the target")];
+        if let Some(records) = &at_line {
+            anchors.push((records, line_place.as_str()));
+        }
+        match declared_line_tasks(&anchors, &at_head, branch) {
+            Err(refusal) => return Ok(EpicLineProof::NotLine(refusal)),
+            Ok(false) => {
+                return Ok(EpicLineProof::NotLine(format!(
+                    "no task of {epic_id} targets '{branch}', nor a task of an epic declaring {} '{branch}' on the target or the line's fetched tip",
+                    super::line_adoption::PARENT_LINE_FIELD
+                )));
+            }
+            Ok(true) => {}
+        }
     }
     let destination = default_work_target(repo_root)
         .map_err(|error| error.to_string())?
@@ -952,18 +979,15 @@ pub fn epic_line_binding(
         return Ok(EpicLineBinding::Refused(not_own));
     };
     let records = anchor_records(repo_root, anchor)?;
-    let binding = bound_in(&records, line, epic_id, place);
     let Claim::Declared(own) = claim else {
-        return Ok(binding);
+        return Ok(bound_in(&records, line, epic_id, place));
     };
-    if binding != EpicLineBinding::Bound {
-        return Ok(binding);
-    }
     let head_value =
         epic_record_at_revision(repo_root, &own, head)?.and_then(|record| record.parent_line);
     Ok(declared_binding(
         &records,
         line,
+        epic_id,
         &own,
         head_value.as_deref(),
         place,
@@ -1034,17 +1058,29 @@ fn epic_record_at_revision(
 /// record (`head_value`) must declare the same line. The declaration is
 /// trusted only from `records`; a head that adds it gains nothing, and a
 /// head that changes or removes it is refused, so a branch never rebinds
-/// its own epic (TSK-1286).
+/// its own epic (TSK-1286). A cancelled or archived `own` there refuses
+/// before anything else, so a caller that reads several anchors lets it
+/// outweigh a declaration at another; then the line itself must be bound
+/// there ([`bound_in`]).
 fn declared_binding(
     records: &BTreeMap<String, Record>,
     line: &str,
+    epic_id: &str,
     own: &str,
     head_value: Option<&str>,
     place: &str,
     not_own: &str,
 ) -> EpicLineBinding {
     let field = super::line_adoption::PARENT_LINE_FIELD;
-    if let LineMembership::Not(reason) = line_membership(line, own, &record_facts(records), place) {
+    let membership = line_membership(line, own, &record_facts(records), place);
+    if let LineMembership::Refused(reason) = &membership {
+        return EpicLineBinding::Refused(format!("{not_own}: {reason}"));
+    }
+    let binding = bound_in(records, line, epic_id, place);
+    if binding != EpicLineBinding::Bound {
+        return binding;
+    }
+    if let LineMembership::Not(reason) = &membership {
         let head_only = if head_value == Some(line) {
             format!(
                 "; the head's own {field} for {own} is not trusted, so land the declaration on the line through a planning pull request first"
@@ -1131,6 +1167,9 @@ pub(crate) enum LineMembership {
     /// is neither cancelled nor archived, and the line's own epic has a
     /// record there.
     Declared,
+    /// The epic's record there is cancelled or archived: a refusal, which
+    /// a declaration at another anchor never outweighs.
+    Refused(String),
     /// Neither; the reason names what is missing or different.
     Not(String),
 }
@@ -1164,7 +1203,7 @@ pub(crate) fn line_membership(
         return LineMembership::Not(format!("{epic} has no epic record on {place}"));
     };
     if matches!(facts.status.as_str(), "cancelled" | "archived") {
-        return LineMembership::Not(format!("{epic} is {} on {place}", facts.status));
+        return LineMembership::Refused(format!("{epic} is {} on {place}", facts.status));
     }
     match facts.parent_line.as_deref() {
         None => LineMembership::Not(format!("{epic} declares no {field} on {place}")),
@@ -1207,6 +1246,53 @@ fn line_has_member_task(records: &BTreeMap<String, Record>, line: &str, place: &
                 )
             })
     })
+}
+
+/// Whether a task in one of the trusted `anchors` (each a record set and
+/// its place) targets `line` as a task of an epic that declares the line
+/// in that same set (TSK-1286). Every anchor is read before an answer, and
+/// a declaring epic that is cancelled or archived at any anchor or at the
+/// `head` refuses, naming where.
+///
+/// # Errors
+///
+/// Returns the refusal for a cancelled or archived declaring epic.
+fn declared_line_tasks(
+    anchors: &[(&BTreeMap<String, Record>, &str)],
+    head: &BTreeMap<String, Record>,
+    line: &str,
+) -> Result<bool, String> {
+    let mut declared = std::collections::BTreeSet::new();
+    for (records, place) in anchors {
+        for record in records.values() {
+            let Some(epic) = record.epic_id.as_deref() else {
+                continue;
+            };
+            if record.kind == RecordKind::Task
+                && record
+                    .integration_target
+                    .as_deref()
+                    .is_some_and(|target| logical_target(target) == line)
+                && line_membership(line, epic, &record_facts(records), place)
+                    == LineMembership::Declared
+            {
+                declared.insert(epic.to_string());
+            }
+        }
+    }
+    for epic in &declared {
+        for (records, place) in anchors.iter().copied().chain([(head, "the head")]) {
+            if let LineMembership::Refused(reason) =
+                line_membership(line, epic, &record_facts(records), place)
+            {
+                return Err(format!(
+                    "{epic} declares {} '{line}', but {reason}",
+                    super::line_adoption::PARENT_LINE_FIELD
+                ));
+            }
+        }
+    }
+    Ok(!declared.is_empty())
 }
 
 /// The record of task `task` at `revision`, found by its file name and id,
@@ -1313,11 +1399,17 @@ pub fn task_line_binding(
     let mut unbound = Vec::new();
     for (anchor, place) in anchors {
         let records = anchor_records(repo_root, anchor)?;
-        let binding = match (&claim, bound_in(&records, line, epic_id, place)) {
-            (Claim::Declared(own), EpicLineBinding::Bound) => {
-                declared_binding(&records, line, own, head_value.as_deref(), place, &not_own)
-            }
-            (_, binding) => binding,
+        let binding = match &claim {
+            Claim::Declared(own) => declared_binding(
+                &records,
+                line,
+                epic_id,
+                own,
+                head_value.as_deref(),
+                place,
+                &not_own,
+            ),
+            Claim::Line => bound_in(&records, line, epic_id, place),
         };
         match binding {
             EpicLineBinding::Bound => bound = true,
@@ -4279,7 +4371,7 @@ mod tests {
         let elsewhere = second_epic(Some("integration/EPC-009-elsewhere"), "planning");
         let cancelled = second_epic(Some(DECLARED_LINE), "cancelled");
         // (case, EPC-002 at the anchor, EPC-002 at the head, refused, reason)
-        let cases: [(&str, Option<&str>, Option<&str>, bool, &str); 8] = [
+        let cases = [
             // The head adds the declaration the anchor lacks: not trusted.
             (
                 "head adds",
@@ -4309,11 +4401,13 @@ mod tests {
                 false,
                 "EPC-002 has no epic record on protected branch",
             ),
+            // A cancelled declaring epic is a refusal, which no other anchor
+            // can outweigh.
             (
                 "cancelled",
                 Some(cancelled.as_str()),
                 Some(cancelled.as_str()),
-                false,
+                true,
                 "EPC-002 is cancelled",
             ),
             // The head changes or removes the anchor's declaration: refused.
@@ -4444,6 +4538,94 @@ mod tests {
         ));
     }
 
+    /// TSK-1286 review: a declaring epic cancelled at one trusted anchor
+    /// refuses even when another anchor still declares the line, in either
+    /// order. At 5dcc8d8ce the declaring anchor bound the line.
+    #[test]
+    fn a_cancelled_declaring_epic_at_any_anchor_refuses() {
+        let declared = second_epic(Some(DECLARED_LINE), "planning");
+        let cancelled = second_epic(Some(DECLARED_LINE), "cancelled");
+        let dir = declared_fixture(Some(cancelled.as_str()), Some(declared.as_str()));
+        let root = dir.path();
+        git(root, &["switch", "-q", "-c", "anchor/declaring", "main"]);
+        fs::write(root.join("project-management/epics/EPC-002.md"), &declared).unwrap();
+        git(root, &["commit", "-qam", "an anchor that still declares"]);
+        git(root, &["switch", "-q", "task/TSK-002-work"]);
+        for anchors in [
+            [
+                ("main", "the candidate authority"),
+                ("anchor/declaring", "the line's tip"),
+            ],
+            [
+                ("anchor/declaring", "the line's tip"),
+                ("main", "the candidate authority"),
+            ],
+        ] {
+            let binding =
+                task_line_binding(root, "TSK-002", "HEAD", DECLARED_LINE, &anchors).unwrap();
+            assert!(
+                matches!(&binding, EpicLineBinding::Refused(reason) if reason.contains("EPC-002 is cancelled on the candidate authority")),
+                "{anchors:?}: {binding:?}"
+            );
+        }
+        assert!(matches!(bind_declared(root), EpicLineBinding::Refused(_)));
+    }
+
+    /// A line `integration/EPC-001-outcome` merged from a `work` branch that
+    /// holds TSK-002 of EPC-002 targeting the line and EPC-002 with
+    /// `head_status`, declaring the line. With `on_target`, `main` holds the
+    /// same task and an active declaring EPC-002 too.
+    fn proof_fixture(on_target: bool, head_status: &str) -> tempfile::TempDir {
+        let dir = fixture();
+        let root = dir.path();
+        let epic = root.join("project-management/epics/EPC-002.md");
+        let task = root.join("project-management/tasks/TSK-002.md");
+        let declared_task = format!("---\nid: TSK-002\nepic_id: EPC-002\nstandalone_reason: null\nintegration_target: {DECLARED_LINE}\nstatus: todo\n---\n");
+        git(root, &["switch", "-q", "main"]);
+        if on_target {
+            fs::write(&epic, second_epic(Some(DECLARED_LINE), "planning")).unwrap();
+            fs::write(&task, &declared_task).unwrap();
+            git(root, &["add", "-A"]);
+            git(root, &["commit", "-qm", "the target declares"]);
+        }
+        git(root, &["switch", "-q", "-c", DECLARED_LINE]);
+        git(root, &["switch", "-q", "-c", "work"]);
+        fs::write(&epic, second_epic(Some(DECLARED_LINE), head_status)).unwrap();
+        fs::write(&task, &declared_task).unwrap();
+        fs::write(root.join("work.txt"), "work\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-qm", "work on the line"]);
+        git(root, &["switch", "-q", DECLARED_LINE]);
+        git(root, &["merge", "-q", "--no-ff", "-m", "land work", "work"]);
+        dir
+    }
+
+    /// TSK-1286 review: the proof that lands a line on `main` trusts a
+    /// declaration only from the target or the line's fetched tip, never
+    /// from the head alone, and a cancellation at the head refuses. At
+    /// 5dcc8d8ce the head-only declaration was verified.
+    #[test]
+    fn epic_line_proof_trusts_only_anchor_declarations() {
+        let proof = |root: &Path| {
+            epic_line_proof(root, DECLARED_LINE, "main", "main", DECLARED_LINE).unwrap()
+        };
+        let head_only = proof_fixture(false, "planning");
+        assert!(
+            matches!(proof(head_only.path()), EpicLineProof::NotLine(reason) if reason.contains("nor a task of an epic declaring parent_line")),
+            "head only"
+        );
+        let trusted = proof_fixture(true, "planning");
+        assert!(
+            matches!(proof(trusted.path()), EpicLineProof::Verified(..)),
+            "declared on the target"
+        );
+        let cancelled = proof_fixture(true, "cancelled");
+        assert!(
+            matches!(proof(cancelled.path()), EpicLineProof::NotLine(reason) if reason.contains("EPC-002 is cancelled on the head")),
+            "cancelled at the head"
+        );
+    }
+
     /// TSK-1286: the record reader takes `parent_line` only as an exact epic
     /// line name, on any record kind, so a binding can refuse it on a task.
     #[test]
@@ -4466,6 +4648,11 @@ mod tests {
             "main",
             "[integration/EPC-001-outcome]",
             "7",
+            // An empty slug, and slugs that are not valid branch names.
+            "integration/EPC-001-",
+            "'integration/EPC-001-bad name'",
+            "integration/EPC-001-a..b",
+            "integration/EPC-001-a~b",
         ] {
             assert!(epic(bad).is_err(), "{bad}");
         }

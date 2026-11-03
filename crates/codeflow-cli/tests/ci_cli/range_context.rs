@@ -1163,6 +1163,51 @@ fn declared_parent_line_binds_only_from_the_line_records() {
     }
 }
 
+/// TSK-1286 review: when the protected branch binds the line, the line's
+/// fetched tip is still read, and a refusal or an unreadable record there
+/// wins. At 5dcc8d8ce the protected binding returned before the tip was
+/// read, so both cases selected the line.
+#[test]
+fn a_refusing_or_unreadable_line_tip_outweighs_the_protected_binding() {
+    for case in ["cancelled", "unreadable"] {
+        let f = Line::new();
+        f.git(&["push", "-q", "origin", "main"]);
+        let epic = std::fs::read_to_string(f.root().join(super::line_adoption::fixture::EPIC_PATH))
+            .unwrap();
+        let changed = if case == "cancelled" {
+            epic.replace("status: planning", "status: cancelled")
+        } else {
+            "---\nid: [unclosed\n---\n".to_string()
+        };
+        f.write(super::line_adoption::fixture::EPIC_PATH, &changed);
+        f.commit("docs: change the line's records");
+        f.git(&["push", "-q", "origin", LINE]);
+        f.git(&["switch", "-qc", "task/TSK-001-work", "main"]);
+        f.write("src/lib.rs", "pub fn work() {}\n");
+        f.commit("feat: work");
+        let out = ci(&f, &[], None);
+        let text = output(&out);
+        assert!(
+            !text.contains(&format!(
+                "acceptance target '{LINE}' (branch declared target)"
+            )),
+            "{case}: {text}"
+        );
+        if case == "cancelled" {
+            // The rejection is a warning: the run falls back to the
+            // protected branch instead of judging the head on the line.
+            assert!(
+                text.contains(&format!("which is cancelled on 'origin/{LINE}'"))
+                    && text.contains("base falls back to the policy protected branches"),
+                "{case}: {text}"
+            );
+        } else {
+            // An unreadable record at the tip stops the run.
+            assert_ne!(out.status.code(), Some(0), "{case}: {text}");
+        }
+    }
+}
+
 /// TSK-398: a local branch named `origin/main` (`refs/heads/origin/main`)
 /// at an author commit never stands in for the remote-tracking
 /// `refs/remotes/origin/main`, whichever source names the base branch. The

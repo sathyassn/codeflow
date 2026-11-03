@@ -148,7 +148,21 @@ pub(crate) fn parse_parent_line(value: Option<&Value>) -> Result<Option<String>,
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) => {
-            epic_id(text).map_err(|reason| format!("{PARENT_LINE_FIELD}: {reason}"))?;
+            let id = epic_id(text).map_err(|reason| format!("{PARENT_LINE_FIELD}: {reason}"))?;
+            // `epic_id` proved the text is `integration/<id>-...`.
+            let slug = text
+                .get("integration/".len() + id.len() + 1..)
+                .unwrap_or_default();
+            if slug.is_empty() {
+                return Err(format!(
+                    "{PARENT_LINE_FIELD}: '{text}' has no slug after '{id}-'; an epic line is integration/EPC-NNN-<slug>"
+                ));
+            }
+            if !super::work_start::is_stable_work_target(text) {
+                return Err(format!(
+                    "{PARENT_LINE_FIELD}: '{text}' is not a valid branch name"
+                ));
+            }
             Ok(Some(text.clone()))
         }
         Some(_) => Err(format!(
