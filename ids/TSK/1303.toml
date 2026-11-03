@@ -1,0 +1,11 @@
+id = "TSK-1303"
+uid = "1f38e3ba-47f1-410b-8ec9-08f50f71d776"
+kind = "TSK"
+title = "Bypass permissions is a named preset and the guards still hold under it"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T19:43:58Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
