@@ -1580,6 +1580,43 @@ mod tests {
         assert!(!fixture.refused("notes.md"), "a normal path is unchanged");
     }
 
+    /// TSK-1258 AC-3, reach of the cache-full condition: a guard call is one
+    /// process whose glob cache starts empty, and the only patterns it
+    /// compiles are the policy's own (the secret-read rules and the edit
+    /// enforcement patterns, with a Git common directory, the largest case).
+    /// While their distinct count stays under the cache size no guard call
+    /// can fill the cache, so the stall of AC-1 needs a longer-lived process.
+    #[test]
+    fn one_guard_call_compiles_fewer_globs_than_the_cache_holds() {
+        let fixture = Fixture::new();
+        let common = fixture.temp.path().join("common");
+        std::fs::create_dir_all(&common).unwrap();
+        let ctx = EditContext {
+            git_common_dir: Some(&common),
+            ..fixture.ctx()
+        };
+        let enforcement = enforcement_patterns(&ctx).unwrap();
+        let reads: BTreeSet<&str> = actions::table()
+            .claude_read_groups
+            .iter()
+            .filter(|group| group.carveouts.is_empty())
+            .flat_map(|group| group.denies.iter())
+            .filter_map(|rule| rule.strip_prefix("Read(")?.strip_suffix(')'))
+            .collect();
+        eprintln!(
+            "glob working set of one guard call: {} read patterns, {} edit patterns, cache holds {}",
+            reads.len(),
+            enforcement.len(),
+            crate::security::pattern::GLOB_CACHE_ENTRIES
+        );
+        assert!(
+            reads.len() + enforcement.len() < crate::security::pattern::GLOB_CACHE_ENTRIES,
+            "{} read and {} edit patterns no longer fit the glob cache",
+            reads.len(),
+            enforcement.len()
+        );
+    }
+
     #[test]
     fn f9_truncated_inputs_are_refused() {
         for field in ["toolInputTruncated", "tool_input_truncated"] {

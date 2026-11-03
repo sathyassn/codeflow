@@ -84,7 +84,7 @@ pub fn is_path_targeted(cmd: &str, path: &str) -> bool {
 }
 
 /// Most compiled glob patterns kept at once.
-const GLOB_CACHE_ENTRIES: usize = 128;
+pub(crate) const GLOB_CACHE_ENTRIES: usize = 128;
 
 /// Longest glob pattern the matcher compiles. Shipped policy patterns are far
 /// shorter; a longer one is refused, never compiled.
@@ -94,6 +94,9 @@ pub const MAX_GLOB_PATH_BYTES: usize = 32 * 1024;
 /// Largest compiled program, in bytes, for one glob. Compile work grows with
 /// this size, so it is the step bound for compilation.
 const GLOB_COMPILED_BYTES: usize = 256 * 1024;
+
+/// The cause a guard names when a path is past [`MAX_GLOB_PATH_BYTES`].
+pub const PATH_PAST_BOUND: &str = "a path is longer than the glob matcher's bound";
 
 /// The result of matching a path against a glob under the bound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,7 +137,7 @@ impl GlobCache {
             return GlobMatch::Unbounded("a glob pattern is longer than the matcher's bound");
         }
         if path.len() > MAX_GLOB_PATH_BYTES {
-            return GlobMatch::Unbounded("a path is longer than the glob matcher's bound");
+            return GlobMatch::Unbounded(PATH_PAST_BOUND);
         }
         let found = self
             .entries

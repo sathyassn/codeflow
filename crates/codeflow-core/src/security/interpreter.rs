@@ -656,12 +656,12 @@ fn git_operand(
 /// any directory, so the path after it is judged as a relative name in an
 /// unknown directory (TSK-1002 review 08), and a glob after it selects
 /// entries the guard cannot list, whatever it names (review 07).
-fn substitution_root_unknown(value: &str, expands: bool) -> bool {
+fn substitution_root_unknown(value: &str, expands: bool) -> Result<bool, &'static str> {
     let Some((_, tail)) = value.rsplit_once(['\u{1}', '\u{2}']) else {
-        return false;
+        return Ok(false);
     };
     if expands && crate::hooks::git_guard::has_glob(tail) {
-        return true;
+        return Ok(true);
     }
     // The separators after the substitution, slash or backslash, are
     // dropped; the name itself keeps every other character.
@@ -669,8 +669,7 @@ fn substitution_root_unknown(value: &str, expands: bool) -> bool {
         .char_indices()
         .find(|(_, ch)| !matches!(ch, '/' | '\\'))
         .map_or("", |(at, _)| &tail[at..]);
-    // This yes/no answer refuses on a bound hit, without the named cause.
-    relative_names_secret(name).unwrap_or(true)
+    relative_names_secret(name)
 }
 
 /// Whether a word holding a command substitution the guard did not resolve
@@ -770,7 +769,7 @@ fn inspect_operand(
             .expands
             .as_ref()
             .is_none_or(|flags| flags.get(at).copied().unwrap_or(true));
-    if substitution_root_unknown(value, expands) {
+    if substitution_root_unknown(value, expands)? {
         return Err("cannot establish the directory a command substitution prints");
     }
     if substitution_may_name_secret(value, cwd, home)? {
@@ -1476,6 +1475,12 @@ fn secret_path_spelling_checked(
     home: Option<&Path>,
     reader: Option<bool>,
 ) -> Result<bool, &'static str> {
+    // An oversize path is refused first and by name. Without this a reader
+    // operand reached `glob_intersects`, whose token cap refuses it without
+    // saying why, before the matcher could name the bound.
+    if word.len() > super::pattern::MAX_GLOB_PATH_BYTES {
+        return Err(super::pattern::PATH_PAST_BOUND);
+    }
     let word = crate::portable_path::filesystem_spelling(word).to_ascii_lowercase();
     let home_relative = home.and_then(|home| {
         let home = crate::portable_path::slashed(home).to_ascii_lowercase();
@@ -2397,6 +2402,11 @@ fn search_root_matches(
     if pattern == "*" && secret_path_spelling_checked(&secret_path_text(root)?, home, Some(false))?
     {
         return Ok(true);
+    }
+    // Bound the selector before it is brace-expanded, so its length cannot
+    // shape the expansion's cost (TSK-1258).
+    if pattern.len() > super::pattern::MAX_GLOB_PATTERN_BYTES {
+        return Err("a search selector is longer than the glob matcher's bound");
     }
     let patterns = crate::hooks::git_guard::brace_expand(pattern)
         .ok_or("cannot inspect every search-glob brace alternative")?;
@@ -4866,15 +4876,35 @@ mod tests {
             Err(cause),
             "the spelling check names the same cause"
         );
-        // The relative-word checks never allow it. A reader operand this
-        // long also passes `glob_intersects`, whose 256-token cap returns
-        // `None` first, so those checks refuse (`Ok(true)`) or carry the cause.
-        for verdict in [
-            relative_names_secret(&long[1..]),
-            relative_may_name_secret(&long[1..]),
-        ] {
-            assert_ne!(verdict, Ok(false), "an oversize word must not clear");
-        }
+        // The relative-word and command-substitution checks carry it too.
+        assert_eq!(relative_names_secret(&long[1..]), Err(cause));
+        assert_eq!(relative_may_name_secret(&long[1..]), Err(cause));
+        assert_eq!(
+            substitution_root_unknown(&format!("\u{1}/{}", &long[1..]), true),
+            Err(cause)
+        );
+    }
+
+    /// TSK-1258 round 2: a command substitution followed by an oversize name
+    /// is refused with the bound named, not as an unknown directory.
+    #[test]
+    fn oversize_name_after_a_substitution_names_the_bound() {
+        let repo = repo();
+        let long = "a".repeat(super::super::pattern::MAX_GLOB_PATH_BYTES);
+        let command = format!("python3 tool.py $(date)/{long}");
+        let findings = judge_in(&repo, &repo.root, &repo.root, &command, PolicyLevel::Block);
+        assert!(
+            findings
+                .iter()
+                .any(|v| v.message.contains("longer than the glob matcher's bound")),
+            "{findings:?}"
+        );
+        assert!(
+            !findings.iter().any(|v| v
+                .message
+                .contains("cannot establish the directory a command substitution prints")),
+            "the bound, not an unknown directory, is the stated cause: {findings:?}"
+        );
     }
 
     /// TSK-1258 sibling sweep: a search selector past the pattern bound is

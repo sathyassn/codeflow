@@ -2667,6 +2667,10 @@ const BRACE_WORD_LIMIT: usize = 64;
 /// Most brace groups one word may nest or chain before expansion gives up
 /// (`None`, a refusal): bounds the recursion depth of `brace_expand`.
 const BRACE_DEPTH_LIMIT: usize = 256;
+/// Longest word `brace_expand` reads (`None`, a refusal, past it). It is the
+/// longest path the supported systems open, and small enough that the
+/// nested-group scan (the square of the length) stays cheap.
+const BRACE_WORD_BYTES: usize = 4096;
 
 /// The most `{`, `}` and `,` characters a word may hold for the guard to
 /// read its braces; each may have been quoted or escaped (see
@@ -2763,6 +2767,11 @@ pub(crate) fn brace_expand(word: &str) -> Option<Vec<String>> {
             )?;
         }
         Some(())
+    }
+    // Each group's interior is scanned again for every nested group, so the
+    // work grows with the square of the word; a longer word cannot be read.
+    if word.len() > BRACE_WORD_BYTES {
+        return None;
     }
     let mut out = Vec::new();
     into(word, &mut out, 0)?;
@@ -14939,10 +14948,15 @@ mod tests {
     #[test]
     fn brace_expansion_stays_bounded_on_long_words() {
         let started = std::time::Instant::now();
-        assert_eq!(
-            brace_expand(&"{".repeat(200_000)),
-            Some(vec!["{".repeat(200_000)])
-        );
+        // Unmatched `{` inside the length bound read as text, in one pass.
+        let unmatched = "{".repeat(BRACE_WORD_BYTES);
+        assert_eq!(brace_expand(&unmatched), Some(vec![unmatched.clone()]));
+        // Past the length bound a word cannot be read: a refusal, at once,
+        // for unmatched braces and for nested balanced ones (each group's
+        // interior was scanned again for every group inside it).
+        assert_eq!(brace_expand(&"{".repeat(200_000)), None);
+        let nested = format!("{}x{}", "{".repeat(100_000), "}".repeat(100_000));
+        assert_eq!(brace_expand(&nested), None);
         assert_eq!(brace_expand(&"{1..1}".repeat(BRACE_DEPTH_LIMIT + 1)), None);
         assert_eq!(
             brace_expand("a{b,c}d"),
