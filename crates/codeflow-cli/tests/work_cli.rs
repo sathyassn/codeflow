@@ -345,7 +345,11 @@ fn failed_review_providers_refuse_pins_without_mutating_the_branch() {
     let child = "task/TSK-002-work-tsk-002";
     for (provider, reason, hangs) in [
         ("exit 1", "provider failed", false),
-        ("printf 'not json'", "cannot parse predecessor review", false),
+        (
+            "printf 'not json'",
+            "cannot parse predecessor review",
+            false,
+        ),
         (
             "dd if=/dev/zero bs=1048577 count=1 2>/dev/null",
             "review response too large",
