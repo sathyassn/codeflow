@@ -1,7 +1,7 @@
 //! Conservative literal inspection inside interpreter code, never ordinary
 //! data, and of the arguments an interpreter is given (TSK-302).
-use super::search_pattern::CommandLine;
 use super::pattern::{match_extended_glob, GlobMatch};
+use super::search_pattern::CommandLine;
 use super::{actions, outward};
 use crate::hooks::{PolicyLevel, SecuritySection, Violation};
 use std::path::{Path, PathBuf};
@@ -1498,8 +1498,7 @@ fn secret_path_spelling_checked(
             continue;
         }
         for rule in &group.denies {
-            let Some(pattern) = rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')'))
-            else {
+            let Some(pattern) = rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')')) else {
                 continue;
             };
             match match_extended_glob(word, pattern) {
@@ -2388,8 +2387,7 @@ fn search_root_matches(
     links: &[super::composed::paths::Link],
     read: &mut usize,
 ) -> Result<bool, &'static str> {
-    if pattern == "*"
-        && secret_path_spelling_checked(&secret_path_text(root)?, home, Some(false))?
+    if pattern == "*" && secret_path_spelling_checked(&secret_path_text(root)?, home, Some(false))?
     {
         return Ok(true);
     }
@@ -4835,16 +4833,25 @@ mod tests {
     #[test]
     fn unbounded_glob_input_names_its_cause_in_the_path_check() {
         let repo = repo();
-        let long = format!("/{}", "a".repeat(super::super::pattern::MAX_GLOB_PATH_BYTES));
+        let long = format!(
+            "/{}",
+            "a".repeat(super::super::pattern::MAX_GLOB_PATH_BYTES)
+        );
         let cause = secret_path_result(&long, &repo.root, None, Some(true))
             .expect_err("a path past the bound must refuse, not answer");
-        assert!(cause.contains("longer than the glob matcher's bound"), "{cause}");
+        assert!(
+            cause.contains("longer than the glob matcher's bound"),
+            "{cause}"
+        );
         assert_eq!(
             real_secret_path(Path::new(&long), None),
             Err(cause),
             "the real-path check carries the same cause"
         );
-        assert!(secret_path_spelling(&long, None, None), "a yes/no caller refuses");
+        assert!(
+            secret_path_spelling(&long, None, None),
+            "a yes/no caller refuses"
+        );
     }
 
     /// TSK-1258 AC-2, through the guard: an oversize operand is refused by

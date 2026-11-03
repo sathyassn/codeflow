@@ -119,16 +119,16 @@ impl GlobMatch {
 /// fixed bound on pattern length, compiled size and path length.
 #[must_use]
 pub fn match_extended_glob(path: &str, pattern: &str) -> GlobMatch {
+    // Recursive search checks the same policy patterns for many names. Bound
+    // the cache because this utility also accepts caller-provided patterns.
+    static CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, Regex>>> =
+        OnceLock::new();
     if pattern.len() > MAX_GLOB_PATTERN_BYTES {
         return GlobMatch::Unbounded("a glob pattern is longer than the matcher's bound");
     }
     if path.len() > MAX_GLOB_PATH_BYTES {
         return GlobMatch::Unbounded("a path is longer than the glob matcher's bound");
     }
-    // Recursive search checks the same policy patterns for many names. Bound
-    // the cache because this utility also accepts caller-provided patterns.
-    static CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, Regex>>> =
-        OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     let found = cache
         .lock()
@@ -361,7 +361,10 @@ mod tests {
         let before = COMPILES.with(std::cell::Cell::get);
         for _ in 0..50 {
             assert!(!matches_extended_glob("a/b.pem", "tsk1258-late/**/*.pem"));
-            assert!(matches_extended_glob("tsk1258-late/a/b.pem", "tsk1258-late/**/*.pem"));
+            assert!(matches_extended_glob(
+                "tsk1258-late/a/b.pem",
+                "tsk1258-late/**/*.pem"
+            ));
         }
         let compiles = COMPILES.with(std::cell::Cell::get) - before;
         assert!(
