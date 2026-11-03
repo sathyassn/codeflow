@@ -18,7 +18,7 @@ pub const GAP_PROOFS: &[&str] = &["test", "journey", "hosted", "native"];
 pub const VERIFICATION_RECORD_DIR: &str = "docs/verification/";
 /// The largest file read to find a named test. A larger file is refused, and
 /// naming the file alone never reads it. This is a constant for now because the
-/// limits registry is not on this line yet (TSK-362 records this).
+/// limits registry has not reached this line; it moves there under TSK-1299.
 pub const CAPABILITY_MAX_EVIDENCE_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 const FORMAT: &str = "expected test: <path>[::<name>], journey: <path>[::<name>], \

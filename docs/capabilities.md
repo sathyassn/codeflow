@@ -285,9 +285,8 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
   the default branch, and pull requests with strict, pinned checks guard it,
   the integration lines and each other protected branch. It never weakens a
   rule and reports what the plan cannot apply.
-- The tests for these commands stub the GitHub boundary: `gh` is a scripted
-  transport (`GithubProvider::run_gh`), so they show what would be sent and
-  how replies are read, never that GitHub accepts it.
+- Tests stub the GitHub boundary (`GithubProvider::run_gh`), so none applies a
+  ruleset on GitHub.
 - `codeflow doctor` runs twenty-seven health checks on the repository and the
   tools around it, including the default branch's host rules.
 
@@ -693,25 +692,17 @@ Records contain YAML frontmatter and Markdown prose, checked by `validate --docs
 | `journey: <path>[::<name>]` | Resolves as `test:`. It marks a test that drives the whole path a user takes. |
 | `record: docs/verification/<path>` | A non-empty verification record. Currency is a review judgment: the check proves the record exists. |
 | `gap: <proof>: <reason>` | A declared gap, not proof. `<proof>` is what is still owed: `test`, `journey`, `hosted` or `native`. |
-
-- A source file named alone, a command, free text and an unresolved reference
-  are refused, naming the capability and the entry.
-- Nothing an entry names is run. Files are read through the repository-confined
-  reader, and links are refused. `CAPABILITY_MAX_EVIDENCE_FILE_BYTES` (16 MiB)
-  bounds the file read to find a `::<name>`. It is a constant until the limits
-  registry reaches this line.
-- Where a sandbox denies reading a path, a whole-file entry resolves only when
-  the Git index tracks that path.
-- A legacy fence file with no typed entry keeps validating with one warning
-  through 4.x. Its first typed entry makes every fence entry in the file subject
-  to these rules.
+| Refused | A source file named alone, a command, free text or an unresolved reference, naming the capability and the entry. |
+| Reading | Nothing an entry names is run. Files are read through the repository-confined reader, and links are refused. Where a sandbox denies reading a path, a whole-file entry resolves only when the Git index tracks that path. |
+| Read bound | `CAPABILITY_MAX_EVIDENCE_FILE_BYTES`: 16 MiB for the file read to find a `::<name>`. It is a constant for now; it moves to the limits registry under TSK-1299 when this line syncs from `main`. |
+| Legacy fences | A legacy file with no typed entry keeps validating with one warning through 4.x. Its first typed entry makes every fence entry in the file subject to these rules. |
 
 | Validation rule | Contract |
 |---|---|
 | Record files | Regular files directly under `docs/capabilities/`, named `CAP-NNN-<slug>.md`. Git index or tree mode must be non-executable; synthetic filesystem execute bits are ignored, including with `core.fileMode=false`. Untracked records have no Git mode until indexed. This mode rule does not apply to legacy or configuration files. Absolute paths, `..`, nested paths and symlinks are refused. Containment applies only to record files, not references inside them. |
 | Legacy compatibility | Fences and distinct folder records coexist. A CAP page without frontmatter remains companion prose when its id has a legacy fence. Legacy fences retain their field shapes and ignore unknown keys; known string and list fields use the same bounds during deserialization. |
 | Identity | Duplicate ids or UUIDs name both sources. An identity in both layouts is refused regardless of bindings or payload equality. |
-| Evidence | References are syntax-checked, never opened or executed. Resolution belongs to TSK-362. A shipped record with only `gap:` evidence accepts `unassessed`, but refuses `beta` or `stable`. |
+| Evidence | The loader checks the grammar and opens nothing, in a checkout or a tree. `validate --docs` resolves references in a checkout. A shipped record with only `gap:` evidence accepts `unassessed` and refuses any other stage. |
 | Scalar bound | `CAPABILITY_MAX_VALUE_CHARS` in `capability.rs`: 1024 Unicode characters per known string scalar or list item. |
 | List bound | `CAPABILITY_MAX_LIST_ITEMS`: 64 items per list. The same visitors enforce scalar and list bounds while reading records, legacy fences and vocabulary. |
 | Key bound | `CAPABILITY_MAX_FRONTMATTER_KEYS`: 32 frontmatter keys per record. The closed field set contains fewer than 32 fields; unknown and duplicate keys are refused before reading their values. |
