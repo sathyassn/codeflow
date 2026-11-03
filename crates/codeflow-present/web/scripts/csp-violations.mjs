@@ -1,27 +1,25 @@
-// Every present browser suite records the page's securitypolicyviolation
-// events from the first script on and fails on any: a page that needs a
-// source its policy does not grant is a defect, not a console warning.
+// Fixture suites record DOM securitypolicyviolation events from init scripts.
+// Scriptless live frames use Playwright's external console/pageerror stream,
+// including child targets. Both paths refuse errors instead of muting them.
 
 const externalRecorders = new WeakMap();
 
-// Chromium's live measuring frames forbid scripts. Observe their policy
-// issues through the page target instead of injecting code into each frame.
-// Install and enable before navigation, including on pages that later reload.
+// Playwright recursively attaches iframe targets before resuming them and
+// forwards their Log/Runtime errors to the owning Page. Register before
+// navigation so later child targets and reloads retain the same coverage.
+// Refuse every error, as the real-browser check already does; do not depend
+// on matching a browser's CSP wording or inject scripts into sandboxed frames.
 export async function recordPolicyViolationsOutsidePage(page) {
   if (externalRecorders.has(page)) return;
-  const session = await page.context().newCDPSession(page);
   const violations = [];
-  session.on("Audits.issueAdded", ({ issue }) => {
-    const details = issue.details.contentSecurityPolicyIssueDetails;
-    if (!details) return;
-    violations.push({
-      directive: details.violatedDirective.split(/\s/u)[0],
-      blocked: details.blockedURL ?? "",
-      sample: details.contentSecurityPolicyViolationType,
-      details,
-    });
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      violations.push({ kind: "console", text: message.text(), location: message.location() });
+    }
   });
-  await session.send("Audits.enable");
+  page.on("pageerror", (error) => {
+    violations.push({ kind: "pageerror", text: error.message });
+  });
   externalRecorders.set(page, violations);
 }
 
