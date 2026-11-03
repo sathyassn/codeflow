@@ -1,0 +1,11 @@
+id = "TSK-1272"
+uid = "061d75dd-9337-4955-b8f5-44d1b690cec4"
+kind = "TSK"
+title = "The hosted release check passes a real line pull request behind the tip once batch landing is on the line"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T04:29:59Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
