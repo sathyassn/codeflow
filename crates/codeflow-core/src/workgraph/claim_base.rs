@@ -141,7 +141,7 @@ pub fn select(root: &Path, task: &str, target: &str, pins: &[ReviewedPin]) -> Re
         }
     }
     if sources.len() > 1 {
-        return Err(format!("predecessors require different unmerged sources: {}; use the codeflow line sync route to bring them onto the target first", sources.keys().cloned().collect::<Vec<_>>().join(", ")));
+        return Err(format!("predecessors require different unmerged sources: {}; use the line sync pull request route (issue #280) to bring them onto the target first", sources.keys().cloned().collect::<Vec<_>>().join(", ")));
     }
     let (mut reference, mut base) = sources.into_iter().next().unwrap_or((target_ref, tip));
     if base != tip && pins.is_empty() {
@@ -149,11 +149,11 @@ pub fn select(root: &Path, task: &str, target: &str, pins: &[ReviewedPin]) -> Re
         let mut planning = records(&repo, common)?;
         project_dependencies(&repo, &mut planning, task, common, base, pins)?;
         work_start::validate_anchored_task_on(&repo, &planning, task, target, pins)
-            .map_err(|error| format!("source {reference}@{base} lacks the target's required planning anchor: {error}; use the codeflow line sync route first"))?;
+            .map_err(|error| format!("source {reference}@{base} lacks the target's required planning anchor: {error}; use the line sync pull request route (issue #280) first"))?;
     }
     if let Some(stack) = work_start::stack_base(root, pins)? {
         if base != tip && !contains(&repo, stack, base)? {
-            return Err(format!("reviewed stack does not contain {reference}@{base}; use the codeflow line sync route first"));
+            return Err(format!("reviewed stack does not contain {reference}@{base}; use the line sync pull request route (issue #280) first"));
         }
         reference = "reviewed pins".into();
         base = stack;
