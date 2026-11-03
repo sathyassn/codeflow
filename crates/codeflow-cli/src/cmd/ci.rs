@@ -777,6 +777,8 @@ pub fn run(args: &CiArgs) -> i32 {
         &head,
         pr_body.as_deref(),
         body_inventory.as_deref(),
+        // The push set supplies this flag on every local push CI call, so it
+        // identifies local push context; it cannot authorize hosted deferral.
         args.advertisement_stdin,
         is_pr_event(|key| environment.get(key).cloned()),
     );
