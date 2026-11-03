@@ -1,0 +1,11 @@
+id = "TSK-1275"
+uid = "266b9f22-5d23-4ed3-bb0c-7114f9662b66"
+kind = "TSK"
+title = "Each guard call finishes quickly on a loaded host without changing what it refuses"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T05:35:03Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
