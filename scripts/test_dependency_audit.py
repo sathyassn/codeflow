@@ -2,6 +2,7 @@
 import datetime
 import importlib.util
 import json
+import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -92,6 +93,29 @@ class Precedence(unittest.TestCase):
         self.assertEqual(audit.findings(report, Path("/scan"))[0]["severity"], 3)
         with self.assertRaises(audit.AuditError):
             audit.findings({}, Path("/scan"))
+
+    def test_scan_root_alias_accepts_same_tree_and_refuses_outside(self):
+        with tempfile.TemporaryDirectory() as temp:
+            parent = Path(temp)
+            tree = parent / "tree"
+            tree.mkdir()
+            alias = parent / "alias"
+            alias.symlink_to(tree, target_is_directory=True)
+            report = {"results": [{"source": {"path": str(tree.resolve() / "Cargo.lock")},
+                                   "packages": [{"package": {"name": "demo", "ecosystem": "crates.io"},
+                                                 "vulnerabilities": [{"id": "GHSA-test"}]}]}]}
+            self.assertEqual(audit.findings(report, alias)[0]["path"], "Cargo.lock")
+            report["results"][0]["source"]["path"] = str(alias / "Cargo.lock")
+            self.assertEqual(audit.findings(report, tree)[0]["path"], "Cargo.lock")
+            for outside in [parent / "Cargo.lock", parent / "tree-other" / "Cargo.lock"]:
+                report["results"][0]["source"]["path"] = str(outside)
+                with self.assertRaises(audit.AuditError):
+                    audit.findings(report, alias)
+            link = tree / "outside"
+            link.symlink_to(parent / "Cargo.lock")
+            report["results"][0]["source"]["path"] = str(link)
+            with self.assertRaises(audit.AuditError):
+                audit.findings(report, tree)
 
     def test_scan_errors_and_incomplete_reports_cannot_reach_the_table(self):
         from subprocess import CompletedProcess

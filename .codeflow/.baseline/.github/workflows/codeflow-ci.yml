@@ -1125,7 +1125,10 @@ jobs:
                   path = Path(path)
                   if path.is_absolute():
                       try:
-                          path = path.relative_to(root)
+                          # A runner temp path may be a platform alias (/var on macOS),
+                          # while the scanner reports its physical path. Compare physical
+                          # paths, retaining the boundary check for links outside the tree.
+                          path = path.resolve().relative_to(root.resolve())
                       except ValueError as error:
                           raise AuditError("OSV source is outside the scanned tree") from error
                   if ".." in path.parts:

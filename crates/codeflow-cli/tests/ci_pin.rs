@@ -1802,7 +1802,7 @@ fn a_pull_request_into_a_non_default_target_is_judged_by_that_target() {
     let enforced = verdict(&target);
     let text = String::from_utf8_lossy(&enforced.stderr);
     assert_eq!(enforced.status.code(), Some(1), "{text}");
-    assert!(text.contains("git.commit_format"), "{text}");
+    assert!(text.contains("git.commit_description"), "{text}");
     assert!(text.contains("over the 10-char limit"), "{text}");
 }
 
