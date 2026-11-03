@@ -1,0 +1,11 @@
+id = "TSK-1274"
+uid = "eec27833-ee66-4fa7-81c2-d8a29b233fc0"
+kind = "TSK"
+title = "Main's markdown parser is free of the RUSTSEC-2026-0433 advisory"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T05:06:06Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
