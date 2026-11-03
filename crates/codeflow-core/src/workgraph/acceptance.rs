@@ -6398,7 +6398,14 @@ mod tests {
 
     #[test]
     fn line_record_refuses_unreviewed_span_even_without_a_record_at_either_end() {
-        line_record_refusal(LineRecordCase::UnreviewedSpan, "src/unreviewed.rs");
+        let f = AdoptionFixture::line_record(LineRecordCase::UnreviewedSpan);
+        let repo = Repository::open(f.dir.path()).unwrap();
+        assert!(blob_at(&repo, f.reviewed, ADOPTION_TASK).unwrap().is_none());
+        assert!(blob_at(&repo, f.span, ADOPTION_TASK).unwrap().is_none());
+        assert_ne!(f.reviewed, f.span);
+        f.complete();
+        let problem = f.line_record_source(Transport::TaskLanding, true, false).unwrap_err();
+        assert!(problem.contains("src/unreviewed.rs"), "{problem}");
     }
 
     #[test]
