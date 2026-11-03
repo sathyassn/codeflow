@@ -615,12 +615,14 @@ pub fn commit_msg_from(
                 ]),
             ));
         }
+    }
+    if policy.commit_footer_required.is_active() {
         if let Some(reason) =
             standards::check_required_footers(subject, &cleaned, &policy.commit_required_footers)
         {
             report.violations.push(Violation::new(
-                "git.commit_body",
-                policy.commit_body,
+                "git.commit_footer_required",
+                policy.commit_footer_required,
                 reason,
                 crate::remedy::COMMIT_REQUIRED_FOOTERS
                     .with(&[("footers", &policy.commit_required_footers.join(", "))]),
@@ -2587,7 +2589,7 @@ mod tests {
         let v = missing
             .violations
             .iter()
-            .find(|v| v.rule == "git.commit_body" && v.message.contains("Signed-off-by"))
+            .find(|v| v.rule == "git.commit_footer_required" && v.message.contains("Signed-off-by"))
             .expect("a missing-required-footer violation");
         assert_eq!(v.level, PolicyLevel::Block);
         // Present (the required token is implicitly allowed) → clean.

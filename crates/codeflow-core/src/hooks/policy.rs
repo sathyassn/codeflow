@@ -289,7 +289,7 @@ pub struct GitPolicy {
     /// (off/warn/allow/block); default `warn`. When active, the body is only
     /// `- ` bullets (≤ `commit_body_max_bullets`, each ≤ `commit_body_bullet_max_len`
     /// chars), blank lines, an optional `BREAKING CHANGE:` footer, and any opted-in
-    /// footer trailers; a prose paragraph, numbered list, or story blocks.
+    /// footer trailers; a prose paragraph, numbered list, or story warns by default.
     /// Auto-generated subjects (merge/revert/fixup/squash) are exempt.
     pub commit_body: PolicyLevel,
     /// Max number of `- ` bullets allowed in a commit body. Integer; default 3
@@ -312,8 +312,11 @@ pub struct GitPolicy {
     /// `["Signed-off-by"]` for DCO). Default empty. A required token is implicitly
     /// allowed (no need to also list it in
     /// [`commit_footer_tokens`](GitPolicy::commit_footer_tokens)); a commit
-    /// missing one is blocked under `commit_body`.
+    /// missing one is judged under `commit_footer_required`.
     pub commit_required_footers: Vec<String>,
+    /// Level for missing required footer trailers, independent of body style.
+    /// Default `block`; an empty required-footer list imposes no requirement.
+    pub commit_footer_required: PolicyLevel,
     /// Ticket-reference footer tokens the project recognizes (e.g.
     /// `["Refs", "Closes"]`). Default empty = the ticket feature is off and a
     /// `Refs:` line is NOT auto-allowed (it blocks unless added to
@@ -595,6 +598,7 @@ impl Default for GitPolicy {
             // exactly what it needs (an agent fills every default-allowed slot).
             commit_footer_tokens: Vec::new(),
             commit_required_footers: Vec::new(),
+            commit_footer_required: PolicyLevel::Block,
             commit_ticket_keys: Vec::new(),
             commit_ticket_required: PolicyLevel::Off,
             commit_ticket_pattern: String::new(),
@@ -1037,6 +1041,7 @@ impl GitPolicy {
         self.commit_format = PolicyLevel::Off;
         self.commit_description = PolicyLevel::Off;
         self.commit_body = PolicyLevel::Off;
+        self.commit_footer_required = PolicyLevel::Off;
         // Neutralize the footer/ticket opt-ins so the scaffold commit is never
         // walled by a required trailer during the pre-first-commit grace window.
         self.commit_ticket_required = PolicyLevel::Off;
@@ -1172,6 +1177,7 @@ mod tests {
         // the `BREAKING CHANGE:` footer are allowed until a project opts in.
         assert!(g.commit_footer_tokens.is_empty());
         assert!(g.commit_required_footers.is_empty());
+        assert_eq!(g.commit_footer_required, PolicyLevel::Block);
         assert!(g.commit_ticket_keys.is_empty());
         assert_eq!(g.commit_ticket_required, PolicyLevel::Off);
         assert!(g.commit_ticket_pattern.is_empty());
@@ -1547,6 +1553,7 @@ mod tests {
         assert_eq!(policy.git.local_ref_protection, PolicyLevel::Off);
         assert_eq!(policy.git.commit_format, PolicyLevel::Off);
         assert_eq!(policy.git.commit_body, PolicyLevel::Off);
+        assert_eq!(policy.git.commit_footer_required, PolicyLevel::Off);
         // The security / red-team gates are advisory (warn) defaults, so — like
         // test_gate_on_push — bootstrap grace suspends them (ADR-0016).
         assert_eq!(policy.git.security_review, PolicyLevel::Off);

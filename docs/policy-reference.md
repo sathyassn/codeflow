@@ -38,11 +38,12 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.commit_description` | Level | `warn` | off \| warn \| allow \| block | The commit description length guideline. | Defaults to warn independently of commit_format. The subject length stays under commit_format. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.commit_desc_max_len` | uint | `50` | a non-negative integer (character count) | Max length of the description, the text after `type(scope): `. | Enforced under commit_description. |
 | `git.commit_subject_max_len` | uint | `72` | a non-negative integer (character count) | Max length of the whole subject line (git's 72-column wrap). | Enforced under commit_format. |
-| `git.commit_body` | Level | `warn` | off \| warn \| allow \| block | Shape of the commit body: only `- ` bullets, blank lines, and sanctioned footers. | Governs the whole body family: the bullet caps, footer tokens, required footers, and ticket trailers; off/allow disables them all. Merge/revert/fixup/squash commits are exempt. |
+| `git.commit_body` | Level | `warn` | off \| warn \| allow \| block | Shape of the commit body: only `- ` bullets, blank lines, and sanctioned footers. | Governs body shape and allowed trailer tokens. Required footers and tickets have separate levels. Merge/revert/fixup/squash commits are exempt. |
 | `git.commit_body_max_bullets` | uint | `3` | a non-negative integer | Max number of `- ` bullets allowed in a commit body. | Enforced under commit_body. |
 | `git.commit_body_bullet_max_len` | uint | `72` | a non-negative integer (character count, including the `- ` marker) | Max length of a single commit-body bullet line. | Enforced under commit_body. |
 | `git.commit_footer_tokens` | string list | `[]` | an array of exact, case-sensitive trailer tokens (e.g. Signed-off-by) | Footer trailers ALLOWED (optional) beyond the always-allowed BREAKING CHANGE:. | Unioned with commit_required_footers and commit_ticket_keys into the sanctioned-footer set; enforced under commit_body. |
-| `git.commit_required_footers` | string list | `[]` | an array of exact, case-sensitive trailer tokens (e.g. Signed-off-by) | Footer trailers that MUST appear on every non-exempt commit (e.g. DCO). | A required token is implicitly allowed; a commit missing one blocks under commit_body. |
+| `git.commit_required_footers` | string list | `[]` | an array of exact, case-sensitive trailer tokens (e.g. Signed-off-by) | Footer trailers that MUST appear on every non-exempt commit (e.g. DCO). | A required token is implicitly allowed; a commit missing one is judged under commit_footer_required. |
+| `git.commit_footer_required` | Level | `block` | off \| warn \| allow \| block | Missing required footer trailers, independently of body style. | Default block. An empty commit_required_footers list imposes no requirement. |
 | `git.commit_ticket_keys` | string list | `[]` | an array of exact, case-sensitive trailer tokens (e.g. Refs, Closes) | Ticket-reference trailer tokens the project recognizes. | EMPTY = the ticket feature is off and a `Refs:` line BLOCKS unless listed in commit_footer_tokens; non-empty allows these tokens and arms commit_ticket_required. |
 | `git.commit_ticket_required` | Level | `off` | off \| warn \| allow \| block | Whether a matching ticket-reference trailer is REQUIRED on every commit. | Only meaningful when commit_ticket_keys is non-empty; `allow` behaves like `off` here (inactive); use warn or block to require. Merge/revert/fixup/squash commits are exempt. |
 | `git.commit_ticket_pattern` | string | `""` | a regular expression, e.g. ^PROJ-\d+$ (empty = no format check) | Regex a present ticket trailer's value must match. | Strictly validated: an unparseable pattern is a loud error at the commit-msg hook, `codeflow ci`, and `codeflow validate` (at enforcement time it would silently fail open). |
@@ -2223,8 +2224,10 @@ the head scan and not the base scan. The first matching row applies:
 Unknown severity is treated as high. Unknown or missing reachability is
 reachable. Dev-only lockfiles have no exemption. Suppressions use
 `[[IgnoredVulns]]` in the base commit's `osv-scanner.toml` beside the
-lockfile, with `id`, `reason` and `ignoreUntil`. Expired suppressions do
-not apply. The scanner runs with an explicit empty configuration, so
+lockfile, with nonempty `id` and `reason` and a valid `ignoreUntil`.
+Migration: `reason` and `ignoreUntil` were previously optional. Add both
+fields on the base before adopting this workflow. Missing or malformed
+fields fail the job at warn and block. Expired suppressions do not apply. The scanner runs with an explicit empty configuration, so
 checkout configuration cannot hide findings before this table judges them.
 
 File-based triage lives in `.codeflow/audit-triage.json`, a JSON array of

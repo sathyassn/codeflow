@@ -213,9 +213,8 @@ def scan(scanner, root, config):
     # Capture first, then match. There is no producer pipe whose SIGPIPE can
     # change an extraction-error match into a successful empty scan.
     text = run.stderr + "\n" + run.stdout
-    if run.returncode == 128 and "error during extraction" not in text.lower():
-        if not run.stderr.strip() or run.stderr.strip() == "No package sources found, --help for usage information.":
-            return []
+    if run.returncode == 128 and text.strip() == "No package sources found, --help for usage information.":
+        return []
     if run.returncode not in (0, 1) or run.stderr.strip():
         raise AuditError(f"OSV scan failed or was incomplete (exit {run.returncode})")
     try:
@@ -236,9 +235,13 @@ def trusted_exceptions(tree, head, trusted_sha, work, today):
     for file in tree.rglob("osv-scanner.toml"):
         file = regular(tree, file.relative_to(tree))
         for item in tomllib.loads(file.read_text()).get("IgnoredVulns", []):
-            nonempty(item.get("id"), "suppression id")
-            nonempty(item.get("reason"), "suppression reason")
-            suppressions.append({"id": item["id"], "expiry": expiry(item.get("ignoreUntil")),
+            nonempty(item.get("id"), f"{file.relative_to(tree)} suppression id")
+            nonempty(item.get("reason"), f"{file.relative_to(tree)} suppression reason")
+            try:
+                until = expiry(item.get("ignoreUntil"))
+            except AuditError as error:
+                raise AuditError(f"{file.relative_to(tree)} suppression ignoreUntil: {error}") from error
+            suppressions.append({"id": item["id"], "expiry": until,
                                  "directory": str(file.parent.relative_to(tree))})
     hook = regular(tree, ".codeflow/audit-exceptions.sh")
     if hook.exists():
@@ -253,6 +256,8 @@ def trusted_exceptions(tree, head, trusted_sha, work, today):
         result = subprocess.run(["bash", str(hook)], cwd=tree, env=env, stdin=subprocess.DEVNULL,
                                 capture_output=True, text=True, check=False)
         if result.returncode:
+            if result.stderr.strip():
+                print("audit-exceptions.sh stderr: " + json.dumps(result.stderr), file=sys.stderr)
             raise AuditError(f"trusted audit-exceptions.sh failed (exit {result.returncode}); {MIGRATION}")
         entries.extend(parse_hook(result.stdout))
     try:

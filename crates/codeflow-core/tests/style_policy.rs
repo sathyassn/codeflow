@@ -107,3 +107,28 @@ fn retired_controls_load_without_entering_the_effective_schema() {
     }
     assert_eq!(policy_schema::unsupported_control_warnings(&raw).len(), 7);
 }
+
+#[test]
+fn required_footers_block_independently_of_body_style() {
+    for body in [PolicyLevel::Warn, PolicyLevel::Off] {
+        let policy = GitPolicy {
+            commit_body: body,
+            commit_required_footers: vec!["Signed-off-by".into()],
+            ..GitPolicy::default()
+        };
+        let missing = git_hook::commit_msg(&policy, "feat: x", false);
+        assert!(missing
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.commit_footer_required" && v.level == PolicyLevel::Block));
+        let present = git_hook::commit_msg(
+            &policy,
+            "feat: x\n\nSigned-off-by: Example <example@example.com>",
+            false,
+        );
+        assert!(!present
+            .violations
+            .iter()
+            .any(|v| v.level == PolicyLevel::Block));
+    }
+}

@@ -154,7 +154,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 72] = [
+pub const SCHEMA: [KeySpec; 73] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -453,9 +453,8 @@ pub const SCHEMA: [KeySpec; 72] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Shape of the commit body: only `- ` bullets, blank lines, and sanctioned footers.",
-        notes: "Governs the whole body family: the bullet caps, footer \
-                tokens, required footers, and ticket trailers; off/allow \
-                disables them all. Merge/revert/fixup/squash commits are exempt.",
+        notes: "Governs body shape and allowed trailer tokens. Required footers and tickets \
+                have separate levels. Merge/revert/fixup/squash commits are exempt.",
     },
     KeySpec {
         path: "git.commit_body_max_bullets",
@@ -485,7 +484,14 @@ pub const SCHEMA: [KeySpec; 72] = [
         valid: "an array of exact, case-sensitive trailer tokens (e.g. Signed-off-by)",
         purpose: "Footer trailers that MUST appear on every non-exempt commit (e.g. DCO).",
         notes: "A required token is implicitly allowed; a commit missing one \
-                blocks under commit_body.",
+                is judged under commit_footer_required.",
+    },
+    KeySpec {
+        path: "git.commit_footer_required",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Missing required footer trailers, independently of body style.",
+        notes: "Default block. An empty commit_required_footers list imposes no requirement.",
     },
     KeySpec {
         path: "git.commit_ticket_keys",

@@ -119,7 +119,9 @@ class Precedence(unittest.TestCase):
 
     def test_scan_errors_and_incomplete_reports_cannot_reach_the_table(self):
         from subprocess import CompletedProcess
-        cases = [(127, "", "failed"), (128, "Error during extraction\n" + "x" * 2097152, ""),
+        cases = [(128, "", ""), (128, "unexpected", ""),
+                 (128, "unexpected", "No package sources found, --help for usage information."),
+                 (127, "", "failed"), (128, "Error during extraction\n" + "x" * 2097152, ""),
                  (1, '{"results":[]}', ""), (0, '{"results":[]}', "read failed"),
                  (0, '{}', ""), (0, 'not json', "")]
         for status, out, err in cases:

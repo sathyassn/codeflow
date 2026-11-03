@@ -1124,13 +1124,14 @@ fn audit_repo(
 /// The fake osv-scanner: it reports an advisory unless an `osv-scanner.toml`
 /// sits beside the lockfile and, as osv-scanner does, skips a lockfile the
 /// `.gitignore` names unless it runs with `--no-ignore`. `OSV_FAKE` is
-/// `empty`, `broken` or `broken_long` (all exit 128) and `OSV_FAKE_SOURCE` is the path the
+/// `empty`, `silent`, `broken` or `broken_long` (all exit 128) and `OSV_FAKE_SOURCE` is the path the
 /// advisory names. With `--format json` it prints a report on stdout, one
 /// vulnerability per id in `OSV_FAKE_IDS` (default `GHSA-test`), and its
 /// messages on stderr.
 const FAKE_OSV_SCANNER: &str = r#"#!/bin/sh
 case " $* " in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev/null; then echo 'No package sources found'; exit 128; fi ;; esac
 case ${OSV_FAKE:-} in
+  silent) exit 128 ;;
   empty) echo 'No package sources found, --help for usage information.'; exit 128 ;;
   broken) echo 'Error during extraction: Cargo.lock: could not extract'; echo 'No package sources found, --help for usage information.'; exit 128 ;;
   broken_long) echo 'Error during extraction: Cargo.lock: could not extract'; head -c 2097152 /dev/zero | tr '\000' x; echo; exit 128 ;;
@@ -1214,7 +1215,7 @@ fn levels(security_review: &str, dep_audit: &str) -> String {
 #[test]
 fn audit_scan_errors_fail_at_warn_and_block_and_off_skips() {
     for level in ["warn", "block", "off"] {
-        for mode in ["broken", "broken_long", "incomplete"] {
+        for mode in ["broken", "broken_long", "incomplete", "silent"] {
             let dir = tempfile::tempdir().unwrap();
             let work = dir.path().join("repo");
             std::fs::create_dir_all(&work).unwrap();
@@ -1240,6 +1241,8 @@ fn audit_reads_base_policy_and_suppressions() {
     for (base, suppression, passes) in [
         ("block", "head", false),
         ("block", "base", true),
+        ("block", "gitignore", false),
+        ("block", "symlink", false),
         ("warn", "", true),
         ("off", "", true),
     ] {
@@ -1248,12 +1251,30 @@ fn audit_reads_base_policy_and_suppressions() {
         std::fs::create_dir_all(&work).unwrap();
         let policy = levels(base, base);
         let trusted = audit_repo(&work, Some(&policy), &levels("off", "off"), suppression);
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "unchanged").unwrap();
         let out = run_audit_step(&work, &trusted, &[]);
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "unchanged");
+        if base == "warn" {
+            assert!(
+                String::from_utf8_lossy(&out.stdout).contains("::warning::"),
+                "{out:?}"
+            );
+        }
         assert_eq!(
             out.status.success(),
             passes,
             "{base} {suppression}: {out:?}"
         );
+    }
+    for level in ["block", "warn"] {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("repo");
+        std::fs::create_dir_all(&work).unwrap();
+        let policy = levels(level, level);
+        let trusted = audit_repo(&work, Some(&policy), &policy, "");
+        let out = run_audit_step(&work, &trusted, &[("OSV_FAKE", "empty")]);
+        assert!(out.status.success(), "{level}: {out:?}");
     }
     for base in [None, Some("{}"), Some("not json")] {
         let dir = tempfile::tempdir().unwrap();
