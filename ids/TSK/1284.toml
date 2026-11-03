@@ -1,0 +1,11 @@
+id = "TSK-1284"
+uid = "f4659e57-3305-40f9-a26d-7d4c6463e108"
+kind = "TSK"
+title = "TSK-1263's hosted cache criteria are proved on the line"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T15:45:48Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
