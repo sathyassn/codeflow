@@ -59,8 +59,7 @@
       "docs-validation",
       "docs-portal"
     ],
-    "worker_budget": 9,
-    "heavy_wait_seconds": 1800
+    "worker_budget": 9
   },
   "defaults": {
     "coverage": []

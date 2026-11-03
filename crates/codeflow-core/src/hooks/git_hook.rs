@@ -1548,24 +1548,20 @@ fn epic_line_push(
     if adoptions.unadopted.is_empty() {
         return;
     }
-    let epic = crate::workgraph::line_adoption::epic_id(branch).unwrap_or("its epic");
-    let ids = adoptions
-        .unadopted
-        .iter()
-        .map(|id| &id[..9])
-        .collect::<Vec<_>>()
-        .join(", ");
     let reset = if first_push {
         target
     } else {
         format!("refs/remotes/origin/{branch}")
     };
+    let (message, remedy) = crate::workgraph::line_adoption::direct_commit_refusal(
+        branch,
+        &adoptions.unadopted,
+        &reset,
+    );
     report.violations.push(Violation::always_blocking(
         "work.epic_line",
-        format!("{} would receive a commit made directly on the line ({ids})", crate::git::display_text(branch)),
-        &format!(
-            "land it by a pull request: save it on a task or planning branch, then `git reset --keep {reset}` and open a task or planning pull request to the line; a commit already on the remote is adopted by a `line_adoptions` entry in {epic} (see git-rules.md, \"Bodies of work\")"
-        ),
+        message,
+        &remedy,
     ));
 }
 

@@ -201,8 +201,10 @@ mutation testing, or project-owned architecture fitness checks only from the
 orchestrator's evidence triggers; `none selected` is valid and is written
 nowhere per task, and normal scenario coverage remains mandatory. Builders
 run targeted tests as they go and `codeflow test --mode quick` once before
-ready, and cite them with the revision and the command; the landing checks selected by `git-rules.md`, "Bodies of work", run once
-on each exact candidate, and a standalone PR is its own candidate. Adopted push and CI
+ready, and cite them with the revision and the command; the full gate runs once on each exact landing candidate,
+which carries every PR ready when its line lands, and a standalone PR is its
+own candidate. Gates, full ones included, run in parallel as host capacity
+allows. Adopted push and CI
 gates still run, and completed evidence is reused only for the same tree.
 Honor what the gate reports; the project's policy sets its level.
 
@@ -444,6 +446,12 @@ review and consult work that produces no durable artifact needs no task
 record of its own. Review, confirmation and repairs reuse the current task,
 never a task per finding, reviewer turn or status reply. The smallest unit
 is one standalone task whose record and code land in one reviewed PR.
+
+Change only work you own. Every change that goes into a repository is part
+of a task, made by the session that owns that work; no ad hoc edits. A
+session that sees a needed change in work it does not own tells the owner,
+with the evidence, and the owner makes it in that task. At the standard and
+minimal tiers the task is the harness's tracked unit.
 
 Plan once, at the breakdown: a brief or spec is shaped once into an epic
 and its tasks, or into one standalone task, and a task reuses that plan

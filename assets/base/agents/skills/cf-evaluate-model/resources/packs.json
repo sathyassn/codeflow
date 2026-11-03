@@ -449,6 +449,15 @@
       "cases": [
         "release-strings-say-what-they-do"
       ]
+    },
+    {
+      "id": "batch-landing-ownership",
+      "description": "Focused TSK-1268 diagnostics for one candidate containing all ready PRs and for reporting a needed edit to the session that owns it. Run each case once per lineage as a native diagnostic with retained, independently graded traces. Structural checks prove registration only; this pack is not full binding qualification.",
+      "includes": [],
+      "cases": [
+        "ready-pull-requests-share-one-landing-candidate",
+        "needed-edit-is-reported-to-work-owner"
+      ]
     }
   ]
 }

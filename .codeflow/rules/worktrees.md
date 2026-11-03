@@ -156,8 +156,12 @@ concurrency cap from available CPU, memory, disk, and tool limits, monitors
 pressure, and reduces fan-out before swapping, duplicate heavyweight builds,
 or context sprawl degrade quality. Dependent work stays sequential.
 
-For a multi-task body, integrate through `integration/<epic>` in small
-batches, and serialize each landing: one candidate at a time. Before review,
+For a multi-task body, integrate through `integration/<epic>` in batches.
+When a line lands, every PR reviewed and ready at that moment goes on one
+candidate, and a PR that becomes ready later joins the next candidate; no
+PR waits for another PR's landing or hosted run. Only correctness
+serializes: one landing candidate at a time on a line tip, while different
+lines land in parallel. Before review,
 each builder merges the current line into the task branch and resolves the
 conflicts there. The primary assembles reviewed task heads on a candidate
 from the line tip in dependency order, resolves any remaining conflicts
