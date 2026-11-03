@@ -623,22 +623,23 @@ fn export_without_capture_time(html: &str) -> String {
     let marker = "<aside aria-label=\"Export status\">Review capture of the session at ";
     assert_eq!(html.matches(marker).count(), 1, "one export capture status");
     let start = html.find(marker).unwrap() + marker.len();
+    let end = html[start..]
+        .find("</time>")
+        .expect("a closed export capture time")
+        + "</time>".len();
     let time = regex::Regex::new(
-        r#"^<time datetime="([0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z)" data-cf-unix="([0-9]+)">([^<]+)</time>"#,
+        r#"^<time datetime="([0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z)" data-cf-unix="([0-9]+)">([^<]+)</time>$"#,
     )
     .unwrap();
     let capture = time
-        .captures(&html[start..])
+        .captures(&html[start..start + end])
         .expect("a well-formed UTC export capture time and Unix seconds");
     assert_eq!(&capture[1], &capture[3], "capture datetime matches its text");
     capture[2]
         .parse::<u64>()
         .expect("capture Unix seconds fit u64");
     let mut normalised = html.to_string();
-    normalised.replace_range(
-        start..start + capture.get(0).unwrap().len(),
-        "<time>CAPTURE_TIME</time>",
-    );
+    normalised.replace_range(start..start + end, "<time>CAPTURE_TIME</time>");
     normalised
 }
 
