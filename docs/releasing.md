@@ -126,12 +126,19 @@ Local-artifact authority job:
     coverage shards and their report, which applies the line floor.
   - `windows` is the one verdict over the Windows build, checks, test
     partitions and journeys.
-  - On a main push whose merge commit has exactly the tree of a pull request
-    head whose `codeflow-ci` run passed every job, both verdicts pass by
-    naming that run and the gate and Windows jobs are skipped
-    (`scripts/ci-reuse.py`, TSK-265). A push that changes a build cache
-    input (the CI workflow included), or for which main lacks the present
-    part's apt cache for the current runner image, runs every job instead.
+  - On a push to main or to an integration line whose merge commit has
+    exactly the tree of a pull request head whose `codeflow-ci` run passed
+    every job, both verdicts pass by naming that run and the gate and
+    Windows jobs are skipped (`scripts/ci-reuse.py`, TSK-265, TSK-359). The
+    run must be the one for the merged pull request into that line, and its
+    own recorded provenance (pull request number, base line, head, merge
+    tree, workflow file and Ubuntu and Windows runner images) must equal the
+    push's, with a recorded base the line already held. Every job the push
+    skips must have run on the push's runner image for its label, as
+    GitHub's job log records it. A push that changes a build cache
+    input (the CI workflow included), or for which neither the pushed line
+    nor main holds the present part's apt cache for the current runner
+    image, runs every job instead.
 - It checks write-visible host collisions. Its write-scoped token can see draft
   releases.
 - It fails closed on a wrong tag, source or public release, a foreign draft, or
