@@ -2198,7 +2198,10 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
     } else if blocking {
         eprintln!("codeflow ci: FAILED — {blocks} blocking, {warnings} warning(s)");
     } else if skipped.is_empty() {
-        eprintln!("codeflow ci: {warnings} warning(s) only — proceeding");
+        eprintln!(
+            "codeflow ci: {warnings} warning(s) only; proceeding (checks run: {})",
+            ran.join(", ")
+        );
     } else {
         eprintln!(
             "codeflow ci: {warnings} warning(s); skipped: {}",

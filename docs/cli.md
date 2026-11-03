@@ -596,7 +596,7 @@ Claim and start use these rules.
 | Fixed claim evidence | Local annotated Git object at `refs/codeflow/claims/<task branch>`, shared by linked worktrees; records the base, source and reviewed pins independently of the ledger and shared Git configuration. |
 | Source advances after claim | Start retains the recorded base and reports the new tip. |
 | Metadata absent or corrupt | Absent metadata uses the current selected base, including in a fresh clone; corrupt metadata refuses admission. |
-| Unlanded reviewed stack | Supply the original `--on TSK@SHA` pins again; each start checks the current exact head and review. |
+| Unlanded reviewed stack | Supply current reviewed `--on TSK@SHA` pins; start checks their exact heads, reviews and ancestry while retaining the original base. Once the predecessor lands, ordinary completion checks replace the pin requirement. A rebase that drops the original base needs a new claim. |
 | Source fetch fails | Claim and start refuse, naming the remote and last fetch time, or unknown; missing live evidence blocks even at `git.work_planning: warn`. |
 | Head lacks the current target | Before review, merge the target into the task branch. CI's `work.target_tip` warns, or reports an unreadable tip as unverified; existing planning and record checks still apply. |
 

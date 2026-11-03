@@ -23,7 +23,8 @@ pub struct Base {
     pub source: String,
     /// Full commit identity, never a rev expression.
     pub revision: String,
-    /// Reviewed predecessor identities, still checked live by the CLI.
+    /// Original reviewed pins. Unlanded starts check the current reviewed
+    /// heads of these same predecessors, retaining this claim's base.
     pub pins: Vec<String>,
 }
 
@@ -172,6 +173,21 @@ fn claim_ref(branch: &str) -> String {
     format!("refs/codeflow/claims/{branch}")
 }
 
+fn pin_tasks(values: &[String]) -> Result<BTreeSet<String>, String> {
+    let mut tasks = BTreeSet::new();
+    for value in values {
+        let (task, revision) = value.split_once('@').ok_or("malformed claim pin")?;
+        if !super::is_valid_task_format_id(task)
+            || revision.len() != 40
+            || Oid::from_str(revision).is_err()
+            || !tasks.insert(task.to_string())
+        {
+            return Err("malformed or repeated claim pin".into());
+        }
+    }
+    Ok(tasks)
+}
+
 /// Persist a claim snapshot after allocating a previously absent branch.
 ///
 /// # Errors
@@ -247,13 +263,14 @@ pub fn recorded(
     }
     repo.find_commit(tag.target_id())
         .map_err(|e| e.to_string())?;
+    pin_tasks(&claim.base.pins)?;
     Ok(Some(claim.base))
 }
 
 /// Check containment and report a source advancing after a fixed claim.
 ///
 /// # Errors
-/// Refuses a wrong base or changed reviewed pins; callers choose policy level.
+/// Refuses a wrong base or different pinned predecessors; callers choose policy level.
 pub fn check(
     root: &Path,
     task: &str,
@@ -268,27 +285,19 @@ pub fn check(
         Some(base) => base,
         None => select(root, task, target, pins)?,
     };
-    let actual: BTreeSet<_> = pins
-        .iter()
-        .map(|p| format!("{}@{}", p.task_id(), p.revision()))
-        .collect();
-    if base.pins.iter().cloned().collect::<BTreeSet<_>>() != actual {
-        return Err("claim's reviewed pins differ; use the exact recorded --on TSK@SHA pins and verify their current review".into());
+    let actual: BTreeSet<_> = pins.iter().map(|p| p.task_id().to_string()).collect();
+    // Once the predecessor lands, start can omit --on. The ordinary
+    // dependency checks after containment must then prove its completion;
+    // a deleted review branch cannot keep a landed dependency unstartable.
+    if !pins.is_empty() && pin_tasks(&base.pins)? != actual {
+        return Err("claim's reviewed dependencies differ; supply --on pins for the same predecessors and verify their current review".into());
     }
-    if !base.pins.is_empty()
-        && work_start::stack_base(root, pins)?
-            .map(|id| id.to_string())
-            .as_deref()
-            != Some(base.revision.as_str())
-    {
-        return Err("recorded base differs from the exact reviewed stack head".into());
-    }
+    let oid = Oid::from_str(&base.revision).map_err(|e| e.to_string())?;
     let head = repo
         .head()
         .and_then(|r| r.peel_to_commit())
         .map_err(|e| e.to_string())?
         .id();
-    let oid = Oid::from_str(&base.revision).map_err(|e| e.to_string())?;
     if !contains(&repo, head, oid)? {
         return Err(format!("HEAD does not contain required base {}@{}; start new work with `codeflow work claim {task}`", base.source, base.revision));
     }
