@@ -4542,7 +4542,10 @@ fn private_origin() -> (String, Requests) {
             );
         }
     });
-    (format!("http://127.0.0.1:{port}/owner/private.git"), requests)
+    (
+        format!("http://127.0.0.1:{port}/owner/private.git"),
+        requests,
+    )
 }
 
 /// Every header name in `requests`, lowercased.
