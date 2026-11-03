@@ -1,0 +1,11 @@
+id = "TSK-1268"
+uid = "f6e72c5e-18a1-4fc6-a35b-bc7ced3cfb04"
+kind = "TSK"
+title = "Ready pull requests land together on one batch candidate per line"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T02:02:52Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
