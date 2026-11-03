@@ -1,0 +1,11 @@
+id = "TSK-1263"
+uid = "e4248de5-2bef-4c9f-a7a0-ce8f1327c23c"
+kind = "TSK"
+title = "The line keeps the Playwright apt cache that the verdict reuse check looks for"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T00:45:07Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
