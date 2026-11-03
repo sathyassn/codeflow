@@ -1,0 +1,11 @@
+id = "EPC-029"
+uid = "b3ff1518-77df-4724-84e8-a5eeddad4cef"
+kind = "EPC"
+title = "Guards close known bypasses"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T15:56:05Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
