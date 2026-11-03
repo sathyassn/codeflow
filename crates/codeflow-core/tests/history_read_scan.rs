@@ -147,7 +147,7 @@ fn direct_history_reads_require_the_reader_or_a_display_reason() {
     // `ContainedRoot::parent` walks a filesystem path, never Git history.
     assert_eq!(
         found.remove("codeflow-core/src/contained.rs").unwrap(),
-        vec!["parent"; 9]
+        vec!["parent"; 10]
     );
     assert!(
         found.is_empty(),

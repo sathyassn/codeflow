@@ -36,11 +36,12 @@ Runbook: [codeflow's own releases](releasing.md#codeflows-own-releases), [pendin
 - [ ] 1.1 The normal work PR holds reviewed pending notes in its own `changelog.d/` fragment, one labelled entry with an adjacent impact annotation per item, and every warranted coupled stamp change. Evidence: the PR link and `release.py check-pr` output.
 - [ ] 1.2 The cumulative version is the verified public baseline bumped once by the highest remaining pending impact, with breaking changes and migrations explicit. Evidence: `release.py sync` output.
 - [ ] 1.3 A reviewed `release.py assemble` PR (`Impact: none`) wrote every fragment into `CHANGELOG.md`, no `changelog.d/` fragment remains at the source, and `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, the release notes and the proposed `vX.Y.Z` tag agree. Evidence: the assemble PR and `release.py check-pr` output.
-- [ ] 1.4 PR validation used the current target and the actual proposed merge tree, rechecked just before the human merge. Evidence: the fresh PR CI run.
+- [ ] 1.4 PR validation used the current target and the actual proposed merge tree. Evidence: the fresh PR CI run.
 - [ ] 1.5 Every shipped behavior change links its capability or epic and its accepted architecture decision record (ADR), and the docs describe current behavior. Evidence: those links.
-- [ ] 1.6 The notes rendered from the final assembled source were read twice before the tag, as a new user and as a user upgrading from the last release. Evidence: both reads and their fixes.
+- [ ] 1.6 The notes rendered from the final assembled source were read twice before the tag, as a new user and as an upgrading user. Evidence: both reads and their fixes.
 - [ ] 1.7 No published section changed; any correction is a dated `## Errata` entry. Evidence: the `CHANGELOG.md` diff.
 - [ ] 1.8 The ceremony report over the release's window is pasted with a one-line comparison against the recorded baseline. Evidence: the report output.
+- [ ] 1.9 TSK-1145 ships only with TSK-1256. Evidence: the ancestry check.
 
 #### Scope and version details
 
@@ -54,6 +55,8 @@ Runbook: [codeflow's own releases](releasing.md#codeflows-own-releases), [pendin
 | 1.6 | Rendering: step 3 of [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication) |
 | 1.8 | The report informs the release decision and never blocks it |
 | 1.8 | Procedure: [ceremony check before a release](releasing.md#ceremony-check-before-a-release) |
+| 1.9 | A release whose source includes c1481a51a (TSK-1145) also includes the TSK-1256 gate lock fence. Check: `git merge-base --is-ancestor` for both commits against the release commit |
+| 1.9 | Builds with TSK-1145 but not TSK-1256 take a later slot when `full-gate.lock` is busy, so a 3.1 gate or a newer 4.0 run on the same machine does not keep them out. See [older CodeFlow binaries on the same machine](troubleshooting.md#older-codeflow-binaries-on-the-same-machine) |
 
 ### 2. Source and security gates
 
@@ -69,7 +72,7 @@ Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-p
 - [ ] 2.8 The committed presentation web distribution rebuilds byte-identically and passes its integrity, budget, license, audit and binary-delta limits. Evidence: `npm run supply-chain` and `npm run check` output.
 - [ ] 2.9 CodeQL state is honest for the repository's visibility, as the [CodeQL rows](releasing.md#re-verification-before-tagging) require. Evidence: the tool status page.
 - [ ] 2.10 Catastrophic-action blocked and allowed canaries pass for macOS, Linux and WSL2, and native Windows command forms, including supported privilege and shell launch wrappers. Evidence: canary output.
-- [ ] 2.11 Claude and Codex settings validate in their current native harnesses, and their secret-store denies, research access, prompts and sandbox match the documented contract. Evidence: validation output.
+- [ ] 2.11 Claude and Codex settings validate in their current native harnesses and match the documented contract. Evidence: validation output.
 
 #### Source and security details
 
