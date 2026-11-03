@@ -1,0 +1,11 @@
+id = "TSK-1285"
+uid = "8dc4863c-0207-44e7-82be-d8fcfab4b94c"
+kind = "TSK"
+title = "A hook binary older than the repository says it is too old"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T15:46:07Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
