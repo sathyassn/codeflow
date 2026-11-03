@@ -1673,6 +1673,27 @@ mod tests {
         assert_eq!(result.exit_code, 1);
     }
 
+    #[test]
+    fn a_heavy_target_keeps_progressing_past_the_base_timeout() {
+        let command = if cfg!(windows) {
+            "1..6 | ForEach-Object { Write-Output 'PASS work'; Start-Sleep -Milliseconds 300 }"
+        } else {
+            "for i in 1 2 3 4 5 6; do echo 'PASS work'; sleep 0.3; done"
+        };
+        let mut target = make_target("reduced-workers", command);
+        if cfg!(windows) {
+            target.shell = CommandShell::Powershell;
+        }
+        target.heavy = Some(true);
+        target.workers = Some(4);
+        target.env.insert("CARGO_BUILD_JOBS".into(), "1".into());
+        target.env.insert("NEXTEST_TEST_THREADS".into(), "1".into());
+        target.timeout_seconds = Some(1);
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_target(&target, "full", dir.path()).unwrap();
+        assert_eq!(result.exit_code, 0, "active work was killed: {result:?}");
+    }
+
     /// A target whose command hangs past its `timeout_seconds` is killed and
     /// FAILS fast with a loud message naming the timeout and the config field —
     /// it must not block for the full sleep duration.
