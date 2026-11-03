@@ -1,0 +1,11 @@
+id = "TSK-1302"
+uid = "492ae36b-8b43-4645-92e8-97ba59d2d4d7"
+kind = "TSK"
+title = "A project overrides managed instructions and keeps the overrides through updates"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T19:43:47Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
