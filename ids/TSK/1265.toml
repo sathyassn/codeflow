@@ -1,0 +1,11 @@
+id = "TSK-1265"
+uid = "a334b85d-89c6-497f-a11d-aae2378aed62"
+kind = "TSK"
+title = "The adopter CI template records hosted-run provenance so adopters can take hosted credit"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T00:49:15Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
