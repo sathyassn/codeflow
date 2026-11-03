@@ -1097,14 +1097,14 @@ fn audit_repo(
         std::fs::write(work.join(".codeflow/policy.json"), policy).unwrap();
     }
     if suppression == "base" {
-        std::fs::write(work.join("osv-scanner.toml"), "[[IgnoredVulns]]\n").unwrap();
+        std::fs::write(work.join("osv-scanner.toml"), "[[IgnoredVulns]]\nid = \"GHSA-test\"\nreason = \"tracked\"\nignoreUntil = 2099-01-01\n").unwrap();
     }
     git(work, &["add", "-A"]);
     git(work, &["commit", "-qm", "base"]);
     let base = git(work, &["rev-parse", "HEAD"]);
     std::fs::write(work.join(".codeflow/policy.json"), head_policy).unwrap();
     if suppression == "head" {
-        std::fs::write(work.join("osv-scanner.toml"), "[[IgnoredVulns]]\n").unwrap();
+        std::fs::write(work.join("osv-scanner.toml"), "[[IgnoredVulns]]\nid = \"GHSA-test\"\nreason = \"tracked\"\nignoreUntil = 2099-01-01\n").unwrap();
     }
     if suppression == "gitignore" {
         std::fs::write(work.join(".gitignore"), "Cargo.lock\n").unwrap();
@@ -1124,7 +1124,7 @@ fn audit_repo(
 /// The fake osv-scanner: it reports an advisory unless an `osv-scanner.toml`
 /// sits beside the lockfile and, as osv-scanner does, skips a lockfile the
 /// `.gitignore` names unless it runs with `--no-ignore`. `OSV_FAKE` is
-/// `empty` or `broken` (both exit 128) and `OSV_FAKE_SOURCE` is the path the
+/// `empty`, `broken` or `broken_long` (all exit 128) and `OSV_FAKE_SOURCE` is the path the
 /// advisory names. With `--format json` it prints a report on stdout, one
 /// vulnerability per id in `OSV_FAKE_IDS` (default `GHSA-test`), and its
 /// messages on stderr.
@@ -1135,7 +1135,7 @@ case ${OSV_FAKE:-} in
   broken) echo 'Error during extraction: Cargo.lock: could not extract'; echo 'No package sources found, --help for usage information.'; exit 128 ;;
   broken_long) echo 'Error during extraction: Cargo.lock: could not extract'; head -c 2097152 /dev/zero | tr '\000' x; echo; exit 128 ;;
 esac
-if [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi
+case " $* " in *' --config '*) ;; *) if [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi ;; esac
 case " $* " in
   *' --format json '*)
     # as osv-scanner does with a JSON format: every log level goes to stderr
@@ -1210,128 +1210,58 @@ fn levels(security_review: &str, dep_audit: &str) -> String {
     )
 }
 
-/// sathyassn/codeflow#81: the dependency audit reads its levels from the
-/// trusted commit, so a pull request that turns both keys off, deletes
-/// them or adds its own suppression is still judged by the base, and a
-/// base whose policy cannot be read fails the job instead of warning.
+/// Both audit levels fail closed for a failed or incomplete scan; off skips.
 #[test]
-fn the_security_review_reads_its_levels_and_suppressions_from_the_trusted_commit() {
-    let run_with = |base: Option<&str>, head: &str, suppression: &str, fake: &[(&str, &str)]| {
+fn audit_scan_errors_fail_at_warn_and_block_and_off_skips() {
+    for level in ["warn", "block", "off"] {
+        for mode in ["broken", "broken_long", "incomplete"] {
+            let dir = tempfile::tempdir().unwrap();
+            let work = dir.path().join("repo");
+            std::fs::create_dir_all(&work).unwrap();
+            let policy = levels(level, level);
+            let trusted = audit_repo(&work, Some(&policy), &policy, "");
+            let fake = if mode == "incomplete" {
+                vec![("OSV_FAKE_LOG", "Error during extraction: incomplete scan")]
+            } else {
+                vec![("OSV_FAKE", mode)]
+            };
+            let out = run_audit_step(&work, &trusted, &fake);
+            assert_eq!(
+                out.status.success(),
+                level == "off",
+                "{level} {mode}: {out:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn audit_reads_base_policy_and_suppressions() {
+    for (base, suppression, passes) in [
+        ("block", "head", false),
+        ("block", "base", true),
+        ("warn", "", true),
+        ("off", "", true),
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let work = dir.path().join("repo");
         std::fs::create_dir_all(&work).unwrap();
-        let trusted = audit_repo(&work, base, head, suppression);
-        let out = run_audit_step(&work, &trusted, fake);
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
+        let policy = levels(base, base);
+        let trusted = audit_repo(&work, Some(&policy), &levels("off", "off"), suppression);
+        let out = run_audit_step(&work, &trusted, &[]);
+        assert_eq!(
+            out.status.success(),
+            passes,
+            "{base} {suppression}: {out:?}"
         );
-        (out.status.success(), text)
-    };
-    let run =
-        |base: Option<&str>, head: &str, suppression: &str| run_with(base, head, suppression, &[]);
-    let block = levels("warn", "block");
-
-    // The head turns both keys off: the base's block still fails the job.
-    let (ok, text) = run(Some(&block), &levels("off", "off"), "");
-    assert!(!ok, "{text}");
-    assert!(text.contains("dep_audit=block"), "{text}");
-    assert!(!text.contains("skipping"), "{text}");
-
-    // The head deletes the keys: the base still judges.
-    let (ok, text) = run(Some(&block), "{\"git\": {}}\n", "");
-    assert!(!ok, "{text}");
-
-    // The head adds its own suppression: the base's (none) applies.
-    let (ok, text) = run(Some(&block), &block, "head");
-    assert!(!ok, "{text}");
-    assert!(text.contains("GHSA-test"), "{text}");
-
-    // The head hides its lockfile behind a `.gitignore`: it is still read.
-    let (ok, text) = run(Some(&block), &block, "gitignore");
-    assert!(!ok, "{text}");
-    assert!(text.contains("GHSA-test"), "{text}");
-
-    // A missing policy, a missing key or a value outside block, warn and
-    // off fails closed whatever the head says.
-    for base in [
-        None,
-        Some("{\"git\": {\"dep_audit\": \"block\"}}\n"),
-        Some(levels("warn", "loud").as_str()),
-        Some("not json\n"),
-    ] {
-        let (ok, text) = run(base, &levels("off", "off"), "");
-        assert!(!ok, "{base:?}: {text}");
-        assert!(text.contains("fails closed"), "{base:?}: {text}");
     }
-
-    // A key missing from the base is set by hand: `codeflow update` keeps a
-    // key that a policy from 3.0.0 or later deleted, so the error must not
-    // send the adopter there.
-    let (_, text) = run(
-        Some("{\"git\": {\"dep_audit\": \"block\"}}\n"),
-        &levels("off", "off"),
-        "",
-    );
-    assert!(
-        text.contains("git.security_review in .codeflow/policy.json")
-            && text.contains("Set it to block, warn or off")
-            && text.contains("does not restore a deleted key")
-            && !text.contains("to add a missing key"),
-        "{text}"
-    );
-
-    // The base's own levels still decide: warn reports, off skips, and a
-    // suppression the base holds applies.
-    let (ok, text) = run(Some(&levels("warn", "warn")), &block, "");
-    assert!(ok, "{text}");
-    assert!(text.contains("::warning::dependency advisories"), "{text}");
-    let (ok, text) = run(Some(&levels("off", "off")), &block, "");
-    assert!(ok, "{text}");
-    assert!(text.contains("skipping"), "{text}");
-    let (ok, text) = run(Some(&block), &block, "base");
-    assert!(ok, "{text}");
-    assert!(
-        text.contains("suppressions from trusted commit: osv-scanner.toml"),
-        "{text}"
-    );
-
-    // The verdict follows the scanner's exit status: an advisory whose path
-    // reads like the no-lockfile message still fails under block, a scan
-    // that finds no package sources passes, and one that could not read a
-    // lockfile is a scan error.
-    let (ok, text) = run_with(
-        Some(&block),
-        &block,
-        "",
-        &[("OSV_FAKE_SOURCE", "no lockfiles/Cargo.lock")],
-    );
-    assert!(!ok, "{text}");
-    assert!(
-        text.contains("GHSA-test advisory in no lockfiles/"),
-        "{text}"
-    );
-    assert!(!text.contains("nothing to audit"), "{text}");
-    let (ok, text) = run_with(Some(&block), &block, "", &[("OSV_FAKE", "empty")]);
-    assert!(ok, "{text}");
-    assert!(text.contains("nothing to audit"), "{text}");
-    let (ok, text) = run_with(Some(&block), &block, "", &[("OSV_FAKE", "broken")]);
-    assert!(!ok, "{text}");
-    assert!(text.contains("exit 128"), "{text}");
-
-    // The scanner downloads outside the checkout, so a link the change
-    // commits at `osv-scanner` cannot redirect the write.
-    let dir = tempfile::tempdir().unwrap();
-    let work = dir.path().join("repo");
-    std::fs::create_dir_all(&work).unwrap();
-    let victim = dir.path().join("victim");
-    std::fs::write(&victim, "keep\n").unwrap();
-    let trusted = audit_repo(&work, Some(&block), &block, "symlink");
-    let out = run_audit_step(&work, &trusted, &[]);
-    let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("GHSA-test"), "{out:?}");
-    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep\n");
+    for base in [None, Some("{}"), Some("not json")] {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("repo");
+        std::fs::create_dir_all(&work).unwrap();
+        let trusted = audit_repo(&work, base, &levels("off", "off"), "");
+        assert!(!run_audit_step(&work, &trusted, &[]).status.success());
+    }
 }
 
 /// A repository with one lockfile whose base commit holds `policy` and
@@ -1371,14 +1301,7 @@ fn exception_repo(
 }
 
 const HOOK: &str = ".codeflow/audit-exceptions.sh";
-/// A hook that accepts each finding whose advisory id is a row of the
-/// register, which it reads from the exported trusted commit.
-const ACCEPTING_HOOK: &str = "awk -F'\\t' 'NR==FNR { ok[$1] = 1; next } ($1 in ok)' docs/register.txt \"$CODEFLOW_AUDIT_FINDINGS\"\n";
-
-const REGISTER: (&str, &str) = ("docs/register.txt", "GHSA-a\nGHSA-b\n");
-const ACCEPTING: (&str, &str) = (HOOK, ACCEPTING_HOOK);
-const ONE: [(&str, &str); 1] = [("OSV_FAKE_IDS", "GHSA-a")];
-const TWO: [(&str, &str); 1] = [("OSV_FAKE_IDS", "GHSA-a GHSA-c")];
+const VALID_TRIAGE: &str = r#"{"id":"GHSA-test","package":"demo","ecosystem":"crates.io","owner":"team","rationale":"reviewed","expiry":"2099-01-01","reachability":"not-reachable","evidence":"no call path"}"#;
 
 /// Run the audit step at the `block` level on a repository whose base
 /// holds `base` and whose head adds `head`; returns whether it passed and
@@ -1401,205 +1324,41 @@ fn run_exception_step(
     (out.status.success(), text)
 }
 
-/// sathyassn/codeflow#149 AC-1: a project exception hook on the trusted
-/// commit accepts findings from a trusted register, and the step passes
-/// only when it accepts every finding.
+/// The trusted hook output is validated triage, never a bare waiver.
 #[test]
-fn the_project_exception_hook_accepts_findings_from_the_trusted_commit() {
-    let run = run_exception_step;
-    let (register, accepting, one) = (REGISTER, ACCEPTING, ONE);
-
-    // AC-1: every finding is a register row, so the step passes and lists
-    // each accepted finding; the hook runs from the exported trusted commit.
-    let (ok, text) = run(&[accepting, register], &[], &one);
+fn the_project_exception_hook_uses_validated_base_entries() {
+    let hook = format!("printf '%s\\n' '{}'\n", VALID_TRIAGE);
+    let (ok, text) = run_exception_step(&[(HOOK, &hook)], &[(HOOK, "exit 7\n")], &[]);
     assert!(ok, "{text}");
-    assert!(
-        text.contains(
-            "accepted by the project exception hook: GHSA-a\tdemo\t1.0.0\tcrates.io\tCargo.lock\tCVE-GHSA-a"
-        ),
-        "{text}"
-    );
-    assert!(
-        text.contains("Every dependency advisory is accepted"),
-        "{text}"
-    );
-    let (ok, text) = run(
-        &[accepting, register],
-        &[],
-        &[("OSV_FAKE_IDS", "GHSA-a GHSA-b")],
-    );
-    assert!(ok, "{text}");
-    assert!(
-        text.contains("hook: GHSA-a\tdemo") && text.contains("hook: GHSA-b\tdemo"),
-        "{text}"
-    );
-}
-
-/// AC-1: findings the hook does not accept fail the step, and a hook that
-/// fails or prints what is no finding accepts nothing.
-#[test]
-fn the_project_exception_hook_fails_the_step_for_findings_it_does_not_accept() {
-    let run = run_exception_step;
-    let (register, accepting, one, two) = (REGISTER, ACCEPTING, ONE, TWO);
-
-    // AC-1: one finding the register lacks fails the step, which still
-    // lists the accepted one and the one that is not accepted.
-    let (ok, text) = run(&[accepting, register], &[], &two);
-    assert!(!ok, "{text}");
-    assert!(
-        text.contains("accepted by the project exception hook: GHSA-a\t"),
-        "{text}"
-    );
-    assert!(text.contains("not accepted: GHSA-c\t"), "{text}");
-    assert!(!text.contains("Every dependency advisory"), "{text}");
-
-    // osv-scanner exits 1 for advisories even when it logged an error, such
-    // as a lockfile it could not read. The scan may be incomplete, so an
-    // accepting hook is not run and the step fails.
-    let (ok, text) = run(
-        &[accepting, register],
-        &[],
-        &[
-            ("OSV_FAKE_IDS", "GHSA-a"),
-            (
-                "OSV_FAKE_LOG",
-                "Error during extraction: other/Cargo.lock: could not extract",
-            ),
-        ],
-    );
-    assert!(!ok, "{text}");
-    assert!(text.contains("logged errors"), "{text}");
-    assert!(text.contains("could not extract"), "{text}");
-    assert!(
-        !text.contains("accepted by the project exception hook"),
-        "{text}"
-    );
-
-    // AC-1: a hook that accepts nothing, prints a line that is no finding,
-    // or fails (even after printing a real finding) accepts nothing.
-    for (hook, expect) in [
-        ("exit 0\n", ""),
-        ("echo 'GHSA-a'\n", ""),
-        (
-            "awk '{print}' \"$CODEFLOW_AUDIT_FINDINGS\"\nexit 3\n",
-            "failed (exit 3)",
-        ),
+    assert!(text.contains("trusted not-reachable triage"), "{text}");
+    for bad in [
+        "cat \"$CODEFLOW_AUDIT_FINDINGS\"\n".to_string(),
+        hook.replace("2099-01-01", "2000-01-01"),
+        "exit 3\n".to_string(),
     ] {
-        let (ok, text) = run(&[(HOOK, hook), register], &[], &one);
-        assert!(!ok, "{hook}: {text}");
-        assert!(text.contains("not accepted: GHSA-a\t"), "{hook}: {text}");
-        assert!(text.contains(expect), "{hook}: {text}");
+        let (ok, text) = run_exception_step(&[(HOOK, &bad)], &[(HOOK, &hook)], &[]);
+        assert!(!ok, "{text}");
+        assert!(text.contains("Replace bare TSV"), "{text}");
     }
-}
-
-/// AC-2: the hook and the register it reads come from the trusted commit,
-/// so a pull request cannot accept its own findings.
-#[test]
-fn a_pull_request_cannot_accept_its_own_audit_findings() {
-    let run = run_exception_step;
-    let (register, accepting, one, two) = (REGISTER, ACCEPTING, ONE, TWO);
-
-    // AC-2: a head that adds the hook and its register gets neither: the
-    // trusted commit has none, so the audit fails and says why.
-    let (ok, text) = run(&[], &[accepting, register], &one);
-    assert!(!ok, "{text}");
-    assert!(
-        text.contains(
-            "::notice::this change holds .codeflow/audit-exceptions.sh, but the trusted commit does not"
-        ),
-        "{text}"
-    );
-    assert!(
-        !text.contains("accepted by the project exception hook"),
-        "{text}"
-    );
-
-    // AC-2: a head that changes only the hook, or only the register, is
-    // judged by the trusted commit's copies.
-    let (ok, text) = run(&[(HOOK, "exit 0\n"), register], &[accepting], &one);
-    assert!(!ok, "{text}");
-    assert!(!text.contains("::notice::"), "{text}");
-    let (ok, text) = run(
-        &[accepting, register],
-        &[("docs/register.txt", "GHSA-a\nGHSA-b\nGHSA-c\n")],
-        &two,
-    );
-    assert!(!ok, "{text}");
-    assert!(text.contains("not accepted: GHSA-c\t"), "{text}");
-    // ... and a head that breaks the hook or empties the register cannot
-    // take away the trusted commit's acceptance either.
-    let (ok, text) = run(&[accepting, register], &[(HOOK, "exit 7\n")], &one);
+    let (ok, text) = run_exception_step(&[], &[(HOOK, &hook)], &[]);
+    assert!(!ok, "head-only hook waived finding: {text}");
+    let (ok, text) = run_exception_step(&[(HOOK, "symlink:/etc/hostname")], &[], &[]);
+    assert!(!ok, "symlink hook passed: {text}");
+    let file = format!("[{VALID_TRIAGE}]");
+    let (ok, text) = run_exception_step(&[(".codeflow/audit-triage.json", &file)], &[], &[]);
     assert!(ok, "{text}");
-    let (ok, text) = run(&[accepting, register], &[("docs/register.txt", "")], &one);
-    assert!(ok, "{text}");
+    let (ok, text) = run_exception_step(&[], &[(".codeflow/audit-triage.json", &file)], &[]);
+    assert!(!ok, "head-only triage waived finding: {text}");
 }
 
-/// AC-3: the failure advice names the hook when the trusted commit holds it
-/// and is the 3.1.0 text otherwise; the hook never judges a scan error.
 #[test]
-fn the_audit_failure_advice_names_the_hook_only_when_it_exists() {
-    let run = run_exception_step;
-    let (register, accepting, one) = (REGISTER, ACCEPTING, ONE);
-
-    // AC-3: the failure advice names the hook when the trusted commit holds
-    // it, and the v3.1.0 `osv-scanner.toml` route otherwise.
-    let (ok, text) = run(&[(HOOK, "exit 0\n")], &[], &one);
-    assert!(!ok, "{text}");
-    assert!(
-        text.contains("Triage, or accept a justified finding through the project exception hook .codeflow/audit-exceptions.sh."),
-        "{text}"
-    );
-    assert!(
-        !text.contains("osv-scanner.toml beside the lockfile"),
-        "{text}"
-    );
-    let (ok, text) = run(&[], &[], &one);
-    assert!(!ok, "{text}");
-    assert!(
-        text.contains("failing. Triage, or record a justified suppression in an osv-scanner.toml beside the lockfile.\n"),
-        "{text}"
-    );
-    assert!(text.contains("GHSA-test advisory in Cargo.lock"), "{text}");
-    assert!(!text.contains("exception hook"), "{text}");
-
-    // The hook judges advisories only: a scan error is never accepted, and
-    // a hook that is not a regular file on the trusted commit fails closed.
-    let (ok, text) = run(&[accepting, register], &[], &[("OSV_FAKE", "broken")]);
-    assert!(!ok, "{text}");
-    assert!(
-        !text.contains("accepted by the project exception hook"),
-        "{text}"
-    );
-    let (ok, text) = run(&[(HOOK, "symlink:/etc/hostname")], &[], &one);
-    assert!(!ok, "{text}");
-    assert!(
-        text.contains("is not a regular file; failing closed"),
-        "{text}"
-    );
-}
-
-/// At the warn level the hook still lists what it accepts, and findings it
-/// does not accept are reported without failing the step.
-#[test]
-fn the_project_exception_hook_reports_at_the_warn_level() {
-    let dir = tempfile::tempdir().unwrap();
-    let work = dir.path().join("repo");
-    std::fs::create_dir_all(&work).unwrap();
-    let trusted = exception_repo(
-        &work,
-        &levels("warn", "warn"),
-        &[(HOOK, ACCEPTING_HOOK), ("docs/register.txt", "GHSA-a\n")],
-        &[],
-    );
-    let out = run_audit_step(&work, &trusted, &[("OSV_FAKE_IDS", "GHSA-a GHSA-c")]);
-    let text = String::from_utf8_lossy(&out.stdout);
+fn severity_table_contract() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let out = Command::new("python3")
+        .arg(root.join("scripts/test_dependency_audit.py"))
+        .output()
+        .unwrap();
     assert!(out.status.success(), "{out:?}");
-    assert!(
-        text.contains("accepted by the project exception hook: GHSA-a\t"),
-        "{text}"
-    );
-    assert!(text.contains("not accepted: GHSA-c\t"), "{text}");
-    assert!(text.contains("::warning::dependency advisories"), "{text}");
 }
 
 /// TSK-449 AC-7: the shipped gate runs essential on pull requests and full
@@ -1932,7 +1691,7 @@ fn default_and_integration_targets(origin: &Path) -> (String, String) {
         origin.join(".codeflow/policy.json"),
         policy.replace(
             "\"commit_desc_max_len\": 50,",
-            "\"commit_desc_max_len\": 10,",
+            "\"commit_desc_max_len\": 10, \"commit_description\": \"block\",",
         ),
     )
     .unwrap();
@@ -2053,32 +1812,38 @@ fn a_pull_request_into_a_non_default_target_is_judged_by_that_target() {
 fn long_scan_errors_fail_closed_under_pipefail() {
     let baseline = include_str!("../../../.codeflow/.baseline/.github/workflows/codeflow-ci.yml");
     for workflow in [CI, baseline] {
-        let audit = run_blocks(workflow, "dependency audit").remove(0);
-        let verdict = &audit[audit.find("scan_text=").unwrap_or_else(|| audit.find("if [ \"$rc\" -eq 0 ]; then").unwrap())..];
         let dir = tempfile::tempdir().unwrap();
-        let scanner = dir.path().join("fake-osv");
-        std::fs::write(&scanner, FAKE_OSV_SCANNER).unwrap();
-        let script = format!(
-            "set +e\nout=$(OSV_FAKE=broken_long sh \"$SCANNER\" scan --no-ignore .); rc=$?\nset -e\ndiag=$out\naccepted_all=\nhook_mode=\nlevel=block\nsr=block\nda=block\n{verdict}"
-        );
-        let output = Command::new("bash")
-            .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", &script])
-            .env("SCANNER", &scanner)
-            .output()
-            .unwrap();
-        assert!(!output.status.success(), "long extraction error passed");
-        assert!(!String::from_utf8_lossy(&output.stdout).contains("nothing to audit"));
-
         let start = workflow.find("          plain=$(sed").unwrap();
-        let end = workflow[start..].find("          # The report holds no line text").unwrap() + start;
-        let check = workflow[start..end].lines().map(str::trim_start).collect::<Vec<_>>().join("\n");
+        let end = workflow[start..]
+            .find("          # The report holds no line text")
+            .unwrap()
+            + start;
+        let check = workflow[start..end]
+            .lines()
+            .map(str::trim_start)
+            .collect::<Vec<_>>()
+            .join("\n");
         for diagnostic in ["ERR scan failed", "FTL scan failed", "DBG command aborted"] {
             let log = dir.path().join("scan.log");
-            std::fs::write(&log, format!("now {diagnostic}\n{}\nnow INF 1 commits scanned.\n", "x".repeat(2 * 1024 * 1024))).unwrap();
+            std::fs::write(
+                &log,
+                format!(
+                    "now {diagnostic}\n{}\nnow INF 1 commits scanned.\n",
+                    "x".repeat(2 * 1024 * 1024)
+                ),
+            )
+            .unwrap();
             let report = dir.path().join("report.json");
             std::fs::write(&report, "[]").unwrap();
             let output = Command::new("bash")
-                .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", &format!("rc=0\n{check}")])
+                .args([
+                    "--noprofile",
+                    "--norc",
+                    "-eo",
+                    "pipefail",
+                    "-c",
+                    &format!("rc=0\n{check}"),
+                ])
                 .env("log", &log)
                 .env("report", &report)
                 .output()

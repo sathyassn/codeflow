@@ -324,3 +324,29 @@ fn repeated_policy_loads_report_each_unsupported_key_once() {
         );
     }
 }
+
+#[test]
+fn bare_policy_command_reports_each_effective_value_and_source() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    write_policy(dir.path(), r#"{"git":{"commit_body":"block"}}"#);
+    let out = run_in(dir.path(), &["policy"]);
+    assert!(out.status.success(), "{out:?}");
+    let text = String::from_utf8_lossy(&out.stdout);
+    for spec in schema() {
+        assert!(
+            text.lines().any(|line| line.contains(spec.path)
+                && (line.contains("project") || line.contains("default"))),
+            "{}: {text}",
+            spec.path
+        );
+    }
+    assert!(text.lines().any(|line| line.contains("git.commit_body")
+        && line.contains("project")
+        && line.contains("block")));
+    assert!(text
+        .lines()
+        .any(|line| line.contains("git.commit_description")
+            && line.contains("default")
+            && line.contains("warn")));
+}

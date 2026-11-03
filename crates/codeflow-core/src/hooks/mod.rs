@@ -43,6 +43,7 @@ pub mod landed_policy;
 pub mod orient;
 pub mod path_policy;
 pub mod policy;
+mod policy_compat;
 pub mod policy_schema;
 pub mod ref_authority;
 pub mod repo;
