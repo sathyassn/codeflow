@@ -1,7 +1,8 @@
 //! Conservative literal inspection inside interpreter code, never ordinary
 //! data, and of the arguments an interpreter is given (TSK-302).
 use super::search_pattern::CommandLine;
-use super::{actions, outward, pattern::glob_covers_or_refuses};
+use super::pattern::{match_extended_glob, GlobMatch};
+use super::{actions, outward};
 use crate::hooks::{PolicyLevel, SecuritySection, Violation};
 use std::path::{Path, PathBuf};
 
@@ -260,8 +261,15 @@ fn relative_names_secret(word: &str) -> bool {
         .collect::<Vec<_>>()
         .join("/");
     protected_dirs().iter().any(|dir| {
-        secret_path_spelling(&format!("{dir}/{word}"), None, Some(true))
-            && !secret_path_spelling(&format!("{dir}/{ordinary}"), None, Some(true))
+        // Negated control: a spelling the matcher cannot judge inside its
+        // bound refuses here, so the negation cannot turn it into an allow.
+        match (
+            secret_path_spelling_checked(&format!("{dir}/{word}"), None, Some(true)),
+            secret_path_spelling_checked(&format!("{dir}/{ordinary}"), None, Some(true)),
+        ) {
+            (Ok(named), Ok(control)) => named && !control,
+            _ => true,
+        }
     })
 }
 
@@ -617,12 +625,12 @@ fn git_operand(
     // Git matches a pathspec pattern against the tree and history, which
     // the guard cannot list: one that could select a secret name refuses
     // (TSK-1002 review 07 sibling sweep).
-    if git_reads::pathspec_pattern(call, at).is_some_and(|spellings| {
-        spellings
-            .iter()
-            .any(|spelling| secret_path_spelling(spelling, home, Some(true)))
-    }) {
-        return Some(Err(git_reads::PATTERN));
+    for spelling in git_reads::pathspec_pattern(call, at).unwrap_or_default() {
+        match secret_path_spelling_checked(&spelling, home, Some(true)) {
+            Ok(false) => {}
+            Ok(true) => return Some(Err(git_reads::PATTERN)),
+            Err(cause) => return Some(Err(cause)),
+        }
     }
     for path in git_object_paths(call, at, value) {
         match secret_path_result(path, cwd, home, Some(false)) {
@@ -1194,17 +1202,17 @@ fn secret_path_result(
     if reader == Some(true) && (crate::hooks::git_guard::has_glob(word) || word.contains('{')) {
         return secret_glob(word, cwd, home);
     }
+    // Flat operands name one file or store. Only recursive root
+    // inspection applies the ancestor rule for descendant reads.
+    if !literal_tilde && secret_path_spelling_checked(word, home, None)? {
+        return Ok(true);
+    }
+    let Some(path) = absolute.as_deref() else {
+        return Ok(false);
+    };
     Ok(
-        // Flat operands name one file or store. Only recursive root
-        // inspection applies the ancestor rule for descendant reads.
-        (!literal_tilde && secret_path_spelling(word, home, None))
-            || absolute.as_deref().is_some_and(|path| {
-                secret_path_spelling(&crate::portable_path::slashed(path), home, None)
-            })
-            || match absolute.as_deref() {
-                Some(path) => real_secret_path(path, home)?,
-                None => false,
-            },
+        secret_path_spelling_checked(&crate::portable_path::slashed(path), home, None)?
+            || real_secret_path(path, home)?,
     )
 }
 
@@ -1229,10 +1237,11 @@ fn physical_secret(
         physical_path(cwd, Path::new(word))?
     };
     match physical.as_deref() {
-        Some(path) => Ok(
-            secret_path_spelling(&crate::portable_path::slashed(path), home, None)
-                || real_secret_path(path, home)?,
-        ),
+        Some(path) => Ok(secret_path_spelling_checked(
+            &crate::portable_path::slashed(path),
+            home,
+            None,
+        )? || real_secret_path(path, home)?),
         None => Ok(false),
     }
 }
@@ -1364,10 +1373,10 @@ fn unc_store_suffix(
         return Ok(false);
     };
     let parts: Vec<&str> = rest.split('/').filter(|part| !part.is_empty()).collect();
-    if (1..parts.len())
-        .any(|at| secret_path_spelling(&format!("~/{}", parts[at..].join("/")), home, reader))
-    {
-        return Ok(true);
+    for at in 1..parts.len() {
+        if secret_path_spelling_checked(&format!("~/{}", parts[at..].join("/")), home, reader)? {
+            return Ok(true);
+        }
     }
     let unc = format!("//{}", parts.join("/"));
     let chosen = trusted.iter().any(|dir| {
@@ -1444,7 +1453,22 @@ fn stream_base(word: &str) -> String {
         .join("/")
 }
 
+/// [`secret_path_spelling_checked`] for a caller that can only answer yes or
+/// no: a glob match that cannot finish inside the bound counts as a secret,
+/// so the caller refuses and never allows. A caller that negates the answer
+/// (`!secret_path_spelling(..)`) must use the checked form instead.
 fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -> bool {
+    secret_path_spelling_checked(word, home, reader).unwrap_or(true)
+}
+
+/// Whether `word` spells a secret path. The error names the bound a glob
+/// match hit (TSK-1258), so a caller that returns a refusal message carries
+/// the cause to the operator.
+fn secret_path_spelling_checked(
+    word: &str,
+    home: Option<&Path>,
+    reader: Option<bool>,
+) -> Result<bool, &'static str> {
     let word = crate::portable_path::filesystem_spelling(word).to_ascii_lowercase();
     let home_relative = home.and_then(|home| {
         let home = crate::portable_path::slashed(home).to_ascii_lowercase();
@@ -1455,7 +1479,7 @@ fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -
     let word = home_relative.as_deref().unwrap_or(&word);
     // A directory rule also protects the store itself, even when it is
     // absent. This is equality, not the ancestor rule for descendant reads.
-    secret_stores()
+    if secret_stores()
         .iter()
         .any(|store| word.trim_end_matches('/') == store)
         || actions::table().sandbox_read_denies.iter().any(|path| {
@@ -1465,20 +1489,30 @@ fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -
                     .is_some_and(|tail| tail.starts_with('/'))
                 || reader.is_some_and(|expands| secret_prefix(word, path, expands))
         })
-        || actions::table().claude_read_groups.iter().any(|group| {
-            // This group has no carve-outs; source-name and env-file groups do.
-            group.carveouts.is_empty()
-                && group.denies.iter().any(|rule| {
-                    let Some(pattern) =
-                        rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')'))
-                    else {
-                        return false;
-                    };
-                    glob_covers_or_refuses(word, pattern)
-                        || reader.is_some_and(|expands| secret_prefix(word, pattern, expands))
-                })
-        })
-        || secret_backup(word)
+    {
+        return Ok(true);
+    }
+    for group in &actions::table().claude_read_groups {
+        // This group has no carve-outs; source-name and env-file groups do.
+        if !group.carveouts.is_empty() {
+            continue;
+        }
+        for rule in &group.denies {
+            let Some(pattern) = rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')'))
+            else {
+                continue;
+            };
+            match match_extended_glob(word, pattern) {
+                GlobMatch::Match => return Ok(true),
+                GlobMatch::Unbounded(cause) => return Err(cause),
+                GlobMatch::NoMatch => {}
+            }
+            if reader.is_some_and(|expands| secret_prefix(word, pattern, expands)) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(secret_backup(word))
 }
 
 /// Whether `word` (lowercase, home-relative as `~/...`) is a backup copy of
@@ -1563,7 +1597,9 @@ fn secret_glob(word: &str, cwd: &Path, home: Option<&Path>) -> Result<bool, &'st
         let paths = crate::hooks::git_guard::secret_glob_paths(pattern, base)?;
         for path in paths {
             let text = secret_path_text(&path)?;
-            if secret_path_spelling(&text, home, Some(false)) || real_secret_path(&path, home)? {
+            if secret_path_spelling_checked(&text, home, Some(false))?
+                || real_secret_path(&path, home)?
+            {
                 return Ok(true);
             }
         }
@@ -1680,7 +1716,7 @@ fn secret_directory(directory: &str, cwd: &Path, home: Option<&Path>) -> bool {
 /// visible spelling. Proven absence is the only metadata failure that clears
 /// a literal operand; unreadable and dangling links cannot certify a read.
 fn real_secret_path(path: &Path, home: Option<&Path>) -> Result<bool, &'static str> {
-    if secret_path_spelling(&secret_path_text(path)?, home, None) {
+    if secret_path_spelling_checked(&secret_path_text(path)?, home, None)? {
         return Ok(true);
     }
     if crate::absence::cannot_exist(path)
@@ -1692,7 +1728,7 @@ fn real_secret_path(path: &Path, home: Option<&Path>) -> Result<bool, &'static s
         .map_err(|_| "cannot resolve a read path's real target")?;
     let text = secret_path_text(&real)?;
     // A link can resolve into a share (`\\?\UNC\host\share\...`).
-    if secret_path_spelling(&text, home, None)
+    if secret_path_spelling_checked(&text, home, None)?
         || cfg!(windows) && unc_store_suffix(&text, home, None, &trusted_shares())?
     {
         return Ok(true);
@@ -1703,7 +1739,7 @@ fn real_secret_path(path: &Path, home: Option<&Path>) -> Result<bool, &'static s
                 .map_err(|_| "cannot resolve the secret stores' home directory")
         })
         .transpose()?;
-    Ok(secret_path_spelling(&text, real_home.as_deref(), None))
+    secret_path_spelling_checked(&text, real_home.as_deref(), None)
 }
 
 #[allow(clippy::too_many_arguments)] // Search syntax and shell provenance share one context.
@@ -2352,7 +2388,9 @@ fn search_root_matches(
     links: &[super::composed::paths::Link],
     read: &mut usize,
 ) -> Result<bool, &'static str> {
-    if pattern == "*" && secret_path_spelling(&secret_path_text(root)?, home, Some(false)) {
+    if pattern == "*"
+        && secret_path_spelling_checked(&secret_path_text(root)?, home, Some(false))?
+    {
         return Ok(true);
     }
     let patterns = crate::hooks::git_guard::brace_expand(pattern)
@@ -4789,6 +4827,40 @@ mod tests {
         .unwrap();
         check("python3 tool.py many/*", true);
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// TSK-1258 AC-2: a path past the glob matcher's bound is refused with
+    /// the bound's name, never allowed and never reported as an ordinary
+    /// secret. The check is the choke point every operand read goes through.
+    #[test]
+    fn unbounded_glob_input_names_its_cause_in_the_path_check() {
+        let repo = repo();
+        let long = format!("/{}", "a".repeat(super::super::pattern::MAX_GLOB_PATH_BYTES));
+        let cause = secret_path_result(&long, &repo.root, None, Some(true))
+            .expect_err("a path past the bound must refuse, not answer");
+        assert!(cause.contains("longer than the glob matcher's bound"), "{cause}");
+        assert_eq!(
+            real_secret_path(Path::new(&long), None),
+            Err(cause),
+            "the real-path check carries the same cause"
+        );
+        assert!(secret_path_spelling(&long, None, None), "a yes/no caller refuses");
+    }
+
+    /// TSK-1258 AC-2, through the guard: an oversize operand is refused by
+    /// the command judgment, with the named cause in the message.
+    #[test]
+    fn unbounded_glob_input_is_refused_by_the_guard_with_its_cause() {
+        let repo = repo();
+        let long = "a".repeat(super::super::pattern::MAX_GLOB_PATH_BYTES);
+        let command = format!("python3 tool.py /{long}");
+        let findings = judge_in(&repo, &repo.root, &repo.root, &command, PolicyLevel::Block);
+        assert!(
+            findings
+                .iter()
+                .any(|v| v.message.contains("longer than the glob matcher's bound")),
+            "{findings:?}"
+        );
     }
 
     /// Code string fragments do not acquire recursive checkout-operand
