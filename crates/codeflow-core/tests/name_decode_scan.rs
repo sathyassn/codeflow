@@ -1557,20 +1557,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:catalog-frontmatter",
     ),
-    (
-        "crates/codeflow-core/src/capability.rs",
-        "parse_catalog_with_issues",
-        "trim_end",
-        1,
-        "grammar:catalog-frontmatter",
-    ),
-    (
-        "crates/codeflow-core/src/capability.rs",
-        "parse_record",
-        "trim_end",
-        2,
-        "grammar:catalog-frontmatter",
-    ),
     // Only rejects empty summary, measurement and evidence text; accepted values
     // remain unchanged and reference targets are never opened here.
     (

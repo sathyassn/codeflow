@@ -734,7 +734,9 @@ fn render_status_text(view: &StatusView, capabilities_table: bool) -> crate::git
         }
     }
 
-    let _ = writeln!(out, "capability coverage: {}", view.capability_coverage);
+    if view.capabilities.is_some() {
+        let _ = writeln!(out, "capability coverage: {}", view.capability_coverage);
+    }
 
     if let Some(line) = &view.estimates {
         let _ = writeln!(out, "{line}");

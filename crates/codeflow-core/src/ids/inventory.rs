@@ -162,12 +162,18 @@ pub fn on_every_ref(git: &Git) -> Result<Vec<RefRecords>, IdsError> {
 pub fn max_seq_on_refs(git: &Git, kind: Kind) -> Result<u64, IdsError> {
     let mut seen = std::collections::HashSet::new();
     let mut max = 0;
-    for (_, sha) in code_refs(git)? {
+    for (refname, sha) in code_refs(git)? {
         if !seen.insert(sha.clone()) {
             continue;
         }
         if kind == Kind::Cap {
-            for copy in capability_copies_at(git, &sha)? {
+            let copies = capability_copies_at(git, &sha).map_err(|error| {
+                IdsError::Invalid(format!(
+                    "{refname} ({}): {error}",
+                    super::ledger::short(&sha)
+                ))
+            })?;
+            for copy in copies {
                 if let Some(sequence) = copy.id.try_seq()? {
                     max = max.max(sequence);
                 }

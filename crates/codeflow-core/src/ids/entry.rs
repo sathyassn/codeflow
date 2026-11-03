@@ -268,6 +268,11 @@ pub fn frontmatter_value(text: &str, key: &str) -> Option<String> {
     None
 }
 
+/// Maximum bytes accepted by the capability binding lookup.
+/// A normal entry is a few hundred bytes; 64 KiB leaves room for titles and
+/// provenance while bounding TOML parsing of an untrusted registry blob.
+pub const CAPABILITY_BINDING_MAX_BYTES: usize = 64 * 1024;
+
 /// Read the UID bound to a CAP number from its registry blob.
 ///
 /// The caller supplies the bytes of `ids/CAP/<N>.toml` from its chosen
@@ -275,10 +280,15 @@ pub fn frontmatter_value(text: &str, key: &str) -> Option<String> {
 /// kind and UID; it does not fetch refs or certify append-only history.
 ///
 /// # Errors
-/// Returns [`super::IdsError::Invalid`] for non-UTF-8 bytes and
+/// Returns [`super::IdsError::Invalid`] for oversized or non-UTF-8 bytes and
 /// [`super::IdsError::Damaged`] for malformed or mismatched entries.
 pub fn capability_uid_from_blob(number: u64, blob: &[u8]) -> Result<String, super::IdsError> {
     let path = RegId::canonical(Kind::Cap, number).registry_path();
+    if blob.len() > CAPABILITY_BINDING_MAX_BYTES {
+        return Err(super::IdsError::Invalid(format!(
+            "{path} exceeds {CAPABILITY_BINDING_MAX_BYTES} bytes"
+        )));
+    }
     let text = std::str::from_utf8(blob)
         .map_err(|error| super::IdsError::Invalid(format!("{path} is not valid UTF-8: {error}")))?;
     Entry::parse(&path, text)
@@ -581,6 +591,26 @@ mod tests {
             capability_uid_from_blob(17, &[0xff]),
             Err(super::super::IdsError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn capability_binding_blob_is_bounded_before_decoding() {
+        let entry = Entry::issued(
+            RegId::canonical(Kind::Cap, 17),
+            new_uid(),
+            "Binding",
+            "catalog@example.test",
+            "none",
+        );
+        let mut bytes = entry.render().into_bytes();
+        bytes.resize(65_536, b' ');
+        assert_eq!(capability_uid_from_blob(17, &bytes).unwrap(), entry.uid);
+        bytes.push(b' ');
+        for blob in [bytes, vec![0xff; 65_537]] {
+            let error = capability_uid_from_blob(17, &blob).unwrap_err();
+            assert!(matches!(error, super::super::IdsError::Invalid(_)));
+            assert!(error.to_string().contains("65536 bytes"), "{error}");
+        }
     }
 
     #[test]

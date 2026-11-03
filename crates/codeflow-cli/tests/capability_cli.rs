@@ -289,3 +289,133 @@ fn capability_on_another_branch_reserves_its_number() {
     git(dir.path(), &["switch", "-q", "main"]);
     assert!(new(dir.path(), "next").contains("CAP-041"));
 }
+
+#[test]
+fn invalid_catalog_on_a_side_branch_names_the_ref_and_revision() {
+    let dir = repo();
+    git(dir.path(), &["switch", "-qc", "feat/bad-catalog"]);
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(
+        dir.path().join("docs/capabilities.md"),
+        "```yaml\nid: CAP-040\nname: invalid\nstatus: unknown\n```\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "docs"]);
+    git(dir.path(), &["commit", "-qm", "docs: invalid side catalog"]);
+    let sha = git(dir.path(), &["rev-parse", "HEAD"]);
+    git(dir.path(), &["switch", "-q", "main"]);
+    let output = cli(
+        dir.path(),
+        &[
+            "capability",
+            "new",
+            "next",
+            "--summary",
+            "Next capability",
+            "--area",
+            "engine",
+            "--audience",
+            "agent",
+        ],
+    );
+    assert!(!output.status.success());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("refs/heads/feat/bad-catalog"), "{error}");
+    assert!(error.contains(&sha[..8]), "{error}");
+    assert!(error.contains("docs/capabilities.md"), "{error}");
+}
+
+#[test]
+fn status_omits_coverage_when_the_catalog_is_absent() {
+    let dir = repo();
+    let text = success(cli(dir.path(), &["status"]));
+    assert!(!text.contains("capability coverage:"), "{text}");
+}
+
+#[test]
+fn retarget_repairs_a_two_clone_capability_collision() {
+    let first = repo();
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "--bare", "-q", "-b", "main"]);
+    git(
+        first.path(),
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    git(first.path(), &["push", "-qu", "origin", "main"]);
+    let second = tempfile::tempdir().unwrap();
+    git(
+        second.path(),
+        &["clone", "-q", remote.path().to_str().unwrap(), "."],
+    );
+    git(
+        second.path(),
+        &["config", "user.name", "Second catalog fixture"],
+    );
+    git(
+        second.path(),
+        &["config", "user.email", "second@example.test"],
+    );
+    assert!(new(first.path(), "first").contains("CAP-001"));
+    assert!(new(second.path(), "second").contains("CAP-001"));
+    let before = codeflow_core::capability::load_capability_catalog(second.path()).unwrap();
+    let uid = before.records[0].uid.clone().unwrap();
+    std::fs::write(
+        second.path().join("README.md"),
+        "See [CAP-001](docs/capabilities/CAP-001-second.md).\n",
+    )
+    .unwrap();
+    git(second.path(), &["add", "README.md"]);
+    success(cli(first.path(), &["ids", "sync"]));
+    let collision = cli(second.path(), &["ids", "sync"]);
+    assert!(!collision.status.success());
+    let error = String::from_utf8(collision.stderr).unwrap();
+    assert!(error.contains("ids retarget CAP-001"), "{error}");
+    let text = success(cli(second.path(), &["ids", "retarget", "CAP-001"]));
+    assert!(text.contains("CAP-001  ->  CAP-002"), "{text}");
+    let after = codeflow_core::capability::load_capability_catalog(second.path()).unwrap();
+    assert_eq!(after.records.len(), 1);
+    assert_eq!(after.records[0].entry.id, "CAP-002");
+    assert_eq!(after.records[0].uid.as_deref(), Some(uid.as_str()));
+    assert_eq!(after.records[0].former_ids, ["CAP-001"]);
+    assert!(!second
+        .path()
+        .join("docs/capabilities/CAP-001-second.md")
+        .exists());
+    assert_eq!(
+        std::fs::read_to_string(second.path().join("README.md")).unwrap(),
+        "See [CAP-002](docs/capabilities/CAP-002-second.md).\n"
+    );
+    let bound = git(
+        remote.path(),
+        &["show", "codeflow/registry:ids/CAP/002.toml"],
+    );
+    assert_eq!(
+        codeflow_core::ids::capability_uid_from_blob(2, bound.as_bytes()).unwrap(),
+        uid
+    );
+}
+
+#[test]
+fn retarget_refuses_a_landed_capability() {
+    let dir = repo();
+    new(dir.path(), "landed");
+    git(dir.path(), &["add", "docs"]);
+    git(dir.path(), &["commit", "-qm", "feat: land capability"]);
+    let output = cli(dir.path(), &["ids", "retarget", "CAP-001"]);
+    assert!(!output.status.success());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("has landed on main"), "{error}");
+}
+
+#[test]
+fn retarget_refuses_a_capability_already_bound_to_its_uid() {
+    let dir = repo();
+    new(dir.path(), "bound");
+    let output = cli(dir.path(), &["ids", "retarget", "CAP-001"]);
+    assert!(!output.status.success());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        error.contains("already binds CAP-001 to this record"),
+        "{error}"
+    );
+}
