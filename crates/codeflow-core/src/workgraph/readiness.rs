@@ -1579,10 +1579,16 @@ pub struct Claim {
     pub branch: String,
     pub from: String,
     pub pushed: bool,
-    /// Checkout created by an explicit worktree claim, if requested.
-    pub worktree: Option<PathBuf>,
     /// Unrelated remote branches visible in the last-fetched refs.
     pub informational_branches: Vec<String>,
+}
+
+/// A claim together with its explicitly requested checkout. Keeping this
+/// separate preserves the existing branch-only [`Claim`] interface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeClaim {
+    pub claim: Claim,
+    pub worktree: Option<PathBuf>,
 }
 
 /// `git <args>` with its output as exact bytes.
@@ -1938,7 +1944,7 @@ pub fn claim_on(
     task_id: &str,
     pins: &[super::work_start::ReviewedPin],
 ) -> Result<Claim, String> {
-    claim_on_in_worktree(repo_root, task_id, pins, None)
+    claim_on_in_worktree(repo_root, task_id, pins, None).map(|result| result.claim)
 }
 
 /// Claim a task and optionally create its checkout without rewriting the
@@ -1952,7 +1958,7 @@ pub fn claim_on_in_worktree(
     task_id: &str,
     pins: &[super::work_start::ReviewedPin],
     destination: Option<&Path>,
-) -> Result<Claim, String> {
+) -> Result<WorktreeClaim, String> {
     let worktree = destination
         .map(|path| claim_destination(repo_root, path))
         .transpose()?;
@@ -2064,12 +2070,14 @@ pub fn claim_on_in_worktree(
         )
         .map_err(|error| format!("created {branch} locally; push to origin failed: {error}"))?;
     }
-    Ok(Claim {
-        branch,
-        from: format!("{reference_shown}@{}", &tip.to_string()[..9]),
-        pushed: has_origin,
+    Ok(WorktreeClaim {
+        claim: Claim {
+            branch,
+            from: format!("{reference_shown}@{}", &tip.to_string()[..9]),
+            pushed: has_origin,
+            informational_branches: information,
+        },
         worktree,
-        informational_branches: information,
     })
 }
 

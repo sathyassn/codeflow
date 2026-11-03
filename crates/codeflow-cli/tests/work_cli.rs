@@ -2968,3 +2968,72 @@ fn a_denied_checkout_preserves_the_claim_and_reports_inspection() {
     );
     assert!(!git(root, &["branch", "--list", "task/TSK-001*"]).is_empty());
 }
+
+#[test]
+fn claim_refuses_a_checkout_nested_in_another_linked_worktree() {
+    let dir = fixture();
+    let root = dir.path();
+    git(
+        root,
+        &["worktree", "add", "-qb", "fix/caller", ".worktrees/caller"],
+    );
+    let out = cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-001",
+            "--worktree",
+            ".worktrees/caller/.worktrees/one",
+        ],
+        None,
+    );
+    assert!(!out.status.success());
+    assert!(
+        text(&out).contains("inside another linked worktree"),
+        "{}",
+        text(&out)
+    );
+    assert!(git(root, &["branch", "--list", "task/TSK-001*"]).is_empty());
+}
+
+#[test]
+fn a_standalone_claim_refuses_a_second_checkout_without_renaming() {
+    let dir = fixture();
+    let root = dir.path();
+    standalone_branch(root);
+    let out = cli(
+        root,
+        &["work", "claim", "TSK-003", "--worktree", ".worktrees/three"],
+        None,
+    );
+    assert!(!out.status.success());
+    assert!(text(&out).contains("omit --worktree"), "{}", text(&out));
+    assert_eq!(git(root, &["branch", "--show-current"]), "fix/standalone");
+    assert!(!root.join(".worktrees/three").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn claim_checks_out_a_tracked_harness_symlink_without_writing_its_target() {
+    let dir = fixture();
+    let root = dir.path();
+    let shared = tempfile::tempdir().unwrap();
+    write(shared.path(), "agents/worker.md", "shared instructions\n");
+    std::os::unix::fs::symlink(shared.path(), root.join(".claude")).unwrap();
+    git(root, &["add", ".claude"]);
+    git(root, &["commit", "-qm", "chore: link harness instructions"]);
+    succeeds(&cli(
+        root,
+        &["work", "claim", "TSK-001", "--worktree", ".worktrees/one"],
+        None,
+    ));
+    assert_eq!(
+        std::fs::read_link(root.join(".worktrees/one/.claude")).unwrap(),
+        shared.path()
+    );
+    assert_eq!(
+        std::fs::read_to_string(shared.path().join("agents/worker.md")).unwrap(),
+        "shared instructions\n"
+    );
+}

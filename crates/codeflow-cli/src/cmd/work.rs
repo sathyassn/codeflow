@@ -303,7 +303,8 @@ fn claim(task_id: &str, on: &[String], worktree: Option<&std::path::Path>) -> i3
         }
     };
     match readiness::claim_on_in_worktree(&root, task_id, &pins, worktree) {
-        Ok(claim) => {
+        Ok(result) => {
+            let claim = result.claim;
             println!(
                 "work claim: {task_id} -> {} from {}",
                 claim.branch, claim.from
@@ -316,7 +317,7 @@ fn claim(task_id: &str, on: &[String], worktree: Option<&std::path::Path>) -> i3
             } else {
                 println!("  no origin remote: the claim is visible only in this clone");
             }
-            if let Some(path) = claim.worktree {
+            if let Some(path) = result.worktree {
                 println!(
                     "  worktree: {} (planning preflight passed)",
                     codeflow_core::git::display_path(&path)
