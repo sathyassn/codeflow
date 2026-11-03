@@ -179,7 +179,9 @@ fn resolve_test(
     identity: &TestIdentity<'_>,
 ) -> Result<(), String> {
     let path = identity.path;
-    let rust = path.ends_with(".rs");
+    let rust = std::path::Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("rs"));
     let test_tree = in_test_tree(path);
     if !test_tree && (identity.name.is_none() || !rust) {
         return Err(format!(
