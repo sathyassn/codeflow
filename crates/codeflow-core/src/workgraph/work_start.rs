@@ -688,6 +688,36 @@ pub enum EpicLineProof {
     NotLine(String),
 }
 
+/// Why the line `branch`'s own epic `epic_id` refuses the proof across
+/// `record_sets` (each a record set and its place): it has no epic record
+/// in any of them, or it is cancelled or archived in any one, whichever
+/// set still has it active (TSK-1286).
+fn line_owner_refusal(
+    record_sets: &[(&BTreeMap<String, Record>, &str)],
+    branch: &str,
+    epic_id: &str,
+) -> Option<String> {
+    let owner = |records: &BTreeMap<String, Record>| {
+        records
+            .get(epic_id)
+            .filter(|record| record.kind == RecordKind::Epic)
+            .map(|record| record.status.clone())
+    };
+    if record_sets
+        .iter()
+        .all(|(records, _)| owner(records).is_none())
+    {
+        return Some(format!(
+            "'{branch}' names {epic_id}, which has no epic record"
+        ));
+    }
+    record_sets.iter().find_map(|(records, place)| {
+        owner(records)
+            .filter(|status| matches!(status.as_str(), "cancelled" | "archived"))
+            .map(|status| format!("{epic_id} is {status} on {place}"))
+    })
+}
+
 /// Obtain the epic-line evidence, preserving a negative proof as a value.
 ///
 /// # Errors
@@ -726,20 +756,28 @@ pub fn epic_line_proof(
     // range and the first-parent walk.
     let at_base = records_at(target_tip)?;
     let at_head = records_at(head_commit.id())?;
-    let Some(epic) = at_base
-        .get(epic_id)
-        .or_else(|| at_head.get(epic_id))
-        .filter(|record| record.kind == RecordKind::Epic)
-    else {
-        return Ok(EpicLineProof::NotLine(format!(
-            "'{branch}' names {epic_id}, which has no epic record"
-        )));
+    // The line's fetched tip is a trusted anchor beside the target whenever
+    // it exists, on every path, so a cancellation there is never skipped
+    // (TSK-1286).
+    let fetched = super::line_adoption::fetched_tip(repo_root, branch)?;
+    let at_line = match &fetched {
+        Some(tip) => Some(records_at(
+            git2::Oid::from_str(tip).map_err(|error| error.to_string())?,
+        )?),
+        None => None,
     };
-    if matches!(epic.status.as_str(), "cancelled" | "archived") {
-        return Ok(EpicLineProof::NotLine(format!(
-            "{epic_id} is {}",
-            epic.status
-        )));
+    let line_place = format!("'origin/{branch}'");
+    let mut anchors = vec![(&at_base, "the target")];
+    if let Some(records) = &at_line {
+        anchors.push((records, line_place.as_str()));
+    }
+    let everywhere: Vec<(&BTreeMap<String, Record>, &str)> = anchors
+        .iter()
+        .copied()
+        .chain([(&at_head, "the head")])
+        .collect();
+    if let Some(refusal) = line_owner_refusal(&everywhere, branch, epic_id) {
+        return Ok(EpicLineProof::NotLine(refusal));
     }
     let own_task = |records: &BTreeMap<String, Record>| {
         records.values().any(|record| {
@@ -755,19 +793,8 @@ pub fn epic_line_proof(
         // A task of an epic that declares this line binds it only from the
         // trusted anchors, the target's tip and the line's fetched tip, never
         // from the head's records, and a cancellation at any of them or at
-        // the head refuses (TSK-1286).
-        let fetched = super::line_adoption::fetched_tip(repo_root, branch)?;
-        let at_line = match &fetched {
-            Some(tip) => Some(records_at(
-                git2::Oid::from_str(tip).map_err(|error| error.to_string())?,
-            )?),
-            None => None,
-        };
-        let line_place = format!("'origin/{branch}'");
-        let mut anchors = vec![(&at_base, "the target")];
-        if let Some(records) = &at_line {
-            anchors.push((records, line_place.as_str()));
-        }
+        // the head refuses, as does a head that changes or removes the
+        // declaration or deletes the declaring epic (TSK-1286).
         match declared_line_tasks(&anchors, &at_head, branch) {
             Err(refusal) => return Ok(EpicLineProof::NotLine(refusal)),
             Ok(false) => {
@@ -1252,17 +1279,22 @@ fn line_has_member_task(records: &BTreeMap<String, Record>, line: &str, place: &
 /// its place) targets `line` as a task of an epic that declares the line
 /// in that same set (TSK-1286). Every anchor is read before an answer, and
 /// a declaring epic that is cancelled or archived at any anchor or at the
-/// `head` refuses, naming where.
+/// `head` refuses, naming where. The `head` must also keep each trusted
+/// declaration as it is, as [`declared_binding`] requires: a head that
+/// changes or removes the epic's `parent_line`, or deletes the epic,
+/// refuses.
 ///
 /// # Errors
 ///
-/// Returns the refusal for a cancelled or archived declaring epic.
+/// Returns the refusal for a cancelled or archived declaring epic, or for
+/// a head that changes, removes or deletes a trusted declaration.
 fn declared_line_tasks(
     anchors: &[(&BTreeMap<String, Record>, &str)],
     head: &BTreeMap<String, Record>,
     line: &str,
 ) -> Result<bool, String> {
-    let mut declared = std::collections::BTreeSet::new();
+    let field = super::line_adoption::PARENT_LINE_FIELD;
+    let mut declared = BTreeMap::new();
     for (records, place) in anchors {
         for record in records.values() {
             let Some(epic) = record.epic_id.as_deref() else {
@@ -1276,20 +1308,24 @@ fn declared_line_tasks(
                 && line_membership(line, epic, &record_facts(records), place)
                     == LineMembership::Declared
             {
-                declared.insert(epic.to_string());
+                declared.entry(epic.to_string()).or_insert(*place);
             }
         }
     }
-    for epic in &declared {
+    for (epic, trusted_at) in &declared {
         for (records, place) in anchors.iter().copied().chain([(head, "the head")]) {
             if let LineMembership::Refused(reason) =
                 line_membership(line, epic, &record_facts(records), place)
             {
-                return Err(format!(
-                    "{epic} declares {} '{line}', but {reason}",
-                    super::line_adoption::PARENT_LINE_FIELD
-                ));
+                return Err(format!("{epic} declares {field} '{line}', but {reason}"));
             }
+        }
+        if let LineMembership::Not(reason) =
+            line_membership(line, epic, &record_facts(head), "the head")
+        {
+            return Err(format!(
+                "{epic} declares {field} '{line}' on {trusted_at}, but {reason}; a branch cannot change or remove the line an epic lands on, so change it through a planning pull request into the line"
+            ));
         }
     }
     Ok(!declared.is_empty())
@@ -4572,10 +4608,10 @@ mod tests {
     }
 
     /// A line `integration/EPC-001-outcome` merged from a `work` branch that
-    /// holds TSK-002 of EPC-002 targeting the line and EPC-002 with
-    /// `head_status`, declaring the line. With `on_target`, `main` holds the
-    /// same task and an active declaring EPC-002 too.
-    fn proof_fixture(on_target: bool, head_status: &str) -> tempfile::TempDir {
+    /// holds TSK-002 of EPC-002 targeting the line and its copy of EPC-002
+    /// as `head_epic` (none: deleted). With `on_target`, `main` holds
+    /// the same task and an active declaring EPC-002 too.
+    fn proof_fixture(on_target: bool, head_epic: Option<&str>) -> tempfile::TempDir {
         let dir = fixture();
         let root = dir.path();
         let epic = root.join("project-management/epics/EPC-002.md");
@@ -4590,7 +4626,11 @@ mod tests {
         }
         git(root, &["switch", "-q", "-c", DECLARED_LINE]);
         git(root, &["switch", "-q", "-c", "work"]);
-        fs::write(&epic, second_epic(Some(DECLARED_LINE), head_status)).unwrap();
+        match head_epic {
+            Some(content) => fs::write(&epic, content).unwrap(),
+            None if epic.exists() => fs::remove_file(&epic).unwrap(),
+            None => {}
+        }
         fs::write(&task, &declared_task).unwrap();
         fs::write(root.join("work.txt"), "work\n").unwrap();
         git(root, &["add", "-A"]);
@@ -4609,20 +4649,114 @@ mod tests {
         let proof = |root: &Path| {
             epic_line_proof(root, DECLARED_LINE, "main", "main", DECLARED_LINE).unwrap()
         };
-        let head_only = proof_fixture(false, "planning");
+        let declaring = second_epic(Some(DECLARED_LINE), "planning");
+        let head_only = proof_fixture(false, Some(&declaring));
         assert!(
             matches!(proof(head_only.path()), EpicLineProof::NotLine(reason) if reason.contains("nor a task of an epic declaring parent_line")),
             "head only"
         );
-        let trusted = proof_fixture(true, "planning");
+        let trusted = proof_fixture(true, Some(&declaring));
         assert!(
             matches!(proof(trusted.path()), EpicLineProof::Verified(..)),
             "declared on the target"
         );
-        let cancelled = proof_fixture(true, "cancelled");
+        let cancelled = proof_fixture(true, Some(&second_epic(Some(DECLARED_LINE), "cancelled")));
         assert!(
             matches!(proof(cancelled.path()), EpicLineProof::NotLine(reason) if reason.contains("EPC-002 is cancelled on the head")),
             "cancelled at the head"
+        );
+    }
+
+    /// TSK-1286 review of fac11e366: with a matching task and declaration
+    /// on the target, a head that changes the declaration, removes it or
+    /// deletes the declaring epic refuses, as the task binding does. At
+    /// fac11e366 all three were verified.
+    #[test]
+    fn epic_line_proof_refuses_a_head_that_changes_a_trusted_declaration() {
+        let changed = second_epic(Some("integration/EPC-001-elsewhere"), "planning");
+        let removed = second_epic(None, "planning");
+        for (case, head_epic) in [
+            ("changed", Some(changed.as_str())),
+            ("removed", Some(removed.as_str())),
+            ("deleted", None),
+        ] {
+            let dir = proof_fixture(true, head_epic);
+            let proof =
+                epic_line_proof(dir.path(), DECLARED_LINE, "main", "main", DECLARED_LINE).unwrap();
+            assert!(
+                matches!(&proof, EpicLineProof::NotLine(reason) if reason.contains("EPC-002 declares parent_line 'integration/EPC-001-outcome' on the target, but") && reason.contains("a branch cannot change or remove")),
+                "{case}: {proof:?}"
+            );
+        }
+    }
+
+    /// Point `origin/<DECLARED_LINE>` in `root` at a commit off the line
+    /// whose EPC-001 is cancelled, leaving the line itself unchanged.
+    fn cancel_owner_at_fetched_tip(root: &Path) {
+        let owner = root.join("project-management/epics/EPC-001.md");
+        git(root, &["switch", "-q", "-c", "fetched", DECLARED_LINE]);
+        fs::write(
+            &owner,
+            fs::read_to_string(&owner)
+                .unwrap()
+                .replace("status: planning", "status: cancelled"),
+        )
+        .unwrap();
+        git(root, &["commit", "-qam", "cancel the line's epic"]);
+        git(
+            root,
+            &[
+                "update-ref",
+                &format!("refs/remotes/origin/{DECLARED_LINE}"),
+                "fetched",
+            ],
+        );
+        git(root, &["switch", "-q", DECLARED_LINE]);
+    }
+
+    /// TSK-1286 review of fac11e366: the line's own epic cancelled at the
+    /// line's fetched tip refuses the proof while the target and the head
+    /// keep it active, both through a declaring epic and through a task of
+    /// the line's own epic. At fac11e366 both were verified.
+    #[test]
+    fn epic_line_proof_refuses_an_owner_cancelled_at_the_fetched_tip() {
+        let proof = |root: &Path| {
+            epic_line_proof(root, DECLARED_LINE, "main", "main", DECLARED_LINE).unwrap()
+        };
+        let expected = format!("EPC-001 is cancelled on 'origin/{DECLARED_LINE}'");
+        let declared = proof_fixture(true, Some(&second_epic(Some(DECLARED_LINE), "planning")));
+        assert!(matches!(
+            proof(declared.path()),
+            EpicLineProof::Verified(..)
+        ));
+        cancel_owner_at_fetched_tip(declared.path());
+        assert!(
+            matches!(proof(declared.path()), EpicLineProof::NotLine(ref reason) if reason == &expected),
+            "declared path"
+        );
+        let own = proof_fixture(false, None);
+        let root = own.path();
+        git(root, &["switch", "-q", "main"]);
+        let first = root.join("project-management/tasks/TSK-001.md");
+        fs::write(
+            &first,
+            fs::read_to_string(&first).unwrap().replace(
+                "integration_target: main",
+                &format!("integration_target: {DECLARED_LINE}"),
+            ),
+        )
+        .unwrap();
+        git(root, &["commit", "-qam", "the line's own task"]);
+        git(root, &["switch", "-q", DECLARED_LINE]);
+        git(root, &["merge", "-q", "--no-ff", "-m", "take main", "main"]);
+        assert!(
+            matches!(proof(root), EpicLineProof::Verified(..)),
+            "own task"
+        );
+        cancel_owner_at_fetched_tip(root);
+        assert!(
+            matches!(proof(root), EpicLineProof::NotLine(ref reason) if reason == &expected),
+            "own-task path"
         );
     }
 
