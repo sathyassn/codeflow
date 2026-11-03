@@ -356,13 +356,13 @@ fn a_project_with_no_declaration_keeps_the_full_gate() {
     let reason = classify_landing(dir.path(), &base, "HEAD").reason;
     assert!(reason.contains("declares no git.record_paths"), "{reason}");
 
-    let bare = tempfile::tempdir().unwrap();
-    git(bare.path(), &["init", "-q", "-b", "main"]);
-    write(bare.path(), "docs/guide.md", "Old\n");
-    let base = commit(bare.path());
-    write(bare.path(), "docs/guide.md", "New\n");
-    commit(bare.path());
-    decision(bare.path(), &base, LandingClass::Code);
+    let no_policy = tempfile::tempdir().unwrap();
+    git(no_policy.path(), &["init", "-q", "-b", "main"]);
+    write(no_policy.path(), "docs/guide.md", "Old\n");
+    let base = commit(no_policy.path());
+    write(no_policy.path(), "docs/guide.md", "New\n");
+    commit(no_policy.path());
+    decision(no_policy.path(), &base, LandingClass::Code);
 }
 
 /// TSK-1306: a candidate that widens the list to cover its own code change is
