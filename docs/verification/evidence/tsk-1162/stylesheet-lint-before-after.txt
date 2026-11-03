@@ -1,0 +1,14 @@
+Before the consumer-file scan: node scripts/design-tokens-sync.ts --check exited 0 with the planted stylesheet present.
+After the scan: the same command exited 1.
+Clean control after removing the fixture: exit 0.
+
+(node:47082) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+file:///Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1162/scripts/design-tokens-sync.ts:66
+    if (literals.length) throw new Error(`Authored style literals in ${path}: ${literals.join(', ')}`);
+                               ^
+
+Error: Authored style literals in crates/codeflow-present/web/src/tsk1162-literal-fixture.css: 1cm, papayawhip
+    at file:///Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1162/scripts/design-tokens-sync.ts:66:32
+
+Node.js v26.4.0

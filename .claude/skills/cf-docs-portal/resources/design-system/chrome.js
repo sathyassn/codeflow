@@ -1,5 +1,5 @@
 /* CodeFlow design system runtime (chrome.js). Plain ES2020, no framework, no build.
-   Load it in <head> without defer, after the three sheets: the prepaint block runs before first paint,
+   Load it in <head> without defer, after settings.js and the three sheets: the prepaint block runs before first paint,
    and the runtime mounts the page's [data-cf-view] element once the document is parsed.
    Owns: prepaint, Display panel, search dialog, panels and peek sheets, altitude tabs, table of contents,
    ID preview card, Comment state machine, toast.
@@ -8,16 +8,17 @@
    Seams: pagefind (search), router (routes outside the page), session api (review delivery). */
 
 /* ---------- Prepaint: apply stored display choices before first paint ----------
-   Self-contained so a product can inline it in <head>.
-   Keys: cf.skin, cf.theme, cf.typeface, cf.scale, cf.nav.width, cf.nav.open, cf.toc.open */
+   Reads the generated display choices from settings.js.
+   Keys: cf.skin, cf.accent, cf.theme, cf.typeface, cf.scale, cf.nav.width, cf.nav.open, cf.toc.open */
 (function () {
-  var d = document.documentElement;
+  var d = document.documentElement, choices = globalThis.CF_DISPLAY_SETTINGS;
   function get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function pick(v, list, def) { return list.indexOf(v) >= 0 ? v : def; }
-  var skin = pick(get('cf.skin'), ['graphite', 'slate', 'sage'], 'graphite');
-  var pref = pick(get('cf.theme'), ['light', 'dark', 'system'], 'system');
+  var skin = pick(get('cf.skin'), Object.keys(choices.themes), choices.defaultTheme);
+  var pref = pick(get('cf.theme'), choices.modes, 'system');
   var dark = pref === 'dark' || (pref === 'system' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
   d.setAttribute('data-cf-skin', skin);
+  d.setAttribute('data-cf-accent', pick(get('cf.accent'), choices.themes[skin], choices.defaultAccent));
   d.setAttribute('data-cf-theme', dark ? 'dark' : 'light');
   d.setAttribute('data-cf-typeface', pick(get('cf.typeface'), ['archivo', 'inter', 'plex'], 'inter'));
   d.setAttribute('data-cf-scale', pick(get('cf.scale'), ['compact', 'default', 'large'], 'default'));
@@ -49,10 +50,10 @@
   const mq = q => window.matchMedia(q);
   const mqDark = mq('(prefers-color-scheme: dark)');
   const mqReduce = mq('(prefers-reduced-motion: reduce)');
-  const mqNavSheet = mq('(max-width: 879.98px)');
-  const mqTocSheet = mq('(max-width: 1119.98px)');
-  const mqPhone = mq('(max-width: 599.98px)');
-  const mqCardSheet = mq('(max-width: 639.98px)');
+  const mqNavSheet = mq(globalThis.CF_RUNTIME_LAYOUT.compactQuery);
+  const mqTocSheet = mq(globalThis.CF_RUNTIME_LAYOUT.tocQuery);
+  const mqPhone = mq(globalThis.CF_RUNTIME_LAYOUT.phoneQuery);
+  const mqCardSheet = mq(globalThis.CF_RUNTIME_LAYOUT.cardQuery);
   const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
   const editable = el => !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -94,11 +95,14 @@
   CF.toast = toast;
 
   /* ---------- Display preferences ---------- */
+  const choices = globalThis.CF_DISPLAY_SETTINGS;
+  const accentLabel = value => value === 'green' ? 'Deep green' : value === 'plum' ? 'Plum' : 'Violet';
   const PREFS = {
+    accent: { key: 'cf.accent', attr: 'data-cf-accent', label: 'Accent', desc: 'Curated for this theme', def: choices.defaultAccent, options: [...new Set(Object.values(choices.themes).flat())].map(v => [v, accentLabel(v)]) },
     typeface: { key: 'cf.typeface', attr: 'data-cf-typeface', label: 'Font', desc: 'Body and headings', def: 'inter', options: [['archivo', 'Archivo'], ['inter', 'Inter'], ['plex', 'Plex Sans']] },
-    scale: { key: 'cf.scale', attr: 'data-cf-scale', label: 'Size', desc: 'Text and controls', def: 'default', options: [['compact', 'Compact'], ['default', 'Default'], ['large', 'Large']] },
-    skin: { key: 'cf.skin', attr: 'data-cf-skin', label: 'Palette', desc: 'Surfaces and accent', def: 'graphite', options: [['graphite', 'Graphite'], ['slate', 'Slate'], ['sage', 'Sage']] },
-    theme: { key: 'cf.theme', attr: null, label: 'Appearance', desc: 'Light, dark or the system', def: 'system', options: [['light', 'Light'], ['dark', 'Dark'], ['system', 'System']] }
+    scale: { key: 'cf.scale', attr: 'data-cf-scale', label: 'Size', desc: 'Text and controls', def: 'default', options: choices.sizes.map(v => [v, v[0].toUpperCase() + v.slice(1)]) },
+    skin: { key: 'cf.skin', attr: 'data-cf-skin', label: 'Theme', desc: 'Surfaces', def: 'graphite', options: Object.keys(choices.themes).map(v => [v, v[0].toUpperCase() + v.slice(1)]) },
+    theme: { key: 'cf.theme', attr: null, label: 'Mode', desc: 'Light, dark or the system', def: 'system', options: choices.modes.map(v => [v, v[0].toUpperCase() + v.slice(1)]) }
   };
   function getPref(name) {
     const p = PREFS[name], v = store.get(p.key);
@@ -111,6 +115,9 @@
   function setPref(name, value) {
     store.set(PREFS[name].key, value);
     if (name === 'theme') applyTheme(); else root.setAttribute(PREFS[name].attr, value);
+    const allowed = choices.themes[getPref('skin')];
+    if (!allowed.includes(getPref('accent'))) store.set(PREFS.accent.key, choices.defaultAccent);
+    root.setAttribute('data-cf-accent', getPref('accent'));
     syncDisplay();
     d.dispatchEvent(new CustomEvent('cf:prefs', { detail: { name, value } }));
   }
@@ -174,6 +181,7 @@
     setPref(name, pill.dataset.value);
   }
   function syncDisplay() {
+    for (const pill of $$('[data-pref="accent"] [data-value]')) pill.hidden = !choices.themes[getPref('skin')].includes(pill.dataset.value);
     if (!displayEl) return;
     $$('.cf-pills', displayEl).forEach(g => {
       const v = getPref(g.dataset.pref);

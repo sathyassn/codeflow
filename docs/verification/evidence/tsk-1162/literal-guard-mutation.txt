@@ -1,0 +1,209 @@
+✖ planted hex literal fails lint (6.498375ms)
+✖ planted functional literal fails lint (0.328917ms)
+✖ planted named literal fails lint (0.149ms)
+✖ planted named extended literal fails lint (0.124417ms)
+✖ planted absolute size literal fails lint (0.146083ms)
+✖ planted exponent size literal fails lint (0.098541ms)
+✖ planted size literal fails lint (0.1005ms)
+✖ planted radius literal fails lint (0.090667ms)
+✖ planted fallback literal fails lint (0.156041ms)
+✔ clean token control permits intrinsic values and CSS variables (0.639833ms)
+✔ every authored style template is free of colour, size and radius literals (12.126458ms)
+✔ pseudo-highlight selectors are not named colour declarations (0.136667ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 3
+ℹ fail 9
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 138.779791
+
+✖ failing tests:
+
+test at ../../../../../../../../../private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:3
+✖ planted hex literal fails lint (6.498375ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(styleLiterals(`a{${value}}`).length)
+
+      at TestContext.<anonymous> (file:///private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:59)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at ../../../../../../../../../private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:3
+✖ planted functional literal fails lint (0.328917ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(styleLiterals(`a{${value}}`).length)
+
+      at TestContext.<anonymous> (file:///private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:59)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at ../../../../../../../../../private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:3
+✖ planted named literal fails lint (0.149ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(styleLiterals(`a{${value}}`).length)
+
+      at TestContext.<anonymous> (file:///private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:59)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at ../../../../../../../../../private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:3
+✖ planted named extended literal fails lint (0.124417ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(styleLiterals(`a{${value}}`).length)
+
+      at TestContext.<anonymous> (file:///private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:59)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at ../../../../../../../../../private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:3
+✖ planted absolute size literal fails lint (0.146083ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(styleLiterals(`a{${value}}`).length)
+
+      at TestContext.<anonymous> (file:///private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:59)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at ../../../../../../../../../private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:3
+✖ planted exponent size literal fails lint (0.098541ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(styleLiterals(`a{${value}}`).length)
+
+      at TestContext.<anonymous> (file:///private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:59)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at ../../../../../../../../../private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:3
+✖ planted size literal fails lint (0.1005ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(styleLiterals(`a{${value}}`).length)
+
+      at TestContext.<anonymous> (file:///private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:59)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at ../../../../../../../../../private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:3
+✖ planted radius literal fails lint (0.090667ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(styleLiterals(`a{${value}}`).length)
+
+      at TestContext.<anonymous> (file:///private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:59)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at ../../../../../../../../../private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:3
+✖ planted fallback literal fails lint (0.156041ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(styleLiterals(`a{${value}}`).length)
+
+      at TestContext.<anonymous> (file:///private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/literal/lint.test.ts:6:59)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

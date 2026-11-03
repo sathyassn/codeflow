@@ -153,6 +153,9 @@ impl ProjectConfig {
         let raw = read_bounded_file(&path, MAX_TOKEN_BYTES)?;
         let tokens: UtilityTokens = serde_json::from_slice(&raw)?;
         tokens.validate()?;
+        for warning in palette_warnings(&tokens) {
+            eprintln!("{warning}");
+        }
         Ok(Some(tokens))
     }
 
@@ -469,21 +472,56 @@ fn parse_opaque_color(value: &str) -> Result<[u8; 3]> {
 }
 
 fn contrast_ratio(left: [u8; 3], right: [u8; 3]) -> f64 {
-    let left = relative_luminance(left);
-    let right = relative_luminance(right);
-    (left.max(right) + 0.05) / (left.min(right) + 0.05)
+    let hex = |[r, g, b]: [u8; 3]| format!("#{r:02x}{g:02x}{b:02x}");
+    crate::colour::contrast(&hex(left), &hex(right))
 }
 
-fn relative_luminance(color: [u8; 3]) -> f64 {
-    let [red, green, blue] = color.map(|component| {
-        let channel = f64::from(component) / 255.0;
-        if channel <= 0.040_45 {
-            channel / 12.92
+/// Measure the resolved palette, not just the fields the project overrides.
+fn palette_warnings(tokens: &UtilityTokens) -> Vec<String> {
+    const PALETTES: &str = include_str!(
+        "../../../assets/base/agents/skills/cf-present/resources/design-system/tokens.json"
+    );
+    let palettes: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> =
+        serde_json::from_str(PALETTES).expect("generated palettes are valid");
+    let Some(colors) = &tokens.colors else {
+        return Vec::new();
+    };
+    let floor = crate::colour::floor("simulatedSeparation");
+    let mut warnings = Vec::new();
+    for (pair, mut roles) in palettes {
+        let imported = if pair.ends_with("-dark") {
+            &colors.dark
         } else {
-            ((channel + 0.055) / 1.055).powf(2.4)
+            &colors.light
+        };
+        if let Some(accent) = &imported.accent {
+            roles.insert("fig-accent".to_owned(), accent.clone());
         }
-    });
-    0.2126 * red + 0.7152 * green + 0.0722 * blue
+        let names = [
+            "fig-line",
+            "fig-accent",
+            "fig-cat1",
+            "fig-cat2",
+            "fig-warn",
+            "fig-stop",
+        ];
+        for (index, first) in names.iter().enumerate() {
+            for second in &names[index + 1..] {
+                for simulation in ["protan", "deutan", "tritan"] {
+                    let distance = crate::colour::simulated_separation(
+                        &roles[*first],
+                        &roles[*second],
+                        simulation,
+                    );
+                    if distance < floor {
+                        let normal = crate::colour::delta_e_2000(&roles[*first], &roles[*second]);
+                        warnings.push(format!("warning: project palette {pair}: {first}/{second} under {simulation} has CIEDE2000 {distance:.2}, below {floor:.2} (normal {normal:.2}); use the two-channel rule: pair colour with a shape, pattern or label"));
+                    }
+                }
+            }
+        }
+    }
+    warnings
 }
 
 fn append_color_css(css: &mut String, mode: &str, colors: &ColorTokens) {
@@ -502,6 +540,8 @@ fn append_color_declarations(css: &mut String, colors: &ColorTokens) {
         ("surface", colors.surface.as_deref()),
         ("text", colors.text.as_deref()),
         ("accent", colors.accent.as_deref()),
+        ("fig-accent", colors.accent.as_deref()),
+        ("stage-active", colors.accent.as_deref()),
         ("focus", colors.focus.as_deref()),
     ] {
         if let Some(value) = value {
@@ -548,6 +588,38 @@ mod tests {
         let dir = root.join(".codeflow/present");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("config.toml"), body).unwrap();
+    }
+
+    #[test]
+    fn close_project_palette_warns_without_refusing_import() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("tokens.json"),
+            r##"{
+            "schema_version": 1,
+            "colors": {
+              "light": {"canvas":"#ffffff","surface":"#ffffff","text":"#000000","accent":"#3860ac","focus":"#005fcc"},
+              "dark": {"canvas":"#000000","surface":"#000000","text":"#ffffff","accent":"#9bbeff","focus":"#00ffff"}
+            }
+        }"##,
+        )
+        .unwrap();
+        let config = ProjectConfig {
+            primitive_tokens: Some(PrimitiveTokenSource {
+                path: "tokens.json".into(),
+            }),
+            ..ProjectConfig::default()
+        };
+        let tokens = config.load_tokens(root.path()).unwrap().unwrap();
+        let warnings = palette_warnings(&tokens);
+        assert!(warnings
+            .iter()
+            .any(|line| line.contains("fig-accent/fig-cat1") && line.contains("two-channel rule")));
+        assert!(warnings.iter().any(|line| line.contains("protan")));
+        let clean: UtilityTokens =
+            serde_json::from_str(r#"{"schema_version":1,"colors":{"light":{},"dark":{}}}"#)
+                .unwrap();
+        assert!(palette_warnings(&clean).is_empty());
     }
 
     #[test]

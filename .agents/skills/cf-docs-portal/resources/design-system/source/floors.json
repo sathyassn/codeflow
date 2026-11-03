@@ -1,0 +1,24 @@
+{
+  "graphiteLightness": {
+    "light": [
+      94,
+      99.5
+    ],
+    "dark": [
+      5,
+      12
+    ]
+  },
+  "textContrast": 4.5,
+  "uiContrast": 3,
+  "stageContrast": 3,
+  "stageSeparation": 10,
+  "simulatedSeparation": 5,
+  "accentStatusHueGap": 24,
+  "companionSeparation": 20,
+  "companionStopSeparation": 10,
+  "minimumSegmentPx": 3,
+  "minimumArcDegrees": 3,
+  "skinCanvasSeparation": 3,
+  "skinSurfaceSeparation": 1.5
+}

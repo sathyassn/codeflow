@@ -1,0 +1,15 @@
+[
+  {
+    "selector": ":root",
+    "values": {
+      "column-max": "960px",
+      "header-h": "52px",
+      "topbar-h": "56px",
+      "strip-h": "40px",
+      "nav-w": "264px",
+      "toc-w": "232px",
+      "rail-w": "320px",
+      "route-w": "200px"
+    }
+  }
+]

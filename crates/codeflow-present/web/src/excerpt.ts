@@ -1,3 +1,4 @@
+import { runtime } from "./tokens.ts";
 /** Visible excerpts for the calling harness. Gesture UX is unchanged. */
 
 const TEXT_CARRIERS = "p, h1, h2, h3, h4, li, td, th, blockquote, figcaption, text, tspan, span, strong, em, label";
@@ -188,7 +189,7 @@ function groundOf(element: Element): string {
     const color = opaqueColor(getComputedStyle(node).backgroundColor);
     if (color) return color;
   }
-  return "#ffffff";
+  return runtime.paper;
 }
 
 /**
@@ -247,7 +248,7 @@ async function rasterizeDomSlice(root: HTMLElement, box: DOMRect): Promise<Excer
   const source = bestHtmlSource(root, box);
   ctx.fillStyle = opaqueColor(getComputedStyle(document.documentElement).backgroundColor)
     || opaqueColor(getComputedStyle(source).backgroundColor)
-    || "#ffffff";
+    || runtime.paper;
   ctx.fillRect(0, 0, width, height);
   const reference = ctx.getImageData(0, 0, 1, 1).data;
 
@@ -394,7 +395,7 @@ function paintTextNode(
   ctx.beginPath();
   ctx.rect(0, 0, ctx.canvas.width, ctx.canvas.height);
   ctx.clip();
-  ctx.fillStyle = style.color || "#111111";
+  ctx.fillStyle = style.color || runtime.ink;
   const fontSize = Math.max(1, (parseFloat(style.fontSize) || 16) * scale);
   ctx.font = `${style.fontStyle} ${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
   ctx.textAlign = "left";

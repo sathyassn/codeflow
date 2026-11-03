@@ -46,7 +46,7 @@ instructs the agent, and every other string is written in the third person.
   copy; utility copy stays neutral.
 
 Example, the third person in documentation (source: `cf-docs-portal/resources/design-system/README.md`):
-> Products do not import these files as a library; they carry the values and the behaviour this kit demonstrates.
+> Both products consume generated files from the same modular token source.
 
 Example, the second person in a prompt to the reader (source: `cf-docs-portal/resources/design-system/present.reference.html`):
 > Approve the figure for the guide, or mark what should change.

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { execFileSync } from "node:child_process";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const crateRoot = resolve(webRoot, "..");
@@ -30,6 +31,7 @@ export const budgets = Object.freeze({
 
 export async function buildAssets(assetsRoot = defaultAssetsRoot) {
   assertToolchain();
+  execFileSync(process.execPath, ["scripts/design-tokens-sync.ts", "--check"], { cwd: resolve(crateRoot, "../.."), stdio: "inherit" });
   const scratch = await mkdtemp(join(tmpdir(), "cf-present-web-"));
   try {
     const rawService = join(scratch, "service");

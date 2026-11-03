@@ -1,0 +1,8 @@
+{
+  "done": "fig-line",
+  "active": "fig-accent",
+  "review": "fig-cat1",
+  "planned": "fig-cat2",
+  "warning": "fig-warn",
+  "blocked": "fig-stop"
+}

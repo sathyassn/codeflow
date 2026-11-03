@@ -3,14 +3,27 @@
 This folder holds the CodeFlow design system as working files. Open either
 reference page from this folder and the whole system works with no build step:
 three skins, light and dark, the Display panel, the panels, search, the figures
-and the present Comment flow. Products do not import these files as a library;
-they carry the values and the behaviour this kit demonstrates.
+and the present Comment flow. Both products consume generated files from the same modular token source.
 
 ## Files
 
 | File | What it is |
 |---|---|
-| `tokens.json` | The value source: six skin and mode pairs, one hex value per role |
+| `source/colour.json` | Theme palettes and curated accent bases |
+| `source/type.json` | Typefaces, sizes and line heights |
+| `source/space.json` | Spacing scale |
+| `source/radius.json` | Corner radii |
+| `source/elevation.json` | Surface shadows |
+| `source/motion.json` | Durations and easing |
+| `source/layout.json` | Fixed layout dimensions and media breakpoints |
+| `source/geometry.json` | Count-chart geometry |
+| `source/floors.json` | Contrast, separation and minimum-mark floors |
+| `source/matrices.json` | Full-severity colour-deficiency simulation matrices |
+| `source/stages.json` | Stage-to-figure role mapping |
+| `source/named-colours.json` | CSS colour names rejected by the authored-style lint |
+| `tokens.json` | Generated resolved palettes for six theme/mode pairs |
+| `tokens.ts` | Generated typed values and display choices |
+| `counts.reference.html` | Shared bar and ring renderer at one task in three hundred |
 | `tokens.css` | Custom properties only: type, shape and motion on `:root`, the `data-cf-typeface` and `data-cf-scale` blocks, and six `[data-cf-skin][data-cf-theme]` blocks holding the `tokens.json` values plus `--cf-shadow` and `--cf-fig-na-alpha` |
 | `chrome.css` | The `cf-` primitives: header, panels, sheets, grip, rows, pills, popover, dialog, tabs, table of contents, crumbs, provenance, preview card, footer cards, marker, float, composer, rail, toast. Tokens only, no literal colour |
 | `figure.css` | Figure frame, legend, caption, table twin and the mark classes of the figure grammar. Colours and faces from `--cf-fig-*` tokens only; sizes and one transition also read `--cf-ui-scale` and `--cf-dur-select`, each with a fallback |
@@ -21,18 +34,15 @@ they carry the values and the behaviour this kit demonstrates.
 ## How a product consumes it
 
 ```
-tokens.json ── equal per role ──▶ product token sheet
-figure.css  ── byte for byte ──▶ product figure sheet
-chrome.css  ── behaviour and look reference ──▶ product chrome (Preact, Starlight, or other)
-chrome.js   ── behaviour reference ──▶ product runtime
+source/*.json -> generator -> CSS, JSON and typed values -> both products
+figure.css  -- byte for byte --> product figure sheet
+chrome.css  -- behaviour and look reference --> product chrome (Preact, Starlight, or other)
+chrome.js   -- behaviour reference --> product runtime
 ```
 
-- Token roles are equal per role. A product token sheet may add roles and
-  may be generated differently, but every role in `tokens.json` carries the
-  same value in the same skin and mode. So do the values `tokens.css` adds:
-  `--cf-shadow` and `--cf-fig-na-alpha` in each pair block, and the `:root`
-  aliases `--cf-fig-ground`, `--cf-fig-rule`, `--cf-fig-font` and
-  `--cf-fig-mono`, which point at the same roles.
+- The generator adapts selectors for each consumer. Colour roles carry the
+  same value in the same theme, mode and accent. Shared type, layout, elevation
+  and motion modules also produce each consumer's sheet.
 - `figure.css` is carried byte for byte. A figure drawn for one product renders
   the same in every product that carries the sheet.
 - `chrome.css` and `chrome.js` are the reference for what the chrome looks
@@ -44,9 +54,9 @@ chrome.js   ── behaviour reference ──▶ product runtime
 
 | Surface | Names |
 |---|---|
-| Root attributes | `data-cf-skin` (`graphite`, `slate`, `sage`), `data-cf-theme` (`light`, `dark`), `data-cf-typeface` (`archivo`, `inter`, `plex`), `data-cf-scale` (`compact`, `default`, `large`) |
+| Root attributes | `data-cf-skin` (`graphite`, `slate`, `sage`), `data-cf-theme` (`light`, `dark`), `data-cf-accent` (`green`, `plum`, `violet`, curated per theme), `data-cf-typeface` (`archivo`, `inter`, `plex`), `data-cf-scale` (`compact`, `default`, `large`) |
 | State attributes, set by the runtime and never stored themselves | `data-cf-nav` and `data-cf-toc` (`collapsed`, restored from `cf.nav.open` and `cf.toc.open`), `data-cf-preload` (set until the view has mounted and painted), `data-cf-mounted` (on the mounted view), `data-cf-comment` (`armed`) |
-| `localStorage` keys | `cf.skin`, `cf.theme` (`light`, `dark`, `system`), `cf.typeface`, `cf.scale`, `cf.nav.width` (220 to 360), `cf.nav.open`, `cf.toc.open`, `cf.nav.groups` (JSON of collapsed groups) |
+| `localStorage` keys | `cf.skin`, `cf.accent`, `cf.theme` (`light`, `dark`, `system`), `cf.typeface`, `cf.scale`, `cf.nav.width` (220 to 360), `cf.nav.open`, `cf.toc.open`, `cf.nav.groups` (JSON of collapsed groups) |
 | Custom properties | `--cf-<role>` for chrome, `--cf-fig-<name>` for figures |
 | Chrome classes | `cf-` prefix throughout, for example `cf-header`, `cf-panel`, `cf-row`, `cf-pill`, `cf-marker` |
 | Figure classes | `cf-fig` and `cf-fig-*` for the frame, `cf-legend` and `cf-key`, `cf-fig-title` and `cf-fig-details`, `cf-m-<mark>` for every mark of the grammar (`cf-m-layer--remote` for layer-remote) and part classes such as `cf-m-cap` and `cf-m-trans-head`, `cf-f-*` for axes, rules, ticks and hit areas, `cf-t` for table twin text, and `data-cf-tone` (`accent`, `cat1`, `cat2`) on a toned mark group and its key |
@@ -97,3 +107,29 @@ composition rule and the altitude grammar) and `figure-grammar.md` (the nine
 families, twelve rules, altitude contract, mark vocabulary and figure
 declaration). Read them before authoring a page or a figure; read this kit to
 see them run.
+
+## Updating tokens
+
+Edit the modules in `source/`, then run `node source/generate.ts` from this
+kit directory. In the CodeFlow repository, run `node scripts/design-tokens-sync.ts`
+from the repository root to update consumers, mirrors and managed baselines.
+Use `--check` to reject drift without writing. The present asset build runs
+this check and rejects palette floors and authored style literals.
+
+Run `node --test source/*.test.ts` for planted palette/literal failures and
+geometry checks. `node source/measure.ts` reports every worst pair.
+Fixed layout tokens resolve to literals in generated sheets to keep bundle size
+within its existing budget; semantic theme properties remain dynamic.
+
+The opt-in count renderer in `count-charts.js` is consumed by
+`counts.reference.html`. It allocates at least the token minimum to positive
+counts, retains exact count labels and rejects impossible allocations. It does
+not add a new present document block type. Serve the kit with a local static
+server for this ES-module example.
+
+The `length-*` entries in the layout module are a resolved-literal table,
+not semantic design tokens. Generation substitutes their values to avoid
+repeating long custom-property names within the current asset budget. Shared
+spacing and breakpoint roles will replace recurring entries when the bar or
+navigation work next edits these sheets. Value-named colour properties are
+forbidden; authored colours must use semantic roles.

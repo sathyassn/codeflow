@@ -20,6 +20,7 @@ export default defineConfig({
       description: config.description,
       customCss: ["./src/styles/utility-tokens.css", "./src/styles/portal.css", "./src/styles/figure-roles.css", "./src/styles/figure.css", "./.portal/generated/project-tokens.css"],
       components: {
+        ThemeProvider: "./src/components/PortalThemeProvider.astro",
         SkipLink: "./src/components/PortalSkipLink.astro",
         PageFrame: "./src/components/PortalFrame.astro",
         TwoColumnContent: "./src/components/PortalColumns.astro",

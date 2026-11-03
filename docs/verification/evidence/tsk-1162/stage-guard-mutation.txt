@@ -1,0 +1,64 @@
+✔ planted cast is rejected (2.488ms)
+✔ planted white is rejected (0.984084ms)
+✔ planted black is rejected (0.512625ms)
+✔ planted Neutral is rejected (0.378083ms)
+✔ planted one accent is rejected (0.488166ms)
+✔ planted contrast is rejected (0.436459ms)
+✔ planted status hue is rejected (0.363584ms)
+✔ clean Graphite theme control passes every theme check (0.569792ms)
+✔ every shipped theme and accent passes the colour floors (0.387291ms)
+✖ near-identical dark stage inks fail normal and all simulated floors (2.943625ms)
+✖ missed stage surface floor fails, with a clean palette control (0.277917ms)
+✔ all curated companions meet unchanged ordinary and simulated floors (4.366792ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 10
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 149.015375
+
+✖ failing tests:
+
+test at ../../../../../../../../../private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/stage/validate.test.ts:31:1
+✖ near-identical dark stage inks fail normal and all simulated floors (2.943625ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(failures.some(f => f.rule === 'stage separation' && f.context.endsWith('/' + name)))
+
+      at TestContext.<anonymous> (file:///private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/stage/validate.test.ts:33:71)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at ../../../../../../../../../private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/stage/validate.test.ts:36:1
+✖ missed stage surface floor fails, with a clean palette control (0.277917ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(validateStages({ first: '#fafafa' }, { surface: '#ffffff' }, floors).some(f => f.rule === 'stage contrast'))
+
+      at TestContext.<anonymous> (file:///private/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/tsk1162-guards-e408Ix/stage/validate.test.ts:37:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
