@@ -1968,6 +1968,17 @@ pub fn owned_paths(
     head: &str,
     hide: &[&str],
 ) -> Result<Vec<String>, String> {
+    owned_paths_except(repo_root, head, hide, &std::collections::BTreeSet::new())
+}
+
+/// Exclude exact commits whose own work has been proved reviewed, without
+/// excluding the unreviewed work they may have imported through other parents.
+fn owned_paths_except(
+    repo_root: &std::path::Path,
+    head: &str,
+    hide: &[&str],
+    reviewed_own: &std::collections::BTreeSet<Oid>,
+) -> Result<Vec<String>, String> {
     let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
@@ -1984,9 +1995,11 @@ pub fn owned_paths(
     }
     let mut paths = std::collections::BTreeSet::new();
     for commit in walk {
-        let commit = repo
-            .find_commit(commit.map_err(unreadable)?)
-            .map_err(unreadable)?;
+        let commit = commit.map_err(unreadable)?;
+        if reviewed_own.contains(&commit) {
+            continue;
+        }
+        let commit = repo.find_commit(commit).map_err(unreadable)?;
         let parents = history::parents(&repo, &commit).map_err(unreadable)?;
         if parents.len() > 1 {
             match read_merge(&repo, &commit) {

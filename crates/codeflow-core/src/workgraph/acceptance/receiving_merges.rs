@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 
 use super::{
-    finding, history, is_ancestor_or_same, owned_paths, Finding, Graph, Oid, Repository,
+    finding, history, is_ancestor_or_same, owned_paths_except, Finding, Graph, Oid, Repository,
     BINDING_RULE,
 };
 
@@ -76,6 +76,7 @@ pub(super) fn findings(
             }
         }
     }
+    let reviewed_own = reviewed_own_commits(repo, base, head, &merges, reviewed)?;
     let project = super::super::amendment::project_at(repo, base)?;
     let mut found = Vec::new();
     for (merge, parents) in merges {
@@ -87,24 +88,76 @@ pub(super) fn findings(
         }
         // The range's base is already the receiving line's work: a task
         // branch that re-merges its target line brings nothing new from it.
-        let mut hide: Vec<String> = reviewed
-            .iter()
-            .chain([&first, &base])
-            .map(ToString::to_string)
-            .collect();
+        let mut hide = vec![first.to_string(), base.to_string()];
         for home in &homes {
             if let Some(source) = source_before(repo, *home, merge)? {
                 hide.push(source.to_string());
             }
         }
         let refs: Vec<_> = hide.iter().map(String::as_str).collect();
-        for path in owned_paths(root, &merge.to_string(), &refs)? {
+        for path in owned_paths_except(root, &merge.to_string(), &refs, &reviewed_own)? {
             if super::super::classify::path_sets().adopter_facing_any_case(&path, &project) {
                 found.push(finding(BINDING_RULE, format!("receiving line `{line}` introduces {path} through merge {merge} outside its verified source and reviewed task heads; carry that product work through the receiving task's pull request and review the result before landing")));
             }
         }
     }
     Ok(found)
+}
+
+/// A task review covers its first-parent work before its landing, not the
+/// ancestors brought in by its merges. The landing's first parent is the
+/// receiving line before that task landed. A review still on a task branch
+/// instead uses this run's base. Keep exact commit ids: hiding a reviewed
+/// tip in a revwalk would also hide every imported task it contains.
+fn reviewed_own_commits(
+    repo: &Repository,
+    base: Oid,
+    head: Oid,
+    merges: &[(Oid, Vec<Oid>)],
+    reviewed: &[Oid],
+) -> Result<BTreeSet<Oid>, String> {
+    let mut own = BTreeSet::new();
+    for reviewed in reviewed {
+        if !is_ancestor_or_same(repo, *reviewed, head)? {
+            return Err(format!(
+                "reviewed commit {reviewed} is not in the judged head {head}"
+            ));
+        }
+        let mut boundary = base;
+        for (merge, parents) in merges {
+            if is_ancestor_or_same(repo, *reviewed, parents[0])? {
+                continue;
+            }
+            for parent in &parents[1..] {
+                if is_ancestor_or_same(repo, *reviewed, *parent)? {
+                    if parents.len() != 2 {
+                        return Err(format!("merge {merge} has {} parents; cannot prove the task's own work for reviewed commit {reviewed}", parents.len()));
+                    }
+                    boundary = parents[0];
+                }
+            }
+        }
+        let mut at = *reviewed;
+        while !is_ancestor_or_same(repo, at, boundary)? {
+            let commit = repo
+                .find_commit(at)
+                .map_err(|error| format!("cannot read reviewed task work at {at}: {error}"))?;
+            let parents = history::parents(repo, &commit)
+                .map_err(|error| format!("cannot read reviewed task work at {at}: {error}"))?;
+            match parents.as_slice() {
+                [_] => {}
+                [_, _] => {
+                    if let super::MergeReading::Unknown(reason) = super::read_merge(repo, &commit) {
+                        return Err(format!("cannot prove reviewed task work at {at}: {reason}"));
+                    }
+                }
+                _ => return Err(format!("commit {at} has {} parents; cannot prove the task's own work for reviewed commit {reviewed}", parents.len())),
+            }
+            own.insert(at);
+            at = parents[0];
+        }
+    }
+    Ok(own)
 }
 
 /// Whether a merge only brings in its own target line: every parent other
@@ -131,5 +184,240 @@ fn source_before(repo: &Repository, mut source: Oid, merge: Oid) -> Result<Optio
             return Ok(None);
         };
         source = parent;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn commit(repo: &Repository, parent: Oid, path: &[u8], text: &[u8]) -> Oid {
+        repo.reference("refs/heads/main", parent, true, "fixture")
+            .unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .read_tree(&repo.find_commit(parent).unwrap().tree().unwrap())
+            .unwrap();
+        index.write().unwrap();
+        crate::git::add_commit(repo, &[(path, text)])
+    }
+
+    fn merge(repo: &Repository, first: Oid, second: Oid) -> Oid {
+        let first = repo.find_commit(first).unwrap();
+        let second = repo.find_commit(second).unwrap();
+        let tree = repo
+            .merge_commits(&first, &second, None)
+            .unwrap()
+            .write_tree_to(repo)
+            .unwrap();
+        let who = git2::Signature::now("Test", "test@example.test").unwrap();
+        repo.commit(
+            None,
+            &who,
+            &who,
+            "fixture merge",
+            &repo.find_tree(tree).unwrap(),
+            &[&first, &second],
+        )
+        .unwrap()
+    }
+
+    fn two_tasks(review: Option<Oid>) -> (tempfile::TempDir, Repository, Oid, Oid, Oid) {
+        let dir = tempfile::tempdir().unwrap();
+        let task = |id| {
+            format!("---\nid: TSK-{id:03}\nstatus: todo\nintegration_target: integration/EPC-001-line\n---\n\n## Acceptance Criteria\n\n- AC-1 (journey) When run, the system shall work.\n\n## Closeout\n\n")
+        };
+        let (repo, base) = crate::git::repo_with_tree(
+            dir.path(),
+            &[
+                (b"project-management/tasks/TSK-001.md", task(1).as_bytes()),
+                (b"project-management/tasks/TSK-002.md", task(2).as_bytes()),
+            ],
+        );
+        let earlier = commit(&repo, base, b"src/earlier.rs", b"earlier work\n");
+        let landed = merge(&repo, base, earlier);
+        let later = commit(&repo, base, b"src/later.rs", b"later work\n");
+        let sync = merge(&repo, later, landed);
+        let reviewed = commit(&repo, sync, b"src/later.rs", b"reviewed later work\n");
+        let completion_review = review.unwrap_or(reviewed);
+        let completed = format!("{}```yaml\nacceptance:\n  reviewed: {completion_review}\n  review: https://example.test/review\n  criteria:\n    AC-1: verified | fixture passed\n  journey: verified | fixture ran\n  not_verified: none\n  follow_ups: none\n  verdict: approved\n```\n", task(2).replace("status: todo", "status: complete"));
+        let completion = commit(
+            &repo,
+            reviewed,
+            b"project-management/tasks/TSK-002.md",
+            completed.as_bytes(),
+        );
+        let head = merge(&repo, landed, completion);
+        repo.reference("refs/heads/main", base, true, "published default")
+            .unwrap();
+        repo.reference(
+            "refs/heads/integration/EPC-001-line",
+            head,
+            true,
+            "fixture line",
+        )
+        .unwrap();
+        (dir, repo, base, landed, head)
+    }
+
+    fn range(repo: &Repository, base: Oid, head: Oid) -> Vec<Finding> {
+        super::super::completions_in_range(
+            repo,
+            &base.to_string(),
+            &head.to_string(),
+            Some(base),
+            &super::super::Criteria::Amendable,
+            &super::super::RunBases::new([base, head]),
+            Some("integration/EPC-001-line"),
+            &[],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn later_review_does_not_cover_an_earlier_tasks_merge() {
+        let (_dir, repo, base, landed, head) = two_tasks(None);
+        let found = range(&repo, base, head);
+        assert!(
+            !found
+                .iter()
+                .any(|finding| !finding.note && finding.message.contains("TSK-002")),
+            "later task must have a valid completion: {found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .any(|finding| finding.message.contains("src/earlier.rs")
+                    && finding.message.contains(&landed.to_string())),
+            "earlier task must still owe its own completion: {found:?}"
+        );
+        assert!(
+            !found
+                .iter()
+                .any(|finding| finding.message.contains("src/later.rs")),
+            "later task owns and reviewed its own work: {found:?}"
+        );
+    }
+
+    fn judge(
+        repo: &Repository,
+        base: Oid,
+        head: Oid,
+        reviewed: &[Oid],
+    ) -> Result<Vec<Finding>, String> {
+        repo.reference("refs/heads/main", base, true, "published default")
+            .unwrap();
+        findings(
+            repo,
+            base,
+            head,
+            Some("integration/EPC-001-line"),
+            &Graph::default(),
+            reviewed,
+            None,
+        )
+    }
+
+    #[test]
+    fn a_tasks_own_commits_before_and_after_a_line_sync_stay_reviewed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, base) = crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"base")]);
+        let line = commit(
+            &repo,
+            base,
+            b"project-management/tasks/TSK-001.md",
+            b"records only",
+        );
+        let own = commit(&repo, base, b"src/own.rs", b"own work");
+        let sync = merge(&repo, own, line);
+        let reviewed = commit(&repo, sync, b"src/own.rs", b"own revision");
+        let head = merge(&repo, line, reviewed);
+        assert!(judge(&repo, base, head, &[reviewed]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_completion_cannot_cover_product_work() {
+        let missing = Oid::from_str(&"f".repeat(40)).unwrap();
+        let (_dir, repo, base, _landed, head) = two_tasks(Some(missing));
+        let found = range(&repo, base, head);
+        assert!(
+            found
+                .iter()
+                .any(|finding| !finding.note && finding.message.contains(&missing.to_string())),
+            "unreadable review must refuse and name its commit: {found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .any(|finding| !finding.note && finding.message.contains("src/later.rs")),
+            "an unreadable completion grants no product exemption: {found:?}"
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_reviewed_merge_refuses_and_names_its_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, base) = crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"base")]);
+        let a = commit(&repo, base, b"src/a.rs", b"a");
+        let b = commit(&repo, base, b"src/b.rs", b"b");
+        let merged = merge(&repo, a, b);
+        let parents = [base, a, b].map(|id| repo.find_commit(id).unwrap());
+        let who = git2::Signature::now("Test", "test@example.test").unwrap();
+        let ambiguous = repo
+            .commit(
+                None,
+                &who,
+                &who,
+                "ambiguous merge",
+                &repo.find_commit(merged).unwrap().tree().unwrap(),
+                &parents.iter().collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let head = merge(&repo, base, ambiguous);
+        let error = judge(&repo, base, head, &[ambiguous]).unwrap_err();
+        assert!(error.contains(&ambiguous.to_string()), "{error}");
+        assert!(error.contains("3 parents"), "{error}");
+    }
+
+    #[test]
+    fn a_records_only_landing_needs_no_product_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, base) = crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"base")]);
+        let records = commit(
+            &repo,
+            base,
+            b"project-management/tasks/TSK-001.md",
+            b"records only",
+        );
+        let head = merge(&repo, base, records);
+        assert!(judge(&repo, base, head, &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_clean_sync_of_a_verified_source_adds_no_product_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, base) = crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"base")]);
+        let line = commit(
+            &repo,
+            base,
+            b"project-management/tasks/TSK-001.md",
+            b"records only",
+        );
+        let source = commit(&repo, base, b"src/source.rs", b"published work");
+        let head = merge(&repo, line, source);
+        let found = findings(
+            &repo,
+            base,
+            head,
+            Some("integration/EPC-001-line"),
+            &Graph::default(),
+            &[],
+            None,
+        )
+        .unwrap();
+        assert!(
+            found.is_empty(),
+            "clean sync adds no work of its own: {found:?}"
+        );
     }
 }
