@@ -1,7 +1,9 @@
 //! Recorded transfers keep frozen task tags and bind the new serving relation
 //! to the planning commit that introduced an identical destination criterion.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use git2::{Oid, Repository};
 
@@ -19,6 +21,26 @@ pub(super) struct Transfer {
 }
 
 pub(super) type Transfers = BTreeMap<(String, String), Result<Transfer, String>>;
+
+// One parse per historical record, shared by every note in this graph's
+// resolution. The cache expires with read(), so later judgments read live
+// history and never retain authority across repository mutations.
+type RecordCopies = BTreeMap<(Oid, String), Result<Option<Rc<RecordView>>, String>>;
+
+struct TransferHistory<'r> {
+    repo: &'r Repository,
+    records: RefCell<RecordCopies>,
+}
+
+impl TransferHistory<'_> {
+    fn at(&self, oid: Oid, record: &RecordView) -> Result<Option<Rc<RecordView>>, String> {
+        self.records
+            .borrow_mut()
+            .entry((oid, record.path.clone()))
+            .or_insert_with(|| record_at(self.repo, oid, record).map(|copy| copy.map(Rc::new)))
+            .clone()
+    }
+}
 
 /// Reserve only this explicit use of an existing dated amendment note.
 /// Malformed or conflicting transfer notes still demand proof and never
@@ -76,12 +98,12 @@ fn open(record: &RecordView) -> bool {
 /// planning commit through the existing guarded history and record readers.
 #[allow(clippy::too_many_lines)] // Keep review, planning ancestry and membership proofs in refusal order.
 fn resolve(
-    repo: &Repository,
+    history: &TransferHistory<'_>,
     graph: &Graph,
     source: &RecordView,
     criterion: &Criterion,
 ) -> Result<Transfer, String> {
-    let _judgment = history::judgment();
+    let repo = history.repo;
     let target = destination(criterion)?;
     if target.0 == source.id {
         return Err("a criterion cannot transfer to its own epic".into());
@@ -105,14 +127,17 @@ fn resolve(
     if !is_ancestor_or_same(repo, reviewed, graph.revision.ok_or("no graph revision")?)? {
         return Err("the graph does not contain the transfer review".into());
     }
-    let at_review = record_at(repo, reviewed, source)?.ok_or("source missing at review")?;
+    let at_review = history
+        .at(reviewed, source)?
+        .ok_or("source missing at review")?;
     let reviewed_item =
         item(&at_review, &criterion.id).ok_or("source criterion missing at review")?;
     if reviewed_item != criterion {
         return Err("the transfer note or source criterion changed after review".into());
     }
-    let reviewed_target =
-        record_at(repo, reviewed, target_record)?.ok_or("destination missing at review")?;
+    let reviewed_target = history
+        .at(reviewed, target_record)?
+        .ok_or("destination missing at review")?;
     // A completed destination retains its inherited task proof on later
     // validation. It cannot authorize closing the source: that requires a
     // source block whose own review still saw the destination open.
@@ -129,7 +154,7 @@ fn resolve(
         if !seen.insert(oid) {
             continue;
         }
-        let Some(after) = record_at(repo, oid, source)? else {
+        let Some(after) = history.at(oid, source)? else {
             continue;
         };
         let Some(after_item) = item(&after, &criterion.id) else {
@@ -142,7 +167,7 @@ fn resolve(
         let parents = history::parents(repo, &commit).map_err(|error| error.to_string())?;
         let mut inherited = false;
         for parent in &parents {
-            let before = record_at(repo, *parent, source)?;
+            let before = history.at(*parent, source)?;
             if before
                 .as_ref()
                 .and_then(|record| item(record, &criterion.id))
@@ -173,14 +198,17 @@ fn resolve(
                 "the transfer is not a planning-only amendment of the source criterion".into(),
             );
         }
-        let before = record_at(repo, *parent, source)?.ok_or("source missing before transfer")?;
+        let before = history
+            .at(*parent, source)?
+            .ok_or("source missing before transfer")?;
         let before_item =
             item(&before, &criterion.id).ok_or("source criterion missing before transfer")?;
-        let introduced =
-            record_at(repo, oid, target_record)?.ok_or("destination missing at transfer")?;
+        let introduced = history
+            .at(oid, target_record)?
+            .ok_or("destination missing at transfer")?;
         let introduced_item =
             item(&introduced, &target.1).ok_or("destination criterion missing at transfer")?;
-        let previous_target = record_at(repo, *parent, target_record)?;
+        let previous_target = history.at(*parent, target_record)?;
         if previous_target
             .as_ref()
             .and_then(|record| item(record, &target.1))
@@ -214,7 +242,9 @@ fn resolve(
         return Err("a transfer needs moved serving tasks".into());
     }
     for task in serving {
-        let at_review = record_at(repo, reviewed, task)?.ok_or("moved task missing at review")?;
+        let at_review = history
+            .at(reviewed, task)?
+            .ok_or("moved task missing at review")?;
         if task.epic_id.as_deref() != Some(target.0.as_str())
             || at_review.epic_id != task.epic_id
             || at_review.criteria.signature() != task.criteria.signature()
@@ -238,10 +268,15 @@ fn same_obligation(left: &Criterion, right: &Criterion) -> bool {
 }
 
 pub(super) fn read(graph: &Graph) -> Transfers {
+    let _judgment = history::judgment();
     let repo = graph
         .repository
         .as_ref()
         .and_then(|path| Repository::open(path).ok());
+    let history = repo.as_ref().map(|repo| TransferHistory {
+        repo,
+        records: RefCell::default(),
+    });
     let mut transfers = Transfers::new();
     for source in graph
         .records
@@ -254,10 +289,10 @@ pub(super) fn read(graph: &Graph) -> Transfers {
             .iter()
             .filter(|criterion| has_note(criterion))
         {
-            let result = repo
+            let result = history
                 .as_ref()
                 .ok_or_else(|| "cannot read transfer history".to_string())
-                .and_then(|repo| resolve(repo, graph, source, criterion));
+                .and_then(|history| resolve(history, graph, source, criterion));
             transfers.insert((source.id.clone(), criterion.id.clone()), result);
         }
     }
@@ -348,7 +383,7 @@ pub(super) fn destination_problem(
     epic: &RecordView,
     criterion: &Criterion,
     graph: &Graph,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let mut incoming = false;
     for source in graph
         .records
@@ -369,16 +404,19 @@ pub(super) fn destination_problem(
         }
     }
     if incoming
-        && graph.tasks().any(|task| {
-            task.criteria
-                .items
-                .iter()
-                .any(|entry| entry.serves() == Some((epic.id.clone(), criterion.id.clone())))
-        })
+        && graph
+            .tasks()
+            .filter(|task| task.status != "cancelled")
+            .any(|task| {
+                task.criteria
+                    .items
+                    .iter()
+                    .any(|entry| entry.serves() == Some((epic.id.clone(), criterion.id.clone())))
+            })
     {
         return Err("transferred criteria must have only their moved serving tasks".into());
     }
-    Ok(())
+    Ok(incoming)
 }
 
 pub(super) fn warnings(graph: &Graph) -> Vec<Finding> {

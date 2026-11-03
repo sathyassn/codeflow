@@ -345,3 +345,60 @@ fn transfer_cli_a_tick_or_absent_waiver_never_closes_the_source() {
         );
     }
 }
+
+#[test]
+fn cancelled_moved_tasks_cli_refuses_destination_own_block_proof() {
+    let (dir, _) = transfer_plan("valid");
+    let root = dir.path();
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task(
+            "TSK-001",
+            "cancelled",
+            "- AC-1 Work (serves EPC-001 AC-1)\n",
+            "- cancelled: work stopped\n- scope: retained in destination\n",
+        )
+        .replacen("epic_id: EPC-001", "epic_id: EPC-002", 1),
+    );
+    commit(root, "docs: cancel moved task");
+    let result = close_transfer(root, "EPC-002", "verified | own proof");
+    assert!(
+        !result.0 && result.1.contains("no complete moved serving task"),
+        "{}",
+        result.1
+    );
+}
+
+#[test]
+fn cancelled_native_task_cli_keeps_complete_moved_task_proof() {
+    let (dir, _) = transfer_plan("valid");
+    let root = dir.path();
+    let reviewed = head(root);
+    let close = format!("```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: session:transfer@sha256:00\n  criteria:\n    AC-1: verified | task proof\n  journey: none | ordinary criterion\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n```\n");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task(
+            "TSK-001",
+            "complete",
+            "- AC-1 Work (serves EPC-001 AC-1)\n",
+            &close,
+        )
+        .replacen("epic_id: EPC-001", "epic_id: EPC-002", 1),
+    );
+    write(
+        root,
+        &record_path("TSK-002"),
+        &task(
+            "TSK-002",
+            "cancelled",
+            "- AC-1 Native work (serves EPC-002 AC-1)\n",
+            "- cancelled: replaced\n- scope: complete moved task proves it\n",
+        )
+        .replacen("epic_id: EPC-001", "epic_id: EPC-002", 1),
+    );
+    commit(root, "docs: cancel native task beside moved proof");
+    let result = close_transfer(root, "EPC-002", "verified | own proof");
+    assert!(result.0, "{}", result.1);
+}

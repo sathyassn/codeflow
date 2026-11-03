@@ -1498,16 +1498,23 @@ pub(super) fn serving_tasks<'g>(
         .flat_map(|task| task.criteria.items.iter().map(move |item| (task, item)))
         .filter(|(_, item)| item.serves() == Some((epic.id.clone(), criterion.id.clone())))
         .collect();
-    if !direct.is_empty() {
+    if direct.iter().any(|(task, _)| task.status != "cancelled") {
         return direct;
     }
-    graph
+    let moved: Vec<_> = graph
         .tasks()
         .flat_map(|task| task.criteria.items.iter().map(move |item| (task, item)))
         .filter(|(task, item)| {
             super::criterion_move::serves_destination(graph, task, item, epic, criterion)
         })
-        .collect()
+        .collect();
+    // Cancelled native tasks do not compete with a recorded transfer. With
+    // no transfer, preserve the existing cancelled-only serving relation.
+    if moved.is_empty() {
+        direct
+    } else {
+        moved
+    }
 }
 
 /// A legacy ticked checkbox still verifies an ordinary criterion; a journey
@@ -1663,8 +1670,15 @@ fn epic_criterion_verified(
     if super::criterion_move::has_note(criterion) {
         return super::criterion_move::close_source(epic, criterion, graph, own_block);
     }
-    super::criterion_move::destination_problem(epic, criterion, graph)?;
+    let transferred = super::criterion_move::destination_problem(epic, criterion, graph)?;
     let serving = serving_tasks(epic, criterion, graph);
+    if transferred {
+        return if serving_verified(criterion, &serving, graph) {
+            Ok(())
+        } else {
+            Err("no complete moved serving task verified the transferred criterion".into())
+        };
+    }
     if !serving.is_empty() {
         if proven_by_own_block_after_cancellation(epic, criterion, graph) {
             // A valid own block was checked against every criterion served

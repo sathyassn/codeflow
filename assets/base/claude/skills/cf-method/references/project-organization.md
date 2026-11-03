@@ -436,7 +436,8 @@ planning commit, and A closes the source criterion only with `waived |
 commit do not close it. An after-release source keeps the deferral rule
 above. B verifies the destination through a complete moved serving task's
 `verified` or `waived` result, with `journey: verified` for a journey;
-any native serving task beside the moved tasks prevents this credit.
+any open or complete native serving task beside the moved tasks prevents
+this credit.
 `codeflow validate --docs` warns about a dangling or foreign serves tag
 without a proven transfer, naming the task and tag. Unreadable history or
 an invalid transfer grants no transfer credit.

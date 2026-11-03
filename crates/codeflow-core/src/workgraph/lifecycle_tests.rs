@@ -4223,3 +4223,60 @@ fn a_completed_transfer_destination_keeps_its_proof_but_never_waives_the_source(
     let refused = refusal(close_transfer_source(&repo, "verified | finished tasks"));
     assert!(refused.contains("open destination"), "{refused}");
 }
+
+#[test]
+fn cancelled_moved_tasks_never_allow_destination_own_block_proof() {
+    let (repo, _) = transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
+    repo.write(
+        TASK_PATH,
+        &task(
+            "TSK-001",
+            "cancelled",
+            TRANSFER_TAG,
+            "- cancelled: work stopped\n- scope: retained in the destination",
+        )
+        .replacen("epic_id: EPC-001", "epic_id: EPC-002", 1),
+    );
+    repo.commit("cancel moved task");
+    let close = StatusChange {
+        acceptance: Some(repo.reviewed(&block(&["AC-1"], "none | ordinary criterion"))),
+        ..change("complete")
+    };
+    let refused = refusal(set_status(repo.root(), RecordKind::Epic, "EPC-002", &close).map(drop));
+    assert!(
+        refused.contains("no complete moved serving task"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_cancelled_native_task_does_not_replace_or_block_moved_task_proof() {
+    let (repo, _) = transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
+    let close = fenced(&repo.reviewed(&block(&["AC-1"], "none | ordinary criterion")));
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "complete", TRANSFER_TAG, &close).replacen(
+            "epic_id: EPC-001",
+            "epic_id: EPC-002",
+            1,
+        ),
+    );
+    repo.write(
+        "project-management/tasks/TSK-002.md",
+        &task(
+            "TSK-002",
+            "cancelled",
+            "- AC-1 Native work (serves EPC-002 AC-1)",
+            "- cancelled: replaced\n- scope: moved proof decides",
+        )
+        .replacen("epic_id: EPC-001", "epic_id: EPC-002", 1),
+    );
+    repo.commit("cancel native task beside moved proof");
+    set_status(
+        repo.root(),
+        RecordKind::Epic,
+        "EPC-002",
+        &change("complete"),
+    )
+    .unwrap();
+}
