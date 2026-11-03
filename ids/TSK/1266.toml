@@ -1,0 +1,11 @@
+id = "TSK-1266"
+uid = "68979dd6-8174-432b-9cf2-da246fb49f4f"
+kind = "TSK"
+title = "Portal and present generators and validators share one parity check"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T01:01:12Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
