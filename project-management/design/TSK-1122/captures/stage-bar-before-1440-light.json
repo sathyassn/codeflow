@@ -1,0 +1,20 @@
+{
+  "phase": "before",
+  "capturedAt": "2026-11-03T04:14:04.632Z",
+  "page": "prototype.html",
+  "sha256": "91b93fe1492ff300aba6971022606bb39cadd05b76c3c39b0d404f6d4bf37834",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "theme": "graphite",
+  "mode": "light",
+  "accent": "main",
+  "colours": {
+    "surface": "#fafafa",
+    "main": "rgb(28, 28, 28)",
+    "line": "rgb(18, 118, 110)",
+    "lineF": "rgb(18, 118, 110)",
+    "title": "Where the 246 tasks areFigure 163 on main (25.6%)16 complete on the line only (6.5%)15 in a pull req"
+  }
+}
