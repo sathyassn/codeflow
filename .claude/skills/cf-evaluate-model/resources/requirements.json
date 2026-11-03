@@ -1463,7 +1463,7 @@
           "markers": [
             "bounded concurrency cap",
             "one owner, branch, and worktree",
-            "serialize each landing"
+            "one landing candidate at a time on a line tip"
           ]
         },
         {
@@ -1688,7 +1688,7 @@
             "chooses this routine mechanism without an operator question",
             "cut and push `integration/<epic-id>-<slug>` off the current protected target",
             "Each task still completes its producer verification and cross-lineage review before it joins a batch",
-            "assembles reviewed heads into a small batch candidate in dependency order",
+            "every PR reviewed and ready at that moment on one candidate in dependency order",
             "one full gate on that exact candidate",
             "does not reopen unit review",
             "Boundaries are unchanged",
