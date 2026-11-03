@@ -1,0 +1,11 @@
+id = "TSK-1296"
+uid = "dfcd49a2-1204-4d11-900d-28879db806aa"
+kind = "TSK"
+title = "One adopter page explains model defaults and what a project can change"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T19:38:24Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
