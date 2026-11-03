@@ -542,6 +542,15 @@ Heavy runs share the host by capacity and start with fewer jobs past its
 budget; only a `host_exclusive` target runs alone
 ([details](troubleshooting.md#heavy-work-shares-the-host)).
 
+Heavy targets may continue while active beyond `timeout_seconds`, up to a
+ceiling four times that base (default base 600 seconds). The per-target
+`stall_timeout_seconds` defaults to 300 seconds. Early stalls require complete
+CPU accounting and containment; unsupported or uncertain accounting explicitly
+uses the ceiling. macOS is ceiling-only in 4.0.0. Unfinished heavy targets
+print tests done and CPU state at least every five minutes. Stalls and ceiling
+timeouts have distinct non-pass statuses, and cleanup is bounded by a further
+five seconds. See the [deadline configuration](test-gate.md#technical).
+
 - A gate that runs cargo warns about a `CARGO_TARGET_DIR` outside the
   worktree, and each target prints a start line on stderr as it begins.
 - A killed gate's slot stays busy while its target runs. On Windows the

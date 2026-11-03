@@ -115,20 +115,36 @@ impl GroupWatch {
         self.locks.clear();
         drop(self.child_end.take());
     }
+
+    pub(super) fn signal(&mut self) -> io::Result<()> {
+        drop(self.child_end.take());
+        self.controller.set_nonblocking(true)?;
+        self.controller.shutdown(std::net::Shutdown::Write)
+    }
+
+    pub(super) fn finished(&mut self) -> io::Result<bool> {
+        let mut byte = [0];
+        match self.controller.read(&mut byte) {
+            Ok(0) => Ok(true),
+            Ok(_) => Ok(false),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
 }
 
 impl Drop for GroupWatch {
     fn drop(&mut self) {
-        // Close our spare child endpoint even when spawn failed. Half-close the
-        // lifetime pipe, then wait for the watcher to close its end as it exits.
+        // A Drop must never block the controller on a surviving descendant.
+        // Explicit cleanup polls finished() under the shared cleanup deadline.
         drop(self.child_end.take());
         let _ = self.controller.shutdown(std::net::Shutdown::Write);
-        let mut byte = [0];
-        loop {
-            match self.controller.read(&mut byte) {
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                _ => break,
-            }
-        }
     }
 }
