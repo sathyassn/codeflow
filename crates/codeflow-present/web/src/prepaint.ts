@@ -11,12 +11,14 @@ import { normalizeSkin, normalizeTypeface } from "./appearance-values";
   let storedTypeface: string | null = null;
   let storedScale: string | null = null;
   let storedAccent: string | null = null;
+  let storedHeadings: string | null = null;
   try {
     storedTheme = normalizeSkin(localStorage.getItem("cf-present-theme"));
     storedMode = localStorage.getItem("cf-present-mode");
     storedTypeface = normalizeTypeface(localStorage.getItem("cf-present-typeface"));
     storedScale = localStorage.getItem("cf-present-scale");
     storedAccent = localStorage.getItem("cf-present-accent");
+    storedHeadings = localStorage.getItem("cf-present-headings");
   } catch {
     // Defaults below remain usable when storage is unavailable.
   }
@@ -38,4 +40,5 @@ import { normalizeSkin, normalizeTypeface } from "./appearance-values";
   root.dataset.cfModeResolved = resolved;
   root.dataset.cfTypeface = typeface;
   root.dataset.cfScale = scale;
+  root.dataset.cfHeadings = storedHeadings === "archivo" ? "archivo" : "body";
 })();

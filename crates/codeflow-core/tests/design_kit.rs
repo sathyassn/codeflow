@@ -784,33 +784,28 @@ fn companion_inks_stay_apart_from_the_accent_and_the_reserved_hues() {
     }
 }
 
-/// The S2 type scale (TSK-444): the value each size role takes at the
-/// default size, and the floor it keeps at any size step.
-const TYPE_SCALE: [(&str, f64, Option<f64>); 8] = [
-    ("display", 34.0, None),
-    ("lede", 19.0, None),
-    ("h2", 24.0, None),
-    ("h3", 18.0, None),
-    ("title", 15.0, Some(15.0)),
-    ("body", 15.0, Some(15.0)),
-    ("caption", 13.0, Some(13.0)),
-    ("micro", 12.5, Some(12.5)),
+/// The root scale (TSK-1109), in rem. The micro role is the relative floor.
+const TYPE_SCALE: [(&str, f64); 9] = [
+    ("display", 2.35),
+    ("lede", 1.18),
+    ("h2", 1.65),
+    ("h3", 1.25),
+    ("title", 1.0),
+    ("body", 1.0),
+    ("ui", 0.88),
+    ("caption", 0.82),
+    ("micro", 0.76),
 ];
-const SIZE_STEPS: [(&str, f64); 3] = [("compact", 0.94), ("default", 1.0), ("large", 1.12)];
+const SIZE_STEPS: [(&str, f64); 3] = [("compact", 15.0), ("default", 17.0), ("large", 19.0)];
 
-/// The computed px of a `--cf-fs-*` value: `calc(Npx * var(--cf-ui-scale))`,
-/// optionally inside `max(Fpx, ...)`.
-fn font_size(value: &str, scale: f64) -> f64 {
-    let pattern =
-        Regex::new(r"^(?:max\(([\d.]+)px, )?calc\(([\d.]+)px \* var\(--cf-ui-scale\)\)\)?$")
-            .expect("size pattern compiles");
-    let captures = pattern
-        .captures(value.trim())
-        .unwrap_or_else(|| panic!("unexpected size value {value}"));
-    let scaled = captures[2].parse::<f64>().expect("size is a number") * scale;
-    captures.get(1).map_or(scaled, |floor| {
-        scaled.max(floor.as_str().parse().expect("floor is a number"))
-    })
+fn font_size(value: &str, root_px: f64) -> f64 {
+    value
+        .trim()
+        .strip_suffix("rem")
+        .expect("type roles use rem")
+        .parse::<f64>()
+        .expect("size is a number")
+        * root_px
 }
 
 fn size_roles(css: &str) -> BTreeMap<String, String> {
@@ -828,8 +823,8 @@ fn size_roles(css: &str) -> BTreeMap<String, String> {
     roles
 }
 
-/// One type scale in the kit and every product sheet: the S2 values at the
-/// default size, the floors at every size step, and title > section >
+/// One rem type scale in the kit and every product sheet, with
+/// a relative micro floor and title > section >
 /// subsection > block title >= body at compact, default and large.
 #[test]
 fn the_type_scale_keeps_its_order_and_floors_at_every_size_step() {
@@ -842,21 +837,25 @@ fn the_type_scale_keeps_its_order_and_floors_at_every_size_step() {
     ] {
         let css = std::fs::read_to_string(root.join(path)).expect("sheet is readable");
         let roles = size_roles(&css);
-        for (role, at_default, floor) in TYPE_SCALE {
+        for (role, rem) in TYPE_SCALE {
             let value = roles
                 .get(role)
                 .unwrap_or_else(|| panic!("{path} lacks --cf-fs-{role}"));
             assert!(
-                (font_size(value, 1.0) - at_default).abs() < 1e-9,
-                "{path} --cf-fs-{role} is {value}, S2 sets {at_default}px"
+                (font_size(value, 1.0) - rem).abs() < 1e-9,
+                "{path} --cf-fs-{role} must be {rem}rem"
             );
-            if let Some(floor) = floor {
-                assert!(
-                    (font_size(value, 0.5) - floor).abs() < 1e-9,
-                    "{path} --cf-fs-{role} must keep its {floor}px floor"
-                );
-            }
         }
+        for percent in ["93.75%", "106.25%", "118.75%"] {
+            assert!(
+                css.contains(&format!("--cf-root-size: {percent};")),
+                "{path} lacks {percent}"
+            );
+        }
+        assert!(
+            css.contains("font-size: var(--cf-root-size)"),
+            "{path} root must use Size"
+        );
         for (step, scale) in SIZE_STEPS {
             let size = |role: &str| font_size(&roles[role], scale);
             let ladder = [
@@ -949,9 +948,8 @@ fn present_and_portal_headings_take_the_scale_roles() {
     }
     let figure = read_kit("figure.css");
     assert!(
-        rule(&figure, ".cf-fig-title")
-            .contains("font-size: max(15px, calc(15px * var(--cf-ui-scale, 1)));"),
-        "the figure title line sits on the 15px block title step"
+        rule(&figure, ".cf-fig-title").contains("font-size: var(--cf-fs-title);"),
+        "the figure title line uses the relative block title role"
     );
 }
 

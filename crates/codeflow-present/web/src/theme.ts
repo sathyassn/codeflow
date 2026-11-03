@@ -17,6 +17,7 @@ export interface AppearanceState {
   readonly mode: AppearanceMode;
   readonly typeface: Typeface;
   readonly scale: TypeScale;
+  readonly headings: "body" | "archivo";
 }
 
 export function initialAppearance(): AppearanceState {
@@ -25,7 +26,8 @@ export function initialAppearance(): AppearanceState {
   const typeface = readChoice(normalizeTypeface(readStorage(TYPEFACE_KEY)), TYPEFACES) ?? "inter";
   const scale = readChoice(readStorage(SCALE_KEY), SCALES) ?? "default";
   const accent = readChoice(readStorage("cf-present-accent"), settings.themes[theme]) ?? settings.defaultAccent;
-  return { theme, mode, typeface, scale, accent };
+  const headings = readChoice(readStorage("cf-present-headings"), ["body", "archivo"] as const) ?? "body";
+  return { theme, mode, typeface, scale, accent, headings };
 }
 
 export function applyAppearance(state: AppearanceState): void {
@@ -37,6 +39,7 @@ export function applyAppearance(state: AppearanceState): void {
   root.dataset.cfModeResolved = resolvedMode;
   root.dataset.cfTypeface = state.typeface;
   root.dataset.cfScale = state.scale;
+  root.dataset.cfHeadings = state.headings;
 }
 
 export function persistAppearance(state: AppearanceState): void {
@@ -46,6 +49,7 @@ export function persistAppearance(state: AppearanceState): void {
     localStorage.setItem(MODE_KEY, state.mode);
     localStorage.setItem(TYPEFACE_KEY, state.typeface);
     localStorage.setItem(SCALE_KEY, state.scale);
+    localStorage.setItem("cf-present-headings", state.headings);
   } catch {
     // Appearance still applies for this session when storage is unavailable.
   }

@@ -11,17 +11,18 @@
   --cf-font-sans: "Inter", "Archivo", "IBM Plex Sans", ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
   --cf-font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --cf-font-features: normal;
-  --cf-ui-scale: 1;
-  --cf-fs-display: calc(34px * var(--cf-ui-scale));
-  --cf-fs-lede: calc(19px * var(--cf-ui-scale));
-  --cf-fs-h2: calc(24px * var(--cf-ui-scale));
-  --cf-fs-h3: calc(18px * var(--cf-ui-scale));
-  --cf-fs-body: max(15px, calc(15px * var(--cf-ui-scale)));
-  --cf-fs-title: max(15px, calc(15px * var(--cf-ui-scale)));
-  --cf-fs-ui: max(13.5px, calc(13.5px * var(--cf-ui-scale)));
-  --cf-fs-caption: max(13px, calc(13px * var(--cf-ui-scale)));
-  --cf-fs-micro: max(12.5px, calc(12.5px * var(--cf-ui-scale)));
+  --cf-fs-display: 2.35rem;
+  --cf-fs-lede: 1.18rem;
+  --cf-fs-h2: 1.65rem;
+  --cf-fs-h3: 1.25rem;
+  --cf-fs-body: 1rem;
+  --cf-fs-title: 1rem;
+  --cf-fs-ui: 0.88rem;
+  --cf-fs-caption: 0.82rem;
+  --cf-fs-micro: 0.76rem;
   --cf-measure: 68ch;
+  --cf-root-size: 106.25%;
+  --cf-font-heading: var(--cf-font-sans);
   --cf-column-max: 960px;
   --cf-header-h: 52px;
   --cf-topbar-h: 56px;
@@ -104,6 +105,7 @@
   --cf-stage-planned: #5e052c;
   --cf-stage-warning: #8f5f00;
   --cf-stage-blocked: #b93636;
+  font-size: var(--cf-root-size);
 }
 [data-cf-typeface="archivo"], [data-cfp-typeface="archivo"] {
   --cf-font-sans: "Archivo", "Helvetica Neue", Arial, ui-sans-serif, sans-serif;
@@ -118,13 +120,16 @@
   --cf-font-features: normal;
 }
 [data-cf-scale="compact"], [data-cfp-scale="compact"] {
-  --cf-ui-scale: 0.94;
+  --cf-root-size: 93.75%;
 }
 [data-cf-scale="default"], [data-cfp-scale="default"] {
-  --cf-ui-scale: 1;
+  --cf-root-size: 106.25%;
 }
 [data-cf-scale="large"], [data-cfp-scale="large"] {
-  --cf-ui-scale: 1.12;
+  --cf-root-size: 118.75%;
+}
+[data-cf-headings="archivo"], [data-cfp-headings="archivo"] {
+  --cf-font-heading: "Archivo", var(--cf-font-sans);
 }
 [data-cf-mode-resolved="dark"], [data-cf-mode-resolved="dark"], [data-theme="dark"] {
   --cf-shadow: 0 16px 40px -16px rgb(0 0 0 / .7), 0 0 0 1px var(--cf-border);
@@ -544,7 +549,7 @@
   --cf-chrome-h: var(--cf-topbar-h); --cf-toc-w: var(--cf-route-w); --cf-toc-gap: 3rem;
   --cf-left-rail: calc(var(--cf-page-pad-inline) + var(--cf-toc-w) + var(--cf-toc-gap));
   --cf-grad-a: transparent; --cf-grad-b: transparent;
-  font-family: var(--cf-font-sans); font-size: 16px;
+  font-family: var(--cf-font-sans); font-size: var(--cf-root-size);
   font-synthesis: none; text-rendering: optimizeLegibility;
 }
 :root[data-cf-mode-resolved="dark"] { color-scheme: dark; }
@@ -621,7 +626,7 @@ a:hover { text-decoration-thickness: 0.13em; }
 .cf-title-group strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cf-kicker {
   color: var(--cf-accent-strong);
-  font-size: 0.7rem;
+  font-size: var(--cf-fs-micro);
   font-weight: 750;
   letter-spacing: 0.11em;
   text-transform: uppercase;
@@ -636,7 +641,7 @@ a:hover { text-decoration-thickness: 0.13em; }
 }
 .cf-note-count-meta {
   font-family: var(--cf-font-mono);
-  font-size: 0.72rem;
+  font-size: var(--cf-fs-micro);
   letter-spacing: 0.04em;
   color: var(--cf-text-muted);
   white-space: nowrap;
@@ -649,7 +654,7 @@ a:hover { text-decoration-thickness: 0.13em; }
   background: var(--cf-surface);
   color: var(--cf-text-muted);
   font-family: var(--cf-font-mono);
-  font-size: 0.72rem;
+  font-size: var(--cf-fs-micro);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   cursor: pointer;
@@ -679,7 +684,7 @@ a:hover { text-decoration-thickness: 0.13em; }
   align-items: baseline;
   gap: 8px;
   font-family: var(--cf-font-mono);
-  font-size: 0.7rem;
+  font-size: var(--cf-fs-micro);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--cf-text-muted);
@@ -823,6 +828,7 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
   max-inline-size: 100%;
 }
 .cf-stage-host {
+  font-size: var(--cf-fs-ui);
   overflow-x: auto;
   padding: clamp(1.1rem, 2.2vw, 1.75rem);
   border: 1px solid var(--cf-border);
@@ -833,7 +839,7 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
   margin: 0 0 0.5rem;
   color: var(--cf-text-muted);
   font-family: var(--cf-font-mono);
-  font-size: 0.7rem;
+  font-size: var(--cf-fs-micro);
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
@@ -881,7 +887,7 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 .comparison p { margin-block: var(--cf-space-2) 0; }
 .decision { padding-block: var(--cf-space-4); border-block: var(--cf-line) solid var(--cf-border); }
 .decision > header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--cf-space-4); }
-.decision__status { color: var(--cf-accent-strong); font-size: 0.75rem; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
+.decision__status { color: var(--cf-accent-strong); font-size: var(--cf-fs-micro); font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
 /* Forms and v2 decisions (SPC-014 B6): the runtime renders the controls. */
 .cf-form { display: grid; gap: var(--cf-space-4); padding-block: var(--cf-space-4); border-block: var(--cf-line) solid var(--cf-border); }
 #cf-present-document .cf-form__title { margin: 0; font-size: var(--cf-fs-title); }
@@ -1013,7 +1019,7 @@ code { font-family: var(--cf-font-mono); }
 .cf-frame-number {
   color: var(--cf-text-muted);
   font-family: var(--cf-font-mono);
-  font-size: 0.86em;
+  font-size: max(var(--cf-fs-micro), 0.86em);
   font-weight: 500;
   letter-spacing: 0.02em;
 }
@@ -1021,7 +1027,7 @@ code { font-family: var(--cf-font-mono); }
   margin: 0.75rem 0 0;
   max-inline-size: var(--cf-reading-measure);
   color: var(--cf-text-muted);
-  font-size: max(13px, 0.9rem);
+  font-size: var(--cf-fs-caption);
   line-height: 1.45;
 }
 .cf-frame .cf-legend { margin-block-start: 0.9rem; }
@@ -1034,7 +1040,7 @@ code { font-family: var(--cf-font-mono); }
   padding: 2px 4px 2px 0;
   border-radius: 4px;
   color: var(--cf-text-muted);
-  font-size: max(13.5px, 0.9rem);
+  font-size: var(--cf-fs-ui);
   font-weight: 500;
   cursor: pointer;
   list-style: none;
@@ -1098,7 +1104,7 @@ code { font-family: var(--cf-font-mono); }
   border-radius: 999px;
   background: color-mix(in srgb, var(--cf-surface) 22%, transparent);
   font-weight: 600;
-  font-size: 0.85em;
+  font-size: max(var(--cf-fs-micro), 0.85em);
   line-height: 1.4;
 }
 .cf-comment-btn .cf-count.on { display: inline-block; }
@@ -1196,7 +1202,7 @@ code { font-family: var(--cf-font-mono); }
   min-width: 0;
   max-width: 12rem;
   font-family: var(--cf-font-mono);
-  font-size: 0.9em;
+  font-size: max(var(--cf-fs-micro), 0.9em);
   color: var(--cf-text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -1209,7 +1215,7 @@ code { font-family: var(--cf-font-mono); }
   color: var(--cf-text-muted);
   padding: 0 11px;
   cursor: pointer;
-  font: 500 0.72rem/1 var(--cf-font-mono);
+  font: 500 var(--cf-fs-micro)/1 var(--cf-font-mono);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   align-self: stretch;
@@ -1234,7 +1240,7 @@ code { font-family: var(--cf-font-mono); }
 .cf-composer.on { display: grid; }
 .cf-composer .title {
   font-family: var(--cf-font-mono);
-  font-size: 0.72rem;
+  font-size: var(--cf-fs-micro);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--cf-text-muted);
@@ -1316,7 +1322,7 @@ code { font-family: var(--cf-font-mono); }
 .cf-marker svg { width: 13px; height: 13px; display: block; flex-shrink: 0; fill: var(--cf-on-accent); }
 .cf-marker:hover { box-shadow: 0 2px 10px color-mix(in srgb, var(--cf-text) 40%, transparent); }
 .cf-marker .n {
-  font: 700 11px/1 var(--cf-font-mono);
+  font: 700 var(--cf-fs-micro)/1 var(--cf-font-mono);
   color: var(--cf-on-accent);
 }
 
@@ -1357,7 +1363,7 @@ code { font-family: var(--cf-font-mono); }
 .cf-dock .hd .cf-count,
 .cf-dock #dockCount {
   font-family: var(--cf-font-mono);
-  font-size: 0.72rem;
+  font-size: var(--cf-fs-micro);
   font-weight: 600;
   letter-spacing: 0.06em;
   color: var(--cf-text-muted);
@@ -1424,7 +1430,7 @@ code { font-family: var(--cf-font-mono); }
   justify-content: space-between;
   gap: 8px;
   font-family: var(--cf-font-mono);
-  font-size: 0.72rem;
+  font-size: var(--cf-fs-micro);
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--cf-accent-strong);
@@ -1434,7 +1440,7 @@ code { font-family: var(--cf-font-mono); }
   border: 0;
   background: transparent;
   color: var(--cf-text-muted);
-  font: 500 0.72rem var(--cf-font-mono);
+  font: 500 var(--cf-fs-micro) var(--cf-font-mono);
   text-transform: none;
   letter-spacing: 0;
   cursor: pointer;
@@ -1462,7 +1468,7 @@ code { font-family: var(--cf-font-mono); }
 }
 .cf-dock .ft .path {
   font-family: var(--cf-font-mono);
-  font-size: 0.72rem;
+  font-size: var(--cf-fs-micro);
   color: var(--cf-text-muted);
   letter-spacing: 0.03em;
   line-height: 1.45;
@@ -1555,7 +1561,7 @@ code { font-family: var(--cf-font-mono); }
   font-family: var(--cf-font-mono);
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  font-size: 0.7rem;
+  font-size: var(--cf-fs-micro);
 }
 .cf-capture-tools {
   display: grid;
@@ -1607,7 +1613,7 @@ code { font-family: var(--cf-font-mono); }
 .cf-history-heading h3 { margin: 0; font-size: 0.9rem; }
 .cf-history-heading span, .cf-history-meta span, .cf-note-heading span, .cf-anchor-note, .cf-anchor-warning {
   color: var(--cf-text-muted);
-  font-size: 0.72rem;
+  font-size: var(--cf-fs-micro);
 }
 .cf-feedback-history ol, .cf-feedback-history ul {
   display: grid;
@@ -1780,7 +1786,7 @@ body { font-size: var(--cf-fs-body); font-feature-settings: var(--cf-font-featur
 .cf-topbar { min-block-size: var(--cf-topbar-h); height: var(--cf-topbar-h); padding: 0 12px 0 16px; gap: 12px; background: var(--cf-header-bg); border-color: var(--cf-hairline); }
 .cf-title-group { flex-direction: column; align-items: flex-start; gap: 0; line-height: 1.25; }
 .cf-title-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.cf-title-line strong { font-size: max(15px, calc(15px * var(--cf-ui-scale))); font-weight: 600; }
+.cf-title-line strong { font-size: var(--cf-fs-title); font-weight: 600; }
 .cf-title-group .cf-kicker { color: var(--cf-text-muted); font-size: var(--cf-fs-micro); }
 .cf-revision, .cf-note-count-meta { font-size: var(--cf-fs-caption); color: var(--cf-text-muted); white-space: nowrap; }
 .cf-appearance { gap: 8px; margin-left: auto; }
@@ -1802,7 +1808,7 @@ body { font-size: var(--cf-fs-body); font-feature-settings: var(--cf-font-featur
 @media (max-width: 599.98px) {
   .cf-topbar { padding-inline: 8px; gap: 6px; }
   .cf-title-group .cf-kicker, .cf-revision, .cf-note-count-meta { display: none; }
-  .cf-title-line strong { white-space: normal; font-size: 14px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .cf-title-line strong { white-space: normal; font-size: var(--cf-fs-ui); line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .cf-appearance { gap: 4px; flex-shrink: 0; }
   .cf-comment-btn > span:nth-child(2) { display: inline; }
   .cf-settings-panel { position: fixed; top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; max-height: calc(100dvh - 76px); overflow-y: auto; }
@@ -1950,11 +1956,11 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
   .cf-dock .ft .cf-verdict { min-width: 0; margin: 0; }
   .cf-dock .ft #submitAllBtn { grid-column: 1 / -1; }
   .cf-dock .ft textarea { height: 38px; min-height: 38px; }
-  .cf-dock .ft .path { font-family: var(--cf-font-sans); font-size: 12px; }
+  .cf-dock .ft .path { font-family: var(--cf-font-sans); font-size: var(--cf-fs-micro); }
   .cf-topbar .cf-title-line strong { white-space: nowrap; }
-  .cf-hint { font-size: 12px; gap: 6px; padding: 6px 10px; }
-  .cf-hint-leave { padding: 6px 8px; font-size: 12px; max-width: 90px; }
-  .cf-review-sent { font-size: 12px; padding: 8px; }
+  .cf-hint { font-size: var(--cf-fs-micro); gap: 6px; padding: 6px 10px; }
+  .cf-hint-leave { padding: 6px 8px; font-size: var(--cf-fs-micro); max-width: 90px; }
+  .cf-review-sent { font-size: var(--cf-fs-micro); padding: 8px; }
 }
 
 .cf-capture-options > .cf-capture-tools { grid-template-columns: 1fr 1fr; }
@@ -1973,3 +1979,11 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 .cf-end-btn:focus-visible { outline: 2px solid var(--cf-focus, var(--cf-accent)); outline-offset: 2px; }
 .cf-end-btn:disabled { color: var(--cf-text-muted); cursor: default; }
 @media (max-width: 599.98px) { .cf-end-btn { padding: 0 8px; } }
+
+/* Headings follow the reader choice; structural labels use the body face. */
+#cf-present-document :is(h1, h2, h3), .cf-settings-panel .preview .heading { font-family: var(--cf-font-heading); }
+:is(.cf-kicker, .cf-note-count-meta, .cf-comment-btn, .cf-settings-panel .lbl, .cf-dock .hd, .cf-note-row .k, .cf-section-route > .cf-kicker, .cf-frame-number) { font-family: var(--cf-font-sans); }
+.cf-settings-panel { max-block-size: calc(100vh - var(--cf-topbar-h)); overflow-y: auto; }
+.cf-settings-panel .preview .heading { font-size: var(--cf-fs-title); font-weight: 600; }
+.cf-settings-panel .preview .stage { font-size: var(--cf-fs-ui); }
+.cf-settings-panel .preview .figure-label { font-size: var(--cf-fs-micro); }

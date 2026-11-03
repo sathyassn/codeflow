@@ -5,17 +5,18 @@
       "font-sans": "\"Inter\", \"Archivo\", \"IBM Plex Sans\", ui-sans-serif, -apple-system, \"Segoe UI\", sans-serif",
       "font-mono": "\"IBM Plex Mono\", ui-monospace, \"SF Mono\", Menlo, monospace",
       "font-features": "normal",
-      "ui-scale": "1",
-      "fs-display": "calc(34px * var(--cf-ui-scale))",
-      "fs-lede": "calc(19px * var(--cf-ui-scale))",
-      "fs-h2": "calc(24px * var(--cf-ui-scale))",
-      "fs-h3": "calc(18px * var(--cf-ui-scale))",
-      "fs-body": "max(15px, calc(15px * var(--cf-ui-scale)))",
-      "fs-title": "max(15px, calc(15px * var(--cf-ui-scale)))",
-      "fs-ui": "max(13.5px, calc(13.5px * var(--cf-ui-scale)))",
-      "fs-caption": "max(13px, calc(13px * var(--cf-ui-scale)))",
-      "fs-micro": "max(12.5px, calc(12.5px * var(--cf-ui-scale)))",
-      "measure": "68ch"
+      "fs-display": "2.35rem",
+      "fs-lede": "1.18rem",
+      "fs-h2": "1.65rem",
+      "fs-h3": "1.25rem",
+      "fs-body": "1rem",
+      "fs-title": "1rem",
+      "fs-ui": "0.88rem",
+      "fs-caption": "0.82rem",
+      "fs-micro": "0.76rem",
+      "measure": "68ch",
+      "root-size": "106.25%",
+      "font-heading": "var(--cf-font-sans)"
     }
   },
   {
@@ -42,19 +43,25 @@
   {
     "selector": "[data-cf-scale=\"compact\"]",
     "values": {
-      "ui-scale": "0.94"
+      "root-size": "93.75%"
     }
   },
   {
     "selector": "[data-cf-scale=\"default\"]",
     "values": {
-      "ui-scale": "1"
+      "root-size": "106.25%"
     }
   },
   {
     "selector": "[data-cf-scale=\"large\"]",
     "values": {
-      "ui-scale": "1.12"
+      "root-size": "118.75%"
+    }
+  },
+  {
+    "selector": "[data-cf-headings=\"archivo\"]",
+    "values": {
+      "font-heading": "\"Archivo\", var(--cf-font-sans)"
     }
   }
 ]

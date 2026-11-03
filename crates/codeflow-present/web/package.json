@@ -13,7 +13,7 @@
     "check": "node scripts/check.mjs",
     "check:browser": "node scripts/browser-check.mjs && npm run check:transport && npm run check:surface",
     "check:entities": "node scripts/entity-browser-check.mjs && npm run check:surface",
-    "check:surface": "node scripts/review-surface-browser-check.mjs && node scripts/figure-text-browser-check.mjs && node scripts/comment-journey-browser-check.mjs",
+    "check:surface": "node scripts/review-surface-browser-check.mjs && node scripts/figure-text-browser-check.mjs && node scripts/comment-journey-browser-check.mjs && npm run check:root-scale",
     "check:matrix": "node scripts/matrix-browser-check.mjs",
     "check:forms": "node scripts/form-browser-check.mjs",
     "check:delivery": "node scripts/delivery-browser-check.mjs",
@@ -25,7 +25,8 @@
     "supply-chain": "node scripts/supply-chain.mjs",
     "check:transport": "node scripts/transport-check.mjs",
     "check:conversation": "node scripts/conversation-browser-check.mjs",
-    "check:lifecycle": "node scripts/lifecycle-browser-check.mjs"
+    "check:lifecycle": "node scripts/lifecycle-browser-check.mjs",
+    "check:root-scale": "node scripts/root-scale-browser-check.mjs"
   },
   "dependencies": {
     "@shikijs/core": "4.4.1",

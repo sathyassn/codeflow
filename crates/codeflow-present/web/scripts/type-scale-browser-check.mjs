@@ -28,7 +28,7 @@ const codeflow = codeflowBinary(repoRoot);
 const stylesIndex = process.argv.indexOf("--styles-from");
 const stylesFrom = stylesIndex > 0 ? process.argv[stylesIndex + 1] : null;
 const SCALES = ["compact", "default", "large"];
-const S2_DEFAULT = { title: 34, lede: 19, h2: 24, h3: 18, block: 15 };
+const ROOT_DEFAULT = { title: 2.35 * 17, lede: 1.18 * 17, h2: 1.65 * 17, h3: 1.25 * 17, block: 17 };
 // Figure line, two comparison columns, callout, tree, table frame and decision.
 const BLOCK_TITLES = 7;
 const MUTATION = "#cf-present-document .comparison h2 { font-size: var(--cf-fs-display); }";
@@ -123,7 +123,7 @@ try {
       const found = violations(measured);
       if (scale === "default" && found.length === 0) {
         const got = { title: measured.title[0].size, lede: measured.summary[0].size, h2: measured.h2[0].size, h3: measured.h3[0].size, block: Math.max(...measured.blockTitles.map((entry) => entry.size)) };
-        if (JSON.stringify(got) !== JSON.stringify(S2_DEFAULT)) found.push(`default sizes ${JSON.stringify(got)} are not S2 ${JSON.stringify(S2_DEFAULT)}`);
+        if (Object.entries(ROOT_DEFAULT).some(([key, expected]) => Math.abs(got[key] - expected) > 0.02)) found.push(`default sizes ${JSON.stringify(got)} are not the root scale ${JSON.stringify(ROOT_DEFAULT)}`);
       }
       process.stdout.write(`${mode} ${scale}: title ${measured.title.map((e) => e.size)} summary ${measured.summary.map((e) => e.size)} h2 ${[...new Set(measured.h2.map((e) => e.size))]} lead ${[...new Set(measured.lead.map((e) => e.size))]} h3 ${[...new Set(measured.h3.map((e) => e.size))]} block titles ${[...new Set(measured.blockTitles.map((e) => e.size))]} (${measured.blockTitles.map((e) => e.text.replace(/\s+/g, " ").slice(0, 18)).join(" / ")})${found.length ? ` FAIL: ${found.join("; ")}` : ""}\n`);
       failures.push(...found.map((message) => `${mode} ${scale}: ${message}`));

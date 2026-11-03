@@ -13,6 +13,35 @@ below); version 1,
 reads. The runtime is authoritative for semantic and byte limits. Schema
 validity never means the page is a good present.
 
+
+## Type that follows the reader's Size setting
+
+Use rem for stage text and em for local inheritance. The runtime owns the
+root scale: Compact 93.75%, Default 106.25%, Large 118.75% of the browser's
+default size. At the usual 16px browser default those roots are 15px, 17px
+and 19px. A reader's browser default still counts. Do not set a stage root
+or use fixed px text: px ignores Size, and `present check` warns on type
+below 13px in a stage stylesheet.
+
+| Role | Token | Size |
+| --- | --- | --- |
+| Display | `--cf-fs-display` | 2.35rem |
+| Section | `--cf-fs-h2` | 1.65rem |
+| Subsection | `--cf-fs-h3` | 1.25rem |
+| Lede | `--cf-fs-lede` | 1.18rem |
+| Body and block title | `--cf-fs-body`, `--cf-fs-title` | 1rem |
+| UI and inherited stage text | `--cf-fs-ui` | 0.88rem |
+| Caption | `--cf-fs-caption` | 0.82rem |
+| Micro, the relative floor | `--cf-fs-micro` | 0.76rem |
+
+Prefer the tokens so type stays consistent with the surrounding document.
+For example, `.stage-label { font-size: var(--cf-fs-ui); }` scales with the
+reader's choice. Never shrink text below the 0.76rem floor, including with
+nested em sizes or an SVG viewBox transform. Use the body face for structure
+labels such as Figure, Table and Decision. Mono is for code, hashes and ids
+only. The Headings control can use the body face or the already bundled
+Archivo face; stage labels continue to use the body face.
+
 ## Envelope
 
 Every document is a closed JSON object, version 1 or 2:

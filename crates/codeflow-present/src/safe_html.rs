@@ -80,6 +80,78 @@ pub(crate) fn visible_text_from_html(source: &str) -> String {
         .join(" ")
 }
 
+/// Advisory typography check, separate from the sandbox's admission rules.
+/// Token parsing handles comments, escaped names and case without treating
+/// dimensions in padding, selectors or quoted strings as font sizes.
+pub(crate) fn has_small_px_type(source: &str) -> bool {
+    Html::parse_fragment(source)
+        .tree
+        .nodes()
+        .filter_map(ElementRef::wrap)
+        .filter(|element| element.value().name() == "style")
+        .any(|element| {
+            let css = element.text().collect::<String>();
+            let mut input = cssparser::ParserInput::new(&css);
+            small_type_tokens(&mut cssparser::Parser::new(&mut input), false, false, 0)
+        })
+}
+
+fn small_type_tokens(
+    parser: &mut cssparser::Parser<'_, '_>,
+    declarations: bool,
+    mut font_value: bool,
+    depth: usize,
+) -> bool {
+    use cssparser::Token;
+    if depth > 32 {
+        return false;
+    }
+    let mut found_small_type = false;
+    while let Ok(token) = parser.next().cloned() {
+        match token {
+            Token::Ident(name) if declarations => {
+                if parser.try_parse(cssparser::Parser::expect_colon).is_ok() {
+                    font_value =
+                        name.eq_ignore_ascii_case("font-size") || name.eq_ignore_ascii_case("font");
+                }
+            }
+            Token::Dimension { value, unit, .. }
+                if font_value
+                    && unit.eq_ignore_ascii_case("px")
+                    && (0.0..13.0).contains(&value) =>
+            {
+                found_small_type = true;
+            }
+            // After a slash a font shorthand carries line-height, not font-size.
+            Token::Semicolon | Token::Delim('/') => font_value = false,
+            Token::CurlyBracketBlock => {
+                let found = parser.parse_nested_block(|nested| {
+                    Ok::<_, cssparser::ParseError<'_, ()>>(small_type_tokens(
+                        nested,
+                        true,
+                        false,
+                        depth + 1,
+                    ))
+                });
+                found_small_type |= matches!(found, Ok(true));
+            }
+            Token::Function(_) | Token::ParenthesisBlock | Token::SquareBracketBlock => {
+                let found = parser.parse_nested_block(|nested| {
+                    Ok::<_, cssparser::ParseError<'_, ()>>(small_type_tokens(
+                        nested,
+                        false,
+                        font_value,
+                        depth + 1,
+                    ))
+                });
+                found_small_type |= matches!(found, Ok(true));
+            }
+            _ => {}
+        }
+    }
+    found_small_type
+}
+
 /// Parse and serialize authored HTML so style rules cannot address runtime
 /// siblings or ancestors. The caller owns the host identity and containment.
 pub(crate) fn scoped_html(source: &str, host: &str, schema_version: u32) -> Result<String> {

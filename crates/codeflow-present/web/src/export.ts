@@ -29,7 +29,7 @@ const styleStages = (): void => {
   for (const name of computed) {
     if (name.startsWith("--cf-")) carried.setProperty(name, computed.getPropertyValue(name));
   }
-  for (const name of ["color", "color-scheme", "font-family"]) {
+  for (const name of ["color", "color-scheme", "font-family", "font-size"]) {
     carried.setProperty(name, computed.getPropertyValue(name));
   }
   // CSS serialization keeps values intact; a less-than sign must never close
@@ -40,7 +40,7 @@ const styleStages = (): void => {
   // sandbox takes the themed document as its first and only load.
   for (const stage of stages) {
     const fresh = stage.frame.cloneNode(false) as HTMLIFrameElement;
-    fresh.srcdoc = `<!doctype html><meta charset="utf-8"><style>:root{${css}}</style>${stage.source}`;
+    fresh.srcdoc = `<!doctype html><meta charset="utf-8"><style>:root{${css}}body{font-size:var(--cf-fs-ui)}</style>${stage.source}`;
     stage.frame.replaceWith(fresh);
     stage.frame = fresh;
   }
@@ -59,3 +59,10 @@ if (requestedMode === "system") {
   styleStages();
 }
 enhanceDocument(documentRoot, true);
+
+// Export readers may restore a saved size before rendering, and browser checks
+// change the root choice after loading. Sandboxed roots need the same update.
+new MutationObserver(styleStages).observe(document.documentElement, {
+  attributes: true,
+  attributeFilter: ["data-cf-scale", "data-cf-typeface", "data-cf-headings"],
+});

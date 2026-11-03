@@ -1625,12 +1625,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             }}>
               <div class="preview" aria-hidden="true">
                 <span class="swatch swatch-canvas" /><span class="swatch swatch-surface" /><span class="swatch swatch-accent" />
+                <span class="heading">Heading Aa</span>
                 <span class="body">Body Aa</span>
-                <span class="mono">Mono 012</span>
+                <span class="figure-label" data-testid="preview-figure-label">Figure 1</span>
+                <span class="stage" data-testid="preview-stage-line">Stage line Aa</span>
               </div>
               <div>
                 <div class="lbl">
-                  Font<span class="d">Body and headings</span>
+                  Font<span class="d">Body text</span>
                 </div>
                 <div class="pills" data-testid="typeface-pills">
                   {typefacePills.map((face) => (
@@ -1642,6 +1644,18 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                       onClick={() => setAppearance((c) => ({ ...c, typeface: face }))}
                     >
                       {typefaceLabels[face]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div class="lbl">Headings<span class="d">Use the body face or Archivo</span></div>
+                <div class="pills" data-testid="headings-pills">
+                  {(["body", "archivo"] as const).map((headings) => (
+                    <button type="button" data-headings={headings}
+                      aria-pressed={appearance.headings === headings}
+                      onClick={() => setAppearance((c) => ({ ...c, headings }))}>
+                      {headings === "body" ? "Body face" : "Archivo"}
                     </button>
                   ))}
                 </div>

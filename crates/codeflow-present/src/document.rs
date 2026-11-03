@@ -1956,6 +1956,17 @@ pub fn check_document(bytes: &[u8]) -> Vec<CheckFault> {
             }
         }
     }
+    for block in document.walk() {
+        if let Block::Html { id, html, .. } = block {
+            if crate::safe_html::has_small_px_type(html) {
+                faults.push(CheckFault::warning(
+                    Some(id.clone()),
+                    "stage-type-size",
+                    "stage type uses px below 13; use rem type roles so Size and the reader's browser text setting scale it (ui 0.88rem, micro floor 0.76rem)".into(),
+                ));
+            }
+        }
+    }
     faults.extend(review_warnings(&document));
     faults.extend(figure_balance_warnings(&document));
     faults
@@ -2209,7 +2220,10 @@ mod tests {
             (".label { font-size: calc(12px + 0.1rem) }", true),
             (".label { font-size: 0.88rem }", false),
             (".label { font-size: 13px; padding: 2px }", false),
-            (".label { font-size: 1rem; content: '12px'; /* font-size:12px */ }", false),
+            (
+                ".label { font-size: 1rem; content: '12px'; /* font-size:12px */ }",
+                false,
+            ),
             (".label { font: 16px/12px sans-serif }", false),
         ] {
             let stage = Block::Html {
@@ -2226,7 +2240,10 @@ mod tests {
                 blocks: vec![stage],
             }]);
             let faults = check_document(&serde_json::to_vec(&value).unwrap());
-            let warnings: Vec<_> = faults.iter().filter(|f| f.rule == "stage-type-size").collect();
+            let warnings: Vec<_> = faults
+                .iter()
+                .filter(|f| f.rule == "stage-type-size")
+                .collect();
             assert_eq!(!warnings.is_empty(), warned, "{css}: {faults:?}");
             for warning in warnings {
                 assert!(!warning.is_fault());

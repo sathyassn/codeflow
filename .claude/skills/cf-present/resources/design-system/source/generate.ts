@@ -49,11 +49,11 @@ export async function generate(): Promise<Map<string, string>> {
   const defaults = { ...light, ...accentFamily(colours.accents[colours.defaultAccent]!.light!, 'light', light.surface!, floors.textContrast) };
   for (const [stage, role] of Object.entries(stages)) defaults[`stage-${stage}`] = defaults[role]!;
   const common = Object.assign({}, layout, ...blocks.filter(block => block.selector === ':root' && !block.media).map(block => block.values), defaults);
-  css += `:root {\n${declarations(common)}\n}\n`;
+  css += `:root {\n${declarations(common)}\n  font-size: var(--cf-root-size);\n}\n`;
   for (const block of blocks) {
     if (block.selector === ':root' && !block.media) continue;
-    const selector = block.selector.includes('data-cf-typeface') || block.selector.includes('data-cf-scale')
-      ? `${block.selector}, ${block.selector.replaceAll('data-cf-typeface', 'data-cfp-typeface').replaceAll('data-cf-scale', 'data-cfp-scale')}` : block.selector;
+    const selector = block.selector.includes('data-cf-typeface') || block.selector.includes('data-cf-scale') || block.selector.includes('data-cf-headings')
+      ? `${block.selector}, ${block.selector.replaceAll('data-cf-typeface', 'data-cfp-typeface').replaceAll('data-cf-scale', 'data-cfp-scale').replaceAll('data-cf-headings', 'data-cfp-headings')}` : block.selector;
     const rule = `${selector} {\n${declarations(block.values)}\n}\n`;
     css += block.media ? `@media ${block.media} {\n${rule}}\n` : rule;
   }
