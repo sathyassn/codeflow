@@ -309,9 +309,10 @@ scoped CPU counts as activity. A silent computing test can exceed the stall
 window while a silent idle target stalls when accounting is complete.
 
 `early stall unavailable` means the run uses the ceiling. Linux needs existing
-writable cgroup v2 delegation and proven containment for early stalls; no
-delegation is set up automatically. Same-user migration uncertainty also
-selects the ceiling. macOS is ceiling-only in 4.0.0. The monitoring reason is
+writable cgroup v2 delegation and placement before workload execution for
+early stalls; no delegation is set up automatically. An unexpected population
+transition, an unpopulated group with a live child, changed launch-child
+membership or unreadable accounting selects the ceiling. macOS is ceiling-only in 4.0.0. The monitoring reason is
 retained in the summary and run report. Five-minute progress lines show tests
 done or unknown and CPU state without extending the deadline. Check this
 evidence before increasing a limit.

@@ -92,7 +92,7 @@ continue executing their targets until their dependencies are declared.
 | `evidence.covers_modes` | Other modes, `quick` or `essential`, covered by this target's full command. The command must be identical; matching membership and other dependencies are still required |
 | `requires` and `outputs` | Producer relationships and their output files. A missing or changed producer output executes the consumer and its prerequisites |
 | `timeout_seconds` | Base deadline, default 600 seconds. Heavy targets have a ceiling four times this value; light targets retain a fixed deadline |
-| `stall_timeout_seconds` | Heavy-target inactivity window, default 300 seconds. Early stalls require complete scoped CPU accounting and containment; otherwise the run explicitly uses its ceiling |
+| `stall_timeout_seconds` | Heavy-target inactivity window, default 300 seconds. Early stalls require valid scoped CPU accounting; otherwise the run explicitly uses its ceiling |
 
 Both deadline fields accept integers from 1 through 4611686018427386 seconds.
 The loader and schema reject zero, fractional values and values beyond that
@@ -106,10 +106,13 @@ refresh its activity deadline.
 Windows uses its target job's cumulative CPU accounting. Linux creates a
 fresh per-target cgroup only within existing writable cgroup v2 delegation,
 placing the launch child there before workload execution. Its CPU counter
-covers short-lived and auto-reaped work. Early stall detection additionally
-requires reliable containment. Writable same-user delegation alone cannot
-prove containment; uncertain migration or accounting uses ceiling-only
-monitoring. No delegation is provisioned and no host configuration changes.
+covers short-lived and auto-reaped work. Early stalls use that accounting
+without an additional containment launcher. If the group becomes unpopulated,
+a population notification occurs while the launch child remains live, or that
+child leaves its group, the run reports the anomaly and uses ceiling-only
+monitoring. Unreadable accounting does the same. Tests are assumed not to
+migrate cgroups; an undetected migration can cause a false stall, which fails
+the gate. No delegation is provisioned and no host configuration changes.
 Without delegation the status says `early stall unavailable: no delegated
 cgroup`. macOS is ceiling-only, an accepted 4.0.0 limitation reported as
 `early stall unavailable: macOS complete descendant accounting unavailable`.

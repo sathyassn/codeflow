@@ -56,7 +56,9 @@ pub(super) fn run(
     let mut child = cmd.spawn().map_err(spawn_err)?;
     #[cfg(target_os = "linux")]
     if let Some(group) = &mut cgroup {
-        group.mark_launched();
+        if let Err(error) = group.mark_launched(child.id()) {
+            deadline.unavailable(error.to_string());
+        }
     }
     deadline.info.target_pid = child.id();
     #[cfg(unix)]
@@ -141,6 +143,7 @@ pub(super) fn run(
         let now = start.elapsed();
         if stop.is_none()
             && deadline.info.heavy
+            && status.is_none()
             && (now >= next_sample || deadline.decision(now) == Some(TargetStatus::Stalled))
         {
             #[cfg(windows)]
@@ -152,13 +155,22 @@ pub(super) fn run(
             );
             #[cfg(target_os = "linux")]
             if let Some(group) = &cgroup {
-                deadline.cpu(now, group.cpu().map_err(|e| e.to_string()));
+                let old_reason = deadline.info.early_stall_unavailable.is_some();
+                deadline.cpu(now, group.sample(child.id()).map_err(|e| e.to_string()));
+                if !old_reason {
+                    if let Some(reason) = &deadline.info.early_stall_unavailable {
+                        progress!("[codeflow test] {safe_name}: early stall unavailable: {reason}");
+                    }
+                }
             }
             #[cfg(not(any(windows, target_os = "linux")))]
             deadline.cpu(now, Err("platform complete accounting unavailable".into()));
             next_sample = now.saturating_add(Duration::from_secs(1));
         }
-        if let Some(cause) = deadline.decision(now) {
+        if let Some(cause) = deadline
+            .decision(now)
+            .filter(|cause| *cause != TargetStatus::Stalled || status.is_none())
+        {
             if matches!(
                 deadline.info.status,
                 TargetStatus::Passed | TargetStatus::Failed
