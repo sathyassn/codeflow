@@ -1219,9 +1219,21 @@ fn isolate_tree(cmd: &mut Command) {
 /// gate's grandchildren included, and older binaries' gates stay out
 /// (TSK-1256). This process's copies close after the spawn; a fence is
 /// never unlocked here, which would release it for the target too.
-fn spawn_inheriting_fences(cmd: &mut Command) -> std::io::Result<std::process::Child> {
+///
+/// A `hand_over` command (this binary under `codeflow reserve`) gets no
+/// extra copy: it receives the fence among the named lock copies, which it
+/// keeps for its life and makes close-on-exec, and it takes a fence of its
+/// own for its targets. An unnamed copy would stay inheritable in it and
+/// reach every child it starts, helpers included.
+fn spawn_inheriting_fences(
+    cmd: &mut Command,
+    hand_over: bool,
+) -> std::io::Result<std::process::Child> {
     #[cfg(unix)]
     {
+        if hand_over {
+            return cmd.spawn();
+        }
         let fences = crate::testing::gate_guard::fence_copies()?;
         inherit_descriptors(
             cmd,
@@ -1232,7 +1244,10 @@ fn spawn_inheriting_fences(cmd: &mut Command) -> std::io::Result<std::process::C
         child
     }
     #[cfg(not(unix))]
-    cmd.spawn()
+    {
+        let _ = hand_over;
+        cmd.spawn()
+    }
 }
 
 fn spawn_prepared(
@@ -1243,8 +1258,6 @@ fn spawn_prepared(
     supervised: bool,
     hand_over: bool,
 ) -> Result<CommandOutcome, TestingError> {
-    #[cfg(not(unix))]
-    let _ = hand_over;
     // Pipe output so it can be captured while we poll for the timeout. Reader
     // threads drain the pipes concurrently — without them a chatty command
     // could fill the pipe buffer and deadlock while we sit in try_wait().
@@ -1263,7 +1276,7 @@ fn spawn_prepared(
     } else {
         None
     };
-    let mut child = spawn_inheriting_fences(&mut cmd).map_err(spawn_err)?;
+    let mut child = spawn_inheriting_fences(&mut cmd, hand_over).map_err(spawn_err)?;
     #[cfg(unix)]
     if let Some(watcher) = &mut watcher {
         watcher.spawned();

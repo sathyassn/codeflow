@@ -213,8 +213,8 @@ Direct commands outside the wrapper and other applications also
 consume resources that the job budget does not see. Declared heavy targets
 and reserved commands end their process groups when the controller exits.
 On Unix, other targets can outlive a killed gate; their slot counts as
-busy until they end. Every target inherits the gate's hold on
-`full-gate.lock`, so an older gate (below) stays out while any process of
+busy until they end. Every target of an admitted run inherits the
+gate's hold on `full-gate.lock`, so an older gate (below) stays out while any process of
 the target that kept it still runs.
 
 #### Older CodeFlow binaries on the same machine
@@ -243,8 +243,8 @@ run at the same time, in either order:
   name goes away when an older gate next gets the lock, once no 4.0 run is
   active: a 3.1 gate replaces the text inside `full-gate.lock`, and an
   older 4.0 line build replaces `full-gate.record`.
-- On Unix every 4.0 target inherits the run's shared hold on
-  `full-gate.lock`, so older gates stay out while any process of the
+- On Unix every target of an admitted 4.0 run inherits the run's shared
+  hold on `full-gate.lock`, so older gates stay out while any process of the
   target that kept it runs: after the gate ends, after it is killed, and
   for grandchildren too. Its limits:
   - A daemon that closes the descriptors it inherited does not keep the

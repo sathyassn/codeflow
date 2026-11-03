@@ -67,7 +67,7 @@
 //! it keeps copies of the run's slot, host and fence locks, so a target that
 //! outlives its run keeps its slot busy and keeps a host-exclusive target
 //! and older binaries out. Other targets can outlive a killed gate. Every
-//! target inherits the run's fences, and a flock belongs
+//! target of an admitted run inherits the run's fences, and a flock belongs
 //! to the open file description, so the fence lasts while any process of
 //! the target that kept the descriptor lives, grandchildren included; the
 //! run only ever closes its own copy of a fence, never unlocks it
@@ -222,7 +222,7 @@ struct Held {
     runs: usize,
     #[cfg(unix)]
     descriptors: Vec<std::os::fd::RawFd>,
-    /// The fence descriptors of this lock, which every target inherits
+    /// The fence descriptors of this lock, which every target of the run inherits
     /// ([`fence_copies`]).
     #[cfg(unix)]
     fences: Vec<std::os::fd::RawFd>,
