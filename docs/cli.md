@@ -632,8 +632,7 @@ its remotes live, so a narrow fetch cannot hide work.
 
 ### Create and inspect a capability
 
-`codeflow capability bootstrap` resumes inventory, classification, evidence and
-review without changing policy. Minimal-tier work requires explicit invocation.
+`codeflow capability bootstrap` resumes four stages without changing policy.
 
 | Project state or input | Bootstrap result |
 |---|---|
