@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use codeflow_core::hooks::policy_schema;
+use codeflow_core::remedy::{Finding, PORTAL_COPY};
 use codeflow_core::validate::docs::lint_docs;
 use codeflow_core::validate::portal::{
     validate_portal_with, ContentBlock, ContentText, LookupInputs,
@@ -80,13 +81,8 @@ fn run_portal_validation(root: &Path, portal: &Path, copy_detail: bool) -> bool 
     };
     let report = validate_portal_with(root, portal, Some(&inputs));
     let pages = portal_copy_findings(&report.page_text);
-    let lines = if copy_detail {
-        copy_detail_lines(&pages)
-    } else {
-        copy_summary_lines(&pages)
-    };
-    for line in lines {
-        eprintln!("validate --portal: warning: {line}");
+    for warning in portal_copy_warnings(&pages, copy_detail) {
+        eprintln!("{}", warning.line("validate --portal", "warning"));
     }
     // Integrity errors come after the copy warnings, so they are the last
     // thing a reader sees.
@@ -103,6 +99,18 @@ fn run_portal_validation(root: &Path, portal: &Path, copy_detail: bool) -> bool 
         );
         false
     }
+}
+
+fn portal_copy_warnings(pages: &[PageCopy], copy_detail: bool) -> Vec<Finding> {
+    let lines = if copy_detail {
+        copy_detail_lines(pages)
+    } else {
+        copy_summary_lines(pages)
+    };
+    lines
+        .into_iter()
+        .map(|line| Finding::new(line, PORTAL_COPY.remedy()))
+        .collect()
 }
 
 /// One built page's copy warnings (TSK-1255) and its longest text block in
@@ -538,6 +546,35 @@ mod tests {
             ]
         );
         assert!(copy_summary_lines(&portal_copy_findings(&pages[1..2])).is_empty());
+    }
+
+    #[test]
+    fn portal_copy_warnings_carry_a_remedy_in_summary_and_detail_order() {
+        let pages = portal_copy_findings(&[(
+            "dist/status/index.html".to_string(),
+            vec![ContentBlock::Paragraph(text("Read at 13:41."))],
+        )]);
+        for detail in [false, true] {
+            let expected = if detail {
+                copy_detail_lines(&pages)
+            } else {
+                copy_summary_lines(&pages)
+            };
+            let warnings = super::portal_copy_warnings(&pages, detail);
+            assert_eq!(warnings.len(), if detail { 1 } else { 2 });
+            for (warning, line) in warnings.iter().zip(expected) {
+                assert_eq!(
+                    warning.line("validate --portal", "warning"),
+                    format!(
+                        "validate --portal: warning: {line}\n  clear it: revise the source page \
+                         to address the copy rules, rebuild the portal, then rerun \
+                         `codeflow validate --portal <dir> --copy-detail`"
+                    )
+                );
+            }
+        }
+        assert!(super::portal_copy_warnings(&[], false).is_empty());
+        assert!(super::portal_copy_warnings(&[], true).is_empty());
     }
 
     /// A record home behind a dangling link cannot be read; it is never a

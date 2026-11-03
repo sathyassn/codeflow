@@ -352,6 +352,9 @@ catalog! {
     /// A workgraph that does not validate.
     WORKGRAPH_INVALID = Step::Codeflow("codeflow validate"),
         "repair the workgraph until `codeflow validate --docs` passes";
+    /// Copy warnings in a built portal page.
+    PORTAL_COPY = Step::Codeflow("codeflow validate"),
+        "revise the source page to address the copy rules, rebuild the portal, then rerun `codeflow validate --portal <dir> --copy-detail`";
     /// A record added by hand, outside the id registry.
     ID_REGISTRY = Step::Codeflow("codeflow ids admit"),
         "issue ids with `codeflow task|epic|spec new`; a maintainer admits a hand-written record with `codeflow ids admit`";
