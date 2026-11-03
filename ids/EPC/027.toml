@@ -1,0 +1,11 @@
+id = "EPC-027"
+uid = "43435890-ecff-4ae7-9aae-7894d7f405c6"
+kind = "EPC"
+title = "CI verdicts carry trusted policy authority"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T15:44:45Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
