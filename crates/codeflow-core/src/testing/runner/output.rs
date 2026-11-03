@@ -150,8 +150,8 @@ fn completed_count(line: &str) -> Option<String> {
     let (_, tail) = line.rsplit_once('(')?;
     let (numbers, _) = tail.split_once(')')?;
     let (done, total) = numbers.split_once('/')?;
-    let done = done.trim().parse::<u64>().ok()?;
-    let total = total.trim().parse::<u64>().ok()?;
+    let done = done.trim_ascii().parse::<u64>().ok()?;
+    let total = total.trim_ascii().parse::<u64>().ok()?;
     (done <= total).then(|| format!("{done} of {total}"))
 }
 

@@ -101,7 +101,7 @@ impl Cgroup {
     pub fn discover() -> io::Result<Self> {
         let membership = kernel_text("/proc/self/cgroup")?;
         let current = membership
-            .lines()
+            .split('\n')
             .find_map(|line| line.strip_prefix("0::"))
             .ok_or_else(|| io::Error::other("no cgroup v2 membership"))?;
         if current == "/" {
@@ -111,13 +111,13 @@ impl Cgroup {
         }
         let mounts = kernel_text("/proc/self/mountinfo")?;
         let path = mounts
-            .lines()
+            .split('\n')
             .find_map(|line| {
                 let (left, right) = line.split_once(" - ")?;
-                if right.split_whitespace().next()? != "cgroup2" {
+                if right.split_ascii_whitespace().next()? != "cgroup2" {
                     return None;
                 }
-                let fields: Vec<_> = left.split_whitespace().collect();
+                let fields: Vec<_> = left.split_ascii_whitespace().collect();
                 let root = unescape(fields.get(3)?);
                 let mount = unescape(fields.get(4)?);
                 let relative = Path::new(current).strip_prefix(&root).ok()?;
@@ -246,8 +246,8 @@ impl Drop for Cgroup {
 
 fn counter(text: &str, wanted: &str) -> io::Result<u64> {
     let mut found = None;
-    for line in text.lines() {
-        let mut parts = line.split_whitespace();
+    for line in text.split('\n') {
+        let mut parts = line.split_ascii_whitespace();
         if parts.next() == Some(wanted) {
             if found.is_some() {
                 return Err(io::Error::other("duplicate cgroup counter"));
