@@ -218,24 +218,15 @@ jobs:
 
       # The PR body reaches `codeflow ci` through `env:`, never interpolated
       # into the script, so an untrusted body cannot inject shell.
-      #
-      # The default branch decides which ranges are judged under the release
-      # rules. It comes from this event, which the pull request cannot set,
-      # and its tip from the checkout above (fetch-depth: 0), so an ordinary
-      # range is judged without asking the repository again; that ask needs
-      # a credential on a private repository. A release range still asks,
-      # since its judgment needs every branch tip. `codeflow ci --help`
-      # (--default-branch) says when the flag is trusted.
       - name: codeflow ci (commit + branch + PR-body standards)
         if: github.event_name == 'pull_request_target'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}
           ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
-        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --default-branch "$DEFAULT_BRANCH" --actor "$ACTOR"
+        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"
 
       # The registry is fetched explicitly with full history, never forced
       # (R-20); the pull request head above was fetched as data only.
