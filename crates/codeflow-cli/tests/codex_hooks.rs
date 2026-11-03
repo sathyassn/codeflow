@@ -563,8 +563,8 @@ fn the_grok_canary_reads_and_writes_no_repository_around_tmpdir() {
         };
         for remotes in ["no remotes", "two remotes, no origin"] {
             if remotes != "no remotes" {
-                git(&["remote", "add", "upstream", "https://example.invalid/a.git"]);
-                git(&["remote", "add", "fork", "https://example.invalid/b.git"]);
+                git(&["remote", "add", "upstream", "file:///nonexistent/a.git"]);
+                git(&["remote", "add", "fork", "file:///nonexistent/b.git"]);
             }
             let before = tree(&parent);
             let out = std::process::Command::new(&exe)

@@ -239,6 +239,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
 | | `--preflight` | Print the seat, sandbox and tool evidence the orchestrator preflight reads, each value marked configured, observed or unavailable; exit 1 when Codex refuses the builder launch or a builder write is refused; when the builder write probe gives no result, the line says builder readiness is not established and the exit stays 0. |
+| | `--builder-write-probe` | Print whether this process can write each folder a Codex builder seat writes outside its worktree, then whether it can open the shared git config file for writing (one line each, never changing it), and exit 1 when a folder is denied. The preflight runs it inside `codex sandbox` under the builder launch. |
 | | `--profile <PROFILE>` | With `--check remote-perimeter`: compare the rulesets `codeflow remote protect` owns with this profile (solo-administrator or independent-review). A non-empty bypass list on the authority or line checks fails with or without it. One of `solo-administrator`, `independent-review`. |
 | `codeflow work next` | | List ready tasks first, then landed (work merged), waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
 | | `--epic <EPC-NNN>` | Only tasks of this epic. |
