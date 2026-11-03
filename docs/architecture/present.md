@@ -176,7 +176,10 @@ its rules, and this section is their current home:
   a known zone name, a numeric offset or `Z`; ratios and durations are not
   times. Code blocks and code spans are exempt, and collapsed detail is
   exempt from the length limits. `codeflow validate --portal` runs the same
-  rules over the paragraphs and list items of each built portal page.
+  rules over the paragraphs and list items of each built portal page except
+  derived lookup pages, and prints one line a page (count by rule, longest
+  block) and a total before any integrity error; `--copy-detail` lists each
+  block.
   `present open` and `present update` print the warnings on stderr and
   proceed.
 
