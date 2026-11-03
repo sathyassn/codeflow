@@ -2171,6 +2171,7 @@ fn the_named_step_clears_a_stale_in_progress_task() {
     // names `codeflow task status <id> todo`; running that step (the status
     // verb the command drives) clears the warning.
     let repo = Repo::new();
+    repo.write(EPIC_PATH, &epic("planning", "", EPIC_CRITERION));
     repo.write(
         "project-management/tasks/TSK-002.md",
         &task("TSK-002", "in_progress", CRITERIA, "Pending."),
