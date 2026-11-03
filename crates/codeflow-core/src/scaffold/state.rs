@@ -212,9 +212,12 @@ impl ScaffoldConfig {
     /// glob — i.e. `codeflow update` must skip it entirely.
     #[must_use]
     pub fn is_ignored(&self, dest: &str) -> bool {
+        // A match that cannot finish inside the glob bound counts as ignored:
+        // an opt-out never lapses, so `update` never manages a file an
+        // operator's pattern may cover (TSK-1258).
         self.ignore
             .iter()
-            .any(|glob| crate::security::pattern::matches_extended_glob(dest, glob))
+            .any(|glob| crate::security::pattern::match_extended_glob(dest, glob).refuses())
     }
 }
 

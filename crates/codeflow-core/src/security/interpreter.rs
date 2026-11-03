@@ -212,7 +212,7 @@ fn code_reads_where_calls_run(
 /// home path, or to a directory outside the home, it names a protected
 /// path. An absolute or home word is judged as written; a parent component
 /// can reach any directory, so it could.
-fn relative_may_name_secret(word: &str) -> bool {
+fn relative_may_name_secret(word: &str) -> Result<bool, &'static str> {
     let slashed = word.replace('\\', "/");
     let drive = slashed
         .as_bytes()
@@ -220,14 +220,21 @@ fn relative_may_name_secret(word: &str) -> bool {
         .is_some_and(u8::is_ascii_alphabetic)
         && slashed.as_bytes().get(1) == Some(&b':');
     if slashed.starts_with(['/', '~']) || drive {
-        return false;
+        return Ok(false);
     }
     let word = slashed.trim_start_matches("./");
-    !word.is_empty()
-        && (word.split('/').any(|part| part == "..")
-            || protected_dirs()
-                .iter()
-                .any(|dir| secret_path_spelling(&format!("{dir}/{word}"), None, Some(true))))
+    if word.is_empty() {
+        return Ok(false);
+    }
+    if word.split('/').any(|part| part == "..") {
+        return Ok(true);
+    }
+    for dir in protected_dirs() {
+        if secret_path_spelling_checked(&format!("{dir}/{word}"), None, Some(true))? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Whether a relative word names a secret in some directory: its name is a
@@ -237,12 +244,12 @@ fn relative_may_name_secret(word: &str) -> bool {
 /// the rest may start anywhere, so only the rest is judged. This is the
 /// rule for a relative operand read after a directory change the guard
 /// cannot establish (TSK-1002 review 02).
-fn relative_names_secret(word: &str) -> bool {
+fn relative_names_secret(word: &str) -> Result<bool, &'static str> {
     let word = word.replace('\\', "/");
     let drive = word.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
         && word.as_bytes().get(1) == Some(&b':');
     if word.starts_with(['/', '~']) || drive {
-        return false;
+        return Ok(false);
     }
     let word = word
         .rsplit_once("/../")
@@ -250,7 +257,7 @@ fn relative_names_secret(word: &str) -> bool {
         .trim_start_matches("../")
         .trim_start_matches("./");
     if word.is_empty() || word == ".." || word == "." {
-        return false;
+        return Ok(false);
     }
     // A name counts where its own spelling makes the path secret: in a
     // directory denied as a whole every name is secret, which says nothing
@@ -260,17 +267,17 @@ fn relative_names_secret(word: &str) -> bool {
         .map(|_| "__codeflow_ordinary_name__")
         .collect::<Vec<_>>()
         .join("/");
-    protected_dirs().iter().any(|dir| {
+    for dir in protected_dirs() {
         // Negated control: a spelling the matcher cannot judge inside its
-        // bound refuses here, so the negation cannot turn it into an allow.
-        match (
-            secret_path_spelling_checked(&format!("{dir}/{word}"), None, Some(true)),
-            secret_path_spelling_checked(&format!("{dir}/{ordinary}"), None, Some(true)),
-        ) {
-            (Ok(named), Ok(control)) => named && !control,
-            _ => true,
+        // bound is an error carrying the cause, so the negation cannot turn
+        // it into an allow.
+        let named = secret_path_spelling_checked(&format!("{dir}/{word}"), None, Some(true))?;
+        let control = secret_path_spelling_checked(&format!("{dir}/{ordinary}"), None, Some(true))?;
+        if named && !control {
+            return Ok(true);
         }
-    })
+    }
+    Ok(false)
 }
 
 /// The home directories on the way to a protected path, with the home and
@@ -528,12 +535,12 @@ fn secret_reads_at(
                 }
             }
             let judge = |path: &str| {
-                if unwrapped.cwd.is_none() && relative_names_secret(path) {
+                if unwrapped.cwd.is_none() && relative_names_secret(path)? {
                     return Err("cannot establish the directory the command runs in");
                 }
                 secret_path_result(path, reader_cwd, home, Some(false))
             };
-            let pattern = |spelling: &str| secret_path_spelling(spelling, home, Some(true));
+            let pattern = |spelling: &str| secret_path_spelling_checked(spelling, home, Some(true));
             let judges = git_reads::Judges {
                 path: &judge,
                 pattern: &pattern,
@@ -662,7 +669,8 @@ fn substitution_root_unknown(value: &str, expands: bool) -> bool {
         .char_indices()
         .find(|(_, ch)| !matches!(ch, '/' | '\\'))
         .map_or("", |(at, _)| &tail[at..]);
-    relative_names_secret(name)
+    // This yes/no answer refuses on a bound hit, without the named cause.
+    relative_names_secret(name).unwrap_or(true)
 }
 
 /// Whether a word holding a command substitution the guard did not resolve
@@ -671,15 +679,19 @@ fn substitution_root_unknown(value: &str, expands: bool) -> bool {
 /// directory it is read in (TSK-1002 Fable review 14:
 /// `cat ~/.codex/$(echo auth).json`). A word is judged whole, never by its
 /// tail alone.
-fn substitution_may_name_secret(value: &str, cwd: &Path, home: Option<&Path>) -> bool {
+fn substitution_may_name_secret(
+    value: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Result<bool, &'static str> {
     // A word that starts with the substitution has no spelled directory:
     // [`substitution_root_unknown`] judges what follows it.
     let Some(first) = value.find(['\u{1}', '\u{2}']).filter(|at| *at > 0) else {
-        return false;
+        return Ok(false);
     };
     let whole = value.replace(['\u{1}', '\u{2}'], "*");
     let below = format!("{}*/**", &value[..first]);
-    [whole, below].into_iter().any(|pattern| {
+    for pattern in [whole, below] {
         let rooted = pattern.starts_with('~') || Path::new(&pattern).is_absolute();
         let pattern = if rooted {
             pattern
@@ -689,8 +701,11 @@ fn substitution_may_name_secret(value: &str, cwd: &Path, home: Option<&Path>) ->
                 crate::portable_path::slashed(cwd).trim_end_matches('/')
             )
         };
-        secret_path_spelling(&pattern, home, Some(true))
-    })
+        if secret_path_spelling_checked(&pattern, home, Some(true))? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// File operands retain their command-position provenance. Declared links
@@ -710,7 +725,7 @@ fn inspect_operand(
     // After a directory change the guard cannot establish, of any kind, a
     // relative operand that could name a secret refuses (TSK-1002 review
     // 02); other relative operands keep their verdicts below.
-    if call.cwd.is_none() && relative_names_secret(value) {
+    if call.cwd.is_none() && relative_names_secret(value)? {
         return Err("cannot establish the directory the command runs in");
     }
     if value == "__unverified_transfer_input" {
@@ -758,7 +773,7 @@ fn inspect_operand(
     if substitution_root_unknown(value, expands) {
         return Err("cannot establish the directory a command substitution prints");
     }
-    if substitution_may_name_secret(value, cwd, home) {
+    if substitution_may_name_secret(value, cwd, home)? {
         return Err("cannot establish the text a command substitution prints in this path");
     }
     if expands
@@ -1385,7 +1400,7 @@ fn unc_store_suffix(
     });
     // Elsewhere the share's root is a directory the guard cannot
     // establish, so the tail below it is judged as in an unknown directory.
-    if !chosen && parts.len() > 2 && relative_may_name_secret(&parts[2..].join("/")) {
+    if !chosen && parts.len() > 2 && relative_may_name_secret(&parts[2..].join("/"))? {
         return Err(UNKNOWN_SHARE);
     }
     Ok(false)
@@ -1451,14 +1466,6 @@ fn stream_base(word: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("/")
-}
-
-/// [`secret_path_spelling_checked`] for a caller that can only answer yes or
-/// no: a glob match that cannot finish inside the bound counts as a secret,
-/// so the caller refuses and never allows. A caller that negates the answer
-/// (`!secret_path_spelling(..)`) must use the checked form instead.
-fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -> bool {
-    secret_path_spelling_checked(word, home, reader).unwrap_or(true)
 }
 
 /// Whether `word` spells a secret path. The error names the bound a glob
@@ -2450,6 +2457,12 @@ fn selector_matchers(pattern: &str) -> Result<Vec<globset::GlobMatcher>, &'stati
     if pattern.contains("[:") || pattern.contains("[=") || pattern.contains("[.") {
         return Err("a search selector uses a bracket class the guard does not read");
     }
+    // The selector comes from the command line, so its compile cost is an
+    // attacker's to shape: past the glob matcher's pattern bound it refuses
+    // (TSK-1258 sibling sweep).
+    if pattern.len() > super::pattern::MAX_GLOB_PATTERN_BYTES {
+        return Err("a search selector is longer than the glob matcher's bound");
+    }
     let mut matchers = Vec::new();
     for escape in [true, false] {
         for separator in [true, false] {
@@ -3418,7 +3431,7 @@ mod tests {
             ".ssh/config",
             ".aws/credentials",
         ] {
-            assert!(relative_names_secret(word), "{word}");
+            assert_eq!(relative_names_secret(word), Ok(true), "{word}");
         }
         for word in [
             "README.md",
@@ -3429,10 +3442,10 @@ mod tests {
             "/etc/hosts",
             "~/notes.md",
         ] {
-            assert!(!relative_names_secret(word), "{word}");
+            assert_eq!(relative_names_secret(word), Ok(false), "{word}");
         }
         // Interpreter literals in an unknown directory keep the broader rule.
-        assert!(relative_may_name_secret("../anything"));
+        assert_eq!(relative_may_name_secret("../anything"), Ok(true));
     }
 
     /// Review 03, ruling 6: the object path of a `REV:PATH` word keeps the
@@ -4848,10 +4861,32 @@ mod tests {
             Err(cause),
             "the real-path check carries the same cause"
         );
-        assert!(
-            secret_path_spelling(&long, None, None),
-            "a yes/no caller refuses"
+        assert_eq!(
+            secret_path_spelling_checked(&long, None, None),
+            Err(cause),
+            "the spelling check names the same cause"
         );
+        // The relative-word checks never allow it. A reader operand this
+        // long also passes `glob_intersects`, whose 256-token cap returns
+        // `None` first, so those checks refuse (`Ok(true)`) or carry the cause.
+        for verdict in [
+            relative_names_secret(&long[1..]),
+            relative_may_name_secret(&long[1..]),
+        ] {
+            assert_ne!(verdict, Ok(false), "an oversize word must not clear");
+        }
+    }
+
+    /// TSK-1258 sibling sweep: a search selector past the pattern bound is
+    /// refused with the bound named, and one inside it still compiles.
+    #[test]
+    fn selector_past_the_pattern_bound_is_refused_with_its_cause() {
+        let long = "a".repeat(super::super::pattern::MAX_GLOB_PATTERN_BYTES + 1);
+        assert_eq!(
+            selector_matchers(&long).err(),
+            Some("a search selector is longer than the glob matcher's bound")
+        );
+        assert!(selector_matchers("*.rs").is_ok());
     }
 
     /// TSK-1258 AC-2, through the guard: an oversize operand is refused by

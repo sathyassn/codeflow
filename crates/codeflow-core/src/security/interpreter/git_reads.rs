@@ -468,7 +468,9 @@ pub(super) struct Judges<'a> {
     /// Whether a path names a secret, or why that cannot be established.
     pub(super) path: &'a dyn Fn(&str) -> Result<bool, &'static str>,
     /// Whether a secret name could match a pattern spelling.
-    pub(super) pattern: &'a dyn Fn(&str) -> bool,
+    /// Whether a pathspec spelling could select a secret; an error names why
+    /// it cannot be judged, such as the glob matcher's bound (TSK-1258).
+    pub(super) pattern: &'a dyn Fn(&str) -> Result<bool, &'static str>,
 }
 
 /// Git matches a case-insensitive pathspec (`--icase-pathspecs`) in any
@@ -823,10 +825,14 @@ fn judge_input(input: &str, records: Records, judges: &Judges<'_>) -> Result<boo
                     return Err(MAGIC);
                 }
                 match pattern(&path) {
-                    Some(spellings) if spellings.iter().any(|x| (judges.pattern)(x)) => {
-                        return Err(PATTERN);
+                    Some(spellings) => {
+                        for spelling in &spellings {
+                            if (judges.pattern)(spelling)? {
+                                return Err(PATTERN);
+                            }
+                        }
+                        false
                     }
-                    Some(_) => false,
                     None => (judges.path)(&path)?,
                 }
             }
@@ -914,7 +920,7 @@ mod tests {
     #[test]
     fn pathspecs_on_stdin_meet_the_argv_rules() {
         let path = |path: &str| Ok(path.contains("id_rsa"));
-        let pattern = |spelling: &str| spelling.contains("id_r");
+        let pattern = |spelling: &str| Ok(spelling.contains("id_r"));
         let judges = Judges {
             path: &path,
             pattern: &pattern,

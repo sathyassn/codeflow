@@ -115,72 +115,82 @@ impl GlobMatch {
     }
 }
 
+/// Compiled glob patterns, bounded to [`GLOB_CACHE_ENTRIES`]. An instance is
+/// separate state, so a test can fill its own cache without touching the
+/// process-wide one.
+#[derive(Default)]
+struct GlobCache {
+    /// Shared, not cloned: a `Regex` clone builds a new search-cache pool, so
+    /// a cached hit would pay that cost on every call.
+    entries: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Regex>>>,
+    /// Regex compiles made through this cache; tests read it.
+    #[cfg(test)]
+    compiles: std::sync::atomic::AtomicUsize,
+}
+
+impl GlobCache {
+    fn matching(&self, path: &str, pattern: &str) -> GlobMatch {
+        if pattern.len() > MAX_GLOB_PATTERN_BYTES {
+            return GlobMatch::Unbounded("a glob pattern is longer than the matcher's bound");
+        }
+        if path.len() > MAX_GLOB_PATH_BYTES {
+            return GlobMatch::Unbounded("a path is longer than the glob matcher's bound");
+        }
+        let found = self
+            .entries
+            .lock()
+            .ok()
+            .and_then(|entries| entries.get(pattern).cloned());
+        let regex = if let Some(regex) = found {
+            regex
+        } else {
+            #[cfg(test)]
+            self.compiles
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let full_regex = format!("(?s)^{}$", glob_to_regex(pattern));
+            let regex = match regex::RegexBuilder::new(&full_regex)
+                .size_limit(GLOB_COMPILED_BYTES)
+                .dfa_size_limit(GLOB_COMPILED_BYTES)
+                .build()
+            {
+                Ok(regex) => std::sync::Arc::new(regex),
+                Err(regex::Error::CompiledTooBig(_)) => {
+                    return GlobMatch::Unbounded(
+                        "a glob pattern compiles past the matcher's bound",
+                    );
+                }
+                Err(_) => return GlobMatch::Unbounded("a glob pattern cannot be compiled"),
+            };
+            if let Ok(mut entries) = self.entries.lock() {
+                // A full cache is emptied, not frozen: a frozen cache made
+                // every later pattern compile again on each call (TSK-1258).
+                if entries.len() >= GLOB_CACHE_ENTRIES {
+                    entries.clear();
+                }
+                entries.insert(pattern.to_owned(), regex.clone());
+            }
+            regex
+        };
+        if regex.is_match(path) {
+            GlobMatch::Match
+        } else {
+            GlobMatch::NoMatch
+        }
+    }
+}
+
 /// Match a path against an extended glob pattern supporting `**`, inside a
-/// fixed bound on pattern length, compiled size and path length.
+/// fixed bound on pattern length, compiled size and path length. A guard
+/// refuses on [`GlobMatch::refuses`]; no caller reads a bound hit as "no
+/// match", which is why there is no boolean form.
 #[must_use]
 pub fn match_extended_glob(path: &str, pattern: &str) -> GlobMatch {
     // Recursive search checks the same policy patterns for many names. Bound
     // the cache because this utility also accepts caller-provided patterns.
-    static CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, Regex>>> =
-        OnceLock::new();
-    if pattern.len() > MAX_GLOB_PATTERN_BYTES {
-        return GlobMatch::Unbounded("a glob pattern is longer than the matcher's bound");
-    }
-    if path.len() > MAX_GLOB_PATH_BYTES {
-        return GlobMatch::Unbounded("a path is longer than the glob matcher's bound");
-    }
-    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    let found = cache
-        .lock()
-        .ok()
-        .and_then(|entries| entries.get(pattern).cloned());
-    let regex = if let Some(regex) = found {
-        regex
-    } else {
-        #[cfg(test)]
-        tests::COMPILES.with(|n| n.set(n.get() + 1));
-        let full_regex = format!("(?s)^{}$", glob_to_regex(pattern));
-        let regex = match regex::RegexBuilder::new(&full_regex)
-            .size_limit(GLOB_COMPILED_BYTES)
-            .dfa_size_limit(GLOB_COMPILED_BYTES)
-            .build()
-        {
-            Ok(regex) => regex,
-            Err(regex::Error::CompiledTooBig(_)) => {
-                return GlobMatch::Unbounded("a glob pattern compiles past the matcher's bound");
-            }
-            Err(_) => return GlobMatch::Unbounded("a glob pattern cannot be compiled"),
-        };
-        if let Ok(mut entries) = cache.lock() {
-            // A full cache is emptied, not frozen: a frozen cache made every
-            // later pattern compile again on each call (TSK-1258 AC-1).
-            if entries.len() >= GLOB_CACHE_ENTRIES {
-                entries.clear();
-            }
-            entries.insert(pattern.to_owned(), regex.clone());
-        }
-        regex
-    };
-    if regex.is_match(path) {
-        GlobMatch::Match
-    } else {
-        GlobMatch::NoMatch
-    }
-}
-
-/// Match a path against an extended glob pattern supporting `**`. A match
-/// that cannot finish inside the bound reports no match; a guard that must
-/// refuse then uses [`match_extended_glob`] or [`glob_covers_or_refuses`].
-#[must_use]
-pub fn matches_extended_glob(path: &str, pattern: &str) -> bool {
-    match_extended_glob(path, pattern) == GlobMatch::Match
-}
-
-/// Whether a guard must treat `path` as covered by `pattern`: a match, or a
-/// match that cannot finish inside the bound (fail closed).
-#[must_use]
-pub fn glob_covers_or_refuses(path: &str, pattern: &str) -> bool {
-    match_extended_glob(path, pattern).refuses()
+    static CACHE: OnceLock<GlobCache> = OnceLock::new();
+    CACHE
+        .get_or_init(GlobCache::default)
+        .matching(path, pattern)
 }
 
 /// Whether two glob languages share a path. This is a product walk over
@@ -345,31 +355,42 @@ fn non_slash() -> Vec<(u32, u32)> {
 mod tests {
     use super::*;
 
-    thread_local! {
-        /// Regex compiles made by `matches_extended_glob` on this thread.
-        pub(super) static COMPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// A boolean view for the tests: a match, with no bound hit.
+    fn matches_extended_glob(path: &str, pattern: &str) -> bool {
+        match_extended_glob(path, pattern) == GlobMatch::Match
     }
 
-    /// TSK-1258 AC-1: once the shared cache holds 128 patterns, a pattern
-    /// used again and again must still compile once, not on every call.
-    /// Before the fix every call after the cache filled recompiled.
+    /// What a guard does: refuse on a match or on a bound hit.
+    fn glob_covers_or_refuses(path: &str, pattern: &str) -> bool {
+        match_extended_glob(path, pattern).refuses()
+    }
+
+    /// TSK-1258 AC-1: once a cache holds 128 patterns, a pattern used again
+    /// and again must still compile once, not on every call. Before the fix
+    /// every call after the cache filled recompiled. The cache is this
+    /// test's own instance, so parallel tests cannot change the count.
     #[test]
     fn full_glob_cache_does_not_recompile_a_repeated_pattern() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let cache = GlobCache::default();
         for n in 0..300 {
-            let _ = matches_extended_glob("x", &format!("tsk1258-fill-{n}/**/*.never"));
+            let _ = cache.matching("x", &format!("tsk1258-fill-{n}/**/*.never"));
         }
-        let before = COMPILES.with(std::cell::Cell::get);
+        let before = cache.compiles.load(Relaxed);
         for _ in 0..50 {
-            assert!(!matches_extended_glob("a/b.pem", "tsk1258-late/**/*.pem"));
-            assert!(matches_extended_glob(
-                "tsk1258-late/a/b.pem",
-                "tsk1258-late/**/*.pem"
-            ));
+            assert_eq!(
+                cache.matching("a/b.pem", "tsk1258-late/**/*.pem"),
+                GlobMatch::NoMatch
+            );
+            assert_eq!(
+                cache.matching("tsk1258-late/a/b.pem", "tsk1258-late/**/*.pem"),
+                GlobMatch::Match
+            );
         }
-        let compiles = COMPILES.with(std::cell::Cell::get) - before;
-        assert!(
-            compiles <= 1,
-            "recompiled {compiles} times in 100 calls with a full cache"
+        let compiles = cache.compiles.load(Relaxed) - before;
+        assert_eq!(
+            compiles, 1,
+            "{compiles} compiles in 100 calls with a full cache"
         );
     }
 

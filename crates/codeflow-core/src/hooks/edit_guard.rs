@@ -8,7 +8,8 @@ use std::path::{Component, Path, PathBuf};
 use serde_json::{Map, Value};
 
 use super::{PolicyLevel, Violation};
-use crate::security::{actions, pattern::glob_covers_or_refuses};
+use crate::security::actions;
+use crate::security::pattern::{match_extended_glob, GlobMatch};
 
 /// An input which the edit guard cannot safely interpret.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -277,9 +278,16 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
             let enforcement = ctx.level.is_active()
                 && !authority
                 && repository_enforcement_target(candidate, ctx.root, false).map_err(EditError)?;
-            if (authority
-                || (ctx.level.is_active()
-                    && (protected.iter().any(|pattern| covers(&text, pattern)) || enforcement)))
+            let mut covered = false;
+            if ctx.level.is_active() && !authority {
+                for pattern in &protected {
+                    if covers(&text, pattern)? {
+                        covered = true;
+                        break;
+                    }
+                }
+            }
+            if (authority || (ctx.level.is_active() && (covered || enforcement)))
                 && seen.insert(lexical.clone())
             {
                 violations.push(Violation::new(
@@ -398,11 +406,19 @@ fn resolved_pattern(base: &Path, relative: &str, resolve: bool) -> Result<String
     Ok(pattern)
 }
 
-fn covers(path: &str, pattern: &str) -> bool {
-    glob_covers_or_refuses(path, pattern)
-        || pattern
+/// Whether `pattern` covers `path`. A match that cannot finish inside the
+/// glob matcher's bound is an error naming the bound, so the edit is refused
+/// with its cause (TSK-1258) and never allowed.
+fn covers(path: &str, pattern: &str) -> Result<bool, EditError> {
+    match match_extended_glob(path, pattern) {
+        GlobMatch::Match => Ok(true),
+        GlobMatch::Unbounded(cause) => Err(EditError(format!(
+            "cannot check the edit path against the protected paths: {cause}"
+        ))),
+        GlobMatch::NoMatch => Ok(pattern
             .strip_suffix("/**")
-            .is_some_and(|parent| path == parent)
+            .is_some_and(|parent| path == parent)),
+    }
 }
 
 // OS text rule (issue 79, `docs/architecture.md`): kept strict. The rules that
@@ -1544,6 +1560,24 @@ mod tests {
         for path in ["etc/gitconfig.example", "docs/gitconfig", "notes.md"] {
             assert!(!fixture.refused(path), "{path}");
         }
+    }
+
+    /// TSK-1258: a path the glob matcher cannot judge inside its bound is
+    /// refused with the bound named, not reported as an enforcement path and
+    /// never allowed. Many short components keep each one a valid name.
+    #[test]
+    fn a_path_past_the_glob_bound_is_refused_with_its_cause() {
+        let fixture = Fixture::new();
+        let long = format!("notes/{}", "a/".repeat(20_000));
+        let error = evaluate(&synthetic("write", json!({"path": long})), &fixture.ctx())
+            .expect_err("a path past the bound must be refused");
+        assert!(
+            error
+                .to_string()
+                .contains("longer than the glob matcher's bound"),
+            "{error}"
+        );
+        assert!(!fixture.refused("notes.md"), "a normal path is unchanged");
     }
 
     #[test]
