@@ -791,7 +791,7 @@ const UNSHIPPED_FILES: [&str; 6] = [
 /// The present review example stays: the visual guide line (EPC-016) made
 /// it the figure-block example that document-authoring and the present tests
 /// read, so the release line keeps it.
-const RETIRED_FILES: [&str; 7] = [
+const RETIRED_FILES: [&str; 6] = [
     "agents/skills/cf-model-orchestrator/references/other-hosts.md",
     "agents/skills/cf-model-orchestrator/resources/routing/assignment.md",
     "agents/skills/cf-model-orchestrator/resources/routing/effort.md",
