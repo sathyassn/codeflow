@@ -340,7 +340,7 @@ key = "start"
 group = "delivery"
 tiers = ["full"]
 when = "start a task"
-action = "work-start check first (identity, intent-match, currency); one worktree per session; no task work at the root checkout; `codeflow work claim <id>` then `work start <id>` before edits; on an unlanded predecessor only at its reviewed SHA; edit only work you own and tell the owner of a change needed elsewhere"
+action = "work-start check first (identity, intent-match, currency); one worktree per session; no task work at the root checkout; `codeflow work claim <id>` then `work start <id>` before edits; on an unlanded predecessor only at its reviewed SHA"
 see = [
   { target = ".codeflow/rules/worktrees.md", section = "Work-start check" },
   { target = ".codeflow/rules/git-rules.md", must_open = true, reason = "the commit rules" },
@@ -351,7 +351,7 @@ key = "start"
 group = "delivery"
 tiers = ["standard", "minimal"]
 when = "start a unit of work"
-action = "work-start check first (identity, intent-match, currency); one worktree per session; no task work at the root checkout; on an unlanded predecessor only at its reviewed SHA; edit only work you own and tell the owner of a change needed elsewhere"
+action = "work-start check first (identity, intent-match, currency); one worktree per session; no task work at the root checkout; on an unlanded predecessor only at its reviewed SHA"
 see = [
   { target = ".codeflow/rules/worktrees.md", section = "Work-start check" },
   { target = ".codeflow/rules/git-rules.md", must_open = true, reason = "the commit rules" },
@@ -472,7 +472,7 @@ key = "land"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "land a batch on the integration line"
-action = "every PR reviewed and ready when the line lands goes on one candidate in dependency order, and one that becomes ready later joins the next; one candidate per line at a time, lines in parallel; a hand-resolved product hunk reopens that task's whole-unit review; one full gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
+action = "one candidate per line at a time, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; one full gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
 see = [{ target = "cf-method", section = "Managing a body of work", must_open = true, reason = "landing modes and drift control" }]
 
 [[moment]]
@@ -480,7 +480,7 @@ key = "land"
 group = "delivery"
 tiers = ["minimal"]
 when = "land a batch on the integration line"
-action = "every PR reviewed and ready when the line lands goes on one candidate in dependency order, and one that becomes ready later joins the next; one candidate per line at a time, lines in parallel; a hand-resolved product hunk reopens that task's whole-unit review; one full gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
+action = "one candidate per line at a time, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; one full gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
 see = [{ target = ".codeflow/rules/git-rules.md", section = "Bodies of work" }]
 
 [[moment]]
