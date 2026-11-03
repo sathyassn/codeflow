@@ -21,21 +21,18 @@
 # never on a fork pull request.
 #
 # The same job is the enforcing check of the shared id registry (SPC-013
-# R-14, R-20, R-109; ADR-0072), so one target build serves both. Push and
-# schedule runs check the registry at their event's commit. Manual dispatch
-# is now a cache warmer on main, requiring a SHA contained in main or an
-# integration branch; it replaces the manual registry check on arbitrary
-# refs. It builds that SHA only on a cache miss and never runs registry
-# checks. PR-target runs retain read-only cache access. With durable work
-# tracking off, `codeflow ids check` passes with a note.
+# R-14, R-20, R-109; ADR-0072), so one target build serves both. Push,
+# schedule and dispatch runs keep their own event's commit and run only the
+# registry check; with durable work tracking off, `codeflow ids check` passes
+# with a note.
 #
 # Pull request runs share one concurrency group per pull request, so a newer
 # event (a push, then a body edit seconds later) cancels the run it
 # supersedes. The judging run reads the pull request's body from the API
 # when it runs, never from its event, so the newest body is judged whichever
 # run survives. Push, schedule and dispatch runs each get a group of their
-# own run and are never cancelled: a registry check or cache warm is never
-# replaced by a newer queued event.
+# own run and are never cancelled: a registry run is never replaced by a
+# newer queued event.
 #
 # This repository's copy: CodeFlow is its own first consumer, so the install
 # step builds the target branch's own source in place of the pinned release.
@@ -50,11 +47,6 @@ on:
   schedule:
     - cron: "23 4 * * *"
   workflow_dispatch:
-    inputs:
-      build_sha:
-        description: Commit contained in main or an integration branch to cache
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -64,40 +56,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 jobs:
-  # Only a trusted integration push can request default-scope population.
-  # No checkout or PR data runs with this job's dispatch permission.
-  warm-target-cache:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - name: Request a target build in main's cache scope
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          BUILD_SHA: ${{ github.sha }}
-        run: |
-          if dispatch_output=$(gh workflow run codeflow-policy.yml --repo "$GH_REPO" --ref main -f "build_sha=$BUILD_SHA" 2>&1); then
-            printf '%s\n' "$dispatch_output"
-          else
-            dispatch_status=$?
-            printf '%s\n' "$dispatch_output" >&2
-            # Only the complete supported error qualifies: gh exit status 1 and
-            # output that is exactly this one diagnostic, nothing before or after.
-            diagnostic=${dispatch_output#"could not create workflow dispatch event: "}
-            endpoint="https://api.github.com/repos/$GH_REPO/actions/workflows/codeflow-policy.yml/dispatches"
-            diagnostic=${diagnostic%" ($endpoint)"}
-            missing_input='HTTP 422: Unexpected inputs provided: ["build_sha"]'
-            if [[ "$dispatch_status" -eq 1 && "$diagnostic" == "$missing_input" ]]; then
-              echo "::warning::Main does not yet accept build_sha; cache warming for $BUILD_SHA is unavailable. Readers rebuild on a miss."
-              exit 0
-            fi
-            exit "$dispatch_status"
-          fi
-
   commit-lint:
     name: commit standards
     runs-on: ubuntu-24.04
@@ -117,35 +75,6 @@ jobs:
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}
           fetch-depth: 0
 
-      # Dispatch inputs confer no trust. Refresh branch authority, prove
-      # containment, then select the exact commit before running its tools.
-      - name: Verify the dispatched target
-        id: dispatch-target
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          WORKFLOW_REF: ${{ github.ref }}
-          BUILD_SHA: ${{ inputs.build_sha }}
-        run: |
-          set -euo pipefail
-          if [ "$WORKFLOW_REF" != refs/heads/main ] || ! [[ "$BUILD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::cache population requires a full commit SHA and a workflow dispatched on main"; exit 1
-          fi
-          git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
-          git cat-file -e "$BUILD_SHA^{commit}"
-          refs=$(git for-each-ref --contains="$BUILD_SHA" --format='%(refname)' refs/remotes/origin)
-          trusted=false
-          while IFS= read -r ref; do
-            case "$ref" in
-              refs/remotes/origin/main|refs/remotes/origin/integration/*) trusted=true ;;
-            esac
-          done <<< "$refs"
-          if [ "$trusted" != true ]; then
-            echo "::error::requested cache SHA is not contained in main or an integration branch"; exit 1
-          fi
-          git checkout --detach "$BUILD_SHA"
-          [ "$(git rev-parse HEAD)" = "$BUILD_SHA" ]
-          echo "verified=true" >> "$GITHUB_OUTPUT"
-
       # This repository IS codeflow, so it builds the checked-out TARGET
       # branch's own source instead of installing a pinned release. The PR
       # head is never checked out or built. The toolchain is pinned in
@@ -153,95 +82,12 @@ jobs:
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
 
-      # A target checkout determines the key before any head is fetched.
-      # The namespace fixes release/default features/native target. No
-      # fallback keys: even a prefix match must rebuild. A dispatch uses
-      # only the SHA whose trusted branch containment was proved above.
-      - name: Identify the target build
-        id: target-build
-        env:
-          EVENT: ${{ github.event_name }}
-          VERIFIED_DISPATCH: ${{ steps.dispatch-target.outputs.verified }}
-          TARGET_REF: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref_name }}
-        run: |
-          set -euo pipefail
-          sha=$(git rev-parse HEAD)
-          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-          git diff --quiet
-          git diff --cached --quiet
-          allowed=false
-          case "$EVENT:$TARGET_REF" in
-            push:main|push:master|push:integration/*|pull_request_target:main|pull_request_target:master|pull_request_target:integration/*|schedule:main|schedule:master) allowed=true ;;
-            workflow_dispatch:main) if [ "$VERIFIED_DISPATCH" = true ]; then allowed=true; fi ;;
-          esac
-          identity=$({
-            rustc -vV
-            cargo -V
-            cc --version
-            printf '%s\n' "${ImageOS:?}" "${ImageVersion:?}" "${RUNNER_ARCH:?}"
-            printf '%s\n' "${RUSTFLAGS-}" "${CARGO_ENCODED_RUSTFLAGS-}" "${CC-}" "${CFLAGS-}" "${LDFLAGS-}"
-          } | sha256sum | cut -d ' ' -f 1)
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "key=codeflow-policy-release-default-v1-$sha-$identity" >> "$GITHUB_OUTPUT"
-          echo "allowed=$allowed" >> "$GITHUB_OUTPUT"
-
-      - name: Restore the target binary
-        id: target-cache
-        if: steps.target-build.outputs.allowed == 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/codeflow-policy-binary
-          key: ${{ steps.target-build.outputs.key }}
-          # A writer needs no downloaded executable when its exact key exists.
-          lookup-only: ${{ github.event_name == 'workflow_dispatch' }}
-
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.target-cache.outputs.cache-hit != 'true'
-        with:
-          # Head builds cannot populate the trusted dependency scope either.
-          save-if: ${{ github.event_name == 'push' && steps.target-build.outputs.allowed == 'true' }}
 
-      - name: Verify or rebuild the target binary
-        id: target-binary
-        if: github.event_name != 'workflow_dispatch' || steps.target-cache.outputs.cache-hit != 'true'
-        env:
-          TARGET_SHA: ${{ steps.target-build.outputs.sha }}
-          CACHE_HIT: ${{ steps.target-cache.outputs.cache-hit }}
-          BINARY_DIR: ${{ runner.temp }}/codeflow-policy-binary
+      - name: Build codeflow from the target's source
         run: |
-          set -euo pipefail
-          binary="$BINARY_DIR/codeflow"
-          matches_target() {
-            [ -x "$binary" ] && [ ! -L "$binary" ] || return 1
-            version=$("$binary" --version) || return 1
-            [[ "$version" =~ ^codeflow\ [^[:space:]]+\ source=$TARGET_SHA\ dirty=false\ inputs=[0-9a-f]+$ ]]
-          }
-          built=false
-          if [ "$CACHE_HIT" != true ] || ! matches_target; then
-            echo "Target binary cache absent, inexact or wrong identity; rebuilding $TARGET_SHA"
-            rm -f "$binary"
-            cargo build --release --locked -p codeflow-cli
-            mkdir -p "$BINARY_DIR"
-            cp target/release/codeflow "$binary"
-            built=true
-          fi
-          if ! matches_target; then
-            echo "::error::target binary source identity does not match $TARGET_SHA"; exit 1
-          fi
-          echo "Verified target binary: $TARGET_SHA (rebuilt=$built)"
-          echo "built=$built" >> "$GITHUB_OUTPUT"
-          echo "$BINARY_DIR" >> "$GITHUB_PATH"
-
-      # A verified main-scope dispatch or trusted push saves a fresh build.
-      # PR events remain read-only under GitHub's default cache permissions;
-      # no cache-mode expression or write override is needed. An invalid
-      # immutable entry is rebuilt by the reader, not replaced.
-      - name: Save the verified target binary
-        if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && steps.dispatch-target.outputs.verified == 'true')) && steps.target-build.outputs.allowed == 'true' && steps.target-binary.outputs.built == 'true' && steps.target-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/codeflow-policy-binary
-          key: ${{ steps.target-build.outputs.key }}
+          cargo build --release -p codeflow-cli
+          echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
 
       - name: Fetch the pull request head as data
         if: github.event_name == 'pull_request_target'
@@ -294,7 +140,6 @@ jobs:
       # The registry is fetched explicitly with full history, never forced
       # (R-20); the pull request head above was fetched as data only.
       - name: Fetch the shared registry
-        if: github.event_name != 'workflow_dispatch'
         run: |
           if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
             git fetch --no-tags origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
@@ -303,7 +148,6 @@ jobs:
           fi
 
       - name: codeflow ids check
-        if: github.event_name != 'workflow_dispatch'
         env:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

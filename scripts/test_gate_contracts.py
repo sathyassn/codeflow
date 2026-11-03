@@ -17,9 +17,12 @@ _SPEC.loader.exec_module(PARITY)
 _CACHE_SPEC = importlib.util.spec_from_file_location('policy_cache', Path(__file__).resolve().parent / 'test_policy_cache.py')
 _CACHE = importlib.util.module_from_spec(_CACHE_SPEC)
 _CACHE_SPEC.loader.exec_module(_CACHE)
-_CACHE.WORKFLOW = ROOT / '.github/workflows/codeflow-policy.yml'
+_CACHE.ROOT = ROOT
+_CACHE.WORKFLOW = ROOT / 'operator-patches/TSK-1240-codeflow-policy.proposed.yml'
 PolicyCache = _CACHE.PolicyCache
 def read(path):
+    if path == '.github/workflows/codeflow-policy.yml':
+        return _CACHE.proposed_workflow()
     return (ROOT / path).read_text()
 
 class GateContracts(unittest.TestCase):
@@ -156,7 +159,9 @@ class GateContracts(unittest.TestCase):
         self.assertNotIn('github.event.pull_request.body', workflow)
         actions = '      actions: read\n' if admission else ''
         self.assertIn(f'    permissions:\n      contents: read\n      pull-requests: read\n{actions}    steps:\n', workflow)
-        self.assertNotIn(': write', workflow.split('  commit-lint:', 1)[1])
+        self.assertEqual(workflow.split('\npermissions:\n', 1)[1].split('\nconcurrency:', 1)[0],
+                         '  contents: read\n')
+        self.assertNotIn(': write', workflow)
         self.assertIn('    timeout-minutes: 45\n' if admission else '    timeout-minutes: 20\n', workflow)
 
     def test_one_target_source_build_judges_policy_and_registry_and_cancels_only_pr_runs(self):

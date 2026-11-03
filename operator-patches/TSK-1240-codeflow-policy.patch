@@ -1,0 +1,131 @@
+diff --git a/.github/workflows/codeflow-policy.yml b/.github/workflows/codeflow-policy.yml
+index df6fd88c9..89d657a3b 100644
+--- a/.github/workflows/codeflow-policy.yml
++++ b/.github/workflows/codeflow-policy.yml
+@@ -22,7 +22,7 @@
+ #
+ # The same job is the enforcing check of the shared id registry (SPC-013
+ # R-14, R-20, R-109; ADR-0072), so one target build serves both. Push,
+-# schedule and dispatch runs keep their own event's commit and run only the
++# schedule runs keep their own event's commit and run only the
+ # registry check; with durable work tracking off, `codeflow ids check` passes
+ # with a note.
+ #
+@@ -30,7 +30,7 @@
+ # event (a push, then a body edit seconds later) cancels the run it
+ # supersedes. The judging run reads the pull request's body from the API
+ # when it runs, never from its event, so the newest body is judged whichever
+-# run survives. Push, schedule and dispatch runs each get a group of their
++# run survives. Push and schedule runs each get a group of their
+ # own run and are never cancelled: a registry run is never replaced by a
+ # newer queued event.
+ #
+@@ -43,10 +43,9 @@ on:
+   pull_request_target:
+     types: [opened, synchronize, reopened, edited, ready_for_review]
+   push:
+-    branches: [main, master, "integration/**"]
++    branches: [main, "integration/**"]
+   schedule:
+     - cron: "23 4 * * *"
+-  workflow_dispatch:
+ 
+ permissions:
+   contents: read
+@@ -82,12 +81,93 @@ jobs:
+       - name: Install Rust (rust-toolchain.toml)
+         run: rustup toolchain install
+ 
++      # A target checkout determines the key before any head is fetched.
++      # The namespace fixes release/default features/native target. No
++      # fallback keys: even a prefix match must rebuild. The key uses
++      # only the checked-out source, never a PR head or dispatch input.
++      - name: Identify the target build
++        id: target-build
++        env:
++          EVENT: ${{ github.event_name }}
++          TARGET_REF: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref_name }}
++        run: |
++          set -euo pipefail
++          sha=$(git rev-parse HEAD)
++          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
++          git diff --quiet
++          git diff --cached --quiet
++          allowed=false
++          case "$EVENT:$TARGET_REF" in
++            push:main|pull_request_target:main|schedule:main) allowed=true ;;
++          esac
++          identity=$({
++            rustc -vV
++            cargo -V
++            cc --version
++            printf '%s\n' "${ImageOS:?}" "${ImageVersion:?}" "${RUNNER_ARCH:?}"
++            printf '%s\n' "${RUSTFLAGS-}" "${CARGO_ENCODED_RUSTFLAGS-}" "${CC-}" "${CFLAGS-}" "${LDFLAGS-}"
++          } | sha256sum | cut -d ' ' -f 1)
++          echo "sha=$sha" >> "$GITHUB_OUTPUT"
++          echo "key=codeflow-policy-main-binary-v2-$sha-$identity" >> "$GITHUB_OUTPUT"
++          echo "allowed=$allowed" >> "$GITHUB_OUTPUT"
++
++      - name: Restore the target binary
++        id: target-cache
++        if: steps.target-build.outputs.allowed == 'true'
++        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ${{ runner.temp }}/codeflow-policy-binary
++          key: ${{ steps.target-build.outputs.key }}
++          # A writer needs no downloaded executable when its exact key exists.
++          lookup-only: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
++
+       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
++        if: github.event_name == 'push' || steps.target-cache.outputs.cache-hit != 'true'
++        with:
++          # Rotate the dependency namespace; integration runs restore but never save.
++          prefix-key: codeflow-policy-main-deps-v2
++          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+ 
+-      - name: Build codeflow from the target's source
++      - name: Verify or rebuild the target binary
++        id: target-binary
++        env:
++          TARGET_SHA: ${{ steps.target-build.outputs.sha }}
++          CACHE_HIT: ${{ steps.target-cache.outputs.cache-hit }}
++          CACHE_READ: ${{ github.event_name != 'push' }}
++          BINARY_DIR: ${{ runner.temp }}/codeflow-policy-binary
+         run: |
+-          cargo build --release -p codeflow-cli
+-          echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
++          set -euo pipefail
++          binary="$BINARY_DIR/codeflow"
++          matches_target() {
++            [ -x "$binary" ] && [ ! -L "$binary" ] || return 1
++            version=$("$binary" --version) || return 1
++            [[ "$version" =~ ^codeflow\ [^[:space:]]+\ source=$TARGET_SHA\ dirty=false\ inputs=[0-9a-f]+$ ]]
++          }
++          built=false
++          if [ "$CACHE_READ" != true ] || [ "$CACHE_HIT" != true ] || ! matches_target; then
++            echo "Target binary cache absent, inexact or wrong identity; rebuilding $TARGET_SHA"
++            rm -f "$binary"
++            cargo build --release --locked -p codeflow-cli
++            mkdir -p "$BINARY_DIR"
++            cp target/release/codeflow "$binary"
++            built=true
++          fi
++          if ! matches_target; then
++            echo "::error::target binary source identity does not match $TARGET_SHA"; exit 1
++          fi
++          echo "Verified target binary: $TARGET_SHA (rebuilt=$built)"
++          echo "built=$built" >> "$GITHUB_OUTPUT"
++          echo "$BINARY_DIR" >> "$GITHUB_PATH"
++
++      # Only main's own push saves a fresh verified build. Integration-target
++      # runs build their own source but never save binary or dependency caches.
++      # PR cache access stays read-only; there is no write override.
++      - name: Save the verified target binary
++        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.target-build.outputs.allowed == 'true' && steps.target-binary.outputs.built == 'true' && steps.target-cache.outputs.cache-hit != 'true'
++        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ${{ runner.temp }}/codeflow-policy-binary
++          key: ${{ steps.target-build.outputs.key }}
+ 
+       - name: Fetch the pull request head as data
+         if: github.event_name == 'pull_request_target'
