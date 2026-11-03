@@ -1,0 +1,11 @@
+id = "TSK-1280"
+uid = "06ab2622-3882-4071-952b-605ba14d3717"
+kind = "TSK"
+title = "Every test runs offline, and none resolves a network host"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T11:22:18Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
