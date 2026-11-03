@@ -9,6 +9,27 @@ const VALID: &str = include_str!("fixtures/capability-catalog/valid.md");
 const VOCAB: &str = "inventory: incomplete\ngroups: [{name: records, about: Records}]\ntags: [{name: rust, about: Rust}]\n";
 
 #[test]
+fn record_fences_accept_only_ascii_trailing_whitespace() {
+    let dir = fixture();
+    write(
+        dir.path(),
+        RECORD,
+        &VALID.replacen("---\n", "---\u{a0}\n", 1),
+    );
+    refuse_both(dir.path(), RECORD, "record requires YAML frontmatter");
+    write(
+        dir.path(),
+        RECORD,
+        &VALID.replacen("\n---\n", "\n---\u{a0}\n", 1),
+    );
+    refuse_both(dir.path(), RECORD, "unterminated YAML frontmatter");
+    write(dir.path(), RECORD, &VALID.replace("---\n", "--- \t\r\n"));
+    let revision = tree(dir.path());
+    assert!(load_capability_catalog(dir.path()).is_ok());
+    assert!(load_capability_catalog_from_tree(dir.path(), &revision).is_ok());
+}
+
+#[test]
 fn legacy_bounds_are_enforced_during_deserialization() {
     for (field, value, reason) in [
         ("name", "x".repeat(1025), "1024 characters"),

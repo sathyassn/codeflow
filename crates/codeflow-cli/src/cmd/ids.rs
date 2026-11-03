@@ -314,7 +314,7 @@ pub fn render(report: &Report) -> i32 {
 fn parse_id(id: &str) -> Option<RegId> {
     let parsed = RegId::parse(id);
     if parsed.is_none() {
-        eprintln!("error: '{id}' is not a record id (EPC-NNN, SPC-NNN, TSK-NNN, ADR-NNNN)");
+        eprintln!("error: '{id}' is not a record id (EPC-NNN, SPC-NNN, TSK-NNN, ADR-NNNN, FB-NNN, CAP-NNN)");
     }
     parsed
 }

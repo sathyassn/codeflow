@@ -6,6 +6,9 @@
 //! the `validate --docs` referential-integrity lint, which needs line
 //! numbers for `file:line`-style messages.
 
+pub mod coverage;
+pub mod create;
+
 use serde::Deserialize;
 
 mod evidence;
@@ -526,15 +529,19 @@ fn bounded_reference_list<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Vec<String>, D::Error> {
     deserializer.deserialize_any(StringListVisitor::<true>)
 }
+fn frontmatter_fence(line: &str) -> bool {
+    line.trim_end_matches([' ', '\t', '\r', '\n']) == "---"
+}
+
 fn parse_record(file: &str, content: &str) -> Result<CapabilityRecord, CapabilityCatalogError> {
     let mut lines = content.split_inclusive('\n');
-    if lines.next().map(str::trim_end) != Some("---") {
+    if !lines.next().is_some_and(frontmatter_fence) {
         return Err(catalog_error(file, "record requires YAML frontmatter"));
     }
     let mut yaml = String::new();
     let mut closed = false;
     for line in lines.by_ref() {
-        if line.trim_end() == "---" {
+        if frontmatter_fence(line) {
             closed = true;
             break;
         }
@@ -884,7 +891,7 @@ fn parse_catalog_with_issues(
         }
         let name = file.trim_start_matches("docs/capabilities/");
         let id = name.split('-').take(2).collect::<Vec<_>>().join("-");
-        if content.lines().next().map(str::trim_end) != Some("---") && legacy_ids.contains(&id) {
+        if !content.lines().next().is_some_and(frontmatter_fence) && legacy_ids.contains(&id) {
             continue;
         }
         match parse_record(file, content) {

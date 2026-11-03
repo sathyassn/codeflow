@@ -93,6 +93,42 @@ pub fn copies_at(git: &Git, rev: &str) -> Result<Vec<Copy>, IdsError> {
     Ok(copies)
 }
 
+/// Capability identities come from content, including multiple legacy fences
+/// in one file. Allocation uses this adapter only for CAP, leaving work-record
+/// checks' path inventory and cost unchanged.
+///
+/// # Errors
+/// Refuses an unreadable or invalid catalog and malformed numeric identities.
+pub fn capability_copies_at(git: &Git, rev: &str) -> Result<Vec<Copy>, IdsError> {
+    let catalog = crate::capability::load_capability_catalog_from_tree(git.root(), rev)
+        .map_err(|error| IdsError::Invalid(error.to_string()))?;
+    let blobs: HashMap<_, _> = git
+        .tree(rev, &["docs/capabilities.md", "docs/capabilities"])?
+        .into_iter()
+        .map(|(_, blob, path)| (path, blob))
+        .collect();
+    catalog
+        .records
+        .into_iter()
+        .map(|record| {
+            let id = RegId::parse(&record.entry.id).ok_or_else(|| {
+                IdsError::Invalid(format!("invalid capability id: {}", record.entry.id))
+            })?;
+            let path = crate::portable_path::slashed(&record.file);
+            let blob = blobs
+                .get(&path)
+                .cloned()
+                .ok_or_else(|| IdsError::Invalid(format!("capability blob missing: {path}")))?;
+            Ok(Copy {
+                id,
+                path,
+                blob,
+                uid: record.uid,
+            })
+        })
+        .collect()
+}
+
 /// The records on every code ref, reading each distinct tip once.
 ///
 /// # Errors
@@ -126,8 +162,22 @@ pub fn on_every_ref(git: &Git) -> Result<Vec<RefRecords>, IdsError> {
 pub fn max_seq_on_refs(git: &Git, kind: Kind) -> Result<u64, IdsError> {
     let mut seen = std::collections::HashSet::new();
     let mut max = 0;
-    for (_, sha) in code_refs(git)? {
+    for (refname, sha) in code_refs(git)? {
         if !seen.insert(sha.clone()) {
+            continue;
+        }
+        if kind == Kind::Cap {
+            let copies = capability_copies_at(git, &sha).map_err(|error| {
+                IdsError::Invalid(format!(
+                    "{refname} ({}): {error}",
+                    super::ledger::short(&sha)
+                ))
+            })?;
+            for copy in copies {
+                if let Some(sequence) = copy.id.try_seq()? {
+                    max = max.max(sequence);
+                }
+            }
             continue;
         }
         let listing = {
@@ -159,6 +209,20 @@ pub fn max_seq_on_refs(git: &Git, kind: Kind) -> Result<u64, IdsError> {
 /// Returns an error when an existing record directory cannot be read, or a
 /// record name has a number above `u64::MAX`.
 pub fn max_seq_in_worktree(root: &Path, kind: Kind) -> Result<u64, IdsError> {
+    if kind == Kind::Cap {
+        let catalog = crate::capability::load_capability_catalog(root)
+            .map_err(|error| IdsError::Invalid(error.to_string()))?;
+        let mut max = 0;
+        for record in catalog.records {
+            let id = RegId::parse(&record.entry.id).ok_or_else(|| {
+                IdsError::Invalid(format!("invalid capability id: {}", record.entry.id))
+            })?;
+            if let Some(sequence) = id.try_seq()? {
+                max = max.max(sequence);
+            }
+        }
+        return Ok(max);
+    }
     let mut paths = Vec::new();
     for base in RECORD_ROOTS {
         collect_files(root, &root.join(base), &mut paths, 0).map_err(|error| {

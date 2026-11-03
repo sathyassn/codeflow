@@ -7,7 +7,7 @@
 
 ## Concept
 
-`codeflow doctor` runs twenty-six health checks against a repository and the tools around it.
+`codeflow doctor` runs twenty-seven health checks against a repository and the tools around it.
 
 It is for someone whose setup misbehaves after `codeflow init`, after
 `codeflow update` or after a harness change.
@@ -19,7 +19,7 @@ It is for someone whose setup misbehaves after `codeflow init`, after
 
 ## Architecture
 
-The twenty-six checks fall into six groups by the surface each one reads.
+The twenty-seven checks fall into six groups by the surface each one reads.
 
 - **Git hooks, CI and host rules.** `hooks`, `ci-perimeter` and
   `remote-perimeter` read the hook subcommands of the installed binary, git's
@@ -46,9 +46,9 @@ The twenty-six checks fall into six groups by the surface each one reads.
 - **Delegates, model bindings and network.** `delegates`, `model-bindings`,
   `delegate-roundtrip` and `network` probe the peer CLIs, the approved model
   binding records, the binary's delegate lifecycle and a lookup of github.com.
-- **Repository and managed files.** `repo-integrity`, `managed-drift` and
-  `id-registry` read git's repository and worktree state, the managed regions
-  recorded at install and the fetched id registry refs.
+- **Repository and managed files.** `repo-integrity`, `managed-drift`,
+  `id-registry` and `capabilities` read git's repository and worktree state, the managed regions
+  recorded at install, the fetched id registry refs and the capability catalog.
 - **Customization, instructions and test config.** `customization`,
   `instructions`, `reading` and `test-config` read the product, architecture
   and agent docs for scaffold placeholders, the sizes of the instruction files
@@ -66,12 +66,12 @@ failed check never hides the others. Each line starts with a status badge.
 - `FAIL` means the check found a broken state.
 
 Doctor exits 0 when no check failed, with or without warnings, and 1 when any
-check failed. Twelve checks can fail: `hooks`, `guard-timeouts`, `sandbox`,
+check failed. Thirteen checks can fail: `hooks`, `guard-timeouts`, `sandbox`,
 `config`, `permissions`, `policy-source`, `secret-engine`, `model-bindings`,
-`delegate-roundtrip`, `repo-integrity`, `id-registry` and `adopter-fit`. The
+`delegate-roundtrip`, `repo-integrity`, `id-registry`, `adopter-fit` and `capabilities`. The
 other fourteen warn at most.
 
-- `codeflow doctor --list` prints the twenty-six names and exits 0.
+- `codeflow doctor --list` prints the twenty-seven names and exits 0.
 - `codeflow doctor --check <name>` runs one check. An unknown name prints an
   error to stderr and exits 1.
 
@@ -104,6 +104,7 @@ Each row below is one check, in the order doctor prints it.
 | `test-config` | `.codeflow/test-config.json`, through the test engine's own health checks: schema, each target's `cwd`, command parsing, paths, globs, coverage transforms and runner probes | Warn: a listed sub-check warned or failed. This check never fails doctor. Ok when the file is absent | Correct the named entries in `.codeflow/test-config.json`, or replace it with `codeflow test setup --template <name> --replace`, then run `codeflow test` |
 | `id-registry` | The shared id registry on the fetched refs, when durable work tracking is on; it never fetches | Fail: the registry cannot be read or shows damage. Warn: an id no ref can place, tracking state that cannot be read, or a registry without host rules (reduced assurance). Ok when tracking is off | Resolve each finding named (`codeflow ids admit` registers an unplaced id, `codeflow ids retarget <id>` renumbers a collision), then confirm with `codeflow ids check`. Run `codeflow remote protect` to apply the host rules |
 | `adopter-fit` | The effective `git.pr_sections` level and its origin, a kept PR template's pending mapping decision, and the `[release] backend` in `.codeflow/project.toml` against the release tools found | Fail: the release backend is invalid or unreadable. Warn: a mapping decision is pending, policy provenance does not parse, or the backend and a detected release tool disagree | Record the decision in `git.pr_section_mapping.decided` (accepted, refused or custom), or set `[release] backend` to the one version authority the project uses, then rerun `codeflow doctor --check adopter-fit` |
+| `capabilities` | `docs/capabilities.md` and `docs/capabilities/` through the strict catalog loader | Pass: reports inventory and evidence declaration coverage. Fail: the catalog does not load | Run `codeflow validate --docs` and repair the named catalog issues |
 
 ### Lock for heavy work
 

@@ -8,7 +8,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use super::entry::{frontmatter_value, new_uid, record_id_from_path, Entry, RegId, RECORD_ROOTS};
+use super::entry::{
+    frontmatter_value, new_uid, record_id_from_path, Entry, Kind, RegId, RECORD_ROOTS,
+};
 use super::git::Git;
 use super::inventory::{self, branch_name, is_landing_branch};
 use super::issue::{self, Fetched, Pushed, Request};
@@ -520,9 +522,21 @@ pub struct Retarget {
 /// `uid`, and a record the registry already binds to its number.
 pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
     let git = Git::new(root);
-    let records = worktree_records(root).map_err(|error| {
-        IdsError::Invalid(format!("cannot inventory work records: {error}; restore readable record directories, then retry"))
-    })?;
+    let records = if from.kind() == Kind::Cap {
+        let catalog = crate::capability::load_capability_catalog(root)
+            .map_err(|error| IdsError::Invalid(error.to_string()))?;
+        let mut records = BTreeMap::<RegId, Vec<PathBuf>>::new();
+        for record in catalog.records {
+            if record.entry.id == from.to_string() {
+                records.insert(from.clone(), vec![root.join(record.file)]);
+            }
+        }
+        records
+    } else {
+        worktree_records(root).map_err(|error| {
+            IdsError::Invalid(format!("cannot inventory work records: {error}; restore readable record directories, then retry"))
+        })?
+    };
     let paths = records
         .get(from)
         .ok_or_else(|| IdsError::Invalid(format!("{from} is not a record in this working tree")))?;
@@ -543,16 +557,19 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         .map_err(|error| IdsError::Invalid(format!("{rel} cannot be renumbered: {error}")))?;
     let text =
         String::from_utf8(bytes).map_err(|error| IdsError::Invalid(format!("{rel}: {error}")))?;
-    let uid = frontmatter_value(&text, "uid").ok_or_else(|| {
-        IdsError::Invalid(format!(
-            "{from} has no uid; run `codeflow ids backfill` first"
-        ))
-    })?;
+    let uid = frontmatter_value(&text, "uid").ok_or_else(|| missing_retarget_uid(from))?;
     for (refname, sha) in inventory::code_refs(&git)? {
         if !is_landing_branch(branch_name(&refname)) {
             continue;
         }
-        if inventory::copies_at(&git, &sha)?
+        let copies = if from.kind() == Kind::Cap {
+            inventory::capability_copies_at(&git, &sha).map_err(|error| {
+                IdsError::Invalid(format!("{refname} ({}): {error}", short(&sha)))
+            })?
+        } else {
+            inventory::copies_at(&git, &sha)?
+        };
+        if copies
             .iter()
             .any(|copy| &copy.id == from && copy.uid.as_deref() == Some(uid.as_str()))
         {
@@ -580,7 +597,12 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
     let (to, standing) = if let Some(id) = bound {
         (id, Standing::Reserved)
     } else {
-        let title = frontmatter_value(&text, "title").unwrap_or_default();
+        let title_key = if from.kind() == Kind::Cap {
+            "summary"
+        } else {
+            "title"
+        };
+        let title = frontmatter_value(&text, title_key).unwrap_or_default();
         let target =
             frontmatter_value(&text, "integration_target").unwrap_or_else(|| "none".to_string());
         let mut request = Request::issue(from.kind(), &title, &target);
@@ -596,6 +618,15 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         standing,
         rewritten,
     })
+}
+
+fn missing_retarget_uid(from: &RegId) -> IdsError {
+    let remedy = if from.kind() == Kind::Cap {
+        "migrate the legacy fence to a folder record with a registry-bound uid before retargeting"
+    } else {
+        "run `codeflow ids backfill` first"
+    };
+    IdsError::Invalid(format!("{from} has no uid; {remedy}"))
 }
 
 /// Write a renumbering: the record under its new name with `former_ids`,
