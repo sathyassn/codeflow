@@ -23,7 +23,7 @@ The operator's and the Director's requests of 2026-11-03 that the regroup planni
 | Issue 561, a completion on a line that lags main | TSK-1124 AC-8 | EPC-031 |
 | Citations: issue 481 and issue 415 | TSK-1123; TSK-1082 (standalone, complete) | EPC-031; none |
 | Config audit limits under the no-hard-cap rule | TSK-1299 (the limits registry); TSK-1297 (coordination timing) and TSK-1300 (template timeouts) after it; TSK-1073 AC-12 (parser bounds, declared in the registry) | EPC-028; EPC-028; EPC-028; EPC-029 |
-| One limits registry, declared once (the operator's configurable-by-default rule) | TSK-1299, retitled; every limits task depends on it; it absorbs TSK-1301, TSK-1278 and TSK-1258's bound as consumers | EPC-028 |
+| One limits registry, declared once (the operator's configurable-by-default rule) | TSK-1299, retitled; limits tasks either depend on it or land first and migrate under its criteria; it absorbs TSK-1301, TSK-1278 and TSK-1258's bound as consumers | EPC-028 |
 | Limits ship in 4.0.0 (Director, final edit) | TSK-1297, TSK-1299 and TSK-1300 moved from EPC-036 and EPC-038 | EPC-028 |
 | The pre-push destination probe's timeout and attempts | TSK-1301 (standalone, coord/ci's pull request; the registry's first consumer); TSK-1298 was allocated and withdrawn | placed in EPC-028 for planning |
 | Model and effort defaults | TSK-1292 | EPC-032 |
