@@ -293,33 +293,6 @@ fn ci_merge_remedy_keeps_shell_metacharacters_in_the_target_literal() {
 }
 
 #[test]
-fn start_uses_the_planning_severity_from_the_policy_it_just_fetched() {
-    let dir = fixture();
-    let root = dir.path();
-    write(
-        root,
-        ".codeflow/policy.json",
-        r#"{"git":{"work_planning":"warn"}}"#,
-    );
-    commit(root, "chore: warn on planning findings");
-    let old = git(root, &["rev-parse", "HEAD"]);
-    let _origin = with_bare_origin(root);
-    git(root, &["fetch", "-q", "origin"]);
-    write(
-        root,
-        ".codeflow/policy.json",
-        r#"{"git":{"work_planning":"block"}}"#,
-    );
-    commit(root, "chore: block planning findings");
-    git(root, &["push", "-q", "origin", "main"]);
-    git(root, &["update-ref", "refs/remotes/origin/main", &old]);
-    git(root, &["switch", "-qc", "task/TSK-001-manual", &old]);
-    let out = cli(root, &["work", "start", "TSK-001"], None);
-    assert!(!out.status.success(), "{}", text(&out));
-    assert!(text(&out).contains("required base"), "{}", text(&out));
-}
-
-#[test]
 fn ci_warns_until_the_current_target_tip_is_merged_and_reports_unknown_tips() {
     let dir = lines();
     let root = dir.path();

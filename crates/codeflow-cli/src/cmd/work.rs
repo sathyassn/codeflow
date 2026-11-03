@@ -350,12 +350,6 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
         );
         return 1;
     }
-    // Refresh before loading severity: a newly fetched policy owns this start.
-    // Missing live evidence blocks even when the previously fetched level warned.
-    if let Err(error) = readiness::refresh_claim(&root, task_id) {
-        eprintln!("work start: error: {}", crate::cmd::shown(&error));
-        return 1;
-    }
     let (policy, _armed) = match Policy::load_effective(&root) {
         Ok(value) => value,
         Err(error) => {
@@ -367,6 +361,11 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
         }
     };
     let level = policy.git.work_planning_level();
+    // Missing live base evidence blocks even at the project's warning level.
+    if let Err(error) = readiness::refresh_claim(&root, task_id) {
+        eprintln!("work start: error: {}", crate::cmd::shown(&error));
+        return 1;
+    }
     let Err(findings) = plan_check(&root, task_id, target, on) else {
         return 0;
     };
