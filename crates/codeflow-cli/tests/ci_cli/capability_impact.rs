@@ -1099,61 +1099,7 @@ fn capability_registry_join_preserves_renumbered_identity_and_refuses_bad_bindin
             write(root, "docs/capabilities/CAP-203-catalog.md", &second);
         }
         commit(root);
-        let repo = git2::Repository::open(root).unwrap();
-        let uid = if case == "mismatch" {
-            "a7fb4faa-c84d-45ca-ad4d-24d039e0919b"
-        } else {
-            "3b9e7c2a-51d4-4f0e-9a6b-0c2d8e417f55"
-        };
-        let entry = codeflow_core::ids::Entry::issued(
-            codeflow_core::ids::RegId::canonical(codeflow_core::ids::Kind::Cap, 202),
-            uid.to_owned(),
-            "Catalog binding",
-            "fixture@example.test",
-            "none",
-        );
-        let bytes = if case == "malformed" {
-            "invalid toml".to_owned()
-        } else {
-            entry.render()
-        };
-        let blob = repo.blob(bytes.as_bytes()).unwrap();
-        let mut cap = repo.treebuilder(None).unwrap();
-        if case != "missing" {
-            cap.insert(
-                "202.toml",
-                blob,
-                if case == "symlink" {
-                    0o120_000
-                } else {
-                    0o100_644
-                },
-            )
-            .unwrap();
-        }
-        let mut ids = repo.treebuilder(None).unwrap();
-        ids.insert("CAP", cap.write().unwrap(), 0o040_000).unwrap();
-        let mut registry = repo.treebuilder(None).unwrap();
-        registry
-            .insert("ids", ids.write().unwrap(), 0o040_000)
-            .unwrap();
-        let tree_id = registry.write().unwrap();
-        let tree = repo.find_tree(tree_id).unwrap();
-        let signature = repo.signature().unwrap();
-        let sha = repo
-            .commit(
-                Some(codeflow_core::ids::REGISTRY_REF),
-                &signature,
-                &signature,
-                "chore: bind capability",
-                &tree,
-                &[],
-            )
-            .unwrap();
-        if case == "remote-missing" {
-            repo.remote("origin", "https://example.invalid/fixture.git")
-                .unwrap();
-        }
+        let (uid, sha) = registry_binding_fixture(root, case);
         let declaration = "## Capability impact\n\n- Changed CAP-202 catalog: Readers get the converted and edited catalog.\n";
         let out = ci(root, Some(declaration), &[]);
         match case {
@@ -1178,4 +1124,63 @@ fn capability_registry_join_preserves_renumbered_identity_and_refuses_bad_bindin
             _ => unreachable!(),
         }
     }
+}
+
+fn registry_binding_fixture(root: &Path, case: &str) -> (&'static str, git2::Oid) {
+    let repo = git2::Repository::open(root).unwrap();
+    let uid = if case == "mismatch" {
+        "a7fb4faa-c84d-45ca-ad4d-24d039e0919b"
+    } else {
+        "3b9e7c2a-51d4-4f0e-9a6b-0c2d8e417f55"
+    };
+    let entry = codeflow_core::ids::Entry::issued(
+        codeflow_core::ids::RegId::canonical(codeflow_core::ids::Kind::Cap, 202),
+        uid.to_owned(),
+        "Catalog binding",
+        "fixture@example.test",
+        "none",
+    );
+    let bytes = if case == "malformed" {
+        "invalid toml".to_owned()
+    } else {
+        entry.render()
+    };
+    let blob = repo.blob(bytes.as_bytes()).unwrap();
+    let mut cap = repo.treebuilder(None).unwrap();
+    if case != "missing" {
+        cap.insert(
+            "202.toml",
+            blob,
+            if case == "symlink" {
+                0o120_000
+            } else {
+                0o100_644
+            },
+        )
+        .unwrap();
+    }
+    let mut ids = repo.treebuilder(None).unwrap();
+    ids.insert("CAP", cap.write().unwrap(), 0o040_000).unwrap();
+    let mut registry = repo.treebuilder(None).unwrap();
+    registry
+        .insert("ids", ids.write().unwrap(), 0o040_000)
+        .unwrap();
+    let tree_id = registry.write().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    let signature = repo.signature().unwrap();
+    let sha = repo
+        .commit(
+            Some(codeflow_core::ids::REGISTRY_REF),
+            &signature,
+            &signature,
+            "chore: bind capability",
+            &tree,
+            &[],
+        )
+        .unwrap();
+    if case == "remote-missing" {
+        repo.remote("origin", "https://example.invalid/fixture.git")
+            .unwrap();
+    }
+    (uid, sha)
 }
