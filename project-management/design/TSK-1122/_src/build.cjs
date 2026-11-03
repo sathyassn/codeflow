@@ -223,12 +223,15 @@ const evidenceView = `${view()}<section class="view" id="evidence" data-title="E
   ${points(['Lane and window per task: the fields do not exist on the line yet.', 'Epic verification: no epic record on the line carries a result.', 'GitHub mergeability: not computed for ' + unknown + ' of ' + openPrs.length + ' open pull requests at the read.', 'Tracker facts were not re-read after ' + esc(BLOCK_AT) + '.'])}
 </section>`;
 
+const ANSWERS_JSON = 'coordination/coordinators/visual-docs/published/status-prototype/answers.json';
+const saveRow = id => `<div class="save-row"><button class="btn save" type="button" data-save="${id}">Save</button><span class="saved" id="saved-${id}" role="status" aria-live="polite"></span></div>`;
 const inputsView = `${view()}<section class="view" id="inputs" data-title="Your decisions">
   <h2>${R.inputs.length} decisions for you</h2>
   <p class="one">Each asks one question; the recommended answer is marked, never preselected; the Script view writes exactly what you chose.</p>
-  <form class="form" data-answers="tsk-1122-walkthrough" id="decisions">${R.inputs.map((q, i) => `<div class="card" data-block="Decision ${i + 1}"><div class="q">${i + 1}. ${esc(q.title)}</div><div class="opts">${q.options.map(o => `<label class="opt"><input type="radio" name="${q.id}" value="${o.value}" data-label="${esc(o.label)}"><span>${mdn(o.label)}</span>${o.recommended ? '<span class="rec">recommended</span>' : '<span></span>'}<span class="cost">cost: ${mdn(o.cost)}</span></label>`).join('')}</div>${details('Context and why', `<p class="small">${mdn(q.context)}</p><p class="small"><b>Why:</b> ${mdn(q.reasoning)}</p>`)}</div>`).join('')}
-    <div class="card" data-block="Changes named"><label class="q" for="changes">Changes you name, if any</label><textarea id="changes" name="changes" rows="3" placeholder="One change per line"></textarea></div>
+  <form class="form" data-answers="tsk-1122-walkthrough" id="decisions" data-answers-file="${esc(ANSWERS_JSON)}">${R.inputs.map((q, i) => `<div class="card" data-block="Decision ${i + 1}" data-field="${q.id}" data-label="${esc(q.title)}"><div class="q">${i + 1}. ${esc(q.title)}</div><div class="opts">${q.options.map(o => `<label class="opt"><input type="radio" name="${q.id}" value="${o.value}" data-label="${esc(o.label)}"><span>${mdn(o.label)}</span>${o.recommended ? '<span class="rec">recommended</span>' : '<span></span>'}<span class="cost">cost: ${mdn(o.cost)}</span></label>`).join('')}</div>${saveRow(q.id)}${details('Context and why', `<p class="small">${mdn(q.context)}</p><p class="small"><b>Why:</b> ${mdn(q.reasoning)}</p>`)}</div>`).join('')}
+    <div class="card" data-block="Changes named" data-field="changes" data-label="Changes you name"><label class="q" for="changes">Changes you name, if any</label><textarea id="changes" name="changes" rows="3" placeholder="One change per line"></textarea>${saveRow('changes')}</div>
   </form>
+  ${points(['Save writes every answer on this page to <code>answers.json</code> in the repository; the confirmation names the path.', 'The first save asks for the repository folder once.', 'A draft of your typing stays in this browser until you save; a reload keeps it.', 'Where the browser cannot write files (Safari, Firefox), Save downloads <code>answers.json</code> and the confirmation says where to move it.'])}
   <h3 class="gap">Decided today</h3>
   ${vt({ cols: '16ch minmax(0,1fr)', head: ['When', 'Decided'], label: 'Decided today', rows: R.decided.map(d => ({ cells: [esc(d.when), mdn(d.what)] })) })}
   <h3 class="gap">${R.actionsOwed.length} actions owed by you</h3>
@@ -360,7 +363,7 @@ svg .st-line-f{fill:var(--accent)} svg .st-todo-f{fill:var(--stage-todo)} svg .s
 .fig-data{margin-top:10px;font-size:var(--fs-1)} .fig-data summary{cursor:pointer;color:var(--accent-ink);font-weight:500} .fig-data table{border-collapse:collapse;width:100%;margin-top:8px} .fig-data th,.fig-data td{text-align:left;padding:6px 8px;border-top:1px solid var(--line);font-weight:400;vertical-align:top} .fig-data thead th{font-size:var(--fs-0);text-transform:uppercase;letter-spacing:.04em;color:var(--text-2)}
 .path{max-width:460px}
 .blks{grid-template-columns:1fr} .deps{grid-template-columns:minmax(0,1fr) minmax(0,1fr)} @media (max-width:1499px){.deps{grid-template-columns:1fr}} @media (max-width:1300px){ .bar-row,.owner-row{grid-template-columns:minmax(0,1fr) 10ch} .bar-row .bar-t,.owner-row .dots{grid-column:1/3} } .blk h3{font-size:var(--fs-2);line-height:1.35;margin-bottom:8px} .blk .chips{margin-bottom:8px} .points li b{font-weight:600}
-.form .q{display:block} .form textarea{width:100%;margin-top:8px;font:inherit;font-size:var(--fs-1);padding:8px 10px;border-radius:var(--r-2);border:1px solid var(--line-2);background:var(--raised);color:var(--text)} .opt .cost{grid-column:2/4;color:var(--text-2);font-size:var(--fs-0)} .opt{grid-template-rows:auto auto}
+.form .q{display:block} .save-row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin-top:10px} .save-row .btn{height:30px;padding:0 12px;font-size:var(--fs-1)} .saved{font-size:var(--fs-1);color:var(--text-2)} .saved.ok{color:var(--ok)} .saved.warn{color:var(--warn)} .saved b{color:var(--text)} .form textarea{width:100%;margin-top:8px;font:inherit;font-size:var(--fs-1);padding:8px 10px;border-radius:var(--r-2);border:1px solid var(--line-2);background:var(--raised);color:var(--text)} .opt .cost{grid-column:2/4;color:var(--text-2);font-size:var(--fs-0)} .opt{grid-template-rows:auto auto}
 pre{margin:0;padding:14px 16px;background:var(--sunken);border-radius:var(--r-2);font-family:var(--mono);font-size:12.5px;line-height:1.5;overflow:auto;white-space:pre}
 .page p a:not(.btn),.page li a,.page dd a,.page figcaption a,.vt [role=cell] a,.bar-l a{text-decoration:underline;text-underline-offset:2px;text-decoration-color:color-mix(in srgb,currentColor 45%,transparent)} .kind{display:grid;gap:8px;color:inherit;text-decoration:none} .kind:hover{box-shadow:var(--shadow-2)}
 .tabpanel>.fig:first-child{margin-top:0}
@@ -397,6 +400,32 @@ const scriptJs = `
     out.textContent = t;
   }
   form.addEventListener('change', build); form.addEventListener('input', build); build();
+  // answers: a draft in localStorage, Save through the File System Access API, a download where it is missing
+  const FILE_PATH = form.dataset.answersFile, DRAFT = 'cf4.answers.draft', HANDLE_DB = 'cf4-answers';
+  const zone = () => { try { const n = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' }).formatToParts(new Date()).find(x => x.type === 'timeZoneName'); if (n && n.value) return n.value; } catch {} return 'UTC'; };
+  const clock = d => { const p = n => String(n).padStart(2, '0'); const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return p(d.getHours()) + ':' + p(d.getMinutes()) + ' ' + zone() + ', ' + d.getDate() + ' ' + mon[d.getMonth()]; };
+  const stamp = d => { const p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ' ' + zone(); };
+  const fields = () => [...form.querySelectorAll('[data-field]')].map(card => { const id = card.dataset.field; const r = card.querySelector('input[type=radio]:checked'); const ta = card.querySelector('textarea'); return { id, label: card.dataset.label, value: r ? r.value : ta ? ta.value : '', text: r ? r.dataset.label : ta ? ta.value : '' }; });
+  const draftRead = () => { try { return JSON.parse(localStorage.getItem(DRAFT) || '{}'); } catch { return {}; } };
+  const draftWrite = () => { try { const d = {}; for (const f of fields()) d[f.id] = f.value; localStorage.setItem(DRAFT, JSON.stringify(d)); } catch {} };
+  const restore = () => { const d = draftRead(); for (const [k, v] of Object.entries(d)) { if (!v) continue; const r = form.querySelector('input[name="' + k + '"][value="' + v + '"]'); if (r) r.checked = true; const ta = form.querySelector('textarea[name="' + k + '"]'); if (ta) ta.value = v; } build(); };
+  restore(); form.addEventListener('input', draftWrite); form.addEventListener('change', draftWrite);
+  const payload = () => { const now = new Date(); return JSON.stringify({ page: 'CodeFlow 4.0.0 status prototype (TSK-1122)', factsAsOf: AS_OF, savedAt: stamp(now), answers: fields().filter(f => f.value).map(f => ({ id: f.id, label: f.label, text: f.text, value: f.value, page: 'Your decisions', time: stamp(now) })) }, null, 2) + '\\n'; };
+  const idb = () => new Promise((ok, no) => { const r = indexedDB.open(HANDLE_DB, 1); r.onupgradeneeded = () => r.result.createObjectStore('h'); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); });
+  const handleGet = async () => { try { const db = await idb(); return await new Promise((ok, no) => { const t = db.transaction('h').objectStore('h').get('repo'); t.onsuccess = () => ok(t.result || null); t.onerror = () => no(t.error); }); } catch { return null; } };
+  const handlePut = async h => { try { const db = await idb(); await new Promise((ok, no) => { const t = db.transaction('h', 'readwrite').objectStore('h').put(h, 'repo'); t.onsuccess = ok; t.onerror = () => no(t.error); }); } catch {} };
+  const isRepo = async h => { try { await h.getDirectoryHandle('coordination'); return true; } catch { return false; } };
+  const repoHandle = async () => { let h = await handleGet(); if (h && h.queryPermission) { let p = await h.queryPermission({ mode: 'readwrite' }); if (p !== 'granted') p = await h.requestPermission({ mode: 'readwrite' }); if (p !== 'granted') h = null; } if (!h || !(await isRepo(h))) { h = await window.showDirectoryPicker({ mode: 'readwrite', id: 'agentic-systems' }); if (!(await isRepo(h))) throw new Error('That folder has no coordination/ directory; pick the agentic-systems workspace root.'); await handlePut(h); } return h; };
+  const writeFile = async (root, path, text) => { const parts = path.split('/'); let dir = root; for (const p of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(p, { create: true }); const fh = await dir.getFileHandle(parts[parts.length - 1], { create: true }); const w = await fh.createWritable(); await w.write(text); await w.close(); };
+  const download = text => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' })); a.download = 'answers.json'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); };
+  const say = (id, cls, html) => { const el = document.getElementById('saved-' + id); if (!el) return; el.className = 'saved ' + cls; el.innerHTML = html; };
+  form.addEventListener('click', async e => { const b = e.target.closest('[data-save]'); if (!b) return; const id = b.dataset.save; const text = payload(); const now = clock(new Date()); b.disabled = true;
+    try {
+      if (window.showDirectoryPicker) { const root = await repoHandle(); await writeFile(root, FILE_PATH, text); say(id, 'ok', 'Saved to <b>' + FILE_PATH + '</b> at ' + now + '.'); }
+      else { download(text); say(id, 'warn', 'This browser cannot write into the repository: <b>answers.json</b> was downloaded to your browser\\'s download folder at ' + now + '; move it to <b>' + FILE_PATH + '</b>.'); }
+      window.cfToast && window.cfToast('Saved');
+    } catch (err) { say(id, 'warn', 'Not saved: ' + String(err && err.message || err)); }
+    b.disabled = false; });
   // the Comment button: fixed bottom-right on desktop with a reserved lane at the page's right edge, in the flow under 768 px
   const cb = document.querySelector('.comment-btn'), pg = document.querySelector('.page'); if (cb && pg) pg.appendChild(cb);
 })();`;

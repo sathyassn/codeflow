@@ -99,11 +99,17 @@
     const openPeek = id => { clearTimeout(tIn); clearTimeout(tOut); clearTimeout(tFade); if (state !== 'rail' || narrow()) return; showArea(id); if (!menu.classList.contains('peek-card')) { menu.style.transition = 'none'; menu.classList.add('peek-card'); void menu.offsetWidth; menu.style.transition = ''; void menu.offsetWidth; } shell.dataset.peek = 'open'; tipOff(); sync(); };
     const closePeek = now => { clearTimeout(tIn); clearTimeout(tOut); clearTimeout(tFade); const was = shell.dataset.peek === 'open'; delete shell.dataset.peek; sync(); const done = () => { menu.classList.remove('peek-card'); showArea(sel); }; if (now || still.matches || !was) done(); else tFade = setTimeout(done, 140); };
     const PEEK = window.CF_NAV_PEEK !== false;
-    rail.addEventListener('pointerover', e => { const b = e.target.closest('.nav-area'); if (!b) { tipOff(); clearTimeout(tIn); return; } tipOn(b); if (!PEEK || state !== 'rail' || narrow()) return; clearTimeout(tOut); clearTimeout(tIn); if (shell.dataset.peek === 'open') { if (b.dataset.area !== menu.dataset.area) tIn = setTimeout(() => openPeek(b.dataset.area), 100); } else tIn = setTimeout(() => openPeek(b.dataset.area), 150); });
+    // one hover behaviour: where hovering opens the panel there is no tooltip, and the panel opens after one short delay
+    // that also swallows a passing mouse; a tooltip appears only where no panel opens (the pinned menu)
+    const willPeek = () => PEEK && state === 'rail' && !narrow();
+    const PEEK_DELAY = 200;
+    rail.addEventListener('pointerover', e => { const b = e.target.closest('.nav-area'); if (!b) { tipOff(); clearTimeout(tIn); return; } if (!willPeek()) { tipOn(b); return; } tipOff(); clearTimeout(tOut); clearTimeout(tIn); if (shell.dataset.peek === 'open' && b.dataset.area === menu.dataset.area) return; tIn = setTimeout(() => openPeek(b.dataset.area), PEEK_DELAY); });
     const leave = e => { clearTimeout(tIn); if (e.relatedTarget && (rail.contains(e.relatedTarget) || menu.contains(e.relatedTarget))) return; if (shell.dataset.peek === 'open') { clearTimeout(tOut); tOut = setTimeout(() => closePeek(), 250); } };
     rail.addEventListener('pointerleave', e => { tipOff(); leave(e); }); menu.addEventListener('pointerleave', leave);
     menu.addEventListener('pointerenter', () => clearTimeout(tOut));
-    rail.addEventListener('focusin', e => { const b = e.target.closest('.nav-area'); if (b) tipOn(b); }); rail.addEventListener('focusout', tipOff);
+    // keyboard focus: the same behaviour without the delay; the panel closes when focus leaves the rail and the menu
+    rail.addEventListener('focusin', e => { const b = e.target.closest('.nav-area'); if (!b) return; if (willPeek()) { tipOff(); openPeek(b.dataset.area); } else tipOn(b); });
+    rail.addEventListener('focusout', e => { tipOff(); if (e.relatedTarget && (rail.contains(e.relatedTarget) || menu.contains(e.relatedTarget))) return; if (shell.dataset.peek === 'open' && !(e.relatedTarget && menu.contains(e.relatedTarget))) closePeek(); });
     rail.addEventListener('click', e => {
       const b = e.target.closest('.nav-area'); if (!b) return; const id = b.dataset.area;
       if (narrow() || state === 'full') { select(id); return; }

@@ -124,7 +124,55 @@ const CHECK = () => {
   await p2.screenshot({ path: path.join(CAP, 'docs-since-table-390-light.png') }); captures++;
   j.push(['390 px: the Comment button sits in the flow after the page, not over it', await p2.evaluate(() => { const cb = document.querySelector('.comment-btn'); return cb && getComputedStyle(cb).position === 'static'; })]);
   j.push(['every view at four widths: the Comment button covers no content', overlapTotal === 0]);
-  await ctx2.close(); await browser.close();
+  await ctx2.close();
+  // the collapsed rail: hovering opens the panel after one short delay and shows no tooltip; focus opens it at once; the pinned menu keeps its tooltip
+  const ctx3 = await browser.newContext({ viewport: { width: 1440, height: 900 } }); const p3 = await ctx3.newPage(); await p3.goto(`${URL}?hover`, { waitUntil: 'load' }); await p3.waitForTimeout(300);
+  const tipOn = () => p3.evaluate(() => !!document.querySelector('.nav-tip.is-on'));
+  const peekOpen = () => p3.evaluate(() => document.querySelector('.shell').dataset.peek === 'open');
+  const icon = async area => { const b = await p3.$(`.nav-area[data-area="${area}"]`); const r = await b.boundingBox(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; };
+  let i = await icon('across'); await p3.mouse.move(i.x, i.y); await p3.waitForTimeout(80);
+  j.push(['pinned menu: hovering a rail icon shows a tooltip and opens no panel', (await tipOn()) && !(await peekOpen())]);
+  await p3.mouse.move(700, 500); await p3.click('[data-menu-toggle]'); await p3.waitForTimeout(500);
+  j.push(['collapsed rail: the menu is a rail', await p3.evaluate(() => document.querySelector('.shell').dataset.menu === 'rail')]);
+  i = await icon('across'); await p3.mouse.move(i.x, i.y); await p3.waitForTimeout(80);
+  j.push(['collapsed rail: 80 ms after hover there is no tooltip and no panel yet', !(await tipOn()) && !(await peekOpen())]);
+  await p3.mouse.move(i.x + 400, i.y); await p3.waitForTimeout(400);
+  j.push(['collapsed rail: a passing mouse (gone before 200 ms) opens nothing', !(await peekOpen())]);
+  i = await icon('across'); await p3.mouse.move(i.x, i.y); await p3.waitForTimeout(450);
+  const frames = []; for (let k = 0; k < 6; k++) { frames.push([await tipOn(), await peekOpen()]); await p3.waitForTimeout(60); }
+  j.push(['collapsed rail: after the delay the panel is open and at no point was a tooltip shown', (await peekOpen()) && frames.every(f => !f[0]) && frames.some(f => f[1])]);
+  await p3.screenshot({ path: path.join(CAP, 'rail-hover-peek-1440-light.png') }); captures++;
+  await p3.mouse.move(700, 500); await p3.waitForTimeout(500); j.push(['collapsed rail: leaving closes the panel', !(await peekOpen())]);
+  await p3.focus('.nav-area[data-area="act"]'); await p3.waitForTimeout(30);
+  j.push(['collapsed rail: keyboard focus opens the panel at once with no tooltip', (await peekOpen()) && !(await tipOn()) && await p3.evaluate(() => document.querySelector('.menu').dataset.area === 'act')]);
+  await p3.focus('[data-gear]'); await p3.waitForTimeout(300); j.push(['collapsed rail: focus leaving the rail closes the panel', !(await peekOpen())]);
+  await ctx3.close();
+  // answers: Save writes answers.json through a directory handle, confirms with the file and the time; a draft survives a reload
+  const FAKE_FS = () => { window.__written = {}; const dir = (p) => ({ kind: 'directory', getDirectoryHandle: async (n, o) => { if (p === '' && n === 'coordination') return dir('coordination'); if (!o || !o.create) { if (n === 'coordination') return dir(n); throw new Error('no ' + n); } return dir(p ? p + '/' + n : n); }, getFileHandle: async (n) => ({ createWritable: async () => ({ write: async t => { window.__written[(p ? p + '/' : '') + n] = t; }, close: async () => {} }) }), queryPermission: async () => 'granted', requestPermission: async () => 'granted' }); window.showDirectoryPicker = async () => dir(''); };
+  const ctx4 = await browser.newContext({ viewport: { width: 1440, height: 900 } }); await ctx4.addInitScript(FAKE_FS); const p4 = await ctx4.newPage(); await p4.goto(`${URL}?save#inputs`, { waitUntil: 'load' }); await p4.waitForTimeout(300);
+  await p4.click('#decisions input[name=tree][value=approve]'); await p4.fill('#changes', 'Keep the lane for the Comment button.'); await p4.waitForTimeout(100);
+  await p4.reload({ waitUntil: 'load' }); await p4.waitForTimeout(300);
+  j.push(['answers: a reload keeps the draft (the radio and the typed text)', await p4.evaluate(() => document.querySelector('#decisions input[name=tree][value=approve]').checked && document.getElementById('changes').value === 'Keep the lane for the Comment button.')]);
+  await p4.click('[data-save="changes"]'); await p4.waitForTimeout(400);
+  const written = await p4.evaluate(() => window.__written);
+  const file = written['coordination/coordinators/visual-docs/published/status-prototype/answers.json']; let parsed = null; try { parsed = JSON.parse(file); } catch {}
+  j.push(['answers: Save writes answers.json at the repository path through the directory handle', !!parsed]);
+  j.push(['answers: the file carries id, label, text, page and time for each answered field', !!parsed && parsed.answers.length === 2 && parsed.answers.every(a => a.id && a.label && a.text && a.page && /^\d{4}-\d\d-\d\d \d\d:\d\d [A-Z]{2,5}$/.test(a.time)) && parsed.answers.some(a => a.id === 'changes' && a.text === 'Keep the lane for the Comment button.') && parsed.answers.some(a => a.id === 'tree' && a.value === 'approve')]);
+  const conf = await p4.evaluate(() => document.getElementById('saved-changes').textContent);
+  j.push(['answers: the confirmation names the file and the wall-clock time with a zone: ' + conf, /Saved to coordination\/coordinators\/visual-docs\/published\/status-prototype\/answers\.json at \d\d:\d\d [A-Z]{2,5}, \d{1,2} [A-Z][a-z]{2}\./.test(conf)]);
+  await p4.evaluate(() => document.getElementById('saved-changes').scrollIntoView({ block: 'center' })); await p4.waitForTimeout(150); await p4.screenshot({ path: path.join(CAP, 'answers-saved-1440-light.png') }); captures++;
+  await p4.click('[data-save="tree"]'); await p4.waitForTimeout(300);
+  j.push(['answers: every field has its own Save button and confirmation', (await p4.evaluate(() => document.querySelectorAll('#decisions [data-save]').length)) === 5 && /Saved to/.test(await p4.evaluate(() => document.getElementById('saved-tree').textContent))]);
+  await ctx4.close();
+  // the fallback: no File System Access API, so Save downloads answers.json and says where it went
+  const ctx5 = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true }); await ctx5.addInitScript(() => { try { delete window.showDirectoryPicker; } catch {} Object.defineProperty(window, 'showDirectoryPicker', { value: undefined, configurable: true }); });
+  const p5 = await ctx5.newPage(); await p5.goto(`${URL}?fallback#inputs`, { waitUntil: 'load' }); await p5.waitForTimeout(300);
+  await p5.fill('#changes', 'Fallback path.'); const dl = p5.waitForEvent('download'); await p5.click('[data-save="changes"]'); const d = await dl; const dlText = fs.readFileSync(await d.path(), 'utf8'); let dlParsed = null; try { dlParsed = JSON.parse(dlText); } catch {}
+  j.push(['fallback: Save downloads answers.json with the same content', d.suggestedFilename() === 'answers.json' && !!dlParsed && dlParsed.answers.some(a => a.id === 'changes' && a.text === 'Fallback path.')]);
+  const conf5 = await p5.evaluate(() => document.getElementById('saved-changes').textContent);
+  j.push(['fallback: the confirmation says the file was downloaded and names where to move it: ' + conf5, /downloaded to your browser's download folder at \d\d:\d\d [A-Z]{2,5}/.test(conf5) && /move it to coordination\/coordinators\/visual-docs\/published\/status-prototype\/answers\.json/.test(conf5)]);
+  await p5.screenshot({ path: path.join(CAP, 'answers-fallback-1440-light.png') }); captures++;
+  await ctx5.close(); await browser.close();
   console.log(rows.map(r => r.join('  ')).join('\n')); console.log(j.map(([k, ok]) => (ok ? 'PASS ' : 'FAIL ') + k).join('\n'));
   for (const [k, ok] of j) if (!ok) fails.push('journey: ' + k);
   if (fails.length) { console.log('\nFAILURES\n' + fails.join('\n')); process.exit(1); } console.log(`\n${rows.length} renders checked, ${captures} captures in ${CAP}, ${j.length} of ${j.length} journeys, 0 failures`);
