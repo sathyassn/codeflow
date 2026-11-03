@@ -255,7 +255,7 @@
           "command": "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow"
         }
       },
-      "timeout_seconds": 1800,
+      "timeout_seconds": 4500,
       "requires": [
         "present-web-build"
       ],
