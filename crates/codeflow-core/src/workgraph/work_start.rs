@@ -789,22 +789,22 @@ pub fn epic_line_proof(
                     .is_some_and(|target| logical_target(target) == branch)
         })
     };
-    if !own_task(&at_head) && !own_task(&at_base) {
-        // A task of an epic that declares this line binds it only from the
-        // trusted anchors, the target's tip and the line's fetched tip, never
-        // from the head's records, and a cancellation at any of them or at
-        // the head refuses, as does a head that changes or removes the
-        // declaration or deletes the declaring epic (TSK-1286).
-        match declared_line_tasks(&anchors, &at_head, branch) {
-            Err(refusal) => return Ok(EpicLineProof::NotLine(refusal)),
-            Ok(false) => {
-                return Ok(EpicLineProof::NotLine(format!(
-                    "no task of {epic_id} targets '{branch}', nor a task of an epic declaring {} '{branch}' on the target or the line's fetched tip",
-                    super::line_adoption::PARENT_LINE_FIELD
-                )));
-            }
-            Ok(true) => {}
-        }
+    // A task of an epic that declares this line binds it only from the
+    // trusted anchors, the target's tip and the line's fetched tip, never
+    // from the head's records. Every declaration refusal runs first, even
+    // when a task of the line's own epic binds it: a declaring epic
+    // cancelled at an anchor or the head, or a head that changes or removes
+    // a trusted declaration or deletes the declaring epic (TSK-1286). A
+    // task of the line's own epic only lifts the need for a declared task.
+    let declared = match declared_line_tasks(&anchors, &at_head, branch) {
+        Err(refusal) => return Ok(EpicLineProof::NotLine(refusal)),
+        Ok(declared) => declared,
+    };
+    if !declared && !own_task(&at_head) && !own_task(&at_base) {
+        return Ok(EpicLineProof::NotLine(format!(
+            "no task of {epic_id} targets '{branch}', nor a task of an epic declaring {} '{branch}' on the target or the line's fetched tip",
+            super::line_adoption::PARENT_LINE_FIELD
+        )));
     }
     let destination = default_work_target(repo_root)
         .map_err(|error| error.to_string())?
@@ -1005,12 +1005,14 @@ pub fn epic_line_binding(
     } else {
         return Ok(EpicLineBinding::Refused(not_own));
     };
+    let head_value = match head_refusal(repo_root, head, epic_id, &claim, &not_own)? {
+        Err(refusal) => return Ok(EpicLineBinding::Refused(refusal)),
+        Ok(head_value) => head_value,
+    };
     let records = anchor_records(repo_root, anchor)?;
     let Claim::Declared(own) = claim else {
         return Ok(bound_in(&records, line, epic_id, place));
     };
-    let head_value =
-        epic_record_at_revision(repo_root, &own, head)?.and_then(|record| record.parent_line);
     Ok(declared_binding(
         &records,
         line,
@@ -1042,6 +1044,57 @@ fn task_parent_line_refusal(record: &Record) -> Option<String> {
             super::line_adoption::PARENT_LINE_FIELD
         )
     })
+}
+
+/// What the exact `head` says about the epics a binding relies on, read
+/// before any anchor so no positive result can skip it (TSK-1286): the
+/// line's own epic `epic_id`, or the declaring epic a [`Claim::Declared`]
+/// names, cancelled or archived on the head is a refusal (`Err`).
+/// Otherwise `Ok` carries the head's `parent_line` for the declaring epic
+/// (`None` for [`Claim::Line`], or when the head removed the field or the
+/// record), which [`declared_binding`] compares with each anchor.
+fn head_refusal(
+    repo_root: &Path,
+    head: &str,
+    epic_id: &str,
+    claim: &Claim,
+    not_own: &str,
+) -> Result<Result<Option<String>, String>, WorkStartError> {
+    let closed = |record: &Record| matches!(record.status.as_str(), "cancelled" | "archived");
+    // A head record that does not parse refuses, so the binding stays
+    // closed and the check that owns the malformed field names it.
+    let read = |epic: &str| match epic_record_at_revision(repo_root, epic, head) {
+        Ok(record) => Ok(Ok(record)),
+        Err(WorkStartError::InvalidGraph(reason)) => Ok(Err(format!(
+            "names {epic_id}, but {epic}'s record on the head cannot be read: {reason}"
+        ))),
+        Err(error) => Err(error),
+    };
+    let owner = match read(epic_id)? {
+        Ok(owner) => owner,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
+    if let Some(owner) = owner.filter(|owner| closed(owner)) {
+        return Ok(Err(format!(
+            "names {epic_id}, which is {} on the head",
+            owner.status
+        )));
+    }
+    let Claim::Declared(own) = claim else {
+        return Ok(Ok(None));
+    };
+    let declaring = match read(own)? {
+        Ok(declaring) => declaring,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
+    match declaring {
+        Some(record) if closed(&record) => Ok(Err(format!(
+            "{not_own}: {own} is {} on the head",
+            record.status
+        ))),
+        Some(record) => Ok(Ok(record.parent_line)),
+        None => Ok(Ok(None)),
+    }
 }
 
 /// The records of the tree at `anchor`, an exact trusted revision.
@@ -1100,8 +1153,18 @@ fn declared_binding(
 ) -> EpicLineBinding {
     let field = super::line_adoption::PARENT_LINE_FIELD;
     let membership = line_membership(line, own, &record_facts(records), place);
+    // Refusals first, in this order, so no positive result can skip one:
+    // the declaring epic closed here, then a head that changes or removes
+    // the declaration found here, then the line's own epic closed here
+    // (inside [`bound_in`]).
     if let LineMembership::Refused(reason) = &membership {
         return EpicLineBinding::Refused(format!("{not_own}: {reason}"));
+    }
+    if membership == LineMembership::Declared && head_value != Some(line) {
+        let shown = head_value.map_or_else(|| "none".to_string(), |value| format!("'{value}'"));
+        return EpicLineBinding::Refused(format!(
+            "{not_own}: {own} declares {field} '{line}' on {place}, but the head's {own} record declares {shown}; a branch cannot change the line its own epic lands on, so restore the field and change it through a planning pull request into the line"
+        ));
     }
     let binding = bound_in(records, line, epic_id, place);
     if binding != EpicLineBinding::Bound {
@@ -1116,12 +1179,6 @@ fn declared_binding(
             String::new()
         };
         return EpicLineBinding::Unbound(format!("{not_own}, and {reason}{head_only}"));
-    }
-    if head_value != Some(line) {
-        let shown = head_value.map_or_else(|| "none".to_string(), |value| format!("'{value}'"));
-        return EpicLineBinding::Refused(format!(
-            "{not_own}: {own} declares {field} '{line}' on {place}, but the head's {own} record declares {shown}; a branch cannot change the line its own epic lands on, so restore the field and change it through a planning pull request into the line"
-        ));
     }
     EpicLineBinding::Bound
 }
@@ -1424,12 +1481,11 @@ pub fn task_line_binding(
             Claim::Line
         }
     };
-    // The head's copy of the declaring epic, read once at the exact head.
-    let head_value = match &claim {
-        Claim::Declared(own) => {
-            epic_record_at_revision(repo_root, own, head)?.and_then(|record| record.parent_line)
-        }
-        Claim::Line => None,
+    // The head's copies of the line's epic and the declaring epic, read
+    // once at the exact head before any anchor.
+    let head_value = match head_refusal(repo_root, head, epic_id, &claim, &not_own)? {
+        Err(refusal) => return Ok(EpicLineBinding::Refused(refusal)),
+        Ok(head_value) => head_value,
     };
     let mut bound = false;
     let mut unbound = Vec::new();
@@ -4691,18 +4747,21 @@ mod tests {
     }
 
     /// Point `origin/<DECLARED_LINE>` in `root` at a commit off the line
-    /// whose EPC-001 is cancelled, leaving the line itself unchanged.
-    fn cancel_owner_at_fetched_tip(root: &Path) {
-        let owner = root.join("project-management/epics/EPC-001.md");
+    /// whose `epic` (an epic id) is cancelled, leaving the line unchanged.
+    fn cancel_at_fetched_tip(root: &Path, epic: &str) {
+        let record = root.join(format!("project-management/epics/{epic}.md"));
         git(root, &["switch", "-q", "-c", "fetched", DECLARED_LINE]);
         fs::write(
-            &owner,
-            fs::read_to_string(&owner)
+            &record,
+            fs::read_to_string(&record)
                 .unwrap()
                 .replace("status: planning", "status: cancelled"),
         )
         .unwrap();
-        git(root, &["commit", "-qam", "cancel the line's epic"]);
+        git(
+            root,
+            &["commit", "-qam", "cancel an epic at the fetched tip"],
+        );
         git(
             root,
             &[
@@ -4714,28 +4773,9 @@ mod tests {
         git(root, &["switch", "-q", DECLARED_LINE]);
     }
 
-    /// TSK-1286 review of fac11e366: the line's own epic cancelled at the
-    /// line's fetched tip refuses the proof while the target and the head
-    /// keep it active, both through a declaring epic and through a task of
-    /// the line's own epic. At fac11e366 both were verified.
-    #[test]
-    fn epic_line_proof_refuses_an_owner_cancelled_at_the_fetched_tip() {
-        let proof = |root: &Path| {
-            epic_line_proof(root, DECLARED_LINE, "main", "main", DECLARED_LINE).unwrap()
-        };
-        let expected = format!("EPC-001 is cancelled on 'origin/{DECLARED_LINE}'");
-        let declared = proof_fixture(true, Some(&second_epic(Some(DECLARED_LINE), "planning")));
-        assert!(matches!(
-            proof(declared.path()),
-            EpicLineProof::Verified(..)
-        ));
-        cancel_owner_at_fetched_tip(declared.path());
-        assert!(
-            matches!(proof(declared.path()), EpicLineProof::NotLine(ref reason) if reason == &expected),
-            "declared path"
-        );
-        let own = proof_fixture(false, None);
-        let root = own.path();
+    /// Give the line in `root` a task of its own epic: TSK-001 of EPC-001
+    /// targets the line on `main`, and the line merges `main`.
+    fn add_own_task(root: &Path) {
         git(root, &["switch", "-q", "main"]);
         let first = root.join("project-management/tasks/TSK-001.md");
         fs::write(
@@ -4749,14 +4789,177 @@ mod tests {
         git(root, &["commit", "-qam", "the line's own task"]);
         git(root, &["switch", "-q", DECLARED_LINE]);
         git(root, &["merge", "-q", "--no-ff", "-m", "take main", "main"]);
+    }
+
+    fn proof_of(root: &Path) -> EpicLineProof {
+        epic_line_proof(root, DECLARED_LINE, "main", "main", DECLARED_LINE).unwrap()
+    }
+
+    /// TSK-1286 review of fac11e366: the line's own epic cancelled at the
+    /// line's fetched tip refuses the proof while the target and the head
+    /// keep it active, both through a declaring epic and through a task of
+    /// the line's own epic. At fac11e366 both were verified.
+    #[test]
+    fn epic_line_proof_refuses_an_owner_cancelled_at_the_fetched_tip() {
+        let expected = format!("EPC-001 is cancelled on 'origin/{DECLARED_LINE}'");
+        let declared = proof_fixture(true, Some(&second_epic(Some(DECLARED_LINE), "planning")));
+        assert!(matches!(
+            proof_of(declared.path()),
+            EpicLineProof::Verified(..)
+        ));
+        cancel_at_fetched_tip(declared.path(), "EPC-001");
         assert!(
-            matches!(proof(root), EpicLineProof::Verified(..)),
+            matches!(proof_of(declared.path()), EpicLineProof::NotLine(ref reason) if reason == &expected),
+            "declared path"
+        );
+        let own = proof_fixture(false, None);
+        let root = own.path();
+        add_own_task(root);
+        assert!(
+            matches!(proof_of(root), EpicLineProof::Verified(..)),
             "own task"
         );
-        cancel_owner_at_fetched_tip(root);
+        cancel_at_fetched_tip(root, "EPC-001");
         assert!(
-            matches!(proof(root), EpicLineProof::NotLine(ref reason) if reason == &expected),
+            matches!(proof_of(root), EpicLineProof::NotLine(ref reason) if reason == &expected),
             "own-task path"
+        );
+    }
+
+    /// TSK-1286 review of 7b07c2f57: a task of the line's own epic never
+    /// skips a declaration refusal. With both an own-epic task and a task of
+    /// a declaring epic on the target, a head that changes, removes or
+    /// deletes the declaration, a declaring epic cancelled at the head, and
+    /// one cancelled at the line's fetched tip each refuse. At 7b07c2f57 all
+    /// were verified through the own-task shortcut.
+    #[test]
+    fn epic_line_proof_checks_declarations_beside_an_own_task() {
+        let declaring = second_epic(Some(DECLARED_LINE), "planning");
+        let baseline = proof_fixture(true, Some(&declaring));
+        add_own_task(baseline.path());
+        assert!(
+            matches!(proof_of(baseline.path()), EpicLineProof::Verified(..)),
+            "mixed tasks, declaration kept"
+        );
+        let changed = second_epic(Some("integration/EPC-001-elsewhere"), "planning");
+        let removed = second_epic(None, "planning");
+        let cancelled = second_epic(Some(DECLARED_LINE), "cancelled");
+        let mutation =
+            "EPC-002 declares parent_line 'integration/EPC-001-outcome' on the target, but";
+        for (case, head_epic, text) in [
+            ("changed", Some(changed.as_str()), mutation),
+            ("removed", Some(removed.as_str()), mutation),
+            ("deleted", None, mutation),
+            (
+                "cancelled at the head",
+                Some(cancelled.as_str()),
+                "EPC-002 is cancelled on the head",
+            ),
+        ] {
+            let dir = proof_fixture(true, head_epic);
+            add_own_task(dir.path());
+            let proof = proof_of(dir.path());
+            assert!(
+                matches!(&proof, EpicLineProof::NotLine(reason) if reason.contains(text)),
+                "{case}: {proof:?}"
+            );
+        }
+        cancel_at_fetched_tip(baseline.path(), "EPC-002");
+        let proof = proof_of(baseline.path());
+        assert!(
+            matches!(&proof, EpicLineProof::NotLine(reason) if reason.contains(&format!("EPC-002 is cancelled on 'origin/{DECLARED_LINE}'"))),
+            "cancelled at the fetched tip: {proof:?}"
+        );
+    }
+
+    /// TSK-1286 review of 7b07c2f57: the task bindings read the head before
+    /// any anchor. The line's own epic cancelled on the head refuses for a
+    /// task of a declaring epic and for a task of the line's own epic, and
+    /// a head that removes a trusted declaration refuses even at an anchor
+    /// that holds no task of the line. At 7b07c2f57 the declaring-epic task
+    /// bound and the taskless anchor was only unbound.
+    #[test]
+    fn task_bindings_refuse_head_changes_before_any_anchor() {
+        let declared = second_epic(Some(DECLARED_LINE), "planning");
+        let task = |root: &Path| {
+            task_line_binding(
+                root,
+                "TSK-002",
+                "HEAD",
+                DECLARED_LINE,
+                &[("main", "protected branch")],
+            )
+            .unwrap()
+        };
+        let owner_text = "names EPC-001, which is cancelled on the head";
+        let dir = declared_fixture(Some(declared.as_str()), Some(declared.as_str()));
+        let root = dir.path();
+        let owner = root.join("project-management/epics/EPC-001.md");
+        fs::write(
+            &owner,
+            fs::read_to_string(&owner)
+                .unwrap()
+                .replace("status: planning", "status: cancelled"),
+        )
+        .unwrap();
+        git(
+            root,
+            &["commit", "-qam", "the head cancels the line's epic"],
+        );
+        for (case, binding) in [
+            ("declared", bind_declared(root)),
+            ("declared task", task(root)),
+        ] {
+            assert!(
+                matches!(&binding, EpicLineBinding::Refused(reason) if reason.contains(owner_text)),
+                "{case}: {binding:?}"
+            );
+        }
+        let path = root.join("project-management/tasks/TSK-002.md");
+        fs::write(
+            &path,
+            fs::read_to_string(&path)
+                .unwrap()
+                .replace("epic_id: EPC-002", "epic_id: EPC-001"),
+        )
+        .unwrap();
+        git(root, &["commit", "-qam", "a task of the line's own epic"]);
+        for (case, binding) in [("own", bind_declared(root)), ("own task", task(root))] {
+            assert!(
+                matches!(&binding, EpicLineBinding::Refused(reason) if reason.contains(owner_text)),
+                "{case}: {binding:?}"
+            );
+        }
+        let plain = second_epic(None, "planning");
+        let dir = declared_fixture(Some(declared.as_str()), Some(plain.as_str()));
+        let root = dir.path();
+        git(root, &["switch", "-q", "-c", "anchor/no-task", "main"]);
+        let first = root.join("project-management/tasks/TSK-001.md");
+        fs::write(
+            &first,
+            fs::read_to_string(&first).unwrap().replace(
+                &format!("integration_target: {DECLARED_LINE}"),
+                "integration_target: main",
+            ),
+        )
+        .unwrap();
+        git(
+            root,
+            &["commit", "-qam", "an anchor with no task of the line"],
+        );
+        git(root, &["switch", "-q", "task/TSK-002-work"]);
+        let binding = epic_line_binding(
+            root,
+            "task/TSK-002-work",
+            "HEAD",
+            DECLARED_LINE,
+            "anchor/no-task",
+            "the line's tip",
+        )
+        .unwrap();
+        assert!(
+            matches!(&binding, EpicLineBinding::Refused(reason) if reason.contains("declares none")),
+            "removed at a taskless anchor: {binding:?}"
         );
     }
 
