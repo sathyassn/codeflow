@@ -1,0 +1,11 @@
+id = "TSK-1267"
+uid = "91b7224b-8870-42ad-a949-e4dad8a04149"
+kind = "TSK"
+title = "codeflow ci learns the default branch without a network credential, and says when it needs one"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T01:16:57Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
