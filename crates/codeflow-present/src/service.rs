@@ -2074,6 +2074,13 @@ mod tests {
         )
         .await;
         assert_eq!(accepted.status(), StatusCode::OK);
+        let recorded_body = axum::body::to_bytes(accepted.into_body(), 512)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&recorded_body).unwrap(),
+            serde_json::json!({"status":"recorded"})
+        );
         let saved = state.store.stage_measurements(state.session_id).unwrap();
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].revision, 2);
