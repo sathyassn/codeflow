@@ -126,8 +126,54 @@ fn close_transfer_criterion(
 /// Before TSK-1158 the final close refuses: no complete serving task verified it.
 #[test]
 fn recorded_transfer_closes_source_through_the_built_binary() {
-    let (dir, amendment) = transfer_plan("valid");
-    let result = close_transfer(dir.path(), "EPC-001", &format!("waived | {amendment}"));
+    let serving = "- AC-1 Work (serves EPC-001 AC-5)\n";
+    let dir = repo(&[("TSK-001", serving)], "");
+    let root = dir.path();
+    let source = TRANSFER_CRITERION.replacen("AC-1", "AC-5", 1);
+    write(
+        root,
+        TRANSFER_EPIC_PATH,
+        &transfer_epic("EPC-001", "planning", &source),
+    );
+    commit(root, "docs: plan the original AC-5 obligation");
+    write(
+        root,
+        TRANSFER_EPIC_PATH,
+        &transfer_epic("EPC-001", "planning", &format!("{source}{TRANSFER_NOTE}")),
+    );
+    write(
+        root,
+        TRANSFER_TARGET_PATH,
+        &transfer_epic("EPC-002", "planning", TRANSFER_CRITERION),
+    );
+    let path = record_path("TSK-001");
+    let original = std::fs::read_to_string(root.join(&path)).unwrap();
+    write(
+        root,
+        &path,
+        &original.replacen("epic_id: EPC-001", "epic_id: EPC-002", 1),
+    );
+    let amendment = commit(root, "docs: transfer AC-5 to the new AC-1");
+    let result =
+        close_transfer_criterion(root, "EPC-001", "AC-5", &format!("waived | {amendment}"));
+    assert!(result.0, "{}", result.1);
+    commit(root, "docs: close the source through its waiver");
+
+    // The task keeps its old source tag and its own AC-1 result. Neither
+    // criterion number may be mistaken for the new epic's AC-1.
+    let reviewed = head(root);
+    let acceptance = format!("```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: session:transfer@sha256:00\n  criteria:\n    AC-1: verified | task proof\n  journey: none | ordinary criterion\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n```\n");
+    write(
+        root,
+        &path,
+        &task("TSK-001", "complete", serving, &acceptance).replacen(
+            "epic_id: EPC-001",
+            "epic_id: EPC-002",
+            1,
+        ),
+    );
+    commit(root, "docs: complete the moved serving task");
+    let result = close_transfer(root, "EPC-002", "verified | own proof");
     assert!(result.0, "{}", result.1);
 }
 
