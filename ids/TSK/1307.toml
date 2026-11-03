@@ -1,0 +1,11 @@
+id = "TSK-1307"
+uid = "cf57a02b-1fff-42a4-a356-4326e292ca83"
+kind = "TSK"
+title = "Global installers are refused and an unknown writer cannot write a protected name"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T21:42:29Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
