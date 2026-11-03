@@ -78,6 +78,9 @@ class PolicyCache(unittest.TestCase):
             for status, error, missing_input in (
                 (0, '', False),
                 (1, 'could not create workflow dispatch event: HTTP 422: Unexpected inputs provided: ["build_sha"] (https://api.github.com/repos/fixture/repo/actions/workflows/codeflow-policy.yml/dispatches)', True),
+                (1, 'HTTP 422: Unexpected inputs provided: ["build_sha"]', True),
+                (1, 'HTTP 422: Unexpected inputs provided: ["build_sha"] (https://api.github.com/repos/other/repo/actions/workflows/codeflow-policy.yml/dispatches)', False),
+                (1, 'HTTP 422: Unexpected inputs provided: ["build_sha"] (https://api.github.com/repos/fixture/repo/actions/workflows/other.yml/dispatches)', False),
                 (2, 'HTTP 403: Resource not accessible by integration', False),
                 (1, 'HTTP 500: Internal Server Error', False),
                 (1, 'HTTP 422: Validation Failed', False),
