@@ -147,7 +147,7 @@ fn existing(
         } else {
             crate::ids::Kind::Tsk
         };
-        if !crate::ids::RegId::parse(&id).is_some_and(|parsed| parsed.kind() == expected_kind)
+        if crate::ids::RegId::parse(&id).is_none_or(|parsed| parsed.kind() != expected_kind)
             || path.file_stem().and_then(|name| name.to_str()) != Some(id.as_str())
         {
             return Err(format!(
@@ -159,8 +159,7 @@ fn existing(
             .ok_or("bootstrap record has no status")?
             .to_string();
         let epic = value["epic_id"].as_str().map(str::to_string);
-        let dependencies = crate::workgraph::deps::parse_dependencies(value.get("depends_on"))
-            .map_err(|error| error.to_string())?
+        let dependencies = crate::workgraph::deps::parse_dependencies(value.get("depends_on"))?
             .into_iter()
             .map(|edge| edge.id)
             .collect();
@@ -196,7 +195,10 @@ fn with_body(template: &str, body: &str) -> String {
                 .map_or(result.len(), |n| content_start + n);
             result.replace_range(content_start..end, &format!("\n{}\n", content.trim()));
         } else {
-            result.push_str(&format!("{heading}\n{}\n", content.trim()));
+            result.push_str(&heading);
+            result.push('\n');
+            result.push_str(content.trim());
+            result.push('\n');
         }
     }
     result
@@ -212,39 +214,10 @@ fn read_optional(tree: &Tree, path: &str) -> Result<Option<String>, String> {
     }
 }
 
-/// Create one epic and four tasks, or a checklist where tracking is absent.
-/// Markers are written in the allocation itself, so a crash after a record write
-/// resumes that record. An interrupted reservation with no record refuses new
-/// allocation until the existing reservation is recovered.
-///
-/// # Errors
-/// Refuses invalid catalogs, unsafe paths, concurrent invocations, ambiguous
-/// prior work, changed dependency edges and allocation failures.
-pub fn run(
-    root: &Path,
-    tracking: bool,
-    templates: &Templates,
-    mut create: impl FnMut(Creation<'_>) -> Result<NewRecord, String>,
-) -> Result<Progress, String> {
-    let tree = Tree::open(root).map_err(|error| error.to_string())?;
-    let lock = tree
-        .lock_file(".codeflow/capability-bootstrap.lock")
-        .map_err(|error| error.to_string())?;
-    lock.try_lock_exclusive()
-        .map_err(|_| "capability bootstrap is already running in this checkout".to_string())?;
-    if complete(root)? {
-        return Ok(Progress {
-            epic: None,
-            next: None,
-            checklist: false,
-        });
-    }
-    if !tracking {
-        return checklist(&tree, templates);
-    }
+fn existing_work(tree: &Tree) -> Result<(Option<Existing>, Vec<Option<Existing>>), String> {
     let files = layout::bounded_record_files(&tree.path().join("project-management"), 20_000)
         .map_err(|_| "cannot inventory bootstrap work records".to_string())?;
-    let mut epic = existing(&tree, &files.epics, EPIC_MARKER)?;
+    let epic = existing(&tree, &files.epics, EPIC_MARKER)?;
     let mut stages = Vec::new();
     for stage in Stage::ALL {
         stages.push(existing(&tree, &files.tasks, &stage.marker())?);
@@ -278,6 +251,40 @@ pub fn run(
         }
         tree.remove(PENDING).map_err(|error| error.to_string())?;
     }
+    Ok((epic, stages))
+}
+
+/// Create one epic and four tasks, or a checklist where tracking is absent.
+/// Markers are written in the allocation itself, so a crash after a record write
+/// resumes that record. An interrupted reservation with no record refuses new
+/// allocation until the existing reservation is recovered.
+///
+/// # Errors
+/// Refuses invalid catalogs, unsafe paths, concurrent invocations, ambiguous
+/// prior work, changed dependency edges and allocation failures.
+pub fn run(
+    root: &Path,
+    tracking: bool,
+    templates: &Templates,
+    mut create: impl FnMut(Creation<'_>) -> Result<NewRecord, String>,
+) -> Result<Progress, String> {
+    let tree = Tree::open(root).map_err(|error| error.to_string())?;
+    let lock = tree
+        .lock_file(".codeflow/capability-bootstrap.lock")
+        .map_err(|error| error.to_string())?;
+    lock.try_lock_exclusive()
+        .map_err(|_| "capability bootstrap is already running in this checkout".to_string())?;
+    if complete(root)? {
+        return Ok(Progress {
+            epic: None,
+            next: None,
+            checklist: false,
+        });
+    }
+    if !tracking {
+        return checklist(&tree, templates);
+    }
+    let (mut epic, mut stages) = existing_work(&tree)?;
     if epic.is_none() {
         tree.write(PENDING, EPIC_MARKER.as_bytes())
             .map_err(|error| error.to_string())?;
@@ -357,12 +364,13 @@ fn checklist(tree: &Tree, templates: &Templates) -> Result<Progress, String> {
     } else {
         let mut text = format!("# Initial capability catalog\n\n{MARKER}\n\nTracking is not enabled. Complete these stages in order using {GUIDE}.\n\n");
         for (index, stage) in Stage::ALL.into_iter().enumerate() {
-            text.push_str(&format!("- [ ] {}\n", stage.name()));
-            text.push_str(&format!(
-                "\n### {}\n\n{}\n\n",
-                stage.name(),
-                templates.stages[index].replace("(serves bootstrap AC-1)", "")
-            ));
+            text.push_str("- [ ] ");
+            text.push_str(stage.name());
+            text.push_str("\n\n### ");
+            text.push_str(stage.name());
+            text.push_str("\n\n");
+            text.push_str(&templates.stages[index].replace("(serves bootstrap AC-1)", ""));
+            text.push_str("\n\n");
         }
         tree.create_new(CHECKLIST, text.as_bytes())
             .map_err(|error| error.to_string())?;
@@ -422,7 +430,7 @@ mod tests {
         dir
     }
 
-    fn create(root: &Path, creation: Creation<'_>) -> Result<NewRecord, String> {
+    fn create(root: &Path, creation: &Creation<'_>) -> Result<NewRecord, String> {
         let pm = root.join("project-management");
         if creation.stage.is_some() {
             allocate::create_task(
@@ -446,7 +454,7 @@ mod tests {
         let templates = templates();
         let mut writes = 0;
         let result = run(root, true, &templates, |creation| {
-            let record = create(root, creation)?;
+            let record = create(root, &creation)?;
             writes += 1;
             if writes == 3 {
                 Err("interrupted after classification write".into())
@@ -455,7 +463,7 @@ mod tests {
             }
         });
         assert!(result.unwrap_err().contains("interrupted"));
-        let progress = run(root, true, &templates, |creation| create(root, creation)).unwrap();
+        let progress = run(root, true, &templates, |creation| create(root, &creation)).unwrap();
         assert_eq!(progress.epic.as_deref(), Some("EPC-001"));
         assert_eq!(progress.next, Some(Stage::Inventory));
         let files = layout::bounded_record_files(&root.join("project-management"), 100).unwrap();
@@ -483,7 +491,7 @@ mod tests {
         let dir = repo();
         let root = dir.path();
         let templates = templates();
-        run(root, true, &templates, |creation| create(root, creation)).unwrap();
+        run(root, true, &templates, |creation| create(root, &creation)).unwrap();
         let path = root.join("project-management/tasks/TSK-002.md");
         let original = std::fs::read_to_string(&path).unwrap();
         std::fs::write(
