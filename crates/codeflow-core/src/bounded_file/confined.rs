@@ -67,6 +67,40 @@ fn invalid() -> io::Error {
 }
 
 impl ConfinedRoot {
+    /// Hold `directory` as a root: later work goes through its handle.
+    pub(crate) fn from_directory(directory: ConfinedDirectory) -> Self {
+        #[cfg(unix)]
+        {
+            Self {
+                directory: directory.file,
+            }
+        }
+        #[cfg(windows)]
+        {
+            Self {
+                ancestors: directory.ancestors,
+            }
+        }
+    }
+
+    /// Whether both roots are the same filesystem object, by the identity of
+    /// the held handles (device and inode). `None` when this platform has no
+    /// handle identity here.
+    #[cfg(unix)]
+    pub(crate) fn same_object(&self, other: &Self) -> io::Result<Option<bool>> {
+        use std::os::unix::fs::MetadataExt;
+        let (left, right) = (self.directory.metadata()?, other.directory.metadata()?);
+        Ok(Some(
+            left.dev() == right.dev() && left.ino() == right.ino() && left.ino() != 0,
+        ))
+    }
+
+    #[cfg(not(unix))]
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    pub(crate) fn same_object(&self, _other: &Self) -> io::Result<Option<bool>> {
+        Ok(None)
+    }
+
     pub(crate) fn directory(&self, relative: &Path) -> io::Result<ConfinedDirectory> {
         #[cfg(unix)]
         let mut directory = ConfinedDirectory {
