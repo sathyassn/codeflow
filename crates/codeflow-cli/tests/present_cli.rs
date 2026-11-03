@@ -3506,10 +3506,11 @@ fn tsk259_check_open_and_update_warn_on_a_v1_stage_without_refusing_it() {
 }
 
 /// TSK-1255: the copy limits reach the author at `check`, `open` and
-/// `update` as warnings: a block over two lines, cut context and a time
-/// without a zone. The check still exits 0, and open still hands off.
+/// `update` as warnings: a block over the character budget, cut context and
+/// a time without a zone. The check still exits 0, open still hands off and
+/// update still publishes the revision.
 #[test]
-fn tsk1255_check_and_open_print_the_copy_warnings_without_refusing() {
+fn tsk1255_check_open_and_update_print_the_copy_warnings_without_refusing() {
     let fixture = setup_project();
     let document = fixture.project.join("copy.json");
     fs::copy(
@@ -3554,6 +3555,19 @@ fn tsk1255_check_and_open_print_the_copy_warnings_without_refusing() {
     let stdout = require_success(&opened);
     let id = stdout.split_whitespace().nth(1).unwrap().to_string();
     let stderr = String::from_utf8(opened.stderr).unwrap();
+    assert_eq!(check_lines(&stderr), lines, "{stderr}");
+    let mut revised: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&document).unwrap()).unwrap();
+    revised["title"] = "Where the release stands now".into();
+    let revision = fixture.project.join("copy-2.json");
+    fs::write(&revision, serde_json::to_vec(&revised).unwrap()).unwrap();
+    let updated = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "update", &id, revision.to_str().unwrap()],
+    );
+    require_success(&updated);
+    let stderr = String::from_utf8(updated.stderr).unwrap();
     assert_eq!(check_lines(&stderr), lines, "{stderr}");
     close_and_clear(&fixture, &id);
 }

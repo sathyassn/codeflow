@@ -9,16 +9,28 @@
       "markdown": "The line moved at 13:41 EST, 2 Nov.\n\nThe records were read at 2026-11-02 12:26 EST.\n\nThe contrast floor is 4.5:1; `a...b` and `13:41` are code spans."
     },
     {
-      "type": "bullets",
-      "id": "points",
-      "items": ["Gate green at 09:00 UTC", "Review settled", "Release notes updated"]
-    },
-    {
       "type": "table",
       "id": "rows",
       "title": "Open items",
-      "columns": ["Item", "State"],
-      "rows": [["Milestone fixes and quality defaults", "open since 08:15Z"]]
+      "columns": [
+        "Item",
+        "State"
+      ],
+      "rows": [
+        [
+          "Milestone fixes and quality defaults",
+          "open since 08:15Z"
+        ]
+      ]
+    },
+    {
+      "type": "bullets",
+      "id": "points",
+      "items": [
+        "Gate green at 09:00 UTC",
+        "Review settled",
+        "Release notes updated"
+      ]
     },
     {
       "type": "disclosure",

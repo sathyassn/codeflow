@@ -1764,7 +1764,7 @@ fn figure_number_text(value: f64) -> String {
 
 /// The title and caption a figure placeholder shows before the grammar module
 /// draws it; they prefix the block's canonical review text.
-fn figure_text(declaration: &serde_json::Value) -> (&str, &str) {
+pub(crate) fn figure_text(declaration: &serde_json::Value) -> (&str, &str) {
     let field = |name: &str| {
         declaration
             .pointer(&format!("/figure/{name}"))
@@ -2141,10 +2141,10 @@ mod tests {
         );
     }
 
-    /// TSK-1255: a visible text block over two lines, a sentence cut to an
-    /// ellipsis and a clock time without a zone are copy warnings in prose,
-    /// bullets and cells; a code block, a code span, collapsed detail, a
-    /// ratio and a zoned time are not.
+    /// TSK-1255: a visible text block over the character budget, text that
+    /// may be cut to an ellipsis and a clock time without a zone are copy
+    /// warnings in prose, bullets and cells; a code block, a code span,
+    /// collapsed detail, a ratio and a zoned time are not.
     #[test]
     fn check_warns_on_long_blocks_cut_context_and_a_time_without_a_zone() {
         let lines = check_document(&crate::contract_tests::fixture_bytes(
@@ -2166,7 +2166,14 @@ mod tests {
         );
         assert!(lines[0].message.contains("13:41"), "{}", lines[0].message);
         assert!(
-            lines[1].message.contains("4 lines at the 68-character"),
+            lines[1]
+                .message
+                .contains("251 characters, over the 136-character budget"),
+            "{}",
+            lines[1].message
+        );
+        assert!(
+            lines[1].message.contains("move the rest to a figure"),
             "{}",
             lines[1].message
         );
@@ -2177,13 +2184,79 @@ mod tests {
         );
     }
 
+    /// TSK-1255 review: form and decision fields, a figure caption, the text
+    /// of an HTML stage, a narrow table cell and the lede are held to the same
+    /// rules; long words, a quoted title, a numeric range, a ratio, a
+    /// duration and zoned times are controls that stay quiet.
+    #[test]
+    fn check_reads_fields_captions_stages_cells_and_the_lede() {
+        let lines = check_document(&crate::contract_tests::fixture_bytes(
+            "check/v2-copy-coverage.json",
+        ));
+        let copy: Vec<_> = lines
+            .iter()
+            .map(|line| (line.block_id.as_deref(), line.rule))
+            .collect();
+        assert_eq!(
+            copy,
+            [
+                (None, "copy-density"),
+                (Some("intake"), "copy-density"),
+                (Some("intake"), "copy-time-zone"),
+                (Some("intake"), "copy-time-zone"),
+                (Some("pick"), "copy-ellipsis"),
+                (Some("landing"), "copy-density"),
+                (Some("boxes"), "copy-density"),
+                (Some("cells"), "copy-density"),
+                (Some("cut"), "copy-ellipsis"),
+            ],
+            "{lines:?}"
+        );
+        assert!(
+            lines[3].message.contains("09:00-10:00 has no zone"),
+            "{}",
+            lines[3].message
+        );
+        assert!(
+            lines[6].message.contains("Boxed prose"),
+            "{}",
+            lines[6].message
+        );
+        assert!(lines.iter().all(|line| line.severity == "warning"));
+    }
+
+    /// TSK-1255 review: a wall split into one-line paragraphs and titled
+    /// callouts is still a wall; it warns once, naming its first block.
+    #[test]
+    fn check_warns_once_on_a_run_of_text_blocks() {
+        let lines = check_document(&crate::contract_tests::fixture_bytes(
+            "check/v2-copy-split-run.json",
+        ));
+        let copy: Vec<_> = lines
+            .iter()
+            .map(|line| (line.block_id.as_deref(), line.rule, line.severity))
+            .collect();
+        assert_eq!(copy, [(Some("p1"), "copy-run", "warning")], "{lines:?}");
+        assert!(
+            lines[0]
+                .message
+                .starts_with("12 text blocks follow each other"),
+            "{}",
+            lines[0].message
+        );
+    }
+
     #[test]
     fn check_is_quiet_on_prose_and_never_doubles_a_v2_framing_fault() {
         assert!(check_lines("check/v1-prose.json").is_empty());
-        assert_eq!(
-            check_lines("documents/v2-html-missing-caption.json"),
-            [(Some("answer-flow".to_string()), "block", "fault")]
-        );
+        // The shared landing figure's long caption draws a copy warning;
+        // this test is about the framing fault, so the copy lines are left
+        // out here and covered by the copy tests above.
+        let lines: Vec<_> = check_lines("documents/v2-html-missing-caption.json")
+            .into_iter()
+            .filter(|(_, rule, _)| !rule.starts_with("copy-"))
+            .collect();
+        assert_eq!(lines, [(Some("answer-flow".to_string()), "block", "fault")]);
     }
 
     fn document(blocks: Vec<Block>) -> PresentationDocument {

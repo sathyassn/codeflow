@@ -6,10 +6,13 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use codeflow_core::hooks::policy_schema;
 use codeflow_core::validate::docs::lint_docs;
-use codeflow_core::validate::portal::{validate_portal_with, LookupInputs};
+use codeflow_core::validate::portal::{
+    validate_portal_with, ContentBlock, ContentText, LookupInputs,
+};
 use codeflow_core::validate::{
     validate_epic, validate_spec, validate_task, validate_workgraph, ValidateOptions,
 };
+use codeflow_present::copy_rules::{page_findings, PageBlock, PageText};
 
 #[derive(Args)]
 pub struct ValidateArgs {
@@ -71,6 +74,9 @@ fn run_portal_validation(root: &Path, portal: &Path) -> bool {
         hook_stages: &stages,
     };
     let report = validate_portal_with(root, portal, Some(&inputs));
+    for warning in portal_copy_warnings(&report.page_text) {
+        eprintln!("validate --portal: warning: {warning}");
+    }
     for issue in &report.issues {
         eprintln!("validate --portal: error: {issue}");
     }
@@ -84,6 +90,31 @@ fn run_portal_validation(root: &Path, portal: &Path) -> bool {
         );
         false
     }
+}
+
+/// The copy warnings for each built page (TSK-1255): the same character
+/// budget, run, ellipsis and time rules `present check` applies, read from
+/// the page's paragraphs and list items. They never fail validation.
+fn portal_copy_warnings(page_text: &[(String, Vec<ContentBlock>)]) -> Vec<String> {
+    let page = |text: &ContentText| PageText {
+        text: text.text.clone(),
+        prose: text.prose.clone(),
+    };
+    let mut warnings = Vec::new();
+    for (path, content) in page_text {
+        let blocks: Vec<PageBlock> = content
+            .iter()
+            .map(|block| match block {
+                ContentBlock::Paragraph(text) => PageBlock::Paragraph(page(text)),
+                ContentBlock::List(items) => PageBlock::List(items.iter().map(page).collect()),
+                ContentBlock::Visual => PageBlock::Visual,
+            })
+            .collect();
+        for finding in page_findings(&blocks) {
+            warnings.push(format!("{path}: {}: {}", finding.rule, finding.message));
+        }
+    }
+    warnings
 }
 
 fn run_workgraph_validation(root: &Path) -> bool {
@@ -332,6 +363,60 @@ fn run_docs_lint(root: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::{portal_copy_warnings, ContentBlock, ContentText};
+
+    fn text(value: &str) -> ContentText {
+        ContentText {
+            text: value.to_string(),
+            prose: value.to_string(),
+        }
+    }
+
+    /// TSK-1255: a built page with a long paragraph, a cut list item and a
+    /// run of text blocks draws the copy warnings, named by its path; a
+    /// short page with a figure between its blocks draws none.
+    #[test]
+    fn portal_copy_warnings_name_the_page_and_rule() {
+        let long = "word ".repeat(30);
+        let pages = vec![
+            (
+                "dist/status/index.html".to_string(),
+                vec![
+                    ContentBlock::Paragraph(text(long.trim())),
+                    ContentBlock::List(vec![text("items cut to that...")]),
+                    ContentBlock::Paragraph(text("Read at 13:41.")),
+                    ContentBlock::Paragraph(text("Four.")),
+                ],
+            ),
+            (
+                "dist/clean/index.html".to_string(),
+                vec![
+                    ContentBlock::Paragraph(text("Lead at 13:41 EST.")),
+                    ContentBlock::Visual,
+                    ContentBlock::Paragraph(text("After the figure.")),
+                ],
+            ),
+        ];
+        let rules: Vec<String> = portal_copy_warnings(&pages)
+            .iter()
+            .map(|warning| {
+                warning
+                    .splitn(3, ": ")
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(": ")
+            })
+            .collect();
+        assert_eq!(
+            rules,
+            [
+                "dist/status/index.html: copy-density",
+                "dist/status/index.html: copy-ellipsis",
+                "dist/status/index.html: copy-time-zone",
+                "dist/status/index.html: copy-run",
+            ]
+        );
+    }
 
     /// A record home behind a dangling link cannot be read; it is never a
     /// tier without records. A missing home still validates clean.

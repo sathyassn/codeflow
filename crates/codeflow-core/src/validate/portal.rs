@@ -109,6 +109,29 @@ struct DistArtifactInventory {
 pub struct PortalValidationReport {
     pub checked_pages: usize,
     pub issues: Vec<String>,
+    /// The content text of each built page, by its built path, in reading
+    /// order, for the copy warnings (TSK-1255). It never makes the report
+    /// unclean.
+    pub page_text: Vec<(String, Vec<ContentBlock>)>,
+}
+
+/// One unit of a built page's content in reading order: a paragraph, a list
+/// with its items, or anything that is not text (a figure, table, code
+/// block, disclosure or embedded media).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContentBlock {
+    Paragraph(ContentText),
+    List(Vec<ContentText>),
+    Visual,
+}
+
+/// A paragraph's or list item's text as the page shows it, and the same
+/// text with its code blanked to spaces, for the checks that must not read
+/// code as prose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentText {
+    pub text: String,
+    pub prose: String,
 }
 impl PortalValidationReport {
     #[must_use]
@@ -1123,6 +1146,9 @@ pub fn validate_portal_with(
                     continue;
                 }
             };
+            report
+                .page_text
+                .push((artifact.path.clone(), figures::content_blocks(html)));
             let search_marker = format!(
                 "data-pagefind-body data-codeflow-search-root=\"{}\"",
                 page.route

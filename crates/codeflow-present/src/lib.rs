@@ -31,7 +31,7 @@ mod contract_tests;
 pub mod conversation;
 #[cfg(test)]
 mod conversation_tests;
-mod copy_rules;
+pub mod copy_rules;
 pub mod delivery;
 pub mod document;
 pub mod entity;

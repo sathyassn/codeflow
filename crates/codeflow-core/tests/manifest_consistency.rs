@@ -3043,7 +3043,7 @@ fn kit_readme_writing_bullets_are_carried_verbatim_by_the_copy_guide() {
         repo_text("assets/base/agents/skills/cf-docs-portal/resources/design-system/README.md");
     assert_eq!(present, portal, "kit README drifted between the skills");
     let bullets = kit_readme_writing_bullets(&present);
-    assert_eq!(bullets.len(), 9, "kit README keeps nine writing bullets");
+    assert_eq!(bullets.len(), 10, "kit README keeps ten writing bullets");
     assert!(
         normalized_whitespace(&present).contains("`cf-editorial-review/references/copy-guide.md`"),
         "kit README must name the copy guide"
@@ -3057,10 +3057,61 @@ fn kit_readme_writing_bullets_are_carried_verbatim_by_the_copy_guide() {
     }
 }
 
+/// TSK-1255 AC-1: each page limit is stated in the copy guide's "Page
+/// limits" and in the cf-present and cf-docs-portal skills, in the shipped
+/// source and in every mirror the repository keeps.
+#[test]
+fn page_limits_are_stated_in_every_mirror() {
+    let roots = [
+        "assets/base/agents/skills",
+        ".claude/skills",
+        ".agents/skills",
+        ".codeflow/.baseline/.claude/skills",
+        ".codeflow/.baseline/.agents/skills",
+    ];
+    let guide_limits = [
+        "within 136 characters",
+        "Put one point in each bullet.",
+        "Put at most three text blocks in a row",
+        "Make a figure the main view of any flow, comparison or status.",
+        "Text in styled boxes, cards or callouts is not a figure",
+        "Give every number its unit",
+        "Put a subject's name before its identifier",
+    ];
+    let skill_limits = [
+        "at most 136 characters per text block",
+        "at most three text blocks in a row",
+        "one point per bullet",
+        "a figure as the main view of any flow, comparison or status",
+        "unit on every number",
+        "names before identifiers",
+    ];
+    let mut missing = Vec::new();
+    for root in roots {
+        let guide = normalized_whitespace(&repo_text(&format!(
+            "{root}/cf-editorial-review/references/copy-guide.md"
+        )));
+        for limit in guide_limits {
+            if !guide.contains(limit) {
+                missing.push(format!("{root} copy guide: {limit}"));
+            }
+        }
+        for skill in ["cf-present", "cf-docs-portal"] {
+            let text = normalized_whitespace(&repo_text(&format!("{root}/{skill}/SKILL.md")));
+            for limit in skill_limits {
+                if !text.contains(limit) {
+                    missing.push(format!("{root}/{skill}: {limit}"));
+                }
+            }
+        }
+    }
+    assert!(missing.is_empty(), "page limits missing: {missing:#?}");
+}
+
 /// Sentences that restated the writing rules outside their homes before
 /// TSK-073, and the kit README bullets. A paraphrase that avoids these
 /// words is not detected; review owns that case.
-const WRITING_RULE_RESTATEMENTS: [&str; 19] = [
+const WRITING_RULE_RESTATEMENTS: [&str; 20] = [
     "short plain sentences, bullets or a table where they carry facts better than a sentence",
     "The lead sentence says what the reader is looking at; it does not restate the caption",
     "one sentence saying what the reader takes from it; it never repeats the title",
@@ -3071,8 +3122,9 @@ const WRITING_RULE_RESTATEMENTS: [&str; 19] = [
     "Avoid cryptic headings, invented personality",
     "Keep titles literal and findable",
     "Utility language remains neutral when no project voice is established",
-    "Visuals first: a figure is the main view of any flow, comparison or status, with a lead sentence above it and the acting sentences below; text in styled boxes is not a figure, and the page leans visual, elegant and balanced.",
-    "Short blocks: short plain sentences, at most two lines per text block outside collapsed detail, one point per bullet and a unit on every number.",
+    "Visuals first: a figure is the main view of any flow, comparison or status, with a lead sentence above it and the acting sentences below.",
+    "Boxed text is not a figure: text in styled boxes, cards or callouts stays text, and the page leans visual, elegant and balanced.",
+    "Short blocks: short plain sentences, at most 136 characters per text block outside collapsed detail (about two desktop lines), at most three text blocks in a row, one point per bullet and a unit on every number.",
     "No em or en dash; use a comma, colon, full stop or hyphen.",
     "Names first: a title is never a bare identifier, and a row, chip, menu entry, crumb, cell or figure label names its subject in words, with the identifier after it.",
     "Context whole: no \"...\", ellipsis or clipped text; a long string wraps or goes behind a disclosure.",
