@@ -147,7 +147,7 @@ Mocked or absent, and said so on the page:
 | `textlines.cjs` | 316 views at 1440 and 1280 px, 26 566 text blocks measured, 0 over two lines outside a closed disclosure |
 | `render.cjs` | 248 renders at 1440, 1280, 1200 and 390 px in both modes plus Graphite, Slate and Sage at the default and large size: 0 horizontal scroll, 0 wrapped chips, 0 clipped text, 0 page errors; Comment button over content in 0 of 316 views at each of 1440, 1280, 1200 and 390 px; 49 of 49 journeys; 190 captures |
 | `axe.cjs` | 118 view renders: 0 critical, 0 serious, 0 moderate, 0 minor |
-| `floors.cjs` | 228 pairs over 3 themes, 2 modes and 2 accents: 0 under the floor |
+| `floors.cjs` | 228 pairs over 3 themes, 2 modes and 2 accents, the stage fills as the page renders them: 220 over, 8 under the 3:1 floor, all the stage line fill (55% accent in the surface) in light mode and in dark mode with plum; reported to the Coordinator, no colour changed |
 | scan of the page text | 19 788 text nodes outside script and style: 0 "..." in content, 0 identifiers as the only label of a link, 0 times without a zone |
 | workspace `textwall-check.cjs` | 0 paragraphs over 3 lines |
 | workspace `nav.test.cjs` on `_src/kit` | 30 of 31 pass; the `tooltip` check expects a tooltip on a collapsed rail icon at 60 ms, which the operator's hover rule of 2 Nov 19:36 EST removes on purpose |
@@ -173,8 +173,16 @@ Captures to look at first: `captures/overview-1440-light.png`,
   should draw them in the product.
 - The kit and page styles diverge from the vendored workspace kit;
   TSK-1162 and TSK-1120 decide what ships.
-- The colour floors are computed from tokens, not measured on the
-  rendered page; axe's contrast rule is the rendered check.
+- The colour floors are computed from tokens and the page's local stage
+  styles, not measured on the rendered page; axe's contrast rule is the
+  rendered text check. The stage line fill is under the 3:1 non-text
+  floor in light mode; the design owner decides the colour.
+- The nine specimen kinds use generic content; representative content is
+  TSK-1127's. Task views read Outcome without Context and there is no
+  capability-backed feature view; TSK-1098 AC-13 and TSK-1120 own those.
+- The figure check inspects the numbered figures present, not an
+  inventory of required figures; the size matrix is default and large
+  only; TSK-1127 owns both.
 - Tracker facts (lanes, blockers, decisions) were not re-read after
   12:33 EST.
 - The guidance rules this prototype follows (names before identifiers,
