@@ -1358,7 +1358,7 @@ fn run_exception_step(
 /// The trusted hook output is validated triage, never a bare waiver.
 #[test]
 fn the_project_exception_hook_uses_validated_base_entries() {
-    let hook = format!("printf '%s\\n' '{}'\n", VALID_TRIAGE);
+    let hook = format!("printf '%s\\n' '{VALID_TRIAGE}'\n");
     let (ok, text) = run_exception_step(&[(HOOK, &hook)], &[(HOOK, "exit 7\n")], &[]);
     assert!(ok, "{text}");
     assert!(text.contains("trusted not-reachable triage"), "{text}");

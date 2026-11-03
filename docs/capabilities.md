@@ -315,8 +315,8 @@ adrs: [ADR-0016]
 The duo develop flow includes a mandatory security and red-team stage
 (ADR-0016).
 
-- The CI `security-review` job runs `osv-scanner` for software composition
-  analysis (SCA) over every lockfile ecosystem. Advisory verdicts follow
+- The CI `security-review` job audits all lockfile ecosystems with
+  `osv-scanner`. Advisory verdicts follow
   the severity table at the stricter of `security_review` and `dep_audit`;
   the shipped default is warn. Scan errors and invalid exceptions fail at
   warn and block. Both off skips the audit.
