@@ -628,6 +628,13 @@ pub fn validate_task(
             message: "does not match EPC-NNN".into(),
         });
     }
+    let parent_line = crate::workgraph::line_adoption::PARENT_LINE_FIELD;
+    if data.get(parent_line).is_some_and(|value| !value.is_null()) {
+        errs.push(ValidationError {
+            field: parent_line.into(),
+            message: "only an epic record declares the line it lands on; remove it from the task and declare it on the task's epic".into(),
+        });
+    }
 
     // Enum validations.
     errs.extend(validate_enum(&data, "status", TASK_STATUS_VALUES));
@@ -917,7 +924,7 @@ pub fn validate_epic(
         EPIC_TEMPLATE_SENTINEL_FIELDS,
     ));
 
-    let (_id, identity_errors, identity_warnings) =
+    let (id, identity_errors, identity_warnings) =
         canonical_identity(path, &data, is_valid_epic_format_id, "EPC-NNN");
     errs.extend(identity_errors);
     warns.extend(identity_warnings);
@@ -938,6 +945,15 @@ pub fn validate_epic(
     if let Err(message) = crate::workgraph::line_adoption::parse(data.get("line_adoptions")) {
         errs.push(ValidationError {
             field: "line_adoptions".into(),
+            message,
+        });
+    }
+    let parent_line = crate::workgraph::line_adoption::PARENT_LINE_FIELD;
+    if let Err(message) =
+        crate::workgraph::line_adoption::check_parent_line(&id, data.get(parent_line))
+    {
+        errs.push(ValidationError {
+            field: parent_line.into(),
             message,
         });
     }
@@ -1756,6 +1772,57 @@ Criteria
                     "{entry}: expected {field}: {errors:?}"
                 ),
             }
+        }
+    }
+
+    /// TSK-1286: an epic's `parent_line` is null or an exact epic line name
+    /// other than the epic's own; a task record never carries it.
+    #[test]
+    fn parent_line_validation_accepts_only_another_epics_exact_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("EPC-022.md");
+        // (value, a text the parent_line error must hold, or None when valid)
+        for (value, named) in [
+            ("null", None),
+            ("integration/EPC-001-outcome", None),
+            ("integration/EPC-022-own", Some("own line")),
+            (
+                "origin/integration/EPC-001-outcome",
+                Some("not an integration line"),
+            ),
+            ("EPC-001", Some("not an integration line")),
+            ("integration/outcome", Some("names no epic")),
+            (
+                "[integration/EPC-001-outcome]",
+                Some("must be an epic line name"),
+            ),
+        ] {
+            let content =
+                valid_epic_content().replacen("---\n", &format!("---\nparent_line: {value}\n"), 1);
+            std::fs::write(&path, content).unwrap();
+            let (errors, _) = validate_epic(&path, &ValidateOptions::default()).unwrap();
+            match named {
+                None => assert!(errors.is_empty(), "{value}: {errors:?}"),
+                Some(text) => assert!(
+                    errors
+                        .iter()
+                        .any(|e| e.field == "parent_line" && e.message.contains(text)),
+                    "{value}: expected {text}: {errors:?}"
+                ),
+            }
+        }
+        let task = dir.path().join("TSK-022.md");
+        for (value, refused) in [("integration/EPC-001-outcome", true), ("null", false)] {
+            let content =
+                valid_task_content().replacen("---\n", &format!("---\nparent_line: {value}\n"), 1);
+            std::fs::write(&task, content).unwrap();
+            let (errors, _) = validate_task(&task, &ValidateOptions::default()).unwrap();
+            assert_eq!(
+                errors.iter().any(|e| e.field == "parent_line"
+                    && e.message.contains("only an epic record declares")),
+                refused,
+                "{value}: {errors:?}"
+            );
         }
     }
 
