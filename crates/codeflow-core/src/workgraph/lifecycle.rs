@@ -1498,7 +1498,7 @@ pub(super) fn serving_tasks<'g>(
         .flat_map(|task| task.criteria.items.iter().map(move |item| (task, item)))
         .filter(|(_, item)| item.serves() == Some((epic.id.clone(), criterion.id.clone())))
         .collect();
-    if direct.iter().any(|(task, _)| task.status != "cancelled") {
+    if direct.iter().any(|(task, _)| task.status != "cancelled") || graph.transfers().is_empty() {
         return direct;
     }
     let moved: Vec<_> = graph

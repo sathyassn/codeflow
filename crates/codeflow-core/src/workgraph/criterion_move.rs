@@ -385,22 +385,21 @@ pub(super) fn destination_problem(
     graph: &Graph,
 ) -> Result<bool, String> {
     let mut incoming = false;
-    for source in graph
-        .records
-        .values()
-        .filter(|record| record.kind == RecordKind::Epic)
-    {
-        for entry in &source.criteria.items {
-            if destination(entry).ok() != Some((epic.id.clone(), criterion.id.clone())) {
-                continue;
+    for ((source, id), result) in graph.transfers() {
+        match result {
+            Ok(transfer) => {
+                incoming |= transfer.destination == (epic.id.clone(), criterion.id.clone());
             }
-            incoming = true;
-            graph
-                .transfers()
-                .get(&(source.id.clone(), entry.id.clone()))
-                .ok_or("no readable incoming transfer")?
-                .as_ref()
-                .map_err(Clone::clone)?;
+            Err(reason) => {
+                // Invalid transfers still refuse their intended destination.
+                let intended = graph
+                    .get(source, RecordKind::Epic)
+                    .and_then(|record| item(record, id))
+                    .and_then(|entry| destination(entry).ok());
+                if intended == Some((epic.id.clone(), criterion.id.clone())) {
+                    return Err(reason.clone());
+                }
+            }
         }
     }
     if incoming
