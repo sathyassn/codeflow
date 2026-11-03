@@ -39,7 +39,7 @@ pub const DEFAULT_REQUIRED_CHECKS: &[&str] = &[
     "codeflow gates",
     "secret scan",
     "security review",
-    "commit standards",
+    "trusted: commit standards",
 ];
 
 /// Enforcement level for a policy rule.

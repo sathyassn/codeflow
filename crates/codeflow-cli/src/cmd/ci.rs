@@ -30,6 +30,7 @@ mod judging;
 mod line_tip;
 pub(crate) mod pr_body;
 mod work_records;
+mod workflow_change;
 
 use change_class::ChangeClass;
 use clap::Args;
@@ -551,6 +552,10 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut tagged,
         &mut ran,
     );
+    // What this change does to the workflows is base..head; the wider
+    // commit range `--commits-from` selects (pre-push) also holds commits
+    // the target already carries, whose workflow edits are not this one's.
+    workflow_change::dispatch(&root, base_sha.as_deref(), &head, &mut tagged, &mut ran);
 
     match codeflow_core::hooks::path_policy::PathPolicy::from_git(configured).and_then(|paths| {
         let size_and_ignore = judging::content_rules(&root, authority.as_ref())?;
@@ -2107,7 +2112,9 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
             Some(sha) => format!("ci commit {}", short(sha)),
             None => "ci".to_string(),
         };
-        if t.violation.rule.starts_with("work.") {
+        if t.violation.rule == workflow_change::RULE {
+            eprintln!("{}", workflow_change::render(&t.violation, &plane));
+        } else if t.violation.rule.starts_with("work.") {
             eprintln!(
                 "{}",
                 t.violation.render_invariant(
