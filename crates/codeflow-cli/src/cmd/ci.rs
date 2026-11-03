@@ -616,6 +616,7 @@ pub fn run(args: &CiArgs) -> i32 {
     let names = Names {
         branch: &branch,
         into: into.as_deref(),
+        into_flag: args.into.as_deref(),
         destination: destination.as_deref(),
         advertisement: advertisement.as_deref(),
         candidate: match &authority {
@@ -717,7 +718,7 @@ pub fn run(args: &CiArgs) -> i32 {
     // A push of a task branch stacked on reviewed predecessor heads (SPC-013
     // R-42, issue #69); a pull request check keeps the landing rule.
     let stacked = if pr_body.is_none() && !pr_context {
-        stacked_pins(&root, &branch, &head)
+        stacked_pins(&root, git, &branch, &head)
     } else {
         Vec::new()
     };
@@ -1765,13 +1766,19 @@ fn visible_graph_check(
 /// as the claim honoured it, through the same review lookup, so a branch
 /// tip or another movable ref never stands in for review. A candidate that
 /// is not honoured is noted and the ordinary checks judge the range.
-fn stacked_pins(root: &Path, branch: &str, head: &str) -> Vec<ReviewedPin> {
+fn stacked_pins(root: &Path, git: &GitPolicy, branch: &str, head: &str) -> Vec<ReviewedPin> {
     // A read that fails honours no pin, the strict side; the work-start
-    // check reads the same task and target and reports the failure.
-    let Ok(Some(task_id)) = branch_task_at(root, branch, head) else {
+    // check reads the same task and target and reports the failure. The
+    // task and its target come from the judged head under the run's
+    // policy, never the checkout, since an honoured pin changes how the
+    // criteria are judged (TSK-350 AC-2).
+    let Ok(Some(task_id)) =
+        codeflow_core::workgraph::judged_task_id(root, &git.branch_prefixes, branch, head)
+    else {
         return Vec::new();
     };
-    let Ok(declared) = work_target_at(root, branch, head, &task_id) else {
+    let Ok(declared) = codeflow_core::workgraph::task_target_at_revision(root, &task_id, head)
+    else {
         return Vec::new();
     };
     let Ok(Some(target)) = resolve_work_target_checked(root, declared.as_deref()) else {
@@ -2639,6 +2646,9 @@ pub(super) fn branch_anchors(name: &str) -> Vec<String> {
 pub(super) struct Names<'a> {
     pub branch: &'a str,
     pub into: Option<&'a str>,
+    /// `--into` as the caller gave it, `None` when the run inferred its
+    /// target; only a given one earns the own-line exception (TSK-350).
+    pub into_flag: Option<&'a str>,
     pub destination: Option<&'a str>,
     /// The destination's advertisement, when the caller already asked it.
     pub advertisement: Option<&'a str>,
