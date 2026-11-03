@@ -517,6 +517,9 @@ task's criteria; `codeflow ci` prints the delta as a `work.criteria_frozen`
 note and still refuses an added, removed, renumbered or reordered
 criterion, a changed tag or checkbox form, or an added list item that is
 no criterion (ADR-0080).
+`codeflow ci` reads the branch's task from the judged head, never the
+checkout; how it judges a task's own criteria on its integration line is
+in the [policy reference](policy-reference.md#own-task-criteria-on-an-integration-line).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
 another provider prints the manual checklist. It writes only rulesets it owns
 by name, never another ruleset or classic branch protection, and never weakens
