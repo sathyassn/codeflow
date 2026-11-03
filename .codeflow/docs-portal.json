@@ -122,11 +122,11 @@
     },
     "scripts/runtime-scripts.json": {
       "ownership": "managed",
-      "pristine_sha256": "97ae0f0a9f14e4b9bdb34b9c8fb8e56627bb5864294e2badb22c02a906fe7002"
+      "pristine_sha256": "496b41ca73ea9c07ea5baf3a24341776add6c271cea3217ee1af43a5624f15fc"
     },
     "scripts/runtime-scripts.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "1dea2dc1a8b08e2354f0dc5602ace14f0483eb04adb85bfb1f2bdd082f4f2a68"
+      "pristine_sha256": "55311847536cc042a1579489899902afb2171826e6245951e3242d93665220de"
     },
     "scripts/site-server.mjs": {
       "ownership": "managed",
@@ -226,7 +226,7 @@
     },
     "tests/chrome.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "06032c3fa4685d0101caa8cc1533d1a926f7b1ae0c7548d01b9ac048ff58cc48"
+      "pristine_sha256": "9f7acefe22129784c737903568f96b5288536106480aec6c7dc6f4e7329b9c94"
     },
     "tests/composition-browser.test.mjs": {
       "ownership": "managed",
@@ -379,6 +379,10 @@
     "tests/fixtures/figures/rendered/controls/layering-toned.html": {
       "ownership": "managed",
       "pristine_sha256": "abe8f1c9144fddb587d6f65d3ddc6e851f392d0ca4b379c2658fd68cd45d48b5"
+    },
+    "tests/fixtures/pre-paint-script.json": {
+      "ownership": "managed",
+      "pristine_sha256": "e096b671d83f682e7616e22dc109585f9c883e6a627dc834d031b1498971be2e"
     },
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",
