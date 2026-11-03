@@ -634,7 +634,10 @@ fn export_without_capture_time(html: &str) -> String {
     let capture = time
         .captures(&html[start..start + end])
         .expect("a well-formed UTC export capture time and Unix seconds");
-    assert_eq!(&capture[1], &capture[3], "capture datetime matches its text");
+    assert_eq!(
+        &capture[1], &capture[3],
+        "capture datetime matches its text"
+    );
     capture[2]
         .parse::<u64>()
         .expect("capture Unix seconds fit u64");

@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright-core";
 import axe from "axe-core";
 import { validateWindowsQualificationConfinement } from "./windows-qualification-scope.mjs";
-import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
+import { assertNoPolicyViolations, recordPolicyViolationsOutsidePage } from "./csp-violations.mjs";
 import { codeflowBinary } from "./codeflow-binary.mjs";
 import { closeWaitMs } from "./browser-close-bound.mjs";
 
@@ -326,6 +326,7 @@ try {
   const exportPath = join(output, "review.html");
   run(codeflow, ["present", "export", sessionId, "--out", exportPath, "--theme", "graphite", "--mode", "dark"], project);
   const exportPage = await context.newPage();
+  await recordPolicyViolationsOutsidePage(exportPage);
   await exportPage.goto(pathToFileURL(exportPath).href);
   await exportPage.locator("#cf-present-document").getByText("Second revision").waitFor();
   await exportPage.waitForFunction(() => (
@@ -334,6 +335,9 @@ try {
   await exportPage.waitForFunction(() => (
     document.querySelector("code[data-cf-language='rust']")?.getAttribute("data-cf-highlight") === "ready"
   ));
+  // The audit runs in this top document only. Context init scripts would
+  // also enter the scriptless measuring and exported stage frames.
+  await exportPage.evaluate(axe.source);
   const exportAccessibility = await exportPage.evaluate(async () => globalThis.axe.run(document, {
     runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"] },
   }));
@@ -361,6 +365,7 @@ try {
   const retiredExportPath = join(output, "retired.html");
   run(codeflow, ["present", "export", sessionId, "--out", retiredExportPath], project);
   const retiredExportPage = await context.newPage();
+  await recordPolicyViolationsOutsidePage(retiredExportPage);
   await retiredExportPage.goto(pathToFileURL(retiredExportPath).href);
   await assertRetiredPage(retiredExportPage, "exported retired revision");
   await retiredExportPage.close();
@@ -646,8 +651,6 @@ async function launchBrowser(profile) {
       "--no-first-run",
     ],
   });
-  await launched.addInitScript({ content: axe.source });
-  await recordPolicyViolations(launched);
   return launched;
 }
 
@@ -705,6 +708,7 @@ function recordBrowserVersion(openContext) {
 }
 
 async function openAuthenticatedPresentation(page, bootstrapPath, servicePort) {
+  await recordPolicyViolationsOutsidePage(page);
   // The private file immediately submits into the loopback service. Waiting
   // for its full load event conflates that handoff with the destination page
   // and can hang behind long-lived application requests. A cold renderer on a
