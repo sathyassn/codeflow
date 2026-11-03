@@ -1,0 +1,11 @@
+id = "TSK-1259"
+uid = "63046ada-ec31-4b63-b52b-952ec2b822ea"
+kind = "TSK"
+title = "A named-target or sharded run narrows by what the change selects"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T00:39:18Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
