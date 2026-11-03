@@ -1731,7 +1731,18 @@ fn early_fork_import(
     let dir = repo(&[("TSK-001", OWN_JOURNEY), ("TSK-002", OWN_JOURNEY)], "");
     let root = dir.path();
     let path = record_path("TSK-001");
-    let base = head(root);
+    let older = head(root);
+    write(
+        root,
+        &path,
+        &task(
+            "TSK-001",
+            "todo",
+            &OWN_JOURNEY.replace("shall work", "shall work well"),
+            "Pending.\n",
+        ),
+    );
+    let base = commit(root, "docs: write the criteria the syncs keep");
     git(root, &["switch", "-c", "plan/new-version"]);
     write(
         root,
@@ -1748,63 +1759,24 @@ fn early_fork_import(
         None => commit(root, "docs: introduce the superseding criteria"),
     };
 
-    // M1 keeps V1 against a side parent's different criteria. The planning
-    // branch already forked at B, so M1 is not an ancestor of C.
-    git(root, &["switch", "-c", "plan/other-version", &base]);
-    write(
-        root,
-        &path,
-        &task(
-            "TSK-001",
-            "todo",
-            &OWN_JOURNEY.replace("shall work", "shall stop"),
-            "Pending.\n",
-        ),
-    );
-    commit(root, "docs: introduce the side criteria");
+    // M1 keeps V1 against a side parent that still holds the version V1
+    // replaced, as the real sync merges do. The planning branch already
+    // forked at B, so M1 is not an ancestor of C.
+    git(root, &["switch", "-c", "plan/other-version", &older]);
+    write(root, "docs/other.md", "A side line.\n");
+    commit(root, "docs: advance a side line");
     git(root, &["switch", "main"]);
-    git(
-        root,
-        &[
-            "merge",
-            "--no-ff",
-            "-s",
-            "ours",
-            "-m",
-            "docs: resolve to the old criteria",
-            "plan/other-version",
-        ],
-    );
+    merge(root, "plan/other-version");
     let first_resolution = head(root);
 
-    // A second line independently resolves to V1. The real 1097 and 1062
-    // histories both have unordered old-version resolutions; their receiver
-    // retains a different one while the source eventually contains both.
-    git(root, &["switch", "-c", "plan/another-version", &base]);
-    write(
-        root,
-        &path,
-        &task(
-            "TSK-001",
-            "todo",
-            &OWN_JOURNEY.replace("shall work", "shall wait"),
-            "Pending.\n",
-        ),
-    );
-    commit(root, "docs: introduce another side criterion");
+    // A second line independently keeps V1. The real 1097 and 1062 histories
+    // both have unordered old-version merges; their receiver retains a
+    // different one while the source eventually contains both.
+    git(root, &["switch", "-c", "plan/another-version", &older]);
+    write(root, "docs/another.md", "Another side line.\n");
+    commit(root, "docs: advance another side line");
     git(root, &["switch", "-c", "test/old-version-line", &base]);
-    git(
-        root,
-        &[
-            "merge",
-            "--no-ff",
-            "-s",
-            "ours",
-            "-m",
-            "docs: retain the old criteria in the sync",
-            "plan/another-version",
-        ],
-    );
+    merge(root, "plan/another-version");
     let second_resolution = head(root);
     let retained = if receiver_second_resolution {
         &second_resolution

@@ -223,10 +223,11 @@ A receiver's first push still proves its own task landings.
   by ancestry on the fetched history and reads no branch name or date. A
   version is older when every commit that wrote it precedes every commit
   that wrote the other, so a sync can bring in an edit whose branch forked
-  before a merge on the receiving line. A merge that only kept the older
-  version does not change the order, unless it saw the other version or kept
-  its version against something the other was built on. When both lines
-  wrote their own criteria, neither is older and the sync refuses.
+  before a merge on the receiving line. A merge that kept the older version
+  against an even older one, or against a side that never held the record,
+  does not change the order. A merge that kept it against a newer or unordered
+  version rejected that version, so it still competes. When both lines wrote
+  their own criteria, neither is older and the sync refuses.
 - Receiving-line record edits and competing criteria introductions still
   need their own judgment. A source landing with an unreviewed resolution,
   an unavailable home without a proven default-target landing, or an

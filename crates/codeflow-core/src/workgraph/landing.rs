@@ -811,11 +811,11 @@ impl<'r> RecordStore<'r> {
     /// Whether a merge that kept `older`'s version from one parent decided
     /// nothing against the newer version, so it does not compete with it:
     /// every write of the newer version read the merge's result; or the
-    /// merge never saw the newer version (`seen`), and what it kept the
-    /// version against is no part of what the newer version was written on.
-    /// That second part is what a three-way merge reads: for each parent
-    /// the merge kept the version against, the common base with each newer
-    /// write holds the older version or precedes it ([`Self::precedes`]).
+    /// merge never saw the newer version (`seen`), and every parent it kept
+    /// the version against holds something that came before the version
+    /// ([`Self::precedes`]). A merge that kept the version against a newer
+    /// or unordered one rejected that one, which is the line's own decision
+    /// and competes (TSK-234).
     fn kept_apart(
         &mut self,
         task: &Identity,
@@ -844,47 +844,33 @@ impl<'r> RecordStore<'r> {
             }
         }
         for &side in &merge.kept_against {
-            for &after in wrote_newer {
-                let bases = match history::merge_bases(self.repo, side, after) {
-                    Ok(bases) => bases,
-                    // Unrelated histories have no base to read.
-                    Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(false),
-                    Err(error) => {
-                        return Err(format!("cannot read the history: {}", error.message()))
-                    }
-                };
-                for base in bases {
-                    if !self.precedes(task, base, older, wrote_older)? {
-                        return Ok(false);
-                    }
-                }
+            if !self.precedes(task, side, older, wrote_older)? {
+                return Ok(false);
             }
         }
         Ok(true)
     }
 
-    /// Whether what `base` holds of the task is `older`'s version or comes
-    /// before it: it holds that version; it holds no record and its history
-    /// never held one; or it holds a version whose every write is a proper
-    /// ancestor of every write of the older version, and it has not seen
-    /// those writes, so it did not choose its version over the older one.
+    /// Whether what `side` holds of the task comes before `older`'s version,
+    /// so a merge that kept the older version against it rejected nothing:
+    /// it holds no record and its history never held one; or it holds a
+    /// version whose every write is a proper ancestor of every write of the
+    /// older version, and it has not seen those writes, so it did not choose
+    /// its version over the older one.
     fn precedes(
         &mut self,
         task: &Identity,
-        base: Oid,
+        side: Oid,
         older: &Holding,
         wrote_older: &[Oid],
     ) -> Result<bool, String> {
         let mut uids: BTreeSet<String> = task.uid.iter().cloned().collect();
-        let held = self.history_at(task, base, &mut uids)?;
-        if older.version.held(&held, &mut HashMap::new()) {
-            return Ok(true);
-        }
+        let held = self.history_at(task, side, &mut uids)?;
         let Some((_, record)) = held.records.first() else {
-            return Ok(self.first_holder(task, &[base], &[])?.is_none());
+            return Ok(self.first_holder(task, &[side], &[])?.is_none());
         };
         let version = older.version.like(record);
-        let introductions = self.introductions(task, base, &version)?;
+        let introductions = self.introductions(task, side, &version)?;
         for &write in &written(&introductions)? {
             for &before in wrote_older {
                 if write == before
@@ -895,7 +881,7 @@ impl<'r> RecordStore<'r> {
             }
         }
         for &before in wrote_older {
-            if super::acceptance::is_ancestor_or_same(self.repo, before, base)? {
+            if super::acceptance::is_ancestor_or_same(self.repo, before, side)? {
                 return Ok(false);
             }
         }
@@ -2058,6 +2044,7 @@ mod tests {
     }
 
     const SIDE: &str = "When run, the system shall stop.";
+    const KEPT: &str = "When run, the system shall work well.";
 
     /// The current branch merges `side` and keeps its own tree.
     fn keep_against(root: &std::path::Path, side: &str) {
@@ -2091,23 +2078,32 @@ mod tests {
         }
     }
 
-    /// TSK-1185 AC-1: the line's edit forked before main's merge, which kept
-    /// the version the edit replaced against another version on a side
-    /// branch. The merge never saw the edit, and the edit's line never held
-    /// the side's version, so only one side edited.
+    /// TSK-1185 AC-1, the shape of TSK-1012: [`LINE`] replaced an older
+    /// version and syncs `main`, which still holds the older one. `plan`
+    /// forks and edits; then [`LINE`] syncs `main` again. That second merge
+    /// is not in `plan`'s history, but it rejected nothing, so only `plan`
+    /// edited the version [`LINE`] holds.
     fn kept_merge_then_early_fork() -> tempfile::TempDir {
-        let dir = positive_shape();
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::Note],
+            vec![Step::File(RECORD, with_criterion(KEPT))],
+        );
         let root = dir.path();
-        let fork = git(root, &["rev-parse", &format!("{LINE}~1")]);
-        main_keeps_against_side(root, fork.trim(), Some(&with_criterion(SIDE)));
+        git(root, &["merge", "-q", "--no-ff", "-m", "sync", "main"]);
+        git(root, &["switch", "-q", "-c", "plan"]);
+        save(root, RECORD, &with_criterion(LINE_V));
+        git(root, &["switch", "-q", "main"]);
+        save(root, "later.txt", "main advanced\n");
         git(root, &["switch", "-q", LINE]);
+        git(root, &["merge", "-q", "--no-ff", "-m", "sync", "main"]);
         dir
     }
 
     #[test]
-    fn a_merge_that_kept_a_version_yields_to_an_edit_forked_before_it() {
+    fn a_merge_that_kept_a_version_against_an_older_one_yields_to_an_earlier_fork() {
         let dir = kept_merge_then_early_fork();
-        newest_is_fast(dir.path(), LINE, "main");
+        newest_is_fast(dir.path(), LINE, "plan");
     }
 
     /// TSK-1185 AC-3: swapping the branch names changes nothing.
@@ -2115,10 +2111,10 @@ mod tests {
     fn the_order_does_not_read_which_branch_is_named_like_a_line() {
         let dir = kept_merge_then_early_fork();
         let root = dir.path();
-        git(root, &["branch", "-m", "main", "moved"]);
-        git(root, &["branch", "-m", LINE, "main"]);
-        git(root, &["branch", "-m", "moved", LINE]);
-        newest_is_fast(root, LINE, "main");
+        git(root, &["branch", "-m", LINE, "moved"]);
+        git(root, &["branch", "-m", "plan", LINE]);
+        git(root, &["branch", "-m", "moved", "plan"]);
+        newest_is_fast(root, LINE, "plan");
     }
 
     /// When neither point holds the record, the lines of the history are
@@ -2129,32 +2125,43 @@ mod tests {
         let root = dir.path();
         git(root, &["rm", "-q", RECORD]);
         git(root, &["commit", "-q", "-m", "retire on the line"]);
-        git(root, &["switch", "-q", "main"]);
+        git(root, &["switch", "-q", "plan"]);
         git(root, &["rm", "-q", RECORD]);
-        git(root, &["commit", "-q", "-m", "retire on main"]);
-        newest_is_fast(root, LINE, "main");
+        git(root, &["commit", "-q", "-m", "retire on the plan"]);
+        newest_is_fast(root, LINE, "plan");
     }
 
-    /// TSK-1012's shape: the kept version replaced an older one, the side
-    /// still holds the older one, and the common base holds it too. The
-    /// newer edit read the kept version.
+    /// A merge that kept a version against a newer one rejected it, which is
+    /// the line's own decision (TSK-234), even though the other line's edit
+    /// read the kept version.
     #[test]
-    fn a_merge_that_kept_a_version_against_an_older_one_yields_to_a_later_edit() {
-        let kept = with_criterion("When run, the system shall work well.");
-        let dir = diverged(
-            Step::File(RECORD, record(UID)),
-            vec![Step::Note],
-            vec![Step::File(RECORD, kept)],
-        );
+    fn a_merge_that_rejected_a_newer_version_still_competes() {
+        let dir = positive_shape();
         let root = dir.path();
-        git(root, &["merge", "-q", "--no-ff", "-X", "ours", "-m", "sync", "main"]);
-        git(root, &["switch", "-q", "-c", "plan"]);
+        let fork = git(root, &["rev-parse", &format!("{LINE}~1")]);
+        main_keeps_against_side(root, fork.trim(), Some(&with_criterion(SIDE)));
+        refuses_both_orders(root, "different versions");
+    }
+
+    /// One line rejected a version in a merge the older version's line later
+    /// took in. Writing that version again elsewhere does not undo the
+    /// rejection, even though the merge the older line kept rejected nothing.
+    #[test]
+    fn a_copy_of_a_version_the_older_line_rejected_still_competes() {
+        let dir = diverged(Step::File(RECORD, record(UID)), vec![], vec![]);
+        let root = dir.path();
+        git(root, &["switch", "-q", "-c", "rejected", "main"]);
         save(root, RECORD, &with_criterion(LINE_V));
+        git(root, &["switch", "-q", "-c", "rejecting", "main"]);
+        save(root, "note.txt", "the rejecting line\n");
+        keep_against(root, "rejected");
         git(root, &["switch", "-q", "main"]);
-        save(root, "later.txt", "main advanced\n");
+        save(root, RECORD, &with_criterion(KEPT));
+        git(root, &["merge", "-q", "--no-ff", "-m", "sync", "rejecting"]);
+        git(root, &["branch", "-f", LINE, "main^1"]);
         git(root, &["switch", "-q", LINE]);
-        git(root, &["merge", "-q", "--no-ff", "-X", "ours", "-m", "sync", "main"]);
-        newest_is_fast(root, LINE, "plan");
+        save(root, RECORD, &with_criterion(LINE_V));
+        refuses_both_orders(root, "different versions");
     }
 
     /// TSK-1132's shape: the side never held the record, so a merge keeping
@@ -2222,9 +2229,9 @@ mod tests {
     fn a_kept_merge_does_not_excuse_a_later_edit_back_to_the_version() {
         let dir = kept_merge_then_early_fork();
         let root = dir.path();
-        git(root, &["switch", "-q", "main"]);
         save(root, RECORD, &with_criterion(SIDE));
-        save(root, RECORD, &record(UID));
+        save(root, RECORD, &with_criterion(KEPT));
+        git(root, &["branch", "-f", "main", "plan"]);
         refuses_both_orders(root, "different versions");
     }
 
