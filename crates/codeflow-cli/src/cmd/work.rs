@@ -1,6 +1,6 @@
 //! Durable-work commands: `work next`, `work claim` and `work start`. All three
-//! read the one readiness core (SPC-013 R-40, R-110); only `work claim`
-//! writes, and what it writes is a branch. `work status` is the recovery
+//! read the one readiness core (SPC-013 R-40, R-110). Claim and start fetch;
+//! claim also writes a branch and its fixed base evidence. `work status` is the recovery
 //! inventory: per task, the worktrees holding work found nowhere else.
 
 use std::fmt::Write as _;
@@ -34,9 +34,10 @@ pub enum WorkCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Fetch, check the task is ready and unclaimed on its target tip, then
-    /// create and push `task/<id>-<slug>` from that tip. The pushed branch is
-    /// an advisory mark others can see.
+    /// Fetch, choose the live target tip or the single line holding a completed
+    /// predecessor the target has not received, then create and push
+    /// `task/<id>-<slug>` from that base. The pushed branch is an advisory mark
+    /// others can see.
     Claim {
         /// Stable task id.
         task_id: String,
@@ -44,7 +45,7 @@ pub enum WorkCommand {
         #[arg(long, value_name = "TSK-NNN@SHA")]
         on: Vec<String>,
     },
-    /// Verify that a durable task was planned and anchored before implementation.
+    /// Fetch, verify planning, and require HEAD to contain its recorded claim base or the current selected base.
     Start {
         /// Stable task id.
         task_id: String,
@@ -360,13 +361,18 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
         }
     };
     let level = policy.git.work_planning_level();
+    // A failed refresh is missing live evidence, even at warning level.
+    if let Err(error) = readiness::refresh_claim(&root, task_id) {
+        eprintln!("work start: error: {}", crate::cmd::shown(&error));
+        return 1;
+    }
     let Err(findings) = plan_check(&root, task_id, target, on) else {
         return 0;
     };
     let warn = level == PolicyLevel::Warn;
     let label = if warn { "warning" } else { "error" };
     for finding in &findings {
-        eprintln!("work start: {label}: {finding}");
+        eprintln!("work start: {label}: {}", crate::cmd::shown(finding));
     }
     if warn {
         eprintln!(
@@ -409,6 +415,9 @@ fn plan_check(
         "work start: {} anchored at {} for {} -> {}",
         report.task_id, report.merge_base, report.branch, report.target
     );
+    if let Some(note) = report.base_note {
+        println!("  {}", crate::cmd::shown(&note));
+    }
     if let Some(epic) = report.epic_id {
         println!("  epic: {epic}");
     } else {

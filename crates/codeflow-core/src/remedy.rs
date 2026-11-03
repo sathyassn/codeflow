@@ -336,6 +336,9 @@ catalog! {
     /// A task branch whose planning is not anchored on the target.
     WORK_START_RECONCILE = Step::Codeflow("codeflow work start"),
         "reconcile the target branch, then run `codeflow work start {id}`";
+    /// A review head missing its current target, or an unreadable target tip.
+    WORK_TARGET_TIP = Step::Git("git merge"),
+        "fetch the target remote, then run `git merge {target}` on the task branch before review and rerun `codeflow ci`";
     /// A task blocked on the target (TSK-1036): its own pull request
     /// unblocks it once the Blocker is resolved.
     WORK_START_UNBLOCK = Step::Codeflow("codeflow task status"),

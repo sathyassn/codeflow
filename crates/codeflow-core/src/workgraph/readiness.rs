@@ -1873,7 +1873,7 @@ pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
         .is_none()
     {
         for remote in &remotes {
-            git(repo_root, &["fetch", "--prune", "--quiet", remote])?;
+            fetch_for_admission(repo_root, remote)?;
         }
     }
     let declared = claim_target(repo_root, task_id)?
@@ -1888,10 +1888,41 @@ pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
     if has_origin && !fetch.contains(&"origin") {
         fetch.push("origin");
     }
+    let mut refreshed: BTreeSet<_> = fetch.iter().map(|r| (*r).to_string()).collect();
     for remote in fetch {
-        git(repo_root, &["fetch", "--prune", "--quiet", remote])
-            .map_err(|error| format!("fetch {remote} failed: {error}"))?;
+        fetch_for_admission(repo_root, remote)?;
     }
+    // Discover code sources from the freshly fetched target, never the ledger.
+    let (_, tip) = super::claim_base::source(&repo, &declared)?;
+    let tree = repo
+        .find_commit(tip)
+        .and_then(|c| c.tree())
+        .map_err(|e| e.to_string())?;
+    let records = records_from_tree(&repo, &tree).map_err(|e| e.to_string())?;
+    for dep in records.get(task_id).into_iter().flat_map(|r| &r.depends_on) {
+        if dep.kind != super::deps::DependencyKind::Code {
+            continue;
+        }
+        if let Some(line) = records
+            .get(&dep.id)
+            .and_then(|r| r.integration_target.as_deref())
+        {
+            if let Some(remote) = target_fetch_remote(&repo, line)? {
+                if remotes.contains(&remote) && refreshed.insert(remote.clone()) {
+                    fetch_for_admission(repo_root, &remote)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn fetch_for_admission(root: &Path, remote: &str) -> Result<(), String> {
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let last = fetched_at(&repo).unwrap_or_else(|| "unknown".into());
+    git(root, &["fetch", "--prune", "--quiet", "--", remote]).map_err(|error| {
+        format!("fetch {remote} failed (last fetch before this attempt: {last}): {error}")
+    })?;
     Ok(())
 }
 
@@ -1945,9 +1976,10 @@ pub fn claim_on(
     let (reference, target_tip) = resolve_target(repo_root, &repo, &declared)?
         .ok_or_else(|| format!("target '{declared}' does not resolve here"))?;
     let stack = super::work_start::stack_base(repo_root, pins)?;
-    let mut tip = stack.unwrap_or(target_tip);
+    let selected = super::claim_base::select(repo_root, task_id, &declared, pins)?;
+    let mut tip = git2::Oid::from_str(&selected.revision).map_err(|e| e.to_string())?;
     let tree = repo
-        .find_commit(tip)
+        .find_commit(if stack.is_some() { tip } else { target_tip })
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
     let mut records = records_from_tree(&repo, &tree).map_err(|error| error.to_string())?;
@@ -1964,6 +1996,7 @@ pub fn claim_on(
         }
     }
     let reference_shown = shown(&reference);
+    super::claim_base::project_dependencies(&repo, &mut records, task_id, target_tip, tip, pins)?;
     super::work_start::validate_anchored_task_on(&repo, &records, task_id, &reference, pins)
         .map_err(|error| format!("not ready on {reference_shown}: {error}"))?;
     let ids = BTreeSet::from([task_id.to_string()]);
@@ -2015,6 +2048,7 @@ pub fn claim_on(
     } else {
         git(repo_root, &["branch", &branch, &tip.to_string()])?;
     }
+    super::claim_base::record(repo_root, task_id, &branch, &declared, &selected)?;
     if has_origin {
         // Create only: an existing remote branch of that name is never moved.
         let destination = format!("refs/heads/{branch}");
@@ -2032,7 +2066,7 @@ pub fn claim_on(
     }
     Ok(Claim {
         branch,
-        from: format!("{reference_shown}@{}", &tip.to_string()[..9]),
+        from: format!("{}@{}", shown(&selected.source), &tip.to_string()[..9]),
         pushed: has_origin,
         informational_branches: information,
     })

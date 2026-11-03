@@ -577,6 +577,30 @@ fn clears_work_start_reconcile() {
 }
 
 #[test]
+fn clears_work_target_tip() {
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    const BRANCH: &str = "task/TSK-001-work";
+    hosted.plan_task("plan/work");
+    hosted.land("plan/work");
+    hosted.branch(BRANCH);
+    commit(root, "x.txt", "feat: add x");
+    hosted.branch("plan/advance");
+    commit(root, "target.txt", "docs: advance target");
+    hosted.land("plan/advance");
+    git(root, &["switch", "-q", BRANCH]);
+    prove(
+        "WORK_TARGET_TIP",
+        "work.target_tip",
+        || hosted.ci(BRANCH, &["--into", &hosted.target]),
+        |printed| {
+            let step = printed_command(printed, "WORK_TARGET_TIP", None);
+            run_printed(root, &step, &[], &[]);
+        },
+    );
+}
+
+#[test]
 fn clears_work_start_merge_planning() {
     let hosted = Hosted::new();
     let root = &hosted.root;

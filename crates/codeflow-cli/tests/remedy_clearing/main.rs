@@ -102,6 +102,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("FEEDBACK_INDEX_STALE", Runs),
     ("DOCS_CAPABILITIES_UNCHECKED", Runs),
     ("WORK_START_RECONCILE", Runs),
+    ("WORK_TARGET_TIP", Runs),
     ("WORK_START_MERGE_PLANNING", Runs),
     ("WORK_START_UNBLOCK", Runs),
     ("WORK_CLASSIFICATION", Runs),
