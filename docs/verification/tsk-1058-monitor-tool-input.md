@@ -8,6 +8,17 @@ build and is not confirmed on the other supported versions.
 - Observed: Claude Code 2.1.317 only. This record claims the matcher and the
   `tool_input.command` read for that build and for any build whose `Monitor`
   hook payload has the same `tool_name` and `tool_input.command` shape.
+- Reason for the narrowing: only the installed 2.1.317 build could be
+  observed here, the coordinator asked that harness binaries not be read
+  again, and a non-interactive capture is refused by policy. No other build
+  was available to check.
+- What is lost: no confirmation that the hook payload shape holds on other
+  supported builds, and no native hook payload for `Monitor` on any build.
+- An unverified build does not fail closed. If its `Monitor` payload carries
+  the shell text outside `tool_input.command`, the guards find no command and
+  allow the call, the same as before this change. This change adds judging
+  where the field matches; it does not block unknown shapes. No evidence shows
+  such a build exists.
 - A matcher entry for a tool name a build does not have matches nothing, so
   the wider matcher is harmless on builds without `Monitor`. A build that
   puts the shell text in a different field is not covered, and the guards
