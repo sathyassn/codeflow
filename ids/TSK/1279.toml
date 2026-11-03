@@ -1,0 +1,11 @@
+id = "TSK-1279"
+uid = "550e0789-2c60-488e-b33a-b014ab9e6009"
+kind = "TSK"
+title = "Heavy runs keep the caller's job cap and each target's declared workers and exclusivity"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T07:02:48Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
