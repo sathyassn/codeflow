@@ -52,9 +52,11 @@ needed, such as a quoted title or a numeric range in data.
   where a few anchoring lines and then bullets or a table would carry the
   facts.
 - A present or portal page breaks the copy guide's "Page limits": a text
-  block runs past two lines outside a disclosure, a bullet carries several
-  points, a number has no unit, or text in styled boxes stands where a
-  figure would show the flow, comparison or status.
+  block runs past the 136-character budget outside a disclosure, four or
+  more text blocks follow each other with no figure, table or status rows
+  between them, a bullet carries several points, a number has no unit, or
+  text in styled boxes stands where a figure would show the flow,
+  comparison or status.
 - A row, chip, menu entry, crumb or figure label leads with its identifier;
   a context string is cut to "..."; a time a reader sees has no zone; an
   entity view opens with numbers before what it is, for whom and why now.

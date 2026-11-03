@@ -70,8 +70,9 @@ style direction outranks this skill's defaults.
    identifier or unexpanded acronym is a smell (ADR-0067), and a more
    expressive label must be earned by the product voice and remain
    understandable in context. A present or portal page also meets the
-   copy guide's "Page limits"; a text block over two lines, a bullet with
-   several points or text in boxes standing in for a figure is a finding.
+   copy guide's "Page limits"; a text block over the 136-character budget,
+   more than three text blocks in a row, a bullet with several points or
+   text in boxes standing in for a figure is a finding.
    Utility copy does not become product voice, and CodeFlow does not supply a
    personality for either. Keep formatting proportionate: a simple
    answer needs no apparatus, and when a relationship is materially clearer

@@ -67,7 +67,7 @@ figure:
 <li data-state="human"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle cx="14" cy="8" r="6" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line)" stroke-width="2.5"/></svg>Human decision</li>
 <li data-state="stop"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><line x1="14" y1="3" x2="14" y2="13" stroke="var(--cf-fig-stop)" stroke-width="4" stroke-linecap="square"/></svg>Gate that stops travel</li>
 </ul>
-<figcaption class="cf-fig-caption">One task lands as a pull request and a body of work lands task by task on an integration branch, and both end at a human merge behind green checks.</figcaption>
+<figcaption class="cf-fig-caption">One task lands as a pull request and a body of work lands task by task; both end at a human merge behind green checks.</figcaption>
 <details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">Four columns: branch, review, gate, land. Path A runs from a task branch to a pull request, to required checks, to a human merge, all travelled. Path B runs from a task in an epic to codeflow integrate, an agent merge point, to the integration branch, then along travel not yet made to the same human merge. A gate that stops travel crosses both paths in the gate column.</p>
 <table><thead><tr><th>Path</th><th>Who opens</th><th>Who merges</th><th>What stops it</th></tr></thead>
 <tbody><tr><td>A: one task</td><td>an agent opens the pull request</td><td>a person, on green checks</td><td>a red required check</td></tr>

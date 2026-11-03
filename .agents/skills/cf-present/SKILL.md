@@ -51,9 +51,10 @@ it; write every string by the copy guide
 (`cf-editorial-review/references/copy-guide.md`). Write the
 page plainly: simple, straightforward and clear, no mannered prose (see
 `.codeflow/rules/writing.md`), in short prose and bullets. Hold it to the
-copy guide's "Page limits": at most two lines per text block outside a
-disclosure, one point per bullet, a figure as the main view of any flow,
-comparison or status, a unit on every number and names before identifiers.
+copy guide's "Page limits": at most 136 characters per text block outside
+a disclosure, at most three text blocks in a row, one point per bullet, a
+figure as the main view of any flow, comparison or status, a unit on every
+number and names before identifiers.
 Keep it faithful
 to the session and project voice; preserve exact identifiers and technical
 terms; invent no personality, certainty,
@@ -93,9 +94,10 @@ as a **shape** (carrier first), not a form to pad.
    history, external URLs, and filesystem paths out of it.
 2. Write a `schema_version: 2` document by
    `references/document-authoring.md`; run `codeflow present check --file
-   <document.json>` and fix every warning it prints, the copy warnings
-   (`copy-density`, `copy-ellipsis`, `copy-time-zone`) included, then let
-   `codeflow present open` validate.
+   <document.json>` and fix each warning it prints. For a copy warning
+   (`copy-density`, `copy-run`, `copy-ellipsis`, `copy-time-zone`), fix the
+   text, or keep an exact quote or title as it is and say why in the
+   hand-off. Then let `codeflow present open` validate.
 3. Use the isolated browser/profile opened by CodeFlow. `--no-launch` is for
    recovery, automation, or an agent sandbox (run in the project tree); it
    never attaches to the operator's browser or active view.

@@ -9,11 +9,12 @@ that reads only the kit still gets them. The lines below are the kit's own
 (`cf-docs-portal/resources/design-system/README.md`, "Writing rules"):
 
 - Visuals first: a figure is the main view of any flow, comparison or
-  status, with a lead sentence above it and the acting sentences below; text
-  in styled boxes is not a figure, and the page leans visual, elegant and
-  balanced.
-- Short blocks: short plain sentences, at most two lines per text block
-  outside collapsed detail, one point per bullet and a unit on every number.
+  status, with a lead sentence above it and the acting sentences below.
+- Boxed text is not a figure: text in styled boxes, cards or callouts stays
+  text, and the page leans visual, elegant and balanced.
+- Short blocks: short plain sentences, at most 136 characters per text
+  block outside collapsed detail (about two desktop lines), at most three
+  text blocks in a row, one point per bullet and a unit on every number.
 - No em or en dash; use a comma, colon, full stop or hyphen.
 - Names first: a title is never a bare identifier, and a row, chip, menu
   entry, crumb, cell or figure label names its subject in words, with the
@@ -125,7 +126,7 @@ A title or heading is a noun phrase in words that names its subject.
 
 - Name the subject in words. A bare identifier (`TSK-066`, `ADR-0032`) or an
   unexpanded acronym is never the whole title; it goes in the body, the link
-  or the frontmatter. An identifier followed by words is fine.
+  or the frontmatter, or after the name in words.
 - Keep the same order in a row, chip, menu entry, breadcrumb, table cell
   or figure label: the name in words first, the identifier after it, as a
   tag or in parentheses. A reader scans names; the identifier is for the
@@ -272,24 +273,32 @@ Example, noun headers (source: `cf-docs-portal/resources/design-system/README.md
 A present or portal page carries its facts in figures and short blocks;
 the rest goes behind a disclosure.
 
-- Keep each text block outside collapsed detail to two lines: 136
-  characters at the 68-character reading measure, with a hard break
-  starting a new line. A disclosure, a stage's Details and a code block are
-  exempt.
+- Keep each text block outside collapsed detail within 136 characters.
+  That is a character budget, not a line count: it approximates two
+  desktop lines of a paragraph, list item or lede at the 68ch reading
+  measure, and about five lines on a phone, which is the ceiling. Long
+  words, wide glyphs and narrow table or comparison cells wrap sooner and
+  are held to the same budget. A hard break ends its line. A disclosure, a
+  stage's Details and a code block are exempt.
 - Put one point in each bullet.
+- Put at most three text blocks in a row; the fourth needs a figure, table
+  or status rows before it.
 - Make a figure the main view of any flow, comparison or status. Text in
-  styled boxes, cards or callouts is not a figure.
+  styled boxes, cards or callouts is not a figure; a stage holds at most
+  about 320 characters of text.
 - Give every number its unit: "12 tasks", "40 minutes", "3.2 MB".
 - Put a subject's name before its identifier, as "Titles and headings"
   sets out.
 - Lean the page visual, elegant and balanced: figures and short blocks
-  alternate, and no section is a run of text blocks.
-- Run `codeflow present check` on a present document. It warns on a text
-  block over two lines, on "..." or an ellipsis, and on a time without a
-  zone. Review holds a portal page to the same limits.
+  alternate.
+- Run `codeflow present check` on a present document and `codeflow
+  validate --portal` on a built portal. Both warn on a block over the
+  budget, more than three text blocks in a row, an ellipsis that may cut
+  text short and a time without a zone. Fix each warning, or keep an exact
+  quote or title as it is and say why in the hand-off.
 
 Example, the limits as the kit states them (source: `cf-present/resources/design-system/README.md`):
-> Short blocks: short plain sentences, at most two lines per text block outside collapsed detail, one point per bullet and a unit on every number.
+> Short blocks: short plain sentences, at most 136 characters per text block outside collapsed detail (about two desktop lines), at most three text blocks in a row, one point per bullet and a unit on every number.
 
 ## Microcopy
 
