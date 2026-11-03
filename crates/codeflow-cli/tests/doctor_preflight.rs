@@ -590,6 +590,40 @@ fn a_builder_grant_that_is_not_effective_fails_the_preflight() {
     assert!(!out.contains("observed effective"), "{out}");
 }
 
+/// TSK-1156: inside a Codex seat the nested `codex sandbox` probe cannot
+/// start, so the grants line says that and names `--builder-write-probe`;
+/// outside a seat the line stays as it was.
+#[cfg(unix)]
+#[test]
+fn the_unobserved_grants_line_inside_a_codex_seat_points_to_the_write_probe() {
+    let project = builder_project();
+    let bin = fake_codex_with(Fake::LoadsProject, Grants::Aborts);
+    let run = |seat: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+        command
+            .current_dir(project.path())
+            .env("PATH", bin.path())
+            .env("CODEFLOW_HOME", project.path().join("personal"))
+            .args(["doctor", "--preflight"]);
+        if seat {
+            command.env("CODEX_SANDBOX", "seatbelt");
+        } else {
+            command.env_remove("CODEX_SANDBOX");
+        }
+        String::from_utf8_lossy(&command.output().unwrap().stdout).into_owned()
+    };
+    let inside = run(true);
+    assert!(
+        inside.contains("this run is inside a Codex seat, where that nested probe cannot start"),
+        "{inside}"
+    );
+    assert!(
+        inside.contains("run `codeflow doctor --builder-write-probe` in the seat"),
+        "{inside}"
+    );
+    assert!(!run(false).contains("inside a Codex seat"));
+}
+
 /// TSK-337: a refusal of the overrides fails the preflight too, and no
 /// sandbox run follows it.
 #[cfg(unix)]
