@@ -1,0 +1,11 @@
+id = "TSK-1299"
+uid = "81c6f5e2-d514-4447-865a-4a3bb1a704f5"
+kind = "TSK"
+title = "Project limits are configurable within stated bounds and listed on one page"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T19:41:40Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
