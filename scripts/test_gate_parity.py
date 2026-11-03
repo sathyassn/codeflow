@@ -1103,12 +1103,13 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
 
     OWN = {
         ".github/workflows/codeflow-ci.yml", ".github/workflows/codeflow-policy.yml",
-        ".github/workflows/codeflow-release.yml",
+        ".github/workflows/codeflow-registry.yml", ".github/workflows/codeflow-release.yml",
         ".github/workflows/portal-pages.yml", ".github/workflows/release.yml",
         ".github/workflows/release-main-recheck.yml", ".github/workflows/release-plan-authority.yml",
         ".github/workflows/release-post-announce.yml",
     }
-    SHIPPED = {"assets/base/ci/codeflow-ci.yml", "assets/base/ci/codeflow-policy.yml"}
+    SHIPPED = {"assets/base/ci/codeflow-ci.yml", "assets/base/ci/codeflow-policy.yml",
+               "assets/base/ci/codeflow-registry.yml"}
 
     def files(self) -> dict[str, str]:
         return {path.as_posix(): (parity.ROOT / path).read_text(encoding="utf-8") for path in parity.workflow_files()}
