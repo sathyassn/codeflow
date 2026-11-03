@@ -239,6 +239,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
 | | `--preflight` | Print the seat, sandbox and tool evidence the orchestrator preflight reads, each value marked configured, observed or unavailable; exit 1 when Codex refuses the builder launch or a builder write is refused; when the builder write probe gives no result, the line says builder readiness is not established and the exit stays 0. |
+| | `--builder-write-probe` | Print whether this process can write each folder a Codex builder seat writes outside its worktree, then whether it can open the shared git config file for writing (one line each, never changing it), and exit 1 when a folder is denied. The preflight runs it inside `codex sandbox` under the builder launch. |
 | | `--profile <PROFILE>` | With `--check remote-perimeter`: compare the rulesets `codeflow remote protect` owns with this profile (solo-administrator or independent-review). A non-empty bypass list on the authority or line checks fails with or without it. One of `solo-administrator`, `independent-review`. |
 | `codeflow work next` | | List ready tasks first, then landed (work merged), waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
 | | `--epic <EPC-NNN>` | Only tasks of this epic. |
@@ -517,6 +518,9 @@ task's criteria; `codeflow ci` prints the delta as a `work.criteria_frozen`
 note and still refuses an added, removed, renumbered or reordered
 criterion, a changed tag or checkbox form, or an added list item that is
 no criterion (ADR-0080).
+`codeflow ci` reads the branch's task from the judged head, never the
+checkout; how it judges a task's own criteria on its integration line is
+in the [policy reference](policy-reference.md#own-task-criteria-on-an-integration-line).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
 another provider prints the manual checklist. It writes only rulesets it owns
 by name, never another ruleset or classic branch protection, and never weakens

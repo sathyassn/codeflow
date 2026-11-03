@@ -13,12 +13,12 @@ use std::path::Path;
 
 use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
-    is_correction, pull_request_findings_into, Criteria, Finding, AUTHORITY_NOTE, FROZEN_RULE,
-    IMPORT_RULE, REMOVAL_RULE, SCOPE_NOTE,
+    is_correction, pull_request_findings_into, Criteria, Finding, OwnLine, Replaced, Scope,
+    AUTHORITY_NOTE, COPIES_NOTE, FROZEN_RULE, IMPORT_RULE, REMOVAL_RULE, SCOPE_NOTE,
 };
 use codeflow_core::workgraph::amendment::AMENDMENT_RULE;
 use codeflow_core::workgraph::release_line;
-use codeflow_core::workgraph::{check_epic_line, task_id_from_branch};
+use codeflow_core::workgraph::{check_epic_line, judged_task_id};
 
 use super::classification::{range_changes, root_branch_at, Class, Range};
 
@@ -60,7 +60,7 @@ pub(super) fn dispatch(
     let branch = names.branch;
     let found = match judge(root, range, names) {
         Some(judged) => judged,
-        None => criteria(root, range, branch, class).and_then(|criteria| {
+        None => criteria(root, git, range, branch, class).and_then(|criteria| {
             println!(
                 "codeflow ci: acceptance binding: {} (branch '{}', target '{}')",
                 if criteria.amends() {
@@ -76,6 +76,8 @@ pub(super) fn dispatch(
             } else {
                 None
             };
+            let own_line = own_line(root, git, range, names, &criteria);
+            let replaced = replaced_ref(root, git, range, names, push);
             pull_request_findings_into(
                 root,
                 range.base,
@@ -84,6 +86,10 @@ pub(super) fn dispatch(
                 names.candidate,
                 (Some(names.branch), Some(range.target), sync_tip.as_deref()),
                 stacked,
+                Scope {
+                    own_line: own_line.as_ref(),
+                    replaced: replaced.as_ref(),
+                },
             )
         }),
     };
@@ -95,7 +101,7 @@ pub(super) fn dispatch(
                         tagged.push(refused);
                     }
                 } else if found.note {
-                    let remedy = if found.rule == AUTHORITY_NOTE {
+                    let remedy = if found.rule == AUTHORITY_NOTE || found.rule == COPIES_NOTE {
                         codeflow_core::remedy::CRITERIA_AUTHORITY.remedy()
                     } else if is_correction(&found) {
                         codeflow_core::remedy::CRITERIA_CORRECTION.remedy()
@@ -148,13 +154,178 @@ fn line_sync_tip(
     if git.branch_is_protected_any_case(branch) || git.branch_folds_onto_protected(branch) {
         return None;
     }
-    if !matches!(task_id_from_branch(root, branch), Ok(Some(_))) {
+    if !matches!(judged_task(root, git, branch, range.head), Ok(Some(_))) {
         return None;
     }
     let destination = release_line::from_advertisement(url, listed).ok()?;
     release_line::advertised_tip_here(root, &destination, range.target)
         .ok()
         .map(|tip| tip.to_string())
+}
+
+/// The task `branch` carries, read from the task records at the judged
+/// `head` under the work prefixes of the policy the run judges with
+/// (TSK-350 AC-1, AC-2), never from the checkout's records or policy.
+fn judged_task(
+    root: &Path,
+    git: &GitPolicy,
+    branch: &str,
+    head: &str,
+) -> Result<Option<String>, String> {
+    judged_task_id(root, &git.branch_prefixes, branch, head).map_err(|error| error.to_string())
+}
+
+/// The bounded own-line exception for the task's own criteria change
+/// (TSK-350 AC-6, SPC-013 R-52), when every condition holds; `None` keeps
+/// today's criteria points. It matters only when the run names a candidate
+/// authority (the pre-push hook's `--policy-from`), the one point it would
+/// set aside, so no other run asks the destination for it. A condition
+/// that cannot be proved is a refusal of the exception, never a grant.
+fn own_line(
+    root: &Path,
+    git: &GitPolicy,
+    range: &Range<'_>,
+    names: &super::Names<'_>,
+    criteria: &Criteria,
+) -> Option<OwnLine> {
+    let Criteria::OwnTask(task) = criteria else {
+        return None;
+    };
+    names.candidate?;
+    // Only an explicit `--into` earns the exception: a target inferred from
+    // the head's own record keeps today's rule (TSK-350 Description).
+    let into = names.into_flag.and(names.into)?;
+    match own_line_tip(root, git, range, names, task, into) {
+        Ok(line) => {
+            println!(
+                "codeflow ci: acceptance: {task} changes its own criteria on its bound line '{}' (at {:.9}): the line's tip and the range base are its criteria points; the candidate authority stays the policy and history authority (SPC-013 R-52)",
+                codeflow_core::git::display_text(into),
+                line.tip
+            );
+            Some(line)
+        }
+        Err(reason) => {
+            if codeflow_core::workgraph::line_adoption::epic_id(into).is_ok() {
+                println!(
+                    "codeflow ci: acceptance: the own-line criteria exception does not apply to {task} on '{}': {reason}",
+                    codeflow_core::git::display_text(into)
+                );
+            }
+            None
+        }
+    }
+}
+
+/// The confirmed tip of `into` when the exception's binding holds for
+/// `task`: `into` is an epic line, not a protected branch; the branch
+/// carries `task` at the judged head; the destination advertises `into`
+/// and its tip is here; the task's record declares `into` at that tip and
+/// at the head; and the records at the pinned candidate authority and at
+/// that tip bind the line, with no refusal at either.
+fn own_line_tip(
+    root: &Path,
+    git: &GitPolicy,
+    range: &Range<'_>,
+    names: &super::Names<'_>,
+    task: &str,
+    into: &str,
+) -> Result<OwnLine, String> {
+    use codeflow_core::workgraph::EpicLineBinding;
+    if codeflow_core::workgraph::line_adoption::epic_id(into).is_err()
+        || git.branch_is_protected_any_case(into)
+        || git.branch_folds_onto_protected(into)
+    {
+        return Err("the target is not an epic integration line".into());
+    }
+    let branch = names.branch;
+    if judged_task(root, git, branch, range.head)?.as_deref() != Some(task) {
+        return Err(format!(
+            "the branch does not carry {task} at the judged head"
+        ));
+    }
+    let destination = match (names.destination, names.advertisement) {
+        (Some(url), Some(listed)) => release_line::from_advertisement(url, listed),
+        _ => release_line::ask_destination(root, names.destination),
+    }
+    .map_err(|error| format!("the destination cannot confirm the line: {error}"))?;
+    let tip = release_line::advertised_tip_here(root, &destination, into)
+        .map_err(|error| format!("the destination cannot confirm the line: {error}"))?;
+    // Every read below is at an exact revision and by the task's id: the
+    // declarations at the confirmed line tip and the head, and the binding
+    // at the pinned candidate authority and that tip, where a refusal at
+    // either wins. No checkout policy and no local or remote-tracking ref
+    // takes part (TSK-350 review 01, findings 1 and 2).
+    let tip_text = tip.to_string();
+    for (revision, place) in [
+        (tip_text.as_str(), "the line's tip"),
+        (range.head, "the head"),
+    ] {
+        let declared = codeflow_core::workgraph::task_target_at_revision(root, task, revision)
+            .map_err(|error| error.to_string())?;
+        if declared.as_deref() != Some(into) {
+            return Err(format!(
+                "{task}'s record at {place} does not declare this line as its integration_target"
+            ));
+        }
+    }
+    let candidate = names
+        .candidate
+        .ok_or_else(|| "no pinned candidate authority".to_string())?;
+    let anchors = [
+        (candidate, "the candidate authority"),
+        (tip_text.as_str(), "the line's tip"),
+    ];
+    match codeflow_core::workgraph::task_line_binding(root, task, range.head, into, &anchors)
+        .map_err(|error| error.to_string())?
+    {
+        EpicLineBinding::Bound => Ok(OwnLine {
+            task: task.to_string(),
+            tip,
+        }),
+        EpicLineBinding::Refused(reason) | EpicLineBinding::Unbound(reason) => {
+            Err(format!("the line {reason}, so it is not a bound epic line"))
+        }
+    }
+}
+
+/// The remote-tracking ref of the judged branch that this run replaces
+/// (TSK-350 AC-4, AC-5), by full name and its exact tip: the destination's
+/// copy of a task branch, `refs/remotes/<remote>/<branch>`, where
+/// `<remote>` is the one configured remote whose URL is the destination.
+/// On the pre-push hand-off its tip must also be the old head the
+/// destination advertises for the branch, the head the push replaces. A
+/// protected branch, a branch carrying no task at the head, an ambiguous
+/// or missing remote and a tracking ref behind or ahead of the destination
+/// leave nothing out.
+fn replaced_ref(
+    root: &Path,
+    git: &GitPolicy,
+    range: &Range<'_>,
+    names: &super::Names<'_>,
+    push: bool,
+) -> Option<Replaced> {
+    let branch = names.branch;
+    if git.branch_is_protected_any_case(branch) || git.branch_folds_onto_protected(branch) {
+        return None;
+    }
+    if !matches!(judged_task(root, git, branch, range.head), Ok(Some(_))) {
+        return None;
+    }
+    let url = names.destination?;
+    // A read that fails sets nothing aside, the strict side.
+    let replaced = Replaced::tracking(root, url, branch).ok().flatten()?;
+    if push {
+        let destination = release_line::from_advertisement(url, names.advertisement?).ok()?;
+        let advertised = destination
+            .heads
+            .iter()
+            .find(|(head, _)| head == branch)
+            .map(|(_, tip)| *tip)?;
+        if advertised != replaced.tip {
+            return None;
+        }
+    }
+    Some(replaced)
 }
 
 /// The release-range judgement (SPC-013 R-120), or `None` for an ordinary
@@ -326,17 +497,18 @@ fn unscoped(error: &str) -> String {
 /// line. A push names no epics yet, so its pull request judges their scope.
 fn criteria(
     root: &Path,
+    git: &GitPolicy,
     range: &Range<'_>,
     branch: &str,
     class: Option<&Class>,
 ) -> Result<Criteria, String> {
+    // The branch's task, from the judged head under the run's policy
+    // (TSK-350 AC-1): the same head gets the same answer from any checkout.
+    let carried = judged_task(root, git, branch, range.head)?;
     // A release range is judged by `judge` and does not reach here; were it
     // to, the release pull request keeps its task's criteria as tracked work.
     if let Some(task_id) = class.and_then(Class::task_id) {
-        let own_branch = task_id_from_branch(root, branch)
-            .map_err(|error| error.to_string())?
-            .as_deref()
-            == Some(task_id);
+        let own_branch = carried.as_deref() == Some(task_id);
         return codeflow_core::workgraph::acceptance::task_criteria(
             root, range.base, task_id, own_branch,
         );
@@ -344,9 +516,7 @@ fn criteria(
     // Without a pull request body (a push), a task branch's only valid class
     // is its own task, so it may change that task's criteria as its PR may.
     if class.is_none() {
-        if let Some(task_id) =
-            task_id_from_branch(root, branch).map_err(|error| error.to_string())?
-        {
+        if let Some(task_id) = carried.clone() {
             return codeflow_core::workgraph::acceptance::task_criteria(
                 root, range.base, &task_id, true,
             );
@@ -362,11 +532,7 @@ fn criteria(
                 .then(|| check_epic_line(root, branch, range.target, range.base, range.head));
             if root_branch || matches!(line, Some(Ok(_))) {
                 true
-            } else if task_id_from_branch(root, branch)
-                .map_err(|error| error.to_string())?
-                .is_none()
-                && planning_amendment_range(root, range)?
-            {
+            } else if carried.is_none() && planning_amendment_range(root, range)? {
                 return Ok(Criteria::Amendment(None));
             } else {
                 // Only now are the criteria frozen, so only now say why.
