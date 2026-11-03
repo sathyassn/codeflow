@@ -111,10 +111,12 @@ Heavy runs share the host by capacity; none waits for another. Essential
 and full gates, heavy quick targets and `codeflow reserve` each take one
 free slot in both lock folders for the run: `locks/` under the CodeFlow
 home, which spans repositories, and `codeflow/` under the git common
-directory, which spans a repository's worktrees. Slot 0 is
-`full-gate.lock`; slot `n` is `full-gate-<n>.lock`, with its record
-`full-gate-<n>.record` beside it. Each run also holds the folder's
-`host.lock` shared. Gates in several worktrees and projects run at once.
+directory, which spans a repository's worktrees. Slot `n` is
+`full-gate-<n>.lock`, from 1 up, with its record `full-gate-<n>.record`
+beside it. Each run also holds the folder's `host.lock` shared, and
+`full-gate.lock` shared as the fence for older binaries (see "Older
+CodeFlow binaries on the same machine" below). Gates in several worktrees
+and projects run at once.
 A folder has no fixed number of slots: a run that finds every slot busy
 creates the next one.
 `gate lock unavailable` means a folder or lock cannot be opened or a record
@@ -161,8 +163,8 @@ a configured quick mode use `execution.quick_default_class`, which accepts
 precedence. When there are no quick targets and quick falls back to
 essential, undeclared targets are heavy. Light targets take no slot.
 
-Read each slot's and the host lock's holder with `codeflow test
---lock-status`. This reads the records without taking a lock, changing a
+Read the holders of the host lock, the fence and each slot with
+`codeflow test --lock-status`. This reads the records without taking a lock, changing a
 record or starting a target. A killed gate can leave a stale record; the
 next run that takes that slot reclaims it. A free slot whose record names a
 live target group counts as busy, so a target that outlived its gate still
@@ -189,11 +191,11 @@ host-exclusive target runs, and an unreadable slot record refuses it. The nested
 its targets' process groups to the holder's record and leaves those still
 running there when it ends, so a target that survives a killed nested run
 keeps the slot busy until it exits. Each rewrite of a slot's record holds
-the OS lock of the record lock beside it (`full-gate.record.lock` for slot
-0) from read to rename, so the reserve and the nested run never drop a
+the OS lock of the record lock beside it (`full-gate-1.record.lock` for
+slot 1) from read to rename, so the reserve and the nested run never drop a
 group line the other just added. If that lock cannot be taken within five
-seconds, the rewrite runs without it and the gate reports the missed
-serialization. Full and essential gates under a reserve take a slot of
+seconds, the record is left as it is and the gate reports it; a rewrite
+never runs without the lock. Full and essential gates under a reserve take a slot of
 their own. On Windows a nested quick run takes a slot of its own.
 
 `execution.worker_budget`, when configured, divides workers among ready
@@ -207,13 +209,46 @@ defaults. This repository sets nine workers and gives clippy a separate
 Each Cargo producer takes the full budget to avoid package-cache and
 build-directory waits; light checks still run beside it.
 
-A 3.x binary on the same machine locks `full-gate.lock` exclusively, so it
-refuses while a 4.0 run holds slot 0; a 4.0 run beside it takes the next
-slot. Direct commands outside the wrapper and other applications also
+Direct commands outside the wrapper and other applications also
 consume resources that the job budget does not see. Declared heavy targets
 and reserved commands end their process groups when the controller exits.
 On Unix, other targets can outlive a killed gate; their slot counts as
 busy until they end.
+
+#### Older CodeFlow binaries on the same machine
+
+A 3.1 gate, or a 4.0 line build from before TSK-1145, locks
+`full-gate.lock` exclusively and runs alone. Every 4.0 run holds it shared
+for its whole life, in both lock folders, before it takes a slot, so the
+two never run at the same time, in either order.
+
+| Situation | What happens |
+|---|---|
+| An older gate starts while a 4.0 run is active | It refuses, as it refuses beside another older gate; an older 4.0 line build told to wait waits instead |
+| A 3.1 gate names the holder | It reads the text inside `full-gate.lock`. 4.0 runs never write it, so the 3.1 gate says the holder has not recorded itself, or names a killed 3.1 gate that left its record there |
+| An older 4.0 line build names the holder | It reads `full-gate.record`, which names the last admitted 4.0 run. That run may have ended, since no release rewrites the record |
+| You want to see what is recorded | Run `codeflow test --lock-status` with a 4.0 binary, or read the slot records `full-gate-<n>.record`: they show the recorded slots and target groups, and the line for `full-gate.lock` says it is the last recorded holder. The stale name goes away when an older gate next gets the lock, once no 4.0 run is active: a 3.1 gate replaces the text inside `full-gate.lock`, and an older 4.0 line build replaces `full-gate.record` |
+| A 4.0 run starts while an older gate is active | It refuses at once with `an older CodeFlow binary's gate is running on this machine`, naming the last recorded holder. It takes no slot, starts nothing and does not wait; run it again when that gate ends |
+| Targets a killed older gate started still run | A 4.0 run refuses the same way and names their process groups, since they run alone as their gate did |
+| A 4.0 run cannot open or lock `full-gate.lock` for any other reason | It refuses with `gate lock unavailable`, naming the file |
+
+The hold lasts as long as the targets of the run that took it:
+
+| Case | Effect on older gates |
+|---|---|
+| Unix: every target of an admitted 4.0 run | Inherits the run's shared hold on `full-gate.lock`, so older gates stay out while any process of the target that kept it runs: after the gate ends, after it is killed, and for grandchildren too |
+| Windows | A target and all its descendants end when the gate exits or is killed (a kill-on-close job object), so nothing outlives the hold |
+| A daemon that closes the descriptors it inherited | It does not keep the hold, so an older gate can start beside it |
+| A daemon that keeps them, such as a build cache server a target starts | Older gates stay out until it exits; new runs are not affected. Stop the daemon to let an older gate in |
+| A target that unlocks the inherited descriptor itself | The hold ends for every process sharing it |
+| A lock folder on NFS | Linux emulates this lock with per-process locks, so the hold ends with the gate even while its targets run |
+
+Upgrading from an earlier 4.0 line build:
+
+| Case | What to do |
+|---|---|
+| A build that includes TSK-1145 but not this change | It is not fenced out: when it finds `full-gate.lock` busy it takes a later slot, so it runs beside this version. Let every run of such a build end, or rebuild it from a line that has this change, before running this version on the machine. No released version is such a build |
+| Lock files and records such a build left | No cleanup: `full-gate.lock`, `full-gate.record` and the slot files are read as they are. Stale records are reclaimed, a run of that build still holding a slot from 1 up counts as a run, and one holding `full-gate.lock` itself is treated as an older gate |
 
 ### Fix a failing check
 

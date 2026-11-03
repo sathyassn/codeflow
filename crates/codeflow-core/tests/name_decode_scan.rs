@@ -4344,6 +4344,36 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "format-contract",
     ),
+    // TSK-1256: preserve holder fields from parse_record's validated,
+    // LF-separated output while excluding group fields. No other separator
+    // may change the record's fields.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "fence_live_groups",
+        "split_terminator",
+        1,
+        "format-contract",
+    ),
+    // TSK-1256: all platform implementations read pid fields using the
+    // same exact LF separator as parse_record, without stripping CR or
+    // Unicode whitespace from a process identity.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "holder_alive",
+        "split_terminator",
+        3,
+        "format-contract",
+    ),
+    // TSK-1256: unreadable holder snapshots omit diagnostic details only.
+    // The caller has already refused admission on the held fence; this
+    // best-effort read cannot authorize a run or reclaim a lock.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "fence_holder",
+        "obtain-absent:read",
+        1,
+        "display",
+    ),
     // Formats owner PID/directory and stale-lock notes after lock authority has been decided using the lock itself.
     (
         "crates/codeflow-core/src/testing/gate_guard.rs",
