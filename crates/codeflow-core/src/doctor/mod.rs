@@ -379,7 +379,7 @@ fn check_capabilities(opts: &Options) -> CheckResult {
                 message.push_str(offer);
             }
             (Status::Pass, message)
-        },
+        }
         Err(error) => (Status::Fail, format!("coverage unavailable: {error}")),
     };
     CheckResult {
