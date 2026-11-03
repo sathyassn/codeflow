@@ -41,6 +41,8 @@
       ".claude/settings.json",
       "scripts/proofs/**",
       "scripts/test_gate_contracts.py",
+      "scripts/dependency_audit.py",
+      "scripts/test_dependency_audit.py",
       "scripts/contract-scans.py",
       "scripts/test_contract_scans.py",
       "scripts/windows-partitions.py",
