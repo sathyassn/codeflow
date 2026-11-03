@@ -547,19 +547,31 @@ fn pr_review(
         .spawn()
         .map_err(|error| format!("cannot verify review for this pin: {error}"))?;
     let start = Instant::now();
+    let deadline = Duration::from_secs(15);
     let status = loop {
+        if start.elapsed() >= deadline {
+            break Err(format!(
+                "cannot verify review for this pin: provider timed out after {} seconds",
+                deadline.as_secs()
+            ));
+        }
+        match output.metadata() {
+            Ok(metadata) if metadata.len() <= 1_048_576 => {}
+            Ok(_) => break Err("review response too large".to_string()),
+            Err(error) => {
+                break Err(format!(
+                    "cannot verify review for this pin: cannot inspect provider response: {error}"
+                ));
+            }
+        }
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
-            Ok(None)
-                if start.elapsed() < Duration::from_secs(5)
-                    && output.metadata().is_ok_and(|m| m.len() <= 1_048_576) =>
-            {
-                std::thread::sleep(Duration::from_millis(20));
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(error) => {
+                break Err(format!(
+                    "cannot verify review for this pin: cannot wait for provider: {error}"
+                ));
             }
-            _ => break Err(
-                "cannot verify review for this pin: provider unavailable, too large or timed out"
-                    .to_string(),
-            ),
         }
     };
     // Terminate descendants too, including those holding the output file open.
