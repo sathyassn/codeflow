@@ -116,6 +116,25 @@ impl Default for Fixture<'_> {
     }
 }
 
+/// Merge a line commit that waives the secret-shaped fixture into the task.
+fn waive_fixture(root: &Path, file: &str, line: &str, home_path: &Path) {
+    let commit = git(root, &["rev-parse", "HEAD"], home_path);
+    git(root, &["checkout", "-q", line], home_path);
+    std::fs::write(
+        root.join(".gitleaksignore"),
+        format!("{commit}:{file}:github-pat:1\n"),
+    )
+    .unwrap();
+    git(root, &["add", ".gitleaksignore"], home_path);
+    git(
+        root,
+        &["commit", "-qm", "chore: waive a reviewed fixture"],
+        home_path,
+    );
+    git(root, &["checkout", "-q", "feat/reviewed"], home_path);
+    git(root, &["merge", "-q", "--no-edit", line], home_path);
+}
+
 fn land_with(fixture: &Fixture<'_>) -> Landing {
     let Fixture {
         file,
@@ -162,21 +181,7 @@ fn land_with(fixture: &Fixture<'_>) -> Landing {
     git(root, &["add", file], home_path);
     git(root, &["commit", "-qm", fixture.subject], home_path);
     if waive {
-        let commit = git(root, &["rev-parse", "HEAD"], home_path);
-        git(root, &["checkout", "-q", line], home_path);
-        std::fs::write(
-            root.join(".gitleaksignore"),
-            format!("{commit}:{file}:github-pat:1\n"),
-        )
-        .unwrap();
-        git(root, &["add", ".gitleaksignore"], home_path);
-        git(
-            root,
-            &["commit", "-qm", "chore: waive a reviewed fixture"],
-            home_path,
-        );
-        git(root, &["checkout", "-q", "feat/reviewed"], home_path);
-        git(root, &["merge", "-q", "--no-edit", line], home_path);
+        waive_fixture(root, file, line, home_path);
     }
     let linked = root.join(".worktrees/integrator");
     git(

@@ -173,7 +173,8 @@ waive the clarity, safety, review or protected-branch conditions.
    product hunk is that task's own work and returns it to a whole-unit
    review at its new head; a path two tasks both changed is looked at on the
    candidate, and that look is not a unit review), and runs the landing-class
-   checks from `.codeflow/rules/git-rules.md` on that exact candidate. It lands through one of two
+   checks from `.codeflow/rules/git-rules.md` on that exact candidate. A code
+   candidate takes one full gate on that exact candidate. It lands through one of two
    sanctioned modes: **Local**, `codeflow integrate <candidate> --into
    integration/<…>` on a candidate cut from the current line tip (one per line at a time,
    runs the non-selective full gate, keeps the tested tip); or **PR** into the
