@@ -42,6 +42,25 @@ edits, and a linked worktree outside `git.worktree_locations`.
 
 ## Work-start check
 
+From the primary checkout, `codeflow work claim TSK-NNN --worktree
+.worktrees/<slug>` claims the task and creates its linked worktree in one
+command. Relative destinations resolve from the primary checkout even when
+the command runs in a linked worktree. The destination must not exist and
+must fall under `git.worktree_locations`; the flag can name another
+project-configured location. The checkout uses libgit2 without rewriting the
+shared `.git/config`. Enter the printed path and run `codeflow work start
+TSK-NNN`, which checks the existing worktree and creates none. Without
+`--worktree`, claim retains the branch-only route for harness-managed
+worktrees and standalone work already in its own checkout.
+
+A Claude or Codex builder keeps its sandbox and enforcement-path denies.
+Creation needs write access to the destination and common Git metadata. If
+the sandbox refuses a tracked enforcement file, claim reports the failure
+and preserves the branch and partial checkout for inspection. It never
+retries outside the sandbox or omits enforcement files. Report that refusal
+to the coordinator; do not repeat the claim or weaken a deny. A desktop
+session remains in its own harness-managed worktree.
+
 Before a task's first branch, worktree, commit, merge, rebase, push, or
 delete mutation, make three ordered work-start assertions:
 

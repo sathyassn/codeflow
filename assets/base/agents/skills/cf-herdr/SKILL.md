@@ -111,6 +111,16 @@ Herdr is not an external sandbox. The posture table is the boundary. When
 seat started, address that seat by its pane id. No third-party Grok Codex
 plugins.
 
+For a sandboxed builder launched at the primary checkout, name the exact
+task destination with `codeflow work claim TSK-NNN --worktree
+.worktrees/<slug>`, then enter the printed checkout and run `codeflow work
+start TSK-NNN`. Claim creates the checkout without rewriting shared Git
+config; start only checks it. Keep the launch's lock-home grant and every
+enforcement-path deny. If checkout is refused, preserve the reported branch
+and partial checkout and tell the coordinator; never retry outside the
+sandbox or claim the same task again. A harness-managed desktop session
+uses its own worktree and a branch-only claim.
+
 Prompt rules: consults edit nothing; no force-push or rebase of a shared
 branch; no merge of protected main; no `herdr server stop`; no keys to the
 caller pane; no closing tabs this run did not create.

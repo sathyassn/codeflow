@@ -56,6 +56,28 @@ The twenty-six checks fall into six groups by the surface each one reads.
 
 ## Technical
 
+### A task claim cannot create its worktree
+
+Use `codeflow work claim TSK-NNN --worktree .worktrees/<slug>` to create the
+checkout with the claim, without rewriting shared `.git/config`. Relative
+paths resolve from the primary checkout; the project's
+`git.worktree_locations` controls allowed destinations. An existing path is
+refused before claiming. Keep existing work intact and choose an unused
+assigned destination.
+
+A checkout failure names the branch and path to inspect. The command keeps
+that partial state and does not retry unsandboxed. A sandbox that denies
+creation of the checkout's enforcement files needs a coordinator-supported
+creation route; sparse checkout or a broader write grant does not establish
+that those files remain protected. Do not repeat the claim after a partial
+failure. `codeflow work start` creates no worktree.
+
+The default Codex builder grant already permits `~/.codeflow/locks`. A
+project that relocates `CODEFLOW_HOME` needs a grant for that home's lock
+folder. Reserve uses OS locks and signal-zero liveness checks without `ps`;
+it prints a reclamation note when it finds a stale holder. A review seat has
+no lock-home grant and does not reserve work.
+
 Doctor inspects the nearest directory at or above the current one that holds
 `.git`. The checks run concurrently, and the report keeps the order below. One
 failed check never hides the others. Each line starts with a status badge.

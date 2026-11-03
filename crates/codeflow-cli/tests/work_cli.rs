@@ -2760,3 +2760,211 @@ fn a_claim_that_cannot_write_the_config_renames_nothing() {
     assert_eq!(git(root, &["branch", "--show-current"]), "fix/standalone");
     assert!(git(root, &["branch", "--list", "task/TSK-003*"]).is_empty());
 }
+
+#[test]
+fn claim_creates_a_worktree_without_writing_the_shared_config() {
+    let dir = fixture();
+    let root = dir.path();
+    for (path, content) in [
+        (".claude/agents/worker.md", "worker instructions\n"),
+        (".claude/settings.json", "{}\n"),
+        (".codex/config.toml", "approval_policy = \"never\"\n"),
+    ] {
+        write(root, path, content);
+    }
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "chore: install harness files"]);
+    let before = config_bytes(root);
+    // Simulate the shared config being unavailable for any Git rewrite.
+    // The checkout must not need config.lock, even when it already exists.
+    write(root, ".git/config.lock", "held by another process\n");
+    let out = cli(
+        root,
+        &["work", "claim", "TSK-001", "--worktree", ".worktrees/one"],
+        None,
+    );
+    succeeds(&out);
+    let linked = root.join(".worktrees/one");
+    assert_eq!(config_bytes(root), before);
+    assert_eq!(git(root, &["branch", "--show-current"]), "main");
+    assert_eq!(
+        git(&linked, &["branch", "--show-current"]),
+        "task/TSK-001-work-tsk-001"
+    );
+    for path in [
+        ".claude/agents/worker.md",
+        ".claude/settings.json",
+        ".codex/config.toml",
+    ] {
+        assert_eq!(
+            std::fs::read(root.join(path)).unwrap(),
+            std::fs::read(linked.join(path)).unwrap()
+        );
+    }
+    assert!(git(&linked, &["status", "--porcelain"]).is_empty());
+    succeeds(&cli(&linked, &["work", "start", "TSK-001"], None));
+}
+
+#[test]
+fn claim_refuses_an_existing_worktree_destination_before_claiming() {
+    let dir = fixture();
+    let root = dir.path();
+    write(root, ".worktrees/one/keep", "existing work\n");
+    let out = cli(
+        root,
+        &["work", "claim", "TSK-001", "--worktree", ".worktrees/one"],
+        None,
+    );
+    assert!(!out.status.success());
+    assert!(text(&out).contains("already exists"), "{}", text(&out));
+    assert!(git(root, &["branch", "--list", "task/TSK-001*"]).is_empty());
+    assert_eq!(
+        std::fs::read_to_string(root.join(".worktrees/one/keep")).unwrap(),
+        "existing work\n"
+    );
+}
+
+#[test]
+fn a_worktree_claim_from_a_linked_checkout_resolves_at_the_primary() {
+    let dir = fixture();
+    let root = dir.path();
+    git(
+        root,
+        &["worktree", "add", "-qb", "fix/caller", ".worktrees/caller"],
+    );
+    succeeds(&cli(
+        &root.join(".worktrees/caller"),
+        &["work", "claim", "TSK-001", "--worktree", ".worktrees/one"],
+        None,
+    ));
+    assert!(root.join(".worktrees/one/.git").is_file());
+    assert!(!root.join(".worktrees/caller/.worktrees").exists());
+}
+
+#[test]
+fn worktree_claim_honours_project_locations_before_creating_a_branch() {
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        ".codeflow/policy.json",
+        r#"{"schema_version":1,"git":{"worktree_locations":["checkouts"]}}"#,
+    );
+    git(root, &["add", ".codeflow/policy.json"]);
+    git(
+        root,
+        &["commit", "-qm", "chore: configure checkout locations"],
+    );
+    let refused = cli(
+        root,
+        &["work", "claim", "TSK-001", "--worktree", ".worktrees/one"],
+        None,
+    );
+    assert!(!refused.status.success());
+    assert!(
+        text(&refused).contains("outside git.worktree_locations"),
+        "{}",
+        text(&refused)
+    );
+    assert!(git(root, &["branch", "--list", "task/TSK-001*"]).is_empty());
+    succeeds(&cli(
+        root,
+        &["work", "claim", "TSK-001", "--worktree", "checkouts/one"],
+        None,
+    ));
+    assert!(root.join("checkouts/one/.git").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_claim_refuses_a_symlink_escape_without_claiming() {
+    let dir = fixture();
+    let root = dir.path();
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), root.join(".worktrees")).unwrap();
+    let out = cli(
+        root,
+        &["work", "claim", "TSK-001", "--worktree", ".worktrees/one"],
+        None,
+    );
+    // The configured location itself may be a project-owned symlink. Its
+    // canonical target is still that configured location; a nested escape
+    // from it must be refused.
+    succeeds(&out);
+    let escape = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(escape.path(), outside.path().join("escape")).unwrap();
+    let refused = cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-002",
+            "--worktree",
+            ".worktrees/escape/two",
+        ],
+        None,
+    );
+    assert!(!refused.status.success());
+    assert!(
+        text(&refused).contains("outside git.worktree_locations"),
+        "{}",
+        text(&refused)
+    );
+    assert!(git(root, &["branch", "--list", "task/TSK-002*"]).is_empty());
+    assert!(!escape.path().join("two").exists());
+}
+
+#[test]
+fn work_start_creates_no_checkout() {
+    let dir = fixture();
+    let root = dir.path();
+    let before = git(root, &["worktree", "list", "--porcelain"]);
+    let out = cli(root, &["work", "start", "TSK-001"], None);
+    assert!(
+        !out.status.success(),
+        "the root branch does not carry this task"
+    );
+    assert_eq!(git(root, &["worktree", "list", "--porcelain"]), before);
+    assert!(!root.join(".worktrees").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_denied_checkout_preserves_the_claim_and_reports_inspection() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = fixture();
+    let root = dir.path();
+    let parent = root.join(".worktrees/denied");
+    std::fs::create_dir_all(&parent).unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500)).unwrap();
+    // A root-runner can still write an owner-read-only directory. That
+    // platform needs a native sandbox probe for this denial case.
+    if std::fs::create_dir(parent.join("probe")).is_ok() {
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        return;
+    }
+    let out = cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-001",
+            "--worktree",
+            ".worktrees/denied/one",
+        ],
+        None,
+    );
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(!out.status.success());
+    assert!(
+        text(&out).contains("preserve the branch and any partial checkout"),
+        "{}",
+        text(&out)
+    );
+    assert!(
+        text(&out).contains("do not repeat the claim or retry outside the sandbox"),
+        "{}",
+        text(&out)
+    );
+    assert!(!git(root, &["branch", "--list", "task/TSK-001*"]).is_empty());
+}

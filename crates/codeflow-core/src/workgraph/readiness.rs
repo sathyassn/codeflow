@@ -11,7 +11,7 @@
 use crate::workgraph::history;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
 use git2::{BranchType, Repository};
@@ -1579,6 +1579,8 @@ pub struct Claim {
     pub branch: String,
     pub from: String,
     pub pushed: bool,
+    /// Checkout created by an explicit worktree claim, if requested.
+    pub worktree: Option<PathBuf>,
     /// Unrelated remote branches visible in the last-fetched refs.
     pub informational_branches: Vec<String>,
 }
@@ -1936,6 +1938,24 @@ pub fn claim_on(
     task_id: &str,
     pins: &[super::work_start::ReviewedPin],
 ) -> Result<Claim, String> {
+    claim_on_in_worktree(repo_root, task_id, pins, None)
+}
+
+/// Claim a task and optionally create its checkout without rewriting the
+/// shared Git config. Relative destinations are primary-checkout relative.
+///
+/// # Errors
+/// Refuses an existing, nested or disallowed destination before claiming.
+/// A checkout failure preserves the branch and partial checkout for inspection.
+pub fn claim_on_in_worktree(
+    repo_root: &Path,
+    task_id: &str,
+    pins: &[super::work_start::ReviewedPin],
+    destination: Option<&Path>,
+) -> Result<Claim, String> {
+    let worktree = destination
+        .map(|path| claim_destination(repo_root, path))
+        .transpose()?;
     refresh_claim(repo_root, task_id)?;
     let declared = claim_target(repo_root, task_id)?
         .ok_or_else(|| format!("{task_id} has no visible record with an integration_target"))?;
@@ -2010,10 +2030,24 @@ pub fn claim_on(
         .get(task_id)
         .map_or("", |record| record.title.as_str());
     let branch = format!("task/{task_id}-{}", super::light_paths::slug(title));
+    if worktree.is_some() && renamed.is_some() {
+        return Err(
+            "a standalone claim already has a checkout; omit --worktree and use that checkout"
+                .into(),
+        );
+    }
     if let Some(current) = &renamed {
         rename_standalone_branch(repo_root, current, &branch, tip)?;
     } else {
         git(repo_root, &["branch", &branch, &tip.to_string()])?;
+    }
+    if let Some(path) = &worktree {
+        create_claim_worktree(&repo, path, &branch, task_id, &declared, pins).map_err(|error| {
+            format!(
+                "created {branch}; worktree {} failed: {error}; preserve the branch and any partial checkout for inspection, do not repeat the claim or retry outside the sandbox",
+                crate::git::display_path(path)
+            )
+        })?;
     }
     if has_origin {
         // Create only: an existing remote branch of that name is never moved.
@@ -2034,8 +2068,109 @@ pub fn claim_on(
         branch,
         from: format!("{reference_shown}@{}", &tip.to_string()[..9]),
         pushed: has_origin,
+        worktree,
         informational_branches: information,
     })
+}
+
+/// Resolve through the nearest existing parent before checking the project's
+/// locations. This also prevents a symlink from escaping an allowed folder.
+fn claim_destination(repo_root: &Path, destination: &Path) -> Result<PathBuf, String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+    let main = Repository::open(repo.commondir()).map_err(|error| error.to_string())?;
+    let root = main
+        .workdir()
+        .ok_or("worktree creation requires a primary checkout")?;
+    let root = crate::portable_path::canonicalize(root).map_err(|error| error.to_string())?;
+    if destination.as_os_str().is_empty()
+        || destination
+            .components()
+            .any(|part| part == Component::ParentDir)
+    {
+        return Err("worktree destination must be nonempty and contain no parent traversal".into());
+    }
+    let path = if destination.is_absolute() {
+        destination.to_path_buf()
+    } else {
+        root.join(destination)
+    };
+    if !crate::absence::proven_absent(&path).map_err(|error| error.to_string())? {
+        return Err(format!(
+            "worktree destination {} already exists",
+            crate::git::display_path(&path)
+        ));
+    }
+    let resolve = |path: &Path| -> Result<PathBuf, String> {
+        let mut missing = Vec::new();
+        let mut parent = path;
+        while crate::absence::proven_absent(parent).map_err(|error| error.to_string())? {
+            missing.push(
+                parent
+                    .file_name()
+                    .ok_or("worktree destination has no parent")?,
+            );
+            parent = parent
+                .parent()
+                .ok_or("worktree destination has no parent")?;
+        }
+        let mut resolved =
+            crate::portable_path::canonicalize(parent).map_err(|error| error.to_string())?;
+        for part in missing.into_iter().rev() {
+            resolved.push(part);
+        }
+        Ok(resolved)
+    };
+    let path = resolve(&path)?;
+    let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root)?;
+    let mut allowed = false;
+    for location in &policy.git.worktree_locations {
+        if let Some(location) = crate::root_checkout::expand_location(
+            location,
+            &root,
+            &crate::root_checkout::process_env,
+        ) {
+            let location = resolve(&location)?;
+            allowed |= path != location && path.starts_with(&location);
+        }
+    }
+    if !allowed {
+        return Err(format!(
+            "worktree destination {} is outside git.worktree_locations",
+            crate::git::display_path(&path)
+        ));
+    }
+    for (checkout, _) in crate::git::checkout_heads(&repo)? {
+        let checkout =
+            crate::portable_path::canonicalize(&checkout).map_err(|error| error.to_string())?;
+        if checkout != root && path.starts_with(&checkout) {
+            return Err("a worktree cannot be created inside another linked worktree".into());
+        }
+    }
+    Ok(path)
+}
+
+fn create_claim_worktree(
+    repo: &Repository,
+    path: &Path,
+    branch: &str,
+    task_id: &str,
+    target: &str,
+    pins: &[super::work_start::ReviewedPin],
+) -> Result<(), String> {
+    let parent = path.parent().ok_or("worktree destination has no parent")?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let reference = repo
+        .find_reference(&format!("refs/heads/{branch}"))
+        .map_err(|error| error.to_string())?;
+    let mut options = git2::WorktreeAddOptions::new();
+    options.reference(Some(&reference));
+    // libgit2 writes only the new checkout and its worktree registration.
+    // It neither changes shared config nor launches an unsandboxed helper.
+    repo.worktree(&task_id.to_ascii_lowercase(), path, Some(&options))
+        .map_err(|error| error.to_string())?;
+    super::work_start::check_work_start_on(path, task_id, target, pins)
+        .map_err(|error| format!("planning preflight failed: {error}"))?;
+    Ok(())
 }
 
 /// Whether the local branch `old` has `branch.<old>.*` settings in the

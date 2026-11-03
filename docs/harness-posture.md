@@ -19,6 +19,15 @@ controls ([Codex security](https://learn.chatgpt.com/docs/security)).
 
 ## Architecture
 
+Sandboxed builders can request the checkout as part of the claim:
+`codeflow work claim TSK-NNN --worktree .worktrees/<slug>`. The destination
+is relative to the primary checkout and must match the project's
+`git.worktree_locations`. This uses libgit2 without changing shared Git
+config, then checks the task's planning anchor. `work start` checks an
+existing worktree and creates none. A branch-only claim remains available
+for a harness-managed worktree. Neither route changes the sandbox or its
+denies; a denied checkout stops and preserves partial state for inspection.
+
 Each harness reads its own configuration files, and all three hand the same
 payload to the same two guards. Each table row is the boundary for one harness.
 The middle column is what the scaffold turns on, and the right column is what

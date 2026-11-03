@@ -1,6 +1,6 @@
 //! Durable-work commands: `work next`, `work claim` and `work start`. All three
 //! read the one readiness core (SPC-013 R-40, R-110); only `work claim`
-//! writes, and what it writes is a branch. `work status` is the recovery
+//! writes a branch and optionally its checkout. `work status` is the recovery
 //! inventory: per task, the worktrees holding work found nowhere else.
 
 use std::fmt::Write as _;
@@ -43,6 +43,9 @@ pub enum WorkCommand {
         /// Reviewed predecessor pin, repeat once per code dependency.
         #[arg(long, value_name = "TSK-NNN@SHA")]
         on: Vec<String>,
+        /// Create a checkout at this primary-checkout-relative or absolute path.
+        #[arg(long, value_name = "PATH")]
+        worktree: Option<std::path::PathBuf>,
     },
     /// Verify that a durable task was planned and anchored before implementation.
     Start {
@@ -65,7 +68,11 @@ pub enum WorkCommand {
 pub fn run(args: &WorkArgs) -> i32 {
     match &args.command {
         WorkCommand::Next { epic, json } => next(epic.as_deref(), *json),
-        WorkCommand::Claim { task_id, on } => claim(task_id, on),
+        WorkCommand::Claim {
+            task_id,
+            on,
+            worktree,
+        } => claim(task_id, on, worktree.as_deref()),
         WorkCommand::Start {
             task_id,
             target,
@@ -268,7 +275,7 @@ fn next_json(backlog: &Backlog) -> serde_json::Value {
     })
 }
 
-fn claim(task_id: &str, on: &[String]) -> i32 {
+fn claim(task_id: &str, on: &[String], worktree: Option<&std::path::Path>) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
@@ -295,7 +302,7 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
             return 1;
         }
     };
-    match readiness::claim_on(&root, task_id, &pins) {
+    match readiness::claim_on_in_worktree(&root, task_id, &pins, worktree) {
         Ok(claim) => {
             println!(
                 "work claim: {task_id} -> {} from {}",
@@ -309,10 +316,18 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
             } else {
                 println!("  no origin remote: the claim is visible only in this clone");
             }
-            println!(
-                "  next: check out {} and run `codeflow work start {task_id}`",
-                claim.branch
-            );
+            if let Some(path) = claim.worktree {
+                println!(
+                    "  worktree: {} (planning preflight passed)",
+                    codeflow_core::git::display_path(&path)
+                );
+                println!("  next: enter that worktree and run `codeflow work start {task_id}`");
+            } else {
+                println!(
+                    "  next: check out {} and run `codeflow work start {task_id}`",
+                    claim.branch
+                );
+            }
             0
         }
         Err(error) => {

@@ -395,7 +395,7 @@
     ".agents/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "17885692903758cf1b69bd18b8f4ba615034aea6ebcf917b01caeaf716c4a404",
+      "sha256": "5b2a1f4749b2dee43c29512339f45e529d54275f9f56835f2633fb2d56899a57",
       "exec": false
     },
     ".agents/skills/cf-herdr/references/review-and-harvest.md": {
@@ -641,7 +641,7 @@
     ".agents/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "2ae60e36cdee005be4d864f14c79a403cad7625237b5ede9c7c359dc355d2f96",
+      "sha256": "c773adb990d51d355fdc14b7ded0358ca68700a27efd0744ae899ab4d053633e",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -1241,7 +1241,7 @@
     ".claude/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "17885692903758cf1b69bd18b8f4ba615034aea6ebcf917b01caeaf716c4a404",
+      "sha256": "5b2a1f4749b2dee43c29512339f45e529d54275f9f56835f2633fb2d56899a57",
       "exec": false
     },
     ".claude/skills/cf-herdr/references/review-and-harvest.md": {
@@ -1487,7 +1487,7 @@
     ".claude/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "2ae60e36cdee005be4d864f14c79a403cad7625237b5ede9c7c359dc355d2f96",
+      "sha256": "c773adb990d51d355fdc14b7ded0358ca68700a27efd0744ae899ab4d053633e",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -1739,7 +1739,7 @@
     ".codeflow/rules/worktrees.md": {
       "src": "rules/worktrees.md",
       "ownership": "managed",
-      "sha256": "45fe430d45ff30e3734303beb75eb82c00a028f2463c5ffe282fc482f8e3fbab",
+      "sha256": "0fd61513e745b34c60ecc18083a3bffe13987dabbf5b1a79d480ed5a91086db2",
       "exec": false
     },
     ".codeflow/rules/writing.md": {

@@ -81,8 +81,15 @@ config, they let a builder write both gate lock folders and the common
 `.git` objects and refs; it exits 1 when a write is refused. When it
 cannot run that check, it says builder readiness is not established,
 and the launched seat's own writes are the evidence. A review seat gets
-none of these writes. A builder reports a failed push and the caller
-pushes. The Grok builder posture is ADR-0075 D3:
+none of these writes. From the primary checkout, a builder can claim and
+create its task checkout with `codeflow work claim TSK-NNN --worktree
+.worktrees/<slug>`, then enter that path and run `codeflow work start
+TSK-NNN`. Creation does not rewrite shared Git config. Existing destination
+or checkout refusals stop the route without an unsandboxed retry; preserve
+the reported partial state and report a denied enforcement file. The profile
+keeps its denies. Gate liveness uses kernel locks and signal-zero checks,
+without `ps`, and reserve prints a stale-holder reclamation note. A builder
+reports a failed push and the caller pushes. The Grok builder posture is ADR-0075 D3:
 `--always-approve --sandbox cf-guard-worktree`, launched in its own task
 worktree after a separate step saves folder trust for that exact directory,
 with readiness judged by the hooks that load. ADR-0075 still lists as
