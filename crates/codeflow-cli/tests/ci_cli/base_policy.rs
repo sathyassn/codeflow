@@ -72,7 +72,7 @@ fn a_head_that_loosens_its_own_policy_gets_the_base_verdict() {
     );
     // A caller-chosen base is not presented as the hosted verdict.
     assert!(
-        said.contains("only when that is the pull request's target tip"),
+        said.contains("the hosted verdict names the default branch's commit with --policy-from instead, so this is a local judgment"),
         "{said}"
     );
     assert!(
@@ -213,6 +213,45 @@ fn a_head_that_changes_a_workflow_is_warned_by_name() {
         "{text}"
     );
     assert_ne!(out.status.code(), Some(1), "a warning never blocks: {text}");
+}
+
+/// TSK-336 AC-11: the warning judges what the change does, base..head. The
+/// pre-push hook widens the commit checks with `--commits-from` to the
+/// default branch, whose range also holds the line's own workflow edits;
+/// those are not this change's and are not warned about.
+#[test]
+fn the_workflow_warning_reads_the_change_not_the_widened_commit_range() {
+    const POLICY_WF: &str = ".github/workflows/codeflow-policy.yml";
+    let dir = fixture(Some("{}"));
+    let root = dir.path();
+    git(root, &["switch", "-q", "main"]);
+    write(root, POLICY_WF, "on:\n  pull_request_target:\njobs:\n  commit-lint:\n    name: 'trusted: commit standards'\n    runs-on: ubuntu-24.04\n    steps:\n      - run: codeflow ci\n");
+    commit(root, "ci: add the policy workflow");
+    // The line changes the workflow; the task branch, cut from the line,
+    // does not.
+    git(root, &["switch", "-q", "-c", "line"]);
+    write(root, POLICY_WF, "on:\n  pull_request_target:\n  push:\njobs:\n  commit-lint:\n    name: 'trusted: commit standards'\n    runs-on: ubuntu-24.04\n    steps:\n      - run: codeflow ci\n");
+    commit(root, "ci: add a push trigger on the line");
+    git(root, &["switch", "-q", "-C", "feat/x"]);
+    write(root, "y.txt", "y\n");
+    commit(root, "feat: add y");
+    let out = run_in(
+        root,
+        &[
+            "ci",
+            "--base",
+            "line",
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/x",
+            "--commits-from",
+            "main",
+        ],
+    );
+    let text = said(&out);
+    assert!(text.contains("the commit checks run over"), "{text}");
+    assert!(!text.contains("ci.workflow_change"), "{text}");
 }
 
 #[test]
