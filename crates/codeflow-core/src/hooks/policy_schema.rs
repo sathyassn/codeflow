@@ -927,10 +927,14 @@ pub fn schema() -> &'static [KeySpec] {
     &SCHEMA
 }
 
-/// Find one key's spec by its dotted leaf path.
+/// Find an accepted key's spec, including retired compatibility keys.
+/// Use [`schema`] to enumerate only the effective policy controls.
 #[must_use]
 pub fn spec_for(path: &str) -> Option<&'static KeySpec> {
-    SCHEMA.iter().find(|s| s.path == path)
+    SCHEMA
+        .iter()
+        .find(|s| s.path == path)
+        .or_else(|| super::policy_compat::spec_for(path))
 }
 
 /// [`Policy::default`] serialized to JSON — the live source `explain`/`show`
@@ -1330,7 +1334,7 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
         return;
     }
     validate_root_checkout_key(path, value, errors);
-    let Some(spec) = spec_for(path).or_else(|| super::policy_compat::spec_for(path)) else {
+    let Some(spec) = spec_for(path) else {
         errors.push(PolicyError {
             key: path.to_string(),
             message: format!(
