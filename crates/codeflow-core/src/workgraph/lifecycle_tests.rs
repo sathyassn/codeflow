@@ -3996,9 +3996,9 @@ fn transfer_refuses_missing_self_malformed_and_unmoved_records() {
         ("self", "own epic"),
         ("malformed", "use `- Amended"),
         ("membership", "not a moved serving task"),
-        ("unreadable", "cannot read"),
+        ("unreadable", "graft"),
     ] {
-        let (repo, _) = transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
+        let (repo, moving) = transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
         match change_kind {
             "missing" => fs::remove_file(repo.root().join(DESTINATION_PATH)).unwrap(),
             "self" => repo.write(
@@ -4017,11 +4017,11 @@ fn transfer_refuses_missing_self_malformed_and_unmoved_records() {
                     .read(TASK_PATH)
                     .replace("epic_id: EPC-002", "epic_id: EPC-003"),
             ),
-            _ => repo.write(".git/info/grafts", "not readable history\n"),
+            _ => repo.write(".git/info/grafts", &format!("{moving}\n")),
         }
         // The overlay case intentionally cannot create any further commit.
         let amendment = if change_kind == "unreadable" {
-            repo.git(&["rev-parse", "HEAD"])
+            moving
         } else {
             repo.commit("alter transfer records")
         };
@@ -4029,11 +4029,7 @@ fn transfer_refuses_missing_self_malformed_and_unmoved_records() {
             &repo,
             &format!("waived | {amendment}"),
         ));
-        assert!(
-            refused.contains(reason)
-                || (change_kind == "unreadable" && refused.contains("history")),
-            "{change_kind}: {refused}"
-        );
+        assert!(refused.contains(reason), "{change_kind}: {refused}");
     }
 }
 
