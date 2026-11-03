@@ -2774,10 +2774,37 @@ fn claim_creates_a_worktree_without_writing_the_shared_config() {
     }
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "chore: install harness files"]);
+    let origin = with_bare_origin(root);
     let before = config_bytes(root);
     // Simulate the shared config being unavailable for any Git rewrite.
     // The checkout must not need config.lock, even when it already exists.
     write(root, ".git/config.lock", "held by another process\n");
+    // Git's direct route creates a branch with remote tracking settings,
+    // which needs the shared config. It fails under the same refusal that
+    // the CodeFlow route below must tolerate.
+    let legacy = Command::new("git")
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            "fix/legacy",
+            ".worktrees/legacy",
+            "origin/main",
+        ])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(
+        !legacy.status.success(),
+        "the direct route must need config"
+    );
+    let failure = String::from_utf8_lossy(&legacy.stderr);
+    assert!(
+        failure.contains("config") && failure.contains("lock"),
+        "{failure}"
+    );
     let out = cli(
         root,
         &["work", "claim", "TSK-001", "--worktree", ".worktrees/one"],
@@ -2802,6 +2829,13 @@ fn claim_creates_a_worktree_without_writing_the_shared_config() {
         );
     }
     assert!(git(&linked, &["status", "--porcelain"]).is_empty());
+    assert_eq!(
+        git(
+            origin.path(),
+            &["rev-parse", "refs/heads/task/TSK-001-work-tsk-001"]
+        ),
+        git(&linked, &["rev-parse", "HEAD"])
+    );
     succeeds(&cli(&linked, &["work", "start", "TSK-001"], None));
 }
 
