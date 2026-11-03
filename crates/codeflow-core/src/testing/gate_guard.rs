@@ -35,7 +35,7 @@
 //! in the one-holder format older readers parse, so an older gate's refusal
 //! names a holder: the last admitted run, which may have ended, since no
 //! release rewrites it. `codeflow test --lock-status` and the slot records
-//! show the live holders. Builds between the landed TSK-1145 change and
+//! show the recorded slot and target group information. Builds between the landed TSK-1145 change and
 //! TSK-1256 fall back to a later slot when `full-gate.lock` is busy, so they
 //! are not fenced out; they are drained or rebuilt before a new build runs
 //! on the same machine. The shipped Claude settings presets allow sandboxed
@@ -59,16 +59,20 @@
 //! cannot write its record refuses instead of running uncoordinated. The
 //! folder stays an advisory coordination boundary: a seat that can write it
 //! can block or split coordination between runs. A record a pre-3.2 gate
-//! keeps inside the lock file is still read while the record file names no
-//! holder.
+//! keeps inside the lock file is still shown while the record file names no
+//! holder; for target groups both are always checked (TSK-1256).
 //!
 //! **Target lifetime on Unix.** Heavy quick targets and reserved commands
 //! have a watcher that ends their process group when the controller exits;
 //! it keeps copies of the run's slot, host and fence locks, so a target that
 //! outlives its run keeps its slot busy and keeps a host-exclusive target
-//! and older binaries out. Other targets can outlive a killed gate; each
-//! has a keeper that holds the same copies while its process group lives
-//! and never ends it (TSK-1256). While a run holds a slot,
+//! and older binaries out. Other targets can outlive a killed gate. Every
+//! target inherits the run's fences ([`fence_copies`]), and a flock belongs
+//! to the open file description, so the fence lasts while any process of
+//! the target that kept the descriptor lives, grandchildren included; the
+//! run only ever closes its own copy of a fence, never unlocks it
+//! (TSK-1256). A descendant that closes its inherited descriptors, as some
+//! daemons do, does not keep the fence. While a run holds a slot,
 //! the runner records each running target's process group in the slot's
 //! record ([`target_group_started`]). A free slot whose record names a
 //! process group with a live process counts as busy.
@@ -179,9 +183,10 @@ fn slot_indices(dir: &Path) -> Result<Vec<usize>, LockHeld> {
 pub struct GateLock {
     id: u64,
     files: Vec<AcquiredFile>,
-    /// The fence held shared in each lock directory, with its path; it
-    /// releases after the slots and host locks.
-    fences: Vec<(PathBuf, AcquiredFile)>,
+    /// The fence held shared in each lock directory, with its path. It is
+    /// closed after the slots and host locks, never unlocked, so targets
+    /// that inherited it keep it (TSK-1256).
+    fences: Vec<(PathBuf, FenceFile)>,
     /// Descriptors of a slot an enclosing `codeflow reserve` holds. They
     /// are never unlocked here: unlocking would release the holder's slot.
     inherited: Vec<File>,
@@ -217,6 +222,10 @@ struct Held {
     runs: usize,
     #[cfg(unix)]
     descriptors: Vec<std::os::fd::RawFd>,
+    /// The fence descriptors of this lock, which every target inherits
+    /// ([`fence_copies`]).
+    #[cfg(unix)]
+    fences: Vec<std::os::fd::RawFd>,
 }
 
 static HELD: Mutex<Vec<Held>> = Mutex::new(Vec::new());
@@ -289,7 +298,9 @@ impl Drop for GateLock {
         // The fence record is left as written at admission: it names the
         // last admitted run, which may have ended (TSK-1256). AcquiredFile
         // explicitly unlocks before its descriptor closes: the slots
-        // release, then the host locks with the entry, then the fences.
+        // release, then the host locks with the entry. The fences close
+        // last and are never unlocked: targets inherited them, and an
+        // unlock would release them for those targets too.
         self.files.clear();
         drop(entry);
         self.fences.clear();
@@ -396,7 +407,7 @@ impl std::fmt::Display for LockHeld {
             };
             return write!(
                 f,
-                "{what} ({last}; `codeflow test --lock-status` shows the live holders). \
+                "{what} ({last}; `codeflow test --lock-status` shows the recorded slots and target groups). \
                  Gates of CodeFlow 3.1 and other older binaries run alone, so this run \
                  started nothing; run it again when they end (lock: {lock})"
             );
@@ -614,12 +625,13 @@ fn holder_status(path: &Path, trusted: &[String]) -> Result<String, String> {
 
 /// The status line for the fence at `path`: its record names the last
 /// admitted run, which may have ended, so the line says so and points to
-/// the slot lines for the live holders (TSK-1256).
+/// the slot lines, which show the recorded slots and target groups
+/// (TSK-1256).
 fn fence_status(path: &Path, trusted: &[String]) -> Result<String, String> {
     let line = holder_status(path, trusted)?;
     Ok(line.replacen(
         ": recorded holder: ",
-        ": last recorded holder (may have ended; the slot lines show the live holders): ",
+        ": last recorded holder (may have ended; the slot lines show the recorded slots and target groups): ",
         1,
     ))
 }
@@ -845,13 +857,25 @@ pub fn acquire_gate_lock(
                     .iter()
                     .map(|file| file.0.as_raw_fd())
                     .chain(host.iter().map(|(_, file)| file.0.as_raw_fd()))
-                    .chain(lock.fences.iter().map(|(_, file)| file.0.as_raw_fd()))
+                    .chain(lock.fences.iter().map(|(_, fence)| fence.file.as_raw_fd()))
+                    .collect()
+            },
+            #[cfg(unix)]
+            fences: {
+                use std::os::fd::AsRawFd;
+                lock.fences
+                    .iter()
+                    .map(|(_, fence)| fence.file.as_raw_fd())
                     .collect()
             },
             host,
             trusted,
             runs: lock.runs,
         });
+    }
+    // Admitted: from here on the fences only close (FenceFile).
+    for (_, fence) in &mut lock.fences {
+        fence.armed = false;
     }
     Ok(lock)
 }
@@ -884,7 +908,7 @@ fn take_host_shared(dir: &Path, trusted: &[String]) -> Result<(PathBuf, Acquired
 fn take_fences(
     dirs: &[PathBuf],
     trusted: &[String],
-) -> Result<Vec<(PathBuf, AcquiredFile)>, LockHeld> {
+) -> Result<Vec<(PathBuf, FenceFile)>, LockHeld> {
     dirs.iter()
         .map(|dir| Ok((dir.join(LOCK_FILE), take_fence(dir, trusted)?)))
         .collect()
@@ -897,35 +921,86 @@ fn take_fences(
 /// binary's gate that ended while its targets ran leaves there, naming the
 /// last recorded holder; when the fence cannot be opened or locked, or its
 /// record cannot be read (fail closed).
-fn take_fence(dir: &Path, trusted: &[String]) -> Result<AcquiredFile, LockHeld> {
+fn take_fence(dir: &Path, trusted: &[String]) -> Result<FenceFile, LockHeld> {
     let path = dir.join(LOCK_FILE);
     let Slot::Taken(file) = try_open_and_lock(&path, true)? else {
         let holder = fence_holder(&path, trusted);
         return Err(LockHeld::older_binary(path, holder, Vec::new()));
     };
-    let mut acquired = AcquiredFile(file);
-    let previous = read_holder(&path, Some(&mut acquired.0), trusted).map_err(|error| {
-        LockHeld::unavailable(
-            path.clone(),
-            format!("cannot read gate lock record: {error}"),
-        )
-    })?;
-    let running = live_groups(&previous).map_err(|error| {
-        LockHeld::unavailable(
-            path.clone(),
-            format!("cannot reclaim gate lock: {error}; inspect and repair the lock record after verifying its processes"),
-        )
-    })?;
+    // Armed until admission completes: a refusal before any target starts
+    // unlocks it explicitly.
+    let mut fence = FenceFile { file, armed: true };
+    let (holder, running) = fence_live_groups(&path, Some(&mut fence.file), trusted)?;
     if !running.is_empty() {
         // The older gate is gone but its targets are not, and they run as
-        // that gate did, alone; the shared hold releases as `acquired` drops.
-        let mut holder = String::new();
-        for line in previous.lines().filter(|line| !line.starts_with("group=")) {
-            let _ = writeln!(holder, "{line}");
-        }
+        // that gate did, alone; the shared hold releases as `fence` drops.
         return Err(LockHeld::older_binary(path, holder, running));
     }
-    Ok(acquired)
+    Ok(fence)
+}
+
+/// The live target groups an older binary's gate left on the fence at
+/// `fence`, with the holder lines of the record that names them. Both
+/// locations are read and checked independently, since either can carry an
+/// orphan whatever the other says: the record inside the lock file, which a
+/// 3.1 gate writes and whose targets never inherit the lock, and
+/// [`RECORD_FILE`], which line builds before TSK-1256 write. The caller
+/// holds the fence shared, so no older gate writes either meanwhile. The
+/// lock file is read through `held` when given.
+/// # Errors
+/// When either record cannot be read or parsed, or names a value that is
+/// not a target process group (fail closed).
+fn fence_live_groups(
+    fence: &Path,
+    held: Option<&mut File>,
+    trusted: &[String],
+) -> Result<(String, Vec<u32>), LockHeld> {
+    let unreadable = |error: std::io::Error| {
+        LockHeld::unavailable(
+            fence.to_path_buf(),
+            format!("cannot read gate lock record: {error}"),
+        )
+    };
+    let read_file = |file: &Path| -> std::io::Result<String> {
+        if crate::absence::proven_absent(file)? {
+            return Ok(String::new());
+        }
+        let (anchor, relative) = lock_anchor(file)?;
+        read_record(&mut crate::contained::Tree::open(anchor)?.open_regular(&relative)?)
+    };
+    let inline = match held {
+        Some(file) => read_record(file),
+        None => read_file(fence),
+    }
+    .map_err(unreadable)?;
+    let sidecar = read_file(&record_path(fence)).map_err(unreadable)?;
+    let mut holder = String::new();
+    let mut running: Vec<u32> = Vec::new();
+    for text in [inline, sidecar] {
+        let parsed = parse_record(&text, trusted).map_err(|error| {
+            unreadable(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unreadable gate lock record: {error}"),
+            ))
+        })?;
+        let live = live_groups(&parsed).map_err(|error| {
+            LockHeld::unavailable(
+                fence.to_path_buf(),
+                format!("cannot reclaim gate lock: {error}; inspect and repair the lock record after verifying its processes"),
+            )
+        })?;
+        if !live.is_empty() && holder.is_empty() {
+            for line in parsed.lines().filter(|line| !line.starts_with("group=")) {
+                let _ = writeln!(holder, "{line}");
+            }
+        }
+        for group in live {
+            if !running.contains(&group) {
+                running.push(group);
+            }
+        }
+    }
+    Ok((holder, running))
 }
 
 /// The last holder recorded for the fence at `path`: the
@@ -1052,12 +1127,17 @@ pub struct HostExclusive {
     files: Vec<(PathBuf, Option<AcquiredFile>)>,
     /// The fence held shared in each lock directory, taken before the host,
     /// so an older binary's gate stays out while the target runs whatever
-    /// called this (TSK-1256). It releases after the host.
-    fences: Vec<(PathBuf, AcquiredFile)>,
+    /// called this (TSK-1256). The target inherits it ([`fence_copies`]);
+    /// it closes after the host, never unlocked.
+    fences: Vec<(PathBuf, FenceFile)>,
+    /// This hold's entry in the registry [`fence_copies`] reads.
+    id: u64,
 }
 
 impl Drop for HostExclusive {
     fn drop(&mut self) {
+        #[cfg(unix)]
+        host_fences().retain(|(id, _)| *id != self.id);
         for (path, _) in &self.files {
             if let Err(error) = write_record(path, "") {
                 eprintln!(
@@ -1231,10 +1311,19 @@ pub fn hold_host_exclusive_in(
             crate::git::display_path(&path)
         ));
     }
-    Ok(HostExclusive {
+    let mut hold = HostExclusive {
         files: taken,
         fences,
-    })
+        id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+    };
+    // Held: from here on the fences only close, and the target inherits
+    // them as it inherits an admission's.
+    for (_, fence) in &mut hold.fences {
+        fence.armed = false;
+        #[cfg(unix)]
+        host_fences().push((hold.id, std::os::fd::AsRawFd::as_raw_fd(&fence.file)));
+    }
+    Ok(hold)
 }
 
 /// A busy slot in `dirs` that this process does not hold, or a fence whose
@@ -1247,15 +1336,7 @@ fn orphaned_slot(dirs: &[PathBuf], trusted: &[String]) -> Result<Option<PathBuf>
         .collect();
     for dir in dirs {
         let fence = dir.join(LOCK_FILE);
-        let record = read_holder(&fence, None, trusted).map_err(|error| {
-            LockHeld::unavailable(
-                fence.clone(),
-                format!("cannot read gate lock record: {error}"),
-            )
-        })?;
-        let running = live_groups(&record).map_err(|error| {
-            LockHeld::unavailable(fence.clone(), format!("cannot reclaim gate lock: {error}"))
-        })?;
+        let (_, running) = fence_live_groups(&fence, None, trusted)?;
         if !running.is_empty() {
             return Ok(Some(fence));
         }
@@ -1508,11 +1589,78 @@ fn inherit_gate_lock(
             .iter()
             .map(AsRawFd::as_raw_fd)
             .chain(host.iter().map(|(_, file)| file.0.as_raw_fd()))
-            .chain(lock.fences.iter().map(|(_, file)| file.0.as_raw_fd()))
+            .chain(lock.fences.iter().map(|(_, fence)| fence.file.as_raw_fd()))
+            .collect(),
+        fences: lock
+            .fences
+            .iter()
+            .map(|(_, fence)| fence.file.as_raw_fd())
             .collect(),
         host,
     });
+    let mut lock = lock;
+    for (_, fence) in &mut lock.fences {
+        fence.armed = false;
+    }
     Ok(Some(lock))
+}
+
+/// The fences of active host-exclusive holds, by hold, which every target
+/// inherits as it inherits an admission's ([`fence_copies`]).
+#[cfg(unix)]
+static HOST_FENCES: Mutex<Vec<(u64, std::os::fd::RawFd)>> = Mutex::new(Vec::new());
+
+#[cfg(unix)]
+fn host_fences() -> std::sync::MutexGuard<'static, Vec<(u64, std::os::fd::RawFd)>> {
+    HOST_FENCES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Copies of every fence this process holds, for a target to inherit
+/// before it is spawned (TSK-1256). A copy shares the fence's open file
+/// description, which owns the shared lock, so the fence lasts while any
+/// process that kept a copy lives: a target, its grandchildren, and those
+/// that outlive a killed gate. The copies are close-on-exec here; the
+/// spawn clears that in the child only. The registry guards keep the
+/// owners alive during the copy.
+/// # Errors
+/// When a descriptor cannot be duplicated; the target then does not start.
+#[cfg(unix)]
+pub(crate) fn fence_copies() -> std::io::Result<Vec<File>> {
+    use std::os::fd::BorrowedFd;
+    let held = held();
+    let hosts = host_fences();
+    held.iter()
+        .flat_map(|lock| lock.fences.iter().copied())
+        .chain(hosts.iter().map(|(_, fd)| *fd))
+        .map(|descriptor| {
+            // SAFETY: the registry guards keep the owning fence open.
+            unsafe { BorrowedFd::borrow_raw(descriptor) }
+                .try_clone_to_owned()
+                .map(File::from)
+        })
+        .collect()
+}
+
+/// A fence ([`LOCK_FILE`]) held shared. Targets inherit copies of it, and
+/// a flock belongs to the open file description, so an explicit unlock
+/// through any copy releases it for all of them. Once a run is admitted
+/// the fence is only ever closed; only a refusal before any target starts
+/// (`armed`) unlocks it explicitly, so a sibling thread's fork that holds a
+/// copy until its exec cannot keep a refused run's fence.
+#[derive(Debug)]
+struct FenceFile {
+    file: File,
+    armed: bool,
+}
+
+impl Drop for FenceFile {
+    fn drop(&mut self) {
+        if self.armed {
+            os_lock::unlock(&self.file);
+        }
+    }
 }
 
 /// Duplicate held locks for a target's lifetime watcher before spawning it.
@@ -2497,6 +2645,7 @@ mod tests {
             trusted: trusted.clone(),
             runs: 1,
             descriptors: Vec::new(),
+            fences: Vec::new(),
         };
         // At the rewrite's read, a nested run (an inherited lock) adds the
         // target's group. Give it a moment: unserialized, it
@@ -2522,6 +2671,7 @@ mod tests {
                     trusted,
                     runs: 1,
                     descriptors: Vec::new(),
+                    fences: Vec::new(),
                 };
                 assert_eq!(rewrite_serialized(&nested, &path), Vec::<String>::new());
                 let _ = done.send(());
@@ -3715,6 +3865,7 @@ mod old_binary_fence_tests {
             trusted: trusted_dirs(&work),
             runs: 1,
             descriptors: Vec::new(),
+            fences: Vec::new(),
         };
         let failures = rewrite_serialized(&own, &path);
         assert_eq!(failures.len(), 1, "{failures:?}");
@@ -3860,5 +4011,121 @@ mod old_binary_fence_tests {
         let refused = acquire_full_gate_lock(&dirs, &work).unwrap_err();
         assert_eq!(refused.path, dirs[0].join(LOCK_FILE));
         drop(slot_zero);
+    }
+
+    /// TSK-1256 R1-B: a released run's fence is only closed, never
+    /// unlocked, so a target's inherited copy keeps older binaries out
+    /// after the run ends; once the copy closes, the fence frees.
+    #[cfg(unix)]
+    #[test]
+    fn a_released_runs_fence_stays_while_a_target_copy_lives() {
+        let (_tmp, work, dirs) = setup();
+        let lock = acquire_full_gate_lock(&dirs[..1], &work).unwrap();
+        let copies = fence_copies().unwrap();
+        let ours = std::fs::File::open(dirs[0].join(LOCK_FILE)).unwrap();
+        let own_identity = FileIdentity::of(&ours).unwrap();
+        // Keep only the copy of this test's fence; sibling tests' fences
+        // close with their own copies.
+        let copy: Vec<File> = copies
+            .into_iter()
+            .filter(|file| FileIdentity::of(file).ok().as_ref() == Some(&own_identity))
+            .collect();
+        assert_eq!(copy.len(), 1, "one copy of this run's fence");
+        drop(lock);
+        match old_take(&dirs[0]) {
+            Err(error) if os_lock::is_contended(&error) => {}
+            other => panic!(
+                "the target's copy must keep the fence: {:?}",
+                other.map(drop)
+            ),
+        }
+        drop(copy);
+        drop(old_take_eventually(&dirs[0]));
+    }
+
+    /// TSK-1256 R1-A: a completed new run leaves `full-gate.record`, and a
+    /// 3.1 gate killed afterwards leaves its target's group only inside
+    /// `full-gate.lock`. A reserve's admission and a standalone
+    /// host-exclusive hold both refuse before taking a slot or the host.
+    #[cfg(unix)]
+    #[test]
+    fn a_3_1_orphan_behind_a_completed_runs_record_is_refused() {
+        use std::os::unix::process::CommandExt;
+        let (_tmp, work, dirs) = setup();
+        drop(acquire_full_gate_lock(&dirs, &work).unwrap());
+        for dir in &dirs {
+            assert!(std::fs::read_to_string(dir.join(RECORD_FILE))
+                .unwrap()
+                .contains("pid="));
+        }
+        let mut survivor = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let group = survivor.id();
+        let old = old_take_eventually(&dirs[1]);
+        std::fs::write(
+            dirs[1].join(LOCK_FILE),
+            format!("pid=999999\nstarted=1\ngroup={group}\n"),
+        )
+        .unwrap();
+        drop(old);
+        let slot_records: Vec<String> = dirs
+            .iter()
+            .map(|dir| std::fs::read_to_string(record_path(&dir.join(slot_file(1)))).unwrap())
+            .collect();
+        let refused = acquire_gate_lock(&dirs, &work, "reserve").unwrap_err();
+        assert!(refused.older_binary);
+        assert_eq!(refused.path, dirs[1].join(LOCK_FILE));
+        assert_eq!(refused.running_groups, vec![group]);
+        let refused = hold_host_exclusive_in(&dirs, &work, Duration::ZERO).unwrap_err();
+        assert!(refused.contains("older CodeFlow binary"), "{refused}");
+        assert!(
+            refused.contains(&format!("process groups {group}")),
+            "{refused}"
+        );
+        for (dir, before) in dirs.iter().zip(&slot_records) {
+            assert_eq!(
+                &std::fs::read_to_string(record_path(&dir.join(slot_file(1)))).unwrap(),
+                before,
+                "no slot was taken"
+            );
+            assert!(!dir.join(slot_file(2)).exists(), "no slot was taken");
+            assert!(
+                !std::fs::read_to_string(record_path(&dir.join(HOST_LOCK_FILE)))
+                    .unwrap_or_default()
+                    .contains("mode=exclusive"),
+                "the host was not taken"
+            );
+        }
+        survivor.kill().unwrap();
+        survivor.wait().unwrap();
+        drop(acquire_gate_lock(&dirs, &work, "reserve").expect("admitted once it ends"));
+    }
+
+    /// TSK-1256: a host-exclusive hold outside any admission passes its
+    /// fence to the target it guards, as an admission does, and stops when
+    /// the hold ends.
+    #[cfg(unix)]
+    #[test]
+    fn a_host_exclusive_holds_fence_reaches_its_target() {
+        let (_tmp, work, dirs) = setup();
+        let ours = |copies: Vec<File>| {
+            let identity = FileIdentity::of(&File::open(dirs[0].join(LOCK_FILE)).unwrap()).unwrap();
+            copies
+                .into_iter()
+                .filter(|file| FileIdentity::of(file).ok().as_ref() == Some(&identity))
+                .count()
+        };
+        let hold = hold_host_exclusive_in(&dirs[..1], &work, Duration::ZERO).unwrap();
+        assert_eq!(ours(fence_copies().unwrap()), 1, "the target inherits it");
+        drop(hold);
+        assert_eq!(
+            ours(fence_copies().unwrap()),
+            0,
+            "the ended hold passes none"
+        );
+        drop(old_take_eventually(&dirs[0]));
     }
 }

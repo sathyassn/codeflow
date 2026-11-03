@@ -213,8 +213,9 @@ Direct commands outside the wrapper and other applications also
 consume resources that the job budget does not see. Declared heavy targets
 and reserved commands end their process groups when the controller exits.
 On Unix, other targets can outlive a killed gate; their slot counts as
-busy until they end, and a small keeper process holds the gate's locks for
-them, so an older gate (below) stays out too.
+busy until they end. Every target inherits the gate's hold on
+`full-gate.lock`, so an older gate (below) stays out while any process of
+the target that kept it still runs.
 
 #### Older CodeFlow binaries on the same machine
 
@@ -226,21 +227,37 @@ run at the same time, in either order:
 
 - An older gate started while a 4.0 run is active refuses, as it refuses
   beside another older gate (an older 4.0 line build told to wait waits
-  instead). It names the holder from its usual record. A 3.1 gate reads
-  the text inside `full-gate.lock`, which 4.0 runs never write, so it says
-  the holder has not recorded itself. An older 4.0 line build reads
-  `full-gate.record`, which names the last admitted 4.0 run; that run may
-  have ended, since no release rewrites the record.
-- So an older gate's refusal can name a run that has ended: a 4.0 run
-  that has finished, or a 3.1 gate that was killed and left its record
-  inside `full-gate.lock`. To see the live holders, run
-  `codeflow test --lock-status` with a 4.0 binary, or read the slot records
-  `full-gate-<n>.record` beside `full-gate-<n>.lock`; the status line for
+  instead). It names the holder from its usual record:
+  - A 3.1 gate reads the text inside `full-gate.lock`. 4.0 runs never
+    write it, so while it is empty the 3.1 gate says the holder has not
+    recorded itself; when a killed 3.1 gate left its record there, it names
+    that gate.
+  - An older 4.0 line build reads `full-gate.record`, which names the last
+    admitted 4.0 run. That run may have ended, since no release rewrites
+    the record.
+- So an older gate's refusal can name a run that has ended. To see what is
+  recorded, run `codeflow test --lock-status` with a 4.0 binary, or read
+  the slot records `full-gate-<n>.record` beside `full-gate-<n>.lock`: they
+  show the recorded slots and target groups. The status line for
   `full-gate.lock` itself says it is the last recorded holder. The stale
-  name goes away on its own: once no 4.0 run is active, the next older gate
-  takes the lock and replaces the record.
-- A 4.0 run's target that outlives its killed gate on Unix keeps older
-  gates out until its process group ends.
+  name goes away when an older gate next gets the lock, once no 4.0 run is
+  active: a 3.1 gate replaces the text inside `full-gate.lock`, and an
+  older 4.0 line build replaces `full-gate.record`.
+- On Unix every 4.0 target inherits the run's shared hold on
+  `full-gate.lock`, so older gates stay out while any process of the
+  target that kept it runs: after the gate ends, after it is killed, and
+  for grandchildren too. Its limits:
+  - A daemon that closes the descriptors it inherited does not keep the
+    hold, so an older gate can start beside it.
+  - A daemon that keeps them (for example a build cache server a target
+    starts) keeps older gates out until it exits. New runs are not
+    affected. Stop the daemon to let an older gate in.
+  - A target that unlocks the inherited descriptor itself releases the
+    hold for every process sharing it.
+  - On NFS, Linux emulates this lock with per-process locks, so the hold
+    ends with the gate even while its targets run.
+- On Windows, a target and all its descendants end when the gate exits or
+  is killed (a kill-on-close job object), so nothing outlives the hold.
 - A 4.0 run started while an older gate is active refuses at once with
   `an older CodeFlow binary's gate is running on this machine`, naming its
   last recorded holder. It takes no slot, starts nothing and does not
