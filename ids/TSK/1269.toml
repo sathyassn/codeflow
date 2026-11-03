@@ -1,0 +1,11 @@
+id = "TSK-1269"
+uid = "dfb8fbf5-bb34-4245-850b-f5026f510a84"
+kind = "TSK"
+title = "A second full gate in the same worktree refuses while one runs"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T03:17:02Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
