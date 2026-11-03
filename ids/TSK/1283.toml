@@ -1,0 +1,11 @@
+id = "TSK-1283"
+uid = "bab26b94-f155-4b38-8a18-bdfa9f91b7a2"
+kind = "TSK"
+title = "Hosted CI runs only the record checks for a records-only pull request"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-03T14:07:44Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
