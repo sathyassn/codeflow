@@ -997,6 +997,140 @@ pub fn epic_line_bound_at(
     Ok(EpicLineBinding::Bound)
 }
 
+/// The record of task `task` at `revision`, found by its file name and id,
+/// with no branch name or policy involved (TSK-350 AC-1, AC-6).
+///
+/// # Errors
+///
+/// Returns an error if the revision or the task's record cannot be read.
+pub(crate) fn task_record_at_revision(
+    repo_root: &Path,
+    task: &str,
+    revision: &str,
+) -> Result<Option<Record>, WorkStartError> {
+    let repo = Repository::discover(repo_root)
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let tree = repo
+        .revparse_single(revision)
+        .and_then(|object| object.peel_to_tree())
+        .map_err(|error| WorkStartError::Repository(format!("{revision}: {error}")))?;
+    let records = records_from_tree_matching(&repo, &tree, |path, kind| {
+        kind == RecordKind::Task && path.rsplit('/').next().and_then(markdown_stem) == Some(task)
+    })?;
+    Ok(records
+        .into_iter()
+        .find(|(id, _)| id == task)
+        .map(|(_, record)| record))
+}
+
+/// The `integration_target` task `task`'s record declares at `revision`,
+/// as a logical branch name, read by the task's id with no branch name or
+/// policy involved (TSK-350 AC-1, AC-6).
+///
+/// # Errors
+///
+/// Returns an error if the revision or the task's record cannot be read.
+pub fn task_target_at_revision(
+    repo_root: &Path,
+    task: &str,
+    revision: &str,
+) -> Result<Option<String>, WorkStartError> {
+    Ok(task_record_at_revision(repo_root, task, revision)?
+        .and_then(|record| record.integration_target)
+        .filter(|target| !target.is_empty())
+        .map(|target| logical_target(&target).to_owned()))
+}
+
+/// Whether trusted records bind `line` as the epic line task `task` may
+/// declare (TSK-350 AC-6, AC-8), judged at exact revisions only: the task's
+/// record at `head` must name the line's epic, or be standalone with a
+/// reason and this target; then each `(anchor, place)` is read, and a
+/// refusal at any anchor (a cancelled or archived epic) wins over a binding
+/// at another. No local or remote-tracking ref is read, so a stale ref can
+/// neither bind the line nor hide its epic's cancellation.
+///
+/// # Errors
+///
+/// Returns why a revision or a record could not be read.
+pub fn task_line_binding(
+    repo_root: &Path,
+    task: &str,
+    head: &str,
+    line: &str,
+    anchors: &[(&str, &str)],
+) -> Result<EpicLineBinding, WorkStartError> {
+    let line = logical_target(line);
+    let epic_id = match super::line_adoption::epic_id(line) {
+        Ok(epic_id) => epic_id,
+        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+    };
+    let Some(record) = task_record_at_revision(repo_root, task, head)? else {
+        return Ok(EpicLineBinding::Refused(format!(
+            "{task} has no record at the judged head"
+        )));
+    };
+    let may_target = match record.epic_id.as_deref() {
+        Some(own) => own == epic_id,
+        None => {
+            record
+                .standalone_reason
+                .as_deref()
+                .is_some_and(|reason| reason.bytes().any(|byte| !byte.is_ascii_whitespace()))
+                && logical_target(record.integration_target.as_deref().unwrap_or_default()) == line
+        }
+    };
+    if !may_target {
+        return Ok(EpicLineBinding::Refused(format!(
+            "names {epic_id}, which {task} may not target"
+        )));
+    }
+    let repo = Repository::discover(repo_root)
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let mut bound = false;
+    let mut unbound = Vec::new();
+    for (anchor, place) in anchors {
+        let tree = repo
+            .revparse_single(anchor)
+            .and_then(|object| object.peel_to_tree())
+            .map_err(|error| WorkStartError::Repository(format!("{anchor}: {error}")))?;
+        let records = records_from_tree(&repo, &tree)?;
+        let Some(epic) = records
+            .get(epic_id)
+            .filter(|record| record.kind == RecordKind::Epic)
+        else {
+            unbound.push(format!(
+                "names {epic_id}, which has no epic record on {place}"
+            ));
+            continue;
+        };
+        if matches!(epic.status.as_str(), "cancelled" | "archived") {
+            return Ok(EpicLineBinding::Refused(format!(
+                "names {epic_id}, which is {} on {place}",
+                epic.status
+            )));
+        }
+        if records.values().any(|record| {
+            record.kind == RecordKind::Task
+                && record.epic_id.as_deref() == Some(epic_id)
+                && record
+                    .integration_target
+                    .as_deref()
+                    .is_some_and(|target| logical_target(target) == line)
+        }) {
+            bound = true;
+        } else {
+            unbound.push(format!(
+                "is not the target of any task of {epic_id} on {place}"
+            ));
+        }
+    }
+    Ok(if bound {
+        EpicLineBinding::Bound
+    } else {
+        EpicLineBinding::Unbound(unbound.join("; "))
+    })
+}
+
 /// The `integration_target` the task record at `path` declares.
 pub(crate) fn declared_work_target_at(path: &Path) -> Result<Option<String>, WorkStartError> {
     let content = std::fs::read_to_string(path).map_err(|error| {
@@ -1319,6 +1453,42 @@ pub fn task_id_from_branch_at(
     let Some(suffix) = work_branch_suffix(repo_root, branch)? else {
         return Ok(None);
     };
+    task_id_in_head(repo_root, suffix, head)
+}
+
+/// The task id a work branch carries, judged as `codeflow ci` judges a
+/// range (TSK-350 AC-1, AC-2): the work prefixes come from `prefixes`, the
+/// `git.branch_prefixes` of the policy the run judges with, and the id from
+/// the task records at the judged `head`. The checkout supplies neither, so
+/// a record only the checkout holds grants no own-task authority, and one
+/// the checkout lacks takes none away.
+///
+/// # Errors
+///
+/// Returns an error if the revision or its task records cannot be read.
+pub fn judged_task_id(
+    repo_root: &Path,
+    prefixes: &[String],
+    branch: &str,
+    head: &str,
+) -> Result<Option<String>, WorkStartError> {
+    let prefixes: Vec<String> = prefixes
+        .iter()
+        .filter(|prefix| !NON_WORK_PREFIXES.contains(&prefix.as_str()))
+        .cloned()
+        .collect();
+    let Some(suffix) = work_suffix(&prefixes, branch) else {
+        return Ok(None);
+    };
+    task_id_in_head(repo_root, suffix, head)
+}
+
+/// The longest task id at `head` that `suffix` starts with, followed by `-`.
+fn task_id_in_head(
+    repo_root: &Path,
+    suffix: &str,
+    head: &str,
+) -> Result<Option<String>, WorkStartError> {
     let repo = Repository::discover(repo_root)
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     let tree = repo
@@ -1326,15 +1496,24 @@ pub fn task_id_from_branch_at(
         .and_then(|object| object.peel_to_commit())
         .and_then(|commit| commit.tree())
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
-    Ok(records_from_tree(&repo, &tree)?
-        .into_iter()
-        .filter(|(id, record)| {
-            record.kind == RecordKind::Task
-                && is_valid_task_format_id(id)
-                && suffix.starts_with(&format!("{id}-"))
-        })
-        .map(|(id, _)| id)
-        .max_by_key(String::len))
+    // The task record files at `head`, by name as the checkout lookup reads
+    // them: no record is parsed, so another record that does not parse
+    // keeps the refusal that names it rather than this lookup's.
+    let ids = std::cell::RefCell::new(std::collections::BTreeSet::new());
+    records_from_tree_matching(&repo, &tree, |path, kind| {
+        if kind == RecordKind::Task {
+            if let Some(id) = path
+                .rsplit('/')
+                .next()
+                .and_then(markdown_stem)
+                .filter(|id| is_valid_task_format_id(id))
+            {
+                ids.borrow_mut().insert(id.to_owned());
+            }
+        }
+        false
+    })?;
+    Ok(carried_task_id(suffix, &ids.into_inner()))
 }
 
 /// Whether a work branch names a task id by shape (`<prefix>/TSK-<digits>-`),
