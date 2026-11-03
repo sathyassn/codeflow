@@ -367,7 +367,7 @@ fn commits_from_another_commit_is_never_called_the_hosted_verdict() {
     assert!(said.contains("the other checks over"), "{said}");
     assert!(said.contains("so this is not the hosted verdict"), "{said}");
     assert!(
-        !said.contains("it is the hosted verdict only when"),
+        !said.contains("the hosted verdict names the default branch's commit"),
         "{said}"
     );
     // The same commit as the base keeps the one range and its wording.
@@ -388,7 +388,7 @@ fn commits_from_another_commit_is_never_called_the_hosted_verdict() {
     let same = self::said(&same);
     assert!(!same.contains("the commit checks run over"), "{same}");
     assert!(
-        same.contains("it is the hosted verdict only when"),
+        same.contains("the hosted verdict names the default branch's commit"),
         "{same}"
     );
 }

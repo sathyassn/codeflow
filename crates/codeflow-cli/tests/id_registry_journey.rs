@@ -738,12 +738,14 @@ fn a_follow_up_task_takes_its_number_from_the_registry() {
     );
 }
 
-/// The enforcing registry check is a step of the policy workflow (TSK-184:
-/// one target build serves both). It must run on `pull_request_target`
-/// (its workflow from the default branch, never the PR), check out the
-/// default branch's commit (TSK-336), read the PR head only as git data, and hold a read-only token:
-/// then a PR that edits this file changes nothing about the verdict it
-/// receives. GitHub's own dispatch is not exercised here.
+/// The enforcing registry check is a step of the policy workflow's verdict
+/// job (TSK-184). It must run on `pull_request_target` alone (its workflow
+/// from the default branch, never the PR), check out the default branch's
+/// commit (TSK-336), read the PR head only as git data, and hold a
+/// read-only token: then a PR that edits this file changes nothing about the
+/// verdict it receives. Pushes, the schedule and manual runs check the
+/// registry in codeflow-registry.yml (TSK-336 R1-1). GitHub's own dispatch
+/// is not exercised here.
 #[test]
 fn the_enforcing_registry_workflow_cannot_be_changed_by_the_pull_request_it_judges() {
     let asset =
@@ -759,7 +761,17 @@ fn the_enforcing_registry_workflow_cannot_be_changed_by_the_pull_request_it_judg
         on.get("pull_request").is_none(),
         "never from the PR's own workflow file"
     );
-    assert!(on.get("schedule").is_some() && on.get("push").is_some());
+    for event in ["push", "schedule", "workflow_dispatch"] {
+        assert!(on.get(event).is_none(), "{event} starts the registry workflow");
+    }
+    let registry: serde_yaml::Value = serde_yaml::from_str(include_str!(
+        "../../../assets/base/ci/codeflow-registry.yml"
+    ))
+    .unwrap();
+    for event in ["push", "schedule", "workflow_dispatch"] {
+        assert!(registry["on"].get(event).is_some(), "{event}");
+    }
+    assert_eq!(registry["permissions"]["contents"], "read");
     assert_eq!(workflow["permissions"]["contents"], "read");
     let job = &workflow["jobs"]["commit-lint"];
     assert!(
@@ -790,7 +802,7 @@ fn the_enforcing_registry_workflow_cannot_be_changed_by_the_pull_request_it_judg
         // The pinned install runs only the verified release download, the
         // same script in every enforcing job (TSK-107, `ci_pin.rs`).
         if step.get("name").and_then(serde_yaml::Value::as_str)
-            == Some("Install codeflow (target-pinned, checksum-verified)")
+            == Some("Install codeflow (authority-pinned, checksum-verified)")
         {
             continue;
         }

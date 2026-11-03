@@ -85,11 +85,14 @@ fn events(workflow: &Value) -> Vec<String> {
     }
 }
 
-/// AC-9: a `trusted:` name comes only from a job that runs on
-/// `pull_request_target` alone, so no `pull_request`, `push`, `schedule`
-/// or dispatch run emits it; `commit standards` has no producer at all.
+/// AC-2, AC-9 (review round 1, R1-1): a `trusted:` name comes only from a
+/// workflow that `pull_request_target` alone starts, and the job carries no
+/// `if`. A job-level `if` skips a job but keeps its check, and GitHub counts
+/// a skipped required check as passing, so a push, schedule or dispatch run
+/// of a workflow holding a trusted-named job would leave a passing check
+/// under that name at the pushed commit. `commit standards` has no producer.
 #[test]
-fn only_pull_request_target_jobs_emit_a_trusted_name() {
+fn only_pull_request_target_workflows_emit_a_trusted_name() {
     for (path, workflow) in workflows() {
         for (id, name, job) in jobs(&workflow) {
             assert_ne!(
@@ -97,16 +100,53 @@ fn only_pull_request_target_jobs_emit_a_trusted_name() {
                 "{path} job {id} still produces the old name"
             );
             if name.starts_with("trusted: ") {
-                assert!(
-                    events(&workflow).contains(&"pull_request_target".to_owned()),
-                    "{path} job {id}"
-                );
                 assert_eq!(
-                    job["if"].as_str(),
-                    Some("github.event_name == 'pull_request_target'"),
-                    "{path} job {id} ('{name}') must run on pull_request_target alone"
+                    events(&workflow),
+                    ["pull_request_target"],
+                    "{path} job {id} ('{name}'): a workflow any other event starts creates this check, skipped or not"
+                );
+                assert!(
+                    job.get("if").is_none(),
+                    "{path} job {id} ('{name}'): a skipped job still reports its check"
                 );
             }
+        }
+    }
+}
+
+/// AC-2: the registry check of pushes, the schedule and manual runs lives in
+/// its own workflow, under its own name, and no workflow that runs on
+/// `pull_request_target` carries it; the pull request's registry check is a
+/// step of the verdict job.
+#[test]
+fn the_registry_runs_in_its_own_workflow() {
+    let all = workflows();
+    for path in [
+        "assets/base/ci/codeflow-registry.yml",
+        ".codeflow/.baseline/.github/workflows/codeflow-registry.yml",
+        ".github/workflows/codeflow-registry.yml",
+    ] {
+        let (_, workflow) = all
+            .iter()
+            .find(|(found, _)| found == path)
+            .unwrap_or_else(|| panic!("{path}"));
+        assert_eq!(
+            events(workflow),
+            ["push", "schedule", "workflow_dispatch"],
+            "{path}"
+        );
+        let names: Vec<String> = jobs(workflow).into_iter().map(|(_, n, _)| n).collect();
+        assert_eq!(names, ["registry check"], "{path}");
+    }
+    for (path, workflow) in &all {
+        if jobs(workflow)
+            .iter()
+            .any(|(_, name, _)| name == "registry check")
+        {
+            assert!(
+                !events(workflow).contains(&"pull_request_target".to_owned()),
+                "{path}"
+            );
         }
     }
 }

@@ -292,6 +292,7 @@ registry check for a pull request, now named `trusted: commit standards`,
 checks out the default branch at the run's one commit, never the pull
 request's base, so the default branch's pin and policy judge a pull request
 into an integration line too. Push, schedule and dispatch runs check the
-registry under their own name, `registry check`, so none of them can stand
-in for the pull request verdict. The 2026-09-27 note's base-commit checkout
+registry in their own workflow, `codeflow-registry.yml`, under their own
+name, `registry check`, so none of them creates a check under the verdict's
+name, not even a skipped one. The 2026-09-27 note's base-commit checkout
 is superseded by this. The accepted text above is unchanged.

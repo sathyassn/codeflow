@@ -14,6 +14,7 @@ use std::process::{Command, Output};
 
 const CI: &str = include_str!("../../../assets/base/ci/codeflow-ci.yml");
 const POLICY: &str = include_str!("../../../assets/base/ci/codeflow-policy.yml");
+const REGISTRY: &str = include_str!("../../../assets/base/ci/codeflow-registry.yml");
 const ASSET: &str = "codeflow-cli-x86_64-unknown-linux-gnu";
 
 /// The `run:` script of every step whose name starts with `prefix`: the
@@ -284,6 +285,7 @@ fn every_install_step_is_the_same_verified_script() {
     let mut blocks = run_blocks(CI, "Install codeflow");
     blocks.extend(run_blocks(CI, "Install candidate codeflow"));
     blocks.extend(run_blocks(POLICY, "Install codeflow"));
+    blocks.extend(run_blocks(REGISTRY, "Install codeflow"));
     assert_eq!(
         blocks.len(),
         4,
@@ -291,11 +293,13 @@ fn every_install_step_is_the_same_verified_script() {
     );
     assert!(blocks.iter().all(|b| b == &blocks[0]));
     assert!(blocks[0].contains("sha256.sum"));
-    for workflow in [CI, POLICY] {
+    for workflow in [CI, POLICY, REGISTRY] {
         assert!(!workflow.contains("PLACEHOLDER"));
     }
-    // The enforcing job reads the pin from the target checkout.
+    // The enforcing job reads the pin from the authority checkout, and the
+    // registry check from the event's own commit.
     assert!(POLICY.contains("PIN_REF: HEAD"));
+    assert!(REGISTRY.contains("PIN_REF: HEAD"));
 }
 
 #[test]
@@ -1728,33 +1732,41 @@ fn resolve_ref(
 
 #[test]
 fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
-    // pull_request_target, never pull_request: GitHub runs this file from
-    // the default branch, never from the pull request. Push, schedule and
-    // dispatch are the registry check's own events, on the event's commit.
-    let on = POLICY
-        .split("\non:\n")
-        .nth(1)
-        .and_then(|rest| rest.split("\n\n").next())
-        .unwrap();
+    // pull_request_target alone, never pull_request: GitHub runs this file
+    // from the default branch, never from the pull request. Push, schedule
+    // and dispatch start the registry workflow instead, so no such run
+    // creates a check under the verdict's name (TSK-336 R1-1).
+    let on_block = |workflow: &'static str| {
+        workflow
+            .split("\non:\n")
+            .nth(1)
+            .and_then(|rest| rest.split("\n\n").next())
+            .unwrap()
+    };
+    let on = on_block(POLICY);
     assert!(on.contains("pull_request_target:"), "{on}");
-    assert!(!on.contains("  pull_request:"), "{on}");
-    for event in ["push:", "schedule:", "workflow_dispatch:"] {
-        assert!(on.contains(event), "{on}");
+    for event in ["  pull_request:", "push:", "schedule:", "workflow_dispatch:"] {
+        assert!(!on.contains(event), "{on}");
     }
-    // TSK-254: one group per pull request cancels a superseded
-    // pull_request_target run; push, schedule and dispatch runs each get a
-    // group of their own run id and are never cancelled, so a registry run
-    // is never replaced by a queued event.
+    let registry_on = on_block(REGISTRY);
+    for event in ["push:", "schedule:", "workflow_dispatch:"] {
+        assert!(registry_on.contains(event), "{registry_on}");
+    }
+    assert!(!registry_on.contains("pull_request"), "{registry_on}");
+    // TSK-254: one group per pull request cancels a superseded run. The
+    // registry workflow has no group, so a registry run is never replaced
+    // by a queued event.
     assert_eq!(POLICY.matches("concurrency:").count(), 1, "one group");
     assert!(
         POLICY.contains(
-            "\nconcurrency:\n  group: ${{ github.event_name == 'pull_request_target' && \
-             format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || \
-             format('{0}-run-{1}', github.workflow, github.run_id) }}\n  \
-             cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}\n\njobs:\n"
+            "\nconcurrency:\n  group: ${{ format('{0}-pr-{1}', github.workflow, \
+             github.event.pull_request.number) }}\n  cancel-in-progress: true\n\njobs:\n"
         ),
-        "a registry run is never replaced by a queued event"
+        "one group per pull request"
     );
+    assert!(!REGISTRY.contains("concurrency:"));
+    assert!(REGISTRY.contains("\npermissions:\n  contents: read\n"));
+    assert!(!REGISTRY.contains("secrets.") && !REGISTRY.contains(": write"));
     assert!(POLICY.contains("\npermissions:\n  contents: read\n"));
     assert!(
         !POLICY.contains("secrets."),
@@ -1767,16 +1779,19 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     assert!(POLICY.contains("CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}"));
     assert!(POLICY.contains("/pulls/${PR_NUMBER}\" -o \"${RUNNER_TEMP}/pull.json\""));
 
-    // TSK-336: the verdict job runs only on pull_request_target, under its
-    // trusted name; push, schedule and dispatch run the registry check under
-    // a name of its own, so no such run can stand in for the verdict.
+    // TSK-336: the verdict job, under its trusted name, is the policy
+    // workflow's only job and has no `if`, since a skipped job still
+    // reports its check; the registry check has its own workflow and name.
     let enforcing = job(POLICY, "commit-lint");
     assert!(enforcing.contains("    name: \"trusted: commit standards\"\n"));
-    assert!(enforcing.contains("    if: github.event_name == 'pull_request_target'\n"));
-    let registry = job(POLICY, "registry-check");
+    assert!(!enforcing.contains("\n    if: "));
+    assert!(!POLICY.contains("registry-check:"));
+    let registry = job(REGISTRY, "registry-check");
     assert!(registry.contains("    name: registry check\n"));
-    assert!(registry.contains("    if: github.event_name != 'pull_request_target'\n"));
+    assert!(!registry.contains("\n    if: "));
+    assert!(registry.contains("codeflow ids check"));
     assert!(!POLICY.contains("name: commit standards"));
+    assert!(!REGISTRY.contains("trusted:"));
     // The checkout is the run's own commit, the default branch's tip on
     // pull_request_target, never the base or the head.
     let checkout = checkout_block(enforcing);
@@ -2239,4 +2254,65 @@ fn a_pull_request_into_a_line_is_judged_by_the_default_branch() {
     let line_text = String::from_utf8_lossy(&by_line.stderr);
     assert_eq!(by_line.status.code(), Some(1), "{line_text}");
     assert!(line_text.contains("over the 10-char limit"), "{line_text}");
+}
+
+/// TSK-336 AC-1 (review round 1, R1-2): a default branch with no
+/// `.codeflow/policy.json` has no policy to judge with, so the verdict step
+/// refuses before `codeflow ci` runs, never falling back to the shipped
+/// defaults the CLI selects for a local adoption range (TSK-1077).
+#[test]
+fn the_verdict_refuses_a_default_branch_without_a_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = dir.path().join("origin");
+    let (base, head) = default_and_integration_targets(&origin);
+    let target = dir.path().join("target");
+    codeflow_fixture::clone(
+        dir.path(),
+        origin.to_str().unwrap(),
+        target.to_str().unwrap(),
+    )
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
+    let main = git(&origin, &["rev-parse", "main"]);
+    git(&target, &["checkout", "-q", "--detach", &main]);
+    git(
+        &target,
+        &["fetch", "-q", "origin", "feat/longer:refs/codeflow/pr-head"],
+    );
+    git(&target, &["rm", "-q", ".codeflow/policy.json"]);
+    git(
+        &target,
+        &[
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@example.com",
+            "commit",
+            "-qm",
+            "chore: drop the policy",
+        ],
+    );
+    let authority = git(&target, &["rev-parse", "HEAD"]);
+
+    let home = dir.path().join("home");
+    let judged = run_verdict_step(&target, &home, &authority, &base, &head, "feat/longer");
+    let said = String::from_utf8_lossy(&judged.stdout);
+    let text = String::from_utf8_lossy(&judged.stderr);
+    assert_eq!(judged.status.code(), Some(1), "{said}{text}");
+    assert!(
+        said.contains(&format!(
+            "::error::the default branch at {authority} has no .codeflow/policy.json, so nothing is judged"
+        )),
+        "{said}"
+    );
+    assert!(!said.contains("shipped defaults"), "{said}");
+
+    // The same step with the policy present runs codeflow ci.
+    let present = run_verdict_step(&target, &home, &main, &base, &head, "feat/longer");
+    let present_said = String::from_utf8_lossy(&present.stdout);
+    assert!(
+        present_said.contains("verifying against .codeflow/policy.json at"),
+        "{present_said}"
+    );
 }
