@@ -383,6 +383,11 @@ fn init_writes(
         );
     }
 
+    report.notes.push(shown!(
+        "capability coverage: {}",
+        crate::capability::coverage::report(root)
+    ));
+
     Ok(report)
 }
 

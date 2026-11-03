@@ -284,7 +284,7 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
   the default branch, and pull requests with strict, pinned checks guard it,
   the integration lines and each other protected branch. It never weakens a
   rule and reports what the plan cannot apply.
-- `codeflow doctor` runs twenty-six health checks on the repository and the
+- `codeflow doctor` runs twenty-seven health checks on the repository and the
   tools around it, including the default branch's host rules.
 
 | Doctor check | Reports |
@@ -649,9 +649,9 @@ one bounded local review surface with anchored feedback.
 
 - The standard and full tiers supply the `cf-present` authoring skill and its
   schemas.
-- The runtime serves an authenticated loopback-only page to an isolated browser
-  profile. It keeps immutable revisions and append-only feedback in
-  owner-private state, and it retains ambiguous state rather than deleting it.
+- The runtime serves an authenticated loopback-only page in an isolated browser
+  profile, with immutable revisions and append-only feedback in owner-private
+  state. It preserves ambiguous state.
 - The `diagram` block was removed with Mermaid. New input carrying one is
   refused with its conversion named. A revision stored with one loads read only,
   with a notice and its escaped source.
@@ -660,6 +660,8 @@ The status stays building until task TSK-007 records the full native platform
 and browser matrix.
 Detail: [present architecture](architecture/present.md) and
 [present guide](present-guide.md).
+
+See [capability commands](cli.md#create-and-inspect-a-capability).
 
 ### Catalog record schema
 

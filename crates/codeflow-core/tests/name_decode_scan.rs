@@ -1616,17 +1616,10 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ),
     (
         "crates/codeflow-core/src/capability.rs",
-        "parse_catalog_with_issues",
-        "trim_end",
+        "frontmatter_fence",
+        "trim_end_matches",
         1,
-        "grammar:catalog-frontmatter",
-    ),
-    (
-        "crates/codeflow-core/src/capability.rs",
-        "parse_record",
-        "trim_end",
-        2,
-        "grammar:catalog-frontmatter",
+        "grammar:yaml-frontmatter-fence",
     ),
     // Only rejects empty summary, measurement and evidence text; accepted values
     // remain unchanged and reference targets are never opened here.
@@ -3114,14 +3107,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim_matches",
         1,
         "grammar:guidance-words",
-    ),
-    // Optional orientation summary only; unreadable input cannot authorize or route a command.
-    (
-        "crates/codeflow-core/src/hooks/orient.rs",
-        "capabilities_line",
-        "obtain-absent:read_to_string",
-        1,
-        "display",
     ),
     // Optional hook-installation display only; actual hook enforcement obtains its own inputs.
     (
