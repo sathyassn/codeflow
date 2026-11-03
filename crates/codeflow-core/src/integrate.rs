@@ -13,7 +13,7 @@
 //! the hard line (charter §6.5).
 
 use crate::workgraph::history;
-use crate::workgraph::landing_class::{classify_landing_into, LandingClass};
+use crate::workgraph::landing_class::{classify_landing_into, LandingClass, LandingDecision};
 
 use std::path::{Path, PathBuf};
 
@@ -124,6 +124,8 @@ pub struct IntegrateOutcome {
     pub warnings: Vec<String>,
     /// Class selected from the pinned target-to-candidate diff.
     pub landing_class: LandingClass,
+    /// Why that class applied.
+    pub landing_reason: String,
     /// Checks successfully executed for this landing.
     pub checks: Vec<String>,
 }
@@ -197,7 +199,12 @@ impl IntegrateOutcome {
                 )?;
             }
         }
-        writeln!(f, "  landing class: {}", self.landing_class.name())?;
+        writeln!(
+            f,
+            "  landing class: {} ({})",
+            self.landing_class.name(),
+            display_line(&self.landing_reason)
+        )?;
         writeln!(f, "  checks ran: {}", self.checks.join(", "))?;
         writeln!(f, "  checkout:  {}", display_text(&self.final_checkout))?;
         for warning in &self.warnings {
@@ -307,7 +314,7 @@ pub fn integrate_with_mode(
 
     // Stage 3: selected landing checks, then the release structure of a
     // project that adopted CodeFlow's calculator (SPC-013 R-94).
-    let (class, test_gate, checks) =
+    let (decision, test_gate, checks) =
         run_landing_checks(repo_root, &original, branch, target, target_oid, tested_oid)?;
 
     // The source must still match the head used to prepare the candidate,
@@ -387,7 +394,7 @@ pub fn integrate_with_mode(
         old_target_short,
         original,
         test_gate,
-        class,
+        decision,
         checks,
     )
 }
@@ -541,14 +548,15 @@ fn finish_integration(
     old_target: String,
     original: String,
     test_gate: TestGateSummary,
-    landing_class: LandingClass,
+    landing: LandingDecision,
     checks: Vec<String>,
 ) -> Result<IntegrateOutcome, IntegrateError> {
     let new_target_oid = resolve_branch(repo, target)?;
     let mut warnings = refresh_target_worktrees(repo_root, target, old_target_oid, tested_oid);
     let record = serde_json::json!({
         "base": old_target_oid.to_string(), "head": tested_oid.to_string(),
-        "target": target, "class": landing_class, "checks_ran": checks,
+        "target": target, "class": landing.class, "reason": landing.reason,
+        "checks_ran": checks,
     });
     let directory = repo.commondir().join("codeflow/landings");
     if let Err(error) = std::fs::create_dir_all(&directory).and_then(|()| {
@@ -576,7 +584,8 @@ fn finish_integration(
         test_gate,
         final_checkout: current_checkout(repo_root).unwrap_or(original),
         warnings,
-        landing_class,
+        landing_class: landing.class,
+        landing_reason: landing.reason,
         checks,
     })
 }
@@ -616,14 +625,14 @@ fn run_landing_checks(
     target: &str,
     target_oid: git2::Oid,
     tested_oid: git2::Oid,
-) -> Result<(LandingClass, TestGateSummary, Vec<String>), IntegrateError> {
-    let class = classify_landing_into(
+) -> Result<(LandingDecision, TestGateSummary, Vec<String>), IntegrateError> {
+    let decision = classify_landing_into(
         repo_root,
         &target_oid.to_string(),
         &tested_oid.to_string(),
         target,
-    )
-    .class;
+    );
+    let class = decision.class;
     let mut checks = Vec::new();
     if class == LandingClass::RecordsOnly {
         checks = run_record_checks(repo_root, original, branch, target, target_oid, tested_oid)?;
@@ -638,7 +647,7 @@ fn run_landing_checks(
         });
     }
     run_release_structure(repo_root, original, &tested_oid.to_string())?;
-    Ok((class, test_gate, checks))
+    Ok((decision, test_gate, checks))
 }
 
 /// Run the records-only checks and return their names in the order they ran:
@@ -680,7 +689,7 @@ fn run_record_checks(
         let mut ran: Vec<String> = ["validate --docs", "ci range", "built-in secret scan"]
             .map(str::to_string)
             .into();
-        let named = declared_record_checks(root)?;
+        let named = declared_record_checks(root, &head)?;
         if !named.is_empty() {
             run_named_record_checks(root, &named)?;
             ran.push(format!("test --mode full --only {}", named.join(",")));
@@ -693,17 +702,36 @@ fn run_record_checks(
     })
 }
 
-/// `execution.record_checks` from the checked-out candidate's test config.
-/// The config is not a record, so a records-only candidate carries the line
-/// tip's copy unchanged.
-fn declared_record_checks(root: &Path) -> Result<Vec<String>, String> {
-    let path = root.join(crate::testing::gate::TEST_CONFIG_PATH);
-    if crate::absence::proven_absent(&path).map_err(|error| error.to_string())? {
-        return Ok(Vec::new());
+/// `execution.record_checks` from the test config blob at the tested commit,
+/// never the worktree file: an index flag such as skip-worktree can hide a
+/// worktree edit from the dirty-tree check, and that edit could shorten the
+/// list. The config is not a record, so a records-only candidate carries the
+/// line tip's copy unchanged. Only a regular file counts; a config the commit
+/// does not hold lists nothing.
+fn declared_record_checks(root: &Path, head: &str) -> Result<Vec<String>, String> {
+    let unreadable =
+        |error: &dyn std::fmt::Display| format!("record checks cannot be read: {error}");
+    let repo = git2::Repository::discover(root).map_err(|error| unreadable(&error))?;
+    let tree = repo
+        .revparse_single(head)
+        .and_then(|object| object.peel_to_tree())
+        .map_err(|error| unreadable(&error))?;
+    let path = Path::new(crate::testing::gate::TEST_CONFIG_PATH);
+    let entry = match tree.get_path(path) {
+        Ok(entry) => entry,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(unreadable(&error)),
+    };
+    if entry.filemode() != 0o100_644 {
+        return Err(unreadable(&"the test config is not a regular file"));
     }
-    crate::testing::config::load_test_config(&path)
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|error| unreadable(&error))?;
+    let text = std::str::from_utf8(blob.content()).map_err(|error| unreadable(&error))?;
+    crate::testing::config::parse_test_config(path, text)
         .map(|config| config.execution.record_checks)
-        .map_err(|error| format!("record checks cannot be read: {error}"))
+        .map_err(|error| unreadable(&error))
 }
 
 /// Run the declared record checks in full mode. Every named target must

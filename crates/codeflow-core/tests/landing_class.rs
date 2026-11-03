@@ -1,7 +1,12 @@
 //! The records exemption is proven from real Git trees and the line policy.
 
-use codeflow_core::workgraph::landing_class::{classify_landing, LandingClass};
+use codeflow_core::workgraph::landing_class::{
+    classify_landing, classify_landing_at_fetched_tip, LandingClass,
+};
 use std::path::Path;
+
+/// A policy that declares task, epic and docs Markdown as records.
+const DECLARED: &str = r#"{"git":{"record_paths":["project-management/tasks/**/*.md","project-management/epics/**/*.md","docs/**/*.md"]}}"#;
 
 fn git(root: &Path, args: &[&str]) -> String {
     let output = codeflow_core::git::command()
@@ -60,7 +65,7 @@ fn decision(root: &Path, base: &str, class: LandingClass) {
 
 #[test]
 fn records_only_candidate_selects_quick_from_the_exact_line_tip() {
-    let (dir, base) = fixture("{}");
+    let (dir, base) = fixture(DECLARED);
     write(dir.path(), "docs/guide.md", "New guide\n");
     write(dir.path(), "project-management/tasks/TSK-001.md", "Task\n");
     write(dir.path(), "project-management/epics/EPC-001.md", "Epic\n");
@@ -84,7 +89,7 @@ fn product_config_instructions_and_undeclared_paths_keep_the_full_gate() {
         "project-management/templates/task.md",
         "README.md",
     ] {
-        let (dir, base) = fixture("{}");
+        let (dir, base) = fixture(DECLARED);
         write(dir.path(), path, "Changed\n");
         commit(dir.path());
         decision(dir.path(), &base, LandingClass::Code);
@@ -115,7 +120,7 @@ fn record_paths_are_configurable_but_cannot_admit_code_or_watched_files() {
             LandingClass::Code,
         ),
         (
-            r#"{"git":{"breaking_watch_paths":["docs/guide.md"]}}"#,
+            r#"{"git":{"record_paths":["docs/**/*.md"],"breaking_watch_paths":["docs/guide.md"]}}"#,
             "docs/guide.md",
             LandingClass::Code,
         ),
@@ -148,7 +153,7 @@ fn a_candidate_cannot_expand_its_own_record_paths() {
 #[test]
 fn copies_and_renames_from_code_keep_the_full_gate() {
     for rename in [false, true] {
-        let (dir, base) = fixture("{}");
+        let (dir, base) = fixture(DECLARED);
         let root = dir.path();
         if rename {
             git(root, &["mv", "src/source.rs", "docs/copied.md"]);
@@ -162,7 +167,7 @@ fn copies_and_renames_from_code_keep_the_full_gate() {
 
 #[test]
 fn record_rename_and_deletion_stay_records() {
-    let (dir, base) = fixture("{}");
+    let (dir, base) = fixture(DECLARED);
     git(dir.path(), &["mv", "docs/guide.md", "docs/renamed.md"]);
     commit(dir.path());
     decision(dir.path(), &base, LandingClass::RecordsOnly);
@@ -174,7 +179,7 @@ fn record_rename_and_deletion_stay_records() {
 #[test]
 fn mode_symlink_and_submodule_changes_keep_the_full_gate() {
     for mode in ["100755", "120000", "160000"] {
-        let (dir, base) = fixture("{}");
+        let (dir, base) = fixture(DECLARED);
         let object = if mode == "160000" {
             base.clone()
         } else {
@@ -195,7 +200,7 @@ fn mode_symlink_and_submodule_changes_keep_the_full_gate() {
 
 #[test]
 fn a_diverged_candidate_cannot_use_its_merge_base_as_the_line_tip() {
-    let (dir, base) = fixture("{}");
+    let (dir, base) = fixture(DECLARED);
     write(dir.path(), "docs/guide.md", "Candidate\n");
     let head = commit(dir.path());
     git(dir.path(), &["checkout", "--detach", &base]);
@@ -212,26 +217,31 @@ fn protected_and_release_targets_keep_the_full_gate() {
     use codeflow_core::workgraph::landing_class::classify_landing_into;
     for (policy, target, class, reason) in [
         (
-            "{}",
+            DECLARED,
             "integration/EPC-001-notes",
             LandingClass::RecordsOnly,
             "declared",
         ),
         (
-            "{}",
+            DECLARED,
             "integration/release-4.0",
             LandingClass::Code,
             "release pattern",
         ),
-        ("{}", "main", LandingClass::Code, "not an integration line"),
         (
-            r#"{"git":{"protected_branches":["main","integration/locked"]}}"#,
+            DECLARED,
+            "main",
+            LandingClass::Code,
+            "not an integration line",
+        ),
+        (
+            r#"{"git":{"record_paths":["docs/**/*.md"],"protected_branches":["main","integration/locked"]}}"#,
             "integration/locked",
             LandingClass::Code,
             "protected",
         ),
         (
-            r#"{"git":{"release_branch_pattern":"integration/stable-*"}}"#,
+            r#"{"git":{"record_paths":["docs/**/*.md"],"release_branch_pattern":"integration/stable-*"}}"#,
             "integration/stable-4",
             LandingClass::Code,
             "release pattern",
@@ -258,7 +268,7 @@ fn only_links_on_record_paths_withhold_the_class() {
         ("docs/img/source", LandingClass::Code),
         ("project-management", LandingClass::Code),
     ] {
-        let (dir, _) = fixture("{}");
+        let (dir, _) = fixture(DECLARED);
         let object = git(dir.path(), &["rev-parse", "HEAD:src/source.rs"]);
         git(
             dir.path(),
@@ -296,7 +306,7 @@ fn set_gitlink(root: &Path, path: &str, object: &str) {
 #[test]
 fn any_submodule_change_keeps_the_full_gate_even_when_git_ignores_it() {
     for change in ["moved", "added", "removed", "unchanged"] {
-        let (dir, first) = fixture("{}");
+        let (dir, first) = fixture(DECLARED);
         let root = dir.path();
         write(
             root,
@@ -332,4 +342,97 @@ fn any_submodule_change_keeps_the_full_gate_even_when_git_ignores_it() {
         let actual = classify_landing(root, &base, "HEAD");
         assert_eq!(actual.class, expected, "{change}: {}", actual.reason);
     }
+}
+
+/// TSK-1306: a project that declares nothing keeps the full gate, whether its
+/// policy omits the key or the line tip holds no policy at all.
+#[test]
+fn a_project_with_no_declaration_keeps_the_full_gate() {
+    let (dir, base) = fixture("{}");
+    write(dir.path(), "docs/guide.md", "Changed\n");
+    write(dir.path(), "project-management/tasks/TSK-001.md", "Task\n");
+    commit(dir.path());
+    decision(dir.path(), &base, LandingClass::Code);
+    let reason = classify_landing(dir.path(), &base, "HEAD").reason;
+    assert!(reason.contains("declares no git.record_paths"), "{reason}");
+
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "-q", "-b", "main"]);
+    write(bare.path(), "docs/guide.md", "Old\n");
+    let base = commit(bare.path());
+    write(bare.path(), "docs/guide.md", "New\n");
+    commit(bare.path());
+    decision(bare.path(), &base, LandingClass::Code);
+}
+
+/// TSK-1306: a candidate that widens the list to cover its own code change is
+/// refused, and the list is read from the line tip rather than the checkout.
+#[test]
+fn widening_the_list_never_covers_a_code_change_or_the_checkout() {
+    let (dir, base) = fixture(r#"{"git":{"record_paths":["docs/**/*.md"]}}"#);
+    write(
+        dir.path(),
+        ".codeflow/policy.json",
+        r#"{"git":{"record_paths":["**"]}}"#,
+    );
+    write(dir.path(), "src/source.rs", "Changed code\n");
+    commit(dir.path());
+    let decided = classify_landing(dir.path(), &base, "HEAD");
+    assert_eq!(decided.class, LandingClass::Code, "{}", decided.reason);
+
+    // The tip declares nothing and only the uncommitted checkout widens: a
+    // reader of the checkout would grant the class here.
+    let (dir, base) = fixture("{}");
+    write(dir.path(), "docs/guide.md", "Changed\n");
+    commit(dir.path());
+    write(
+        dir.path(),
+        ".codeflow/policy.json",
+        r#"{"git":{"record_paths":["**"]}}"#,
+    );
+    decision(dir.path(), &base, LandingClass::Code);
+}
+
+/// A base handed to a run counts only when it is the line's fetched tip.
+#[test]
+fn a_supplied_base_counts_only_at_the_fetched_tip() {
+    const LINE: &str = "integration/landing";
+    let (dir, tip) = fixture(DECLARED);
+    let root = dir.path();
+    write(root, "src/source.rs", "Changed code\n");
+    let code = commit(root);
+    write(root, "docs/guide.md", "Changed\n");
+    commit(root);
+    let classify = |base: &str| classify_landing_at_fetched_tip(root, base, "HEAD", LINE);
+
+    let no_tip = classify(&code);
+    assert_eq!(no_tip.class, LandingClass::Code);
+    assert!(
+        no_tip.reason.contains("no fetched tip"),
+        "{}",
+        no_tip.reason
+    );
+
+    git(
+        root,
+        &["update-ref", &format!("refs/remotes/origin/{LINE}"), &tip],
+    );
+    // A base past the code commit would read records-only without the bind.
+    let past = classify(&code);
+    assert_eq!(past.class, LandingClass::Code);
+    assert!(
+        past.reason.contains("is not the fetched tip"),
+        "{}",
+        past.reason
+    );
+    // At the real tip the code commit is in the diff.
+    let at_tip = classify(&tip);
+    assert_eq!(at_tip.class, LandingClass::Code);
+    assert!(at_tip.reason.contains("src/source.rs"), "{}", at_tip.reason);
+    // A records-only candidate keeps the class at its tip.
+    git(
+        root,
+        &["update-ref", &format!("refs/remotes/origin/{LINE}"), &code],
+    );
+    assert_eq!(classify(&code).class, LandingClass::RecordsOnly);
 }

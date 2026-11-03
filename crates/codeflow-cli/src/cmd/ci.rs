@@ -757,7 +757,7 @@ pub fn run(args: &CiArgs) -> i32 {
         }
     };
     if let Some(base) = base_sha.as_deref() {
-        let decision = codeflow_core::workgraph::landing_class::classify_landing_into(
+        let decision = codeflow_core::workgraph::landing_class::classify_landing_at_fetched_tip(
             &root,
             base,
             &head,

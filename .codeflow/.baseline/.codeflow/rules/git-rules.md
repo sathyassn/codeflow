@@ -135,12 +135,11 @@ or `git.release_branch_pattern`), keeps its full gate whatever the diff. A
 classification is not a passed check.
 
 `git.record_paths` in the line tip's `.codeflow/policy.json` declares the
-eligible paths. Defaults are task and epic Markdown under
-`project-management/tasks/` and `project-management/epics/`, and Markdown
-under `docs/`, plans included. The binary supplies these defaults when the
-key is absent; the shipped JSON omits the new key so older binaries can
-still read an updated scaffold. Upgrade the binary before declaring a
-custom list. An empty list disables the shorter path.
+eligible paths. It is empty by default, so a project that declares nothing
+keeps the full gate on every landing. List only Markdown that no build or
+test reads: a test that reads a listed file does not run on a records-only
+landing. The shipped JSON omits the key so older binaries can still read an
+updated scaffold. Upgrade the binary before declaring a list.
 Declarations admit only regular non-executable Markdown files outside the
 planning classifier's product, watched, instruction, hidden and template
 exclusions. Config and JSON stay code. A project marks Markdown that a build
@@ -151,8 +150,8 @@ added, removed or moved to another commit at any path, a symlink or
 submodule under a declared record folder or on a folder a changed record
 resolves through, an unreadable diff or invalid config keeps the full gate.
 
-The landing evidence names the base, candidate, class and checks actually
-run. `codeflow integrate` records these under the shared Git directory at
+The landing evidence names the base, candidate, class, the reason for it and
+the checks actually run. `codeflow integrate` records these under the shared Git directory at
 `codeflow/landings/<candidate>.json`; its records-only path runs validation,
 range CI, the built-in credential scan, the declared record checks and the
 quick gate. The built-in scan waives a hit only for a commit-qualified
@@ -160,6 +159,14 @@ fingerprint in `.gitleaksignore` at the line tip. Project and hosted secret
 scanners remain required where adopted. A PR landing carries the same
 evidence in its PR. CI reports its own executed checks and does not claim to
 have run the other landing checks.
+
+Several reviewed units ready on one line build one candidate and run one
+gate, never one gate per unit. Heavy runs share the host by capacity: gates
+in different worktrees and on different lines run side by side in their own
+slots, with fewer jobs each past the host's job budget, and none waits for
+another. Only a `host_exclusive` target runs alone, and a gate from a binary
+older than the slots refuses new runs while it holds the lock. Each worktree
+keeps its own cargo target directory.
 
 Direct commits on an epic line are refused at push. `codeflow ci` refuses
 them on a landing candidate before its gate when run with `--line-tip

@@ -19,19 +19,6 @@ use std::path::Path;
 use crate::git::GitName;
 use crate::workgraph::classify::{path_sets, ProjectPaths};
 
-/// Shipped record-path defaults. An explicit empty list disables the exemption.
-#[must_use]
-pub fn default_record_paths() -> Vec<String> {
-    [
-        "project-management/tasks/**/*.md",
-        "project-management/epics/**/*.md",
-        "docs/**/*.md",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
-}
-
 /// One path the range changes, as git's exact bytes, with its Git mode
 /// before and after (`000000` on the side where the path does not exist).
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -823,7 +823,7 @@ pub fn load_named_test_config(path: &Path) -> Result<(TestConfig, Vec<u8>), Test
 }
 
 /// Parse and validate test config text read from `path`.
-fn parse_test_config(path: &Path, content: &str) -> Result<TestConfig, TestingError> {
+pub(crate) fn parse_test_config(path: &Path, content: &str) -> Result<TestConfig, TestingError> {
     // First, check schema_version before full parse
     let raw: serde_json::Value =
         serde_json::from_str(content).map_err(|e| TestingError::ConfigInvalid {

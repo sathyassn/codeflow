@@ -79,6 +79,36 @@ pub fn classify_landing_into(root: &Path, base: &str, head: &str, target: &str) 
     }
 }
 
+/// [`classify_landing_into`] for a run that was handed its base, such as
+/// `codeflow ci --base`. The base names the diff and the policy that judge the
+/// candidate, so it counts only when it is `target`'s fetched tip: a base past
+/// a candidate's code commits would otherwise hide them. Any other base, a
+/// missing tip or an unreadable one selects the full gate.
+#[must_use]
+pub fn classify_landing_at_fetched_tip(
+    root: &Path,
+    base: &str,
+    head: &str,
+    target: &str,
+) -> LandingDecision {
+    let code = |reason: String| LandingDecision {
+        class: LandingClass::Code,
+        reason,
+    };
+    let shown = crate::git::display_text(target);
+    match super::line_adoption::fetched_tip(root, target) {
+        Ok(Some(tip)) if tip == base => classify_landing_into(root, base, head, target),
+        Ok(Some(tip)) => code(format!(
+            "the base {} is not the fetched tip {tip} of {shown}",
+            crate::git::display_text(base)
+        )),
+        Ok(None) => code(format!("{shown} has no fetched tip")),
+        Err(error) => code(format!(
+            "the fetched tip of {shown} cannot be read: {error}"
+        )),
+    }
+}
+
 /// Why `target` keeps the full gate whatever the diff, or `None`.
 fn full_gate_target(root: &Path, base: &str, target: &str) -> Option<String> {
     if !target.starts_with("integration/") {
@@ -153,6 +183,9 @@ fn records_only(root: &Path, base: &str, head: &str) -> Result<(), String> {
     let base_id = base.id().to_string();
     let project = project_paths(root, &base_id)?;
     let policy = line_policy(root, &base_id)?;
+    if policy.git.record_paths.is_empty() {
+        return Err("the line tip declares no git.record_paths".into());
+    }
     let patterns = policy
         .git
         .record_paths
