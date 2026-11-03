@@ -21,7 +21,8 @@
 use crate::workgraph::history;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use git2::Repository;
 
@@ -151,6 +152,9 @@ impl RecordView {
 #[derive(Debug, Clone, Default)]
 pub struct Graph {
     pub records: BTreeMap<String, RecordView>,
+    pub(super) repository: Option<PathBuf>,
+    pub(super) revision: Option<git2::Oid>,
+    transfers: OnceLock<super::criterion_move::Transfers>,
 }
 
 /// An undecodable epic directory can still hold a task whose identity is ASCII.
@@ -181,7 +185,12 @@ impl Graph {
     /// Returns an error if an inventory or record cannot be read, decoded or parsed.
     pub fn from_worktree(repo_root: &Path) -> Result<Self, String> {
         let pm = repo_root.join("project-management");
-        let mut graph = Self::default();
+        let repo = Repository::discover(repo_root).ok();
+        let mut graph = Self {
+            repository: repo.as_ref().map(|repo| repo.path().to_path_buf()),
+            revision: repo.as_ref().and_then(|repo| repo.head().ok()?.target()),
+            ..Self::default()
+        };
         for (kind, files) in [
             (RecordKind::Epic, super::layout::epic_record_files(&pm)),
             (RecordKind::Spec, super::layout::spec_record_files(&pm)),
@@ -217,7 +226,11 @@ impl Graph {
         let tree = commit
             .tree()
             .map_err(|error| format!("cannot read the tree of {revision}: {}", error.message()))?;
-        let mut graph = Self::default();
+        let mut graph = Self {
+            repository: Some(repo.path().to_path_buf()),
+            revision: Some(commit.id()),
+            ..Self::default()
+        };
         let mut failure = None;
         crate::git::walk_tree(repo, &tree, &mut |name, entry| {
             let path = match record_path_text(name) {
@@ -268,11 +281,11 @@ impl Graph {
         Ok(())
     }
 
-    fn get(&self, id: &str, kind: RecordKind) -> Option<&RecordView> {
+    pub(super) fn get(&self, id: &str, kind: RecordKind) -> Option<&RecordView> {
         self.records.get(id).filter(|record| record.kind == kind)
     }
 
-    fn tasks(&self) -> impl Iterator<Item = &RecordView> {
+    pub(super) fn tasks(&self) -> impl Iterator<Item = &RecordView> {
         self.records
             .values()
             .filter(|record| record.kind == RecordKind::Task)
@@ -293,7 +306,13 @@ impl Graph {
     pub fn with(&self, record: RecordView) -> Self {
         let mut graph = self.clone();
         graph.records.insert(record.id.clone(), record);
+        graph.transfers = OnceLock::new();
         graph
+    }
+
+    pub(super) fn transfers(&self) -> &super::criterion_move::Transfers {
+        self.transfers
+            .get_or_init(|| super::criterion_move::read(self))
     }
 }
 
@@ -1031,7 +1050,7 @@ fn significant_change(before: &RecordView, after: &RecordView) -> bool {
 // ---------------------------------------------------------------------------
 
 const TASK_TERMINAL: [&str; 2] = ["complete", "cancelled"];
-const EPIC_OPEN: [&str; 4] = ["draft", "planning", "in_progress", "blocked"];
+pub(super) const EPIC_OPEN: [&str; 4] = ["draft", "planning", "in_progress", "blocked"];
 
 fn is_terminal(record: &RecordView, status: &str) -> bool {
     match record.kind {
@@ -1469,15 +1488,25 @@ fn epic_close_problems(epic: &RecordView, graph: &Graph) -> Vec<String> {
     problems
 }
 
-fn serving_tasks<'g>(
+pub(super) fn serving_tasks<'g>(
     epic: &RecordView,
     criterion: &Criterion,
     graph: &'g Graph,
 ) -> Vec<(&'g RecordView, &'g Criterion)> {
-    graph
+    let direct: Vec<_> = graph
         .tasks()
         .flat_map(|task| task.criteria.items.iter().map(move |item| (task, item)))
         .filter(|(_, item)| item.serves() == Some((epic.id.clone(), criterion.id.clone())))
+        .collect();
+    if !direct.is_empty() {
+        return direct;
+    }
+    graph
+        .tasks()
+        .flat_map(|task| task.criteria.items.iter().map(move |item| (task, item)))
+        .filter(|(task, item)| {
+            super::criterion_move::serves_destination(graph, task, item, epic, criterion)
+        })
         .collect()
 }
 
@@ -1559,6 +1588,11 @@ fn epic_own_block(
         .items
         .iter()
         .filter(|criterion| {
+            if super::criterion_move::has_note(criterion) && !criterion.is_after_release() {
+                // Transfer rows are checked as waivers by close_source; their
+                // journey obligation stays with the destination's tasks.
+                return false;
+            }
             proven_by_own_block_after_cancellation(epic, criterion, graph)
                 || awaits_follow_up(epic, criterion, graph)
                 || (serving_tasks(epic, criterion, graph).is_empty() && !ticked_ordinary(criterion))
@@ -1602,7 +1636,7 @@ fn epic_own_block(
 /// cancelled one never will, so neither stands in for the deferral. The
 /// block's structure, including the follow-up being listed in `follow_ups`,
 /// was checked when the block was accepted as `own_block`.
-fn deferred_to_open_follow_up(
+pub(super) fn deferred_to_open_follow_up(
     criterion: &Criterion,
     serving: &[(&RecordView, &Criterion)],
     own_block: Option<&AcceptanceBlock>,
@@ -1626,6 +1660,10 @@ fn epic_criterion_verified(
     graph: &Graph,
     own_block: Option<&AcceptanceBlock>,
 ) -> Result<(), String> {
+    if super::criterion_move::has_note(criterion) {
+        return super::criterion_move::close_source(epic, criterion, graph, own_block);
+    }
+    super::criterion_move::destination_problem(epic, criterion, graph)?;
     let serving = serving_tasks(epic, criterion, graph);
     if !serving.is_empty() {
         if proven_by_own_block_after_cancellation(epic, criterion, graph) {
@@ -2826,6 +2864,9 @@ pub fn validate_lifecycle(repo_root: &Path) -> Verdict {
             relationship_problems(record, &graph),
         );
     }
+    verdict
+        .warnings
+        .extend(super::criterion_move::warnings(&graph));
     verdict.warnings.extend(stale_warnings(repo_root, &graph));
     verdict.sort();
     verdict

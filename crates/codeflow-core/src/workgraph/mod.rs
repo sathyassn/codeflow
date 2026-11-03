@@ -11,6 +11,7 @@ pub mod acceptance;
 pub mod allocate;
 pub mod amendment;
 pub mod classify;
+mod criterion_move;
 pub mod deps;
 mod format_id;
 pub mod history;

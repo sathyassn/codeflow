@@ -6986,3 +6986,6 @@ mod line_sync_push;
 
 #[path = "acceptance_cli/own_line_criteria.rs"]
 mod own_line_criteria;
+
+#[path = "acceptance_cli/criterion_transfers.rs"]
+mod criterion_transfers;
