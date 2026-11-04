@@ -2056,12 +2056,11 @@ mod tests {
     /// record.
     fn main_keeps_against_side(root: &std::path::Path, from: &str, text: Option<&str>) {
         git(root, &["switch", "-q", "-c", "side", from]);
-        match text {
-            Some(text) => save(root, RECORD, text),
-            None => {
-                git(root, &["rm", "-q", RECORD]);
-                git(root, &["commit", "-q", "-m", "delete on the side"]);
-            }
+        if let Some(text) = text {
+            save(root, RECORD, text);
+        } else {
+            git(root, &["rm", "-q", RECORD]);
+            git(root, &["commit", "-q", "-m", "delete on the side"]);
         }
         git(root, &["switch", "-q", "main"]);
         keep_against(root, "side");
