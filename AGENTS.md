@@ -129,10 +129,13 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
     makes. That portal check refuses until the files it reads, `docs/`, its
     figures, config and published records, match HEAD, so commit those edits
     first.
-  - The primary runs one full gate on each landing candidate. That gate does
-    not cover a target defined only in essential. Workspace lints: clippy all
-    = deny, pedantic = warn. Edition 2021, workspace-managed dependency
-    versions in the root `Cargo.toml`.
+  - The primary runs one full gate on each landing candidate. Its
+    `host_exclusive` `read-benchmark` waits for the host up to
+    `execution.heavy_wait_seconds` in `.codeflow/test-config.json`; a change
+    to that value cites the wait a real candidate needed. That gate does not
+    cover a target defined only in essential. Workspace
+    lints: clippy all = deny, pedantic = warn. Edition 2021, workspace-managed
+    dependency versions in the root `Cargo.toml`.
 - **Landings batch, with hosted green once per candidate.** When a line
   lands, every pull request into it that is reviewed and ready at that
   moment goes onto one landing candidate, in dependency order, with one full

@@ -3,7 +3,8 @@
 use clap::{ArgGroup, Args, Subcommand};
 use codeflow_core::registry::codeflow_home;
 use codeflow_core::testing::gate::{
-    gate_uses_cargo, run_gate_with_options, CoverageReport, FailureReport, GateOptions, GateOutcome,
+    configured_heavy_wait, gate_uses_cargo, run_gate_with_options, CoverageReport, FailureReport,
+    GateOptions, GateOutcome,
 };
 use codeflow_core::testing::gate_guard::{
     acquire_gate_lock, check_cargo_target_dir, gate_lock_status, lock_dirs, GateLock,
@@ -21,14 +22,15 @@ pub struct TestArgs {
     /// one when its first heavy target starts. Heavy runs in any worktree or project
     /// run at once; past the host's job budget a run uses fewer jobs.
     /// Undeclared quick targets use `execution.quick_default_class` (light by default).
-    /// Only a `host_exclusive` target runs alone; while one holds the host, heavy
-    /// work waits up to `--wait-seconds` (default zero), then refuses. Under `codeflow reserve` quick uses its slot (Unix).
+    /// Only a `host_exclusive` target runs alone; while one holds or queues for the host, heavy
+    /// work waits up to `--wait-seconds` or `execution.heavy_wait_seconds` (default zero), then refuses. Under `codeflow reserve` quick uses its slot (Unix).
     /// With no quick targets, quick uses essential targets, heavy unless declared light.
     #[arg(long, default_value = "full", value_parser = ["full", "quick", "essential"])]
     pub mode: String,
 
     /// Seconds heavy work waits for a host-exclusive target, or a
-    /// host-exclusive target for other heavy runs. Default zero.
+    /// host-exclusive target for other heavy runs. Overrides
+    /// `execution.heavy_wait_seconds`, whose default is zero.
     #[arg(long, value_name = "SECONDS")]
     pub wait_seconds: Option<u64>,
 
@@ -165,7 +167,13 @@ pub fn run(args: &TestArgs) -> i32 {
             ..
         }) => {
             for r in &results {
-                let verdict = if r.passed() { "ok" } else { "FAILED" };
+                let verdict = if r.passed() {
+                    "ok"
+                } else if r.host_was_held() {
+                    "NOT RUN, host held"
+                } else {
+                    "FAILED"
+                };
                 // A target name is checkout text, shown as one line after a
                 // fixed label (TSK-388).
                 println!(
@@ -293,7 +301,9 @@ fn guard_gate(
     let dirs = lock_dirs(root, codeflow_home().as_deref()).map_err(|error| {
         format!("gate lock unavailable: cannot discover repository: {error}; repair repository metadata, then rerun `codeflow doctor --check permissions`")
     })?;
-    let wait = std::time::Duration::from_secs(wait_seconds.unwrap_or(0));
+    let wait = std::time::Duration::from_secs(
+        wait_seconds.unwrap_or_else(|| configured_heavy_wait(root, config)),
+    );
     let start = std::time::Instant::now();
     let mut announced = false;
     let lock = loop {

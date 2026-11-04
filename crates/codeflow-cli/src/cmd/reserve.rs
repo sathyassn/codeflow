@@ -10,10 +10,11 @@ use std::time::{Duration, Instant};
 
 #[derive(Args)]
 pub struct ReserveArgs {
-    /// Maximum seconds to wait while a host-exclusive target holds the host.
-    /// Zero refuses immediately. Other heavy runs never make a reserve wait.
-    #[arg(long, default_value_t = 0)]
-    pub wait_seconds: u64,
+    /// Maximum seconds to wait for an active or queued host-exclusive target.
+    /// Zero refuses immediately. Ordinary shared runs do not make a reserve wait.
+    /// Overrides `execution.heavy_wait_seconds`, whose default is zero.
+    #[arg(long)]
+    pub wait_seconds: Option<u64>,
     /// Stop the command and its descendants after this many seconds.
     #[arg(long, default_value_t = 3600)]
     pub timeout_seconds: u64,
@@ -41,8 +42,23 @@ pub fn run(args: &ReserveArgs) -> i32 {
             return 1;
         }
     };
+    let cap = match capacity::CallerCap::read() {
+        Ok(cap) => cap,
+        Err(error) => {
+            eprintln!("codeflow reserve: refused: {error}");
+            return 1;
+        }
+    };
+    if let Some(jobs) = cap.jobs {
+        eprintln!("codeflow reserve: caller cap CARGO_BUILD_JOBS={jobs}");
+    }
+    let width = cap.width(execution.worker_budget);
     let start = Instant::now();
-    let wait = Duration::from_secs(args.wait_seconds);
+    let wait_seconds = args
+        .wait_seconds
+        .or(execution.heavy_wait_seconds)
+        .unwrap_or(0);
+    let wait = Duration::from_secs(wait_seconds);
     let mut announced = false;
     let lock = loop {
         match acquire_project_gate_lock(&root, "reserve") {
@@ -54,10 +70,7 @@ pub fn run(args: &ReserveArgs) -> i32 {
                 }
                 if !announced {
                     announced = true;
-                    eprintln!(
-                        "codeflow reserve: waiting up to {}s: {message}",
-                        args.wait_seconds
-                    );
+                    eprintln!("codeflow reserve: waiting up to {wait_seconds}s: {message}");
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -69,8 +82,8 @@ pub fn run(args: &ReserveArgs) -> i32 {
     let host = capacity::host_jobs(execution.host_jobs);
     // Always bounded by the host's job budget, the first run included
     // (R483-05); `worker_budget` only caps it further.
-    let jobs = capacity::run_jobs(host, execution.worker_budget, lock.runs);
-    if capacity::lowered(host, execution.worker_budget, lock.runs) {
+    let jobs = capacity::run_jobs(host, width, lock.runs);
+    if capacity::lowered(host, width, lock.runs) {
         eprintln!(
             "codeflow reserve: {} heavy runs share this host's {host} jobs; this command uses {jobs}",
             lock.runs

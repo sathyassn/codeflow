@@ -4,7 +4,7 @@
 //! **Heavy runs share the host** (TSK-1145). Full and essential gates,
 //! heavy quick targets and `codeflow reserve` each take one free *slot*
 //! among the slot locks of a lock folder, and hold the folder's *host lock*
-//! shared. No run waits for another: a run takes the first free slot, and
+//! shared. Ordinary runs share capacity: a run takes the first free slot, and
 //! the number of busy slots tells it how many heavy runs share the host, so
 //! it can size its job count ([`super::capacity`]). Only a target that
 //! declares `host_exclusive` takes the host lock exclusively
@@ -17,6 +17,13 @@
 //!   else `~/.codeflow`), which spans every repository on the machine;
 //! - the repository folder under the git common directory, which spans
 //!   every worktree of the repository.
+//!
+//! A host-exclusive request first releases its idle shared lease and slot,
+//! then publishes an owned FIFO ticket. New shared arrivals consult the same
+//! queue under its publication mutex. Ticket records and stable read-only
+//! ownership locks are separate, so Windows never has to rename a held file.
+//! Older binaries do not consult this queue; bounded refusal still applies
+//! while they, legacy slots or live orphan groups keep the host busy.
 //!
 //! A run takes one slot and the shared host lock in every configured folder
 //! before targets start. Slot `n` is `full-gate-<n>.lock`, from 1 up.
@@ -107,6 +114,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod queue;
 
 /// File name of the fence in each lock directory: the one lock older
 /// binaries take, exclusively. Every new run holds it shared and takes no
@@ -215,11 +224,14 @@ struct Held {
     inherited: bool,
     /// The host locks this run holds shared, one per lock directory, with
     /// their paths; an inherited lock takes its own as well.
-    host: Vec<(PathBuf, AcquiredFile)>,
+    _host: Vec<(PathBuf, AcquiredFile)>,
     /// The folders a record's `dir` may name, for re-reading the record.
     trusted: Vec<String>,
     /// [`GateLock::runs`] of this lock.
     runs: usize,
+    /// Copies of the slot handles, used to release an idle run before it
+    /// queues for exclusivity. The original `GateLock` then becomes inert.
+    slots: Vec<File>,
     #[cfg(unix)]
     descriptors: Vec<std::os::fd::RawFd>,
     /// The fence descriptors of this lock, which every target of the run inherits
@@ -230,6 +242,11 @@ struct Held {
 
 static HELD: Mutex<Vec<Held>> = Mutex::new(Vec::new());
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static PINNED: Mutex<BTreeSet<u64>> = Mutex::new(BTreeSet::new());
+static RETAINED_FILES: Mutex<Vec<AcquiredFile>> = Mutex::new(Vec::new());
+static RETAINED_INHERITED: Mutex<Vec<File>> = Mutex::new(Vec::new());
+static RETAINED_FENCES: Mutex<Vec<(PathBuf, FenceFile)>> = Mutex::new(Vec::new());
+static RETAINED_EXCLUSIVE: Mutex<Vec<HostExclusive>> = Mutex::new(Vec::new());
 
 fn held() -> std::sync::MutexGuard<'static, Vec<Held>> {
     HELD.lock()
@@ -245,6 +262,27 @@ pub fn held_runs() -> Option<usize> {
 
 impl Drop for GateLock {
     fn drop(&mut self) {
+        if PINNED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&self.id)
+        {
+            RETAINED_FILES
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend(std::mem::take(&mut self.files));
+            RETAINED_INHERITED
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend(std::mem::take(&mut self.inherited));
+            // The entry stays registered and names these descriptors, so
+            // they stay open and older binaries stay out until gate exit.
+            RETAINED_FENCES
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend(std::mem::take(&mut self.fences));
+            return;
+        }
         // Deregister first, under the registry lock, so no target update can
         // rewrite a record after it is cleared. The entry's host locks
         // release when it drops, after the records are cleared.
@@ -254,6 +292,11 @@ impl Drop for GateLock {
                 .position(|h| h.id == self.id)
                 .map(|index| held.remove(index))
         };
+        // A suspended admission already removed its registry entry and
+        // released its locks. Never erase a successor's records at its paths.
+        if entry.is_none() {
+            return;
+        }
         if !self.inherited.is_empty() {
             // The record is the holder's. Groups of this process's targets
             // that still run stay on it, so the slot stays busy while they
@@ -417,6 +460,25 @@ impl std::fmt::Display for LockHeld {
         } else {
             describe_holder(&self.holder)
         };
+        if self
+            .path
+            .file_name()
+            .is_some_and(|name| name == std::ffi::OsStr::new(queue::QUEUE_MUTEX))
+        {
+            if self.holder.contains("mode=queue metadata") {
+                return write!(
+                    f,
+                    "host-exclusive admission is pending behind {holder}; this run started \
+                     nothing, so retry it (lock: {lock})"
+                );
+            }
+            return write!(
+                f,
+                "a host-exclusive target is waiting for the host: {holder}. This run started \
+                 nothing and this is not a defect in it; heavy runs start after that target \
+                 has run, so retry then, or pass --wait-seconds <seconds> (lock: {lock})"
+            );
+        }
         write!(
             f,
             "a host-exclusive target is running on this machine: {holder}. Heavy runs \
@@ -427,6 +489,10 @@ impl std::fmt::Display for LockHeld {
 
 /// The directory under the `CodeFlow` home that holds the machine-wide lock.
 pub const HOME_LOCK_DIR: &str = "locks";
+
+/// How a host-exclusive target's refusal starts when another run held the
+/// host, a cause distinct from the target failing.
+pub(crate) const HOST_HELD: &str = "the host was held by";
 
 /// The directory under the `CodeFlow` home that keeps full-run evidence.
 pub const HOME_EVIDENCE_DIR: &str = "gate-runs";
@@ -703,9 +769,12 @@ pub fn acquire_project_gate_lock(root: &Path, mode: &str) -> Result<GateLock, St
     #[cfg(unix)]
     {
         let adopted = adopted().clone();
-        if let Some(lock) = inherit_gate_lock(&dirs, &adopted, trusted_dirs(root))
-            .map_err(|held| with_repair_pointer(&held))?
-        {
+        if let Some(lock) = if mode == "quick" || mode == "reserve" {
+            inherit_gate_lock(&dirs, &adopted, trusted_dirs(root))
+                .map_err(|held| with_repair_pointer(&held))?
+        } else {
+            None
+        } {
             return Ok(lock);
         }
     }
@@ -803,7 +872,12 @@ fn try_open_and_lock(path: &Path, shared: bool) -> Result<Slot, LockHeld> {
     match locked {
         Ok(()) => {
             #[cfg(test)]
-            interleave::at(interleave::Point::Locked);
+            if path
+                .file_name()
+                .is_none_or(|name| name != std::ffi::OsStr::new(queue::QUEUE_MUTEX))
+            {
+                interleave::at(interleave::Point::Locked);
+            }
             if let Err(error) = same_lock_file(&path, &file) {
                 os_lock::unlock(&file);
                 return Err(LockHeld::unavailable(
@@ -844,6 +918,10 @@ pub fn acquire_gate_lock(
     project_dir: &Path,
     mode: &str,
 ) -> Result<GateLock, LockHeld> {
+    let trusted = trusted_dirs(project_dir);
+    // Declare admission AFTER the mutexes so every partial lease and slot
+    // drops before the publication mutexes on an error return.
+    let _queue_mutexes = queue::shared(dirs, &trusted)?;
     let mut lock = GateLock {
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
         files: Vec::new(),
@@ -854,7 +932,6 @@ pub fn acquire_gate_lock(
         notes: Vec::new(),
     };
     let record = holder_record(project_dir, mode);
-    let trusted = trusted_dirs(project_dir);
     if dirs.is_empty() {
         lock.notes.push(
             "no gate lock location (no CodeFlow home and no git repository); \
@@ -922,9 +999,20 @@ pub fn acquire_gate_lock(
                     .map(|(_, fence)| fence.file.as_raw_fd())
                     .collect()
             },
-            host,
+            _host: host,
             trusted,
             runs: lock.runs,
+            slots: lock
+                .files
+                .iter()
+                .map(|file| file.0.try_clone())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| {
+                    LockHeld::unavailable(
+                        project_dir.to_path_buf(),
+                        format!("gate lock unavailable: {error}"),
+                    )
+                })?,
         });
     }
     // Admitted: from here on the fences only close (FenceFile).
@@ -1210,29 +1298,18 @@ fn busy_after(dir: &Path, first: usize, trusted: &[String]) -> Result<usize, Loc
     Ok(busy)
 }
 
-/// The host held exclusively for a `host_exclusive` target. Dropping it
-/// releases the host and takes this process's shared host locks back.
+/// An exclusive host reservation, taken only after giving back the caller's
+/// shared lease and slot. Ordinary successors explicitly reacquire admission.
 #[derive(Debug)]
 pub struct HostExclusive {
-    /// Each host lock held exclusively: a handle opened for it, or `None`
-    /// when this process's own shared handle was upgraded in place.
-    files: Vec<(PathBuf, Option<AcquiredFile>)>,
-    /// The fence held shared in each lock directory, taken before the host,
-    /// so an older binary's gate stays out while the target runs whatever
-    /// called this (TSK-1256). The target inherits it ([`fence_copies`]);
-    /// it closes after the host, never unlocked.
-    fences: Vec<(PathBuf, FenceFile)>,
-    /// This hold's entry in the registry [`fence_copies`] reads; Unix only,
-    /// since targets inherit fences only there.
-    #[cfg(unix)]
-    id: u64,
+    admission: Option<GateLock>,
+    ticket: Option<queue::Ticket>,
+    host_paths: Vec<PathBuf>,
 }
 
 impl Drop for HostExclusive {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        host_fences().retain(|(id, _)| *id != self.id);
-        for (path, _) in &self.files {
+        for path in &self.host_paths {
             if let Err(error) = write_record(path, "") {
                 eprintln!(
                     "warning: the host-exclusive record beside {} could not be cleared: \
@@ -1241,58 +1318,103 @@ impl Drop for HostExclusive {
                 );
             }
         }
-        release_exclusive(std::mem::take(&mut self.files));
-        retake_shared(std::time::Duration::from_secs(5));
-        self.fences.clear();
+        self.admission = None;
+        self.ticket = None;
     }
 }
 
-/// Take the host lock at `path` exclusively on the handle this process
-/// already holds for it, or `None` when it holds none. Target watchers keep
-/// copies of that handle (Unix shares the lock across copies of one open
-/// file description), so the exclusive lease lasts while a target outlives
-/// its run, as the shared one did (R483-01).
-fn upgrade_held_host(path: &Path) -> Option<std::io::Result<()>> {
-    let held = held();
-    let (_, file) = held
-        .iter()
-        .flat_map(|lock| &lock.host)
-        .find(|(held_path, _)| held_path == path)?;
-    Some(os_lock::try_lock(&file.0))
+/// Retain reservations when the producer cannot confirm process termination.
+/// The static owners are deliberately not dropped by reporting or scheduler
+/// return. The OS releases their locks when the gate process exits.
+pub(crate) fn retain_unconfirmed(root: &Path, exclusive: Option<HostExclusive>) {
+    let dirs = project_lock_dirs(root);
+    retain_unconfirmed_in(dirs.as_deref().ok(), exclusive);
 }
 
-/// Release exclusive host locks: opened handles close, and upgraded ones are
-/// unlocked so [`retake_shared`] can take them back shared.
-fn release_exclusive(files: Vec<(PathBuf, Option<AcquiredFile>)>) {
-    let upgraded: Vec<PathBuf> = files
-        .into_iter()
-        .filter_map(|(path, file)| file.is_none().then_some(path))
+/// As `retain_unconfirmed`, for supplied lock domains. Unknown domains pin
+/// every admission this process holds.
+fn retain_unconfirmed_in(dirs: Option<&[PathBuf]>, exclusive: Option<HostExclusive>) {
+    let ids: Vec<_> = held()
+        .iter()
+        .filter(|entry| {
+            dirs.is_none_or(|dirs| {
+                entry.paths.iter().any(|path| {
+                    path.parent()
+                        .is_some_and(|parent| dirs.iter().any(|dir| parent == dir))
+                })
+            })
+        })
+        .map(|entry| entry.id)
         .collect();
-    let held = held();
-    for path in upgraded {
-        if let Some((_, file)) = held
-            .iter()
-            .flat_map(|lock| &lock.host)
-            .find(|(held_path, _)| *held_path == path)
+    PINNED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .extend(ids);
+    if let Some(exclusive) = exclusive {
+        RETAINED_EXCLUSIVE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(exclusive);
+    }
+}
+
+fn suspend_shared(dirs: &[PathBuf]) -> Result<(), String> {
+    let mut registry = held();
+    let index = registry.iter().rposition(|entry| {
+        entry.paths.iter().any(|path| {
+            path.parent()
+                .is_some_and(|parent| dirs.iter().any(|dir| parent == dir))
+        })
+    });
+    let Some(index) = index else { return Ok(()) };
+    let entry = &registry[index];
+    if entry.inherited {
+        return Err("a host-exclusive target cannot run under `codeflow reserve`, which holds the host for its command; run it outside the reserve".into());
+    }
+    if !entry.groups.is_empty() {
+        return Err(
+            "host-exclusive admission refused: this run still has live target groups".into(),
+        );
+    }
+    for path in &entry.paths {
+        if !foreign_live_groups(path, entry)
+            .map_err(|error| error.to_string())?
+            .is_empty()
         {
-            os_lock::unlock(&file.0);
+            return Err(
+                "host-exclusive admission refused: a nested target group still owns this slot"
+                    .into(),
+            );
         }
     }
+    let entry = registry.remove(index);
+    // Clear only while still owning the slot; on failure leave the old
+    // registry and leases intact rather than suspending unrecorded work.
+    if let Err(error) = entry
+        .paths
+        .iter()
+        .try_for_each(|path| write_record(path, ""))
+    {
+        registry.push(entry);
+        return Err(format!(
+            "gate lock unavailable: releasing shared admission: {error}"
+        ));
+    }
+    for file in &entry.slots {
+        os_lock::unlock(file);
+    }
+    drop(entry);
+    Ok(())
 }
 
-/// Take the host lock of every lock directory of `root` exclusively, so the
-/// calling run's next target runs alone on the host: this process's own
-/// shared host locks are released first, then the exclusive locks are tried
-/// until `wait` passes, on the same handles where this process holds them,
-/// so a target's watcher keeps the exclusive lease if the run dies. A run under `codeflow reserve` cannot take them,
-/// since the reserve holds the host shared. The fence of every directory is
-/// held shared first, for the life of the hold, so older binaries' gates
-/// stay out whether or not the caller holds an admission (TSK-1256).
+/// Queue for the host after releasing the current idle shared reservation.
+/// The fence of every directory is held shared first, for the life of the
+/// hold, so older binaries' gates stay out while it waits and runs (TSK-1256).
+/// A shared fence excludes only older binaries, so it blocks no queued request.
 /// # Errors
-/// At once while an older binary's gate or its surviving targets hold a
-/// fence; when other heavy runs still hold the host after `wait`, the run is
-/// nested under a reserve, or a lock cannot be opened. The shared locks are
-/// taken back before returning.
+/// At once while an older binary's gate or its surviving targets hold a fence.
+/// Refuses inherited reservations, live groups, unsafe queue state and a
+/// bounded wait that expires. The caller must reacquire ordinary admission.
 pub fn hold_host_exclusive(
     root: &Path,
     wait: std::time::Duration,
@@ -1300,133 +1422,228 @@ pub fn hold_host_exclusive(
     hold_host_exclusive_in(&project_lock_dirs(root)?, root, wait)
 }
 
-/// [`hold_host_exclusive`] over the given lock directories.
+/// As `hold_host_exclusive`, for explicitly supplied lock domains.
 /// # Errors
-/// As [`hold_host_exclusive`].
+/// As `hold_host_exclusive`.
 pub fn hold_host_exclusive_in(
     dirs: &[PathBuf],
     root: &Path,
     wait: std::time::Duration,
 ) -> Result<HostExclusive, String> {
-    if held().iter().any(|lock| {
-        lock.inherited
-            && lock.paths.iter().any(|path| {
-                path.parent()
-                    .is_some_and(|parent| dirs.iter().any(|dir| dir == parent))
-            })
-    }) {
-        return Err(
-            "a host-exclusive target cannot run under `codeflow reserve`, which holds the host \
-             for its command; run it outside the reserve"
-                .to_string(),
-        );
-    }
+    suspend_shared(dirs)?;
+    let deadline = std::time::Instant::now()
+        .checked_add(wait)
+        .ok_or_else(|| "host-exclusive wait is too large".to_string())?;
     let trusted = trusted_dirs(root);
     let fences = take_fences(dirs, &trusted).map_err(|held| with_repair_pointer(&held))?;
-    for lock in held().iter() {
-        for (_, file) in &lock.host {
-            os_lock::unlock(&file.0);
+    let ticket = queue::Ticket::publish(dirs, root)?;
+    let mut announced = String::new();
+    loop {
+        if !announced.is_empty() && std::time::Instant::now() >= deadline {
+            return Err(host_held_refusal(&announced, wait));
         }
-    }
-    let start = std::time::Instant::now();
-    let mut taken: Vec<(PathBuf, Option<AcquiredFile>)> = Vec::new();
-    let result = loop {
-        let mut busy = None;
-        let mut failed = None;
-        for dir in dirs.iter().skip(taken.len()) {
-            let path = dir.join(HOST_LOCK_FILE);
-            let attempt = match upgrade_held_host(&path) {
-                Some(Ok(())) => Ok(None),
-                Some(Err(error)) if os_lock::is_contended(&error) => Err(None),
-                Some(Err(error)) => Err(Some(LockHeld::unavailable(
-                    path.clone(),
-                    format!("gate lock unavailable: {error}"),
-                ))),
-                None => match try_open_and_lock(&path, false) {
-                    Ok(Slot::Taken(file)) => Ok(Some(AcquiredFile(file))),
-                    Ok(Slot::Busy) => Err(None),
-                    Err(held) => Err(Some(held)),
-                },
-            };
-            match attempt {
-                Ok(file) => taken.push((path, file)),
-                Err(None) => {
-                    busy = Some(path);
-                    break;
+        let mut busy = ticket
+            .waiting_for(&trusted)?
+            .map(|record| holder_texts(&record, ""));
+        let mut host = Vec::new();
+        if busy.is_none() {
+            for dir in dirs {
+                let path = dir.join(HOST_LOCK_FILE);
+                match try_open_and_lock(&path, false).map_err(|held| with_repair_pointer(&held))? {
+                    Slot::Taken(file) => host.push((path, AcquiredFile(file))),
+                    Slot::Busy => {
+                        let holder_path = orphaned_slot(dirs, &trusted)
+                            .map_err(|held| with_repair_pointer(&held))?
+                            .unwrap_or_else(|| path.clone());
+                        let record = read_holder(&holder_path, None, &trusted)
+                            .map_err(|error| format!("gate lock unavailable: {error}"))?;
+                        busy = Some(holder_texts(
+                            &record,
+                            &format!(" (lock: {})", crate::git::display_path(&path)),
+                        ));
+                        break;
+                    }
                 }
-                Err(Some(held)) => {
-                    failed = Some(with_repair_pointer(&held));
-                    break;
+            }
+            if busy.is_none() {
+                if let Some(path) =
+                    orphaned_slot(dirs, &trusted).map_err(|held| with_repair_pointer(&held))?
+                {
+                    let record =
+                        read_holder(&path, None, &trusted).map_err(|error| error.to_string())?;
+                    busy = Some(holder_texts(
+                        &record,
+                        &format!(
+                            " (legacy slot or live target: {})",
+                            crate::git::display_path(&path)
+                        ),
+                    ));
                 }
             }
         }
-        if let Some(message) = failed {
-            break Err(message);
-        }
-        if busy.is_none() && taken.len() == dirs.len() {
-            // The host lock is ours, but a target that outlived its run can
-            // still be working: a slot other than this run's own that is
-            // busy keeps the target waiting.
-            match orphaned_slot(dirs, &trusted) {
-                Ok(None) => break Ok(()),
-                Ok(Some(path)) => busy = Some(path),
-                Err(held) => break Err(with_repair_pointer(&held)),
+        if let Some((identity, holder)) = busy {
+            // No partial exclusive acquisition is held while queueing.
+            drop(host);
+            if identity != announced {
+                eprintln!("[codeflow test] host-exclusive target waiting for {holder}");
+                announced = identity;
             }
+            if std::time::Instant::now() >= deadline {
+                return Err(host_held_refusal(&holder, wait));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            continue;
         }
-        let Some(path) = busy else {
-            break Ok(());
-        };
-        if start.elapsed() >= wait {
-            break Err(format!(
-                "a host-exclusive target waits for the other heavy runs on this machine to \
-                 end, and they still ran after {}s (lock: {})",
-                wait.as_secs(),
-                crate::git::display_path(&path)
-            ));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    };
-    if let Err(message) = result {
-        release_exclusive(taken);
-        retake_shared(wait.max(std::time::Duration::from_secs(5)));
-        return Err(message);
+        return register_exclusive(dirs, root, &trusted, host, fences, ticket);
     }
-    let record = holder_record(root, "exclusive");
-    let unwritten = taken.iter().find_map(|(path, _)| {
-        write_record(path, &record)
-            .err()
-            .map(|error| (path.clone(), error))
-    });
-    if let Some((path, error)) = unwritten {
-        release_exclusive(taken);
-        retake_shared(std::time::Duration::from_secs(5));
-        return Err(format!(
-            "gate lock unavailable: the host-exclusive record beside {} cannot be written: {error}",
-            crate::git::display_path(&path)
-        ));
-    }
-    Ok(held_exclusively(taken, fences))
 }
 
-/// The host-exclusive hold over the host locks `taken` and the `fences`
-/// held for it. From here on the fences only close, and the target
-/// inherits them as it inherits an admission's ([`fence_copies`]).
-fn held_exclusively(
-    taken: Vec<(PathBuf, Option<AcquiredFile>)>,
-    fences: Vec<(PathBuf, FenceFile)>,
-) -> HostExclusive {
-    let mut hold = HostExclusive {
-        files: taken,
-        fences,
-        #[cfg(unix)]
-        id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-    };
-    for (_, fence) in &mut hold.fences {
-        fence.armed = false;
-        #[cfg(unix)]
-        host_fences().push((hold.id, std::os::fd::AsRawFd::as_raw_fd(&fence.file)));
+/// The refusal of a host-exclusive target that waited for its whole bound.
+/// It starts with [`HOST_HELD`], so the result can tell this cause from a
+/// failure of the target.
+fn host_held_refusal(holder: &str, wait: std::time::Duration) -> String {
+    format!(
+        "{HOST_HELD} {holder}, so this host-exclusive target did not start and this says \
+         nothing about the target itself; waited {}s; pass --wait-seconds <seconds> to wait \
+         for the host",
+        wait.as_secs()
+    )
+}
+
+/// Holder records an exclusive admission wrote before it was registered. A
+/// failure clears them while the locks are still held; declared after the
+/// admission so it drops first, and the host locks are parameters, which drop
+/// after every local.
+#[derive(Default)]
+struct UnregisteredRecords {
+    host: Vec<PathBuf>,
+    slots: Vec<PathBuf>,
+}
+
+impl Drop for UnregisteredRecords {
+    fn drop(&mut self) {
+        let results = self.host.iter().map(|path| (path, write_record(path, "")));
+        let slots = self.slots.iter().map(|path| {
+            let cleared = with_record_lock(path, || write_record(path, "")).and_then(|done| done);
+            (path, cleared)
+        });
+        for (path, result) in results.chain(slots) {
+            if let Err(error) = result {
+                eprintln!(
+                    "warning: the holder record beside {} could not be cleared after a refused \
+                     admission: {error}; it names a hold that never began",
+                    crate::git::display_path(path)
+                );
+            }
+        }
     }
-    hold
+}
+
+fn register_exclusive(
+    dirs: &[PathBuf],
+    root: &Path,
+    trusted: &[String],
+    host: Vec<(PathBuf, AcquiredFile)>,
+    fences: Vec<(PathBuf, FenceFile)>,
+    mut ticket: queue::Ticket,
+) -> Result<HostExclusive, String> {
+    let record = holder_record(root, "exclusive");
+    let mut admission = GateLock {
+        id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        files: Vec::new(),
+        fences,
+        inherited: Vec::new(),
+        paths: Vec::new(),
+        runs: 1,
+        notes: Vec::new(),
+    };
+    let mut written = UnregisteredRecords::default();
+    for (path, _) in &host {
+        written.host.push(path.clone());
+        write_record(path, &record)
+            .map_err(|error| format!("gate lock unavailable: host-exclusive record: {error}"))?;
+    }
+    // Older readers name the holder from the fence record; this is an admission.
+    for (fence, _) in &admission.fences {
+        with_record_lock(fence, || write_record(fence, &record))
+            .and_then(|written| written)
+            .map_err(|error| format!("gate lock unavailable: fence record: {error}"))?;
+    }
+    // Exclusive admission now takes its own slot for watcher copies and
+    // orphan records. Queued requesters had no slot to deadlock on.
+    for dir in dirs {
+        let (file, path, _) = take_slot(dir, trusted, &mut admission.notes)
+            .map_err(|held| with_repair_pointer(&held))?;
+        written.slots.push(path.clone());
+        write_record(&path, &record).map_err(|error| error.to_string())?;
+        admission.files.push(file);
+        admission.paths.push(path);
+    }
+    let slots = admission
+        .files
+        .iter()
+        .map(|file| file.0.try_clone())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    let descriptors = {
+        use std::os::fd::AsRawFd;
+        admission
+            .files
+            .iter()
+            .map(|file| file.0.as_raw_fd())
+            .chain(host.iter().map(|(_, file)| file.0.as_raw_fd()))
+            .chain(
+                admission
+                    .fences
+                    .iter()
+                    .map(|(_, fence)| fence.file.as_raw_fd()),
+            )
+            .collect()
+    };
+    #[cfg(unix)]
+    let fence_descriptors = {
+        use std::os::fd::AsRawFd;
+        admission
+            .fences
+            .iter()
+            .map(|(_, fence)| fence.file.as_raw_fd())
+            .collect()
+    };
+    let host_paths = host.iter().map(|(path, _)| path.clone()).collect();
+    held().push(Held {
+        id: admission.id,
+        paths: admission.paths.clone(),
+        record,
+        groups: BTreeSet::new(),
+        recorded: BTreeSet::new(),
+        inherited: false,
+        _host: host,
+        slots,
+        trusted: trusted.to_vec(),
+        runs: 1,
+        #[cfg(unix)]
+        descriptors,
+        #[cfg(unix)]
+        fences: fence_descriptors,
+    });
+    // Registered: the hold's own drop clears these records from here on.
+    written.host.clear();
+    written.slots.clear();
+    let mut hold = HostExclusive {
+        admission: Some(admission),
+        ticket: None,
+        host_paths,
+    };
+    ticket.admitted()?;
+    hold.ticket = Some(ticket);
+    // Admitted: from here on the fences only close (FenceFile).
+    if let Some(admission) = &mut hold.admission {
+        for (_, fence) in &mut admission.fences {
+            fence.armed = false;
+        }
+    }
+    Ok(hold)
 }
 
 /// A busy slot in `dirs` that this process does not hold, or a fence whose
@@ -1476,20 +1693,6 @@ fn slot_busy(path: &Path, trusted: &[String]) -> Result<bool, LockHeld> {
                 )
             })?;
             Ok(!running.is_empty())
-        }
-    }
-}
-
-/// Take back this process's shared host locks, waiting up to `wait` for a
-/// host-exclusive target of another run to end.
-fn retake_shared(wait: std::time::Duration) {
-    let start = std::time::Instant::now();
-    let held = held();
-    for lock in held.iter() {
-        for (_, file) in &lock.host {
-            while os_lock::try_lock_shared(&file.0).is_err() && start.elapsed() < wait {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
         }
     }
 }
@@ -1652,6 +1855,7 @@ fn inherit_gate_lock(
     // the reserve still keeps older binaries out (TSK-1256).
     let fences = take_fences(dirs, &trusted)?;
     // The host half of the lease, taken as ordinary admission takes it.
+    let _queue_mutexes = queue::shared(dirs, &trusted)?;
     let mut host = Vec::new();
     for dir in dirs {
         host.push(take_host_shared(dir, &trusted)?);
@@ -1659,10 +1863,9 @@ fn inherit_gate_lock(
     // The run under the reserve is the reserve's run: its busy slot counts
     // once, so `runs` is the busy slots of the most crowded folder. An
     // unreadable slot record refuses here as in ordinary admission.
-    let mut runs = 1;
-    for dir in dirs {
-        runs = runs.max(busy_after(dir, 0, &trusted)?);
-    }
+    let runs = dirs.iter().try_fold(1_usize, |runs, dir| {
+        busy_after(dir, 0, &trusted).map(|busy| runs.max(busy))
+    })?;
     let lock = GateLock {
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
         files: Vec::new(),
@@ -1687,6 +1890,7 @@ fn inherit_gate_lock(
         inherited: true,
         trusted,
         runs: lock.runs,
+        slots: Vec::new(),
         descriptors: lock
             .inherited
             .iter()
@@ -1699,25 +1903,13 @@ fn inherit_gate_lock(
             .iter()
             .map(|(_, fence)| fence.file.as_raw_fd())
             .collect(),
-        host,
+        _host: host,
     });
     let mut lock = lock;
     for (_, fence) in &mut lock.fences {
         fence.armed = false;
     }
     Ok(Some(lock))
-}
-
-/// The fences of active host-exclusive holds, by hold, which every target
-/// inherits as it inherits an admission's ([`fence_copies`]).
-#[cfg(unix)]
-static HOST_FENCES: Mutex<Vec<(u64, std::os::fd::RawFd)>> = Mutex::new(Vec::new());
-
-#[cfg(unix)]
-fn host_fences() -> std::sync::MutexGuard<'static, Vec<(u64, std::os::fd::RawFd)>> {
-    HOST_FENCES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Copies of every fence this process holds, for a target to inherit
@@ -1733,10 +1925,8 @@ fn host_fences() -> std::sync::MutexGuard<'static, Vec<(u64, std::os::fd::RawFd)
 pub(crate) fn fence_copies() -> std::io::Result<Vec<File>> {
     use std::os::fd::BorrowedFd;
     let held = held();
-    let hosts = host_fences();
     held.iter()
         .flat_map(|lock| lock.fences.iter().copied())
-        .chain(hosts.iter().map(|(_, fd)| *fd))
         .map(|descriptor| {
             // SAFETY: the registry guards keep the owning fence open.
             unsafe { BorrowedFd::borrow_raw(descriptor) }
@@ -2103,7 +2293,12 @@ fn open_lock_file(path: &Path) -> std::io::Result<File> {
     std::fs::create_dir_all(anchor)?;
     let file = crate::contained::Tree::open(anchor)?.create_read_only(&relative)?;
     #[cfg(test)]
-    interleave::at(interleave::Point::Opened);
+    if path
+        .file_name()
+        .is_none_or(|name| name != std::ffi::OsStr::new(queue::QUEUE_MUTEX))
+    {
+        interleave::at(interleave::Point::Opened);
+    }
     Ok(file)
 }
 
@@ -2357,6 +2552,24 @@ fn is_sharing_violation(error: &std::io::Error) -> bool {
     matches!(error.raw_os_error(), Some(5 | 32))
 }
 
+/// A holder's identity, which a wait compares to announce each holder once,
+/// and the text it shows, both ending in `note`.
+fn holder_texts(record: &str, note: &str) -> (String, String) {
+    (
+        format!("{}{note}", holder_without_age(record)),
+        format!("{}{note}", describe_holder(record)),
+    )
+}
+
+/// `describe_holder` without the age, which changes every second.
+fn holder_without_age(record: &str) -> String {
+    let stripped: Vec<&str> = record
+        .lines()
+        .filter(|line| !line.starts_with("started="))
+        .collect();
+    describe_holder(&stripped.join("\n"))
+}
+
 /// Render a holder record as `pid N in DIR, started S s ago`.
 fn describe_holder(record: &str) -> String {
     let field = |key: &str| {
@@ -2365,7 +2578,16 @@ fn describe_holder(record: &str) -> String {
             .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
             .map(str::trim)
     };
-    let pid = field("pid").unwrap_or("unknown");
+    let pid = field("pid").filter(|pid| *pid != "unknown");
+    if pid.is_none() && field("dir").is_none() {
+        let who = if field("mode") == Some("queue metadata") {
+            "a run updating the exclusive queue"
+        } else {
+            "another heavy run"
+        };
+        return format!("{who}, not named by any record");
+    }
+    let pid = pid.unwrap_or("unknown");
     let dir = field("dir").map_or_else(
         || " in an unknown directory".to_string(),
         |d| format!(" in {}", crate::git::display_line(d)),
@@ -2538,7 +2760,7 @@ mod tests {
         let other = open_lock_file(&dirs[0].join(HOST_LOCK_FILE)).unwrap();
         os_lock::try_lock_shared(&other).unwrap();
         let waited = hold_host_exclusive_in(&dirs, &work, none).unwrap_err();
-        assert!(waited.contains("host-exclusive target waits"), "{waited}");
+        assert!(waited.starts_with(HOST_HELD), "{waited}");
         os_lock::unlock(&other);
         drop(hold_host_exclusive_in(&dirs, &work, none).expect("the other run ended"));
     }
@@ -2754,9 +2976,10 @@ mod tests {
             groups: BTreeSet::from([mine]),
             recorded: BTreeSet::from([mine]),
             inherited: false,
-            host: Vec::new(),
+            _host: Vec::new(),
             trusted: trusted.clone(),
             runs: 1,
+            slots: Vec::new(),
             descriptors: Vec::new(),
             fences: Vec::new(),
         };
@@ -2780,9 +3003,10 @@ mod tests {
                     groups: BTreeSet::from([foreign]),
                     recorded: BTreeSet::from([foreign]),
                     inherited: true,
-                    host: Vec::new(),
+                    _host: Vec::new(),
                     trusted,
                     runs: 1,
+                    slots: Vec::new(),
                     descriptors: Vec::new(),
                     fences: Vec::new(),
                 };
@@ -4142,6 +4366,9 @@ mod tests {
         std::fs::write(dir.join(LOCK_FILE), "").unwrap();
         std::fs::write(dir.join(slot_file(1)), "").unwrap();
         std::fs::write(dir.join(HOST_LOCK_FILE), "").unwrap();
+        // Prepare the new queue metadata so this case still reaches the
+        // holder-record write, rather than failing on first queue creation.
+        drop(queue::shared(std::slice::from_ref(&dir), &[]).unwrap());
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
         let refused = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"));
         let reported = unwritable_gate_dirs(tmp.path(), Some(&home));
@@ -4590,9 +4817,10 @@ mod old_binary_fence_tests {
             groups: BTreeSet::from([4_000_003]),
             recorded: BTreeSet::from([4_000_003]),
             inherited: false,
-            host: Vec::new(),
+            _host: Vec::new(),
             trusted: trusted_dirs(&work),
             runs: 1,
+            slots: Vec::new(),
             descriptors: Vec::new(),
             fences: Vec::new(),
         };
@@ -4625,6 +4853,61 @@ mod old_binary_fence_tests {
         for dir in &dirs {
             drop(old_take_eventually(dir));
         }
+    }
+
+    /// A failure after exclusive admission wrote its records leaves none
+    /// behind, so no later busy read names a hold that never began.
+    #[test]
+    fn a_failed_exclusive_admission_clears_its_holder_records() {
+        let record_text =
+            |lock: PathBuf| std::fs::read_to_string(record_path(&lock)).unwrap_or_default();
+        let (_tmp, work, dirs) = setup();
+        for dir in &dirs {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        // Only the fence record's rewrite takes this lock, after the host record.
+        let mut fence_record = record_path(&dirs[1].join(LOCK_FILE)).into_os_string();
+        fence_record.push(".lock");
+        std::fs::create_dir(&fence_record).unwrap();
+        let refused = hold_host_exclusive_in(&dirs, &work, Duration::ZERO).unwrap_err();
+        assert!(refused.contains("fence record"), "{refused}");
+        for dir in &dirs {
+            assert_eq!(record_text(dir.join(HOST_LOCK_FILE)), "", "host record");
+        }
+        std::fs::remove_dir(&fence_record).unwrap();
+
+        // The first folder's slot is recorded before the second folder fails.
+        let slot_record = record_path(&dirs[1].join(slot_file(1)));
+        std::fs::create_dir(&slot_record).unwrap();
+        hold_host_exclusive_in(&dirs, &work, Duration::ZERO).unwrap_err();
+        for dir in &dirs {
+            assert_eq!(record_text(dir.join(HOST_LOCK_FILE)), "", "host record");
+        }
+        assert_eq!(record_text(dirs[0].join(slot_file(1))), "", "slot record");
+    }
+
+    /// A holder's age changes every second; the text a wait compares does not.
+    #[test]
+    fn a_holder_description_can_leave_out_its_age() {
+        let older = "pid=9\ndir=/work\nstarted=1\nmode=full\n";
+        let newer = "pid=9\ndir=/work\nstarted=2\nmode=full\n";
+        assert_eq!(holder_without_age(older), holder_without_age(newer));
+        assert_eq!(holder_without_age(older), "pid 9 in /work, full mode");
+        assert!(describe_holder(older).contains("s ago"));
+    }
+
+    /// A holder with no pid and no directory says what is known about it.
+    #[test]
+    fn a_holder_with_no_record_says_what_is_known() {
+        assert_eq!(
+            describe_holder("pid=unknown\nmode=queue metadata"),
+            "a run updating the exclusive queue, not named by any record"
+        );
+        assert_eq!(
+            describe_holder(""),
+            "another heavy run, not named by any record"
+        );
+        assert!(describe_holder("pid=9\n").contains("pid 9 in an unknown directory"));
     }
 
     /// R4: while an older binary's gate holds the fence, a standalone

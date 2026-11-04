@@ -4433,6 +4433,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // Drops the start time from a holder snapshot so a waiting run prints its line once per holder; admission never reads it.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "holder_without_age",
+        "lines",
+        1,
+        "display",
+    ),
     // Formats owner PID/directory and stale-lock notes after lock authority has been decided using the lock itself.
     (
         "crates/codeflow-core/src/testing/gate_guard.rs",
@@ -7217,6 +7225,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/repo.rs", "shared_git_tree", "ErrorKind::NotFound", 1, "A no-follow metadata read of commondir in the held administrative directory not finding it means no linked-worktree registration was read; the directory is then returned only after require_repository finds HEAD, objects and refs on that same handle, and every other error refuses."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_file", "is_file", 3, "Type checks on metadata obtained with propagated errors (platform::metadata and the opened file's metadata on each platform)."),
     ("crates/codeflow-core/src/contained.rs", "platform::open_regular_for_append", "is_file", 2, "Type check on the opened descriptor's metadata, with propagated errors, on each platform; a pipe, device or folder is refused, never read as absent."),
+    ("crates/codeflow-core/src/contained.rs", "platform::create_read_only", "ErrorKind::NotFound", 1, "Never read as absence: racing creates can report not found while the parent is held, so this retries a bounded number of times and then propagates the error."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_read_only", "is_file", 2, "Type check on the opened file's metadata, with propagated errors, on each platform; a non-regular lock file is refused, never read as absent."),
     ("crates/codeflow-core/src/contained.rs", "platform::open_regular", "is_file", 2, "Type check on the opened file's metadata, with propagated errors, on each platform; a non-regular file is refused, never read as absent."),
     ("crates/codeflow-core/src/contained.rs", "platform::remove", "is_dir", 1, "Windows type check on the metadata of the handle just opened; errors propagate."),

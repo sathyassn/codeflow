@@ -46,6 +46,11 @@
           },
           "description": "Shared input globs that select all targets."
         },
+        "heavy_wait_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum seconds to wait for a host-exclusive target: a heavy run while one holds or queues for the host, or one while other heavy runs hold it. Omitted means zero; --wait-seconds overrides it."
+        },
         "host_jobs": {
           "type": "integer",
           "minimum": 1,
@@ -54,7 +59,7 @@
         "worker_budget": {
           "type": "integer",
           "minimum": 1,
-          "description": "Workers one run allocates across its concurrent heavy targets, capped at the host job budget. Omitted, a run uses the host budget."
+          "description": "Workers one run allocates across its concurrent heavy targets, capped at the host budget and the caller's CARGO_BUILD_JOBS. Omitted, a run uses the capped host budget."
         },
         "quick_default_class": {
           "type": "string",
@@ -234,7 +239,7 @@
         "host_exclusive": {
           "type": "boolean",
           "default": false,
-          "description": "Run alone on the host: no other target of this run and no other heavy run on the machine beside it. Only for a target that cannot share the host, such as a timing-sensitive one."
+          "description": "Run alone on the host: no sibling target or other heavy run. Releases shared admission and queues in FIFO order for the bounded CLI wait; later queue-aware shared arrivals defer. Older binaries cannot honour queue fairness. Use for timing-sensitive targets; exclusive alone excludes siblings only."
         },
         "input_class": {
           "type": "string",
@@ -311,7 +316,7 @@
         "workers": {
           "type": "integer",
           "minimum": 1,
-          "description": "Workers needed before this heavy target starts; requires execution.worker_budget and cannot exceed it. When the run's budget is lowered below it, the target runs at the budget. Omitted targets share the available budget."
+          "description": "Requested workers and ceiling for a heavy target; requires execution.worker_budget and cannot exceed it. Host capacity and caller/target job caps may lower the grant, which is reported. A request using the whole run budget drains all siblings and runs alone within the gate. Omitted targets share the available budget."
         }
       },
       "additionalProperties": false

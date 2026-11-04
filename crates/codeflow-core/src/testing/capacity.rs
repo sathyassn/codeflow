@@ -14,6 +14,77 @@
 /// host budget is computed.
 pub const MEMORY_PER_JOB: u64 = 1 << 30;
 
+/// A caller's Cargo cap, resolved once so relative CPU counts cannot change
+/// between target admissions. This limits both compile and nextest workers.
+#[derive(Debug, Clone, Copy)]
+pub struct CallerCap {
+    pub jobs: Option<usize>,
+    cores: usize,
+}
+
+impl CallerCap {
+    /// Read and validate the caller's cap before any target starts.
+    /// # Errors
+    /// Refuses non-Unicode or invalid Cargo job counts, naming their source.
+    pub fn read() -> Result<Self, String> {
+        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        let jobs = match std::env::var("CARGO_BUILD_JOBS") {
+            Ok(value) => Some(
+                parse_cap(&value, cores)
+                    .map_err(|cause| format!("caller CARGO_BUILD_JOBS: {cause}"))?,
+            ),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err("caller CARGO_BUILD_JOBS must be Unicode".into())
+            }
+        };
+        Ok(Self { jobs, cores })
+    }
+
+    #[must_use]
+    pub fn width(self, configured: Option<usize>) -> Option<usize> {
+        match (configured, self.jobs) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// Resolve a target override without permitting it to raise the caller cap.
+    /// # Errors
+    /// Refuses a malformed target cap before scheduling any target.
+    pub fn target(self, target: &super::config::TargetConfig) -> Result<Option<usize>, String> {
+        let Some(value) = target.env.get("CARGO_BUILD_JOBS") else {
+            return Ok(self.jobs);
+        };
+        let jobs = parse_cap(value, self.cores)
+            .map_err(|cause| format!("target '{}': CARGO_BUILD_JOBS: {cause}", target.name))?;
+        Ok(Some(self.jobs.map_or(jobs, |caller| caller.min(jobs))))
+    }
+}
+
+/// Normalize the documented Cargo forms; the signed range is explicit and
+/// arithmetic never overflows, even at the most negative accepted value.
+fn parse_cap(value: &str, cores: usize) -> Result<usize, String> {
+    if value == "default" {
+        return Ok(cores.max(1));
+    }
+    let digits = value.strip_prefix(['+', '-']).unwrap_or(value);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err("expected a nonzero signed 32-bit integer or default".into());
+    }
+    let parsed = value
+        .parse::<i32>()
+        .map_err(|_| "expected a nonzero signed 32-bit integer or default".to_string())?;
+    if parsed == 0 {
+        return Err("zero is not a job cap".into());
+    }
+    if parsed > 0 {
+        Ok(parsed.unsigned_abs() as usize)
+    } else {
+        Ok(cores.saturating_sub(parsed.unsigned_abs() as usize).max(1))
+    }
+}
+
 /// The host's job budget: `configured` when set, else the logical cores,
 /// lowered to the available memory divided by [`MEMORY_PER_JOB`] when that
 /// can be read, and never below one.
@@ -136,6 +207,53 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cargo_cap_forms_have_a_fixed_normalization_contract() {
+        for (text, jobs) in [
+            ("2", 2),
+            ("+2", 2),
+            ("002", 2),
+            ("-2", 6),
+            ("-8", 1),
+            ("-9", 1),
+            ("default", 8),
+            ("-2147483648", 1),
+            ("2147483647", 2_147_483_647),
+        ] {
+            assert_eq!(parse_cap(text, 8).unwrap(), jobs, "{text}");
+        }
+        for text in [
+            "",
+            "0",
+            "+0",
+            "-0",
+            " 2",
+            "2 ",
+            "many",
+            "2147483648",
+            "-2147483649",
+            "--2",
+            "+-2",
+        ] {
+            assert!(parse_cap(text, 8).is_err(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn caller_caps_bound_every_admitted_share() {
+        let cap = CallerCap {
+            jobs: Some(2),
+            cores: 8,
+        };
+        for host in [1, 2, 4, 10, 100] {
+            for active in 1..=20 {
+                for configured in [None, Some(1), Some(9)] {
+                    assert!(run_jobs(host, cap.width(configured), active) <= 2);
+                }
+            }
+        }
+    }
 
     #[test]
     fn the_budget_is_cores_lowered_by_available_memory() {

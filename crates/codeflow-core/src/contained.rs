@@ -735,17 +735,30 @@ mod platform {
     /// link, never truncated, without blocking on a special file; the type
     /// is checked on the opened descriptor.
     pub(super) fn create_read_only(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<File> {
+        const CREATE_ATTEMPTS: u32 = 100;
         let name = name(leaf)?;
         let flags =
             libc::O_RDONLY | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
-        // SAFETY: live directory descriptor and NUL-terminated basename; mode is
-        // supplied because O_CREAT is set. A successful descriptor is owned once.
-        let descriptor =
-            unsafe { libc::openat(parent.file.as_raw_fd(), name.as_ptr(), flags, 0o666) };
-        if descriptor == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: openat returned this owned descriptor.
+        // Two callers creating one file can see ENOENT on macOS although the
+        // parent is held open. Retry that alone; a parent that is really gone
+        // still fails once the attempts run out.
+        let mut attempts = 0;
+        let descriptor = loop {
+            // SAFETY: live directory descriptor and NUL-terminated basename; mode
+            // is supplied because O_CREAT is set.
+            let descriptor =
+                unsafe { libc::openat(parent.file.as_raw_fd(), name.as_ptr(), flags, 0o666) };
+            if descriptor != -1 {
+                break descriptor;
+            }
+            let error = io::Error::last_os_error();
+            attempts += 1;
+            if error.kind() != io::ErrorKind::NotFound || attempts == CREATE_ATTEMPTS {
+                return Err(error);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        // SAFETY: openat returned this owned descriptor, owned once.
         let file = unsafe { File::from_raw_fd(descriptor) };
         if !file.metadata()?.is_file() {
             return Err(invalid());
@@ -1243,6 +1256,31 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two gates can be first to use a lock folder. Racing creates of one
+    /// file must all open it; macOS can report ENOENT to the loser.
+    #[test]
+    fn racing_creates_of_one_file_all_succeed() {
+        for _ in 0..500 {
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(tmp.path().join("locks")).unwrap();
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let racers: Vec<_> = (0..2)
+                .map(|_| {
+                    let root = tmp.path().to_path_buf();
+                    let barrier = barrier.clone();
+                    std::thread::spawn(move || {
+                        let tree = Tree::open(&root).unwrap();
+                        barrier.wait();
+                        tree.create_read_only("locks/x.lock").map(drop)
+                    })
+                })
+                .collect();
+            for racer in racers {
+                racer.join().unwrap().unwrap();
+            }
+        }
+    }
 
     #[test]
     fn scoped_io_creates_replaces_lists_and_removes_without_traversal() {

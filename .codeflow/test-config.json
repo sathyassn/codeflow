@@ -58,6 +58,7 @@
       "scripts/fixtures/coverage-merge/**",
       "scripts/test_gate_portal_windows.py"
     ],
+    "heavy_wait_seconds": 600,
     "worker_budget": 9
   },
   "defaults": {
@@ -521,7 +522,7 @@
         "present-web-build"
       ],
       "outputs": [],
-      "exclusive": true,
+      "host_exclusive": true,
       "timeout_seconds": 900,
       "heavy": true,
       "workers": 9

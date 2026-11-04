@@ -217,6 +217,441 @@ fn jobs(dir: &Path, name: &str) -> String {
     std::fs::read_to_string(dir.join(format!("jobs-{name}"))).unwrap_or_default()
 }
 
+/// TSK-1279: admission must not replace the wrapper's two-job cap with the
+/// configured nine-job width, including the first heavy quick target.
+#[cfg(unix)]
+#[test]
+fn reserve_and_gates_preserve_the_callers_job_cap() {
+    let home = tempfile::tempdir().unwrap();
+    for mode in ["full", "quick"] {
+        let dir = repo(&two_wide(mode, r#""host_jobs":10,"worker_budget":9"#, 9));
+        let output = command(dir.path(), home.path(), &["test", "--mode", mode])
+            .env("CARGO_BUILD_JOBS", "2")
+            .output()
+            .unwrap();
+        let err = stderr(&output);
+        assert!(output.status.success(), "{mode}: {err}");
+        assert_eq!(jobs(dir.path(), "one"), "2", "{mode}: {err}");
+        assert_eq!(jobs(dir.path(), "two"), "2", "{mode}: {err}");
+        assert!(err.contains("caller cap CARGO_BUILD_JOBS=2"), "{err}");
+    }
+    let dir = repo(&marking("full", r#""host_jobs":10,"worker_budget":9"#, ""));
+    let output = command(
+        dir.path(),
+        home.path(),
+        &[
+            "reserve",
+            "--",
+            "sh",
+            "-c",
+            "printf %s \"$CARGO_BUILD_JOBS\"",
+        ],
+    )
+    .env("CARGO_BUILD_JOBS", "2")
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "2");
+    assert!(stderr(&output).contains("caller cap CARGO_BUILD_JOBS=2"));
+}
+
+#[cfg(unix)]
+#[test]
+fn invalid_caps_refuse_before_running_commands() {
+    let home = tempfile::tempdir().unwrap();
+    for value in ["", "0", "-0", " 2", "many", "2147483648"] {
+        let dir = repo(&marking("full", "", ""));
+        for args in [
+            vec!["test", "--mode", "full"],
+            vec!["reserve", "--", "touch", "ran"],
+        ] {
+            let output = command(dir.path(), home.path(), &args)
+                .env("CARGO_BUILD_JOBS", value)
+                .output()
+                .unwrap();
+            assert!(!output.status.success(), "{value:?}: {}", stderr(&output));
+            assert!(
+                stderr(&output).contains("CARGO_BUILD_JOBS"),
+                "{}",
+                stderr(&output)
+            );
+            assert!(!dir.path().join("ran").exists());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn non_unicode_caps_refuse_without_starting_work() {
+    use std::os::unix::ffi::OsStringExt;
+    let home = tempfile::tempdir().unwrap();
+    let invalid = std::ffi::OsString::from_vec(vec![0xff]);
+    let dir = repo(&marking("full", "", ""));
+    for args in [
+        vec!["test", "--mode", "full"],
+        vec!["reserve", "--", "touch", "ran"],
+    ] {
+        let output = command(dir.path(), home.path(), &args)
+            .env("CARGO_BUILD_JOBS", &invalid)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains("CARGO_BUILD_JOBS must be Unicode"));
+        assert!(!dir.path().join("ran").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn target_caps_lower_the_caller_cap_and_invalid_targets_refuse_before_work() {
+    let home = tempfile::tempdir().unwrap();
+    for mode in ["full", "quick"] {
+        for (value, expected) in [
+            ("1", Some("1")),
+            ("default", Some("2")),
+            ("bad", None),
+            ("-0", None),
+        ] {
+            let mut config: serde_json::Value =
+                serde_json::from_str(&two_wide(mode, r#""host_jobs":10,"worker_budget":9"#, 9))
+                    .unwrap();
+            for target in config["targets"].as_array_mut().unwrap() {
+                target["env"] = serde_json::json!({"CARGO_BUILD_JOBS": value});
+            }
+            let dir = repo(&config.to_string());
+            let output = command(dir.path(), home.path(), &["test", "--mode", mode])
+                .env("CARGO_BUILD_JOBS", "2")
+                .output()
+                .unwrap();
+            if let Some(expected) = expected {
+                assert!(output.status.success(), "{}", stderr(&output));
+                assert_eq!(jobs(dir.path(), "one"), expected);
+                assert_eq!(jobs(dir.path(), "two"), expected);
+            } else {
+                assert!(!output.status.success());
+                assert!(stderr(&output).contains("target 'one': CARGO_BUILD_JOBS"));
+                assert_eq!(jobs(dir.path(), "one"), "");
+                assert_eq!(jobs(dir.path(), "two"), "");
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_whole_budget_target_runs_without_light_or_unclassified_siblings() {
+    let home = tempfile::tempdir().unwrap();
+    for order in [false, true] {
+        let wide = r#"{"name":"wide","heavy":true,"workers":4,"runner":"custom","modes":{"full":{"command":"test ! -d busy && mkdir wide-running && sleep 0.1 && rmdir wide-running"}}}"#;
+        let sibling = |name: &str, class: &str| {
+            format!(
+                r#"{{"name":"{name}",{class}"runner":"custom","modes":{{"full":{{"command":"test ! -d wide-running && mkdir busy && sleep 0.1 && rmdir busy"}}}}}}"#
+            )
+        };
+        // Only one sibling at a time shares its marker, so this asserts
+        // overlap with the whole-budget target rather than between siblings.
+        for class in ["", r#""heavy":false,"#] {
+            let small = sibling("sibling", class);
+            let targets = if order {
+                format!("{wide},{small}")
+            } else {
+                format!("{small},{wide}")
+            };
+            let config = format!(
+                r#"{{"schema_version":"1.0","execution":{{"parallel":true,"max_parallel":3,"host_jobs":4,"worker_budget":4}},"targets":[{targets}]}}"#
+            );
+            let dir = repo(&config);
+            let output = run(dir.path(), home.path(), &["test", "--mode", "full"]);
+            assert!(output.status.success(), "{}", stderr(&output));
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ordinary_work_after_exclusivity_reacquires_its_shared_width() {
+    let home = tempfile::tempdir().unwrap();
+    let config = r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":3,"host_jobs":4,"worker_budget":4},"targets":[
+      {"name":"alone","host_exclusive":true,"heavy":true,"workers":4,"runner":"custom","modes":{"full":{"command":"printf %s \"$CARGO_BUILD_JOBS\" > jobs-alone"}}},
+      {"name":"bridge","heavy":false,"requires":["alone"],"runner":"custom","modes":{"full":{"command":"touch gap; while ! test -f continue; do sleep 0.01; done"}}},
+      {"name":"ordinary","heavy":true,"workers":4,"requires":["bridge"],"runner":"custom","modes":{"full":{"command":"printf %s \"$CARGO_BUILD_JOBS\" > jobs-ordinary"}}}
+    ]}"#;
+    let dir = repo(config);
+    let (mut first, rx, _stdout) = spawn(command(
+        dir.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for_file(&dir.path().join("gap"));
+    let linked = linked_worktree(
+        dir.path(),
+        "new-holder",
+        &holding("full", r#""host_jobs":4,"worker_budget":4"#),
+    );
+    let (mut holder, holder_rx, _holder_out) =
+        spawn(command(&linked, home.path(), &["test", "--mode", "full"]));
+    wait_for(&holder_rx, "starting target 'holder'");
+    std::fs::write(dir.path().join("continue"), "").unwrap();
+    wait_for(&rx, "completed target 'ordinary'");
+    assert!(first.wait().unwrap().success());
+    assert_eq!(jobs(dir.path(), "alone"), "4");
+    assert_eq!(jobs(dir.path(), "ordinary"), "2");
+    release(&linked);
+    assert!(holder.wait().unwrap().success());
+    let runs = std::fs::read_dir(dir.path().join("target/codeflow-gate")).unwrap();
+    assert!(runs.flatten().any(|entry| std::fs::read_to_string(
+        entry.path().join("ordinary/stderr.log")
+    )
+    .is_ok_and(|text| text.contains("workers 2 of 4 (host busy)"))));
+}
+
+#[cfg(unix)]
+#[test]
+fn three_runs_cannot_raise_a_reserved_two_job_cap() {
+    let home = tempfile::tempdir().unwrap();
+    let first = repo(&holding("full", r#""host_jobs":10,"worker_budget":9"#));
+    let second = linked_worktree(
+        first.path(),
+        "second",
+        &holding("full", r#""host_jobs":10,"worker_budget":9"#),
+    );
+    let third = linked_worktree(
+        first.path(),
+        "third",
+        &marking("full", r#""host_jobs":10,"worker_budget":9"#, ""),
+    );
+    let (mut one, rx_one, _out_one) = spawn(command(
+        first.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx_one, "starting target 'holder'");
+    let (mut two, rx_two, _out_two) =
+        spawn(command(&second, home.path(), &["test", "--mode", "full"]));
+    wait_for(&rx_two, "starting target 'holder'");
+    let output = command(
+        &third,
+        home.path(),
+        &[
+            "reserve",
+            "--",
+            "sh",
+            "-c",
+            "printf %s \"$CARGO_BUILD_JOBS\"",
+        ],
+    )
+    .env("CARGO_BUILD_JOBS", "2")
+    .output()
+    .unwrap();
+    release(first.path());
+    release(&second);
+    assert!(one.wait().unwrap().success());
+    assert!(two.wait().unwrap().success());
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "2");
+}
+
+#[cfg(unix)]
+#[test]
+fn exclusive_targets_recover_their_width_after_the_other_run_ends() {
+    let home = tempfile::tempdir().unwrap();
+    let budget = r#""host_jobs":4,"worker_budget":4"#;
+    let first = repo(&holding("full", budget));
+    let config = marking("full", budget, r#","host_exclusive":true,"workers":4"#).replace(
+        "touch ran",
+        "printf %s \\\"$CARGO_BUILD_JOBS\\\" > jobs-marker",
+    );
+    let exclusive = linked_worktree(first.path(), "exclusive-width", &config);
+    let (mut holder, holder_rx, _holder_out) = spawn(command(
+        first.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&holder_rx, "starting target 'holder'");
+    let (mut alone, rx, _alone_out) = spawn(command(
+        &exclusive,
+        home.path(),
+        &["test", "--mode", "full", "--wait-seconds", "10"],
+    ));
+    wait_for(&rx, "2 heavy runs share this host's 4 jobs");
+    release(first.path());
+    assert!(holder.wait().unwrap().success());
+    assert!(alone.wait().unwrap().success());
+    assert_eq!(jobs(&exclusive, "marker"), "4");
+}
+
+/// A host-exclusive target that finds the host held reads as not run, names
+/// the holder and the flag that waits, and still fails the gate. A wait
+/// announces one holder once, though the holder's age changes every second.
+#[cfg(unix)]
+#[test]
+fn a_held_host_reads_as_not_run_and_names_the_wait() {
+    let home = tempfile::tempdir().unwrap();
+    let first = repo(&holding("full", ""));
+    let exclusive = linked_worktree(
+        first.path(),
+        "exclusive-refused",
+        &marking("full", "", r#","host_exclusive":true"#),
+    );
+    let (mut holder, rx, _stdout) = spawn(command(
+        first.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx, "starting target 'holder'");
+
+    let refused = run(&exclusive, home.path(), &["test", "--mode", "full"]);
+    let waited = run(
+        &exclusive,
+        home.path(),
+        &["test", "--mode", "full", "--wait-seconds", "3"],
+    );
+    release(first.path());
+    assert!(holder.wait().unwrap().success());
+
+    let stdout = String::from_utf8_lossy(&refused.stdout);
+    let errors = stderr(&refused);
+    assert_eq!(refused.status.code(), Some(1), "{stdout}{errors}");
+    assert!(
+        stdout.contains("target marker: NOT RUN, host held"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("target marker: FAILED"), "{stdout}");
+    assert!(stdout.contains("test gate: FAILED"), "{stdout}");
+    assert!(errors.contains("the host was held by"), "{errors}");
+    assert!(errors.contains("pid "), "{errors}");
+    assert!(errors.contains("--wait-seconds"), "{errors}");
+    assert!(!exclusive.join("ran").exists());
+
+    let errors = stderr(&waited);
+    assert_eq!(waited.status.code(), Some(1), "{errors}");
+    assert_eq!(
+        errors.matches("host-exclusive target waiting for").count(),
+        1,
+        "{errors}"
+    );
+}
+
+/// `execution.heavy_wait_seconds` makes a host-exclusive target wait for the
+/// host with no flag, and `--wait-seconds` overrides it.
+#[cfg(unix)]
+#[test]
+fn a_configured_wait_holds_for_the_host_and_the_flag_overrides_it() {
+    let home = tempfile::tempdir().unwrap();
+    let first = repo(&holding("full", ""));
+    let exclusive = linked_worktree(
+        first.path(),
+        "exclusive-configured",
+        &marking(
+            "full",
+            r#""heavy_wait_seconds":30"#,
+            r#","host_exclusive":true"#,
+        ),
+    );
+    let (mut holder, rx, _stdout) = spawn(command(
+        first.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx, "starting target 'holder'");
+
+    let refused = run(
+        &exclusive,
+        home.path(),
+        &["test", "--mode", "full", "--wait-seconds", "0"],
+    );
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(!exclusive.join("ran").exists());
+
+    let (mut waiting, waiting_rx, _waiting_out) = spawn(command(
+        &exclusive,
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&waiting_rx, "host-exclusive target waiting for");
+    release(first.path());
+    assert!(holder.wait().unwrap().success());
+    assert!(waiting.wait().unwrap().success());
+    assert!(exclusive.join("ran").exists());
+}
+
+/// A reserve reads the same configured wait, and its flag overrides it.
+#[cfg(unix)]
+#[test]
+fn a_reserve_waits_as_configured_and_its_flag_overrides_it() {
+    let home = tempfile::tempdir().unwrap();
+    let first = repo(&holding("full", "").replace(
+        r#""runner":"custom""#,
+        r#""heavy":true,"host_exclusive":true,"runner":"custom""#,
+    ));
+    let other = linked_worktree(
+        first.path(),
+        "reserving",
+        &marking("full", r#""heavy_wait_seconds":30"#, ""),
+    );
+    let (mut holder, rx, _stdout) = spawn(command(
+        first.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx, "starting target 'holder'");
+
+    let refused = run(
+        &other,
+        home.path(),
+        &["reserve", "--wait-seconds", "0", "--", "true"],
+    );
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+
+    let (mut reserve, reserve_rx, _reserve_out) =
+        spawn(command(&other, home.path(), &["reserve", "--", "true"]));
+    wait_for(&reserve_rx, "waiting up to 30s");
+    release(first.path());
+    assert!(holder.wait().unwrap().success());
+    assert!(reserve.wait().unwrap().success());
+}
+
+/// While a candidate's host-exclusive target queues for the host, another
+/// run is refused with a message that names the candidate and says to retry,
+/// so nobody diagnoses the refusal as a defect.
+#[cfg(unix)]
+#[test]
+fn a_run_refused_behind_a_waiting_candidate_names_it_and_says_to_retry() {
+    let home = tempfile::tempdir().unwrap();
+    let first = repo(&holding("full", ""));
+    let candidate = linked_worktree(
+        first.path(),
+        "waiting-candidate",
+        &marking("full", "", r#","host_exclusive":true"#),
+    );
+    let other = linked_worktree(first.path(), "other", &marking("full", "", ""));
+    let (mut holder, rx, _stdout) = spawn(command(
+        first.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx, "starting target 'holder'");
+    let (mut waiting, waiting_rx, _waiting_out) = spawn(command(
+        &candidate,
+        home.path(),
+        &["test", "--mode", "full", "--wait-seconds", "30"],
+    ));
+    wait_for(&waiting_rx, "host-exclusive target waiting for");
+
+    let refused = run(&other, home.path(), &["test", "--mode", "full"]);
+    let errors = stderr(&refused);
+    release(first.path());
+    assert!(holder.wait().unwrap().success());
+    assert!(waiting.wait().unwrap().success());
+
+    assert_eq!(refused.status.code(), Some(1), "{errors}");
+    assert!(errors.contains("is waiting for the host"), "{errors}");
+    assert!(errors.contains("waiting-candidate"), "{errors}");
+    assert!(errors.contains("retry"), "{errors}");
+    assert!(errors.contains("not a defect"), "{errors}");
+    assert!(!other.join("ran").exists());
+}
+
 /// R483-04: under a budget lowered to two jobs, targets that declare four
 /// workers still run, each with two jobs, in full and in quick runs. Before
 /// the fix a full run left them pending and failed with "unsatisfied

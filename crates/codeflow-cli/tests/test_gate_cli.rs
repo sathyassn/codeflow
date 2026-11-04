@@ -66,6 +66,9 @@ fn command(dir: &Path, home: &Path, args: &[&str]) -> Command {
         .current_dir(dir)
         .env("CODEFLOW_HOME", home)
         .env_remove("CARGO_TARGET_DIR")
+        // Fixtures choose their own caps; the builder's nice wrapper must
+        // not change the expected admission widths inside these fake hosts.
+        .env_remove("CARGO_BUILD_JOBS")
         .env_remove("CI");
     cmd
 }
@@ -1967,7 +1970,7 @@ fn killing_heavy_quick_fallback_and_reservation_reaps_each_command_group() {
 fn a_heavy_target_waits_for_its_requested_share_without_blocking_light_work() {
     let dir = repo(
         r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":3,"host_jobs":8,"worker_budget":8},"targets":[
-      {"name":"first","timeout_seconds":5,"heavy":true,"workers":8,"runner":"custom","modes":{"quick":{"command":"test \"$CARGO_BUILD_JOBS\" = 8 && touch first-start && sleep 0.3 && touch first-done"}}},
+      {"name":"first","timeout_seconds":5,"heavy":true,"workers":6,"runner":"custom","modes":{"quick":{"command":"test \"$CARGO_BUILD_JOBS\" = 6 && touch first-start && sleep 0.3 && touch first-done"}}},
       {"name":"second","timeout_seconds":5,"heavy":true,"workers":4,"runner":"custom","modes":{"quick":{"command":"test -f first-done && test \"$CARGO_BUILD_JOBS\" = 4"}}},
       {"name":"light","timeout_seconds":5,"heavy":false,"runner":"custom","modes":{"quick":{"command":"while ! test -f first-start; do sleep 0.01; done; test ! -f first-done"}}}
     ]}"#,
@@ -2029,6 +2032,11 @@ fn reserve_refuses_when_the_holder_record_cannot_be_written() {
     std::fs::write(locks.join("full-gate.lock"), "").unwrap();
     std::fs::write(locks.join("full-gate-1.lock"), "").unwrap();
     std::fs::write(locks.join("host.lock"), "").unwrap();
+    // The queue exists already, so this reaches the holder record.
+    std::fs::write(locks.join("exclusive-queue.lock"), "").unwrap();
+    for folder in ["exclusive/queue", "exclusive/owners"] {
+        std::fs::create_dir_all(locks.join(folder)).unwrap();
+    }
     std::fs::set_permissions(&locks, std::fs::Permissions::from_mode(0o500)).unwrap();
     let reserved = run(
         dir.path(),
