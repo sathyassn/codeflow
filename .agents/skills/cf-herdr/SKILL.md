@@ -99,6 +99,10 @@ herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex|grok> \
 
 Native args after `--` are the ensemble's primary selector and effort, then
 the seat's posture flags from the transport table; workers own escalation.
+Always pass the effort `codeflow models resolve` returns, the model's
+vendor-recommended default unless a trigger raised it, so a seat never
+inherits a stray personal or environment effort; high or xhigh needs a named
+reason.
 Close the dedicated tracked-Claude pane after its lifecycle ends.
 
 - Claude: `--model <selector> --effort <effort> <posture flags>`

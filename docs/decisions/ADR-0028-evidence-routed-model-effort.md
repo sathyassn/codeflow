@@ -80,3 +80,10 @@ trigger adds an `xhigh-reasoning` worker obligation in the seat's own family
 while the seat stays at high and keeps approval (ADR-0056); with no eligible
 worker the obligation stays open and the trigger is unmet. The current roster
 and its designation date are in ADR-0069.
+
+## Note of 2026-11-01: high defaults superseded
+
+[ADR-0095](ADR-0095-default-effort-follows-each-vendor-s-recommendat.md)
+supersedes the default seat efforts above ("directly at high by default").
+Each seat now starts at its model's vendor-recommended effort and rises to
+high only for a named need on that lane. The rest of this record stands.

@@ -122,9 +122,21 @@ impl ProjectSelection {
             if entry.role == role {
                 role_seen = true;
                 if record.requested.harness == harness {
-                    if record.requested.effort != effort.as_str() || effort < Effort::High {
-                        return Err("project binding effort mismatch or below seat floor".into());
+                    // ADR-0095: a binding pins the model and its qualified
+                    // effort. It accepts a request at or below that effort
+                    // (the vendor-default request included) and keeps the
+                    // bound effort; a request above it stays refused, since
+                    // the binding's evidence does not cover it.
+                    let bound: Effort = serde_json::from_value(serde_json::Value::String(
+                        record.requested.effort.clone(),
+                    ))
+                    .map_err(|_| "project binding effort is not a catalog effort")?;
+                    if effort > bound {
+                        return Err(
+                            "request is above the project binding's qualified effort".into()
+                        );
                     }
+                    let effort = bound;
                     resolved = Some(ResolvedSelection {
                         role: entry.role.clone(),
                         seat: seat.id.clone(),
@@ -133,7 +145,7 @@ impl ProjectSelection {
                         lineage: record.lineage.clone(),
                         harness: record.requested.harness.clone(),
                         model: record.observed.model.clone(),
-                        effort: record.requested.effort.clone(),
+                        effort: effort.as_str().to_owned(),
                     });
                 }
             }
