@@ -1812,6 +1812,7 @@ pub fn target_group_finished(pgid: u32) -> Result<(), String> {
 /// Remove a confirmed target group using one deadline for the registry and
 /// every record lock. Callers defer this function: filesystem I/O itself is
 /// not interruptible. A missed write leaves the on-disk record conservative.
+#[cfg(unix)]
 pub(crate) fn target_group_finished_before(
     pgid: u32,
     finish_by: std::time::Instant,
@@ -1821,6 +1822,7 @@ pub(crate) fn target_group_finished_before(
 
 /// Bound initial target records as well as final cleanup records. Filesystem
 /// I/O is deferred by the caller, under the same absolute wait budget.
+#[cfg(unix)]
 pub(crate) fn target_group_started_before(
     pgid: u32,
     finish_by: std::time::Instant,
@@ -1828,6 +1830,7 @@ pub(crate) fn target_group_started_before(
     update_groups_before(pgid, true, finish_by)
 }
 
+#[cfg(unix)]
 fn update_groups_before(
     pgid: u32,
     running: bool,
