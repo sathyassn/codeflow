@@ -116,10 +116,11 @@ pub(super) fn findings(
     Ok(found)
 }
 
-/// A task's own first-parent work ends at the receiving first-parent chain
-/// or the run's base. A branch commit that already landed through a side
-/// parent remains that task's work. A matching unlanded task branch supplies
-/// its known base instead of the judged chain, which is its own branch.
+/// Walk backward from each reviewed head through its first parents, stopping
+/// before the receiving first-parent chain or any ancestor of the run's base.
+/// Task commits previously landed through a side parent retain their credit.
+/// When judging the matching unlanded task branch, stop at its supplied base
+/// instead: the judged first-parent chain belongs to that task itself.
 fn reviewed_own_commits(
     repo: &Repository,
     base: Oid,
