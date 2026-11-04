@@ -32,22 +32,32 @@ records the required interactive seat unavailable and the reduced assurance.
    a. **Build**: implement the smallest clear, idiomatic, durable scoped change
       with tests through the plan's named interfaces first, and internal unit
       tests where they carry the risk. Apply the neighbour rule in the
-      discipline rules' "Write only what earns its keep". Keep modular
+      discipline rules' "Write only what earns its keep". Under its
+      declare-once rule, read a value, closed set or helper from its
+      home, or add that home, instead of copying it. Keep modular
       boundaries and explicit failure handling; add no speculative
       behavior, abstraction or dependency. Name each identifier, flag,
       message, log line, comment, test and example value with the ordinary
       word for what it does, and check what a plausible reader takes it to
       mean (`.codeflow/rules/writing.md` "Meaning the reader takes"). Apply the
-      quality contract's
-      typed-interface and runtime trust-boundary rule and test accepted
-      invalid-input behavior; never force a stricter compiler, dependency,
-      language, or stack migration merely for compliance. When the change fixes
-      a defect, apply Repair in
+      quality contract's typed-code and typed-boundary-data rule
+      (`cf-model-orchestrator/resources/quality/design-implementation.md`):
+      new and changed code fully typed, an inline reason on every escape
+      type and suppression, data at every boundary parsed into a validating
+      typed model, and accepted invalid-input behavior tested. When the
+      project lacks its type checker, linter or typed-model library, this
+      change adds it to the project (dependency, configuration and the
+      command that runs it), unless the project's `AGENTS.md` states an
+      opt-out with its reason. When the change fixes a defect, apply Repair in
       `cf-model-orchestrator/resources/quality/findings.md`: state the
       evidenced mechanism and add a regression test that fails before the fix
       and passes after; for a defect that resists a first glance, first run one
       command that fails on the exact reported symptom (a cheap local failing
-      test, else the closest executable check). Use small conventional
+      test, else the closest executable check). Commit only files the
+      project needs long term, as the discipline rules' "Write only what
+      earns its keep" lists: run output, logs, review verdict files and scratch
+      files stay out, and the evidence goes in the PR body or the task
+      record. Use small conventional
       commits and push once, at ready, as the git rules' "One push at ready"
       says. Planned work moves at the pace
       [the workflow lifecycle](../cf-method/references/workflow-lifecycle.md)

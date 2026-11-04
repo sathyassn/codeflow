@@ -2400,6 +2400,48 @@
       ]
     },
     {
+      "id": "CF-QA-019",
+      "level": "hard",
+      "statement": "Each value with meaning (a name, id, path, setting, limit or closed set of strings) is declared once, as a constant, enum or type that every use reads, is generated from or is checked against, while a value used in one place, or whose copies would change for different reasons, needs no constant; a closed set of strings the project defines is declared once in the language's own form (an enum, typed constants or a literal type the type checker enforces) and every comparison uses its members or is checked against it; a shared shape or helper has one home that callers import; a deliberate copy is allowed only as a test's independent expected value, a stable external protocol or format constant, documentation and examples, or a generated or checked mirror, with its reason at the site; and a reviewer returns a new unchecked copy of a value or code that has a home as a major finding naming the copy and the home at file:line.",
+      "sources": [
+        {
+          "path": ".codeflow/rules/workflow-discipline.md",
+          "markers": [
+            "Declare each value once.",
+            "every use reads it, is generated from it or is checked against it",
+            "A closed set of strings that the project defines is declared once in the language's own form",
+            "every comparison uses its members or is checked against it",
+            "its copy is generated from the home or a check compares the two",
+            "A shared shape or helper has one home that callers import",
+            "A value used in one place, or whose copies would change for different reasons, needs no constant",
+            "a wrong shared abstraction costs more than the copy",
+            "a test's expected value, kept independent of the code under test",
+            "Any other new copy of a value or code that already has a home is under-design, and a reviewer refuses it"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
+          "markers": [
+            "declare each value with meaning once",
+            "a new unchecked copy of a value or code that has a home"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-develop/SKILL.md",
+          "markers": [
+            "read a value, closed set or helper from its home, or add that home, instead of copying it"
+          ]
+        },
+        {
+          "path": ".claude/agents/cf-reviewer.md",
+          "markers": [
+            "Ask whether the change copies a value",
+            "is a major finding that names the copy and the home, each at file:line"
+          ]
+        }
+      ]
+    },
+    {
       "id": "CF-REF-001",
       "level": "hard",
       "statement": "Work consults product scope and capabilities before building and uses architecture, ADRs, and recall for rationale rather than inventing it.",
@@ -3138,6 +3180,41 @@
       ]
     },
     {
+      "id": "CF-QA-018",
+      "level": "hard",
+      "statement": "New and changed code is fully typed, and every escape type or suppression carries an inline reason. Data crossing any boundary is parsed into a typed model that also validates it, with the typed-model library that is standard for the language; a typed representation alone, such as a plain dataclass, a TypedDict, an interface or a cast, does not validate. A builder adds the project's missing type checker and typed-model library as part of the change. A new project or file that would otherwise be JavaScript is TypeScript, and existing JavaScript is type-checked in place. Shell runs ShellCheck and parses its arguments explicitly, and Rego checks input at run time with json.match_schema, since a Rego schema annotation is static only. A project opts out only by stating its reason in its own AGENTS.md. Review returns changes_requested for untyped new code, an unexplained escape type, untyped boundary data, or a hand-written validator where a standard or schema-generated model fits.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
+          "markers": [
+            "Typed code and typed boundary data are the default.",
+            "A typed representation alone does not validate its input",
+            "A new project or new file that would otherwise be JavaScript is TypeScript.",
+            "only by stating the reason in the project-owned Stack standards of its `AGENTS.md`"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-develop/SKILL.md",
+          "markers": [
+            "When the project lacks its type checker, linter or typed-model library, this change adds it to the project"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-stack/SKILL.md",
+          "markers": [
+            "Set up typed code and typed boundary data by default"
+          ]
+        },
+        {
+          "path": ".claude/agents/cf-reviewer.md",
+          "markers": [
+            "Return `changes_requested`, with one major finding at its file:line for each of these",
+            "a hand-written validator where a model from the language's standard typed-model library"
+          ]
+        }
+      ]
+    },
+    {
       "id": "CF-PM-011",
       "level": "hard",
       "statement": "Every PR reviewed and ready when an integration line lands joins one candidate in dependency order, with one full gate and one hosted run on that exact combined candidate. Later-ready PRs join the next candidate. Never serialize ready PRs behind each other's landing or hosted run; serialize candidates on a line, while different lines may land in parallel.",
@@ -3170,6 +3247,34 @@
             "Change only work you own.",
             "tells the owner,",
             "the owner makes it in that task."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-QA-017",
+      "level": "hard",
+      "statement": "A file joins the repository only when the project needs it long term, in the smallest form that serves its use. Run output, per-run logs, review records, superseded drafts, build and cache output, copies kept for reference, scratch files, duplicate copies no tool manages and per-task evidence folders stay out, whatever earlier commits did, while an admitted use such as a fixture, a lockfile or a bundle the project ships outranks those exclusions; required evidence goes in the PR body or the task record as a summary, and an evidence file lands only when a live record cites it and the PR body cannot carry it. Review asks of every added file whether it is needed long term and in the smallest form that serves its use.",
+      "sources": [
+        {
+          "path": ".codeflow/rules/workflow-discipline.md",
+          "markers": [
+            "A file joins the repository only when the project needs it long term, in the smallest form that serves its use",
+            "Required evidence goes in the PR body or the task record",
+            "Git history keeps removed evidence."
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/references/pr-evidence.md",
+          "markers": [
+            "Run output, logs and review verdict files are never committed to carry it",
+            "there is no per-task evidence folder"
+          ]
+        },
+        {
+          "path": ".claude/agents/cf-reviewer.md",
+          "markers": [
+            "Ask of every file the diff adds whether the project needs it long term and whether this is the smallest form that serves its use"
           ]
         }
       ]

@@ -490,6 +490,260 @@ fn engineering_rigour_rules_keep_one_home() {
     }
 }
 
+/// TSK-1030 (issue #279): the rule on what a repository holds has one home
+/// in the discipline rules, the build, ship, evidence and planning texts
+/// point at it, and the reviewer asks of every added file whether it is
+/// needed long term.
+const REPOSITORY_CONTENT_PINS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "assets/base/rules/workflow-discipline.md",
+        &[
+            (
+                "what belongs",
+                "A file joins the repository only when the project needs it long term, in the smallest form that serves its use.",
+            ),
+            (
+                "what stays out",
+                "Everything else stays out: run output and per-run logs, review records and verdict files, superseded drafts, build and cache output, copies kept for reference, scratch and session working files, duplicate copies no tool manages, and per-task evidence folders.",
+            ),
+            (
+                "evidence home",
+                "Required evidence goes in the PR body or the task record;",
+            ),
+            (
+                "evidence path condition",
+                "a summary of evidence that a live record cites and the PR body cannot carry. A live record is one still in force, such as a task record, an ADR or a research note; a completed task or a past decision stays live while work still relies on it.",
+            ),
+            (
+                "admitted uses outrank exclusions",
+                "An admitted use above outranks these exclusions: a generated file that is the shipped product, such as a GitHub action's bundled `dist/index.js`, is not refused as build output.",
+            ),
+            (
+                "one vendoring rule",
+                "A copy of third-party code that a runtime or build needs is a dependency and joins through the project's dependency rule; a copy kept for reference stays out",
+            ),
+            (
+                "history keeps removed evidence",
+                "Git history keeps removed evidence. A record that still needs a removed file cites it at a commit that holds it, so a clean-up breaks no citation.",
+            ),
+            (
+                "review reads added files",
+                "each added file (needed long term, in the smallest form that serves its use)",
+            ),
+            (
+                "unneeded file is material",
+                "add a file the repository does not need long term, or one larger than the smallest form that serves its use: shown unnecessary content or avoidable bulk, never a wording or structure preference",
+            ),
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-develop/SKILL.md",
+        &[(
+            "build commits only what is needed",
+            "Commit only files the project needs long term, as the discipline rules' \"Write only what earns its keep\" lists",
+        )],
+    ),
+    (
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+        &[(
+            "ship puts evidence in the body",
+            "Evidence goes in the body or the task record, never in committed run output or a per-task evidence folder.",
+        )],
+    ),
+    (
+        "assets/base/agents/skills/cf-ship/references/pr-evidence.md",
+        &[
+            ("evidence section", "## Where evidence lives"),
+            (
+                "evidence path condition",
+                "An evidence file joins the repository only when a live record cites it and the body cannot carry it, and then in summary form; there is no per-task evidence folder.",
+            ),
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/evidence.md",
+        &[(
+            "evidence quality points to its home",
+            "`cf-ship/references/pr-evidence.md` \"Where evidence lives\"",
+        )],
+    ),
+    (
+        "assets/base/claude/skills/cf-method/references/project-organization.md",
+        &[(
+            "spike evidence row",
+            "| Evidence from a spike or comparison | The PR body or the task record, as `cf-ship/references/pr-evidence.md` \"Where evidence lives\" says |",
+        )],
+    ),
+    (
+        "assets/base/claude/agents/cf-reviewer.md",
+        &[
+            (
+                "added-file question",
+                "Ask of every file the diff adds whether the project needs it long term and whether this is the smallest form that serves its use",
+            ),
+            (
+                "oversized is bounded",
+                "Oversized means shown unnecessary content or avoidable bulk, never a wording or structure preference, and an admitted use outranks the exclusions: fixtures, a lockfile or a bundle the project ships stay.",
+            ),
+            (
+                "verdict reports added files",
+                "added_files: <how many added files were checked; each unneeded or oversized one is a finding below | none added>",
+            ),
+        ],
+    ),
+];
+
+#[test]
+fn repository_content_rule_has_one_home_and_its_pointers() {
+    let root = repo_root();
+    for (path, clauses) in REPOSITORY_CONTENT_PINS {
+        assert_contains_all(&root.join(path), clauses);
+    }
+    // The pointing texts do not restate the list the discipline rules own.
+    for path in [
+        "assets/base/agents/skills/cf-develop/SKILL.md",
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+        "assets/base/agents/skills/cf-ship/references/pr-evidence.md",
+        "assets/base/claude/agents/cf-reviewer.md",
+    ] {
+        assert!(
+            !normalized(&read_text(&root.join(path))).contains("copies kept for reference"),
+            "{path} restates the list the discipline rules own"
+        );
+    }
+}
+
+/// The passages of `text` that present `docs/verification` as an ordinary
+/// place: a paragraph (text between blank lines; a line in a JSON file) that
+/// names it and carries no word that refuses it. A warning or prohibition
+/// that names the folder stays allowed.
+fn verification_folder_presented(text: &str, json: bool) -> Vec<String> {
+    const REFUSALS: &[&str] = &["never", "not ", "no per-task", "stays out", "refuse"];
+    let passages: Vec<&str> = if json {
+        text.lines().collect()
+    } else {
+        text.split("\n\n").collect()
+    };
+    passages
+        .into_iter()
+        .filter(|passage| passage.contains("docs/verification"))
+        .filter(|passage| {
+            let lower = passage.to_lowercase();
+            !REFUSALS.iter().any(|word| lower.contains(word))
+        })
+        .map(normalized)
+        .collect()
+}
+
+/// The predicate flags the shipped forms that made the folder look standard
+/// and passes a sentence that refuses it.
+#[test]
+fn verification_folder_check_flags_presentation_and_passes_refusal() {
+    let old_row = "| Retained comparison evidence | `docs/verification/<task>/` | Yes, as evidence, not as a product runtime. |";
+    // The old row carries "not as a product runtime", so a row is judged by
+    // its cells, not its words alone: the home cell names the folder.
+    assert!(!verification_folder_presented(
+        "Example, from CodeFlow's `docs/verification/tsk-006/prototype.html`:",
+        false
+    )
+    .is_empty());
+    assert!(
+        !verification_folder_presented("  \"exclude\": [\"docs/verification\"],", true).is_empty()
+    );
+    assert!(verification_folder_presented(
+        "Never keep a per-task folder such as `docs/verification/<task>/`.",
+        false
+    )
+    .is_empty());
+    assert!(!table_rows_with_verification_home(old_row).is_empty());
+    // Negative control: a row that forbids the folder is not placement.
+    assert!(table_rows_with_verification_home(
+        "| Forbidden evidence | `docs/verification/<task>/` | Never commit it. |"
+    )
+    .is_empty());
+    assert!(table_rows_with_verification_home(
+        "| Per-task evidence | `docs/verification/<task>/` | No. It stays out of the repository. |"
+    )
+    .is_empty());
+}
+
+/// Table rows that place evidence in `docs/verification`: the second cell (a
+/// home or location column) names it and no other cell refuses it. The row
+/// TSK-1030 replaced has that shape; a row that forbids the folder does not.
+fn table_rows_with_verification_home(text: &str) -> Vec<String> {
+    const REFUSALS: &[&str] = &["never", "forbidden", "stays out", "refuse"];
+    text.lines()
+        .filter(|line| line.trim_start().starts_with('|'))
+        .filter(|line| {
+            let cells: Vec<&str> = line.split('|').collect();
+            let names_home = cells
+                .get(2)
+                .is_some_and(|cell| cell.contains("docs/verification"));
+            let refused = cells
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != 2)
+                .any(|(_, cell)| {
+                    let lower = cell.trim().to_lowercase();
+                    lower == "no"
+                        || lower.starts_with("no.")
+                        || lower.starts_with("no,")
+                        || REFUSALS.iter().any(|word| lower.contains(word))
+                });
+            names_home && !refused
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+/// TSK-1030 AC-3: no shipped asset presents the project's own
+/// `docs/verification/` folder as a standard place, in an example, a
+/// default, a fixture or a table row that names it as a home. A mention
+/// that refuses the folder is allowed.
+#[test]
+fn shipped_assets_name_no_per_task_verification_folder() {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("readable asset folder") {
+            let path = entry.expect("directory entry").path();
+            if path.is_dir() {
+                // Installed packages are not shipped; a local install may hold them.
+                if path.file_name().is_some_and(|name| name != "node_modules") {
+                    walk(&path, out);
+                }
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    let assets = repo_root().join("assets");
+    let mut files = Vec::new();
+    walk(&assets, &mut files);
+    assert!(files.len() > 100, "the asset walk found the shipped files");
+    let mut problems = Vec::new();
+    for path in &files {
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        if !text.contains("docs/verification") {
+            continue;
+        }
+        let json = path.extension().is_some_and(|ext| ext == "json");
+        let relative = path.strip_prefix(&assets).unwrap().display().to_string();
+        for passage in verification_folder_presented(&text, json)
+            .into_iter()
+            .chain(table_rows_with_verification_home(&text))
+        {
+            problems.push(format!("{relative}: {passage}"));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "shipped assets present docs/verification as a standard folder:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
 #[test]
 fn always_loaded_agents_preserve_responsible_autonomy_kernel() {
     let root = repo_root();
@@ -1554,66 +1808,208 @@ fn uncertainty_guidance_keeps_its_rules_in_their_homes() {
     );
 }
 
+// TSK-1032 (issue #275): typed code and typed boundary data are the
+// default. The rule has one home in the quality contract; cf-develop,
+// cf-stack and cf-reviewer apply it, and none keeps the wording that told
+// agents to resist a type checker or a validating model.
 #[test]
-fn typed_contracts_are_proportionate_and_runtime_aware() {
+fn typed_code_and_boundary_data_are_the_default() {
     let root = repo_root();
+    let rule = root.join(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
+    );
     assert_contains_all(
-        &root.join(
-            "assets/base/agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
-        ),
+        &rule,
         &[
-            ("existing type system", "existing stack's type system"),
-            ("material bypasses", "unchecked casts, broad escape types"),
+            ("default", "Typed code and typed boundary data are the default."),
+            ("fully typed", "New and changed code is fully typed"),
             (
-                "runtime validation",
-                "Static types do not validate external or runtime data",
+                "inline reason",
+                "Every escape type or suppression",
+            ),
+            ("reason placement", "carries its reason inline"),
+            (
+                "every boundary",
+                "Data crossing any boundary is parsed into a typed model that also validates it.",
             ),
             (
-                "trusted internal values",
-                "Trusted internal values do not need redundant",
+                "representation versus parse",
+                "A typed representation alone does not validate its input",
+            ),
+            ("python library", "Pydantic models in Python"),
+            ("typescript library", "zod schemas in TypeScript"),
+            ("rust library", "serde types in Rust"),
+            ("go library", "plus a validator in Go"),
+            ("opentofu", "`validation` block on each OpenTofu variable"),
+            (
+                "rego at run time",
+                "In Rego, a rule checks `input` with `json.match_schema` and refuses on its errors",
             ),
             (
-                "no stack migration",
-                "language migrations merely to satisfy this rule",
+                "rego schema is static",
+                "checks the policy's references statically and validates nothing at run time",
+            ),
+            (
+                "shell route",
+                "Shell has none: run ShellCheck, parse arguments explicitly and refuse unknown ones",
+            ),
+            ("generated types", "Where a JSON Schema exists, generate the types from it."),
+            ("invalid input tested", "Handle and test invalid, absent and unexpected values."),
+            (
+                "proportionality scope",
+                "Proportionality decides how many fields and checks a boundary model holds, never whether boundary data is parsed or code is typed",
+            ),
+            (
+                "typescript default",
+                "A new project or new file that would otherwise be JavaScript is TypeScript.",
+            ),
+            (
+                "javascript in place",
+                "An existing JavaScript codebase is type-checked in place instead of rewritten",
+            ),
+            ("checkJs", "`checkJs`"),
+            (
+                "missing tools added",
+                "A change that needs a type checker, linter or validating-model library the project lacks adds it to the project: the dependency in the project's manifest, its configuration, and the command that runs it.",
+            ),
+            (
+                "ad hoc run is not adding",
+                "Running a tool once outside the project does not add it.",
+            ),
+            (
+                "opt-out route",
+                "only by stating the reason in the project-owned Stack standards of its `AGENTS.md`",
             ),
         ],
     );
+}
+
+// TSK-1032: cf-develop, cf-stack and cf-reviewer apply the rule.
+#[test]
+fn typed_code_rule_is_applied_by_develop_stack_and_review() {
+    let root = repo_root();
     assert_contains_all(
         &root.join("assets/base/agents/skills/cf-develop/SKILL.md"),
         &[
+            ("rule pointer", "typed-code and typed-boundary-data rule"),
             (
-                "implementation route",
-                "typed-interface and runtime trust-boundary rule",
+                "rule home",
+                "cf-model-orchestrator/resources/quality/design-implementation.md",
             ),
             (
                 "invalid-input evidence",
-                "test accepted invalid-input behavior",
+                "accepted invalid-input behavior tested",
             ),
-            ("no forced migration", "force a stricter compiler"),
-        ],
-    );
-    assert_contains_all(
-        &root.join("assets/base/claude/agents/cf-reviewer.md"),
-        &[
-            ("review bypasses", "material type-check bypasses"),
             (
-                "review runtime validation",
-                "external/runtime data is parsed and validated",
+                "missing tools added",
+                "When the project lacks its type checker, linter or typed-model library, this change adds it to the project (dependency, configuration and the command that runs it)",
             ),
-            ("consequence not style", "Require a concrete consequence"),
         ],
     );
     assert_contains_all(
         &root.join("assets/base/agents/skills/cf-stack/SKILL.md"),
         &[
             (
-                "native type checker",
-                "existing stack supports a compiler or type checker",
+                "default setup",
+                "Set up typed code and typed boundary data by default",
             ),
-            ("dynamic stack", "dynamic stacks keep their native checks"),
-            ("no language mandate", "Do not mandate TypeScript"),
+            ("typed-model library", "add the typed-model library"),
+            (
+                "typescript for new projects",
+                "A new project or new file that would otherwise be JavaScript is TypeScript",
+            ),
+            ("shell", "For shell, wire ShellCheck."),
+            (
+                "javascript in place",
+                "checked in place with `checkJs` and JSDoc types",
+            ),
+            (
+                "opt-out recorded",
+                "any opt-out from typed code or typed boundary data with its scope and reason",
+            ),
         ],
     );
+    assert_contains_all(
+        &root.join("assets/base/claude/agents/cf-reviewer.md"),
+        &[
+            ("rule pointer", "typed-code and typed-boundary-data rule"),
+            (
+                "blocking",
+                "Return `changes_requested`, with one major finding at its file:line for each of these",
+            ),
+            ("untyped code", "new or changed code without types"),
+            (
+                "unexplained escape",
+                "an escape type or suppression without an inline reason",
+            ),
+            (
+                "untyped boundary data",
+                "data crossing a boundary used without being parsed into a validating typed model",
+            ),
+            (
+                "hand-written validator",
+                "a hand-written validator where a model from the language's standard typed-model library",
+            ),
+        ],
+    );
+    // Native trials showed builders going from the orchestrator straight to
+    // the code without opening cf-develop, so the map's build row makes
+    // opening the code defaults a required step in every tier's kernel. Later
+    // quality topics add their names to the same clause.
+    for agents in [
+        "assets/base/AGENTS.md.tmpl",
+        "assets/base/AGENTS.full.md.tmpl",
+    ] {
+        let text = std::fs::read_to_string(root.join(agents)).expect("read AGENTS template");
+        let build = text
+            .lines()
+            .find(|line| line.starts_with("| build |"))
+            .unwrap_or_else(|| panic!("{agents}: no build row"));
+        for (label, needle) in [
+            ("code defaults", "before writing code, open the quality contract's code defaults and apply each one (typed code, validating boundary models and each value declared once)"),
+            ("rule pointer", "MUST OPEN `.agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md` before writing code (the code defaults)"),
+        ] {
+            assert!(build.contains(needle), "{agents} build row lacks {label}: {needle}");
+        }
+    }
+}
+
+// TSK-1032: the wording that steered agents away from strict typing is gone
+// from every one of the four texts.
+#[test]
+fn typed_code_texts_drop_the_retired_wording() {
+    let root = repo_root();
+    let rule = root.join(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
+    );
+    for (path, retired) in [
+        (&rule, "language migrations merely to satisfy this rule"),
+        (&rule, "where they prevent material errors"),
+        (
+            &rule,
+            "TypeScript is the default for new projects and new files",
+        ),
+        (&rule, "schemas for Rego `input` and `data`"),
+        (&rule, "typed-model library is in scope for the change"),
+        (
+            &root.join("assets/base/agents/skills/cf-develop/SKILL.md"),
+            "force a stricter compiler",
+        ),
+        (
+            &root.join("assets/base/agents/skills/cf-stack/SKILL.md"),
+            "Do not mandate TypeScript",
+        ),
+        (
+            &root.join("assets/base/claude/agents/cf-reviewer.md"),
+            "never mandates a dependency, stricter compiler",
+        ),
+    ] {
+        assert!(
+            !normalized(&read_text(path)).contains(retired),
+            "{} still carries the retired wording {retired:?}",
+            path.display()
+        );
+    }
 }
 
 /// Every shipped text file under `dir`, keyed by its path under `base`.
