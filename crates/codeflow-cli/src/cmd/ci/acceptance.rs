@@ -405,7 +405,7 @@ pub(super) fn release_scope<'n>(
                 (Some(url), Some(listed)) => release_line::from_advertisement(url, listed),
                 _ => release_line::ask_destination(root, names.destination),
             }
-            .map_err(ScopeError::Destination)?;
+            .map_err(|why| ScopeError::Destination(credential_hint(why)))?;
             let scope = release_line::scope(root, &destination, names.branch, names.into)
                 .map_err(ScopeError::Scope)?;
             Ok(scope.release().then_some((destination, scope)))
@@ -413,6 +413,19 @@ pub(super) fn release_scope<'n>(
         .as_ref()
         .map(Option::as_ref)
 }
+
+/// `why` the destination could not be asked, with the fix when it refused
+/// for want of a credential (TSK-1267). Release scope is unknown until the
+/// destination answers, so the message names no kind of range.
+fn credential_hint(why: String) -> String {
+    if !why.contains(codeflow_core::git::remote_query::AUTHENTICATION_FAILED) {
+        return why;
+    }
+    format!("{why}: {CREDENTIAL_NEEDED}")
+}
+
+/// The fix for a destination lookup refused for want of a credential.
+const CREDENTIAL_NEEDED: &str = "The destination requires a credential this run does not have. Codeflow needs its default branch and policy to determine release scope. Give the job read access to the destination.";
 
 /// The head a release range is judged at: a pull request into a release
 /// branch is judged as the merge it would create.

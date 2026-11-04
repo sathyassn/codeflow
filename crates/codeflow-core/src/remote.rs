@@ -2265,7 +2265,7 @@ printf '{}'
         assert!(
             text.contains(
                 "require status checks to pass on a branch that is up to date with its base: \
-                 codeflow gates, secret scan, security review, commit standards"
+                 codeflow gates, secret scan, security review, trusted: commit standards"
             ),
             "{text:?}"
         );
@@ -2568,8 +2568,9 @@ esac
         let writes = host.writes();
         assert_eq!(writes.len(), 1, "{writes:?}");
         assert_eq!(writes[0].0, "PUT repos/o/r/rulesets/900");
-        // The six live checks stay, now strict, and the policy's two
-        // missing rules are added.
+        // The six live checks stay, now strict; the policy's
+        // `trusted: commit standards` (TSK-336) and its two missing rules
+        // are added.
         let body = &writes[0].1;
         let kinds: Vec<&str> = body["rules"]
             .as_array()
@@ -2588,10 +2589,12 @@ esac
         );
         let checks = &body["rules"][0]["parameters"];
         assert_eq!(checks["strict_required_status_checks_policy"], true);
-        assert_eq!(
-            checks["required_status_checks"],
-            owned["rules"][0]["parameters"]["required_status_checks"]
-        );
+        let mut expected = owned["rules"][0]["parameters"]["required_status_checks"].clone();
+        expected
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"context": "trusted: commit standards", "integration_id": 15368}));
+        assert_eq!(checks["required_status_checks"], expected);
         assert_eq!(body["bypass_actors"], json!([]));
         assert_eq!(body["enforcement"], "active");
         assert_eq!(

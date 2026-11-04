@@ -279,8 +279,9 @@ With tracking on, `codeflow ci` classifies every pull request as one of:
   every epic it changes, with records, `docs/plan/`, other docs outside the
   adopter-facing set, and `AGENTS.md` with its managed block unchanged
   (ADR-0078)
-- an epic's integration line: `Task: EPC-NNN`. A task of the epic targets it,
-  it lands on the default target, and it holds merges or direct commits with
+- an epic's integration line: `Task: EPC-NNN`. A task of the epic, or of an
+  epic whose record declares the line as its `parent_line`, targets it, it
+  lands on the default target, and it holds merges or direct commits with
   landed `line_adoptions` entries in its epic record (SPC-013 R-52)
 - an automation profile
 
