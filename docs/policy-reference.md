@@ -2248,14 +2248,13 @@ incomplete scans and invalid exception entries fail at both levels.
 An advisory is new when its `(id, package, ecosystem)` identity appears in
 the head scan and not the base scan. The first matching row applies:
 
-| Finding | Verdict |
-|---|---|
-| Failed or incomplete scan | Fail at block and warn |
-| Trusted suppression with an unexpired `ignoreUntil` | Pass and report |
-| New advisory, any severity | Fail |
-| Existing critical or high advisory | Fail unless trusted triage states not reachable with evidence |
-| Existing medium advisory | Fail unless trusted unexpired triage exists |
-| Existing low or informational advisory | Report and pass |
+1. Failed or incomplete scan: fail at block and warn.
+2. Trusted suppression with an unexpired `ignoreUntil`: pass and report.
+3. New advisory, any severity: fail.
+4. Existing critical or high advisory: fail unless trusted triage states
+   not reachable with evidence.
+5. Existing medium advisory: fail unless trusted unexpired triage exists.
+6. Existing low or informational advisory: report and pass.
 
 Unknown severity is treated as high. Unknown or missing reachability is
 reachable. Dev-only lockfiles have no exemption. Suppressions use
