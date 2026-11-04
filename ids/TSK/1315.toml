@@ -1,0 +1,11 @@
+id = "TSK-1315"
+uid = "e4bbc8a9-30af-471a-9ea4-a63ac61d1239"
+kind = "TSK"
+title = "Generated branch names stay readable under a sandbox, and doctor names a refused ref"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-04T02:11:37Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
