@@ -89,8 +89,12 @@ pub(crate) const GLOB_CACHE_ENTRIES: usize = 128;
 /// Longest glob pattern the matcher compiles. Shipped policy patterns are far
 /// shorter; a longer one is refused, never compiled.
 pub const MAX_GLOB_PATTERN_BYTES: usize = 1024;
-/// Longest path the matcher scans against one pattern.
-pub const MAX_GLOB_PATH_BYTES: usize = 32 * 1024;
+/// Longest path the matcher scans against one pattern. It sits under the
+/// Windows path limit: a read of a 32,767-character path fails there with
+/// `os error 206`. A UTF-16 path never has more units than UTF-8 bytes, so a
+/// path inside this bound stays readable with a namespace prefix and a marker
+/// name added, and every host gives the same refusal past it (TSK-1258).
+pub const MAX_GLOB_PATH_BYTES: usize = 32_000;
 /// Largest compiled program, in bytes, for one glob. Compile work grows with
 /// this size, so it is the step bound for compilation.
 const GLOB_COMPILED_BYTES: usize = 256 * 1024;

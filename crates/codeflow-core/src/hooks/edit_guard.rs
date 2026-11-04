@@ -1619,7 +1619,7 @@ mod tests {
     /// TSK-1258: the reads one judgment spends do not grow with how deep a
     /// path runs below its first missing name. One read per ancestor for
     /// each name is quadratic, and it held a Windows test past 1200 seconds:
-    /// Windows reads a path of 32 KiB where Unix refuses it near 1 or 4 KiB,
+    /// Windows reads a path of about 32 KiB where Unix refuses it near 1 or 4 KiB,
     /// so this counts reads at a depth every host can reach.
     #[test]
     fn a_missing_path_costs_the_same_reads_at_any_depth() {
@@ -1636,9 +1636,11 @@ mod tests {
         assert!(deep < shallow * 2, "{shallow} reads at 100, {deep} at 400");
     }
 
-    /// TSK-1258: a path as deep as the glob bound admits is judged, and a
-    /// protected path keeps its refusal at that depth. On Windows this path
-    /// reaches the filesystem, so a walk that is not linear stalls this test.
+    /// TSK-1258: a path as deep as the glob bound admits is judged on every
+    /// host, and a protected path keeps its refusal by rule at that depth. An
+    /// inspection error fails this test instead of reading as a refusal. On
+    /// Windows this path reaches the filesystem, so a walk that is not linear
+    /// stalls this test, and a bound past the Windows limit fails it.
     #[test]
     fn a_path_at_the_glob_bound_is_judged() {
         let fixture = Fixture::new();
@@ -1648,7 +1650,18 @@ mod tests {
             - "/notes/".len();
         let deep = "a/".repeat(space / 2);
         assert!(!fixture.refused(&format!("notes/{deep}")));
-        assert!(fixture.refused(&format!(".git/hooks/{}", &deep[..deep.len() - 8])));
+        let protected = format!(".git/hooks/{}", &deep[..deep.len() - 8]);
+        let violations = evaluate(
+            &synthetic("write", json!({"path": protected})),
+            &fixture.ctx(),
+        )
+        .expect("a protected path inside the bound is judged");
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.rule == "git.hook_integrity"),
+            "{violations:?}"
+        );
     }
 
     /// TSK-1258: a `..` that leaves a missing name returns to a path that

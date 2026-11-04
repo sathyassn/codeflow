@@ -543,7 +543,7 @@ mod cannot_exist_tests {
     /// A missing leaf is settled in reads that grow with the logarithm of its
     /// missing depth. One read per ancestor made a guard that asks this for
     /// every component quadratic in reads, which only the host's path limit
-    /// hid: Windows reads a path of 32 KiB, Unix stops near 1 or 4 KiB
+    /// hid: Windows reads a path of about 32 KiB, Unix stops near 1 or 4 KiB
     /// (TSK-1258, PR 552's Windows hang).
     #[test]
     fn a_deep_missing_leaf_is_settled_without_reading_each_ancestor() {
@@ -598,6 +598,30 @@ mod cannot_exist_tests {
         for (at_link, at_locked) in results {
             assert!(at_link.is_err(), "{at_link:?}");
             assert!(readable || at_locked.is_err(), "{at_locked:?}");
+        }
+    }
+
+    /// What each host does with a path of 32,767 characters, which a guard
+    /// can reach only through a link or short name that expands past its
+    /// bound. Windows reports `os error 206`, which proves nothing about the
+    /// path, so the read fails closed. Unix refuses the name, so nothing can
+    /// exist there and the search moves outward.
+    #[test]
+    fn a_path_at_the_windows_limit_fails_closed_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut path = dir.path().to_path_buf();
+        while path.as_os_str().len() < 32_700 {
+            path.push("a");
+        }
+        path.push("a".repeat(32_767 - path.as_os_str().len() - 1));
+        assert_eq!(path.as_os_str().len(), 32_767);
+        if cfg!(windows) {
+            let error = deepest_entry(&path).unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(206), "{error}");
+            assert!(cannot_exist(&path).is_err());
+        } else {
+            assert_eq!(deepest_entry(&path).unwrap(), dir.path());
+            assert!(cannot_exist(&path).unwrap());
         }
     }
 
