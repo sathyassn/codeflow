@@ -279,7 +279,7 @@ fn landed_authority_refuses_branch_waivers_and_unreadable_sources() {
     let base = f.commit(&[]);
     f.head(base);
     f.repo
-        .remote("origin", "https://example.invalid/project.git")
+        .remote("origin", "file:///nonexistent/project.git")
         .unwrap();
     f.repo
         .reference("refs/remotes/origin/main", base, true, "fixture")
@@ -310,7 +310,7 @@ fn landed_authority_refuses_branch_waivers_and_unreadable_sources() {
         PolicyLevel::Block
     );
     f.repo
-        .remote("origin", "https://example.invalid/project.git")
+        .remote("origin", "file:///nonexistent/project.git")
         .unwrap();
     f.repo
         .reference_symbolic(
@@ -368,7 +368,7 @@ fn a_declared_integration_line_contributes_nothing() {
     f.stage(".codeflow/policy.json", 0o100_644, br#"{"git":{"blocked_names":[{"pattern":"*.pem","except_under":["fixtures/narrow"],"reason":"narrow"},"target-only"],"protected_paths":[{"prefix":"private","allow":[]}]}}"#);
     let line = f.commit(&[main]);
     f.repo
-        .remote("origin", "https://example.invalid/repo.git")
+        .remote("origin", "file:///nonexistent/repo.git")
         .unwrap();
     for (name, id) in [("main", main), ("integration/paths", line)] {
         f.repo
@@ -418,7 +418,7 @@ fn line_fixture(main: &str, line: &str) -> Fixture {
     f.stage(".codeflow/policy.json", 0o100_644, line.as_bytes());
     let line_id = f.commit(&[main_id]);
     f.repo
-        .remote("origin", "https://example.invalid/repo.git")
+        .remote("origin", "file:///nonexistent/repo.git")
         .unwrap();
     for (name, id) in [("main", main_id), ("integration/paths", line_id)] {
         f.repo

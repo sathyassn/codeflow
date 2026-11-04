@@ -72,7 +72,7 @@ fn a_head_that_loosens_its_own_policy_gets_the_base_verdict() {
     );
     // A caller-chosen base is not presented as the hosted verdict.
     assert!(
-        said.contains("only when that is the pull request's target tip"),
+        said.contains("the hosted verdict names the default branch's commit with --policy-from instead, so this is a local judgment"),
         "{said}"
     );
     assert!(
@@ -156,6 +156,129 @@ fn a_head_that_changes_the_setup_hook_is_named() {
         "{text}"
     );
     assert!(!String::from_utf8_lossy(&out.stderr).contains("this change adds"));
+}
+
+/// TSK-336 AC-11: a head that changes a managed workflow or the release
+/// workflow gets a warning naming the triggers, permissions and jobs it
+/// changes. It never blocks: the default branch's copy keeps judging.
+#[test]
+fn a_head_that_changes_a_workflow_is_warned_by_name() {
+    const POLICY_WF: &str = ".github/workflows/codeflow-policy.yml";
+    const RELEASE_WF: &str = ".github/workflows/codeflow-release.yml";
+    let base_policy = "name: codeflow-policy\non:\n  pull_request_target:\npermissions:\n  contents: read\njobs:\n  commit-lint:\n    name: 'trusted: commit standards'\n    permissions:\n      contents: read\n    runs-on: ubuntu-24.04\n    steps:\n      - run: codeflow ci\n";
+    let dir = fixture(Some("{}"));
+    let root = dir.path();
+    git(root, &["switch", "-q", "main"]);
+    write(root, POLICY_WF, base_policy);
+    write(root, RELEASE_WF, "on: pull_request\njobs:\n  release-impact:\n    name: release impact\n    runs-on: ubuntu-24.04\n    steps:\n      - run: true\n");
+    commit(root, "ci: add the workflows");
+    git(root, &["switch", "-q", "feat/x"]);
+    git(root, &["merge", "-q", "--ff-only", "main"]);
+    let quiet = said(&ci(root));
+    assert!(!quiet.contains("ci.workflow_change"), "{quiet}");
+
+    let widened = base_policy
+        .replace("on:\n  pull_request_target:\n", "on:\n  pull_request_target:\n  push:\n")
+        .replace("    permissions:\n      contents: read\n", "    permissions:\n      contents: write\n")
+        + "  forged:\n    name: 'trusted: secret scan'\n    runs-on: ubuntu-24.04\n    steps:\n      - run: true\n";
+    write(root, POLICY_WF, &widened);
+    std::fs::remove_file(root.join(RELEASE_WF)).unwrap();
+    commit(root, "ci: widen the policy workflow");
+    let out = ci(root);
+    let text = said(&out);
+    assert!(text.contains("warning — ci.workflow_change"), "{text}");
+    assert!(
+        text.contains(&format!("this change edits {POLICY_WF}")),
+        "{text}"
+    );
+    assert!(text.contains("adds triggers push"), "{text}");
+    assert!(
+        text.contains("adds jobs forged ('trusted: secret scan')"),
+        "{text}"
+    );
+    assert!(
+        text.contains("changes the permissions of jobs commit-lint ('trusted: commit standards')"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("this change edits {RELEASE_WF}")),
+        "{text}"
+    );
+    assert!(
+        text.contains("removes it: triggers pull_request; jobs release-impact ('release impact')"),
+        "{text}"
+    );
+    assert!(
+        text.contains("authority: the default branch's copy of each workflow"),
+        "{text}"
+    );
+    assert_ne!(out.status.code(), Some(1), "a warning never blocks: {text}");
+}
+
+/// TSK-336 AC-11: the warning judges what the change does, base..head. The
+/// pre-push hook widens the commit checks with `--commits-from` to the
+/// default branch, whose range also holds the line's own workflow edits;
+/// those are not this change's and are not warned about.
+#[test]
+fn the_workflow_warning_reads_the_change_not_the_widened_commit_range() {
+    const POLICY_WF: &str = ".github/workflows/codeflow-policy.yml";
+    let dir = fixture(Some("{}"));
+    let root = dir.path();
+    git(root, &["switch", "-q", "main"]);
+    write(root, POLICY_WF, "on:\n  pull_request_target:\njobs:\n  commit-lint:\n    name: 'trusted: commit standards'\n    runs-on: ubuntu-24.04\n    steps:\n      - run: codeflow ci\n");
+    commit(root, "ci: add the policy workflow");
+    // The line changes the workflow; the task branch, cut from the line,
+    // does not.
+    git(root, &["switch", "-q", "-c", "line"]);
+    write(root, POLICY_WF, "on:\n  pull_request_target:\n  push:\njobs:\n  commit-lint:\n    name: 'trusted: commit standards'\n    runs-on: ubuntu-24.04\n    steps:\n      - run: codeflow ci\n");
+    commit(root, "ci: add a push trigger on the line");
+    git(root, &["switch", "-q", "-C", "feat/x"]);
+    write(root, "y.txt", "y\n");
+    commit(root, "feat: add y");
+    let out = run_in(
+        root,
+        &[
+            "ci",
+            "--base",
+            "line",
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/x",
+            "--commits-from",
+            "main",
+        ],
+    );
+    let text = said(&out);
+    assert!(text.contains("the commit checks run over"), "{text}");
+    assert!(!text.contains("ci.workflow_change"), "{text}");
+}
+
+#[test]
+fn a_workflow_edit_in_invalid_utf8_bytes_is_still_warned() {
+    // Both versions decode lossily to the same text, so only a comparison of
+    // the raw bytes sees the edit.
+    const POLICY_WF: &str = ".github/workflows/codeflow-policy.yml";
+    let workflow = |byte: u8| {
+        let mut bytes = b"on:\n  pull_request_target:\njobs:\n  commit-lint:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: codeflow ci # ".to_vec();
+        bytes.extend([byte, b'\n']);
+        bytes
+    };
+    let dir = fixture(Some("{}"));
+    let root = dir.path();
+    git(root, &["switch", "-q", "main"]);
+    std::fs::create_dir_all(root.join(".github/workflows")).unwrap();
+    std::fs::write(root.join(POLICY_WF), workflow(0xff)).unwrap();
+    commit(root, "ci: add the policy workflow");
+    git(root, &["switch", "-q", "-C", "feat/x"]);
+    std::fs::write(root.join(POLICY_WF), workflow(0xfe)).unwrap();
+    commit(root, "ci: change one byte of the policy workflow");
+    let text = said(&ci(root));
+    assert!(
+        text.contains(&format!("this change edits {POLICY_WF}")),
+        "{text}"
+    );
+    assert!(text.contains("not valid UTF-8"), "{text}");
 }
 
 #[test]
@@ -310,7 +433,7 @@ fn commits_from_another_commit_is_never_called_the_hosted_verdict() {
     assert!(said.contains("the other checks over"), "{said}");
     assert!(said.contains("so this is not the hosted verdict"), "{said}");
     assert!(
-        !said.contains("it is the hosted verdict only when"),
+        !said.contains("the hosted verdict names the default branch's commit"),
         "{said}"
     );
     // The same commit as the base keeps the one range and its wording.
@@ -331,7 +454,7 @@ fn commits_from_another_commit_is_never_called_the_hosted_verdict() {
     let same = self::said(&same);
     assert!(!same.contains("the commit checks run over"), "{same}");
     assert!(
-        same.contains("it is the hosted verdict only when"),
+        same.contains("the hosted verdict names the default branch's commit"),
         "{same}"
     );
 }
