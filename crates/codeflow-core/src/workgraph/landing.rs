@@ -865,13 +865,17 @@ impl<'r> RecordStore<'r> {
         wrote_older: &[Oid],
     ) -> Result<bool, String> {
         let mut uids: BTreeSet<String> = task.uid.iter().cloned().collect();
-        let held = self.history_at(task, side, &mut uids)?;
+        let held = self
+            .history_at(task, side, &mut uids)
+            .map_err(|reason| older.context(&reason))?;
         let Some((_, record)) = held.records.first() else {
             return Ok(self.first_holder(task, &[side], &[])?.is_none());
         };
         let version = older.version.like(record);
-        let introductions = self.introductions(task, side, &version)?;
-        for &write in &written(&introductions)? {
+        let introductions = self
+            .introductions(task, side, &version)
+            .map_err(|reason| older.context(&reason))?;
+        for &write in &written(&introductions).map_err(|reason| older.context(&reason))? {
             for &before in wrote_older {
                 if write == before
                     || !super::acceptance::is_ancestor_or_same(self.repo, write, before)?
