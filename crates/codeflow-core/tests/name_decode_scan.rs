@@ -1634,13 +1634,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         3,
         "schema-reject-only",
     ),
-    (
-        "crates/codeflow-core/src/capability.rs",
-        "validate_evidence",
-        "trim",
-        1,
-        "schema-reject-only",
-    ),
     // TSK-397: doctor's Claude settings reader. A layer that is not UTF-8
     // or not a JSON object is reported, never read as an absent layer. A
     // `.git` file's `gitdir:` value is trimmed as Git trims it, and the main
