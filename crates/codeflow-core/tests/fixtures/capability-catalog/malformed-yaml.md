@@ -8,7 +8,7 @@ status: shipped
 stage: stable
 kind: functional
 audience: [internal
-verified_by: ["test: cargo test capability_catalog"]
+verified_by: ["test: crates/codeflow-core/tests/capability_catalog.rs"]
 group: records
 tags: [rust]
 ---

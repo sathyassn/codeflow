@@ -101,6 +101,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCS_ADRS_UNCHECKED", Runs),
     ("FEEDBACK_INDEX_STALE", Runs),
     ("DOCS_CAPABILITIES_UNCHECKED", Runs),
+    ("CAPABILITY_EVIDENCE_UNTYPED", Runs),
     ("WORK_START_RECONCILE", Runs),
     ("WORK_START_MERGE_PLANNING", Runs),
     ("WORK_CLASSIFICATION", Runs),
@@ -1719,6 +1720,35 @@ fn clears_docs_capabilities_unchecked() {
                     "{registry}{}",
                     CAPABILITY.replace("epics: []", "epics: [EPC-001]")
                 ),
+            );
+        },
+    );
+}
+
+#[test]
+fn clears_capability_evidence_untyped() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let registry = read(&root, "docs/capabilities.md");
+    let entry = |tag: &str| {
+        format!(
+            "{registry}{}",
+            CAPABILITY
+                .replace("status: building", "status: shipped")
+                .replace("verified_by: []", &format!("verified_by: [{tag}]"))
+        )
+    };
+    write(&root, "docs/capabilities.md", &entry("flow-tag"));
+    prove(
+        "CAPABILITY_EVIDENCE_UNTYPED",
+        "verified_by entries are not resolved until they are typed",
+        || validate(&root),
+        |printed| {
+            assert!(printed.contains("docs/capabilities.md"), "{printed}");
+            write(
+                &root,
+                "docs/capabilities.md",
+                &entry("'gap: test: not written yet'"),
             );
         },
     );

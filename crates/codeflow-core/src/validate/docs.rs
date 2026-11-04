@@ -1,13 +1,13 @@
 //! Referential-integrity lint over the doc graph (`validate --docs`).
 //!
 //! Charter §5 maintenance matrix: malformed records and dangling graph IDs
-//! fail loud in CI and at pre-push. `verified_by` must be nonempty for shipped
-//! capabilities; the validator does not infer whether a named test tag exists.
-//! Checks:
+//! fail loud in CI and at pre-push. Checks:
 //!
 //! * capability `epics[]` resolve to `project-management/epics/` files
 //! * capability `adrs[]` resolve to `docs/decisions/` ADR files
 //! * capability status legal; shipped capabilities have nonempty `verified_by`
+//! * capability `verified_by` entries resolve to a test identity, a verification
+//!   record or a declared gap; a legacy catalog with no typed entry warns instead
 //! * ADR `status` legal (`proposed|accepted|superseded`); superseded ADRs
 //!   carry `superseded_by`
 //! * capability `epics[]` and epic `capabilities[]` links are reciprocal;
@@ -24,7 +24,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::capability::{inspect_capability_catalog, CapabilityCatalog};
+use crate::capability::{
+    inspect_capability_catalog, is_typed_evidence, parse_evidence, resolve_evidence,
+    CapabilityCatalog,
+};
 use crate::validate::{get_string_field, parse_frontmatter};
 use crate::workgraph::{is_valid_epic_format_id, is_valid_spec_format_id, is_valid_task_format_id};
 
@@ -130,6 +133,7 @@ pub fn lint_docs(repo_root: &Path) -> DocsLintReport {
     let graph = build_graph_with_catalog(repo_root, &catalog, &mut report);
 
     lint_capabilities(&catalog, &graph, &mut report);
+    lint_capability_evidence(repo_root, &catalog, &mut report);
     lint_adrs(repo_root, &mut report);
     lint_epics(repo_root, &graph, &mut report);
     lint_capability_epic_reciprocity_with_catalog(repo_root, &catalog, &mut report);
@@ -503,6 +507,72 @@ fn lint_capabilities(catalog: &CapabilityCatalog, graph: &DocGraph, report: &mut
                 }
             }
         }
+    }
+}
+
+/// Resolve every `verified_by` entry. A record's grammar was already checked by
+/// the loader, which reported any refusal, so only its references are new here.
+///
+/// A legacy fence file written before entries were typed keeps validating,
+/// with a warning, until it holds its first typed entry. From then on every
+/// fence entry must be typed, so a free-form tag cannot pass unresolved.
+fn lint_capability_evidence(root: &Path, catalog: &CapabilityCatalog, report: &mut DocsLintReport) {
+    let entries = || {
+        catalog
+            .records
+            .iter()
+            .flat_map(|record| record.entry.verified_by.iter().map(move |v| (record, v)))
+    };
+    if entries().next().is_none() {
+        return;
+    }
+    let tree = match crate::contained::Tree::open(root) {
+        Ok(tree) => tree,
+        Err(error) => {
+            cannot_read(report, root, error);
+            return;
+        }
+    };
+    // Without a readable index, a denied read refuses the entry.
+    let index = match crate::hooks::repo::open(root) {
+        Ok(Some(repo)) => repo.index().ok(),
+        Ok(None) | Err(_) => None,
+    };
+    let legacy_typed =
+        entries().any(|(record, value)| record.uid.is_none() && is_typed_evidence(value));
+    let mut untyped = BTreeSet::new();
+    for (record, value) in entries() {
+        let id = &record.entry.id;
+        let legacy = record.uid.is_none();
+        if legacy && !legacy_typed {
+            untyped.insert(id.as_str());
+            continue;
+        }
+        let reason = if legacy && !is_typed_evidence(value) {
+            Some("this file has typed entries, so every entry needs a kind: test, journey, record or gap".to_string())
+        } else {
+            match parse_evidence(value) {
+                Ok(evidence) => resolve_evidence(&tree, index.as_ref(), &evidence).err(),
+                Err(_) if !legacy => None,
+                Err(reason) => Some(reason),
+            }
+        };
+        if let Some(reason) = reason {
+            report.issues.push(DocsLintIssue {
+                file: record.file.clone(),
+                line: record.entry.line,
+                message: format!("{id}: verified_by entry {value:?}: {reason}"),
+            });
+        }
+    }
+    if !untyped.is_empty() {
+        report.warnings.push(crate::remedy::Finding::new(
+            format!(
+                "verified_by entries are not resolved until they are typed, in: {}",
+                untyped.into_iter().collect::<Vec<_>>().join(", ")
+            ),
+            crate::remedy::CAPABILITY_EVIDENCE_UNTYPED.remedy(),
+        ));
     }
 }
 

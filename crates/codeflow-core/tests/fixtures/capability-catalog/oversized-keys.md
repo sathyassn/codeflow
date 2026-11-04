@@ -41,7 +41,7 @@ extra30: value
 extra31: value
 extra32: value
 audience: [internal, agent]
-verified_by: ["test: cargo test capability_catalog"]
+verified_by: ["test: crates/codeflow-core/tests/capability_catalog.rs"]
 group: records
 tags: [rust]
 ---

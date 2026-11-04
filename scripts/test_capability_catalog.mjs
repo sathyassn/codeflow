@@ -20,6 +20,13 @@ test("capability frontmatter preserves loader delimiter and field bounds", () =>
   assert.throws(() => capabilityFrontmatterRecord({ id: "CAP-001", summary: "x".repeat(1025) }, "fixture"), /rendered bounds/);
 });
 
+test("the capability value bound applies per list item, as the loader's does", () => {
+  const items = Array.from({ length: 64 }, (_, index) => `test: crates/app/tests/case_${index}.rs`);
+  assert.ok(items.join(", ").length > 1024);
+  assert.equal(capabilityFrontmatterRecord({ id: "CAP-001", verified_by: items }, "fixture").lookup.get("verified_by"), items.join(", "));
+  assert.throws(() => capabilityFrontmatterRecord({ id: "CAP-001", verified_by: ["x".repeat(1025)] }, "fixture"), /rendered bounds/);
+});
+
 for (const layout of ["legacy", "folder", "mixed"]) {
   test(`capability lookup counts the ${layout} catalog`, async () => {
     const root = await portalFixture();

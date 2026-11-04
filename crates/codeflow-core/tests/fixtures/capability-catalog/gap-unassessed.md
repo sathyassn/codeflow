@@ -8,7 +8,7 @@ status: shipped
 stage: unassessed
 kind: functional
 audience: [internal, agent]
-verified_by: ["gap: tests pending"]
+verified_by: ["gap: test: tests pending"]
 group: records
 tags: [rust]
 ---
