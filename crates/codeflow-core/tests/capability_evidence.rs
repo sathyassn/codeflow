@@ -309,6 +309,16 @@ fn a_denied_read_resolves_only_a_tracked_whole_file() {
     index.add_path(Path::new(TEST_FILE)).unwrap();
     index.write().unwrap();
     write(root, "crates/app/tests/untracked.rs", "fn x() {}\n");
+    std::os::unix::fs::symlink("flow.rs", locked.join("link.rs")).unwrap();
+    index
+        .add_path(Path::new("crates/app/tests/link.rs"))
+        .unwrap();
+    let mut gitlink = index.get_path(Path::new(TEST_FILE), 0).unwrap();
+    gitlink.mode = 0o160_000;
+    gitlink.path = b"crates/app/tests/module.rs".to_vec();
+    gitlink.id = repo.blob(b"not read").unwrap();
+    index.add(&gitlink).unwrap();
+    index.write().unwrap();
 
     let check = |tag: &str| {
         fence(root, &[tag]);
@@ -327,6 +337,10 @@ fn a_denied_read_resolves_only_a_tracked_whole_file() {
     assert!(check("test: crates/app/tests/flow.rs").is_empty());
     assert_eq!(check("test: crates/app/tests/untracked.rs").len(), 1);
     assert_eq!(check("test: crates/app/tests/flow.rs::real_case").len(), 1);
+    // A tracked link or gitlink is not a regular file, as an unlocked checkout
+    // would also find.
+    assert_eq!(check("test: crates/app/tests/link.rs").len(), 1);
+    assert_eq!(check("test: crates/app/tests/module.rs").len(), 1);
 }
 
 #[test]

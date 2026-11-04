@@ -692,7 +692,7 @@ Records contain YAML frontmatter and Markdown prose, checked by `validate --docs
 | `gap: <proof>: <reason>` | A declared gap, not proof. `<proof>` is what is still owed: `test`, `journey`, `hosted` or `native`. |
 | Refused | A source file named alone, a command, free text or an unresolved reference, naming the capability and the entry. |
 | Reading | Nothing an entry names is run. Files are read through the repository-confined reader, and links are refused. Where a sandbox denies reading a path, a whole-file entry resolves only when the Git index tracks that path. |
-| Read bound | `CAPABILITY_MAX_EVIDENCE_FILE_BYTES`: 16 MiB for the file read to find a `::<name>`. It is a constant for now; it moves to the limits registry under TSK-1299 when this line syncs from `main`. |
+| Read bound | `CAPABILITY_MAX_EVIDENCE_FILE_BYTES`: 16 MiB for the file read to find a `::<name>`. It is a constant for now; it moves to the limits registry under TSK-1299, which lands through the EPC-022 line. |
 | Legacy fences | A legacy file with no typed entry keeps validating with one warning through 4.x. Its first typed entry makes every fence entry in the file subject to these rules. |
 
 | Validation rule | Contract |

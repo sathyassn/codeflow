@@ -21,6 +21,10 @@ pub const VERIFICATION_RECORD_DIR: &str = "docs/verification/";
 /// limits registry has not reached this line; it moves there under TSK-1299.
 pub const CAPABILITY_MAX_EVIDENCE_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
+/// The file type bits of a Git index mode, and their value for a regular file.
+const GIT_FILE_TYPE_MASK: u32 = 0o170_000;
+const GIT_REGULAR_FILE: u32 = 0o100_000;
+
 const FORMAT: &str = "expected test: <path>[::<name>], journey: <path>[::<name>], \
                       record: docs/verification/<path> or gap: <proof>: <reason>";
 
@@ -209,8 +213,9 @@ fn resolve_test(
 }
 
 /// A regular, non-empty file. A sandbox may deny reading a path by its name,
-/// even its metadata; the Git index then proves the file is tracked. Without
-/// that proof the entry is refused, because it cannot be verified.
+/// even its metadata; the Git index then proves a regular file is tracked there,
+/// which a link or gitlink is not. Without that proof the entry is refused,
+/// because it cannot be verified.
 fn existing_file(tree: &Tree, index: Option<&git2::Index>, path: &str) -> Result<(), String> {
     match tree.metadata(path) {
         Ok(metadata) if !metadata.is_file() => Err(format!("{path} is not a regular file")),
@@ -218,8 +223,11 @@ fn existing_file(tree: &Tree, index: Option<&git2::Index>, path: &str) -> Result
         Ok(_) => Ok(()),
         Err(error) if error.kind() == ErrorKind::NotFound => Err(format!("{path} does not exist")),
         Err(error) if error.kind() == ErrorKind::PermissionDenied => {
-            let tracked =
-                index.is_some_and(|index| index.get_path(std::path::Path::new(path), 0).is_some());
+            let tracked = index.is_some_and(|index| {
+                index
+                    .get_path(std::path::Path::new(path), 0)
+                    .is_some_and(|entry| entry.mode & GIT_FILE_TYPE_MASK == GIT_REGULAR_FILE)
+            });
             if tracked {
                 Ok(())
             } else {
