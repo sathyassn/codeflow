@@ -32,7 +32,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.root_checkout_commits` | Level | `block` | off \| warn \| allow \| block | A commit at the root checkout on any branch other than git.root_branch. | git-guard applies the level to agents; the git hooks apply it when a harness marker is set and only warn otherwise. Suspended in the pre-first-commit bootstrap window. |
 | `git.worktree_locations` | string list | `[".worktrees",".claude/worktrees","$CODEX_HOME/worktrees","$GROK_HOME/worktrees","$GROK_HOME/worktree_pool"]` | folders: relative to the root checkout, absolute, ~/..., $CODEX_HOME/... or $GROK_HOME/... | Where linked worktrees may live; doctor reports one outside them. | The default covers .worktrees and the folders the Claude desktop app, Codex and Grok manage. |
 | `git.claim_remotes` | string list | `[]` | an array of configured remote names, none starting with a dash | Additional remotes whose branches count as advisory work claims. | Origin and the target's fetch remote always count. Empty by default; other remote branches are reported as information. Named remotes must be configured when work claim lists their branches. The shipped policy file does not list it, so an older binary never meets the key. |
-| `git.required_checks` | string list | `["codeflow gates","secret scan","security review","commit standards"]` | a non-empty array of status check names, none blank | Status checks a protected branch requires before merging, on a branch that is up to date with its base. | Defaults to the shipped CI job names: codeflow gates, secret scan, security review and commit standards. `codeflow remote protect` requires them, on an up-to-date branch, on each protected branch other than the default branch, whose own rulesets require the names its policy workflow declares; `codeflow doctor --check remote-perimeter` warns when the default branch's live rules do not require them. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.required_checks` | string list | `["codeflow gates","secret scan","security review","trusted: commit standards"]` | a non-empty array of status check names, none blank | Status checks a protected branch requires before merging, on a branch that is up to date with its base. | Defaults to the shipped CI job names: codeflow gates, secret scan, security review and trusted: commit standards. `codeflow remote protect` requires them, on an up-to-date branch, on each protected branch other than the default branch, whose own rulesets require the names its policy workflow declares; `codeflow doctor --check remote-perimeter` warns when the default branch's live rules do not require them. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.commit_format` | Level | `block` | off \| warn \| allow \| block | Conventional-commit subject shape: `type(scope): description`. | Governs three checks: commit_types, commit_desc_max_len, and commit_subject_max_len; off/allow disables all of them. |
 | `git.commit_types` | string list | `["feat","fix","docs","refactor","test","chore","ci","perf","build","revert"]` | an array of lower-case conventional commit types | The whitelist of commit types. | Enforced under commit_format. |
 | `git.commit_desc_max_len` | uint | `50` | a non-negative integer (character count) | Max length of the description, the text after `type(scope): `. | Enforced under commit_format. |
@@ -75,7 +75,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.secret_scan_engine` | enum | `builtin` | builtin \| gitleaks | The engine the commit-time secret scan runs beside the built-in patterns. | builtin runs the built-in patterns only. gitleaks also runs the gitleaks release the managed CI scan pins over the staged diff, after the built-in patterns, reading the working tree's .gitleaksignore and .gitleaks.toml. A gitleaks binary that is missing, not the pinned version or not the pinned checksum is a finding at the git.secret_scan level, so at block it refuses the commit; `codeflow doctor --check secret-engine` reports where it looked. The hook never downloads it. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.secret_scan_inline_allow` | enum | `trusted` | trusted \| never | Inline gitleaks:allow handling in the managed CI secret scan. | Read from the trusted commit (the pull request base, or the pushed commit). Missing means trusted: only allows on commits it already holds count. With never, every inline allow is ignored; other trusted exemptions still apply. A pull request's head-only policy change cannot change its own scan. This key does not affect the pre-commit scan. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.conflict_markers` | Level | `block` | off \| warn \| allow \| block | Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170). | Defaults to block. Only added lines are judged. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in .gitattributes to a length its markers do not have. Suspended by bootstrap grace. |
-| `git.test_gate_on_push` | Level | `block` | off \| warn \| allow \| block | Run the push set before a push (pre-push hook). | The push set runs `codeflow ci` over each pushed range, which includes the conflict-marker check, and the release preflight where the project adopted it. It runs no `codeflow validate --docs` (`codeflow ci` checks the work graph) and no test-config target, so a push never waits for the heavy-work lock; cite `codeflow test --mode quick` when the pull request is made ready. Tag and other non-branch pushes are outside the push set. Local-config tampering is outside the hook threat model; hosted CI checks the pushed commit. |
+| `git.test_gate_on_push` | Level | `block` | off \| warn \| allow \| block | Run the push set before a push (pre-push hook). | The push set runs `codeflow ci` over each pushed range, which includes the conflict-marker check, and the release preflight where the project adopted it. It runs no `codeflow validate --docs` (`codeflow ci` checks the work graph) and no test-config target, so a push never waits for a heavy run; cite `codeflow test --mode quick` when the pull request is made ready. Tag and other non-branch pushes are outside the push set. Local-config tampering is outside the hook threat model; hosted CI checks the pushed commit. |
 | `git.security_review` | Level | `warn` | off \| warn \| allow \| block | The umbrella gate for the CI security-review job. | Ships at warn (ADR-0016); harden to block when ready. |
 | `git.dep_audit` | Level | `warn` | off \| warn \| allow \| block | The dependency-audit gate in CI. | Ships at warn (ADR-0016); harden to block when ready. |
 | `git.discard_uncommitted` | Level | `block` | off \| warn \| allow \| block | Commands in an agent session that discard locally unique uncommitted work (ADR-0075). | Default block. The in-session guard judges it; a human terminal and the git hooks are unaffected. |
@@ -851,6 +851,42 @@ exception. Files must be regular. When carrying documentation, indexes or
 `AGENTS.md`, both trees must have no symbolic links or submodules. A refusal
 names the excluded path and the admitted set; carry an excluded file in a
 task PR.
+
+## Own-task criteria on an integration line
+
+`codeflow ci` and the pre-push hook judge a task's criteria this way
+(TSK-350, SPC-013 R-52):
+
+- The branch's task comes from the task records at the judged head, with
+  the work prefixes of the policy the run judges with. A record only the
+  checkout holds grants no own-task authority, and a record the checkout
+  lacks takes none away, so a run from `main`, a detached checkout or the
+  task's worktree gives one criteria verdict.
+- A task's own criteria change on its integration line is judged against
+  the line's tip and the range base when all of these hold: the run names
+  the line with an explicit `--into` (an inferred target never qualifies);
+  the run pins its policy authority with `--policy-from`, as the pre-push
+  hook does with `main`'s tip; the destination advertises the line and its
+  tip is here; the task's record declares the line at the line's tip and
+  at the head; the line passes the trusted-line binding at that pinned tip
+  and at the line's tip; the line is not a protected branch. The line's
+  tip stays a criteria point when the run's base is older. `main` stays
+  the policy and commit-history authority, and a completion `main` or
+  another ref holds still refuses the change.
+- Another task's record whose criteria the range leaves as the range base
+  holds them is not judged against the points. Equality with one judged
+  point, such as `main`'s tip, never skips the check.
+- When a push replaces a branch, or a run judges a branch before that
+  push, a completion held only by that branch's own remote-tracking ref,
+  at the tip the push replaces, is set aside. A completion any other ref
+  or the target holds still counts.
+- A line-to-main range that merges a task record whose criteria `main` and
+  the line each amended prints a `work.criteria_copies` note naming both
+  versions and the one the merge keeps; a reviewer confirms which the task
+  keeps.
+
+The hosted `codeflow-policy.yml` job passes no `--policy-from`, so it
+judges against the pull request's target only.
 
 ## Destination lookup failures
 

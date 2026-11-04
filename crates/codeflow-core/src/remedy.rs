@@ -336,6 +336,13 @@ catalog! {
     /// A task branch whose planning is not anchored on the target.
     WORK_START_RECONCILE = Step::Codeflow("codeflow work start"),
         "reconcile the target branch, then run `codeflow work start {id}`";
+    /// A task blocked on the target (TSK-1036): its own pull request
+    /// unblocks it once the Blocker is resolved.
+    WORK_START_UNBLOCK = Step::Codeflow("codeflow task status"),
+        "when the Blocker is resolved, unblock the task in this pull request: run `codeflow task status {id} todo`, which removes the Blocker, commit the record on this branch, then run `codeflow work start {id}`; while the Blocker holds, the task waits for its revisit event";
+    /// A range that unblocks a task (TSK-1036): evidence, not a refusal.
+    RECORD_UNBLOCKED = Step::Codeflow("codeflow ci"),
+        "nothing to change: `codeflow ci` shows the Blocker the range removes, and a human reviewer confirms it is resolved";
     /// A task whose planning record has not reached the target.
     WORK_START_MERGE_PLANNING = Step::Codeflow("codeflow work start"),
         "merge the epic's planning change into '{target}', or for a standalone task commit its record on this branch, then run `codeflow work start {id}`";
@@ -581,6 +588,9 @@ catalog! {
     /// A project setup hook change that runs with the gate's authority.
     CI_SETUP_HOOK_CHANGED = Step::Edit(".codeflow/ci-setup.sh"),
         "restore .codeflow/ci-setup.sh to its target state; a change kept on purpose prints this note until it lands, so the operator reviews it as they would the CI file";
+    /// A change to a managed workflow or the release workflow (TSK-336).
+    CI_WORKFLOW_CHANGED = Step::Edit("{path}"),
+        "review {path} as a change to who judges pull requests, and restore it to its target state if that was not meant; the default branch's copy judges until this change lands there, and the operator lands it";
     /// A codeflow build whose embedded scaffold manifest does not load.
     SCAFFOLD_MANIFEST_BROKEN = Step::Codeflow("codeflow doctor"),
         "this codeflow build is damaged: install a release build, then `codeflow doctor` reports its managed files again";

@@ -2368,7 +2368,7 @@ fn judge_reopened(
         }
         Err(reason) => return TaskJudgement::unreadable(reason),
     }
-    let (mut judged, own_history) = match judged_points(repo, range, criteria) {
+    let (mut judged, own_history) = match judged_points(repo, range, criteria.bases()) {
         Ok(points) => points,
         Err(reason) => return TaskJudgement::unreadable(reason),
     };
@@ -2384,6 +2384,7 @@ fn judge_reopened(
             tips: &tips,
             at: Some(at),
             own: &own,
+            replaced: None,
         },
     )
 }
@@ -2399,24 +2400,81 @@ pub(super) fn judge_in_range(
     task: &RecordView,
     range: Range,
     criteria: &CriteriaBases,
+    scope: &Scope<'_>,
 ) -> super::landing::TaskJudgement {
-    let (mut judged, own_history) = match judged_points(repo, range, criteria) {
+    let (mut judged, own_history) = match judged_points(repo, range, criteria.bases()) {
         Ok(points) => points,
         Err(reason) => return super::landing::TaskJudgement::unreadable(reason),
     };
+    let own_line = scope.own_line.filter(|line| line.task == task.id);
+    // TSK-350 AC-6: for the task's own change on its bound line, the
+    // criteria points are the range anchor, the run's base and the line's
+    // confirmed tip; the default branch's tip the run names as its policy
+    // authority is none of them. Every point still counts for the landing.
+    // The confirmed tip stays a fixed point even when the head contains it,
+    // as it does when the run's base is older than the tip: the criteria
+    // the line holds are judged either way (TSK-350 review 02 finding 1).
+    let criteria_points = match own_line {
+        Some(line) => {
+            let bases: Vec<Oid> = criteria.bases().first().copied().into_iter().collect();
+            match judged_points(repo, range, &bases) {
+                Ok((mut points, _)) => {
+                    points.push(line.tip);
+                    Some(points)
+                }
+                Err(reason) => return super::landing::TaskJudgement::unreadable(reason),
+            }
+        }
+        None => None,
+    };
+    if let Some(points) = &criteria_points {
+        judged.extend(points.iter().copied());
+    }
     let mut seen = std::collections::HashSet::new();
     judged.retain(|point| seen.insert(*point));
     let own: Vec<Oid> = own_history.iter().map(|(_, point)| *point).collect();
-    store.judge(
+    let mut criteria_points = criteria_points.unwrap_or_else(|| judged.clone());
+    let mut seen = std::collections::HashSet::new();
+    criteria_points.retain(|point| seen.insert(*point));
+    store.judge_split(
         &super::landing::Identity::of(task),
+        &criteria_points,
         &judged,
         &super::landing::Outside {
             head: range.head,
             tips: &[],
             at: None,
             own: &own,
+            replaced: scope.replaced,
         },
     )
+}
+
+/// The task whose own criteria change the run judges within the bounded
+/// exception (TSK-350 AC-6, SPC-013 R-52): its id and the tip of its line
+/// as the destination confirmed it. The caller builds it only after the
+/// destination advertised that tip under the `--into` name, the task's
+/// record declares that line at the line's tip and at the head, and the
+/// line passed the trusted-line binding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnLine {
+    /// The task the exception is for, the branch's own task.
+    pub task: String,
+    /// The line's tip, as the destination advertised it.
+    pub tip: Oid,
+}
+
+pub use super::landing::Replaced;
+
+/// What a run's judgement of task records may take beyond its bases:
+/// the bounded own-line exception, and the remote-tracking ref the run
+/// replaces (TSK-350).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Scope<'a> {
+    /// The own-line exception, when the caller verified one.
+    pub own_line: Option<&'a OwnLine>,
+    /// The remote-tracking ref this run replaces.
+    pub replaced: Option<&'a super::landing::Replaced>,
 }
 
 /// Whether a record of a task shows a completion of it: it is complete,
@@ -2437,14 +2495,10 @@ type JudgedPoints = (Vec<Oid>, Vec<(String, Oid)>);
 /// each of the run's `criteria` bases. A base the range's head reaches
 /// beyond the anchor is the branch's own history, not a fixed target point,
 /// so it is returned apart, as a tip that can only make an answer stricter.
-fn judged_points(
-    repo: &Repository,
-    range: Range,
-    criteria: &CriteriaBases,
-) -> Result<JudgedPoints, String> {
+fn judged_points(repo: &Repository, range: Range, bases: &[Oid]) -> Result<JudgedPoints, String> {
     let mut judged = vec![range.anchor];
     let mut tips: Vec<(String, Oid)> = Vec::new();
-    for base in criteria.bases().iter().copied() {
+    for base in bases.iter().copied() {
         let in_range = if base == range.anchor {
             false
         } else {
@@ -3122,25 +3176,16 @@ pub fn frozen_criteria(
         // run base may hold criteria the target tip does not.
         let tip = target.records.get(&record.id);
         let own = exempt.contains(&record.id);
-        if !own {
-            if let Some(stack) = stacked
-                .iter()
-                .find(|stack| stack.task_id == record.id && stack.record.content == record.content)
-            {
-                found.push(Finding {
-                    epic_record: None,
-                    rule: FROZEN_RULE,
-                    message: format!(
-                        "{} changes its criteria in its own reviewed pull request, at {}, which this branch stacks on; that pull request's check judges the change",
-                        record.id, stack.pin
-                    ),
-                    note: true,
-                });
-                continue;
-            }
+        if let Some(note) = (!own).then(|| stacked_note(record, stacked)).flatten() {
+            found.push(note);
+            continue;
         }
         let judgement = judging.judge(record);
         found.push(authority_note(record, &judgement.criteria_source));
+        if let Some(kept) = unchanged_other_record(record, own, correctable, judging) {
+            found.extend(kept);
+            continue;
+        }
         let unknown = judgement.landing_unknown();
         let authority = match &judgement.criteria {
             Authority::Held(kept) => Some(kept.as_ref()),
@@ -3383,6 +3428,51 @@ fn correction_finding(record: &RecordView, authority: Option<&RecordView>) -> Fi
     }
 }
 
+/// The note for a predecessor's record that is its record at the reviewed
+/// head this branch stacks on, byte for byte (SPC-013 R-42, issue #69).
+fn stacked_note(record: &RecordView, stacked: &[StackedHead]) -> Option<Finding> {
+    let stack = stacked
+        .iter()
+        .find(|stack| stack.task_id == record.id && stack.record.content == record.content)?;
+    Some(Finding {
+        epic_record: None,
+        rule: FROZEN_RULE,
+        message: format!(
+            "{} changes its criteria in its own reviewed pull request, at {}, which this branch stacks on; that pull request's check judges the change",
+            record.id, stack.pin
+        ),
+        note: true,
+    })
+}
+
+/// TSK-350 AC-10 to AC-12 (issue #420): another task's record whose
+/// criteria the range leaves as its anchor holds them is no criteria
+/// change, so it is not judged against the points: `Some` with the
+/// findings it still gets. Equality with one judged point never skips the
+/// check, and a correction keeps its structure check, against the anchor's
+/// copy it leaves unchanged. The range's own task (`own`) keeps the full
+/// judgement, since a newer run base may hold criteria it must keep
+/// (TSK-234): `None`, as for any record whose criteria changed.
+fn unchanged_other_record(
+    record: &RecordView,
+    own: bool,
+    correctable: &std::collections::BTreeSet<String>,
+    judging: &Judging<'_>,
+) -> Option<Vec<Finding>> {
+    if own {
+        return None;
+    }
+    let before = judging.unchanged_since_anchor(record)?;
+    Some(if correctable.contains(&record.id) {
+        correction_structure_problem(record, Some(&before))
+            .map(|problem| correction_refusal(record, &problem))
+            .into_iter()
+            .collect()
+    } else {
+        Vec::new()
+    })
+}
+
 /// One run's judgement of tasks for a pull request (TSK-234): the range,
 /// the run's criteria bases and one record store shared by every task the
 /// run judges, so history is read once.
@@ -3391,6 +3481,32 @@ pub struct Judging<'r> {
     repo: &'r Repository,
     range: Range,
     criteria: CriteriaBases,
+    own_line: Option<OwnLine>,
+    replaced: Option<super::landing::Replaced>,
+    /// The records at the range anchor, read once, or why they cannot be.
+    anchor: std::cell::OnceCell<Result<Graph, String>>,
+}
+
+impl Judging<'_> {
+    /// The task's record at the range anchor when its criteria signature
+    /// equals `record`'s at the head (TSK-350 AC-12). A record the anchor
+    /// does not hold, or an anchor that cannot be read, is a change: `None`,
+    /// so the check runs as before.
+    fn unchanged_since_anchor(&self, record: &RecordView) -> Option<RecordView> {
+        let anchor = self
+            .anchor
+            .get_or_init(|| Graph::from_revision(self.repo, &self.range.anchor.to_string()));
+        anchor
+            .as_ref()
+            .ok()?
+            .records
+            .get(&record.id)
+            .filter(|before| {
+                before.kind == RecordKind::Task
+                    && before.criteria.signature() == record.criteria.signature()
+            })
+            .cloned()
+    }
 }
 
 impl<'r> Judging<'r> {
@@ -3400,12 +3516,33 @@ impl<'r> Judging<'r> {
             repo,
             range,
             criteria,
+            own_line: None,
+            replaced: None,
+            anchor: std::cell::OnceCell::new(),
         }
+    }
+
+    /// This judgement with the caller's verified `scope` (TSK-350).
+    fn scoped(mut self, scope: Scope<'_>) -> Self {
+        self.own_line = scope.own_line.cloned();
+        self.replaced = scope.replaced.cloned();
+        self
     }
 
     /// The judgement of `task` ([`super::landing`]).
     pub(super) fn judge(&mut self, task: &RecordView) -> super::landing::TaskJudgement {
-        judge_in_range(&mut self.store, self.repo, task, self.range, &self.criteria)
+        let scope = Scope {
+            own_line: self.own_line.as_ref(),
+            replaced: self.replaced.as_ref(),
+        };
+        judge_in_range(
+            &mut self.store,
+            self.repo,
+            task,
+            self.range,
+            &self.criteria,
+            &scope,
+        )
     }
 }
 
@@ -4488,6 +4625,7 @@ pub fn pull_request_findings_judged(
         authority,
         (branch, None, None),
         pins,
+        Scope::default(),
     )
 }
 
@@ -4508,7 +4646,7 @@ pub fn pull_request_findings_judged(
 ///
 /// Returns a message when a revision, the merge-base or a tree cannot be
 /// read.
-#[allow(clippy::too_many_lines)] // Keep import, reopening and local completion judgments in order.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // Keep import, reopening and local completion judgments in order.
 pub fn pull_request_findings_into(
     repo_root: &std::path::Path,
     base: &str,
@@ -4517,6 +4655,7 @@ pub fn pull_request_findings_into(
     authority: Option<&str>,
     (branch, into, sync_tip): (Option<&str>, Option<&str>, Option<&str>),
     pins: &[super::work_start::ReviewedPin],
+    scope: Scope<'_>,
 ) -> Result<Vec<Finding>, String> {
     let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
@@ -4567,7 +4706,9 @@ pub fn pull_request_findings_into(
     // Resolution 43: a reopened task keeps its criteria, whatever the
     // range's class allows.
     let mut found = reopened_criteria(&repo, base, head, &local_head)?;
-    if *criteria != Criteria::Amendable {
+    if *criteria == Criteria::Amendable {
+        found.extend(line_landing_copies(&repo, target_tip, head_tip, anchor)?);
+    } else {
         let mut paths = super::lifecycle::changed_paths(&repo, &anchor.to_string(), Some(head))?;
         paths.retain(|path| !imported.values().any(|source| source.path == *path));
         let at_target = Graph::from_revision(&repo, base)?;
@@ -4575,7 +4716,7 @@ pub fn pull_request_findings_into(
             anchor,
             head: head_tip,
         };
-        let mut judging = Judging::new(&repo, range, run.criteria());
+        let mut judging = Judging::new(&repo, range, run.criteria()).scoped(scope);
         // ADR-0080: the named task, or the task it follows up, may have the
         // text of its completed standalone criteria corrected.
         let reopened = reopened_ids(&repo, base, head, &local_head)?;
@@ -4641,6 +4782,200 @@ pub fn pull_request_findings_into(
         &stacked,
     )?);
     Ok(found)
+}
+
+/// The rule of the line landing's report of competing copies (TSK-350
+/// AC-9): a note, as the operator decided on 2026-10-28.
+pub const COPIES_NOTE: &str = "work.criteria_copies";
+
+/// The line landing's report (TSK-350 AC-9, SPC-013 R-52): for a range
+/// that may change criteria, such as an epic line into `main`, each task
+/// record whose criteria the target and the line each amended since their
+/// common version, with the target's version, the line's and the one the
+/// merge keeps. Two places merge the copies: a merge on the range's
+/// first-parent line that brings in history the target `base` holds (a
+/// sync of `main` into the line), and the pull request's own merge of the
+/// head into `base`. A record that only one side amended reports nothing.
+///
+/// # Errors
+///
+/// Returns a message when a commit, tree or record graph cannot be read.
+fn line_landing_copies(
+    repo: &Repository,
+    base: Oid,
+    head: Oid,
+    anchor: Oid,
+) -> Result<Vec<Finding>, String> {
+    let unreadable = |error: git2::Error| error.message().to_string();
+    let mut found = Vec::new();
+    // Merges on the range's first-parent line that bring in the target's
+    // history: the line's syncs of `main`.
+    let mut commit = repo.find_commit(head).map_err(unreadable)?;
+    loop {
+        if commit.id() == anchor || is_ancestor_or_same(repo, commit.id(), anchor)? {
+            break;
+        }
+        let parents = history::parents(repo, &commit).map_err(unreadable)?;
+        let Some(&line) = parents.first() else {
+            break;
+        };
+        for &brought in parents.iter().skip(1) {
+            if is_ancestor_or_same(repo, brought, base)? {
+                let common = history::merge_base(repo, line, brought).map_err(unreadable)?;
+                found.extend(competing_copies(
+                    repo,
+                    common,
+                    (brought, line),
+                    Kept::Commit(commit.id()),
+                )?);
+            }
+        }
+        commit = repo.find_commit(line).map_err(unreadable)?;
+    }
+    // The pull request's own merge of the line into the target.
+    if base != anchor {
+        found.extend(competing_copies(
+            repo,
+            anchor,
+            (base, head),
+            Kept::Merge(base, head),
+        )?);
+    }
+    Ok(found)
+}
+
+/// Where the version a merge keeps is read.
+#[derive(Clone, Copy)]
+enum Kept {
+    /// A merge commit that exists.
+    Commit(Oid),
+    /// The merge of these two commits, which the pull request would make.
+    Merge(Oid, Oid),
+}
+
+/// The [`COPIES_NOTE`] findings for the records whose criteria both sides
+/// amended since `common`, differently.
+fn competing_copies(
+    repo: &Repository,
+    common: Oid,
+    (target, line): (Oid, Oid),
+    kept: Kept,
+) -> Result<Vec<Finding>, String> {
+    let graph = |oid: Oid| Graph::from_revision(repo, &oid.to_string());
+    let (before, at_target, at_line) = (graph(common)?, graph(target)?, graph(line)?);
+    let mut found = Vec::new();
+    for (id, theirs) in &at_target.records {
+        if theirs.kind != RecordKind::Task {
+            continue;
+        }
+        let Some(ours) = at_line.records.get(id) else {
+            continue;
+        };
+        let signature = |record: &RecordView| record.criteria.signature();
+        let Some(common_version) = before.records.get(id) else {
+            // Planned on each side separately: no common version, so both
+            // amended it from nothing.
+            if signature(theirs) != signature(ours) {
+                found.push(copies_finding(
+                    repo,
+                    id,
+                    (target, theirs),
+                    (line, ours),
+                    kept,
+                )?);
+            }
+            continue;
+        };
+        let was = signature(common_version);
+        if signature(theirs) != was
+            && signature(ours) != was
+            && signature(theirs) != signature(ours)
+        {
+            found.push(copies_finding(
+                repo,
+                id,
+                (target, theirs),
+                (line, ours),
+                kept,
+            )?);
+        }
+    }
+    Ok(found)
+}
+
+/// One [`COPIES_NOTE`] finding: the target's version, the line's, and the
+/// version `kept` holds, or that its merge conflicts on the record.
+fn copies_finding(
+    repo: &Repository,
+    id: &str,
+    (target, theirs): (Oid, &RecordView),
+    (line, ours): (Oid, &RecordView),
+    kept: Kept,
+) -> Result<Finding, String> {
+    let unreadable = |error: git2::Error| error.message().to_string();
+    let blob = |commit: Oid, path: &str| -> Result<Oid, String> {
+        repo.find_commit(commit)
+            .and_then(|commit| commit.tree())
+            .and_then(|tree| tree.get_path(std::path::Path::new(path)))
+            .map(|entry| entry.id())
+            .map_err(unreadable)
+    };
+    let main_blob = blob(target, &theirs.path)?;
+    let line_blob = blob(line, &ours.path)?;
+    let kept = match kept {
+        Kept::Commit(merge) => match Graph::from_revision(repo, &merge.to_string())?
+            .records
+            .get(id)
+        {
+            Some(record) => format!(
+                "the merge {merge:.9} keeps {:.9}{}",
+                blob(merge, &record.path)?,
+                which(record, theirs, ours)
+            ),
+            None => format!("the merge {merge:.9} removes the record"),
+        },
+        Kept::Merge(left, right) => {
+            let ours_commit = repo.find_commit(left).map_err(unreadable)?;
+            let theirs_commit = repo.find_commit(right).map_err(unreadable)?;
+            let index =
+                history::merge_commits(repo, &ours_commit, &theirs_commit).map_err(unreadable)?;
+            let path = std::path::Path::new(&ours.path);
+            match index.get_path(path, 0) {
+                Some(entry) => {
+                    let text = repo.find_blob(entry.id).map_err(unreadable)?;
+                    let text = std::str::from_utf8(text.content())
+                        .map_err(|_| format!("the merged {} is not UTF-8", ours.path))?;
+                    let merged = RecordView::parse(RecordKind::Task, &ours.path, text)?;
+                    format!(
+                        "the pull request's merge keeps {:.9}{}",
+                        entry.id,
+                        which(&merged, theirs, ours)
+                    )
+                }
+                None => "the pull request's merge conflicts on the record, and the person who resolves it chooses".to_string(),
+            }
+        }
+    };
+    Ok(Finding {
+        epic_record: None,
+        rule: COPIES_NOTE,
+        message: format!(
+            "{id}: the target and the line each amended its criteria since their common version: the target {target:.9} holds {main_blob:.9}, the line {line:.9} holds {line_blob:.9}, and {kept}; a reviewer confirms the criteria the task keeps (SPC-013 R-52)"
+        ),
+        note: true,
+    })
+}
+
+/// Which side's criteria `kept` has, for the report.
+fn which(kept: &RecordView, target: &RecordView, line: &RecordView) -> &'static str {
+    let signature = kept.criteria.signature();
+    if signature == target.criteria.signature() {
+        " (the target's criteria)"
+    } else if signature == line.criteria.signature() {
+        " (the line's criteria)"
+    } else {
+        " (criteria of neither side)"
+    }
 }
 
 /// Bind a predecessor's completion as its own reviewed pull request binds

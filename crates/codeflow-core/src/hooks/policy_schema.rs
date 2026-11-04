@@ -412,7 +412,7 @@ pub const SCHEMA: [KeySpec; 78] = [
         valid: "a non-empty array of status check names, none blank",
         purpose: "Status checks a protected branch requires before merging, on a branch that is up to date with its base.",
         notes: "Defaults to the shipped CI job names: codeflow gates, secret scan, \
-                security review and commit standards. `codeflow remote protect` \
+                security review and trusted: commit standards. `codeflow remote protect` \
                 requires them, on an up-to-date branch, on each protected branch \
                 other than the default branch, whose own rulesets require the \
                 names its policy workflow declares; `codeflow doctor --check \
@@ -830,8 +830,8 @@ pub const SCHEMA: [KeySpec; 78] = [
                 includes the conflict-marker check, and the release preflight \
                 where the project adopted it. It runs no `codeflow validate \
                 --docs` (`codeflow ci` checks the work graph) and no \
-                test-config target, so a push never waits for the heavy-work \
-                lock; cite `codeflow test --mode quick` when the pull request \
+                test-config target, so a push never waits for a heavy run; \
+                cite `codeflow test --mode quick` when the pull request \
                 is made ready. Tag and other non-branch pushes are outside the \
                 push set. Local-config tampering is outside the hook threat \
                 model; hosted CI checks the pushed commit.",
@@ -1903,7 +1903,7 @@ mod tests {
                 "codeflow gates",
                 "secret scan",
                 "security review",
-                "commit standards"
+                "trusted: commit standards"
             ]
         );
         // A set list replaces the default.

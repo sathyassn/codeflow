@@ -175,6 +175,18 @@ pub enum NotReady {
 }
 
 impl WorkStartError {
+    /// The catalogued step that clears this refusal of a task's admission:
+    /// a task blocked on the target is unblocked in its own pull request
+    /// (TSK-1036); any other refusal reconciles the planning anchor.
+    #[must_use]
+    pub fn admission_remedy(&self, target: &str, task_id: &str) -> crate::remedy::Remedy {
+        match self {
+            Self::Blocked { .. } => crate::remedy::WORK_START_UNBLOCK.with(&[("id", task_id)]),
+            _ => crate::remedy::WORK_START_MERGE_PLANNING
+                .with(&[("target", target), ("id", task_id)]),
+        }
+    }
+
     /// The derived state this refusal puts a task in.
     #[must_use]
     pub fn not_ready(&self) -> NotReady {
@@ -924,6 +936,30 @@ pub fn epic_line_binding(
             "names {epic_id}, which is not the epic of branch '{branch}'"
         )));
     }
+    epic_line_bound_at(repo_root, line, anchor, place)
+}
+
+/// Whether the trusted records at `anchor` (named `place` in messages) bind
+/// `line` as an epic line, whatever branch asks: the epic exists there
+/// without being cancelled or archived, and a task of that epic there names
+/// this exact line. [`epic_line_binding`] adds the asking branch's own
+/// claim; `codeflow ci` uses this alone to confirm the line a landing
+/// candidate's head would become the tip of (TSK-1155).
+///
+/// # Errors
+///
+/// Returns why the repository, the anchor or a record could not be read.
+pub fn epic_line_bound_at(
+    repo_root: &Path,
+    line: &str,
+    anchor: &str,
+    place: &str,
+) -> Result<EpicLineBinding, WorkStartError> {
+    let line = logical_target(line);
+    let epic_id = match super::line_adoption::epic_id(line) {
+        Ok(epic_id) => epic_id,
+        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+    };
     let repo = Repository::discover(repo_root)
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     let tree = repo
@@ -959,6 +995,140 @@ pub fn epic_line_binding(
         )));
     }
     Ok(EpicLineBinding::Bound)
+}
+
+/// The record of task `task` at `revision`, found by its file name and id,
+/// with no branch name or policy involved (TSK-350 AC-1, AC-6).
+///
+/// # Errors
+///
+/// Returns an error if the revision or the task's record cannot be read.
+pub(crate) fn task_record_at_revision(
+    repo_root: &Path,
+    task: &str,
+    revision: &str,
+) -> Result<Option<Record>, WorkStartError> {
+    let repo = Repository::discover(repo_root)
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let tree = repo
+        .revparse_single(revision)
+        .and_then(|object| object.peel_to_tree())
+        .map_err(|error| WorkStartError::Repository(format!("{revision}: {error}")))?;
+    let records = records_from_tree_matching(&repo, &tree, |path, kind| {
+        kind == RecordKind::Task && path.rsplit('/').next().and_then(markdown_stem) == Some(task)
+    })?;
+    Ok(records
+        .into_iter()
+        .find(|(id, _)| id == task)
+        .map(|(_, record)| record))
+}
+
+/// The `integration_target` task `task`'s record declares at `revision`,
+/// as a logical branch name, read by the task's id with no branch name or
+/// policy involved (TSK-350 AC-1, AC-6).
+///
+/// # Errors
+///
+/// Returns an error if the revision or the task's record cannot be read.
+pub fn task_target_at_revision(
+    repo_root: &Path,
+    task: &str,
+    revision: &str,
+) -> Result<Option<String>, WorkStartError> {
+    Ok(task_record_at_revision(repo_root, task, revision)?
+        .and_then(|record| record.integration_target)
+        .filter(|target| !target.is_empty())
+        .map(|target| logical_target(&target).to_owned()))
+}
+
+/// Whether trusted records bind `line` as the epic line task `task` may
+/// declare (TSK-350 AC-6, AC-8), judged at exact revisions only: the task's
+/// record at `head` must name the line's epic, or be standalone with a
+/// reason and this target; then each `(anchor, place)` is read, and a
+/// refusal at any anchor (a cancelled or archived epic) wins over a binding
+/// at another. No local or remote-tracking ref is read, so a stale ref can
+/// neither bind the line nor hide its epic's cancellation.
+///
+/// # Errors
+///
+/// Returns why a revision or a record could not be read.
+pub fn task_line_binding(
+    repo_root: &Path,
+    task: &str,
+    head: &str,
+    line: &str,
+    anchors: &[(&str, &str)],
+) -> Result<EpicLineBinding, WorkStartError> {
+    let line = logical_target(line);
+    let epic_id = match super::line_adoption::epic_id(line) {
+        Ok(epic_id) => epic_id,
+        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+    };
+    let Some(record) = task_record_at_revision(repo_root, task, head)? else {
+        return Ok(EpicLineBinding::Refused(format!(
+            "{task} has no record at the judged head"
+        )));
+    };
+    let may_target = match record.epic_id.as_deref() {
+        Some(own) => own == epic_id,
+        None => {
+            record
+                .standalone_reason
+                .as_deref()
+                .is_some_and(|reason| reason.bytes().any(|byte| !byte.is_ascii_whitespace()))
+                && logical_target(record.integration_target.as_deref().unwrap_or_default()) == line
+        }
+    };
+    if !may_target {
+        return Ok(EpicLineBinding::Refused(format!(
+            "names {epic_id}, which {task} may not target"
+        )));
+    }
+    let repo = Repository::discover(repo_root)
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let mut bound = false;
+    let mut unbound = Vec::new();
+    for (anchor, place) in anchors {
+        let tree = repo
+            .revparse_single(anchor)
+            .and_then(|object| object.peel_to_tree())
+            .map_err(|error| WorkStartError::Repository(format!("{anchor}: {error}")))?;
+        let records = records_from_tree(&repo, &tree)?;
+        let Some(epic) = records
+            .get(epic_id)
+            .filter(|record| record.kind == RecordKind::Epic)
+        else {
+            unbound.push(format!(
+                "names {epic_id}, which has no epic record on {place}"
+            ));
+            continue;
+        };
+        if matches!(epic.status.as_str(), "cancelled" | "archived") {
+            return Ok(EpicLineBinding::Refused(format!(
+                "names {epic_id}, which is {} on {place}",
+                epic.status
+            )));
+        }
+        if records.values().any(|record| {
+            record.kind == RecordKind::Task
+                && record.epic_id.as_deref() == Some(epic_id)
+                && record
+                    .integration_target
+                    .as_deref()
+                    .is_some_and(|target| logical_target(target) == line)
+        }) {
+            bound = true;
+        } else {
+            unbound.push(format!(
+                "is not the target of any task of {epic_id} on {place}"
+            ));
+        }
+    }
+    Ok(if bound {
+        EpicLineBinding::Bound
+    } else {
+        EpicLineBinding::Unbound(unbound.join("; "))
+    })
 }
 
 /// The `integration_target` the task record at `path` declares.
@@ -1283,6 +1453,42 @@ pub fn task_id_from_branch_at(
     let Some(suffix) = work_branch_suffix(repo_root, branch)? else {
         return Ok(None);
     };
+    task_id_in_head(repo_root, suffix, head)
+}
+
+/// The task id a work branch carries, judged as `codeflow ci` judges a
+/// range (TSK-350 AC-1, AC-2): the work prefixes come from `prefixes`, the
+/// `git.branch_prefixes` of the policy the run judges with, and the id from
+/// the task records at the judged `head`. The checkout supplies neither, so
+/// a record only the checkout holds grants no own-task authority, and one
+/// the checkout lacks takes none away.
+///
+/// # Errors
+///
+/// Returns an error if the revision or its task records cannot be read.
+pub fn judged_task_id(
+    repo_root: &Path,
+    prefixes: &[String],
+    branch: &str,
+    head: &str,
+) -> Result<Option<String>, WorkStartError> {
+    let prefixes: Vec<String> = prefixes
+        .iter()
+        .filter(|prefix| !NON_WORK_PREFIXES.contains(&prefix.as_str()))
+        .cloned()
+        .collect();
+    let Some(suffix) = work_suffix(&prefixes, branch) else {
+        return Ok(None);
+    };
+    task_id_in_head(repo_root, suffix, head)
+}
+
+/// The longest task id at `head` that `suffix` starts with, followed by `-`.
+fn task_id_in_head(
+    repo_root: &Path,
+    suffix: &str,
+    head: &str,
+) -> Result<Option<String>, WorkStartError> {
     let repo = Repository::discover(repo_root)
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     let tree = repo
@@ -1290,15 +1496,24 @@ pub fn task_id_from_branch_at(
         .and_then(|object| object.peel_to_commit())
         .and_then(|commit| commit.tree())
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
-    Ok(records_from_tree(&repo, &tree)?
-        .into_iter()
-        .filter(|(id, record)| {
-            record.kind == RecordKind::Task
-                && is_valid_task_format_id(id)
-                && suffix.starts_with(&format!("{id}-"))
-        })
-        .map(|(id, _)| id)
-        .max_by_key(String::len))
+    // The task record files at `head`, by name as the checkout lookup reads
+    // them: no record is parsed, so another record that does not parse
+    // keeps the refusal that names it rather than this lookup's.
+    let ids = std::cell::RefCell::new(std::collections::BTreeSet::new());
+    records_from_tree_matching(&repo, &tree, |path, kind| {
+        if kind == RecordKind::Task {
+            if let Some(id) = path
+                .rsplit('/')
+                .next()
+                .and_then(markdown_stem)
+                .filter(|id| is_valid_task_format_id(id))
+            {
+                ids.borrow_mut().insert(id.to_owned());
+            }
+        }
+        false
+    })?;
+    Ok(carried_task_id(suffix, &ids.into_inner()))
 }
 
 /// Whether a work branch names a task id by shape (`<prefix>/TSK-<digits>-`),
@@ -1930,6 +2145,22 @@ fn check_task_anchor(
             }
         }
     }
+    // A task blocked at the merge-base may be unblocked in its own range
+    // (TSK-1036, issue #365): only its status is projected, as a reopen is,
+    // and only when the range proves the unblock step by step. Every other
+    // planning input and every dependency still comes from the merge-base,
+    // so an unblock never admits work the graph does not.
+    if at_base
+        && records
+            .get(task_id)
+            .is_some_and(|task| task.status == "blocked" || task.blocker_reason.is_some())
+        && unblocked_in_range(&repo, repo_root, &merge_base, head, head_id, task_id)?
+    {
+        if let Some(task) = records.get_mut(task_id) {
+            task.status = "todo".into();
+            task.blocker_reason = None;
+        }
+    }
     let anchored = validate_task_structure(
         &repo,
         &records,
@@ -1940,8 +2171,8 @@ fn check_task_anchor(
         admission != Admission::SecretScanExemption,
     )?;
     // The start gate judges the record as the merge base has it, with a
-    // reopen in this range projected above: a task complete or cancelled
-    // there takes no further change. A standalone record arriving with its
+    // reopen or an unblock in this range projected above: a task complete
+    // or cancelled there takes no further change. A standalone record arriving with its
     // code (admission) has no base record; `standalone_at_head` judged it.
     if admission == Admission::Start || at_base {
         start_gate(&records[task_id], task_id)?;
@@ -2184,6 +2415,62 @@ fn refuse_retarget(
 
 /// The commit the check reads: `head` when a caller names one (CI's pull
 /// request head), else the checkout's `HEAD`.
+/// Whether the change this check reads (the named head, else the checkout)
+/// unblocks `task_id`, blocked at `merge_base` (TSK-1036): the record there
+/// is `todo` or `complete` with no Blocker, or `cancelled`, at the same
+/// path, and every status step from the merge-base is read and legal, so a
+/// direct `blocked -> complete` or unreadable history projects nothing.
+fn unblocked_in_range(
+    repo: &Repository,
+    repo_root: &Path,
+    merge_base: &str,
+    head: Option<&str>,
+    head_id: Oid,
+    task_id: &str,
+) -> Result<bool, WorkStartError> {
+    use super::lifecycle::Graph;
+    use super::status_steps::{judge, step_allowed};
+    let base = Graph::from_revision(repo, merge_base).map_err(WorkStartError::InvalidGraph)?;
+    let Some(old) = base.records.get(task_id) else {
+        return Ok(false);
+    };
+    let current = match head {
+        Some(_) => Graph::from_revision(repo, &head_id.to_string()),
+        None => Graph::from_worktree(repo_root),
+    }
+    .map_err(WorkStartError::InvalidGraph)?;
+    let Some(now) = current.records.get(task_id) else {
+        return Ok(false);
+    };
+    let cleared = match now.status.as_str() {
+        "todo" | "complete" => super::record_text::parse_blocker(&now.body).is_none(),
+        "cancelled" => true,
+        _ => false,
+    };
+    if now.path != old.path || !cleared {
+        return Ok(false);
+    }
+    let base_id = Oid::from_str(merge_base)
+        .map_err(|error| WorkStartError::Repository(error.message().to_string()))?;
+    if !judge(repo, base_id, head_id, RecordKind::Task, &now.id).proven {
+        return Ok(false);
+    }
+    if head.is_none() {
+        // The checkout's uncommitted change is the last step.
+        let committed = Graph::from_revision(repo, &head_id.to_string())
+            .map_err(WorkStartError::InvalidGraph)?;
+        let Some(at_head) = committed.records.get(task_id) else {
+            return Ok(false);
+        };
+        if at_head.path != now.path
+            || step_allowed(RecordKind::Task, Some(&at_head.status), &now.status).is_err()
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn head_commit(repo: &Repository, head: Option<&str>) -> Result<Oid, WorkStartError> {
     match head {
         Some(revision) => repo

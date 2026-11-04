@@ -21,11 +21,12 @@ pub struct DoctorArgs {
     /// readiness is not established and the exit stays 0.
     #[arg(long, conflicts_with_all = ["check", "list"])]
     pub preflight: bool,
-    /// Internal (TSK-337): print whether this process can write each folder
-    /// a Codex builder seat writes outside its worktree, one line each, and
-    /// exit 1 when one is denied. The preflight runs it inside `codex
-    /// sandbox` under the builder launch.
-    #[arg(long, hide = true, conflicts_with_all = ["check", "list", "preflight"])]
+    /// Print whether this process can write each folder a Codex builder seat
+    /// writes outside its worktree, then whether it can open the shared git
+    /// config file for writing (one line each, never changing it), and exit 1
+    /// when a folder is denied. The preflight runs it inside `codex sandbox`
+    /// under the builder launch.
+    #[arg(long, conflicts_with_all = ["check", "list", "preflight"])]
     pub builder_write_probe: bool,
     /// With `--check remote-perimeter`: compare the rulesets `codeflow
     /// remote protect` owns with this profile (solo-administrator or
@@ -76,6 +77,23 @@ pub fn run(args: &DoctorArgs) -> i32 {
                     failed = true;
                     let _ = term_writeln!(out, "denied {dir}: {}", shown(&error));
                 }
+            }
+        }
+        // The shared git config file is reported after the folders a builder
+        // seat needs, and never changes the exit: the shipped profile cannot
+        // write it, and a claim no longer needs to (TSK-1156).
+        let (config, result) = codeflow_core::testing::gate_guard::probe_git_config_write(&root);
+        let config = shown(&config.display());
+        match result {
+            Ok(()) => {
+                let _ = term_writeln!(out, "git-config writable {config}");
+                let _ = term_writeln!(
+                    out,
+                    "git-config unverified: the rename of a new file onto it is not tried, so the file is never replaced"
+                );
+            }
+            Err(error) => {
+                let _ = term_writeln!(out, "git-config denied {config}: {}", shown(&error));
             }
         }
         return i32::from(failed);
@@ -377,10 +395,22 @@ fn codex_builder_line(
     };
     let root = codeflow_core::doctor::builder_launch_root(project);
     let place = shown(&root.display());
-    match codeflow_core::doctor::probe_codex_builder_grants(&root, &codex, codeflow) {
+    let probe = codeflow_core::doctor::probe_codex_builder_grants(&root, &codex, codeflow);
+    let config = match &probe.git_config {
+        Some(Ok(path)) => format!(
+            "; shared git config file: a lock file could be created and the file opened for writing ({}); the rename onto it is not tried, so `git config`, `git push -u` and `git branch -m` are expected to work in a builder seat, unverified",
+            shown(path)
+        ),
+        Some(Err(denied)) => format!(
+            "; shared git config file: observed NOT writable ({}); `codeflow work claim` does not need it, but `git config`, `git push -u` and `git branch -m` of a branch with tracking settings are refused in a builder seat",
+            shown(denied)
+        ),
+        None => String::new(),
+    };
+    match probe.grants {
         GrantCheck::Effective(dirs) => (
             format!(
-                "{line}; builder grants: observed effective from {place} under `codex sandbox` with the launch overrides and managed config: wrote {}",
+                "{line}; builder grants: observed effective from {place} under `codex sandbox` with the launch overrides and managed config: wrote {}{config}",
                 shown(&dirs.join(", "))
             ),
             false,
@@ -394,11 +424,24 @@ fn codex_builder_line(
         ),
         GrantCheck::NotRun(reason) => (
             format!(
-                "{line}; builder grants: unavailable: {}; builder readiness is not established, so a builder seat's own writes are the evidence",
-                shown(&reason)
+                "{line}; builder grants: unavailable: {}; builder readiness is not established, so a builder seat's own writes are the evidence{}",
+                shown(&reason),
+                inside_codex_seat_note()
             ),
             false,
         ),
+    }
+}
+
+/// Inside a Codex seat the nested `codex sandbox` probe cannot start (the
+/// seat's managed network proxy is already bound), so no observation of the
+/// shared git config file or the folders is made there (TSK-1156). Says so
+/// and names the check that does run in a seat; empty outside one.
+fn inside_codex_seat_note() -> &'static str {
+    if std::env::var_os("CODEX_SANDBOX").is_some_and(|value| !value.is_empty()) {
+        "; this run is inside a Codex seat, where that nested probe cannot start, so the shared git config file and the gate folders are not observed by this line: run `codeflow doctor --builder-write-probe` in the seat, which reports each folder and the shared git config file directly"
+    } else {
+        ""
     }
 }
 
@@ -521,6 +564,22 @@ fn codex_builder_load(
     (text, None)
 }
 
+/// Whether the codex project config under `root` defines a `cf-builder`
+/// profile. An unreadable or unparsable file defines none; the builder
+/// profile line reports why.
+fn defines_cf_builder(root: &std::path::Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(root.join(".codex/config.toml")) else {
+        return false;
+    };
+    let Ok(config) = text.parse::<toml::Table>() else {
+        return false;
+    };
+    config
+        .get("permissions")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|profiles| profiles.contains_key("cf-builder"))
+}
+
 /// The preflight evidence report (TSK-452): each value is marked
 /// `configured` (what project files request), `observed` (what doctor saw on
 /// this host) or `unavailable` (what doctor cannot establish).
@@ -536,6 +595,15 @@ fn preflight_report(
     lines.extend(sandbox_lines(root));
     let (builder, failed) = codex_builder_line(root, look, codeflow);
     lines.push(builder);
+    // Only where the project defines a cf-builder profile: a project with
+    // none has no builder seat to describe.
+    let launch = codeflow_core::doctor::builder_launch_root(root);
+    if defines_cf_builder(&launch) {
+        lines.push(format!(
+            "codex builder seat limits: {}",
+            codeflow_core::doctor::BUILDER_SEAT_LIMITS
+        ));
+    }
     for tool in PREFLIGHT_TOOLS {
         lines.push(executable_line("tool", tool, look));
     }

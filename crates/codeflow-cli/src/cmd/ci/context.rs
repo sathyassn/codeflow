@@ -373,7 +373,7 @@ fn branch(
     Ok((name, source.into()))
 }
 
-fn normalize(name: &str) -> String {
+pub(super) fn normalize(name: &str) -> String {
     named_branch(name).unwrap_or_else(|| name.to_string())
 }
 

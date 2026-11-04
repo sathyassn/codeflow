@@ -27,8 +27,10 @@ mod context;
 pub(super) use context::{judged_declared_target, Declared};
 mod id_registry;
 mod judging;
+mod line_tip;
 pub(crate) mod pr_body;
 mod work_records;
+mod workflow_change;
 
 use change_class::ChangeClass;
 use clap::Args;
@@ -151,7 +153,10 @@ pub struct CiArgs {
     /// or eligible epic line at the base commit, then the repository default).
     /// An ambiguous commit-ID base requires --into or --branch. A range whose head
     /// or target matches the release pattern is judged as a
-    /// release range (SPC-013 R-120).
+    /// release range (SPC-013 R-120). Deciding that asks the destination for
+    /// its default branch and that branch's policy, so on a private
+    /// repository the job running codeflow ci needs read access to it (for
+    /// actions/checkout, `persist-credentials: true`).
     #[arg(long, value_name = "BRANCH")]
     pub into: Option<String>,
 
@@ -168,6 +173,24 @@ pub struct CiArgs {
     /// hosted CI never passes it.
     #[arg(long, hide = true, requires = "destination")]
     pub advertisement_stdin: bool,
+
+    /// Judge the head as the next tip of this integration line, as a
+    /// landing candidate is: every commit on the head's first-parent chain
+    /// from the line's fetched tip (`origin/<LINE>`) must be a merge or a
+    /// direct commit a landed `line_adoptions` entry names, the rule the
+    /// pre-push hook applies to a push to the line (`work.epic_line`).
+    /// Without it, a run with no pull request and no push context whose
+    /// base is the fetched tip of exactly one epic line cannot tell how the
+    /// head reaches the line and refuses when the head would add a direct
+    /// commit; pass `--into <LINE>` or the body for a pull request head
+    /// that lands by merge.
+    #[arg(long, value_name = "LINE", conflicts_with_all = ["into", "pushed_ref"])]
+    pub line_tip: Option<String>,
+
+    /// The ref a push updates. The pre-push hook passes it: a push is not
+    /// a landing candidate, and the hook itself judges a push to a line.
+    #[arg(long, value_name = "REF", hide = true)]
+    pub pushed_ref: Option<String>,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -529,6 +552,10 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut tagged,
         &mut ran,
     );
+    // What this change does to the workflows is base..head; the wider
+    // commit range `--commits-from` selects (pre-push) also holds commits
+    // the target already carries, whose workflow edits are not this one's.
+    workflow_change::dispatch(&root, base_sha.as_deref(), &head, &mut tagged, &mut ran);
 
     match codeflow_core::hooks::path_policy::PathPolicy::from_git(configured).and_then(|paths| {
         let size_and_ignore = judging::content_rules(&root, authority.as_ref())?;
@@ -597,6 +624,7 @@ pub fn run(args: &CiArgs) -> i32 {
     let names = Names {
         branch: &branch,
         into: into.as_deref(),
+        into_flag: args.into.as_deref(),
         destination: destination.as_deref(),
         advertisement: advertisement.as_deref(),
         candidate: match &authority {
@@ -681,10 +709,24 @@ pub fn run(args: &CiArgs) -> i32 {
     // That remains a push, not a landing. Hosted PR metadata always wins.
     let pr_context = (args.into.is_some() && !args.advertisement_stdin)
         || is_pr_event(|key| environment.get(key).cloned());
+    // A landing candidate's head judged as its line's next tip (TSK-1155):
+    // the rule the pre-push hook applies to a push to the line.
+    line_tip::check(
+        &root,
+        &line_tip::Run {
+            line_tip: args.line_tip.as_deref(),
+            base: base_sha.as_deref(),
+            head: &head,
+            merge_landing: pr_body.is_some() || pr_context,
+            pushed: args.pushed_ref.is_some() || args.advertisement_stdin,
+        },
+        &mut tagged,
+        &mut ran,
+    );
     // A push of a task branch stacked on reviewed predecessor heads (SPC-013
     // R-42, issue #69); a pull request check keeps the landing rule.
     let stacked = if pr_body.is_none() && !pr_context {
-        stacked_pins(&root, &branch, &head)
+        stacked_pins(&root, git, &branch, &head)
     } else {
         Vec::new()
     };
@@ -1732,13 +1774,19 @@ fn visible_graph_check(
 /// as the claim honoured it, through the same review lookup, so a branch
 /// tip or another movable ref never stands in for review. A candidate that
 /// is not honoured is noted and the ordinary checks judge the range.
-fn stacked_pins(root: &Path, branch: &str, head: &str) -> Vec<ReviewedPin> {
+fn stacked_pins(root: &Path, git: &GitPolicy, branch: &str, head: &str) -> Vec<ReviewedPin> {
     // A read that fails honours no pin, the strict side; the work-start
-    // check reads the same task and target and reports the failure.
-    let Ok(Some(task_id)) = branch_task_at(root, branch, head) else {
+    // check reads the same task and target and reports the failure. The
+    // task and its target come from the judged head under the run's
+    // policy, never the checkout, since an honoured pin changes how the
+    // criteria are judged (TSK-350 AC-2).
+    let Ok(Some(task_id)) =
+        codeflow_core::workgraph::judged_task_id(root, &git.branch_prefixes, branch, head)
+    else {
         return Vec::new();
     };
-    let Ok(declared) = work_target_at(root, branch, head, &task_id) else {
+    let Ok(declared) = codeflow_core::workgraph::task_target_at_revision(root, &task_id, head)
+    else {
         return Vec::new();
     };
     let Ok(Some(target)) = resolve_work_target_checked(root, declared.as_deref()) else {
@@ -1868,8 +1916,7 @@ fn evaluate_work_start(
                         "work.stable_planning_anchor",
                         level,
                         error.to_string(),
-                        codeflow_core::remedy::WORK_START_MERGE_PLANNING
-                            .with(&[("target", &target), ("id", &task_id)]),
+                        error.admission_remedy(&target, &task_id),
                     )
                 },
             });
@@ -2055,7 +2102,9 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
             Some(sha) => format!("ci commit {}", short(sha)),
             None => "ci".to_string(),
         };
-        if t.violation.rule.starts_with("work.") {
+        if t.violation.rule == workflow_change::RULE {
+            eprintln!("{}", workflow_change::render(&t.violation, &plane));
+        } else if t.violation.rule.starts_with("work.") {
             eprintln!(
                 "{}",
                 t.violation.render_invariant(
@@ -2607,6 +2656,9 @@ pub(super) fn branch_anchors(name: &str) -> Vec<String> {
 pub(super) struct Names<'a> {
     pub branch: &'a str,
     pub into: Option<&'a str>,
+    /// `--into` as the caller gave it, `None` when the run inferred its
+    /// target; only a given one earns the own-line exception (TSK-350).
+    pub into_flag: Option<&'a str>,
     pub destination: Option<&'a str>,
     /// The destination's advertisement, when the caller already asked it.
     pub advertisement: Option<&'a str>,

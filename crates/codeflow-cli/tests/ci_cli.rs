@@ -22,6 +22,8 @@ mod change_class_probes;
 mod destination;
 #[path = "ci_cli/document_indexes.rs"]
 mod document_indexes;
+#[path = "ci_cli/line_tip.rs"]
+mod line_tip;
 #[path = "ci_cli/outcome_marker.rs"]
 mod outcome_marker;
 #[path = "ci_cli/pr_body_fixtures.rs"]
@@ -30,6 +32,8 @@ mod pr_body_fixtures;
 mod range_context;
 #[path = "ci_cli/secret_scan_exemption.rs"]
 mod secret_scan_exemption;
+#[path = "ci_cli/status_steps.rs"]
+mod status_steps;
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -1128,9 +1132,19 @@ fn ci_scaffold_range_skips_unmodified_managed_files() {
     // and the user-owned starter docs carry no policy character, so the
     // scaffold range is clean even when the policy blocks.
     let (code, all) = ci_scaffold_range(dir.path());
+    // Exit 0, not 2: neither the commit nor the added-lines check was
+    // skipped, so added-lines ran over the scaffold and found nothing.
     assert_eq!(code, Some(0), "{all}");
     assert!(!all.contains("git.policy_characters"), "{all}");
-    assert!(all.contains("added-lines"), "{all}");
+    assert!(!all.contains("skipped:"), "{all}");
+    // The only findings are the warnings that the range adds the managed
+    // workflows, which change who judges pull requests (TSK-336 AC-11).
+    assert!(all.contains("3 warning(s) only"), "{all}");
+    assert_eq!(
+        all.matches("warning — ci.workflow_change").count(),
+        3,
+        "{all}"
+    );
 }
 
 #[test]
