@@ -14,8 +14,8 @@ use super::{
 #[derive(Clone, Copy, Debug)]
 pub(super) struct LineSyncTip(pub(super) Oid);
 
-/// A bound task review, with an unlanded base only when the judged branch
-/// carries that same task. A review on the line needs a proven task landing.
+/// A bound task review, with a base only when the judged branch carries
+/// that same task. Otherwise the receiving first-parent chain bounds its work.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ReviewedTaskHead {
     pub(super) head: Oid,
@@ -41,10 +41,12 @@ pub(super) fn findings(
         .and_then(|()| walk.simplify_first_parent())
         .map_err(|error| error.to_string())?;
     let mut merges = Vec::new();
+    let mut receiving_commits = BTreeSet::new();
     for id in walk {
         let commit = repo
             .find_commit(id.map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())?;
+        receiving_commits.insert(commit.id());
         let parents = history::parents(repo, &commit).map_err(|error| error.to_string())?;
         if parents.len() > 1 {
             merges.push((commit.id(), parents));
@@ -84,7 +86,7 @@ pub(super) fn findings(
             }
         }
     }
-    let reviewed_own = reviewed_own_commits(repo, base, head, &merges, reviewed)?;
+    let reviewed_own = reviewed_own_commits(repo, base, head, &receiving_commits, reviewed)?;
     let project = super::super::amendment::project_at(repo, base)?;
     let mut found = Vec::new();
     for (merge, parents) in merges {
@@ -103,7 +105,9 @@ pub(super) fn findings(
             }
         }
         let refs: Vec<_> = hide.iter().map(String::as_str).collect();
-        for path in owned_paths_except(root, &merge.to_string(), &refs, &reviewed_own)? {
+        let paths = owned_paths_except(root, &merge.to_string(), &refs, &reviewed_own)
+            .map_err(|reason| format!("cannot read receiving merge {merge}: {reason}"))?;
+        for path in paths {
             if super::super::classify::path_sets().adopter_facing_any_case(&path, &project) {
                 found.push(finding(BINDING_RULE, format!("receiving line `{line}` introduces {path} through merge {merge} outside its verified source and reviewed task heads; carry that product work through the receiving task's pull request and review the result before landing")));
             }
@@ -112,16 +116,15 @@ pub(super) fn findings(
     Ok(found)
 }
 
-/// A task review covers its first-parent work before its landing, not the
-/// ancestors brought in by its merges. The landing's first parent is the
-/// receiving line before that task landed. A review still on a task branch
-/// instead uses its verified branch base. Keep exact commit ids: hiding a reviewed
-/// tip in a revwalk would also hide every imported task it contains.
+/// A task's own first-parent work ends at the receiving first-parent chain
+/// or the run's base. A branch commit that already landed through a side
+/// parent remains that task's work. A matching unlanded task branch supplies
+/// its known base instead of the judged chain, which is its own branch.
 fn reviewed_own_commits(
     repo: &Repository,
     base: Oid,
     head: Oid,
-    merges: &[(Oid, Vec<Oid>)],
+    receiving_commits: &BTreeSet<Oid>,
     reviewed: &[ReviewedTaskHead],
 ) -> Result<BTreeSet<Oid>, String> {
     let mut own = BTreeSet::new();
@@ -132,27 +135,11 @@ fn reviewed_own_commits(
                 "reviewed commit {reviewed} is not in the judged head {head}"
             ));
         }
-        if is_ancestor_or_same(repo, reviewed, base)? {
-            continue;
-        }
-        let mut boundary = task.branch_base;
-        'landing: for (merge, parents) in merges {
-            if is_ancestor_or_same(repo, reviewed, parents[0])? {
-                continue;
-            }
-            for parent in &parents[1..] {
-                if is_ancestor_or_same(repo, reviewed, *parent)? {
-                    if parents.len() != 2 {
-                        return Err(format!("merge {merge} has {} parents; cannot prove the task's own work for reviewed commit {reviewed}", parents.len()));
-                    }
-                    boundary = Some(parents[0]);
-                    break 'landing;
-                }
-            }
-        }
-        let boundary = boundary.ok_or_else(|| format!("cannot prove the task's own work at reviewed commit {reviewed}: no task landing or matching task branch establishes its base; complete the task from its own reviewed branch"))?;
+        let branch_base = task.branch_base.unwrap_or(base);
         let mut at = reviewed;
-        while !is_ancestor_or_same(repo, at, boundary)? {
+        while !(task.branch_base.is_none() && receiving_commits.contains(&at))
+            && !is_ancestor_or_same(repo, at, branch_base)?
+        {
             let commit = repo
                 .find_commit(at)
                 .map_err(|error| format!("cannot read reviewed task work at {at}: {error}"))?;
@@ -499,7 +486,7 @@ mod tests {
             "receiving line",
         )
         .unwrap();
-        let error = super::super::completions_in_range(
+        let found = super::super::completions_in_range(
             &repo,
             &base.to_string(),
             &head.to_string(),
@@ -509,11 +496,12 @@ mod tests {
             Some("integration/EPC-001-line"),
             &[],
         )
-        .unwrap_err();
-        assert!(error.contains(&reviewed.to_string()), "{error}");
+        .unwrap();
         assert!(
-            error.contains("no task landing or matching task branch"),
-            "{error}"
+            found.iter().any(|finding| !finding.note
+                && finding.message.contains("src/hidden.rs")
+                && finding.message.contains(&reviewed.to_string())),
+            "the line review cannot vouch for the earlier merge resolution: {found:?}"
         );
     }
 
@@ -588,6 +576,37 @@ mod tests {
         assert!(
             !found.iter().any(|finding| !finding.note),
             "the completed task branch must keep its own review: {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_late_completion_keeps_its_original_work_after_syncing_the_line() {
+        let (_dir, repo, base, first_landing, before) = two_tasks(None);
+        let original =
+            super::super::history::parent_id(&repo, &repo.find_commit(first_landing).unwrap(), 1)
+                .unwrap();
+        let reviewed = merge(&repo, original, before);
+        let completed = format!("{}```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: https://example.test/review\n  criteria:\n    AC-1: verified | original task work reviewed\n  journey: verified | late completion fixture ran\n  not_verified: none\n  follow_ups: none\n  verdict: approved\n```\n", task(1).replace("status: todo", "status: complete"));
+        let completion = commit(
+            &repo,
+            reviewed,
+            b"project-management/tasks/TSK-001.md",
+            completed.as_bytes(),
+        );
+        let head = merge(&repo, before, completion);
+        repo.reference("refs/heads/main", base, true, "published default")
+            .unwrap();
+        repo.reference(
+            "refs/heads/integration/EPC-001-line",
+            head,
+            true,
+            "receiving line",
+        )
+        .unwrap();
+        let found = range(&repo, base, head);
+        assert!(
+            !found.iter().any(|finding| !finding.note),
+            "both tasks now have their own valid completion: {found:?}"
         );
     }
 }
