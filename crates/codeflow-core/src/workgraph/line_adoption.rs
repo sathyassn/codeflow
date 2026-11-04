@@ -132,6 +132,62 @@ pub(crate) fn parse(value: Option<&Value>) -> Result<Vec<LineAdoption>, String> 
         .collect()
 }
 
+/// The epic record field that declares the epic line the epic's tasks land
+/// on, when that line is another epic's (TSK-1286). Its value is the line's
+/// exact logical name, `integration/EPC-NNN-<slug>`. TSK-1011 extends the
+/// same field to a child line that starts from that line.
+pub const PARENT_LINE_FIELD: &str = "parent_line";
+
+/// Parse a record's `parent_line` value. Absent or null is no declaration;
+/// anything else must be a string naming an epic line exactly, with no
+/// `origin/` or `refs/` prefix, so one spelling binds one line.
+///
+/// # Errors
+/// Returns why the value is not an epic line name.
+pub(crate) fn parse_parent_line(value: Option<&Value>) -> Result<Option<String>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => {
+            let id = epic_id(text).map_err(|reason| format!("{PARENT_LINE_FIELD}: {reason}"))?;
+            // `epic_id` proved the text is `integration/<id>-...`.
+            let slug = text
+                .get("integration/".len() + id.len() + 1..)
+                .unwrap_or_default();
+            if slug.is_empty() {
+                return Err(format!(
+                    "{PARENT_LINE_FIELD}: '{text}' has no slug after '{id}-'; an epic line is integration/EPC-NNN-<slug>"
+                ));
+            }
+            if !super::work_start::is_stable_work_target(text) {
+                return Err(format!(
+                    "{PARENT_LINE_FIELD}: '{text}' is not a valid branch name"
+                ));
+            }
+            Ok(Some(text.clone()))
+        }
+        Some(_) => Err(format!(
+            "{PARENT_LINE_FIELD} must be an epic line name (integration/EPC-NNN-<slug>) or null"
+        )),
+    }
+}
+
+/// Check an epic record's `parent_line` value against the epic's own id:
+/// the shape `parse_parent_line` reads, and never the epic's own line.
+///
+/// # Errors
+/// Returns why the declaration is not one the binding can use.
+pub fn check_parent_line(own_epic: &str, value: Option<&Value>) -> Result<Option<String>, String> {
+    let Some(line) = parse_parent_line(value)? else {
+        return Ok(None);
+    };
+    if epic_id(&line) == Ok(own_epic) {
+        return Err(format!(
+            "{PARENT_LINE_FIELD} names {own_epic}'s own line '{line}'; an epic lands on its own line without declaring it"
+        ));
+    }
+    Ok(Some(line))
+}
+
 /// Extract the epic id from an integration line's name.
 ///
 /// # Errors
