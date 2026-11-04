@@ -581,6 +581,81 @@ mod tests {
     }
 
     #[test]
+    fn a_task_branch_review_covers_its_hand_resolved_sync_of_the_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, base) = crate::git::repo_with_tree(
+            dir.path(),
+            &[
+                (b"project-management/tasks/TSK-002.md", task(2).as_bytes()),
+                (b"src/shared.rs", b"base\n"),
+            ],
+        );
+        let line_work = commit(&repo, base, b"src/shared.rs", b"line\n");
+        let line = merge(&repo, base, line_work);
+        let own = commit(&repo, base, b"src/shared.rs", b"own\n");
+        // Both sides changed the file, so this sync's resolution is the task's
+        // own work, which only a walk bounded by the branch's base can credit.
+        let resolution = commit(&repo, own, b"src/shared.rs", b"resolved\n");
+        let who = git2::Signature::now("Test", "test@example.test").unwrap();
+        let sync = repo
+            .commit(
+                None,
+                &who,
+                &who,
+                "hand-resolved sync of the line",
+                &repo.find_commit(resolution).unwrap().tree().unwrap(),
+                &[
+                    &repo.find_commit(own).unwrap(),
+                    &repo.find_commit(line).unwrap(),
+                ],
+            )
+            .unwrap();
+        assert!(
+            matches!(
+                super::super::read_merge(&repo, &repo.find_commit(sync).unwrap()),
+                super::super::MergeReading::Changed(_)
+            ),
+            "the sync must read as hand-resolved"
+        );
+        let reviewed = commit(&repo, sync, b"src/own.rs", b"reviewed own work\n");
+        let completed = format!("{}```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: https://example.test/review\n  criteria:\n    AC-1: verified | fixture passed\n  journey: verified | fixture ran\n  not_verified: none\n  follow_ups: none\n  verdict: approved\n```\n", task(2).replace("status: todo", "status: complete"));
+        let head = commit(
+            &repo,
+            reviewed,
+            b"project-management/tasks/TSK-002.md",
+            completed.as_bytes(),
+        );
+        repo.reference("refs/heads/main", base, true, "published default")
+            .unwrap();
+        repo.reference(
+            "refs/heads/integration/EPC-001-line",
+            line,
+            true,
+            "receiving line before landing",
+        )
+        .unwrap();
+        let found = super::super::pull_request_findings_into(
+            repo.workdir().unwrap(),
+            &line.to_string(),
+            &head.to_string(),
+            &super::super::Criteria::OwnTask("TSK-002".into()),
+            None,
+            (
+                Some("task/TSK-002-own-work"),
+                Some("integration/EPC-001-line"),
+                None,
+            ),
+            &[],
+            super::super::Scope::default(),
+        )
+        .unwrap();
+        assert!(
+            !found.iter().any(|finding| !finding.note),
+            "the task's review covers its own hand-resolved sync: {found:?}"
+        );
+    }
+
+    #[test]
     fn a_late_completion_keeps_its_original_work_after_syncing_the_line() {
         let (_dir, repo, base, first_landing, before) = two_tasks(None);
         let original =
