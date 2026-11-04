@@ -1,0 +1,11 @@
+id = "TSK-1320"
+uid = "0920309c-f6f9-4902-a8d4-74fc0dac214f"
+kind = "TSK"
+title = "A reviewed completion survives a landed planning move of its epic"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-04T16:07:44Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
