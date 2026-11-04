@@ -147,6 +147,9 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
 
     let (branch, worktrees, cleanup_target, cleanup) =
         if let Ok(repo) = git2::Repository::open(repo_root) {
+            // Named first: a refused ref is what makes the branch below read
+            // as none and a worktree as detached.
+            notes.extend(crate::git::unreadable::scan(&repo).report_lines());
             let branch = repo.head().ok().map(|h| {
                 crate::git::name::reference_shorthand(&h)
                     .display()

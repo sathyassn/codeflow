@@ -42,6 +42,15 @@ pub const DEFAULT_REQUIRED_CHECKS: &[&str] = &[
     "trusted: commit standards",
 ];
 
+/// The words a generated branch name leaves out unless a project sets its own
+/// list, the default of [`GitPolicy::branch_name_omit_words`].
+///
+/// These are what the Claude Code sandbox was probed to refuse among names a
+/// slug can form (2026-11-03): any file name holding `secret` or
+/// `credentials`. `credential`, `token`, `password` and `key` stayed readable.
+/// Other harnesses differ, which is why this is a default and not a rule.
+pub const DEFAULT_BRANCH_NAME_OMIT_WORDS: &[&str] = &["secret", "credentials"];
+
 /// Enforcement level for a policy rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -266,6 +275,10 @@ pub struct GitPolicy {
     /// Additional remotes whose branches count as advisory work claims.
     /// Origin and the target's fetch remote always count. Empty by default.
     pub claim_remotes: Vec<String>,
+    /// Words a generated branch name leaves out, because a sandbox can refuse
+    /// to read a ref file with such a word in its name. A project sets the
+    /// list its own harness needs; an empty list keeps every word.
+    pub branch_name_omit_words: Vec<String>,
     /// Days since a line sync before orient suggests syncing; zero disables it.
     pub line_sync_interval: u32,
     /// The status check names a protected branch requires before merging,
@@ -572,6 +585,10 @@ impl Default for GitPolicy {
                 .map(ToString::to_string)
                 .collect(),
             claim_remotes: Vec::new(),
+            branch_name_omit_words: DEFAULT_BRANCH_NAME_OMIT_WORDS
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             line_sync_interval: 0,
             required_checks: DEFAULT_REQUIRED_CHECKS
                 .iter()
