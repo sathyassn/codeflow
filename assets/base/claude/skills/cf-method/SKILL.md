@@ -105,9 +105,10 @@ facts yourself and make reversible, outcome-preserving implementation choices
 from evidence; do not offload research to the operator.
 
 An epic is one outcome. When its criteria describe two outcomes, it is two
-epics on one integration line. Size tasks by the rule in the orchestrator's
-task-graph contract: one observable outcome per task, split only for a
-written reason. For an explicit estimate, capacity or deadline request, use
+epics on one integration line; the epic that does not own the line declares
+it with `parent_line: integration/<epic-id>-<slug>`. Size tasks by the rule
+in the orchestrator's task-graph contract: one observable outcome per task,
+split only for a written reason. For an explicit estimate, capacity or deadline request, use
 `cf-estimate`. For a durable repository guide, `cf-docs-portal` owns the
 opt-in lifecycle; Markdown stays authoritative.
 

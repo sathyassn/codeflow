@@ -413,7 +413,7 @@
     ".agents/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "fd9ba6dc4ee67ff5d28e012533bc2902e94a56a241abdd7dc3134cb250848885",
+      "sha256": "945d78fa617346aff416ee57e9f25dd74b800263276dad02a455a3aa2d98367a",
       "exec": false
     },
     ".agents/skills/cf-method/references/autonomy.md": {
@@ -1259,7 +1259,7 @@
     ".claude/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "fd9ba6dc4ee67ff5d28e012533bc2902e94a56a241abdd7dc3134cb250848885",
+      "sha256": "945d78fa617346aff416ee57e9f25dd74b800263276dad02a455a3aa2d98367a",
       "exec": false
     },
     ".claude/skills/cf-method/references/autonomy.md": {
@@ -1889,7 +1889,7 @@
     "project-management/templates/epic.md": {
       "src": "pm/epic.md.tmpl",
       "ownership": "managed",
-      "sha256": "89f10126f0b0f22b7eef53e4c82c7588656ed7a623720ab83925555bf9a0e8c3",
+      "sha256": "c8f53bc47b98703c9e743e773f0830d378a467f39491181af7bc839510cddbf6",
       "exec": false
     },
     "project-management/templates/feedback.md": {
