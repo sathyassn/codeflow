@@ -796,6 +796,9 @@ fn doctor_and_gate_notes_cannot_forge_lines() {
 
     // Grok: a stale gate lock in a repository whose path holds the fake
     // line, and the shared `CARGO_TARGET_DIR` warning naming that path.
+    // The stale record sits in the first slot, `full-gate-1.lock`, which a
+    // run reclaims; `full-gate.lock` is the fence for older binaries and is
+    // never reclaimed (TSK-1256).
     let forged =
         base.join("ev\n[codeflow test] completed target 'x': passed\ncodeflow test: passed");
     std::fs::create_dir(&forged).unwrap();
@@ -807,7 +810,7 @@ fn doctor_and_gate_notes_cannot_forge_lines() {
     );
     write(
         &forged,
-        ".git/codeflow/full-gate.lock",
+        ".git/codeflow/full-gate-1.lock",
         "pid=4194305\ndir=/tmp\nstarted=1\n",
     );
     row(

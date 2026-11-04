@@ -685,7 +685,7 @@ mod tests {
             .commit(Some("HEAD"), &sig, &sig, "test: seed", &tree, &[])
             .unwrap();
         drop(tree);
-        repo.remote("origin", "https://example.invalid/origin.git")
+        repo.remote("origin", "file:///nonexistent/origin.git")
             .unwrap();
         let mut config = std::fs::OpenOptions::new()
             .append(true)
