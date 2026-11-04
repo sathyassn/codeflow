@@ -191,7 +191,7 @@
     ".agents/skills/cf-docs-portal/resources/explanation-method.md": {
       "src": "agents/skills/cf-docs-portal/resources/explanation-method.md",
       "ownership": "managed",
-      "sha256": "46a859bc7c7a2f7ca62235930097c900802bf127c20d8b3ff9f5bd0b290d1b86",
+      "sha256": "41101688583f4e68d3092a8d0ebbb03da02e2ad150a211e97743dde1d650158a",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/figure-grammar-specimens.md": {
@@ -341,7 +341,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "a323df264f461b5c1b20352179ceb17a59b5406971f34861dd7c581c63824ff7",
+      "sha256": "a2df6dd4bd4e4d87e662826c5f75f07a283f6c7f9db135431af280b853500a31",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -665,7 +665,7 @@
     ".agents/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "97f1e20a2ec8387ae429c22a77bb687cda15f54305486a909a52cd5410815f26",
+      "sha256": "e3141e621842109ce78fcced59da23889ff99dbc4d918dba7b545a14e96d88d2",
       "exec": false
     },
     ".agents/skills/cf-present/agents/openai.yaml": {
@@ -701,7 +701,7 @@
     ".agents/skills/cf-present/references/feedback-loop.md": {
       "src": "agents/skills/cf-present/references/feedback-loop.md",
       "ownership": "managed",
-      "sha256": "6491c11867a39cd5d2a4b95104e6130c556141a66e1d996395920367deb69941",
+      "sha256": "233bc477d9e8eeb1c8d5887f22527a4ee9150b0ac00a518e1f86d24f4a794bde",
       "exec": false
     },
     ".agents/skills/cf-present/references/visual-craft.md": {
@@ -761,7 +761,7 @@
     ".agents/skills/cf-present/resources/explanation-method.md": {
       "src": "agents/skills/cf-present/resources/explanation-method.md",
       "ownership": "managed",
-      "sha256": "46a859bc7c7a2f7ca62235930097c900802bf127c20d8b3ff9f5bd0b290d1b86",
+      "sha256": "41101688583f4e68d3092a8d0ebbb03da02e2ad150a211e97743dde1d650158a",
       "exec": false
     },
     ".agents/skills/cf-present/resources/figure-grammar-specimens.md": {
@@ -1037,7 +1037,7 @@
     ".claude/skills/cf-docs-portal/resources/explanation-method.md": {
       "src": "agents/skills/cf-docs-portal/resources/explanation-method.md",
       "ownership": "managed",
-      "sha256": "46a859bc7c7a2f7ca62235930097c900802bf127c20d8b3ff9f5bd0b290d1b86",
+      "sha256": "41101688583f4e68d3092a8d0ebbb03da02e2ad150a211e97743dde1d650158a",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/figure-grammar-specimens.md": {
@@ -1187,7 +1187,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "a323df264f461b5c1b20352179ceb17a59b5406971f34861dd7c581c63824ff7",
+      "sha256": "a2df6dd4bd4e4d87e662826c5f75f07a283f6c7f9db135431af280b853500a31",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1511,7 +1511,7 @@
     ".claude/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "97f1e20a2ec8387ae429c22a77bb687cda15f54305486a909a52cd5410815f26",
+      "sha256": "e3141e621842109ce78fcced59da23889ff99dbc4d918dba7b545a14e96d88d2",
       "exec": false
     },
     ".claude/skills/cf-present/agents/openai.yaml": {
@@ -1547,7 +1547,7 @@
     ".claude/skills/cf-present/references/feedback-loop.md": {
       "src": "agents/skills/cf-present/references/feedback-loop.md",
       "ownership": "managed",
-      "sha256": "6491c11867a39cd5d2a4b95104e6130c556141a66e1d996395920367deb69941",
+      "sha256": "233bc477d9e8eeb1c8d5887f22527a4ee9150b0ac00a518e1f86d24f4a794bde",
       "exec": false
     },
     ".claude/skills/cf-present/references/visual-craft.md": {
@@ -1607,7 +1607,7 @@
     ".claude/skills/cf-present/resources/explanation-method.md": {
       "src": "agents/skills/cf-present/resources/explanation-method.md",
       "ownership": "managed",
-      "sha256": "46a859bc7c7a2f7ca62235930097c900802bf127c20d8b3ff9f5bd0b290d1b86",
+      "sha256": "41101688583f4e68d3092a8d0ebbb03da02e2ad150a211e97743dde1d650158a",
       "exec": false
     },
     ".claude/skills/cf-present/resources/figure-grammar-specimens.md": {

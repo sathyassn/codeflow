@@ -630,7 +630,10 @@ parts, and the fixture's grading note states both:
 pinned by version and wheel SHA-256 in `anchored/requirements.txt` (the
 source packages' hashes are kept for audit only in
 `anchored/requirements-sdist-audit.txt`). There is no venv and no install
-step. Run the grader isolated and it fetches what it needs:
+step. Run the grader isolated and it fetches what it needs. Its first run
+for a pin, and every run of `test_markdown_env.py`, downloads the pinned
+wheels from pypi.org, so the `model-eval-kit` gate target needs egress to
+the package index; without it that target fails with `urlopen error`.
 
 ```sh
 python3 -I -S -B evals/qualification/anchored/check.py \

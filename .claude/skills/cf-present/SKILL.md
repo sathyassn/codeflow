@@ -103,9 +103,11 @@ presentation, described in `how-presentation-works.md` section 3, is the
 worked example.
 
 Use [present-document.example.json](resources/present-document.example.json)
-as the template for an explainer. Follow its anchor, picture, problem, model,
-behaviour and decision; replace its illustrative subject and facts with the
-verified subject of this session.
+as the template for an explainer. Follow its anchor, picture of the whole,
+evidence, two options drawn side by side and decision; replace its
+illustrative subject and facts with the verified subject of this session.
+For a mechanism, the problem, model and behaviour order is the spine in
+section 3 of `how-presentation-works.md`.
 
 ## 3. Validate and open
 

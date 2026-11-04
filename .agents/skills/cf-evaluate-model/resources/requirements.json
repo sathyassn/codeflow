@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-11-02-batch-landing-ownership-v1",
+  "requirements_version": "2026-11-03-anchored-documents-batch-landing-v1",
   "requirements": [
     {
       "id": "CF-REL-004",
