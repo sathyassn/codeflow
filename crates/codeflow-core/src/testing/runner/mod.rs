@@ -9,7 +9,7 @@ use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
