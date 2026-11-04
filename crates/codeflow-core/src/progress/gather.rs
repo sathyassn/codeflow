@@ -12,8 +12,8 @@ use std::time::Duration;
 use git2::{Oid, Repository};
 
 use super::inputs::{
-    AcceptanceIn, BlockerIn, BranchIn, CheckRunIn, EpicIn, ForecastIn, ForgeIn, Inputs, LaneIn,
-    LedgerIn, OperatorItemIn, PullIn, RefIn, RequiredCheckIn, ScopeSpec, TaskIn, UnreadableIn,
+    AcceptanceIn, BlockerIn, BranchIn, CheckRunIn, EpicIn, ForecastIn, ForgeIn, Inputs, LedgerIn,
+    OperatorItemIn, PullIn, RefIn, RequiredCheckIn, ScopeSpec, TaskIn, UnreadableIn, WorkerIn,
 };
 use super::owed::OwedSource;
 use crate::workgraph::history;
@@ -188,6 +188,68 @@ pub fn collect(start: &Path, options: &Options) -> Result<Inputs, String> {
     inputs.forecast = forecast;
     inputs.forecast_note = note;
     Ok(inputs)
+}
+
+/// The scope a coordination stream's links name, for `status --scope`. A
+/// link is work when it is exactly a task or epic id; any other link is
+/// left out, and a stream with none is refused.
+///
+/// # Errors
+///
+/// The reason, naming the stream, when `stream` is not a stream id, the
+/// ledger is missing, unreadable or damaged, the ledger has no such stream,
+/// or the stream has no work links.
+pub fn stream_scope(start: &Path, stream: &str) -> Result<ScopeSpec, String> {
+    use crate::coord::store::{read, Paths, ReadOutcome};
+    use crate::workgraph::{is_valid_epic_format_id, is_valid_task_format_id};
+    if !crate::coord::actor::is_stream_id(stream) {
+        return Err(format!("--scope: `{stream}` is not a stream id (WS-NNN)"));
+    }
+    let (paths, _) = Paths::discover(start).map_err(|error| {
+        format!("--scope: stream {stream} cannot be read: no coordination ledger ({error})")
+    })?;
+    let snapshot = match read(&paths) {
+        ReadOutcome::Ledger(snapshot) => snapshot,
+        ReadOutcome::Empty => {
+            return Err(format!(
+                "--scope: unknown stream {stream}: this clone has no coordination ledger"
+            ))
+        }
+        ReadOutcome::Unavailable(reason) => {
+            return Err(format!(
+                "--scope: stream {stream} cannot be read: the coordination ledger is unreadable ({reason})"
+            ))
+        }
+    };
+    if let Some(damage) = &snapshot.folded.damage {
+        return Err(format!(
+            "--scope: stream {stream} cannot be read: the coordination ledger is damaged ({damage})"
+        ));
+    }
+    let Some(found) = snapshot.folded.ledger.streams.get(stream) else {
+        return Err(format!(
+            "--scope: unknown stream {stream}: the coordination ledger does not have it"
+        ));
+    };
+    let mut epics = BTreeSet::new();
+    let mut tasks = BTreeSet::new();
+    for link in &found.scope {
+        if is_valid_task_format_id(link) {
+            tasks.insert(link.clone());
+        } else if is_valid_epic_format_id(link) {
+            epics.insert(link.clone());
+        }
+    }
+    if epics.is_empty() && tasks.is_empty() {
+        return Err(format!(
+            "--scope: stream {stream} has no work links: its scope names no task or epic id"
+        ));
+    }
+    Ok(ScopeSpec::Stream {
+        id: stream.to_string(),
+        epics: epics.into_iter().collect(),
+        tasks: tasks.into_iter().collect(),
+    })
 }
 
 /// One task record as found on its home tip.
@@ -1373,18 +1435,23 @@ fn ledger(root: &Path) -> LedgerIn {
         ReadOutcome::Empty => LedgerIn::Absent,
         ReadOutcome::Unavailable(reason) => LedgerIn::Unreadable(reason),
         ReadOutcome::Ledger(snapshot) => {
+            // A damaged ledger may have lost later events, so it is not a
+            // checked source.
+            if let Some(damage) = &snapshot.folded.damage {
+                return LedgerIn::Unreadable(damage.clone());
+            }
             let ledger = &snapshot.folded.ledger;
-            let lanes = ledger
+            let workers = ledger
                 .lanes
                 .values()
-                .filter(|lane| lane.closed.is_none())
-                .map(|lane| LaneIn {
-                    id: lane.id.clone(),
-                    stream: lane.stream.clone(),
-                    scope: lane.scope.clone(),
-                    attempt: lane.generation,
-                    seat: lane.seat.clone(),
-                    reported_at: lane.reported_at.as_deref().and_then(parse_time),
+                .filter(|worker| worker.closed.is_none())
+                .map(|worker| WorkerIn {
+                    id: worker.id.clone(),
+                    stream: worker.stream.clone(),
+                    scope: worker.scope.clone(),
+                    attempt: worker.generation,
+                    seat: worker.seat.clone(),
+                    reported_at: worker.reported_at.as_deref().and_then(parse_time),
                 })
                 .collect();
             let operator_items = ledger
@@ -1402,7 +1469,7 @@ fn ledger(root: &Path) -> LedgerIn {
                 })
                 .collect();
             LedgerIn::Read {
-                lanes,
+                workers,
                 operator_items,
             }
         }

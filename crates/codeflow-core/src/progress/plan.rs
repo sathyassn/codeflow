@@ -1,8 +1,8 @@
-//! Order, critical path, lane count and windows. A window is a duration
+//! Order, critical path, worker count and windows. A window is a duration
 //! from the snapshot time, never a date: from an adopted forecast that
 //! covers the scope, otherwise from the planned throughput rule
 //! (`cf-method/references/workflow-lifecycle.md` "Planned work moves at
-//! speed": at least one task per build lane per hour).
+//! speed": at least one task per build worker per hour).
 
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 
@@ -12,15 +12,15 @@ use super::model::{Known, OrderFact, OrderRow, ScenarioFact, WindowFact, Windows
 
 /// One review cycle, one repair round or one landing cycle: one hour.
 const HOUR: i64 = 3_600;
-/// Earliest: two tasks per lane-hour, plus one review and landing cycle.
+/// Earliest: two tasks per Worker-hour, plus one review and landing cycle.
 const UNIT_EARLIEST: i64 = HOUR / 2 + HOUR;
-/// Planning: one task per lane-hour, one review cycle, one repair round.
+/// Planning: one task per Worker-hour, one review cycle, one repair round.
 const UNIT_PLANNING: i64 = HOUR + HOUR + HOUR;
-/// Latest: one task per lane-hour, two review rounds, one landing cycle.
+/// Latest: one task per Worker-hour, two review rounds, one landing cycle.
 const UNIT_LATEST: i64 = HOUR + 2 * HOUR + HOUR;
 
 /// The planned-throughput basis, printed with every window it gives.
-pub const PLANNED_BASIS: &str = "planned throughput: earliest at two tasks per lane-hour plus one review and landing cycle (1.5 h a unit), planning at one task per lane-hour with one review cycle and one repair round (3 h), latest at one task per lane-hour with two review rounds and one landing cycle (4 h); a unit already in progress counts only its remaining share by stage";
+pub const PLANNED_BASIS: &str = "planned throughput: earliest at two tasks per Worker-hour plus one review and landing cycle (1.5 h a unit), planning at one task per Worker-hour with one review cycle and one repair round (3 h), latest at one task per Worker-hour with two review rounds and one landing cycle (4 h); a unit already in progress counts only its remaining share by stage";
 
 /// A computed window, in seconds from the snapshot time.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,10 +38,10 @@ pub enum Win {
 pub struct Plan {
     rows: Vec<(String, String, Vec<String>, String)>,
     windows: BTreeMap<String, Win>,
-    pub(super) lanes_used: usize,
+    pub(super) workers_used: usize,
     pub(super) basis_kind: &'static str,
     pub(super) basis: String,
-    lane_map: BTreeMap<String, String>,
+    worker_map: BTreeMap<String, String>,
     critical: Vec<String>,
     critical_seconds: Option<i64>,
     depth_chain: Vec<String>,
@@ -116,7 +116,7 @@ impl Plan {
             .filter(|id| open.contains_key(id.as_str()))
             .cloned()
             .collect();
-        let (lanes_used, lane_map, observed) = lanes(inputs, ids);
+        let (workers_used, worker_map, observed) = workers(inputs, ids);
         let covering = inputs
             .forecast
             .as_ref()
@@ -136,22 +136,22 @@ impl Plan {
             ),
             (None, true) => (
                 "observed",
-                format!("{PLANNED_BASIS}; over the {lanes_used} lane(s) observed"),
+                format!("{PLANNED_BASIS}; over the {workers_used} Worker(s) observed"),
             ),
             (None, false) => (
                 "assumed",
                 format!(
-                    "{PLANNED_BASIS}; no lane observed, so one lane is assumed (assumed one lane)"
+                    "{PLANNED_BASIS}; no Worker observed, so one Worker is assumed (assumed one Worker)"
                 ),
             ),
         };
         let mut plan = Self {
             rows: Vec::new(),
             windows: BTreeMap::new(),
-            lanes_used,
+            workers_used,
             basis_kind,
             basis,
-            lane_map,
+            worker_map,
             critical: Vec::new(),
             critical_seconds: None,
             depth_chain: Vec::new(),
@@ -211,7 +211,7 @@ impl Plan {
             .collect();
         let mut free: [BinaryHeap<std::cmp::Reverse<i64>>; 3] = Default::default();
         for heap in &mut free {
-            for _ in 0..self.lanes_used.max(1) {
+            for _ in 0..self.workers_used.max(1) {
                 heap.push(std::cmp::Reverse(0));
             }
         }
@@ -253,8 +253,8 @@ impl Plan {
             let units = [UNIT_EARLIEST, UNIT_PLANNING, UNIT_LATEST];
             let mut ends = [0_i64; 3];
             for (index, heap) in free.iter_mut().enumerate() {
-                let lane = heap.pop().map_or(0, |std::cmp::Reverse(at)| at);
-                ends[index] = lane.max(start) + units[index] * remaining / 100;
+                let worker = heap.pop().map_or(0, |std::cmp::Reverse(at)| at);
+                ends[index] = worker.max(start) + units[index] * remaining / 100;
                 heap.push(std::cmp::Reverse(ends[index]));
             }
             ends
@@ -390,10 +390,10 @@ impl Plan {
         }
     }
 
-    /// The lane carrying a task, when one does.
+    /// The worker carrying a task, when one does.
     #[must_use]
-    pub fn lane_of(&self, id: &str) -> Option<String> {
-        self.lane_map.get(id).cloned()
+    pub fn worker_of(&self, id: &str) -> Option<String> {
+        self.worker_map.get(id).cloned()
     }
 
     /// The latest window over a set of open tasks: their finish, or `None`
@@ -484,8 +484,8 @@ impl Plan {
             || done_window(&self.computed_at),
             |window| self.fact(window),
         );
-        // Planned capacity over seven days: one task per lane-hour.
-        let week_capacity = self.lanes_used.max(1) * 24 * 7;
+        // Planned capacity over seven days: one task per Worker-hour.
+        let week_capacity = self.workers_used.max(1) * 24 * 7;
         let capacity = count_f64(week_capacity) / 7.0;
         let (continues, words) = match (self.intake_added, &stops) {
             (None, _) => (
@@ -525,12 +525,12 @@ impl Plan {
             basis_kind: self.basis_kind.into(),
             basis: self.basis.clone(),
             computed_at: self.computed_at.clone(),
-            lanes_used: self.lanes_used.max(1),
+            workers_used: self.workers_used.max(1),
             forecast: Known::or_word(self.forecast.clone(), "none covers the scope"),
             scenarios: vec![
                 ScenarioFact {
                     name: "intake stops",
-                    rate: "the planned capacity rate over the lanes used".into(),
+                    rate: "the planned capacity rate over the Workers used".into(),
                     open_tasks: Known::Value(open.len()),
                     words: stops.as_ref().map_or_else(
                         || "nothing is open".into(),
@@ -566,10 +566,10 @@ impl Plan {
             basis_kind: self.basis_kind.into(),
             basis: self.basis.clone(),
             computed_at: self.computed_at.clone(),
-            lanes_used: self.lanes_used.max(1),
+            workers_used: self.workers_used.max(1),
             forecast: Known::or_word(self.forecast.clone(), "none covers the scope"),
             scenarios: vec![
-                scenario("intake stops", "the planned capacity rate over the lanes used"),
+                scenario("intake stops", "the planned capacity rate over the Workers used"),
                 scenario(
                     "intake continues",
                     "the planned capacity rate less the intake rate observed over the last seven days",
@@ -737,19 +737,19 @@ fn topological(open: &BTreeMap<&str, &TaskIn>) -> Vec<String> {
     out
 }
 
-/// The lanes a window uses: open ledger lanes, else the observed claims,
-/// else one assumed lane. Returns the count, task to lane, and whether any
-/// lane was observed.
-fn lanes(inputs: &Inputs, ids: &BTreeSet<String>) -> (usize, BTreeMap<String, String>, bool) {
+/// The workers a window uses: open ledger workers, else the observed claims,
+/// else one assumed worker. Returns the count, task to worker, and whether any
+/// worker was observed.
+fn workers(inputs: &Inputs, ids: &BTreeSet<String>) -> (usize, BTreeMap<String, String>, bool) {
     let mut map = BTreeMap::new();
-    if let LedgerIn::Read { lanes, .. } = &inputs.ledger {
-        if !lanes.is_empty() {
-            for lane in lanes {
-                for task in &lane.scope {
-                    map.insert(task.clone(), lane.id.clone());
+    if let LedgerIn::Read { workers, .. } = &inputs.ledger {
+        if !workers.is_empty() {
+            for worker in workers {
+                for task in &worker.scope {
+                    map.insert(task.clone(), worker.id.clone());
                 }
             }
-            return (lanes.len(), map, true);
+            return (workers.len(), map, true);
         }
     }
     let observed: Vec<&TaskIn> = inputs

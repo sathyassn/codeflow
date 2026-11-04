@@ -58,12 +58,26 @@ pub fn lane(lane: &str, instance: &str, generation: u64) -> RecordedBy {
 ///
 /// As [`commit`].
 pub fn open_stream(paths: &Paths, stream: &str, instance: &str) -> Result<(), CoordError> {
+    open_stream_with_scope(paths, stream, instance, &["fixture"])
+}
+
+/// [`open_stream`] with the stream's scope links.
+///
+/// # Errors
+///
+/// As [`commit`].
+pub fn open_stream_with_scope(
+    paths: &Paths,
+    stream: &str,
+    instance: &str,
+    scope: &[&str],
+) -> Result<(), CoordError> {
     commit(paths, &operator(), COMMAND_WAIT, |_| {
         Ok(vec![Draft::new(
             SubjectId::Given(stream.into()),
             Data::StreamOpened(Scope {
                 slug: None,
-                scope: vec!["fixture".into()],
+                scope: scope.iter().map(|link| (*link).to_string()).collect(),
             }),
         )])
     })?;

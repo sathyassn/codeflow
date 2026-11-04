@@ -17,7 +17,7 @@
     "tasks",
     "pulls_into_main",
     "order",
-    "lanes",
+    "workers",
     "windows",
     "issues",
     "pace",
@@ -105,6 +105,7 @@
             "task",
             "epic",
             "line",
+            "stream",
             "default"
           ]
         },
@@ -308,13 +309,13 @@
         }
       }
     },
-    "lanes": {
+    "workers": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "source",
         "note",
-        "lanes",
+        "workers",
         "session",
         "overall_percent"
       ],
@@ -328,7 +329,7 @@
         "note": {
           "type": "string"
         },
-        "lanes": {
+        "workers": {
           "type": "array",
           "items": {
             "type": "object",
@@ -428,7 +429,7 @@
                 "additionalProperties": false,
                 "required": [
                   "label",
-                  "lane",
+                  "worker",
                   "task",
                   "builder",
                   "reviewer",
@@ -441,7 +442,7 @@
                   "label": {
                     "const": "session"
                   },
-                  "lane": {
+                  "worker": {
                     "type": "string"
                   },
                   "task": {
@@ -492,7 +493,7 @@
         "basis_kind",
         "basis",
         "computed_at",
-        "lanes_used",
+        "workers_used",
         "forecast",
         "scenarios"
       ],
@@ -506,7 +507,7 @@
         "computed_at": {
           "$ref": "#/$defs/time"
         },
-        "lanes_used": {
+        "workers_used": {
           "type": "integer",
           "minimum": 0
         },
@@ -526,7 +527,7 @@
       "additionalProperties": false,
       "required": [
         "tasks",
-        "lanes",
+        "workers",
         "operator",
         "complete"
       ],
@@ -537,7 +538,7 @@
             "$ref": "#/$defs/issue"
           }
         },
-        "lanes": {
+        "workers": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/issue"
@@ -638,7 +639,7 @@
         "days",
         "landed_total",
         "added_total",
-        "lanes_observed",
+        "workers_observed",
         "observed_landing_rate_per_day",
         "planned_capacity_rate_per_day",
         "intake_rate_per_day",
@@ -722,7 +723,7 @@
             }
           ]
         },
-        "lanes_observed": {
+        "workers_observed": {
           "type": "integer",
           "minimum": 0
         },
@@ -1468,7 +1469,7 @@
         "percent",
         "criteria",
         "location",
-        "lane",
+        "worker",
         "window",
         "theme",
         "about",
@@ -1521,7 +1522,7 @@
         "location": {
           "$ref": "#/$defs/location"
         },
-        "lane": {
+        "worker": {
           "type": "string"
         },
         "window": {
@@ -1545,7 +1546,7 @@
           "required": [
             "outcome",
             "location",
-            "lane",
+            "worker",
             "state",
             "window",
             "last_moved",
@@ -1558,7 +1559,7 @@
             "location": {
               "type": "string"
             },
-            "lane": {
+            "worker": {
               "type": "string"
             },
             "state": {
@@ -1624,7 +1625,7 @@
           "properties": {
             "kind": {
               "enum": [
-                "lane",
+                "worker",
                 "ci run",
                 "predecessor",
                 "operator",

@@ -158,6 +158,14 @@ pub(super) fn scope_ids(inputs: &Inputs) -> BTreeSet<String> {
         .filter(|task| match &inputs.scope {
             ScopeSpec::Task(id) => &task.id == id,
             ScopeSpec::Line(line) => &task.target == line,
+            ScopeSpec::Stream {
+                epics: linked,
+                tasks,
+                ..
+            } => {
+                tasks.contains(&task.id)
+                    || task.epic.as_ref().is_some_and(|epic| linked.contains(epic))
+            }
             ScopeSpec::Epics(_) | ScopeSpec::Default => {
                 task.epic.as_ref().is_some_and(|epic| epics.contains(epic))
             }
@@ -194,7 +202,42 @@ pub(super) fn scope_epics(inputs: &Inputs) -> BTreeSet<String> {
             .filter(|task| &task.target == line)
             .filter_map(|task| task.epic.clone())
             .collect(),
+        ScopeSpec::Stream { epics, tasks, .. } => epics
+            .iter()
+            .cloned()
+            .chain(
+                inputs
+                    .tasks
+                    .iter()
+                    .filter(|task| tasks.contains(&task.id))
+                    .filter_map(|task| task.epic.clone()),
+            )
+            .collect(),
     }
+}
+
+/// Why a stream's percent is unknown when a link names no record: a dropped
+/// link would shrink the denominator without saying so.
+fn missing_link(inputs: &Inputs) -> Option<String> {
+    let ScopeSpec::Stream { id, epics, tasks } = &inputs.scope else {
+        return None;
+    };
+    let missing: Vec<&str> = tasks
+        .iter()
+        .filter(|link| !inputs.tasks.iter().any(|task| &task.id == *link))
+        .chain(
+            epics
+                .iter()
+                .filter(|link| !inputs.epics.iter().any(|epic| &epic.id == *link)),
+        )
+        .map(String::as_str)
+        .collect();
+    (!missing.is_empty()).then(|| {
+        format!(
+            "stream {id} links {}, which has no record here",
+            missing.join(", ")
+        )
+    })
 }
 
 /// Why a percent over `tasks` is unknown, when it is: a record that may
@@ -441,7 +484,7 @@ fn criteria(task: &TaskIn) -> Known<CriteriaFact> {
         })
 }
 
-/// The task facts, in id order, with the plan views' lane and window.
+/// The task facts, in id order, with the plan views' worker and window.
 pub(super) fn tasks(
     inputs: &Inputs,
     ids: &BTreeSet<String>,
@@ -471,7 +514,7 @@ fn task_fact(inputs: &Inputs, task: &TaskIn, plan: &super::plan::Plan) -> TaskFa
     let staged = stage(inputs, task);
     let location = location(inputs, task);
     let window = plan.window(&task.id);
-    let lane = plan.lane_of(&task.id);
+    let worker = plan.worker_of(&task.id);
     let pull = pull_for(inputs, task).map(|pull| pull.number);
     let last_moved = task
         .landed_at
@@ -499,7 +542,7 @@ fn task_fact(inputs: &Inputs, task: &TaskIn, plan: &super::plan::Plan) -> TaskFa
         context: ContextFact {
             outcome: Known::or_word(task.outcome.clone(), "not recorded"),
             location: location.kind,
-            lane: Known::or_word(lane.clone(), "none"),
+            worker: Known::or_word(worker.clone(), "none"),
             state: Known::or_word(state, "unknown"),
             window: Known::or_word(super::plan::window_summary(&window), "not yet estimable"),
             last_moved: Known::or_word(last_moved, "unknown"),
@@ -509,7 +552,7 @@ fn task_fact(inputs: &Inputs, task: &TaskIn, plan: &super::plan::Plan) -> TaskFa
             },
         },
         location,
-        lane: Known::or_word(lane, "none"),
+        worker: Known::or_word(worker, "none"),
         window,
         theme: theme(inputs, task),
         about: Known::or_word(task.about.clone(), "not recorded"),
@@ -534,14 +577,14 @@ fn unreadable_task(inputs: &Inputs, id: &str, reason: &str, plan: &super::plan::
         context: ContextFact {
             outcome: Known::unknown(),
             location: "unknown",
-            lane: Known::unknown(),
+            worker: Known::unknown(),
             state: Known::unknown(),
             window: Known::Word("not yet estimable".into()),
             last_moved: Known::unknown(),
             open_pull_request: Known::unknown(),
         },
         location,
-        lane: Known::unknown(),
+        worker: Known::unknown(),
         window: plan.window(id),
         theme: "ungrouped".into(),
         about: Known::unknown(),
@@ -615,7 +658,7 @@ fn scope(inputs: &Inputs, ids: &BTreeSet<String>) -> ScopeFact {
         _ => None,
     };
     let unreadable = coverage_reason(inputs, &scoped, single);
-    let reason = if let Some(reason) = unreadable {
+    let reason = if let Some(reason) = unreadable.or_else(|| missing_link(inputs)) {
         Some(reason)
     } else if percents.is_empty() && unknown == 0 {
         Some("no open or complete task in scope".into())
@@ -696,7 +739,7 @@ pub fn facts(inputs: &Inputs) -> Facts {
     let tasks = tasks(inputs, &ids, &plan);
     let epics = super::epics::epics(inputs, &plan);
     let issues = super::issues::issues(inputs, &ids, &plan);
-    let lanes = super::issues::lanes(inputs, &ids, &plan);
+    let workers = super::issues::workers(inputs, &ids, &plan);
     let pace = super::issues::pace(inputs, &ids, &plan);
     Facts {
         schema_version: SCHEMA_VERSION,
@@ -715,7 +758,7 @@ pub fn facts(inputs: &Inputs) -> Facts {
         order: plan.order_fact(),
         windows: plan.windows_fact(),
         evidence: super::issues::evidence(inputs, &plan),
-        lanes,
+        workers,
         issues,
         pace,
         since: Known::Word("not requested".into()),

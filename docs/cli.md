@@ -264,10 +264,11 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--task <TSK-NNN>` | Progress of one task. |
 | | `--epic <EPC-NNN>...` | Progress of an epic; repeat for several. |
 | | `--line <BRANCH>` | Progress of every task whose home is this integration line. |
+| | `--scope <WS-NNN>` | Progress of the epics and tasks a coordination stream's scope links name. |
 | | `--json` | Print the progress facts as versioned JSON (report-v1). |
 | | `--present` | Reserved for the cf-present report view (TSK-1098); refused for now. |
 | | `--md` | Reserved for the Markdown report view (TSK-1098); refused for now. |
-| | `--session <FILE>` | Merge a session facts file (session-v1) into the lanes view. |
+| | `--session <FILE>` | Merge a session facts file (session-v1) into the Workers view. |
 | | `--since <FILE>` | Report what changed since a previous `--json` snapshot. |
 | `codeflow recall <QUERY>` | | Search project memory: ledger, session summaries, ADRs, epics, capabilities |
 | | `--all` | Search every repo in the user registry, not just the current one. |

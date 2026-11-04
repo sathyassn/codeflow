@@ -44,7 +44,7 @@ pub struct OwedItem {
     pub task: Option<String>,
     pub kind: OwedKind,
     pub summary: String,
-    /// Who owes it (`operator`, a lane, an agent).
+    /// Who owes it (`operator`, a worker, an agent).
     pub owner: String,
     /// The event that settles it, when recorded.
     pub event: Option<String>,

@@ -1,5 +1,5 @@
 //! Progress facts for `codeflow status`: percent complete, location, order,
-//! lanes, windows, issues and pace for a task, one or more epics, a line or
+//! workers, windows, issues and pace for a task, one or more epics, a line or
 //! the default scope (TSK-1095).
 //!
 //! The work splits into a read and a computation. [`gather`] reads records,

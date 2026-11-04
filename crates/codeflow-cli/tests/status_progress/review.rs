@@ -378,10 +378,10 @@ fn pace_reads_statuses_with_the_record_parser() {
     assert!((rate - 1.0 / 7.0).abs() < 1e-9, "{rate}");
 }
 
-/// F7: `--since` keeps a session lane and a nested fact the current
+/// F7: `--since` keeps a session worker and a nested fact the current
 /// snapshot did not observe, never dropping them.
 #[test]
-fn since_keeps_session_lanes_and_nested_facts() {
+fn since_keeps_session_workers_and_nested_facts() {
     let repo = Repo::new(
         "since",
         &[("TSK-001", record("TSK-001", "todo", "main", ""))],
@@ -389,7 +389,7 @@ fn since_keeps_session_lanes_and_nested_facts() {
     let session = repo.base.join("session.json");
     std::fs::write(
         &session,
-        r#"{"schema_version":1,"facts":[{"observed_at":"2026-11-01T11:00:00Z","lane":"L-1","task":"TSK-001","builder":"fixture","blocker":"vendor unavailable"}]}"#,
+        r#"{"schema_version":1,"facts":[{"observed_at":"2026-11-01T11:00:00Z","worker":"L-1","task":"TSK-001","builder":"fixture","blocker":"vendor unavailable"}]}"#,
     )
     .unwrap();
     let before = repo.json(&["--epic", "EPC-001", "--session", session.to_str().unwrap()]);
@@ -399,7 +399,7 @@ fn since_keeps_session_lanes_and_nested_facts() {
     let kept = after["since"]["not_observed"].as_array().unwrap();
     assert!(
         kept.iter()
-            .any(|item| item["family"] == "session lane" && item["subject"] == "L-1 TSK-001"),
+            .any(|item| item["family"] == "session worker" && item["subject"] == "L-1 TSK-001"),
         "{}",
         after["since"]
     );
@@ -714,7 +714,7 @@ fn since_keeps_lost_observations_with_their_own_times() {
     let session = repo.base.join("session.json");
     std::fs::write(
         &session,
-        r#"{"schema_version":1,"facts":[{"observed_at":"2026-11-01T11:00:00Z","lane":"L-1","task":"TSK-001","builder":"fixture","blocker":"vendor unavailable"}]}"#,
+        r#"{"schema_version":1,"facts":[{"observed_at":"2026-11-01T11:00:00Z","worker":"L-1","task":"TSK-001","builder":"fixture","blocker":"vendor unavailable"}]}"#,
     )
     .unwrap();
     let pulls = serde_json::json!([{"number": 1, "title": "Task", "headRefName": "task/TSK-001-work",
@@ -727,11 +727,11 @@ fn since_keeps_lost_observations_with_their_own_times() {
     repo.gh("exit 1");
     let after = repo.json(&["--epic", "EPC-001", "--since", previous.to_str().unwrap()]);
     let kept = after["since"]["not_observed"].as_array().unwrap();
-    let lane = kept
+    let worker = kept
         .iter()
-        .find(|item| item["family"] == "session lane")
+        .find(|item| item["family"] == "session worker")
         .unwrap_or_else(|| panic!("{}", after["since"]));
-    assert_eq!(lane["earlier_observed_at"], "2026-11-01T11:00:00Z");
+    assert_eq!(worker["earlier_observed_at"], "2026-11-01T11:00:00Z");
     let pull = kept
         .iter()
         .find(|item| item["family"] == "pull request" && item["subject"] == "#1")

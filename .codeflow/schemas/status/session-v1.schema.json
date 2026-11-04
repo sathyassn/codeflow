@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:codeflow:schema:status:session:1",
   "title": "CodeFlow status session facts v1",
-  "$comment": "Facts only a coordinating session knows, each with the time it was observed. codeflow status --session merges them into the lanes view labelled session; they never change a percent or a stage.",
+  "$comment": "Facts only a coordinating session knows, each with the time it was observed. codeflow status --session merges them into the Workers view labelled session; they never change a percent or a stage.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -26,7 +26,7 @@
             "type": "string",
             "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
           },
-          "lane": {
+          "worker": {
             "type": "string"
           },
           "task": {
@@ -103,7 +103,7 @@
         "anyOf": [
           {
             "required": [
-              "lane"
+              "worker"
             ]
           },
           {

@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::Value;
 
 use super::inputs::{
-    AcceptanceIn, BlockerIn, BranchIn, EpicIn, ForecastIn, ForgeIn, Inputs, LaneIn, LedgerIn,
-    PullIn, RefIn, ScopeSpec, TaskIn, UnreadableIn,
+    AcceptanceIn, BlockerIn, BranchIn, EpicIn, ForecastIn, ForgeIn, Inputs, LedgerIn, PullIn,
+    RefIn, ScopeSpec, TaskIn, UnreadableIn, WorkerIn,
 };
 use super::owed::{Decision, OwedItem, OwedKind, OwedRead, OwedSource};
 use super::{facts, to_json};
@@ -339,7 +339,7 @@ fn a_blocked_predecessor_orders_before_its_waiting_successor() {
 }
 
 #[test]
-fn windows_without_lanes_are_assumed_one_lane_and_lanes_change_the_basis() {
+fn windows_without_workers_are_assumed_one_worker_and_workers_change_the_basis() {
     let mut inputs = inputs();
     for task in &mut inputs.tasks {
         if task.state.as_deref() == Some("active") {
@@ -348,20 +348,20 @@ fn windows_without_lanes_are_assumed_one_lane_and_lanes_change_the_basis() {
     }
     let value = json(&inputs);
     assert_eq!(value["windows"]["basis_kind"], "assumed");
-    assert_eq!(value["windows"]["lanes_used"], 1);
-    assert_eq!(value["lanes"]["note"], "lanes: observed only");
+    assert_eq!(value["windows"]["workers_used"], 1);
+    assert_eq!(value["workers"]["note"], "Workers: observed only");
 
     let observed = json(&super::tests::inputs());
     assert_eq!(observed["windows"]["basis_kind"], "observed");
-    assert_eq!(observed["windows"]["lanes_used"], 3);
-    assert_eq!(observed["lanes"]["lanes"].as_array().unwrap().len(), 3);
+    assert_eq!(observed["windows"]["workers_used"], 3);
+    assert_eq!(observed["workers"]["workers"].as_array().unwrap().len(), 3);
 }
 
 #[test]
-fn ledger_lanes_replace_observed_ones() {
+fn ledger_workers_replace_observed_ones() {
     let mut inputs = inputs();
     inputs.ledger = LedgerIn::Read {
-        lanes: vec![LaneIn {
+        workers: vec![WorkerIn {
             id: "L-1".into(),
             stream: "S-1".into(),
             scope: vec!["TSK-002".into(), "TSK-003".into()],
@@ -372,10 +372,10 @@ fn ledger_lanes_replace_observed_ones() {
         operator_items: Vec::new(),
     };
     let value = json(&inputs);
-    assert_eq!(value["lanes"]["source"], "ledger");
-    let lane = &value["lanes"]["lanes"][0];
-    assert_eq!(lane["seat"], "not recorded");
-    assert_eq!(lane["percent"], 35.0);
+    assert_eq!(value["workers"]["source"], "ledger");
+    let worker = &value["workers"]["workers"][0];
+    assert_eq!(worker["seat"], "not recorded");
+    assert_eq!(worker["percent"], 35.0);
 }
 
 #[test]
@@ -385,7 +385,7 @@ fn intake_at_capacity_gives_no_finite_finish() {
         task.created = Some("2026-11-01".into());
         task.id = format!("TSK-{:03}", index + 1);
     }
-    // One assumed lane gives 168 tasks a week; add that many in the window.
+    // One assumed worker gives 168 tasks a week; add that many in the window.
     for index in 0..170 {
         let mut extra = task(&format!("TSK-{:03}", 100 + index), "todo", Some("ready"));
         extra.created = Some("2026-10-31".into());
@@ -479,7 +479,7 @@ fn owed_items_arrive_through_the_source_interface() {
         task: Some("TSK-002".into()),
         kind: OwedKind::DeferredResult,
         summary: "AC-3 proved after release".into(),
-        owner: "lane L-1".into(),
+        owner: "worker L-1".into(),
         event: Some("the release is published".into()),
         recorded_at: None,
         decision: None,
@@ -652,7 +652,7 @@ fn since_refuses_another_scope_or_repository() {
 #[test]
 fn a_session_fact_fills_a_recommendation_and_never_a_percent() {
     let session = super::session::parse(
-        br#"{"schema_version":1,"facts":[{"observed_at":"2026-11-01T11:00:00Z","lane":"L-1","task":"TSK-003","builder":"codex","no_progress":true,"recommendation":{"action":"rerun the checks","why":"a runner timed out","alternatives":["wait"]}}]}"#,
+        br#"{"schema_version":1,"facts":[{"observed_at":"2026-11-01T11:00:00Z","worker":"L-1","task":"TSK-003","builder":"codex","no_progress":true,"recommendation":{"action":"rerun the checks","why":"a runner timed out","alternatives":["wait"]}}]}"#,
     )
     .unwrap();
     let mut inputs = inputs();
@@ -660,7 +660,7 @@ fn a_session_fact_fills_a_recommendation_and_never_a_percent() {
     inputs.session = Some(session);
     let value = json(&inputs);
     assert_eq!(value["scope"]["percent"], before["scope"]["percent"]);
-    assert_eq!(value["lanes"]["session"][0]["label"], "session");
+    assert_eq!(value["workers"]["session"][0]["label"], "session");
     let issue = value["issues"]["tasks"]
         .as_array()
         .unwrap()
@@ -670,10 +670,10 @@ fn a_session_fact_fills_a_recommendation_and_never_a_percent() {
     assert_eq!(issue["recommended_action"], "rerun the checks");
     assert_eq!(issue["source"], "session");
     assert!(super::session::parse(
-        br#"{"schema_version":1,"facts":[{"observed_at":"x","lane":"L"}]}"#
+        br#"{"schema_version":1,"facts":[{"observed_at":"x","worker":"L"}]}"#
     )
     .is_err());
-    assert!(super::session::parse(br#"{"schema_version":1,"facts":[{"observed_at":"2026-11-01T11:00:00Z","lane":"L","seat_owner":"x"}]}"#).unwrap_err().contains("seat_owner"));
+    assert!(super::session::parse(br#"{"schema_version":1,"facts":[{"observed_at":"2026-11-01T11:00:00Z","worker":"L","seat_owner":"x"}]}"#).unwrap_err().contains("seat_owner"));
 }
 
 #[test]

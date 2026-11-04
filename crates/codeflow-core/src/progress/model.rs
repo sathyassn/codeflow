@@ -59,7 +59,7 @@ pub struct Facts {
     pub tasks: Vec<TaskFact>,
     pub pulls_into_main: Known<Vec<PullFact>>,
     pub order: OrderFact,
-    pub lanes: LanesFact,
+    pub workers: WorkersFact,
     pub windows: WindowsFact,
     pub issues: IssuesFact,
     pub pace: PaceFact,
@@ -291,7 +291,7 @@ pub struct WindowFact {
 pub struct ContextFact {
     pub outcome: Known<String>,
     pub location: &'static str,
-    pub lane: Known<String>,
+    pub worker: Known<String>,
     pub state: Known<String>,
     pub window: Known<String>,
     pub last_moved: Known<String>,
@@ -311,7 +311,7 @@ pub struct TaskFact {
     pub percent: Known<f64>,
     pub criteria: Known<CriteriaFact>,
     pub location: LocationFact,
-    pub lane: Known<String>,
+    pub worker: Known<String>,
     pub window: WindowFact,
     pub theme: String,
     pub about: Known<String>,
@@ -351,9 +351,9 @@ pub struct OrderFact {
     pub depth_chain: Vec<String>,
 }
 
-/// One lane.
+/// One worker.
 #[derive(Debug, Clone, Serialize)]
-pub struct LaneFact {
+pub struct WorkerFact {
     pub id: String,
     /// `ledger` or `observed`.
     pub label: &'static str,
@@ -372,7 +372,7 @@ pub struct LaneFact {
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionLaneFact {
     pub label: &'static str,
-    pub lane: Known<String>,
+    pub worker: Known<String>,
     pub task: Known<String>,
     pub builder: Known<String>,
     pub reviewer: Known<String>,
@@ -382,13 +382,13 @@ pub struct SessionLaneFact {
     pub observed_at: String,
 }
 
-/// The lanes view.
+/// The workers view.
 #[derive(Debug, Clone, Serialize)]
-pub struct LanesFact {
+pub struct WorkersFact {
     /// `ledger` or `observed`.
     pub source: &'static str,
     pub note: Known<String>,
-    pub lanes: Vec<LaneFact>,
+    pub workers: Vec<WorkerFact>,
     pub session: Known<Vec<SessionLaneFact>>,
     pub overall_percent: Known<f64>,
 }
@@ -411,7 +411,7 @@ pub struct WindowsFact {
     pub basis_kind: String,
     pub basis: String,
     pub computed_at: String,
-    pub lanes_used: usize,
+    pub workers_used: usize,
     pub forecast: Known<String>,
     pub scenarios: Vec<ScenarioFact>,
 }
@@ -419,7 +419,7 @@ pub struct WindowsFact {
 /// Who or what clears an issue.
 #[derive(Debug, Clone, Serialize)]
 pub struct Unblocker {
-    /// `lane`, `ci run`, `predecessor`, `operator` or `agent`.
+    /// `worker`, `ci run`, `predecessor`, `operator` or `agent`.
     pub kind: &'static str,
     pub name: Known<String>,
 }
@@ -484,7 +484,7 @@ pub struct OperatorSet {
 #[derive(Debug, Clone, Serialize)]
 pub struct IssuesFact {
     pub tasks: Vec<IssueFact>,
-    pub lanes: Vec<IssueFact>,
+    pub workers: Vec<IssueFact>,
     pub operator: OperatorSet,
     /// Every source the issues read was checked.
     pub complete: bool,
@@ -505,7 +505,7 @@ pub struct PaceFact {
     pub days: Vec<PaceDay>,
     pub landed_total: Known<usize>,
     pub added_total: Known<usize>,
-    pub lanes_observed: usize,
+    pub workers_observed: usize,
     pub observed_landing_rate_per_day: Known<f64>,
     pub planned_capacity_rate_per_day: f64,
     pub intake_rate_per_day: Known<f64>,

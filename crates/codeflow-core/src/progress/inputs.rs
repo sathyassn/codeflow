@@ -17,6 +17,12 @@ pub enum ScopeSpec {
     Epics(Vec<String>),
     /// Every task whose home is this integration line.
     Line(String),
+    /// The work a coordination stream's scope links name.
+    Stream {
+        id: String,
+        epics: Vec<String>,
+        tasks: Vec<String>,
+    },
     /// Every open epic whose home is the current target.
     Default,
 }
@@ -29,6 +35,7 @@ impl ScopeSpec {
             Self::Task(_) => "task",
             Self::Epics(_) => "epic",
             Self::Line(_) => "line",
+            Self::Stream { .. } => "stream",
             Self::Default => "default",
         }
     }
@@ -37,7 +44,7 @@ impl ScopeSpec {
     #[must_use]
     pub fn names(&self) -> Vec<String> {
         match self {
-            Self::Task(id) | Self::Line(id) => vec![id.clone()],
+            Self::Task(id) | Self::Line(id) | Self::Stream { id, .. } => vec![id.clone()],
             Self::Epics(ids) => {
                 let mut ids = ids.clone();
                 ids.sort();
@@ -247,9 +254,9 @@ pub enum ForgeIn {
     Unverified { reason: String },
 }
 
-/// A ledger lane.
+/// A ledger worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LaneIn {
+pub struct WorkerIn {
     pub id: String,
     pub stream: String,
     pub scope: Vec<String>,
@@ -275,9 +282,9 @@ pub enum LedgerIn {
     Absent,
     /// The ledger exists but could not be read.
     Unreadable(String),
-    /// Open lanes and open operator follow-ups.
+    /// Open workers and open operator follow-ups.
     Read {
-        lanes: Vec<LaneIn>,
+        workers: Vec<WorkerIn>,
         operator_items: Vec<OperatorItemIn>,
     },
 }
@@ -321,7 +328,7 @@ pub struct Inputs {
     pub readiness_problem: Option<String>,
     pub forge: ForgeIn,
     pub ledger: LedgerIn,
-    /// Linked worktrees with their checked-out branch, for observed lanes.
+    /// Linked worktrees with their checked-out branch, for observed workers.
     pub session: Option<SessionFile>,
     pub owed: Vec<(String, OwedRead)>,
     pub forecast: Option<ForecastIn>,

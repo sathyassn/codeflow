@@ -1,5 +1,5 @@
-//! `codeflow status --task/--epic/--line/--json`: percent complete,
-//! location, order, lanes, windows, issues and pace over fixture
+//! `codeflow status --task/--epic/--line/--scope/--json`: percent complete,
+//! location, order, workers, windows, issues and pace over fixture
 //! repositories (TSK-1095). The forge is a fake `gh` on `PATH`.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -9,6 +9,8 @@ use serde_json::Value;
 
 #[path = "status_progress/review.rs"]
 mod review;
+#[path = "status_progress/stream.rs"]
+mod stream;
 
 const AS_OF: &str = "2026-11-01T12:00:00Z";
 
@@ -251,8 +253,8 @@ fn the_epic_view_gives_every_stage_location_and_issue() {
         .expect("the red check is an issue");
     assert_eq!(red["subject"], "TSK-003");
     assert_eq!(red["unblocker"]["kind"], "ci run");
-    assert_eq!(value["lanes"]["source"], "observed");
-    assert_eq!(value["lanes"]["note"], "lanes: observed only");
+    assert_eq!(value["workers"]["source"], "observed");
+    assert_eq!(value["workers"]["note"], "Workers: observed only");
     assert_eq!(value["issues"]["operator"]["state"], "none owed");
 }
 
@@ -352,7 +354,7 @@ fn status_writes_nothing_and_never_fetches() {
 }
 
 #[test]
-fn the_text_view_prints_the_ladder_order_lanes_and_windows() {
+fn the_text_view_prints_the_ladder_order_workers_and_windows() {
     let fx = fixture();
     let output = fx.cli(&["status", "--epic", "EPC-001"]);
     let out = text(&output);
@@ -362,7 +364,7 @@ fn the_text_view_prints_the_ladder_order_lanes_and_windows() {
         "Overall: 42.5%",
         "path to main:",
         "Order (critical path",
-        "Lanes (observed)",
+        "Workers (observed)",
         "intake stops:",
         "TSK-003 required check red",
     ] {
@@ -404,7 +406,7 @@ fn a_malformed_session_file_is_refused_by_name() {
     let path = fx.root.parent().unwrap().join("session.json");
     std::fs::write(
         &path,
-        r#"{"schema_version":1,"facts":[{"observed_at":"2026-11-01T11:00:00Z","lane":"L-1","owner":"x"}]}"#,
+        r#"{"schema_version":1,"facts":[{"observed_at":"2026-11-01T11:00:00Z","worker":"L-1","owner":"x"}]}"#,
     )
     .unwrap();
     let output = fx.cli(&["status", "--json", "--session", path.to_str().unwrap()]);
@@ -413,11 +415,11 @@ fn a_malformed_session_file_is_refused_by_name() {
 
     std::fs::write(
         &path,
-        r#"{"schema_version":1,"facts":[{"observed_at":"2026-11-01T11:00:00Z","lane":"L-1","task":"TSK-002","builder":"codex"}]}"#,
+        r#"{"schema_version":1,"facts":[{"observed_at":"2026-11-01T11:00:00Z","worker":"L-1","task":"TSK-002","builder":"codex"}]}"#,
     )
     .unwrap();
     let value = fx.json(&["--epic", "EPC-001", "--session", path.to_str().unwrap()]);
-    assert_eq!(value["lanes"]["session"][0]["builder"], "codex");
+    assert_eq!(value["workers"]["session"][0]["builder"], "codex");
     assert_eq!(value["scope"]["percent"], 42.5);
 }
 
@@ -528,7 +530,7 @@ fn the_facts_validate_against_the_shipped_schema() {
             "tasks",
             "pulls_into_main",
             "order",
-            "lanes",
+            "workers",
             "windows",
             "issues",
             "pace",
@@ -550,7 +552,7 @@ fn the_facts_validate_against_the_shipped_schema() {
 
 /// FNV-1a over the shipped v1 schema's bytes, carriage returns left out
 /// so a CRLF checkout reads the same.
-const SCHEMA_DIGEST: u64 = 0x8307_4ce5_5e28_836b;
+const SCHEMA_DIGEST: u64 = 0x9533_b3d4_081f_5a2d;
 
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes

@@ -193,8 +193,8 @@ worktrees and build directories.
 
 ### Reading where work stands
 
-`codeflow status --epic EPC-NNN` (or `--task`, `--line`; `--json` for
-versioned facts) derives each task's stage, location, order, lane, window
+`codeflow status --epic EPC-NNN` (or `--task`, `--line`, `--scope WS-NNN`;
+`--json` for versioned facts) derives each task's stage, location, order, Worker, window
 and issues from the records on each target's tip, the fetched refs, the
 forge and the ledger, with `work next`'s readiness core.
 
@@ -231,8 +231,8 @@ forge and the ledger, with `work next`'s readiness core.
   every creation date for additions and open counts.
 - Windows are durations from the snapshot, never dates, from an adopted
   forecast covering the scope (named stale when a task's criteria
-  changed), else planned throughput over observed lanes (one assumed
-  lane if none). A window starts at the snapshot or its open
+  changed), else planned throughput over observed Workers (one assumed
+  Worker if none). A window starts at the snapshot or its open
   predecessors' latest end, outside the scope included, and all ends run from that
   start. The scope finish assumes intake stops, or continues at the last
   seven days' rate.

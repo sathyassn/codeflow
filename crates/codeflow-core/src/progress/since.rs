@@ -80,17 +80,19 @@ fn checked_sources(facts: &Value) -> BTreeMap<String, bool> {
         }
     }
     // A session file is observed only when this snapshot read one.
-    let session_read = facts.pointer("/lanes/session").is_some_and(Value::is_array);
+    let session_read = facts
+        .pointer("/workers/session")
+        .is_some_and(Value::is_array);
     let slot = out.entry("session file".to_string()).or_insert(true);
     *slot = *slot && session_read;
     out
 }
 
 /// Each keyed item of one family: issues by subject and kind, operator
-/// items by source and id, session lanes by lane and task, tasks by id.
+/// items by source and id, session workers by worker and task, tasks by id.
 fn keyed(facts: &Value) -> BTreeMap<(String, String), (String, Value)> {
     let mut out = BTreeMap::new();
-    for list in ["/issues/tasks", "/issues/lanes"] {
+    for list in ["/issues/tasks", "/issues/workers"] {
         for issue in facts
             .pointer(list)
             .and_then(Value::as_array)
@@ -116,16 +118,16 @@ fn keyed(facts: &Value) -> BTreeMap<(String, String), (String, Value)> {
             (text(item, "/source").to_string(), item.clone()),
         );
     }
-    for lane in facts
-        .pointer("/lanes/session")
+    for worker in facts
+        .pointer("/workers/session")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
     {
-        let key = format!("{} {}", word(lane, "/lane"), word(lane, "/task"));
+        let key = format!("{} {}", word(worker, "/worker"), word(worker, "/task"));
         out.insert(
-            ("session lane".into(), key),
-            ("session".into(), lane.clone()),
+            ("session worker".into(), key),
+            ("session".into(), worker.clone()),
         );
     }
     // Pull requests on each epic's landing chain, with their check runs.
@@ -204,7 +206,7 @@ fn replaced_by(family: &str, earlier: &Value, current: &Value) -> String {
             }
         }
         "operator item" => "resolved: its source no longer holds it".into(),
-        "session lane" => "the session file no longer holds it".into(),
+        "session worker" => "the session file no longer holds it".into(),
         "pull request" => "the forge no longer lists it open".into(),
         _ => "no longer in the scope the records give".into(),
     }
@@ -392,7 +394,7 @@ pub fn delta(previous: &Value, current: &Value) -> Result<Value, String> {
                 "issue" => "issue opened",
                 "operator item" if text(item, "/source") == "session" => "decision recorded",
                 "operator item" => "operator item added",
-                "session lane" => "session lane recorded",
+                "session worker" => "session worker recorded",
                 _ => "task added",
             };
             changes.push(json!({"change": what, "subject": key, "at": at}));
@@ -447,7 +449,7 @@ pub fn delta(previous: &Value, current: &Value) -> Result<Value, String> {
                 "issue" if text(earlier, "/kind") == "blocked" => "blocker cleared",
                 "issue" if text(earlier, "/kind").starts_with("required check") => "check cleared",
                 "operator item" => "operator item resolved",
-                "session lane" => "session lane cleared",
+                "session worker" => "session worker cleared",
                 _ => "removed",
             };
             changes.push(json!({"change": what, "subject": key, "at": at}));

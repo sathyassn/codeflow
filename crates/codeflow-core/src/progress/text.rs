@@ -177,29 +177,29 @@ pub fn render(facts: &Facts) -> String {
     );
     let _ = writeln!(
         out,
-        "\nLanes ({}): overall {}",
-        facts.lanes.source,
-        percent(&facts.lanes.overall_percent)
+        "\nWorkers ({}): overall {}",
+        facts.workers.source,
+        percent(&facts.workers.overall_percent)
     );
-    if let Known::Value(note) = &facts.lanes.note {
+    if let Known::Value(note) = &facts.workers.note {
         let _ = writeln!(out, "  {note}");
     }
-    for lane in &facts.lanes.lanes {
+    for worker in &facts.workers.workers {
         let _ = writeln!(
             out,
             "  {} [{}] {}: {}",
-            lane.id,
-            lane.label,
-            lane.tasks.join(", "),
-            percent(&lane.percent)
+            worker.id,
+            worker.label,
+            worker.tasks.join(", "),
+            percent(&worker.percent)
         );
     }
-    if let Known::Value(session) = &facts.lanes.session {
+    if let Known::Value(session) = &facts.workers.session {
         for fact in session {
             let _ = writeln!(
                 out,
-                "  [session] lane {} task {}: builder {}, reviewer {}, observed {}",
-                word(&fact.lane),
+                "  [session] Worker {} task {}: builder {}, reviewer {}, observed {}",
+                word(&fact.worker),
                 word(&fact.task),
                 word(&fact.builder),
                 word(&fact.reviewer),
@@ -209,8 +209,8 @@ pub fn render(facts: &Facts) -> String {
     }
     let _ = writeln!(
         out,
-        "\nWindows ({}, {} lane(s)):",
-        facts.windows.basis_kind, facts.windows.lanes_used
+        "\nWindows ({}, {} Worker(s)):",
+        facts.windows.basis_kind, facts.windows.workers_used
     );
     let _ = writeln!(out, "  basis: {}", facts.windows.basis);
     for scenario in &facts.windows.scenarios {
@@ -221,7 +221,7 @@ pub fn render(facts: &Facts) -> String {
         );
     }
     let _ = writeln!(out, "\nIssues:");
-    for issue in facts.issues.tasks.iter().chain(&facts.issues.lanes) {
+    for issue in facts.issues.tasks.iter().chain(&facts.issues.workers) {
         let _ = writeln!(
             out,
             "  {} {}: {} (checked {}, cleared by {} {})",

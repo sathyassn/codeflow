@@ -1,6 +1,7 @@
 //! `codeflow status [--capabilities] [--delivery]` — generated views, never
-//! stored — and the progress views (`--task`, `--epic`, `--line`, `--json`)
-//! that give percent complete, location, order, lanes, windows, issues and
+//! stored — and the progress views (`--task`, `--epic`, `--line`, `--scope`,
+//! `--json`)
+//! that give percent complete, location, order, workers, windows, issues and
 //! pace for a scope (TSK-1095). Status writes nothing and never fetches.
 
 use std::path::PathBuf;
@@ -37,6 +38,10 @@ pub struct StatusArgs {
     #[arg(long, value_name = "BRANCH")]
     pub line: Option<String>,
 
+    /// Progress of the epics and tasks a coordination stream's scope links name
+    #[arg(long = "scope", value_name = "WS-NNN", conflicts_with_all = ["task", "epic", "line"])]
+    pub stream: Option<String>,
+
     /// Print the progress facts as versioned JSON (report-v1)
     #[arg(long)]
     pub json: bool,
@@ -49,7 +54,7 @@ pub struct StatusArgs {
     #[arg(long)]
     pub md: bool,
 
-    /// Merge a session facts file (session-v1) into the lanes view
+    /// Merge a session facts file (session-v1) into the Workers view
     #[arg(long, value_name = "FILE")]
     pub session: Option<PathBuf>,
 
@@ -63,6 +68,7 @@ impl StatusArgs {
         self.task.is_some()
             || !self.epic.is_empty()
             || self.line.is_some()
+            || self.stream.is_some()
             || self.json
             || self.present
             || self.md
@@ -126,7 +132,17 @@ fn run_progress(root: &std::path::Path, args: &StatusArgs) -> i32 {
         );
         return 2;
     }
-    let mut options = Options::new(args.scope());
+    let scope = match &args.stream {
+        Some(stream) => match progress::gather::stream_scope(root, stream) {
+            Ok(scope) => scope,
+            Err(error) => {
+                eprintln!("codeflow status: {error}");
+                return 2;
+            }
+        },
+        None => args.scope(),
+    };
+    let mut options = Options::new(scope);
     options.session.clone_from(&args.session);
     let as_of = match std::env::var(AS_OF_ENV) {
         Ok(text) => Some(text),

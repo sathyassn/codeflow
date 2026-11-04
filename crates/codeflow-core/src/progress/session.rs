@@ -1,7 +1,7 @@
 //! The `--session <file>` input: facts only a coordinating session knows
-//! (which seat builds or reviews a lane, a verdict in flight, a blocker it
+//! (which seat builds or reviews a worker, a verdict in flight, a blocker it
 //! saw), each with the time it was observed. Validated against
-//! `session-v1.schema.json`; merged into the lanes view labelled `session`
+//! `session-v1.schema.json`; merged into the Workers view labelled `session`
 //! and never changing a percent or a stage.
 
 use serde::Deserialize;
@@ -35,7 +35,7 @@ pub struct SessionDecision {
 pub struct SessionFact {
     pub observed_at: String,
     #[serde(default)]
-    pub lane: Option<String>,
+    pub worker: Option<String>,
     #[serde(default)]
     pub task: Option<String>,
     #[serde(default)]
@@ -92,8 +92,8 @@ pub fn parse(bytes: &[u8]) -> Result<SessionFile, String> {
     for (index, fact) in file.facts.iter().enumerate() {
         crate::coord::parse_time(&fact.observed_at)
             .map_err(|error| format!("facts[{index}].observed_at: {error}"))?;
-        if fact.lane.is_none() && fact.task.is_none() && fact.decision.is_none() {
-            return Err(format!("facts[{index}] names no lane, task or decision"));
+        if fact.worker.is_none() && fact.task.is_none() && fact.decision.is_none() {
+            return Err(format!("facts[{index}] names no Worker, task or decision"));
         }
     }
     Ok(file)

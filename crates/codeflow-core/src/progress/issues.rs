@@ -1,4 +1,4 @@
-//! Issues per task and lane, the operator-owned set, the lanes view, pace
+//! Issues per task and worker, the operator-owned set, the workers view, pace
 //! and intake, and the evidence entries.
 
 use std::collections::BTreeSet;
@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 use super::compute::{count_f64, mean, pull_for, stage, time_text, Stage};
 use super::inputs::{ForgeIn, Inputs, LedgerIn, RequiredCheckIn, TaskIn};
 use super::model::{
-    DecisionFact, EvidenceFact, IssueFact, IssuesFact, Known, LaneFact, LanesFact,
-    OperatorItemFact, OperatorSet, PaceDay, PaceFact, SessionLaneFact, SourceCheck, Unblocker,
+    DecisionFact, EvidenceFact, IssueFact, IssuesFact, Known, OperatorItemFact, OperatorSet,
+    PaceDay, PaceFact, SessionLaneFact, SourceCheck, Unblocker, WorkerFact, WorkersFact,
 };
 use super::owed::{OwedKind, OwedRead};
 use super::plan::{is_open, Plan, Win};
@@ -48,7 +48,7 @@ fn gh_repo(inputs: &Inputs) -> Option<&str> {
     inputs.repository.strip_prefix("github.com/")
 }
 
-/// Issues per task and per lane, and the operator-owned set.
+/// Issues per task and per worker, and the operator-owned set.
 #[must_use]
 pub fn issues(inputs: &Inputs, ids: &BTreeSet<String>, plan: &Plan) -> IssuesFact {
     let now = time_text(inputs.now);
@@ -90,7 +90,7 @@ pub fn issues(inputs: &Inputs, ids: &BTreeSet<String>, plan: &Plan) -> IssuesFac
         }
     }
     attach_session(inputs, &mut tasks);
-    let lanes = lane_issues(inputs, &now);
+    let workers = worker_issues(inputs, &now);
     let operator = operator_set(inputs, ids, &now);
     // An open task whose reported head was not read may carry issues
     // there that no source here shows.
@@ -102,7 +102,7 @@ pub fn issues(inputs: &Inputs, ids: &BTreeSet<String>, plan: &Plan) -> IssuesFac
         operator.unchecked.is_empty() && heads_read && required_unread(inputs, Some(ids)).is_none();
     IssuesFact {
         tasks,
-        lanes,
+        workers,
         operator,
         complete,
     }
@@ -247,8 +247,8 @@ fn task_issues(inputs: &Inputs, plan: &Plan, task: &TaskIn, now: &str, out: &mut
                     ),
                     Known::Value(now.to_string()),
                     Unblocker {
-                        kind: "lane",
-                        name: Known::or_word(plan.lane_of(&task.id), "not recorded"),
+                        kind: "worker",
+                        name: Known::or_word(plan.worker_of(&task.id), "not recorded"),
                     },
                 );
                 fact.command = Known::Value(format!(
@@ -283,25 +283,25 @@ fn attach_session(inputs: &Inputs, issues: &mut [IssueFact]) {
     }
 }
 
-fn lane_issues(inputs: &Inputs, now: &str) -> Vec<IssueFact> {
+fn worker_issues(inputs: &Inputs, now: &str) -> Vec<IssueFact> {
     let mut out = Vec::new();
-    if let LedgerIn::Read { lanes, .. } = &inputs.ledger {
-        for lane in lanes {
-            let quiet = lane
+    if let LedgerIn::Read { workers, .. } = &inputs.ledger {
+        for worker in workers {
+            let quiet = worker
                 .reported_at
                 .is_none_or(|at| inputs.now - at > inputs.sweep_seconds);
             if quiet {
                 let mut fact = issue(
-                    &lane.id,
+                    &worker.id,
                     "seat with no progress",
-                    lane.reported_at.map_or_else(
-                        || "the lane has never reported".into(),
+                    worker.reported_at.map_or_else(
+                        || "the Worker has never reported".into(),
                         |at| format!("last report {}, past the sweep interval", time_text(at)),
                     ),
                     Known::Value(now.to_string()),
                     Unblocker {
-                        kind: "lane",
-                        name: Known::Value(lane.id.clone()),
+                        kind: "worker",
+                        name: Known::Value(worker.id.clone()),
                     },
                 );
                 fact.source = "ledger".into();
@@ -312,7 +312,7 @@ fn lane_issues(inputs: &Inputs, now: &str) -> Vec<IssueFact> {
     if let Some(session) = &inputs.session {
         for fact in session.facts.iter().filter(|fact| fact.no_progress) {
             let subject = fact
-                .lane
+                .worker
                 .clone()
                 .or_else(|| fact.task.clone())
                 .unwrap_or_default();
@@ -322,7 +322,7 @@ fn lane_issues(inputs: &Inputs, now: &str) -> Vec<IssueFact> {
                 format!("the session saw no progress at {}", fact.observed_at),
                 Known::Value(fact.observed_at.clone()),
                 Unblocker {
-                    kind: "lane",
+                    kind: "worker",
                     name: Known::or_word(fact.seat.clone(), "not recorded"),
                 },
             );
@@ -504,9 +504,9 @@ fn records_problem(inputs: &Inputs) -> Option<String> {
     (!problems.is_empty()).then(|| problems.join("; "))
 }
 
-/// The lanes view.
+/// The workers view.
 #[must_use]
-pub fn lanes(inputs: &Inputs, ids: &BTreeSet<String>, _plan: &Plan) -> LanesFact {
+pub fn workers(inputs: &Inputs, ids: &BTreeSet<String>, _plan: &Plan) -> WorkersFact {
     let percent_of = |scope: &[String]| {
         let stages: Vec<Stage> = inputs
             .tasks
@@ -520,24 +520,27 @@ pub fn lanes(inputs: &Inputs, ids: &BTreeSet<String>, _plan: &Plan) -> LanesFact
         let percents: Vec<u32> = stages.into_iter().filter_map(Stage::percent).collect();
         mean(&percents)
     };
-    let mut lanes = Vec::new();
+    let mut workers = Vec::new();
     let mut source = "observed";
-    if let LedgerIn::Read { lanes: ledger, .. } = &inputs.ledger {
+    if let LedgerIn::Read {
+        workers: ledger, ..
+    } = &inputs.ledger
+    {
         if !ledger.is_empty() {
             source = "ledger";
-            for lane in ledger {
-                lanes.push(LaneFact {
-                    id: lane.id.clone(),
+            for worker in ledger {
+                workers.push(WorkerFact {
+                    id: worker.id.clone(),
                     label: "ledger",
-                    stream: Known::Value(lane.stream.clone()),
-                    tasks: lane.scope.clone(),
-                    attempt: Known::Value(lane.attempt),
-                    seat: Known::or_word(lane.seat.clone(), "not recorded"),
+                    stream: Known::Value(worker.stream.clone()),
+                    tasks: worker.scope.clone(),
+                    attempt: Known::Value(worker.attempt),
+                    seat: Known::or_word(worker.seat.clone(), "not recorded"),
                     worktree: Known::not_recorded(),
                     branch: Known::not_recorded(),
                     pull_request: Known::not_recorded(),
                     head_age_seconds: Known::not_recorded(),
-                    percent: Known::or_word(percent_of(&lane.scope), "unknown"),
+                    percent: Known::or_word(percent_of(&worker.scope), "unknown"),
                 });
             }
         }
@@ -549,7 +552,7 @@ pub fn lanes(inputs: &Inputs, ids: &BTreeSet<String>, _plan: &Plan) -> LanesFact
             .filter(|task| task.state.as_deref() == Some("active"))
         {
             let scope = vec![task.id.clone()];
-            lanes.push(LaneFact {
+            workers.push(WorkerFact {
                 id: format!("observed {}", task.id),
                 label: "observed",
                 stream: Known::not_recorded(),
@@ -570,9 +573,9 @@ pub fn lanes(inputs: &Inputs, ids: &BTreeSet<String>, _plan: &Plan) -> LanesFact
             });
         }
     }
-    let carried: Vec<String> = lanes
+    let carried: Vec<String> = workers
         .iter()
-        .flat_map(|lane| lane.tasks.clone())
+        .flat_map(|worker| worker.tasks.clone())
         .filter(|id| ids.contains(id) || source == "observed")
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -581,10 +584,10 @@ pub fn lanes(inputs: &Inputs, ids: &BTreeSet<String>, _plan: &Plan) -> LanesFact
         session
             .facts
             .iter()
-            .filter(|fact| fact.lane.is_some() || fact.task.is_some())
+            .filter(|fact| fact.worker.is_some() || fact.task.is_some())
             .map(|fact| SessionLaneFact {
                 label: "session",
-                lane: Known::or_word(fact.lane.clone(), "none"),
+                worker: Known::or_word(fact.worker.clone(), "none"),
                 task: Known::or_word(fact.task.clone(), "none"),
                 builder: Known::or_word(fact.builder.clone(), "not recorded"),
                 reviewer: Known::or_word(fact.reviewer.clone(), "not recorded"),
@@ -596,14 +599,14 @@ pub fn lanes(inputs: &Inputs, ids: &BTreeSet<String>, _plan: &Plan) -> LanesFact
             .collect()
     });
     let note = if source == "observed" && inputs.session.is_none() {
-        Known::Value("lanes: observed only".into())
+        Known::Value("Workers: observed only".into())
     } else {
         word("none")
     };
-    LanesFact {
+    WorkersFact {
         source,
         note,
-        lanes,
+        workers,
         session: Known::or_word(session, "no session file given"),
         overall_percent: Known::or_word(percent_of(&carried), "unknown"),
     }
@@ -625,8 +628,8 @@ pub fn pace(inputs: &Inputs, ids: &BTreeSet<String>, plan: &Plan) -> PaceFact {
         .iter()
         .filter(|task| ids.contains(&task.id) && task.status != "cancelled")
         .collect();
-    let lanes = plan.lanes_used.max(1);
-    let planned = count_f64(lanes) * 24.0;
+    let workers = plan.workers_used.max(1);
+    let planned = count_f64(workers) * 24.0;
     // Each measure needs its own coverage: landings the history walk of
     // every home; additions every task's creation date; open counts both,
     // and every task's openness.
@@ -687,11 +690,11 @@ pub fn pace(inputs: &Inputs, ids: &BTreeSet<String>, plan: &Plan) -> PaceFact {
         days: per_day,
         landed_total: if known { Known::Value(landed_week) } else { Known::unknown() },
         added_total: if added_known { Known::Value(added_week) } else { Known::unknown() },
-        lanes_observed: plan.lanes_used,
+        workers_observed: plan.workers_used,
         observed_landing_rate_per_day: if known { Known::Value(count_f64(landed_week) / 7.0) } else { Known::unknown() },
         planned_capacity_rate_per_day: planned,
         intake_rate_per_day: if added_known { Known::Value(count_f64(added_week) / 7.0) } else { Known::unknown() },
-        basis: "landings from the home target's first-parent history, additions from record creation dates; the planned capacity is one task per lane-hour over the lanes used and is never lowered to the observed pace".into(),
+        basis: "landings from the home target's first-parent history, additions from record creation dates; the planned capacity is one task per Worker-hour over the Workers used and is never lowered to the observed pace".into(),
     }
 }
 
@@ -787,7 +790,7 @@ pub fn evidence(inputs: &Inputs, plan: &Plan) -> Vec<EvidenceFact> {
             &at,
             inputs.readiness_problem.clone(),
         ),
-        evidence_entry("lanes", "ledger", ledger.0, &at, ledger.1.clone()),
+        evidence_entry("workers", "ledger", ledger.0, &at, ledger.1.clone()),
         evidence_entry(
             "windows",
             if plan.basis_kind == "forecast" {
@@ -839,7 +842,7 @@ pub fn evidence(inputs: &Inputs, plan: &Plan) -> Vec<EvidenceFact> {
         ));
     }
     if inputs.session.is_some() {
-        out.push(evidence_entry("lanes", "session file", true, &at, None));
+        out.push(evidence_entry("workers", "session file", true, &at, None));
     }
     out
 }
