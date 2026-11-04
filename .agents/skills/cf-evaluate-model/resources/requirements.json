@@ -746,7 +746,7 @@
             "**INTENT-MATCH:** confirm this is the worktree and branch *this task* was assigned",
             "stop and surface it; never silently adapt",
             "never accept name resemblance as a match",
-            "**CURRENCY:** fetch, then check the base against the repository's configured target branch",
+            "**CURRENCY:** `codeflow work claim <id>` fetches and selects the live",
             "assignment explicitly calls for creating a worktree",
             "Absence alone never authorizes repair",
             "rerun all three assertions inside the new worktree"
