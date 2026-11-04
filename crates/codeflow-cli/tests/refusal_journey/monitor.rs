@@ -68,7 +68,7 @@ fn monitor_input_the_judge_does_not_recognise_is_refused() {
         let outputs = project.replay("claude", "Monitor", input.clone());
         assert!(!outputs.is_empty(), "no hook ran for {input}");
         assert!(
-            refused_by(&outputs, "unreadable hook payload"),
+            refused_by(&outputs, "unrecognised Monitor payload"),
             "{input}: {outputs:?}"
         );
     }

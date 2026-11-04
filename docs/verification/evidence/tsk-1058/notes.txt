@@ -1,0 +1,8 @@
+TSK-1058 native Monitor capture, collected 2026-11-04T03:52:01Z
+payload files copied: 2
+payload files whose text holds the marker path (capture 3): 1
+MARKER does not exist: the refused command did not run
+capture 1 (command 'echo tsk1058-marker'): the payload files without the marker path
+capture 3 (command 'touch MARKER'): the payload files with the marker path
+socket form: not captured
+claude version: see version.txt

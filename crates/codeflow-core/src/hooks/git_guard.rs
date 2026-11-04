@@ -292,6 +292,19 @@ pub struct HookPayload {
     pub cwd: Option<PathBuf>,
 }
 
+/// The fields a `Monitor` call may carry: the Claude Code 2.1.317 tool
+/// schema, which allows no additional properties, plus `persistent`, which
+/// the shape record saw in the same build (TSK-1058). The project policy adds
+/// to this list with `security.monitor_extra_fields`.
+pub const MONITOR_FIELDS: &[&str] = &[
+    "command",
+    "description",
+    "timeout_ms",
+    "persistent",
+    "allowed_domains",
+    "ws",
+];
+
 /// `tool_input` for shell invocations.
 #[derive(Debug, Default, Deserialize)]
 pub struct ToolInput {
@@ -301,6 +314,13 @@ pub struct ToolInput {
     /// Code 2.1.312, TSK-397 design D Part B).
     #[serde(default, rename = "dangerouslyDisableSandbox")]
     pub dangerously_disable_sandbox: Option<serde_json::Value>,
+    /// A `Monitor` socket watch (`ws.url`), which carries no shell text.
+    #[serde(default)]
+    pub ws: Option<serde_json::Value>,
+    /// Every other field of the input, kept so the `Monitor` check can name
+    /// one it does not recognise (TSK-1058).
+    #[serde(flatten)]
+    pub other: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl ToolInput {
@@ -373,10 +393,52 @@ impl HookPayload {
                 "field `{field}` is a JSON {found} where {expected} belongs"
             )));
         }
-        if let Some(problem) = monitor_shape_problem(&value) {
-            return Err(PayloadError::Malformed(problem));
-        }
         serde_json::from_value(value).map_err(|e| PayloadError::Malformed(e.to_string()))
+    }
+
+    /// Whether this is a call to the `Monitor` tool.
+    #[must_use]
+    pub fn is_monitor(&self) -> bool {
+        self.tool_name == "Monitor"
+    }
+
+    /// Why this `Monitor` call's input is not a shape the judge recognises,
+    /// or `None` when it is (TSK-1058). The tool runs shell text, so an input
+    /// with neither a `command` string to judge nor a `ws` socket watch, or
+    /// with a field the judge does not know, cannot be shown to hold no shell
+    /// text: the caller refuses it. `extra_fields` are the names the project
+    /// policy adds to [`MONITOR_FIELDS`]. Other tools return `None`.
+    #[must_use]
+    pub fn monitor_problem(&self, extra_fields: &[String]) -> Option<String> {
+        if !self.is_monitor() {
+            return None;
+        }
+        let input = &self.tool_input;
+        let known = |name: &str| {
+            MONITOR_FIELDS.contains(&name) || extra_fields.iter().any(|extra| extra == name)
+        };
+        if let Some(unknown) = input.other.keys().find(|key| !known(key)) {
+            return Some(format!("the field `{unknown}`"));
+        }
+        let command = input.command.is_some();
+        match (command, input.ws.as_ref().filter(|ws| !ws.is_null())) {
+            (true, None) => None,
+            (false, Some(serde_json::Value::Object(socket))) => {
+                if !socket.get("url").is_some_and(serde_json::Value::is_string) {
+                    Some("a `ws` socket watch with no `url` string".to_string())
+                } else if let Some(extra) = socket
+                    .keys()
+                    .find(|key| !matches!(key.as_str(), "url" | "protocols"))
+                {
+                    Some(format!("the field `ws.{extra}`"))
+                } else {
+                    None
+                }
+            }
+            (false, Some(_)) => Some("a `ws` field that is not an object".to_string()),
+            (true, Some(_)) => Some("both `command` and `ws`".to_string()),
+            (false, None) => Some("neither a `command` string nor a `ws` socket watch".to_string()),
+        }
     }
 
     /// The command to evaluate when this is a shell tool call.
@@ -426,69 +488,6 @@ fn wrong_field_type(
         }
     }
     None
-}
-
-/// The fields a `Monitor` call may carry: the Claude Code 2.1.317 tool
-/// schema (additional properties are not allowed) plus `persistent`, which
-/// the shape record saw in the same build. TSK-1058.
-const MONITOR_FIELDS: &[&str] = &[
-    "command",
-    "description",
-    "timeout_ms",
-    "persistent",
-    "allowed_domains",
-    "ws",
-];
-
-/// Why a `Monitor` call's input is not a shape the judge recognises, or
-/// `None` when it is. The tool runs shell text, so an input that carries
-/// neither a `command` string to judge nor a socket watch (`ws.url`), or that
-/// carries a field the judge does not know, cannot be shown to hold no
-/// shell text: it is refused, not passed.
-fn monitor_shape_problem(value: &serde_json::Value) -> Option<String> {
-    use serde_json::Value;
-    let name = ["tool_name", "toolName"]
-        .iter()
-        .find_map(|key| value.get(*key))?;
-    if name.as_str() != Some("Monitor") {
-        return None;
-    }
-    let Some(Value::Object(input)) = ["tool_input", "toolInput"]
-        .iter()
-        .find_map(|key| value.get(*key))
-    else {
-        return Some("a Monitor call has no tool_input object to judge".to_string());
-    };
-    if let Some(unknown) = input
-        .keys()
-        .find(|key| !MONITOR_FIELDS.contains(&key.as_str()))
-    {
-        return Some(format!(
-            "a Monitor call carries the field `{unknown}`, which the judge does not recognise"
-        ));
-    }
-    let command = input.get("command").filter(|command| !command.is_null());
-    let ws = input.get("ws").filter(|ws| !ws.is_null());
-    match (command, ws) {
-        (Some(_), None) => None,
-        (None, Some(Value::Object(socket))) => {
-            if !socket.get("url").is_some_and(Value::is_string) {
-                Some("a Monitor socket watch has no `ws.url` string".to_string())
-            } else if let Some(extra) = socket
-                .keys()
-                .find(|key| !matches!(key.as_str(), "url" | "protocols"))
-            {
-                Some(format!(
-                    "a Monitor socket watch carries the field `ws.{extra}`, which the judge does not recognise"
-                ))
-            } else {
-                None
-            }
-        }
-        (None, Some(_)) => Some("a Monitor `ws` field is not an object".to_string()),
-        (Some(_), Some(_)) => Some("a Monitor call carries both `command` and `ws`".to_string()),
-        (None, None) => Some("a Monitor call carries neither `command` nor `ws`".to_string()),
-    }
 }
 
 fn json_kind(value: &serde_json::Value) -> &'static str {
@@ -15766,9 +15765,13 @@ mod tests {
     }
 
     #[test]
-    fn test_payload_refuses_unrecognised_monitor_shapes() {
+    fn test_monitor_problem_refuses_unrecognised_shapes() {
         // A Monitor input the judge does not recognise cannot be shown to
-        // carry no shell text, so it is refused rather than passed.
+        // carry no shell text, so it is reported rather than passed.
+        let problem = |json: &str, extra: &[&str]| {
+            let extra: Vec<String> = extra.iter().map(|name| (*name).to_string()).collect();
+            HookPayload::parse(json).unwrap().monitor_problem(&extra)
+        };
         for input in [
             r#"{}"#,
             r#"{"description":"d"}"#,
@@ -15782,24 +15785,53 @@ mod tests {
             r#"{"ws":{"url":"wss://x.invalid/e","command":"sudo true"}}"#,
         ] {
             let json = format!(r#"{{"tool_name":"Monitor","tool_input":{input},"cwd":"/x"}}"#);
-            assert!(
-                matches!(HookPayload::parse(&json), Err(PayloadError::Malformed(_))),
-                "should refuse: {input}"
-            );
+            assert!(problem(&json, &[]).is_some(), "should refuse: {input}");
         }
         let no_input = r#"{"tool_name":"Monitor","cwd":"/x"}"#;
-        assert!(matches!(
-            HookPayload::parse(no_input),
-            Err(PayloadError::Malformed(_))
-        ));
+        assert!(problem(no_input, &[]).is_some());
         let camel = r#"{"toolName":"Monitor","toolInput":{"script":"sudo true"}}"#;
-        assert!(matches!(
-            HookPayload::parse(camel),
-            Err(PayloadError::Malformed(_))
-        ));
+        assert!(problem(camel, &[]).is_some());
         // Other shell tools keep their lenient reading.
         let bash = r#"{"tool_name":"Bash","tool_input":{"command":"git status","extra":1}}"#;
-        assert!(HookPayload::parse(bash).is_ok());
+        assert!(problem(bash, &[]).is_none());
+    }
+
+    #[test]
+    fn test_monitor_problem_accepts_the_native_payload_shape() {
+        // The PreToolUse payload Claude Code 2.1.318 sent for a Monitor call,
+        // captured natively on 2026-11-03 (TSK-1058). The harness adds
+        // `timeout_ms` although the request did not ask for it.
+        let native = r#"{"session_id":"3dc9e626-7a06-4cb9-93db-72898a73e9b9","transcript_path":"/Users/sathya/.claude/projects/-private-tmp-tsk1058-capture/3dc9e626-7a06-4cb9-93db-72898a73e9b9.jsonl","cwd":"/private/tmp/tsk1058-capture","scratchpad_dir":"/private/tmp/claude-501/-private-tmp-tsk1058-capture/3dc9e626-7a06-4cb9-93db-72898a73e9b9/scratchpad","prompt_id":"308a16c7-ef1d-4fa5-8349-68ed41bbbb64","permission_mode":"bypassPermissions","effort":{"level":"medium"},"hook_event_name":"PreToolUse","tool_name":"Monitor","tool_input":{"description":"capture","timeout_ms":300000,"command":"echo tsk1058-marker"},"tool_use_id":"toolu_01Y2idKi6V2z2nQLNstyZkUk"}"#;
+        let payload = HookPayload::parse(native).unwrap();
+        assert_eq!(payload.shell_command(), Some("echo tsk1058-marker"));
+        assert_eq!(payload.monitor_problem(&[]), None);
+    }
+
+    #[test]
+    fn test_monitor_problem_names_the_field_and_honours_listed_extras() {
+        let json = r#"{"tool_name":"Monitor","tool_input":{"command":"git status","script":"x"}}"#;
+        let payload = HookPayload::parse(json).unwrap();
+        assert_eq!(
+            payload.monitor_problem(&[]).as_deref(),
+            Some("the field `script`")
+        );
+        // A listed name is accepted; another is still named.
+        let listed = vec!["script".to_string()];
+        assert_eq!(payload.monitor_problem(&listed), None);
+        let other = r#"{"tool_name":"Monitor","tool_input":{"command":"git status","script":"x","more":1}}"#;
+        assert_eq!(
+            HookPayload::parse(other)
+                .unwrap()
+                .monitor_problem(&listed)
+                .as_deref(),
+            Some("the field `more`")
+        );
+        // A list never replaces the need for a command or a socket watch.
+        let bare = r#"{"tool_name":"Monitor","tool_input":{"script":"x"}}"#;
+        assert!(HookPayload::parse(bare)
+            .unwrap()
+            .monitor_problem(&listed)
+            .is_some());
     }
 
     #[test]
