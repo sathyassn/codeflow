@@ -196,6 +196,15 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // git's stderr after a failed blob read, shown in the warning only; the
+    // workflow's own bytes are returned undecoded and compared as bytes
+    (
+        "codeflow-cli/src/cmd/ci/workflow_change.rs",
+        "bytes_at",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // output of the guard canary run in this process, shown by doctor
     (
         "codeflow-cli/src/cmd/hook.rs",
@@ -2064,6 +2073,32 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-cli/src/cmd/ci/classification.rs",
         "name_status",
+        "trim",
+        1,
+        "display",
+    ),
+    // Formats Git stderr only after a failed blob read, for the warning text.
+    (
+        "crates/codeflow-cli/src/cmd/ci/workflow_change.rs",
+        "bytes_at",
+        "trim",
+        1,
+        "display",
+    ),
+    // A workflow that is not valid UTF-8 is described as unlistable, never
+    // decoded lossily; whether it changed was already decided on its bytes.
+    (
+        "crates/codeflow-cli/src/cmd/ci/workflow_change.rs",
+        "describe",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    // Trims serde_yaml's rendering of a non-string YAML key to name it in the
+    // warning; keys are compared as YAML values, never by this text.
+    (
+        "crates/codeflow-cli/src/cmd/ci/workflow_change.rs",
+        "key",
         "trim",
         1,
         "display",
