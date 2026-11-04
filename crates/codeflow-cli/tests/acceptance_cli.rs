@@ -3285,12 +3285,13 @@ fn a_recompletion_keeps_a_criterion_amended_on_the_target() {
 
     git(root, &["switch", "-c", "fix/implementation", LINE]);
     write(root, "src/work.rs", "// fixed after review\n");
-    commit(root, "fix: change reviewed work");
+    let fixed = commit(root, "fix: change reviewed work");
     land(root, "fix/implementation");
 
+    // The re-completion reviews the fix itself, so the line into `main`
+    // finds the fix's landing covered by a reviewed head (TSK-1309).
     git(root, &["switch", "-c", "plan/loosen", LINE]);
-    let fresh = head(root);
-    let closeout = format!("{archived}{}", valid_block(&fresh));
+    let closeout = format!("{archived}{}", valid_block(&fixed));
     write(
         root,
         &record_path("TSK-001"),

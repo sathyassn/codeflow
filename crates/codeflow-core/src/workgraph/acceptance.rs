@@ -4227,11 +4227,33 @@ fn completions_received(
                 ),
             );
             if let Some(proof) = bound.proof {
+                let branch_base =
+                    (branch_task.as_deref() == Some(task.id.as_str())).then_some(base_oid);
                 reviewed.push(receiving_merges::ReviewedTaskHead {
                     head: proof.reviewed,
-                    branch_base: (branch_task.as_deref() == Some(task.id.as_str()))
-                        .then_some(base_oid),
+                    branch_base,
                 });
+                // A reopened task's earlier completions, which the binding
+                // above proved this history made (`archive_problem`), keep
+                // the credit for the task's own work they reviewed. Only
+                // this task's own commits are walked, so no other task's
+                // landing is covered; an archived review outside the head
+                // credits nothing.
+                for archived in task.superseded_blocks() {
+                    let Some(earlier) = archived
+                        .parsed
+                        .ok()
+                        .and_then(|block| commit_of(repo, &block.reviewed))
+                    else {
+                        continue;
+                    };
+                    if is_ancestor_or_same(repo, earlier, head_oid)? {
+                        reviewed.push(receiving_merges::ReviewedTaskHead {
+                            head: earlier,
+                            branch_base,
+                        });
+                    }
+                }
             }
             // A completion made before the range head but bound at it (a
             // frozen range) did not make the head's change: name the head.
