@@ -651,9 +651,17 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 .block--html iframe {
   display: block;
   inline-size: 100%;
-  block-size: 28rem;
+  block-size: var(--cf-export-stage-height, 28rem);
   border: 0;
   background: transparent;
+}
+[data-cf-stage-notice] {
+  margin: 10px 0 0;
+  padding-inline-start: var(--cf-space-3);
+  border-inline-start: 2px solid var(--cf-border-strong);
+  font-size: var(--cf-fs-caption);
+  line-height: 1.45;
+  color: var(--cf-text-muted);
 }
 #cf-present-document [data-cf-block-id] { position: relative; scroll-margin-block-start: 6rem; }
 .block { margin-block: 0 var(--cf-space-7); }
