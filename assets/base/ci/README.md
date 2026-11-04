@@ -66,7 +66,8 @@ advisory and follow `pr_sections`; off/allow disables them. The length
 warning has no policy key of its own and never blocks, at any `pr_sections`
 level.
 
-`git.pr_summary` defaults to block independently. It checks the shape of the
+`git.pr_summary` defaults to warn independently; a project can select block or
+off. It checks the shape of the
 one Summary section: one prose paragraph, then a list or a table, then at
 most one closing paragraph. Only visible blocks count, so text in an HTML
 comment never supplies the lead or the list, and a heading, code block,
