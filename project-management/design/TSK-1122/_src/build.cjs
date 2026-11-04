@@ -22,7 +22,7 @@ const first = s => { const t = String(s || '').replace(/\s+/g, ' ').trim(); cons
 const lead = s => { const f = first(s); if (f.length <= 150) return f; let cut = -1; for (const m of f.matchAll(/[,;:] /g)) { if (m.index > 50 && m.index <= 140) cut = m.index; } if (cut < 0) { const sp = f.lastIndexOf(' ', 140); cut = sp > 50 ? sp : 140; } return f.slice(0, cut).replace(/[,;:]$/, '') + '.'; };
 const md = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
 const pct1 = (a, b) => b ? (Math.round(1000 * a / b) / 10).toFixed(1) : '0.0';
-const S = F.scope, overall = pct1(S.complete, S.total), EP = Object.values(F.epics), T = F.tasks, CAPS = F.capabilities || {};
+const S = F.scope, overall = pct1(S.complete, S.total), EP = Object.values(F.epics), T = F.tasks, CAPS = F.capabilities || {}, CE = F.capabilityEntries || {};
 const READ_AT = when(F.read.finished), PREV_W = when(P.snapshotAt), TRACK_AT = when(R.readAt), BLOCK_AT = when(R.blockersEvidenceAt || R.readAt);
 const nameOf = id => R.names[id] || (T[id] && T[id].title) || (F.epics[id] && F.epics[id].title) || CAPS[id] || null;
 const idTag = id => `<span class="id">${esc(id)}</span>`;
@@ -128,7 +128,7 @@ function topicView(e) {
   <div class="vhead"><h2>${esc(cap(e.title))}</h2>${idTag(e.id)}${chip(esc(epicState(e)), e.status === 'in_progress' ? 'accent' : 'plain')}</div>
   <p class="one">${esc(sh.oneLine)}</p>
   ${facts([['Delivers', esc(sh.delivers)], ['For whom', esc(sh.forWhom)], ['Why now', esc(sh.whyNow)]], `${e.title} in three facts`)}
-  <div class="chips gap">${e.capabilities.map(cp => chip(`${esc(CAPS[cp] || 'capability')} ${idTag(cp)}`)).join('')}${chip(`${e.criteria} epic criteria`)}${chip('verification not recorded on the line', 'warn')}</div>
+  <div class="chips gap">${e.capabilities.map(cp => chip(`${CE[cp] ? link('f-' + cp, esc(CAPS[cp] || CE[cp].name)) : esc(CAPS[cp] || 'capability')} ${idTag(cp)}`)).join('')}${chip(`${e.criteria} epic criteria`)}${chip('verification not recorded on the line', 'warn')}</div>
   ${tabs(id, [['progress', 'Progress', null, progress], ['order', 'Order', ready.length + waiting.length, order], ['issues', 'Issues', blocked.length + prs.length, issues]])}
   ${details('Sources and the whole summary', `${points([`Short phrases: ${esc(sh.source)}.`, ...(sh.forWhomNote ? [`For whom: ${esc(sh.forWhomNote)}.`] : []), ...(sh.whyNowMore ? [`Why now, also: ${esc(sh.whyNowMore)}.`] : []), `Counts: the task records on the line at ${esc(F.read.lineTip)} and on main at ${esc(F.read.mainTip)}, read at ${esc(READ_AT)}.`, 'Ready and waiting: codeflow work next at ' + esc(when(F.next.at)) + '.'])}<h4>The record\u2019s summary, whole</h4>${e.whatItIs.split(/\n\n+/).map(p => `<p class="small">${md(p)}</p>`).join('')}${e.doneMeans !== 'not recorded' ? `<h4>Done means</h4><p class="small">${md(e.doneMeans)}</p>` : ''}`)}
 </section>`;
@@ -154,7 +154,7 @@ function taskView(t) {
   ${crumbs(parts)}
   <div class="vhead"><h2>${esc(t.title)}</h2>${idTag(t.id)}${chip(esc(t.status), t.status === 'complete' ? 'ok' : t.status === 'blocked' ? 'danger' : 'plain')}</div>
   <p class="one">${esc(one)}</p>
-  ${whole ? details('The whole outcome, from the record', `<p class="small">${esc(t.about)}</p>`) : ''}
+  ${whole || (t.context || []).length ? details('The whole outcome and context, from the record', `<h4>Outcome</h4><p class="small">${esc(t.about)}</p>${(t.context || []).length ? `<h4>Context</h4>${t.context.map(p => `<p class="small">${esc(p)}</p>`).join('')}` : ''}`) : ''}
   ${fig(`${t.title}: where it is`, 'Where the task is on its way to main', taskPath(t), '', '', false)}
   ${facts([['Outcome', e ? `${link('o-' + e.id, esc(cap(e.title)))} ${idTag(e.id)}` : nr], ['Theme', e ? `<span class="wide-cell">${link(themeKey(e.id, t.theme), esc(t.theme))}</span>` : nr], ['Where it is', locChip(t)], ['State', esc(t.status)], ['Lane', nr], ['Window', nr], ['Record last changed', esc(when(t.lastMoved))], ['Pull request', t.prs.length ? t.prs.map(n => `<span class="mono">#${n}</span>`).join(' ') : 'none open']], 'Eight facts')}
   <div class="grid deps gap">
@@ -164,6 +164,20 @@ function taskView(t) {
   ${details('Evidence', vt({ cols: '12ch minmax(0,1fr)', head: ['Fact', 'Source'], label: 'Evidence', rows: [['record', `<code>project-management/tasks/${t.id}.md</code> on the line at ${esc(F.read.lineTip)}`], ['read at', esc(READ_AT)], ['where it is', 'origin/main and the open pull requests, read only'], ['ready or waiting', t.next ? `codeflow work next at ${esc(when(F.next.at))}: ${esc(t.next.state)}` : 'not listed by codeflow work next']].map(r => ({ cells: [`<span class="mono">${r[0]}</span>`, `<span class="mute">${r[1]}</span>`] })) }))}
 </section>`;
 }
+// A feature is its capability entry (TSK-1098 AC-13): what it is, then its status, then the epics that build it; no empty group.
+function featureView(id) {
+  const c = CE[id], name = cap(CAPS[id] || c.name), about = c.about.join(' ') || 'not recorded', one = lead(c.about[0] || about), eps = c.epics.filter(x => F.epics[x]);
+  return `${view()}<section class="view" id="f-${id}" data-title="${esc(name)}">
+  ${crumbs([['overview', 'Release'], ['f-' + id, name]])}
+  <div class="vhead"><h2>${esc(name)}</h2>${idTag(id)}${chip(esc(c.status || 'not recorded'), c.status === 'shipped' ? 'ok' : 'plain')}</div>
+  <p class="one">${esc(one)}</p>
+  ${one.length < about.length ? details('The whole entry, from the record', c.about.map(p => `<p class="small">${esc(p)}</p>`).join('')) : ''}
+  ${facts([['State', esc(c.status || 'not recorded')], ['Area', esc(c.area || 'not recorded')]], 'Two facts')}
+  ${eps.length ? `<div class="card gap" data-block="${esc(name)}: epics"><h4>Built by</h4>${points(eps.map(x => `${link('o-' + x, esc(cap(F.epics[x].title)))} ${idTag(x)}`))}</div>` : ''}
+  ${details('Evidence', `<p class="small">The entry for ${esc(id)} in <code>docs/capabilities.md</code> on the line at ${esc(F.read.lineTip)}, read at ${esc(READ_AT)}.</p>`)}
+</section>`;
+}
+const featureViews = [...new Set(EP.flatMap(e => e.capabilities))].filter(id => CE[id]).map(featureView).join('\n');
 const topicViews = EP.map(topicView).join('\n');
 const themeViews = EP.flatMap(e => Object.keys(e.themes).map((n, i) => themeView(e, n, i))).join('\n');
 const taskViews = Object.values(T).map(taskView).join('\n');
@@ -459,6 +473,7 @@ const html = `<!doctype html>
     ${topicViews}
     ${themeViews}
     ${taskViews}
+    ${featureViews}
     ${epicsView}
     ${blockersView}
     ${sinceView}

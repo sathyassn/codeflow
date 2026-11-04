@@ -28,11 +28,14 @@ function readTasks(ref) {
   for (const f of git('ls-tree', '--name-only', ref, 'project-management/tasks/').split('\n').filter(x => /TSK-\d+\.md$/.test(x))) {
     const id = path.basename(f, '.md'); const t = git('show', `${ref}:${f}`);
     const outcome = (t.match(/\n## Outcome\s*\n+([\s\S]*?)(?=\n## |\s*$(?![\s\S]))/) || [])[1];
+    // the record's Context is its ## Description: paragraphs kept, fenced figures left out because a disclosure draws no figure
+    const description = (t.match(/\n## Description\s*\n+([\s\S]*?)(?=\n## |\s*$(?![\s\S]))/) || [])[1];
+    const context = description ? description.replace(/```[\s\S]*?```/g, '').split(/\n\s*\n/).map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean) : [];
     const serves = [...t.matchAll(/serves (EPC-\d+) (AC-\d+)/g)].map(m => m[1] + ' ' + m[2]);
     out[id] = { id, epic: fm(t, 'epic_id'), status: fm(t, 'status'), work_type: fm(t, 'work_type'), title: unq(fm(t, 'title')), created: fm(t, 'created'),
       depends_on: (fm(t, 'depends_on') || '[]').replace(/[\[\]\s]/g, '').split(',').filter(Boolean).filter(x => /^TSK-\d+$/.test(x)),
       about: outcome ? outcome.replace(/\s+/g, ' ').trim() : 'not recorded',   // the whole Outcome section, never cut
-      criteria: (t.match(/^- AC-\d+/gm) || []).length, serves: [...new Set(serves)].slice(0, 6) };
+      context, criteria: (t.match(/^- AC-\d+/gm) || []).length, serves: [...new Set(serves)].slice(0, 6) };
   }
   return out;
 }
@@ -67,6 +70,15 @@ for (const e of EPICS) {
 const capabilities = {};
 for (const m of git('show', `${LINE_AT}:docs/capabilities.md`).matchAll(/^\| (CAP-\d+) \| ([a-z0-9-]+) \|/gm)) capabilities[m[1]] = m[2].replace(/-/g, ' ');
 
+// 2b2. each capability's entry for its feature view: the yaml fence's facts and the prose after the fence (tables left out)
+const capabilityEntries = {};
+for (const m of git('show', `${LINE_AT}:docs/capabilities.md`).matchAll(/```yaml\n([\s\S]*?)```\n([\s\S]*?)(?=\n#{2,4} |\s*$(?![\s\S]))/g)) {
+  const y = k => (m[1].match(new RegExp(`^${k}: (.*)$`, 'm')) || [])[1] || '';
+  if (!/^CAP-\d+$/.test(y('id'))) continue;
+  const about = m[2].split(/\n\s*\n/).filter(p => !/^\s*\|/.test(p)).map(p => p.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  capabilityEntries[y('id')] = { name: y('name').replace(/-/g, ' '), area: y('area'), status: y('status'), epics: y('epics').replace(/[\[\]\s]/g, '').split(',').filter(Boolean), about };
+}
+
 // 2c. the docs pages that changed between main and the line (the portal's "What changed" page): one numstat, read only
 const docsKind = {}; for (const l of git('diff', '--name-status', MAIN_AT, LINE_AT, '--', 'docs/').split('\n').filter(Boolean)) { const [k, f] = l.split('\t'); docsKind[f] = k === 'A' ? 'new' : k === 'D' ? 'removed' : 'changed'; }
 const docsChanged = git('diff', '--numstat', MAIN_AT, LINE_AT, '--', 'docs/').split('\n').filter(Boolean).map(l => { const [a, d, f] = l.split('\t'); return { file: f, added: +a || 0, removed: +d || 0, kind: docsKind[f] || 'changed' }; });
@@ -79,9 +91,9 @@ for (const ln of git('log', '--format=%x01%ci', '--name-only', LINE, '--', 'proj
 
 if (refresh) {
   const at = est(new Date());
-  for (const [id, t] of Object.entries(PREV.tasks)) if (line[id]) { t.about = line[id].about; t.criteria = line[id].criteria; t.serves = line[id].serves; }
+  for (const [id, t] of Object.entries(PREV.tasks)) if (line[id]) { t.about = line[id].about; t.context = line[id].context; t.criteria = line[id].criteria; t.serves = line[id].serves; }
   for (const e of EPICS) if (PREV.epics[e]) Object.assign(PREV.epics[e], { whatItIs: epics[e].whatItIs, serves: epics[e].serves, doneMeans: epics[e].doneMeans, deliverable: epics[e].deliverable, deliverableSource: epics[e].deliverableSource });
-  PREV.capabilities = capabilities; PREV.docsChanged = docsChanged; PREV.read.recordsRefreshedAt = at;
+  PREV.capabilities = capabilities; PREV.capabilityEntries = capabilityEntries; PREV.docsChanged = docsChanged; PREV.read.recordsRefreshedAt = at;
   fs.writeFileSync(path.join(HERE, 'facts.json'), JSON.stringify(PREV, null, 1));
   console.log(`refreshed the record texts at ${PREV.read.lineTip} (main ${PREV.read.mainTip}) at ${at}: ${Object.keys(PREV.tasks).length} tasks, ${EPICS.length} epics, ${Object.keys(capabilities).length} capability names, ${docsChanged.length} docs files changed`);
   process.exit(0);
@@ -130,7 +142,7 @@ for (const r of (next.rows || [])) if (tasks[r.id]) tasks[r.id].next = { state: 
 const facts = {
   read: { started: est(started), finished: est(new Date()), lineRef: LINE, lineTip: git('rev-parse', '--short=9', LINE).trim(), mainTip: git('rev-parse', '--short=9', MAIN).trim(), repo: REPO, codeflow: run('codeflow', ['--version'], { soft: true }).trim().split(' ').slice(0, 2).join(' ') },
   scope, epics, tasks, gh, next: { read: next.read, at: next.at, head: next.head, counts: next.rows ? next.rows.reduce((a, r) => (a[r.state] = (a[r.state] || 0) + 1, a), {}) : {} },
-  capabilities, docsChanged,
+  capabilities, capabilityEntries, docsChanged,
 };
 fs.writeFileSync(path.join(HERE, 'facts.json'), JSON.stringify(facts, null, 1));
 console.log(JSON.stringify({ started: facts.read.started, finished: facts.read.finished, lineTip: facts.read.lineTip, mainTip: facts.read.mainTip, scope, epics: Object.fromEntries(EPICS.map(e => [e, { ...epics[e].counts, themes: Object.keys(epics[e].themes).length }])), gh: gh.read ? { open: gh.open.length, mergedToday: gh.mergedToday.length, ahead: gh.ahead, behind: gh.behind } : 'not read', next: facts.next.counts }));
