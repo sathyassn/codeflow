@@ -121,10 +121,8 @@ fn doctor_and_status_name_a_ref_git_calls_broken_and_never_call_it_damage() {
             report.contains("not evidence of repository damage"),
             "{surface}: {report}"
         );
-        assert!(
-            report.contains("git pack-refs --all"),
-            "{surface}: {report}"
-        );
+        assert!(report.contains("git branch -m"), "{surface}: {report}");
+        assert!(!report.contains("pack-refs"), "{surface}: {report}");
         assert!(!report.contains("corrupt"), "{surface}: {report}");
     }
     assert!(doctor.contains("warn  repo-integrity"), "{doctor}");
@@ -149,15 +147,12 @@ fn a_refused_tracked_file_is_named_and_asks_nothing() {
     let doctor = cli(&linked, &["doctor", "--check", "repo-integrity"]);
     let status = cli(&linked, &["status"]);
     set_mode(&tracked, 0o644);
-    for (surface, report) in [("doctor", &doctor), ("status", &status)] {
-        assert!(
-            report.contains("unreadable tracked files: plain.txt"),
-            "{surface}: {report}"
-        );
-        assert!(
-            report.contains("the file names can stay"),
-            "{surface}: {report}"
-        );
-        assert!(!report.contains("unreadable ref:"), "{surface}: {report}");
-    }
+    assert!(
+        doctor.contains("unreadable tracked files: plain.txt"),
+        "{doctor}"
+    );
+    assert!(doctor.contains("the file names can stay"), "{doctor}");
+    assert!(!doctor.contains("unreadable ref:"), "{doctor}");
+    // `status` runs often, so it does not open every tracked file.
+    assert!(!status.contains("unreadable"), "{status}");
 }

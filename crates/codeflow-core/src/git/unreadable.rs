@@ -44,7 +44,7 @@ impl Unreadable {
         let mut lines = Vec::new();
         if !self.refs.is_empty() {
             lines.push(format!(
-                "unreadable ref: {}. The file exists and this process is refused when it reads it. Git reports such a ref as broken (bad ref, bad object, a HEAD of zeros, every file staged as new) and `git fetch` can fail. A sandbox or file permissions refuse the read; this is not evidence of repository damage. Next: outside the sandbox, rename a local branch with `git branch -m <old> <new>`, or run `git pack-refs --all`, which lasts until that ref next moves",
+                "unreadable ref: {}. The file exists and this process is refused when it reads it. Git reports such a ref as broken (bad ref, bad object, a HEAD of zeros, every file staged as new) and `git fetch` can fail. A sandbox or file permissions refuse the read; this is not evidence of repository damage. Next: outside the sandbox, rename a local branch with `git branch -m <old> <new>`",
                 listed(&self.refs)
             ));
         }
@@ -56,7 +56,7 @@ impl Unreadable {
         }
         if !self.tracked.is_empty() {
             lines.push(format!(
-                "unreadable tracked files: {}. A sandbox or file permissions refuse the read, so `git status` can print \"Operation not permitted\" for them and this checkout's working state can read as unavailable. This is not evidence of repository damage, and the file names can stay",
+                "unreadable tracked files: {}. A sandbox or file permissions refuse the read, so `git status` can print \"Operation not permitted\" for them and `codeflow status` cannot rule out local changes in this checkout. This is not evidence of repository damage, and the file names can stay",
                 listed(&self.tracked)
             ));
         }
@@ -78,9 +78,25 @@ fn listed(names: &[String]) -> String {
 }
 
 /// Scan `repo`'s loose refs, its reflogs and this checkout's tracked files.
+/// This opens every tracked file, so it belongs to an explicit health check.
 #[must_use]
 pub fn scan(repo: &git2::Repository) -> Unreadable {
     scan_with(repo, &read_regular_file)
+}
+
+/// Scan only `repo`'s loose refs and reflogs, which are few, for a report that
+/// must stay cheap on every run.
+#[must_use]
+pub fn scan_refs(repo: &git2::Repository) -> Unreadable {
+    refs_with(repo, &read_regular_file)
+}
+
+/// Whether reading the file at `git_path` under `workdir` is refused.
+#[must_use]
+pub fn is_refused(workdir: &Path, git_path: &[u8]) -> bool {
+    read_regular_file(&workdir.join(path_of(git_path)))
+        .as_ref()
+        .is_err_and(refused)
 }
 
 /// Stat `path`, then open it when it is a regular file. A sandbox refuses the
@@ -94,6 +110,15 @@ fn read_regular_file(path: &Path) -> io::Result<()> {
 }
 
 fn scan_with(repo: &git2::Repository, read: &dyn Fn(&Path) -> io::Result<()>) -> Unreadable {
+    let mut tracked = tracked_refused(repo, read);
+    tracked.sort();
+    Unreadable {
+        tracked,
+        ..refs_with(repo, read)
+    }
+}
+
+fn refs_with(repo: &git2::Repository, read: &dyn Fn(&Path) -> io::Result<()>) -> Unreadable {
     let common = repo.commondir();
     let mut refs = Vec::new();
     walk(&common.join("refs"), "refs", read, &mut refs);
@@ -103,12 +128,10 @@ fn scan_with(repo: &git2::Repository, read: &dyn Fn(&Path) -> io::Result<()>) ->
     // A ref already named carries its reflog with it in the same report.
     reflogs.retain(|name| !refs.contains(name));
     reflogs.sort();
-    let mut tracked = tracked_refused(repo, read);
-    tracked.sort();
     Unreadable {
         refs,
         reflogs,
-        tracked,
+        tracked: Vec::new(),
     }
 }
 
@@ -242,7 +265,8 @@ mod tests {
             "{line}"
         );
         assert!(line.contains("not evidence of repository damage"), "{line}");
-        assert!(line.contains("git pack-refs --all"), "{line}");
+        assert!(line.contains("git branch -m"), "{line}");
+        assert!(!line.contains("pack-refs"), "{line}");
     }
 
     /// A tracked file with a denied name stays legitimate: it is named,
@@ -327,6 +351,36 @@ mod tests {
         let found = scan(&repo);
         set(&folder, 0o755);
         assert_eq!(found.refs, ["refs/heads/task"]);
+    }
+
+    /// The cheap scan never opens a tracked file, however it would answer.
+    #[cfg(unix)]
+    #[test]
+    fn the_refs_scan_leaves_tracked_files_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = repository(dir.path(), "task/TSK-1-plain");
+        let found = refs_with(&repo, &|path| {
+            assert!(!file_name_holds(path, "plain.txt"), "{}", path.display());
+            read_regular_file(path)
+        });
+        assert_eq!(found, Unreadable::default());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_refused_is_true_only_for_a_refused_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("plain.txt");
+        std::fs::write(&file, "x\n").unwrap();
+        assert!(!is_refused(dir.path(), b"plain.txt"));
+        assert!(!is_refused(dir.path(), b"absent.txt"));
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::File::open(&file).is_ok() {
+            eprintln!("skipped: this user reads through mode 000");
+            return;
+        }
+        assert!(is_refused(dir.path(), b"plain.txt"));
     }
 
     #[test]
