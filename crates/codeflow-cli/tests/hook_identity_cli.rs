@@ -78,6 +78,11 @@ fn stale_sources_warn_twice_and_matching_inputs_clear_the_warning() {
         "crates/codeflow-core/src/git/remote_query.rs",
         "crates/codeflow-cli/src/cmd/push_set.rs",
         "crates/codeflow-cli/src/cmd/ci/judging.rs",
+        "crates/codeflow-cli/src/cmd/ci.rs",
+        "crates/codeflow-cli/src/cmd/ci/capability_impact.rs",
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "crates/codeflow-core/src/capability.rs",
+        "crates/codeflow-core/src/capability/impact.rs",
     ] {
         let probe = root.join(input);
         std::fs::create_dir_all(probe.parent().unwrap()).unwrap();

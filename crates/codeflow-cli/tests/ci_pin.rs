@@ -1837,8 +1837,8 @@ fn judge_a_forged_head(head_pin: &str) {
     // a commit that breaks the target's format rule.
     git(&origin, &["checkout", "-b", "feat/x"]);
     let forged = POLICY.replace(
-        "run: codeflow ci --base \"$BASE_SHA\" --head \"$HEAD_SHA\" --branch \"$HEAD_REF\" --actor \"$ACTOR\"",
-        "run: exit 0",
+        "codeflow ci --base \"$BASE_SHA\" --head \"$HEAD_SHA\" --branch \"$HEAD_REF\" --actor \"$ACTOR\"",
+        "exit 0",
     );
     assert_ne!(forged, POLICY);
     std::fs::write(origin.join(".github/workflows/codeflow-policy.yml"), forged).unwrap();

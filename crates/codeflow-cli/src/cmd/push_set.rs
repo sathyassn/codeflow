@@ -2,10 +2,11 @@
 //!
 //! - `codeflow ci` runs once per pushed branch on git data: the range from
 //!   the destination's own history to the pushed sha.
-//! - The push set runs no tree checks (TSK-449): `codeflow validate --docs`
+//! - The push set runs no checkout test targets (TSK-449): `codeflow validate --docs`
 //!   is `codeflow ci`'s own `work.valid_graph` check, and the test-config
 //!   targets belong to `codeflow test`, cited when the pull request is made
 //!   ready. A push is a backup; it neither runs nor waits for a test target.
+//!   Capability impact is deferred to the hosted actual-target check.
 //!   The conflict-marker check runs inside each `codeflow ci`; staged
 //!   secrets are refused by the pre-commit hook and by the hosted gitleaks
 //!   scan, not here.

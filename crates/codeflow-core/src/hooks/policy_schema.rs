@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 78] = [
+pub const SCHEMA: [KeySpec; 79] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -570,6 +570,13 @@ pub const SCHEMA: [KeySpec; 78] = [
         valid: LEVEL_VALID,
         purpose: "Generic Release impact fields and breaking commit floor in PR bodies.",
         notes: "Defaults to warn independently of pr_sections. Extra project fields are allowed; this check does not calculate versions or require release automation.",
+    },
+    KeySpec {
+        path: "git.pr_capability_impact",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Capability declarations agree with the catalog delta at exact commits.",
+        notes: "Opt-in. Hosted PR checks require a body. Local pushes defer this rule to hosted actual-target CI. Absent or off performs no catalog reads. Legacy conversions require shared registry bindings fetched before hosted codeflow ci.",
     },
     KeySpec {
         path: "git.pr_summary",

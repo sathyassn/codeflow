@@ -16,6 +16,11 @@ pub const INPUT_ROOTS: &[&str] = &[
     "crates/codeflow-core/src/git/remote_query.rs",
     "crates/codeflow-cli/src/cmd/push_set.rs",
     "crates/codeflow-cli/src/cmd/ci/judging.rs",
+    "crates/codeflow-cli/src/cmd/ci.rs",
+    "crates/codeflow-cli/src/cmd/ci/capability_impact.rs",
+    "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+    "crates/codeflow-core/src/capability.rs",
+    "crates/codeflow-core/src/capability/impact.rs",
     "assets/base/policy.json",
     "assets/base/git-hooks",
 ];

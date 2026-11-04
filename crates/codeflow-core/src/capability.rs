@@ -12,6 +12,8 @@ pub mod create;
 
 use serde::Deserialize;
 
+pub mod impact;
+
 /// Legal capability status values (charter §5: planned → building →
 /// shipped → deprecated; deprecate, never delete).
 pub const CAPABILITY_STATUS_VALUES: &[&str] = &["planned", "building", "shipped", "deprecated"];
@@ -197,6 +199,10 @@ pub const CAPABILITY_MAX_LIST_ITEMS: usize = 64;
 pub const CAPABILITY_MAX_FRONTMATTER_KEYS: usize = 32;
 /// Maximum bytes per catalog input, including the legacy Markdown and vocabulary.
 pub const CAPABILITY_MAX_FILE_BYTES: usize = 256 * 1024;
+/// Bound the aggregate work of an untrusted tree catalog before reading blobs.
+pub const CAPABILITY_MAX_TREE_FILES: usize = 10_000;
+/// Bound aggregate blob output before the batch reader allocates it.
+pub const CAPABILITY_MAX_TREE_BYTES: usize = 64 * 1024 * 1024;
 
 const CATALOG_DIR: &str = "docs/capabilities";
 const LEGACY_PATH: &str = "docs/capabilities.md";
@@ -817,6 +823,88 @@ fn legacy_record(entry: CapabilityEntry) -> CapabilityRecord {
     }
 }
 
+/// Keep each legacy entry's surrounding Markdown with the parsed entry.
+/// An equal-or-higher heading ends an entry's section; global guidance and
+/// group headings do not become capability prose. Quoted and fenced headings
+/// do not divide records. YAML parsing stays in `parse_capabilities`.
+fn legacy_records(content: &str, entries: Vec<CapabilityEntry>) -> Vec<CapabilityRecord> {
+    use pulldown_cmark::{Event, Parser, Tag};
+    let lines: Vec<_> = content.split_inclusive('\n').collect();
+    let masked = mask_html_comments(content);
+    let syntax: Vec<_> = masked.lines().collect();
+    let offsets: Vec<_> = lines
+        .iter()
+        .scan(0, |offset, line| {
+            let start = *offset;
+            *offset += line.len();
+            Some(start)
+        })
+        .collect();
+    let mut headings = Vec::new();
+    let mut depth = 0usize;
+    for (event, span) in Parser::new(content).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Heading { level, .. }) if depth == 0 => {
+                headings.push((
+                    offsets
+                        .partition_point(|start| *start <= span.start)
+                        .saturating_sub(1),
+                    level,
+                ));
+                depth += 1;
+            }
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    let mut previous = 0;
+    let starts: Vec<_> = entries
+        .iter()
+        .map(|entry| {
+            let fence = entry.line - 1;
+            let start = headings
+                .iter()
+                .rev()
+                .find(|(line, _)| *line < fence && *line >= previous)
+                .copied()
+                .map_or((fence, None), |(line, level)| (line, Some(level)));
+            previous = fence + 1;
+            start
+        })
+        .collect();
+    entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let fence = entry.line - 1;
+            let marker = if syntax[fence].trim().starts_with('~') {
+                "~~~"
+            } else {
+                "```"
+            };
+            let end_fence = syntax[fence + 1..]
+                .iter()
+                .position(|line| line.trim() == marker)
+                .map_or(lines.len(), |n| fence + n + 2);
+            let (start, level) = starts[index];
+            let next = starts.get(index + 1).map_or(lines.len(), |(line, _)| *line);
+            let end = headings
+                .iter()
+                .find(|(line, heading)| {
+                    *line >= end_fence && level.is_some_and(|level| *heading <= level)
+                })
+                .map_or(next, |(line, _)| next.min(*line));
+            let mut record = legacy_record(entry);
+            record.prose = lines[start..fence].concat();
+            if end_fence <= end {
+                record.prose.push_str(&lines[end_fence..end].concat());
+            }
+            record
+        })
+        .collect()
+}
+
 fn parse_catalog(
     files: &std::collections::BTreeMap<String, Vec<u8>>,
 ) -> Result<CapabilityCatalog, CapabilityCatalogError> {
@@ -855,9 +943,7 @@ fn parse_catalog_with_issues(
             line: error.line,
             message: error.message,
         }));
-        catalog
-            .records
-            .extend(entries.into_iter().map(legacy_record));
+        catalog.records.extend(legacy_records(content, entries));
     }
     if let Some(content) = texts.get(VOCABULARY_PATH) {
         match parse_vocabulary(content) {
@@ -1094,9 +1180,13 @@ pub fn load_capability_catalog_from_tree(
             &format!("{revision}^{{tree}}"),
         ])
         .map_err(|error| catalog_error("<tree>", error.to_string()))?;
-    let entries = git
-        .tree(tree.trim(), &["docs", ".codeflow"])
+    let repo = git2::Repository::discover(root)
         .map_err(|error| catalog_error("<tree>", error.to_string()))?;
+    let entries = catalog_tree_entries(&repo, tree.trim())?;
+    let odb = repo
+        .odb()
+        .map_err(|error| catalog_error("<tree>", error.to_string()))?;
+    let mut total = 0usize;
     let mut selected = Vec::new();
     for (mode, blob, path) in entries {
         if ["docs", CATALOG_DIR, ".codeflow"].contains(&path.as_str()) {
@@ -1110,19 +1200,25 @@ pub fn load_capability_catalog_from_tree(
                 validate_capability_path(&path)?;
             }
             check_mode(&path, &mode)?;
-            let size = git
-                .run(&["cat-file", "-s", &blob])
+            let oid = git2::Oid::from_str(&blob)
                 .map_err(|error| catalog_error(&path, error.to_string()))?;
-            let size = size
-                .strip_suffix('\n')
-                .unwrap_or(&size)
-                .parse::<u64>()
-                .map_err(|error| catalog_error(&path, format!("invalid blob size: {error}")))?;
-            if size > CAPABILITY_MAX_FILE_BYTES as u64 {
+            let (size, kind) = odb
+                .read_header(oid)
+                .map_err(|error| catalog_error(&path, error.to_string()))?;
+            if kind != git2::ObjectType::Blob {
+                return Err(catalog_error(&path, "catalog input must be a blob"));
+            }
+            if size > CAPABILITY_MAX_FILE_BYTES {
                 return Err(catalog_error(
                     &path,
                     format!("input exceeds {CAPABILITY_MAX_FILE_BYTES} bytes"),
                 ));
+            }
+            total = total
+                .checked_add(size)
+                .ok_or_else(|| catalog_error(&path, "catalog byte count overflow"))?;
+            if total > CAPABILITY_MAX_TREE_BYTES || selected.len() >= CAPABILITY_MAX_TREE_FILES {
+                return Err(catalog_error(&path, format!("catalog exceeds {CAPABILITY_MAX_TREE_FILES} files or {CAPABILITY_MAX_TREE_BYTES} bytes")));
             }
             selected.push((path, blob));
         }
@@ -1139,6 +1235,138 @@ pub fn load_capability_catalog_from_tree(
         files.insert(path, content.clone());
     }
     parse_catalog(&files)
+}
+
+/// Inspect only the catalog and its exact configuration inputs. Do not list
+/// unrelated documentation or configuration subtrees before applying bounds.
+fn catalog_tree_entries(
+    repo: &git2::Repository,
+    revision: &str,
+) -> Result<Vec<(String, String, String)>, CapabilityCatalogError> {
+    fn directory<'r>(
+        repo: &'r git2::Repository,
+        tree: &git2::Tree<'_>,
+        name: &str,
+        path: &str,
+    ) -> Result<Option<git2::Tree<'r>>, CapabilityCatalogError> {
+        let Some(entry) = tree.get_name(name) else {
+            return Ok(None);
+        };
+        if entry.filemode() != 0o040_000 {
+            return Err(catalog_error(
+                path,
+                "catalog input parent must be a real directory",
+            ));
+        }
+        bounded_catalog_tree(repo, entry.id(), path).map(Some)
+    }
+    fn row(entry: &git2::TreeEntry<'_>, path: String) -> (String, String, String) {
+        (
+            format!("{:o}", entry.filemode()),
+            entry.id().to_string(),
+            path,
+        )
+    }
+    let id = git2::Oid::from_str(revision).map_err(|e| catalog_error("<tree>", e.to_string()))?;
+    let tree = bounded_catalog_tree(repo, id, "<tree>")?;
+    let mut entries = Vec::new();
+    if let Some(docs) = directory(repo, &tree, "docs", "docs")? {
+        if let Some(legacy) = docs.get_name("capabilities.md") {
+            entries.push(row(&legacy, LEGACY_PATH.into()));
+        }
+        if let Some(catalog) = directory(repo, &docs, "capabilities", CATALOG_DIR)? {
+            entries.extend(catalog_entries(repo, catalog.id())?);
+        }
+    }
+    if let Some(config) = directory(repo, &tree, ".codeflow", ".codeflow")? {
+        if let Some(project) = config.get_name("project.toml") {
+            entries.push(row(&project, PROJECT_PATH.into()));
+        }
+    }
+    Ok(entries)
+}
+
+/// Inspect nested directories only to find misplaced records. Unrelated
+/// companion assets remain allowed, and traversal itself has a work bound.
+fn catalog_entries(
+    repo: &git2::Repository,
+    catalog: git2::Oid,
+) -> Result<Vec<(String, String, String)>, CapabilityCatalogError> {
+    let mut pending = vec![(catalog, CATALOG_DIR.to_owned())];
+    let mut entries = Vec::new();
+    let mut count = 0usize;
+    let mut path_bytes = 0usize;
+    let mut tree_bytes = 0usize;
+    while let Some((id, parent)) = pending.pop() {
+        let (size, kind) = repo
+            .odb()
+            .and_then(|odb| odb.read_header(id))
+            .map_err(|e| catalog_error(&parent, e.to_string()))?;
+        tree_bytes = tree_bytes.saturating_add(size);
+        if kind != git2::ObjectType::Tree || tree_bytes > CAPABILITY_MAX_TREE_BYTES {
+            return Err(catalog_error(
+                CATALOG_DIR,
+                "catalog directory inventory exceeds the byte bound or is not a tree",
+            ));
+        }
+        let tree = repo
+            .find_tree(id)
+            .map_err(|e| catalog_error(&parent, e.to_string()))?;
+        count = count.saturating_add(tree.len());
+        if count > CAPABILITY_MAX_TREE_FILES {
+            return Err(catalog_error(
+                CATALOG_DIR,
+                format!("catalog exceeds {CAPABILITY_MAX_TREE_FILES} entries"),
+            ));
+        }
+        for entry in &tree {
+            let name = entry
+                .name()
+                .map_err(|_| catalog_error(&parent, "catalog path is not UTF-8"))?;
+            path_bytes = path_bytes
+                .saturating_add(parent.len())
+                .saturating_add(1)
+                .saturating_add(name.len());
+            if path_bytes > CAPABILITY_MAX_TREE_BYTES {
+                return Err(catalog_error(
+                    CATALOG_DIR,
+                    "catalog path inventory exceeds the byte bound",
+                ));
+            }
+            let path = format!("{parent}/{name}");
+            if selected_file(&path) {
+                // The caller rejects a nested record or a non-blob mode,
+                // naming the exact input just as the checkout reader does.
+                entries.push((
+                    format!("{:o}", entry.filemode()),
+                    entry.id().to_string(),
+                    path,
+                ));
+            } else if entry.kind() == Some(git2::ObjectType::Tree) {
+                pending.push((entry.id(), path));
+            }
+        }
+    }
+    Ok(entries)
+}
+
+fn bounded_catalog_tree<'r>(
+    repo: &'r git2::Repository,
+    id: git2::Oid,
+    path: &str,
+) -> Result<git2::Tree<'r>, CapabilityCatalogError> {
+    let (size, kind) = repo
+        .odb()
+        .and_then(|odb| odb.read_header(id))
+        .map_err(|e| catalog_error(path, e.to_string()))?;
+    if kind != git2::ObjectType::Tree || size > CAPABILITY_MAX_TREE_BYTES {
+        return Err(catalog_error(
+            path,
+            "catalog input directory exceeds the byte bound or is not a tree",
+        ));
+    }
+    repo.find_tree(id)
+        .map_err(|e| catalog_error(path, e.to_string()))
 }
 
 #[cfg(test)]

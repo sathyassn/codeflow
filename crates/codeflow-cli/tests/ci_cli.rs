@@ -15,6 +15,11 @@ mod acceptance_fix;
 mod base_policy;
 #[path = "ci_cli/cancelled_standalone.rs"]
 mod cancelled_standalone;
+#[path = "ci_cli/capability_impact.rs"]
+mod capability_impact;
+#[cfg(unix)]
+#[path = "ci_cli/capability_snapshot.rs"]
+mod capability_snapshot;
 #[path = "ci_cli/change_class_probes.rs"]
 mod change_class_probes;
 #[cfg(unix)]
