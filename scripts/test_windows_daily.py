@@ -319,7 +319,9 @@ class DiscoverJourneyTests(unittest.TestCase):
             self.commit(origin, "integration/folder", {**folder, "scripts/windows-test-times.json/x": "{}"})
             self.git(origin, "checkout", "-q", "--orphan", "other")
             clone = temp / "clone"
-            self.git(temp, "clone", "-q", "--depth=1", "-b", "main", f"file://{origin.as_posix()}", str(clone))
+            clone.mkdir()
+            self.git(clone, "init", "-q")
+            self.git(clone, "remote", "add", "origin", f"file://{origin.as_posix()}")
 
             result, out, summary = self.discover(clone, temp)
             self.assertEqual(result.returncode, 0, result.stderr)
