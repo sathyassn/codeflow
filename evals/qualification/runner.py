@@ -19,6 +19,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 
@@ -33,6 +34,11 @@ class Refused(RuntimeError):
     def __init__(self, message: str, flag: str | None = None):
         super().__init__(message)
         self.flag = flag
+
+
+class PeerUnverified(Refused):
+    """A peer's accepted directory or hook content failed a recheck before a
+    startup key: the launch loses verification, not only this dialog."""
 
 
 def herdr(*args: str, text: bool = False):
@@ -1023,23 +1029,28 @@ CONFIG_FILES = {
 }
 
 
-def codex_trust_entry(path: Path, repository: Path) -> dict:
+def codex_trust_entry(path: Path, repository: Path, worktrees: list[str] | None = None) -> dict:
     """The trial repository's Codex project entry, and a digest of the rest.
-    Accepting Codex's folder-trust dialog writes exactly that entry."""
+    Accepting Codex's folder-trust dialog writes exactly that entry. `worktrees`
+    names the paths with a recorded acceptance, known only at finish: each one's
+    entry is reported apart and left out of the digest. Every other project
+    stays in the digest, so it still has to match the baseline."""
     try:
         document = tomllib.loads(hook_settings_bytes(path).decode("utf-8")) if path.is_file() else {}
     except (Refused, OSError, ValueError):
-        return {"entry": None, "rest_sha256": None}
+        return {"entry": None, "rest_sha256": None, **({"worktree_entries": {}} if worktrees else {})}
     projects = document.get("projects")
     entry = projects.pop(str(repository), None) if isinstance(projects, dict) else None
+    found = {name: projects.pop(name, None) if isinstance(projects, dict) else None for name in worktrees or []}
     if projects == {}:
         del document["projects"]  # the entry may be the file's first project
-    return {"entry": entry, "rest_sha256": "sha256:" + hashlib.sha256(
+    result = {"entry": entry, "rest_sha256": "sha256:" + hashlib.sha256(
         json.dumps(document, sort_keys=True, default=str).encode()).hexdigest()}
+    return {**result, "worktree_entries": found} if worktrees else result
 
 
 def config_snapshot(environment: dict[str, str], *, plugin_repository: Path | None = None,
-                    repository: Path | None = None) -> dict:
+                    repository: Path | None = None, worktrees: list[str] | None = None) -> dict:
     result = {}
     for harness, variable in kit.EVALUATOR_HOME_VARIABLES.items():
         root = Path(environment[variable])
@@ -1063,7 +1074,7 @@ def config_snapshot(environment: dict[str, str], *, plugin_repository: Path | No
         if harness == "codex":
             result["codex_remote_plugins"] = codex_remote_plugin_state(root)
     if repository is not None:
-        result["codex_trust"] = codex_trust_entry(Path(environment["CODEX_HOME"]) / "config.toml", repository)
+        result["codex_trust"] = codex_trust_entry(Path(environment["CODEX_HOME"]) / "config.toml", repository, worktrees)
     if plugin_repository is not None:
         plugins = []
         reject_extra_hook_sources(Path(environment["CODEX_HOME"]), plugins)
@@ -1073,17 +1084,23 @@ def config_snapshot(environment: dict[str, str], *, plugin_repository: Path | No
 
 
 def config_drift(before: dict, after: dict, peer_trust_accepted: bool = False) -> list[str]:
-    """Any change drifts, except the one Codex project entry for the trial
-    repository written after a recorded peer folder-trust acceptance."""
+    """Any change drifts, except Codex project entries written after a recorded
+    peer folder-trust acceptance for exactly that path: the trial repository's
+    (`peer_trust_accepted`) and those `after` lists as accepted worktrees. An
+    entry with any other shape, or for any other path, drifts."""
     if before == after:
         return []
-    if peer_trust_accepted:
+    trusted = {"trust_level": "trusted"}
+    old, new = before.get("codex_trust") or {}, after.get("codex_trust") or {}
+    worktrees = new.get("worktree_entries") or {}
+    if peer_trust_accepted or worktrees:
         strip = lambda snapshot: {**snapshot, "codex_trust": None,  # noqa: E731
                                   "codex": {k: v for k, v in snapshot.get("codex", {}).items() if k != "config.toml"}}
-        old, new = before.get("codex_trust") or {}, after.get("codex_trust") or {}
+        root_entry = (new.get("entry") == trusted and old.get("entry") in (None, trusted)
+                      if peer_trust_accepted else new.get("entry") == old.get("entry"))
         if (strip(before) == strip(after) and old.get("rest_sha256") is not None
-                and old.get("rest_sha256") == new.get("rest_sha256")
-                and new.get("entry") == {"trust_level": "trusted"} and old.get("entry") in (None, new["entry"])):
+                and old.get("rest_sha256") == new.get("rest_sha256") and root_entry
+                and all(entry in (None, trusted) for entry in worktrees.values())):
             return []
     return ["evaluator_config_drift"]
 
@@ -1215,7 +1232,8 @@ def prepare_peers(repository: Path, environment: dict[str, str], workspace: str,
                  "herdr": executables["herdr"], "launches": str(launches),
                  "decision_seconds": 20, "ready_seconds": 30,
                  "harnesses": {name: executables[name] for name in PEER_HARNESSES if executables[name]},
-                 "environment": dict(environment), "subject": None}}
+                 "environment": dict(environment), "subject": None},
+             "fixture_identity": fixture_identity(repository)}
     write_peer_context(peers)
     return peers
 
@@ -1285,6 +1303,153 @@ def live_process(pid: int) -> dict:
             "environment": environment, "cwd": cwd}
 
 
+# The largest `.git` link, `gitdir` or `commondir` file a worktree check reads.
+WORKTREE_LINK_BYTES = 4096
+
+
+def clean_git(cwd: str, *args: str) -> str:
+    """Git's own answer, unaffected by the caller's environment or config."""
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    with tempfile.TemporaryDirectory() as home:
+        environment.update(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1", HOME=home)
+        try:
+            done = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True,
+                                  timeout=10, env=environment, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise Refused(f"git {args[0]} did not answer: {exc}") from exc
+    if done.returncode:
+        raise Refused(f"git {args[0]} failed with exit code {done.returncode}")
+    return done.stdout
+
+
+def real_directory(path: str, name: str) -> os.stat_result:
+    """The directory itself, by lstat, so a symlink is seen rather than followed."""
+    info = os.lstat(path)
+    if not stat.S_ISDIR(info.st_mode):
+        raise Refused(f"{name} is not a real directory")
+    return info
+
+
+def fixture_identity(repository: Path) -> dict:
+    """Captured once at launch, before the subject starts: the repository and
+    its common directory, its own `.git`, read from the filesystem so launch
+    starts no process. Git's own answer for the repository is checked at each
+    worktree check. A worktree peer is measured against this record. A failure
+    is recorded rather than raised: root peers do not depend on it and every
+    worktree peer then refuses."""
+    try:
+        root = os.path.realpath(repository)
+        common = os.path.join(root, ".git")
+        real_directory(root, "the fixture repository")
+        real_directory(common, "the fixture's .git")
+        if os.path.lexists(os.path.join(common, "commondir")):
+            raise Refused("the fixture's .git names another common directory")
+        return {"repository": root, "common_dir": common}
+    except (Refused, OSError, ValueError) as exc:
+        return {"error": str(exc)}
+
+
+def one_line_file(path: str, name: str) -> tuple[str, str]:
+    """A regular file's one line and the digest of its contents."""
+    info = os.lstat(path)
+    if not stat.S_ISREG(info.st_mode) or info.st_size > WORKTREE_LINK_BYTES:
+        raise Refused(f"{name} is not a regular file under the size cap")
+    data = Path(path).read_bytes()
+    line = data.decode("utf-8").removesuffix("\n")
+    if not line or "\n" in line or "\r" in line:
+        raise Refused(f"{name} does not hold exactly one line")
+    return line, "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def one_level_below(path: str, parent: str) -> bool:
+    name = os.path.basename(path)
+    return os.path.dirname(path) == parent and name not in {"", ".", ".."} and os.path.normpath(path) == path
+
+
+def listed_worktree(repository: str, worktree: str) -> None:
+    """Git's listing names this worktree once, as a usable non-main entry."""
+    blocks = [block.splitlines() for block in clean_git(repository, "worktree", "list", "--porcelain").split("\n\n")
+              if block.strip()]
+    entries = [lines for lines in blocks[1:] if lines[0].startswith("worktree ")
+               and os.path.realpath(lines[0].removeprefix("worktree ")) == worktree]
+    if len(entries) != 1:
+        raise Refused(f"git lists this worktree {len(entries)} times")
+    if any(line == "bare" or line.split(" ", 1)[0] == "prunable" for line in entries[0]):
+        raise Refused("git lists this worktree as bare or prunable")
+
+
+def worktree_identity(identity: dict, cwd: str) -> dict:
+    """Every check a worktree must pass, on raw paths first and realpaths
+    second. The subject runs as the same user and can write all of these
+    files, so this is bounded evidence evaluated now, never proof of ownership.
+    Paths are compared exactly; a name is never matched."""
+    if "error" in identity or not identity.get("repository") or not identity.get("common_dir"):
+        raise Refused(f"the fixture identity was not captured at launch: {identity.get('error', 'missing')}")
+    root, common = identity["repository"], identity["common_dir"]
+    # Placement.
+    worktrees = os.path.join(root, ".worktrees")
+    if not one_level_below(cwd, worktrees):
+        raise Refused("the directory is not one level below the fixture's .worktrees")
+    for path, name in ((root, "the fixture repository"), (worktrees, ".worktrees"), (cwd, "the worktree")):
+        real_directory(path, name)
+    if os.path.realpath(cwd) != cwd:
+        raise Refused("the worktree path passes through a symlink")
+    # The link file.
+    line, link_digest = one_line_file(os.path.join(cwd, ".git"), "the worktree's .git")
+    if not line.startswith("gitdir: "):
+        raise Refused("the worktree's .git is not a gitdir link")
+    admin = os.path.normpath(os.path.join(cwd, line.removeprefix("gitdir: ")))
+    admin_parent = os.path.join(common, "worktrees")
+    if not one_level_below(admin, admin_parent):
+        raise Refused("the gitdir link does not name an entry of the fixture's .git/worktrees")
+    real_directory(common, "the fixture's .git")
+    real_directory(admin_parent, "the fixture's .git/worktrees")
+    admin_info = real_directory(admin, "the worktree's admin entry")
+    if os.path.realpath(admin) != admin:
+        raise Refused("the worktree's admin entry passes through a symlink")
+    # The reciprocal pair.
+    backlink, backlink_digest = one_line_file(os.path.join(admin, "gitdir"), "the admin gitdir file")
+    if os.path.realpath(os.path.join(admin, backlink)) != os.path.join(cwd, ".git"):
+        raise Refused("the admin gitdir backlink names a different worktree")
+    shared, shared_digest = one_line_file(os.path.join(admin, "commondir"), "the admin commondir file")
+    if os.path.realpath(os.path.join(admin, shared)) != common:
+        raise Refused("the admin commondir file does not name the fixture's common directory")
+    # Git's own view, the repository's common directory included.
+    if os.path.realpath(os.path.join(root, clean_git(root, "rev-parse", "--git-common-dir").strip())) != common:
+        raise Refused("git reports another common directory for the fixture repository")
+    listed_worktree(root, cwd)
+    if os.path.realpath(os.path.join(cwd, clean_git(cwd, "rev-parse", "--git-common-dir").strip())) != common:
+        raise Refused("git reports another common directory for this worktree")
+    if os.path.realpath(clean_git(cwd, "rev-parse", "--show-toplevel").strip()) != cwd:
+        raise Refused("git reports another top level for this worktree")
+    # The inodes tell a removed and re-added worktree from the one first accepted.
+    info = os.lstat(cwd)
+    return {"worktree": cwd, "admin": admin, "common_dir": common, "link_sha256": link_digest,
+            "gitdir_sha256": backlink_digest, "commondir_sha256": shared_digest,
+            "inodes": {"worktree": [info.st_dev, info.st_ino], "admin": [admin_info.st_dev, admin_info.st_ino]}}
+
+
+def accepted_directory(run: dict, cwd: str, pinned: dict | None = None) -> dict:
+    """Where a peer may run: the fixture repository, or a registered linked
+    worktree of it. `pinned` is the identity accepted earlier for this launch;
+    any later difference is a failure, never a new acceptance."""
+    repository = run["repository"]
+    if os.path.realpath(cwd) == os.path.realpath(repository):
+        found = {"path": repository, "kind": "repository", "identity": None}
+    else:
+        try:
+            identity = worktree_identity(run["peers"].get("fixture_identity") or {}, cwd)
+        except (Refused, OSError, ValueError) as exc:
+            raise Refused("peers start in the fixture repository or a registered worktree of it "
+                          f"at .worktrees/<name>: {exc}") from exc
+        found = {"path": cwd, "kind": "worktree", "identity": identity}
+    if pinned is not None and found != pinned:
+        changed = sorted(key for key in {*(found["identity"] or {}), *(pinned.get("identity") or {})}
+                         if (found["identity"] or {}).get(key) != (pinned.get("identity") or {}).get(key))
+        raise Refused(f"the accepted directory changed since it was accepted: {', '.join(changed) or 'path'}")
+    return found
+
+
 def peer_argument_tail(harness: str, environment: dict[str, str], option: str) -> list[str]:
     """What every peer start ends with: the kit's isolation arguments, then the
     Codex hook-trust flag only for a Codex peer under the bypass option."""
@@ -1292,33 +1457,35 @@ def peer_argument_tail(harness: str, environment: dict[str, str], option: str) -
     return [*tail, CODEX_HOOK_TRUST_FLAG] if harness == "codex" and option == "bypass" else tail
 
 
-def check_peer_state(run: dict, harness: str, args: list[str], cwd: str, environment: dict[str, str]) -> dict:
+def check_peer_state(run: dict, harness: str, args: list[str], cwd: str, environment: dict[str, str],
+                     pinned: dict | None = None) -> dict:
     """The checks a peer start must pass, for a request or a live process.
-    Raises Refused; returns the recorded flags and hook checks."""
-    repository = Path(run["repository"])
+    Raises Refused; returns the accepted directory, flags and hook checks."""
     option = run["hook_trust"]["option"]
     if harness not in PEER_HARNESSES:
         raise Refused("not a qualified peer harness")
-    if os.path.realpath(cwd) != os.path.realpath(repository):
-        raise Refused("peers start in the fixture repository")
+    directory = accepted_directory(run, cwd, pinned)
+    subject_path = Path(directory["path"])
     # The login shell may reorder PATH; it does not decide which seat runs.
     for key, value in run["environment"].items():
         if key not in {"TERM", "PATH"} and environment.get(key) != value:
             raise Refused(f"{key} differs from the trial environment", key)
-    result = {"permission_flags": permission_flags(harness, args, repository, environment=environment,
+    result = {"directory": directory,
+              "permission_flags": permission_flags(harness, args, subject_path, environment=environment,
                                                    codex_hook_trust=option, peer=True)}
     if harness == "codex":
         require_codex_remote_plugins_off(Path(environment["CODEX_HOME"]))
     if harness == "codex" and option == "bypass":
-        checks = codex_hook_preflight(environment, repository)
+        # The hooks this peer's Codex reads are the ones in its own directory.
+        checks = codex_hook_preflight(environment, subject_path)
         result["hook_trust"] = {key: checks[key] for key in ("evaluator_home", "hooks_sha256", "checks")}
         if checks["plugins"] != run["hook_trust"]["plugins"]:
             raise Refused("plugin inventory changed since launch", CODEX_HOOK_TRUST_FLAG)
     return result
 
 
-def verify_peer_process(run: dict, harness: str, live: dict) -> dict:
-    """Verify a running peer from its live state, rerunning hook and plugin checks."""
+def verify_peer_process(run: dict, harness: str, live: dict, pinned: dict | None = None) -> dict:
+    """Verify a running peer from its live state, rerunning directory, hook and plugin checks."""
     result = {"verified": False, "time": time.time(),
               "flag_used": CODEX_HOOK_TRUST_FLAG in live["argv"]}
     try:
@@ -1330,7 +1497,7 @@ def verify_peer_process(run: dict, harness: str, live: dict) -> dict:
         head = args[:len(args) - len(tail)]
         if args[len(head):] != tail or CODEX_HOOK_TRUST_FLAG in head:
             raise Refused("the trial's isolation arguments or hook-trust flag are missing or changed")
-        result.update(check_peer_state(run, harness, head, live["cwd"], live["environment"]))
+        result.update(check_peer_state(run, harness, head, live["cwd"], live["environment"], pinned))
         result["verified"] = True
     except Refused as exc:
         result["error"] = str(exc)
@@ -1405,6 +1572,12 @@ def set_gate(run: dict, pane: str, launch: dict | None) -> None:
         write(path, {"pane": pane, "identity": launch["identity"], "ready": True})
 
 
+def revoke_peer(run: dict, pane: str, launch: dict, error: str) -> None:
+    """A failed recheck ends this launch's verification: nothing restores it."""
+    set_gate(run, pane, None)
+    launch.update(status="unverified", error=error)
+
+
 def claim_decision(record: dict, pane: str, live: dict) -> dict | None:
     """Bind one unbound answer for this pane to the process the launcher
     became: it execs in place, so the pid and argv match the request."""
@@ -1421,7 +1594,8 @@ def identity_of(run: dict, live: dict) -> list:
     time, plus a digest of the executable, argv, working directory and every
     trial environment value except TERM and PATH. An exec keeps the pid and
     start time, so any change to the rest is a new launch, never verified by
-    inheritance."""
+    inheritance. The accepted directory's identity is checked beside this,
+    never folded into it, so a change to it alone is a failure of this launch."""
     state = {key: live["environment"].get(key) for key in run["environment"] if key not in {"TERM", "PATH"}}
     program = json.dumps([live["executable"], live["argv"], os.path.realpath(live["cwd"]), state],
                          sort_keys=True).encode()
@@ -1464,7 +1638,8 @@ def observe_peer(run: dict, record: dict, peer: dict, agent: dict) -> None:
     """One poll of one peer pane. Each process in it is a separate launch,
     identified by pid and start time and verified from its live state.
     Keys go only to the current verified launch, only for the dialogs
-    handle_startup accepts, and only after its identity is rechecked."""
+    handle_startup accepts, and only after its identity, accepted directory
+    and hook content are rechecked. A ready launch is rechecked on every poll."""
     pane = peer["pane"]
     if agent.get("workspace_id") != run["workspace"]:
         peer["outside_workspace"] = True
@@ -1507,10 +1682,16 @@ def observe_peer(run: dict, record: dict, peer: dict, agent: dict) -> None:
             launch["status"] = "unrecorded"
             return
         entry["bound"] = identity
-        launch["verification"] = verify_peer_process(run, harness, live)
+        launch["verification"] = verify_peer_process(run, harness, live, entry["decision"].get("directory"))
         if not launch["verification"]["verified"]:
-            launch["status"] = "unverified"
+            revoke_peer(run, pane, launch, launch["verification"].get("error", ""))
             return
+        launch["directory"] = launch["verification"]["directory"]
+    if launch["status"] == "ready":
+        check = verify_peer_process(run, launch["harness"], live, launch["directory"])
+        if not check["verified"]:
+            revoke_peer(run, pane, launch, check.get("error", ""))
+        return
     if launch["status"] != "pending":
         return
     # A prompt needs a ready editor: Herdr's working status means delivery
@@ -1521,14 +1702,22 @@ def observe_peer(run: dict, record: dict, peer: dict, agent: dict) -> None:
     def before_key() -> None:
         current = herdr("pane", "process-info", "--pane", pane)["result"]["process_info"]
         now = harness_process(current.get("foreground_processes") or [], executables)
-        if now is None or int(now["pid"]) != live["pid"] or identity_of(run, live_process(live["pid"])) != identity:
+        latest = live_process(live["pid"]) if now is not None and int(now["pid"]) == live["pid"] else None
+        if latest is None or identity_of(run, latest) != identity:
             raise Refused("the peer process changed before a key; no key sent")
+        check = verify_peer_process(run, launch["harness"], latest, launch["directory"])
+        if not check["verified"]:
+            raise PeerUnverified(check.get("error", ""))
 
     screen = herdr("pane", "read", pane, "--source", "visible", text=True)
     try:
-        if handle_startup(pane, launch["harness"], Path(run["repository"]), screen,
+        # A dialog must name the path this launch was accepted in.
+        if handle_startup(pane, launch["harness"], Path(launch["directory"]["path"]), screen,
                           launch["trust_acceptances"], launch["display_choices"], before_key):
             return
+    except PeerUnverified as exc:
+        revoke_peer(run, pane, launch, str(exc))
+        return
     except (Refused, ProcessLookupError) as exc:
         launch.update(status="startup_refused", error=str(exc),
                       screen_sha256="sha256:" + hashlib.sha256(screen.encode()).hexdigest())
@@ -1544,13 +1733,16 @@ def observe_peer(run: dict, record: dict, peer: dict, agent: dict) -> None:
         return
     if identity_of(run, again) != identity:
         return  # replaced since this poll began; the next poll sees a new launch
-    launch["ready_check"] = verify_peer_process(run, launch["harness"], again)
+    launch["ready_check"] = verify_peer_process(run, launch["harness"], again, launch["directory"])
     if launch["ready_check"]["verified"]:
         launch.update(status="ready", ready_at=time.time())
         set_gate(run, pane, launch)
     else:
         error = launch["ready_check"].get("error", "")
-        launch.update(status="plugin_drift" if "plugin" in error else "unverified", error=error)
+        # The worktree's own name must not decide the classification.
+        drifted = "plugin" in error.replace(launch["directory"]["path"], "")
+        set_gate(run, pane, None)
+        launch.update(status="plugin_drift" if drifted else "unverified", error=error)
 
 
 def watch_once(run: dict, record: dict) -> None:
@@ -1699,7 +1891,7 @@ def peer_findings(run: dict, record: dict | None, watched: bool = True) -> tuple
     for entry in record["requests"]:
         decision = entry["decision"]
         summary["requests"].append({**{key: decision.get(key) for key in
-                                       ("id", "harness", "pane", "allow", "argv", "error", "permission_flags", "hook_trust")},
+                                       ("id", "harness", "pane", "allow", "argv", "error", "directory", "permission_flags", "hook_trust")},
                                     "bound": entry.get("bound")})
         if not decision.get("allow"):
             flags.add(PEER_FLAGS["refused"])
@@ -1905,6 +2097,34 @@ def launch(args) -> None:
         write(args.output / "launch.json", run)
 
 
+def peer_trust_acceptances(record: dict | None, repository: str) -> set[str]:
+    """The exact paths with a recorded Codex folder-trust acceptance: the trial
+    repository, and a worktree only for a launch accepted in that directory."""
+    found = set()
+    for peer in (record or {}).get("peers", {}).values():
+        for launch in peer.get("launches", []):
+            directory = launch.get("directory") or {}
+            for event in launch.get("trust_acceptances", []):
+                path = (event or {}).get("path")
+                if (event or {}).get("harness") == "codex" and (
+                        path == repository or (directory.get("kind") == "worktree" and path == directory.get("path"))):
+                    found.add(path)
+    return found
+
+
+def config_allowances(before: dict, after: dict) -> list[str]:
+    """Each trust entry config_drift allowed, by the path it was written for."""
+    old, new = before.get("codex_trust") or {}, after.get("codex_trust") or {}
+    allowances = []
+    if new.get("entry") != old.get("entry"):
+        allowances.append("Codex project trust entry for the trial repository, "
+                          "written after a recorded peer folder-trust acceptance")
+    allowances.extend(f"Codex project trust entry for the accepted worktree {path}, "
+                      "written after a recorded peer folder-trust acceptance"
+                      for path, entry in sorted((new.get("worktree_entries") or {}).items()) if entry is not None)
+    return allowances
+
+
 def finish(args) -> None:
     run = kit.load_json(args.output / "launch.json")
     # Stop answering peer dialogs before the final observation.
@@ -1918,21 +2138,22 @@ def finish(args) -> None:
                   "error": "no pre-trial snapshot recorded after seat readiness"}
     result["observation_limitations"] = run.get("observation_limitations", [])
     try:
+        repository = run.get("repository")
+        accepted_paths = peer_trust_acceptances(peer_record, repository) if repository else set()
         run["config_finish"] = config_snapshot(
             run["environment"], plugin_repository=Path(run["repository"])
             if run.get("hook_trust", {}).get("flag_used") or run.get("hook_trust", {}).get("option") == "bypass"
-            else None, repository=Path(run["repository"]) if "codex_trust" in run.get("config_start", {}) else None)
-        accepted = any(event.get("harness") == "codex" and event.get("path") == run["repository"]
-                       for peer in (peer_record or {}).get("peers", {}).values()
-                       for launch in peer.get("launches", []) for event in launch.get("trust_acceptances", []))
+            else None, repository=Path(run["repository"]) if "codex_trust" in run.get("config_start", {}) else None,
+            worktrees=sorted(accepted_paths - {repository}))
         if "config_start" not in run:
             result["validity_flags"].append("evaluator_config_unreadable")
         else:
-            drift = config_drift(run["config_start"], run["config_finish"], accepted)
+            drift = config_drift(run["config_start"], run["config_finish"], repository in accepted_paths)
             result["validity_flags"].extend(drift)
-            if accepted and not drift and run["config_start"] != run["config_finish"]:
-                result["config_allowances"] = ["Codex project trust entry for the trial repository, "
-                                               "written after a recorded peer folder-trust acceptance"]
+            if not drift:
+                allowances = config_allowances(run["config_start"], run["config_finish"])
+                if allowances:
+                    result["config_allowances"] = allowances
     except (Refused, OSError, KeyError, ValueError) as exc:
         run["config_finish"] = {"error": str(exc)}
         result["validity_flags"].append("evaluator_config_unreadable")
