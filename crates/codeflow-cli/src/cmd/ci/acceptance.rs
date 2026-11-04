@@ -157,7 +157,9 @@ fn line_sync_tip(
     if !matches!(judged_task(root, git, branch, range.head), Ok(Some(_))) {
         return None;
     }
-    let destination = release_line::from_advertisement(url, listed).ok()?;
+    let destination = release_line::from_advertisement(url, listed)
+        .ok()?
+        .with_limits(names.limits);
     release_line::advertised_tip_here(root, &destination, range.target)
         .ok()
         .map(|tip| tip.to_string())
@@ -244,8 +246,9 @@ fn own_line_tip(
         ));
     }
     let destination = match (names.destination, names.advertisement) {
-        (Some(url), Some(listed)) => release_line::from_advertisement(url, listed),
-        _ => release_line::ask_destination(root, names.destination),
+        (Some(url), Some(listed)) => release_line::from_advertisement(url, listed)
+            .map(|destination| destination.with_limits(names.limits)),
+        _ => release_line::ask_destination(root, names.destination, names.limits),
     }
     .map_err(|error| format!("the destination cannot confirm the line: {error}"))?;
     let tip = release_line::advertised_tip_here(root, &destination, into)
@@ -315,7 +318,9 @@ fn replaced_ref(
     // A read that fails sets nothing aside, the strict side.
     let replaced = Replaced::tracking(root, url, branch).ok().flatten()?;
     if push {
-        let destination = release_line::from_advertisement(url, names.advertisement?).ok()?;
+        let destination = release_line::from_advertisement(url, names.advertisement?)
+            .ok()?
+            .with_limits(names.limits);
         let advertised = destination
             .heads
             .iter()
@@ -402,8 +407,9 @@ pub(super) fn release_scope<'n>(
         .release
         .get_or_init(|| {
             let destination = match (names.destination, names.advertisement) {
-                (Some(url), Some(listed)) => release_line::from_advertisement(url, listed),
-                _ => release_line::ask_destination(root, names.destination),
+                (Some(url), Some(listed)) => release_line::from_advertisement(url, listed)
+                    .map(|destination| destination.with_limits(names.limits)),
+                _ => release_line::ask_destination(root, names.destination, names.limits),
             }
             .map_err(|why| ScopeError::Destination(credential_hint(why)))?;
             let scope = release_line::scope(root, &destination, names.branch, names.into)
