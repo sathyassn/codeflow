@@ -1292,6 +1292,28 @@ fn release_pattern_errors(obj: &serde_json::Map<String, Value>, errors: &mut Vec
     }
 }
 
+/// Each `git.branch_name_omit_words` entry must be one lower-case word, since
+/// a title is matched one lower-case word at a time.
+fn validate_branch_name_omit_words(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    for entry in value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        let is_word = !entry.is_empty()
+            && entry
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+        if !is_word {
+            errors.push(PolicyError {
+                key: path.to_string(),
+                message: format!("invalid word '{entry}' in {path}; use lower-case letters and digits only, because a title is matched one lower-case word at a time"),
+            });
+        }
+    }
+}
+
 /// The value checks for the root-checkout keys that their kind alone does
 /// not catch: `git.root_branch` must be a branch name, and each
 /// `git.worktree_locations` entry must be a folder `doctor` can expand.
@@ -1340,25 +1362,7 @@ fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<Policy
                 }
             }
         }
-        "git.branch_name_omit_words" => {
-            for entry in value
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-            {
-                let is_word = !entry.is_empty()
-                    && entry
-                        .chars()
-                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-                if !is_word {
-                    errors.push(PolicyError {
-                        key: path.to_string(),
-                        message: format!("invalid word '{entry}' in {path}; use lower-case letters and digits only, because a title is matched one lower-case word at a time"),
-                    });
-                }
-            }
-        }
+        "git.branch_name_omit_words" => validate_branch_name_omit_words(path, value, errors),
         "git.required_checks" => {
             let entries = value.as_array().map_or(&[][..], Vec::as_slice);
             if value.is_array() && entries.is_empty() {

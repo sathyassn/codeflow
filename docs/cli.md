@@ -612,14 +612,6 @@ make a task active nor create a conflict. `work next --json` keeps these in
 `informational_branches`, separate from the claim `branches`. Claim lists
 its remotes live, so a narrow fetch cannot hide work.
 
-A loose ref is a file named after its branch, and a sandbox can refuse to read
-a file by its name. `work claim` and `epic new --integration` therefore leave
-the words in `git.branch_name_omit_words` out of a generated branch name and
-print which ones they left out. The default list holds `secret` and
-`credentials`, the words the Claude Code sandbox was probed to refuse. Other
-harnesses differ, so a project sets the list it needs, or an empty list to keep
-every word. See the [policy reference](policy-reference.md).
-
 `codeflow follow` is described in the
 [coordination ledger reference](coordination-ledger.md#the-command).
 
