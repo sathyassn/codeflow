@@ -27,7 +27,7 @@ four. Every difference is reconciled below under the predeclared rule
 | 6 | TSK-1301 | 3 Medium | 3 Medium | 3 Medium | yes |
 | 7 | TSK-275 | 2 Medium | 2 Medium | 2 Medium | yes |
 | 8 | TSK-1149 | 2 Medium | 2 Medium | 2 Medium | yes |
-| 9 | TSK-293 | 3 Medium | 2 Medium | 3 Medium | yes |
+| 9 | TSK-293 | 3 Medium | 2 Medium | 2 Medium | yes |
 | 10 | TSK-277 | 2 Medium | 2 Medium | 2 Medium | yes |
 | 11 | TSK-1145 | 4 Medium | 3 Medium | 3 Medium | yes |
 | 12 | TSK-225 | 9 Very Hard | 10 Very Hard | 10 Very Hard | yes |
@@ -55,7 +55,7 @@ decide).
 
 | # | Task | Driver | A | B | Reconciled | Kind | Reason |
 |---|---|---|---|---|---|---|---|
-| 9 | TSK-293 | R | 1 | 0 | 1 | rubric | Counting semantics: "the head is not rewritten" (B's item, which A missed), a red gate, a conflict, and the rebase default unchanged (AC-3, an explicit invariant, which the R rule counts "whether phrased as an error, safeguard, edge case or invariant") make four. "It does not push" is not needed to reach four. |
+| 9 | TSK-293 | R | 1 | 0 | 0 | ambiguity | Second pass: AC-3 (rebase as at v3.1.0, existing tests unchanged) is a regression check, not a refusal obligation; that leaves three (the head not rewritten, a red gate and a conflict leave the line unchanged), so R 0. Applied the same way to TSK-1149 AC-4 and TSK-239 AC-7, neither of which changes a band. Decided by the new R line in the rubric. |
 | 11 | TSK-1145 | S2 | 2 | 1 | 1 | rubric | Full, essential and quick are modes of one operation, `codeflow test`; with `reserve` that is two operations, no mutation and no lifecycle event, so no second point. |
 | 12 | TSK-225 | X | 0 | 1 | 1 | ambiguity | A pinned table of reviewed archive digests, refusing any other bytes, records an approval of specific artifacts on the installer's own path. Resolved: a recorded approval that a path enforces is an approval mechanism. A digest check against a source the requester controls would not be. |
 | 12 | TSK-225 | H | no | yes | yes | record | The operator applies the live workflow patches (AC-10, AC-14), a named human path. |
@@ -67,7 +67,7 @@ decide).
 | 19 | TSK-241 | S7 | 0 | 1 | 1 | record | AC-6: a written index that no longer matches the items warns, drift detection of a projection. |
 | 19 | TSK-241 | X | 0 | 1 | 1 | record | AC-3 and AC-4: a decline needs `--confirmed-by operator`, and validation fails a declined item without it, a named approval on its own path. Grade moves from Hard to Very Hard. |
 | 19 | TSK-241 | H | no | yes | yes | record | Same anchor as X. |
-| 20 | TSK-130 | S5 | 0 | 3 | 0 | ambiguity | S5 asks whether the package "owns model behavior accepted through ... evaluation evidence". The behaviour graded (rules kept across compaction) belongs to the guidance tasks, and the live runs are TSK-116's (AC-5). This package owns the measurement tooling, which scores as tooling. Resolved by a rubric sentence: S5 counts for the package that owns the model behaviour and its acceptance evidence, not for one that builds the evaluation kit. |
+| 20 | TSK-130 | S5 | 0 | 3 | 0 | ambiguity | S5 asks whether the package "owns model behavior accepted through ... evaluation evidence". The behaviour graded (rules kept across compaction) belongs to the guidance tasks, and the live runs are TSK-116's (AC-5). This package owns the measurement tooling, which scores as tooling. Resolved by a rubric sentence (second pass, grader B's wording): S5 counts for the package that owns the model behaviour or the graded runs that accept it, not for one that builds evaluation tooling whose live runs belong to another task. |
 | 20 | TSK-130 | S7 | 0 | 1 | 1 | record | AC-4 and AC-5: the transcript check marks a trial without compaction `broken_fixture`, owned environment evidence. Reconciled sum 3, Medium. |
 | 21 | TSK-015 | S1 | 3 | 0 | 0 | record | The record names no persisted shape; A took the forecast schema from SPC-007 and `records.md`, which `cases.md` puts out of scope. Grade moves from Very Hard to Hard. |
 | 22 | TSK-019 | X | 0 | 1 | 1 | ambiguity | A confirmed whole-runtime transfer is both a custody change (C) and the approval that grants it (X). Resolved: C scores the act, X the named approval mechanism; both apply when the package builds both. |
@@ -87,9 +87,10 @@ anchor or a clarification, never a point or a cut.
 | Policy and config keys: S1 or S2 | both (A's note; B ambiguity 4) | keys are S2 contract members (the S2 definition) |
 | A fix to an owned operation | both (TSK-212 at S2 2) | a fix that changes an owned operation's behaviour scores S2 |
 | Whether X's list is closed | both (A's note; B ambiguity 1) | refusal rules, policy authority and exemption classes are R; a recorded approval that a path enforces is X (the guard anchors) |
-| Parse-and-count against match-and-walk for S4 | both (TSK-228 S4 0, TSK-322 S4 3) | counting or matching recorded text is lookup; a graph walk or normalizing matcher proved by a golden case table is S4 |
+| Parse-and-count against match-and-walk for S4 | both (TSK-228 S4 0, TSK-322 S4 3) | counting or exact lookup over recorded text is not S4; a matcher that normalizes, or a graph walk, proved by a golden case table, is S4 |
 | Redaction as C | both (TSK-278, C 0, X 1) | a sanctioned edit that git history keeps is not destructive erasure; the route is X |
-| S5 for an evaluation kit | both (A reasoned zero; B ambiguity 3) | S5 belongs to the owner of the model behaviour |
+| S5 for an evaluation kit | both (A reasoned zero; B ambiguity 3) | S5 counts for the package that owns the model behaviour or the graded runs that accept it; evaluation tooling whose live runs belong to another task scores as tooling |
+| A regression check under R | both, in the second pass (TSK-293) | a regression check that existing behaviour stays unchanged is not a refusal obligation |
 | A recorded review or waiver as H | B (ambiguity 7), and A on TSK-105 | a required recorded review or operator confirmation is a named human approval path |
 
 B's ambiguity 6 (scope statements and thresholds under R) and 8 (records
@@ -106,8 +107,35 @@ accept. All are pinned at `47403d356`.
 | Easy | TSK-1018 | none, 0 | tests alone |
 | Easy | TSK-228 | S2 1 | one report member; counting is not S4 |
 | Medium | TSK-212 | S2 2, R 2, 4 | a fix scoring S2 at the 4 to 5 cut |
-| Medium | TSK-1149 | S2 1, R 1, 2 | a guard change graded through R, not X |
+| Medium | TSK-1149 | S2 1, R 1 (six refusals), 2 | a guard change graded through R, not X |
 | Hard | TSK-239 | S2 1, S4 3, R 1, 5 | owned computation at the 4 to 5 cut |
 | Hard | TSK-322 | S2 2, S4 3, R 2, 7 | a guard with an owned matcher |
 | Very Hard | TSK-119 | S1 3, S2 2, S3 3, R 2, 10 | three weighted drivers |
-| Very Hard | TSK-019 | S1 3, S2 2, S7 1, C 2, X 1, R 2, 11 | migration and custody change |
+| Very Hard | TSK-019 | S1 3, S2 2, S7 1, C 2, X 1, R 2, 11 | migration and custody change; X 1 rests on the reconciled C and X ambiguity |
+
+## Second pass, after grader B's confirmation
+
+Grader B checked this reconciliation (`grades-b-confirm.md`, committed
+unedited). It agreed with the TSK-278 and TSK-130 outcomes and disputed
+TSK-293. This pass, in one commit:
+
+- **TSK-293:** settled for B. A regression check is not a refusal
+  obligation, so R 0 and the sum 2; still Medium. The rule is applied the
+  same way to TSK-1149 AC-4 (seven obligations become six, still R 1) and
+  TSK-239 AC-7 (not counted by either grader). The kind is ambiguity, not a
+  misreading by B.
+- **S5 sentence:** replaced with B's wording, which clarifies "owns the
+  changed behavior/proof" without requiring both. TSK-130 stays S5 0 under
+  either reading, because AC-5 gives the live runs to TSK-116.
+- **S4 sentence:** replaced with B's wording, so matching that normalizes is
+  S4 and exact lookup is not.
+- **TSK-019 anchor:** its driver line now names the C and X decision.
+- **The rubric:** the first pass said the sentences were "now in
+  `rubric.md`" when they existed only in this file. This commit puts them,
+  the R line and the anchored examples in `rubric.md` in all five homes
+  (`assets/base/`, `.claude/skills`, `.agents/skills` and both baselines),
+  byte-identical, with the example forecast's rubric pin updated.
+- **B's own counts:** B's grades were Easy 4, Medium 7, Hard 7, Very Hard 4,
+  as its table shows; an earlier report of 3 Easy and 8 Medium was wrong.
+
+Agreement is unchanged: 18 of 22 grades.
