@@ -373,6 +373,9 @@ impl HookPayload {
                 "field `{field}` is a JSON {found} where {expected} belongs"
             )));
         }
+        if let Some(problem) = monitor_shape_problem(&value) {
+            return Err(PayloadError::Malformed(problem));
+        }
         serde_json::from_value(value).map_err(|e| PayloadError::Malformed(e.to_string()))
     }
 
@@ -423,6 +426,69 @@ fn wrong_field_type(
         }
     }
     None
+}
+
+/// The fields a `Monitor` call may carry: the Claude Code 2.1.317 tool
+/// schema (additional properties are not allowed) plus `persistent`, which
+/// the shape record saw in the same build. TSK-1058.
+const MONITOR_FIELDS: &[&str] = &[
+    "command",
+    "description",
+    "timeout_ms",
+    "persistent",
+    "allowed_domains",
+    "ws",
+];
+
+/// Why a `Monitor` call's input is not a shape the judge recognises, or
+/// `None` when it is. The tool runs shell text, so an input that carries
+/// neither a `command` string to judge nor a socket watch (`ws.url`), or that
+/// carries a field the judge does not know, cannot be shown to hold no
+/// shell text: it is refused, not passed.
+fn monitor_shape_problem(value: &serde_json::Value) -> Option<String> {
+    use serde_json::Value;
+    let name = ["tool_name", "toolName"]
+        .iter()
+        .find_map(|key| value.get(*key))?;
+    if name.as_str() != Some("Monitor") {
+        return None;
+    }
+    let Some(Value::Object(input)) = ["tool_input", "toolInput"]
+        .iter()
+        .find_map(|key| value.get(*key))
+    else {
+        return Some("a Monitor call has no tool_input object to judge".to_string());
+    };
+    if let Some(unknown) = input
+        .keys()
+        .find(|key| !MONITOR_FIELDS.contains(&key.as_str()))
+    {
+        return Some(format!(
+            "a Monitor call carries the field `{unknown}`, which the judge does not recognise"
+        ));
+    }
+    let command = input.get("command").filter(|command| !command.is_null());
+    let ws = input.get("ws").filter(|ws| !ws.is_null());
+    match (command, ws) {
+        (Some(_), None) => None,
+        (None, Some(Value::Object(socket))) => {
+            if !socket.get("url").is_some_and(Value::is_string) {
+                Some("a Monitor socket watch has no `ws.url` string".to_string())
+            } else if let Some(extra) = socket
+                .keys()
+                .find(|key| !matches!(key.as_str(), "url" | "protocols"))
+            {
+                Some(format!(
+                    "a Monitor socket watch carries the field `ws.{extra}`, which the judge does not recognise"
+                ))
+            } else {
+                None
+            }
+        }
+        (None, Some(_)) => Some("a Monitor `ws` field is not an object".to_string()),
+        (Some(_), Some(_)) => Some("a Monitor call carries both `command` and `ws`".to_string()),
+        (None, None) => Some("a Monitor call carries neither `command` nor `ws`".to_string()),
+    }
 }
 
 fn json_kind(value: &serde_json::Value) -> &'static str {
@@ -15683,15 +15749,57 @@ mod tests {
     }
 
     #[test]
-    fn test_payload_parse_monitor_command_and_missing_command_forms() {
+    fn test_payload_parse_monitor_command_and_socket_forms() {
         let json = r#"{"tool_name":"Monitor","tool_input":{"command":"git status","description":"d","timeout_ms":1000,"persistent":false},"cwd":"/x"}"#;
         let p = HookPayload::parse(json).unwrap();
         assert_eq!(p.shell_command(), Some("git status"));
-        // A call without a `command` field has no shell text to judge. The
-        // field name used by a socket watch is unconfirmed, so this is only
-        // the missing-command parser case.
-        let json = r#"{"tool_name":"Monitor","tool_input":{"description":"d"},"cwd":"/x"}"#;
+        // A socket watch carries no shell text. The `ws.url` field is the
+        // one the Claude Code 2.1.317 tool schema reports.
+        let json = r#"{"tool_name":"Monitor","tool_input":{"ws":{"url":"wss://x.invalid/e","protocols":["v1"]},"description":"d","timeout_ms":1000},"cwd":"/x"}"#;
         assert_eq!(HookPayload::parse(json).unwrap().shell_command(), None);
+        // Grok-style camelCase envelope.
+        let json = r#"{"toolName":"Monitor","toolInput":{"command":"git status"}}"#;
+        assert_eq!(
+            HookPayload::parse(json).unwrap().shell_command(),
+            Some("git status")
+        );
+    }
+
+    #[test]
+    fn test_payload_refuses_unrecognised_monitor_shapes() {
+        // A Monitor input the judge does not recognise cannot be shown to
+        // carry no shell text, so it is refused rather than passed.
+        for input in [
+            r#"{}"#,
+            r#"{"description":"d"}"#,
+            r#"{"script":"sudo true"}"#,
+            r#"{"command":"git status","script":"sudo true"}"#,
+            r#"{"command":null}"#,
+            r#"{"command":"git status","ws":{"url":"wss://x.invalid/e"}}"#,
+            r#"{"ws":{}}"#,
+            r#"{"ws":{"url":1}}"#,
+            r#"{"ws":"wss://x.invalid/e"}"#,
+            r#"{"ws":{"url":"wss://x.invalid/e","command":"sudo true"}}"#,
+        ] {
+            let json = format!(r#"{{"tool_name":"Monitor","tool_input":{input},"cwd":"/x"}}"#);
+            assert!(
+                matches!(HookPayload::parse(&json), Err(PayloadError::Malformed(_))),
+                "should refuse: {input}"
+            );
+        }
+        let no_input = r#"{"tool_name":"Monitor","cwd":"/x"}"#;
+        assert!(matches!(
+            HookPayload::parse(no_input),
+            Err(PayloadError::Malformed(_))
+        ));
+        let camel = r#"{"toolName":"Monitor","toolInput":{"script":"sudo true"}}"#;
+        assert!(matches!(
+            HookPayload::parse(camel),
+            Err(PayloadError::Malformed(_))
+        ));
+        // Other shell tools keep their lenient reading.
+        let bash = r#"{"tool_name":"Bash","tool_input":{"command":"git status","extra":1}}"#;
+        assert!(HookPayload::parse(bash).is_ok());
     }
 
     #[test]

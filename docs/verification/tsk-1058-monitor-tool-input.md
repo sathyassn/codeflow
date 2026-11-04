@@ -14,16 +14,21 @@ build and is not confirmed on the other supported versions.
   was available to check.
 - What is lost: no confirmation that the hook payload shape holds on other
   supported builds, and no native hook payload for `Monitor` on any build.
-- An unverified build does not fail closed. If its `Monitor` payload carries
-  the shell text outside `tool_input.command`, the guards find no command and
-  allow the call, the same as before this change. This change adds judging
-  where the field matches; it does not block unknown shapes. No evidence shows
-  such a build exists.
+- An unverified build fails closed. The judge accepts a `Monitor` input only
+  when it has a `command` string (judged like `Bash`) or a `ws` socket watch
+  with a `url` string and no `command`, and only these fields: `command`,
+  `description`, `timeout_ms`, `persistent`, `allowed_domains`, `ws`. Any
+  other shape is refused as an unreadable hook payload (exit 2): a missing or
+  null `command` with no `ws`, an unknown field such as `script`, both
+  `command` and `ws`, or a malformed `ws`.
+- Cost of failing closed: a build whose `Monitor` tool adds a new field would
+  have its calls refused until `MONITOR_FIELDS` in
+  `crates/codeflow-core/src/hooks/git_guard.rs` is widened. The field list
+  comes from the 2.1.317 tool schema the session reported, which allows no
+  additional properties, so normal use on that build is not refused. Normal
+  use on other builds is unverified.
 - A matcher entry for a tool name a build does not have matches nothing, so
-  the wider matcher is harmless on builds without `Monitor`. A build that
-  puts the shell text in a different field is not covered, and the guards
-  would pass it, because a call without `tool_input.command` has nothing to
-  judge.
+  the wider matcher is harmless on builds without `Monitor`.
 - Native hook capture: attempted and not obtained. A non-interactive capture
   run of the Claude CLI with a logging hook in a scratch folder was refused by
   the `security.headless_peer_runs` guard rule, and was not retried or
@@ -51,8 +56,9 @@ build and is not confirmed on the other supported versions.
 - The socket field is not confirmed from a hook payload. The tool schema the
   Claude Code 2.1.317 session itself reported to the model (not a binary read)
   gives it as `ws` with a `url` inside (`{"ws": {"url": ...}}`), and says it
-  cannot be combined with `command`. The guard does not read it, and no test
-  fixture claims it: the tests cover only a call with no `command`.
+  cannot be combined with `command`. The guard accepts that form because the
+  schema reports it; the tests use it for that reason, not because a hook
+  payload showed it.
 - That the hook payload for `Monitor` is `tool_name: "Monitor"` with the input
   under `tool_input`, as for `Bash`. This is assumed from the common hook
   contract; no native hook payload for `Monitor` was captured.
@@ -64,7 +70,8 @@ build and is not confirmed on the other supported versions.
   nothing for it.
 - Now the matcher is `^(Bash|PowerShell|Monitor)$` in the three presets and
   the installed copies, and `shell_command` returns `tool_input.command` for
-  `Monitor`. A call with no `command` has nothing to judge and passes.
+  `Monitor`. A socket watch (`ws.url`, no `command`) has no shell text and
+  passes. Any other shape is refused (see the version scope above).
 - Exec-guard treats `Monitor` like `PowerShell`: not shown to be a POSIX
   shell, so the line keeps the raw rules, which are no looser than `Bash`.
 
@@ -74,4 +81,5 @@ build and is not confirmed on the other supported versions.
   (`shell_guard_matcher_covers_the_monitor_tool_everywhere`)
 - `crates/codeflow-cli/tests/refusal_journey/monitor.rs`
 - `crates/codeflow-core/src/hooks/git_guard.rs`
-  (`test_payload_parse_monitor_command_and_missing_command_forms`)
+  (`test_payload_parse_monitor_command_and_socket_forms`,
+  `test_payload_refuses_unrecognised_monitor_shapes`)

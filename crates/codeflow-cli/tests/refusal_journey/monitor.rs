@@ -44,11 +44,32 @@ fn monitor_runs_the_same_hooks_as_bash_and_allows_ordinary_watching() {
     for output in monitor {
         success(&output);
     }
-    // A Monitor call with no `command` field has no shell text to judge. This
-    // is only the missing-command case: the field a socket watch uses is
-    // unconfirmed, so no real socket form is claimed here.
-    let no_command = project.replay("claude", "Monitor", json!({"description": "events"}));
-    for output in no_command {
+    // A socket watch carries no shell text; nothing to judge. `ws.url` is the
+    // field the 2.1.317 tool schema reports.
+    let socket = project.replay(
+        "claude",
+        "Monitor",
+        json!({"ws": {"url": "wss://example.invalid/events"}, "description": "events"}),
+    );
+    for output in socket {
         success(&output);
+    }
+}
+
+#[test]
+fn monitor_input_the_judge_does_not_recognise_is_refused() {
+    let project = Project::new();
+    for input in [
+        json!({"description": "events"}),
+        json!({"script": "timeout 1 sudo true"}),
+        json!({"command": "git status", "script": "timeout 1 sudo true"}),
+        json!({"command": "git status", "ws": {"url": "wss://example.invalid/e"}}),
+    ] {
+        let outputs = project.replay("claude", "Monitor", input.clone());
+        assert!(!outputs.is_empty(), "no hook ran for {input}");
+        assert!(
+            refused_by(&outputs, "unreadable hook payload"),
+            "{input}: {outputs:?}"
+        );
     }
 }
