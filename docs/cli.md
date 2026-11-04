@@ -236,7 +236,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `<COMMAND>...` | Executable and exact arguments, following --. |
 | `codeflow validate [PATH]` | | Validate record frontmatter; --docs adds the doc-graph integrity lint |
 | | `[PATH]` | File or directory to validate (default: project-management/). |
-| | `--docs` | Also run the doc-graph referential-integrity lint. |
+| | `--docs` | Also run the doc-graph referential-integrity lint, which resolves each capability's evidence. |
 | | `--portal <DIR>` | Verify a portal evidence manifest without executing project code. |
 | | `--since <REF>` | Also judge every record changed since REF (a commit or branch) against the lifecycle transition rules, as CI judges a pull request. |
 | `codeflow integrate <BRANCH>` | | Land a branch locally after gating a rebase or merge candidate |

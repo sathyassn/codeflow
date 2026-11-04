@@ -660,7 +660,7 @@ mod tests {
         std::fs::write(root.join("docs/architecture.md"), "# arch\n").unwrap();
         std::fs::write(
             root.join("docs/capabilities.md"),
-            "# caps\n\n```yaml\nid: CAP-001\nstatus: shipped\nverified_by: ['gap: not assessed']\n```\n\n```yaml\nid: CAP-002\nstatus: building\n```\n\n```yaml\nid: CAP-003\nstatus: shipped\nverified_by: ['gap: not assessed']\n```\n",
+            "# caps\n\n```yaml\nid: CAP-001\nstatus: shipped\nverified_by: ['gap: test: not assessed']\n```\n\n```yaml\nid: CAP-002\nstatus: building\n```\n\n```yaml\nid: CAP-003\nstatus: shipped\nverified_by: ['gap: test: not assessed']\n```\n",
         )
         .unwrap();
         for (n, title) in [
@@ -900,7 +900,7 @@ mod tests {
         std::fs::write(
             dir.path().join("docs/capabilities.md"),
             "# caps\n\n\
-             ```yaml\nid: CAP-001\nstatus: shipped\nverified_by: ['gap: not assessed']\n```\n\n\
+             ```yaml\nid: CAP-001\nstatus: shipped\nverified_by: ['gap: test: not assessed']\n```\n\n\
              ```yaml\nid: CAP-002\nstatus: bogus\n```\n\n\
              ```yaml\nid: CAP-003\nstatus: planned\n```\n",
         )
@@ -923,7 +923,7 @@ mod tests {
             "# caps\n\n\
              <!-- worked example:\n\
              ## CAP-001 — example\n\n\
-             ```yaml\nid: CAP-001\nname: example\nstatus: shipped\nverified_by: ['gap: not assessed']\n```\n\
+             ```yaml\nid: CAP-001\nname: example\nstatus: shipped\nverified_by: ['gap: test: not assessed']\n```\n\
              -->\n",
         )
         .unwrap();

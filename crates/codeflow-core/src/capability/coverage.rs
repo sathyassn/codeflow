@@ -35,11 +35,10 @@ fn counts(catalog: &CapabilityCatalog) -> (&'static str, usize, usize, usize, us
                     .as_deref()
                     .is_some_and(|stage| stage != "unassessed")
                 && !r.entry.verified_by.is_empty()
-                && r.entry.verified_by.iter().all(|value| {
-                    value
-                        .split_once(':')
-                        .is_some_and(|(kind, _)| matches!(kind, "test" | "journey" | "record"))
-                })
+                && r.entry
+                    .verified_by
+                    .iter()
+                    .all(|value| super::parse_evidence(value).is_ok_and(|e| e.is_proof()))
         })
         .count();
     (inventory, total, declared, shipped, unassessed)

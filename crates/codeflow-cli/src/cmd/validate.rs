@@ -16,7 +16,7 @@ pub struct ValidateArgs {
     /// File or directory to validate (default: project-management/)
     pub path: Option<PathBuf>,
 
-    /// Also run the doc-graph referential-integrity lint
+    /// Also run the doc-graph referential-integrity lint, which resolves each capability's evidence
     #[arg(long)]
     pub docs: bool,
 

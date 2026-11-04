@@ -227,7 +227,7 @@ fn complete_inventory_does_not_imply_evidence_coverage() {
     let file = dir.path().join("docs/capabilities/CAP-001-unassessed.md");
     let record = std::fs::read_to_string(&file).unwrap().replace(
         "status: planned",
-        "status: shipped\nstage: unassessed\nverified_by: ['gap: not assessed']",
+        "status: shipped\nstage: unassessed\nverified_by: ['gap: test: not assessed']",
     );
     std::fs::write(&file, &record).unwrap();
     std::fs::write(
@@ -244,14 +244,14 @@ fn complete_inventory_does_not_imply_evidence_coverage() {
     assert!(text.contains("1 unassessed"), "{text}");
     let assessed = record
         .replace("stage: unassessed", "stage: experimental")
-        .replace("gap: not assessed", "test: catalog/search");
+        .replace("gap: test: not assessed", "test: tests/catalog_search.rs");
     std::fs::write(&file, &assessed).unwrap();
     let text = success(cli(dir.path(), &["orient"]));
     assert!(text.contains("evidence declarations: 1/1"), "{text}");
     assert!(text.contains("0 unassessed"), "{text}");
     let partial = assessed.replace(
-        "['test: catalog/search']",
-        "['test: catalog/search', 'gap: recovery untested']",
+        "['test: tests/catalog_search.rs']",
+        "['test: tests/catalog_search.rs', 'gap: test: recovery untested']",
     );
     std::fs::write(&file, partial).unwrap();
     let text = success(cli(dir.path(), &["orient"]));

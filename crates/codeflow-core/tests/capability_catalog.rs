@@ -593,7 +593,7 @@ fn identities_are_unique_across_files() {
 }
 
 fn fence(id: &str, status: &str) -> String {
-    format!("```yaml\nid: {id}\nname: catalog\narea: engine\nstatus: {status}\nverified_by: ['test: cargo test capability_catalog']\n```\n")
+    format!("```yaml\nid: {id}\nname: catalog\narea: engine\nstatus: {status}\nverified_by: ['test: crates/codeflow-core/tests/capability_catalog.rs']\n```\n")
 }
 
 #[test]
@@ -733,7 +733,7 @@ fn unassessed_gap_is_accepted_and_evidence_references_are_not_opened() {
         dir.path(),
         RECORD,
         &VALID.replace(
-            "test: cargo test capability_catalog",
+            "test: crates/codeflow-core/tests/capability_catalog.rs",
             "record: docs/verification/outside-catalog.md",
         ),
     );
@@ -849,7 +849,13 @@ fn folder_records_participate_in_docs_graph_and_epic_reciprocity() {
         "project-management/epics/EPC-001.md",
         "---\nid: EPC-001\ncapabilities: [CAP-101]\n---\n",
     );
-    assert!(codeflow_core::validate::docs::lint_docs(dir.path()).is_clean());
+    write(
+        dir.path(),
+        "crates/codeflow-core/tests/capability_catalog.rs",
+        "#[test]\nfn case() {}\n",
+    );
+    let report = codeflow_core::validate::docs::lint_docs(dir.path());
+    assert!(report.is_clean(), "{report:?}");
 }
 
 #[test]
@@ -877,12 +883,12 @@ fn required_facets_and_conditional_fields_are_checked() {
         ("audience: [internal, agent]", "audience: []", "audience"),
         ("stage: stable\n", "", "stage"),
         (
-            "test: cargo test capability_catalog",
+            "test: crates/codeflow-core/tests/capability_catalog.rs",
             "other: tests",
             "verified_by",
         ),
         (
-            "test: cargo test capability_catalog",
+            "test: crates/codeflow-core/tests/capability_catalog.rs",
             "test: ",
             "verified_by",
         ),
@@ -964,7 +970,10 @@ fn legacy_validation_also_applies_to_pinned_trees() {
     write(
         dir.path(),
         "docs/capabilities.md",
-        &fence("CAP-099", "shipped").replace("['test: cargo test capability_catalog']", "[]"),
+        &fence("CAP-099", "shipped").replace(
+            "['test: crates/codeflow-core/tests/capability_catalog.rs']",
+            "[]",
+        ),
     );
     refuse_both(dir.path(), "docs/capabilities.md", "verified_by");
 }
