@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -191,6 +192,91 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("path: source/target/nextest/partitions", runner)
         self.assertIn("path: source/target/windows-tests.tar.zst", runner)
         self.assertNotIn("actions: write", runner)
+
+
+class DailyCoverageTests(unittest.TestCase):
+    """What the daily run covers and skips, and how its list stays current. A
+    line is active while its ref exists: the list is read from the remote on
+    every run and nothing stores it."""
+
+    def discover(self, **listing):
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(
+                daily.subprocess, "check_output", **listing) as remote, mock.patch.dict(
+                os.environ, {"GITHUB_OUTPUT": str(Path(temp) / "out"),
+                             "GITHUB_STEP_SUMMARY": str(Path(temp) / "summary")}), mock.patch.object(
+                sys, "argv", ["windows-daily.py", "discover"]), mock.patch("builtins.print"):
+            status = daily.main()
+            written = Path(temp) / "out"
+            return status, remote, written.read_text() if written.exists() else ""
+
+    def test_the_list_comes_from_the_remote_on_every_run(self):
+        status, remote, written = self.discover(return_value=f"{SHA}\trefs/heads/main\n{SHA}\t{LINE}\n")
+        self.assertEqual(status, 0)
+        self.assertEqual(remote.call_args.args[0], ["git", "ls-remote", "--heads", "origin", "main", "integration/*"])
+        self.assertIn(LINE, written)
+        discovery = jobs(workflow("windows-daily"))["sources"]
+        for stored in ("actions/cache", "download-artifact", "vars.", "inputs."):
+            self.assertNotIn(stored, discovery)
+
+    def test_a_failed_listing_fails_the_run_and_offers_no_lines(self):
+        status, _, written = self.discover(side_effect=subprocess.CalledProcessError(128, "git"))
+        self.assertEqual(status, 1)
+        self.assertEqual(written, "")
+
+    def test_a_new_line_joins_and_a_deleted_line_leaves_on_the_next_run(self):
+        main = f"{SHA}\trefs/heads/main\n"
+        added = "refs/heads/integration/new-line"
+        rows = lambda listing: [row["ref"] for row in daily.sources(listing)["include"]]
+        self.assertEqual(rows(main + f"{SHA}\t{LINE}\n"), [LINE, "refs/heads/main"])
+        self.assertEqual(rows(main + f"{SHA}\t{added}\n"), [added, "refs/heads/main"])
+
+    def test_an_old_or_planning_line_stays_while_its_ref_exists(self):
+        refs = ["refs/heads/integration/release-3-0-0-r3", "refs/heads/integration/planning-only"]
+        listing = f"{SHA}\trefs/heads/main\n" + "".join(f"{'b' * 40}\t{ref}\n" for ref in refs)
+        self.assertEqual({row["ref"] for row in daily.sources(listing)["include"]} - {"refs/heads/main"}, set(refs))
+
+    def test_only_main_and_integration_refs_are_covered(self):
+        others = ("refs/heads/task/TSK-1-x", "refs/heads/master", "refs/heads/integrationish",
+                  "refs/heads/release/main", "refs/tags/integration/x", "refs/pull/1/head")
+        listing = f"{SHA}\trefs/heads/main\n" + "".join(f"{SHA}\t{ref}\n" for ref in others)
+        self.assertEqual([row["ref"] for row in daily.sources(listing)["include"]], ["refs/heads/main"])
+
+    def test_no_line_is_skipped_for_its_tip_age_or_name(self):
+        """An unchanged tip runs again: nothing compares it with an earlier run."""
+        scheduler = jobs(workflow("windows-daily"))
+        self.assertEqual(set(scheduler), {"sources", "lines"})
+        for name, job in scheduler.items():
+            self.assertNotIn("if:", job, name)
+        script = (ROOT / "scripts/windows-daily.py").read_text()
+        for memory in ("actions/runs", "api.github.com", '"gh"'):
+            self.assertNotIn(memory, script)
+
+    def test_a_run_skips_no_windows_job_and_has_no_tier(self):
+        """Only the journey reader has a condition, and the verdict refuses its skip."""
+        runner = jobs(workflow("windows-daily-run"))
+        conditions = {name: re.findall(r"^    if: (.*)$", job, re.M) for name, job in runner.items()}
+        self.assertEqual(conditions, {
+            "windows-build": [], "windows-tests": [], "windows": [], "windows-release-journey": [],
+            "windows-journeys": ["${{ always() && needs.windows-tests.result != 'skipped' }}"],
+            "verdict": ["${{ always() }}"],
+        })
+
+    def test_a_line_too_old_for_the_runner_fails_and_never_passes(self):
+        """The commands come from the scheduler and the scripts from the line, so a
+        line without a command's script fails its build and skips what follows."""
+        needs = successful()
+        needs["windows-build"] = {"result": "failure", "outputs": {"sha": SHA}}
+        for name in ("windows-tests", "windows-journeys"):
+            needs[name] = {"result": "skipped", "outputs": {}}
+        result = daily.verdict(LINE, SHA, needs)
+        self.assertEqual(result["result"], "failure")
+        self.assertIsNone(result["tested_sha"])
+
+    def test_the_daily_run_is_windows_only(self):
+        runner = jobs(workflow("windows-daily-run"))
+        for name in daily.WINDOWS_JOBS:
+            self.assertIn("runs-on: windows-latest", runner[name])
+        self.assertEqual(set(runner) - daily.WINDOWS_JOBS, {"verdict"})
 
 
 def step_script(job, step):

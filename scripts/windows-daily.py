@@ -3,6 +3,16 @@
 
 The scheduler runs this script from its own revision. Test jobs check out
 each discovered SHA separately; no daily result supplies PR merge evidence.
+
+Which lines: main and every remote refs/heads/integration/* that exists when a
+run starts. The list is read from the remote on every run and nothing stores
+it, so a new line joins and a deleted one leaves on the next run. Active means
+the ref exists: an old line stays until its branch is deleted, and a line too
+old for the runner's commands fails visibly. Other branches are not covered.
+
+What a run skips: no Windows job, and no line for its age or an unchanged tip.
+It runs Windows only: Linux gates and coverage are not part of it. A commit that
+was never a line's tip at discovery is not tested, and a later tip gets no credit.
 """
 
 from __future__ import annotations
