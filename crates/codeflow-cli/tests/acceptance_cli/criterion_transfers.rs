@@ -529,3 +529,77 @@ fn cancelled_foreign_membership_cli_requires_cancellation_at_both_points() {
         }
     }
 }
+
+/// A dated wording note on the open destination keeps the obligation, so it
+/// never invalidates the transfer for either epic or for later validation.
+#[test]
+fn destination_wording_note_keeps_both_transfer_closes() {
+    let serving = "- AC-1 Work (serves EPC-001 AC-1)\n";
+    let dir = repo(&[("TSK-001", serving)], "");
+    let root = dir.path();
+    write(
+        root,
+        TRANSFER_EPIC_PATH,
+        &transfer_epic("EPC-001", "planning", TRANSFER_CRITERION),
+    );
+    commit(root, "docs: plan the original obligation");
+    write(
+        root,
+        TRANSFER_EPIC_PATH,
+        &transfer_epic(
+            "EPC-001",
+            "planning",
+            &format!("{TRANSFER_CRITERION}{TRANSFER_NOTE}"),
+        ),
+    );
+    write(
+        root,
+        TRANSFER_TARGET_PATH,
+        &transfer_epic("EPC-002", "planning", TRANSFER_CRITERION),
+    );
+    let path = record_path("TSK-001");
+    let original = std::fs::read_to_string(root.join(&path)).unwrap();
+    write(
+        root,
+        &path,
+        &original.replacen("epic_id: EPC-001", "epic_id: EPC-002", 1),
+    );
+    let amendment = commit(root, "docs: transfer the obligation");
+    let noted = format!("{TRANSFER_CRITERION}\n  - Amended 2026-11-04: wording clarified.");
+    write(
+        root,
+        TRANSFER_TARGET_PATH,
+        &transfer_epic("EPC-002", "planning", &noted),
+    );
+    commit(root, "docs: note the destination wording");
+    let result = close_transfer(root, "EPC-001", &format!("waived | {amendment}"));
+    assert!(result.0, "{}", result.1);
+    commit(root, "docs: close the source through its waiver");
+
+    let reviewed = head(root);
+    let acceptance = format!("```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: session:transfer@sha256:00\n  criteria:\n    AC-1: verified | task proof\n  journey: none | ordinary criterion\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n```\n");
+    write(
+        root,
+        &path,
+        &task("TSK-001", "complete", serving, &acceptance).replacen(
+            "epic_id: EPC-001",
+            "epic_id: EPC-002",
+            1,
+        ),
+    );
+    commit(root, "docs: complete the moved serving task");
+    let result = close_transfer(root, "EPC-002", "verified | own proof");
+    assert!(result.0, "{}", result.1);
+    commit(root, "docs: close the destination");
+    let out = codeflow()
+        .args(["validate", "--docs"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

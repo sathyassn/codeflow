@@ -151,8 +151,10 @@ fn resolve(
     // validation. It cannot authorize closing the source: that requires a
     // source block whose own review still saw the destination open.
     let destination_completion = blocks.is_empty() && reviewed_target.status == "complete";
+    // The destination keeps its obligation; its own dated notes may change.
     if (!open(&reviewed_target) && !destination_completion)
-        || item(&reviewed_target, &target.1) != Some(target_item)
+        || !item(&reviewed_target, &target.1)
+            .is_some_and(|reviewed| same_obligation(reviewed, target_item))
     {
         return Err("the review needs an open destination with the same criterion".into());
     }
@@ -229,7 +231,7 @@ fn resolve(
             || !same_obligation(before_item, after_item)
             || !same_obligation(before_item, introduced_item)
             || !same_obligation(before_item, criterion)
-            || introduced_item != target_item
+            || !same_obligation(introduced_item, target_item)
         {
             return Err("the transfer must preserve the obligation and journey/after-release tags in an open epic".into());
         }
@@ -416,7 +418,9 @@ pub(super) fn destination_problem(
                     .and_then(|record| item(record, id))
                     .and_then(|entry| destination(entry).ok());
                 if intended == Some((epic.id.clone(), criterion.id.clone())) {
-                    return Err(reason.clone());
+                    return Err(format!(
+                        "the transfer from {source} {id} is invalid: {reason}"
+                    ));
                 }
             }
         }
