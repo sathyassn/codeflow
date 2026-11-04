@@ -253,6 +253,61 @@ class GateContracts(unittest.TestCase):
         self.assertIn("github.event_name == 'pull_request' && github.ref || github.run_id", workflow)
         self.assertIn('cargo build --release --locked -p codeflow-cli', workflow)
 
+    # TSK-1313: a newer push to an integration line cancels the older push run
+    # on that line, because no check requires a superseded line commit's
+    # verdict. Main, schedule and dispatch runs are never cancelled in
+    # progress. The event is in the group, so a dispatch on a line shares no
+    # group with that line's pushes. The exact text is pinned so a later edit
+    # cannot widen what cancels.
+    CI_CONCURRENCY = (
+        "\nconcurrency:\n"
+        "  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}\n"
+        "  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && "
+        "startsWith(github.ref, 'refs/heads/integration/')) }}\n\n"
+    )
+
+    def ci_concurrency(self, event, ref):
+        """The group and the cancel value for one event, from the workflow's own
+        text. The text is compared with the pin first, so `eval` only ever sees
+        the pinned expression. This models GitHub's expressions for these
+        operators; it does not run GitHub."""
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        self.assertIn(self.CI_CONCURRENCY, workflow)
+        self.assertLess(workflow.index(self.CI_CONCURRENCY), workflow.index('\njobs:\n'))
+        self.assertEqual(len(re.findall(r'^\s*concurrency:', workflow, re.M)), 1, 'one workflow-level group, no job-level one')
+        name = re.search(r'^name: (\S+)$', workflow, re.M).group(1)
+        group = re.search(r'^  group: (.+)$', workflow, re.M).group(1)
+        values = {'github.workflow': name, 'github.event_name': event, 'github.ref': ref}
+        group = re.sub(r'\$\{\{ ([\w.]+) \}\}', lambda found: values[found.group(1)], group)
+        cancel = re.search(r'^  cancel-in-progress: \$\{\{ (.+) \}\}$', workflow, re.M).group(1)
+        cancel = (cancel.replace('github.event_name', repr(event)).replace('github.ref', repr(ref))
+                  .replace('||', ' or ').replace('&&', ' and '))
+        return group, eval(cancel, {'__builtins__': {}, 'startsWith': str.startswith})
+
+    def test_ci_cancels_only_pull_request_runs_and_superseded_line_pushes(self):
+        line = 'refs/heads/integration/EPC-001-a-line'
+        cases = (
+            ('push', line, True),
+            ('push', 'refs/heads/integration/EPC-002-another-line', True),
+            ('pull_request', 'refs/pull/7/merge', True),
+            ('push', 'refs/heads/main', False),
+            ('push', 'refs/heads/master', False),
+            ('push', 'refs/heads/integration', False),
+            ('push', 'refs/heads/integration-not-a-line', False),
+            ('schedule', 'refs/heads/main', False),
+            ('workflow_dispatch', 'refs/heads/main', False),
+            ('workflow_dispatch', line, False),
+        )
+        groups = {}
+        for event, ref, cancels in cases:
+            with self.subTest(event=event, ref=ref):
+                group, cancel = self.ci_concurrency(event, ref)
+                self.assertIs(cancel, cancels)
+                self.assertEqual(group, f'codeflow-ci-{event}-{ref}')
+                # No two of these cases can replace each other's runs.
+                self.assertNotIn(group, groups)
+                groups[group] = (event, ref)
+
     def test_every_workflow_action_is_pinned_to_a_commit(self):
         # Issue 148: a tag can be moved, so a workflow with repository write
         # or pull request permissions must not run whatever a tag points at.
