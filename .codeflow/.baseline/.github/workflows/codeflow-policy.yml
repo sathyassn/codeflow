@@ -192,6 +192,16 @@ jobs:
             echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); this run belongs to an older event, so it fails; re-run the check for the current head"; exit 1
           fi
 
+      # The registry is fetched explicitly with full history, never forced
+      # (R-20); the pull request head above was fetched as data only.
+      - name: Fetch the shared registry
+        run: |
+          if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
+            git fetch --no-tags origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+          else
+            echo "codeflow/registry is not on origin; the check reports it when records are tracked"
+          fi
+
       # The body is read when the job runs, never taken from the event. An
       # event carries the body as it was when the event fired, and the run
       # that survives the concurrency group can belong to an older event (one
@@ -204,11 +214,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_TARGET: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
           curl -fsSL --retry 3 --max-time 60 \
             -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
             "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull.json"
+          # A current body must describe the same head and target as this run.
+          jq -e --arg head "$EXPECTED_HEAD" --arg base "$EXPECTED_BASE" --arg target "$EXPECTED_TARGET" --arg number "$PR_NUMBER" --arg repository "$GITHUB_REPOSITORY" \
+            '.head.sha == $head and .base.sha == $base and .base.ref == $target and (.number | tostring) == $number and .base.repo.full_name == $repository and .state == "open"' \
+            "${RUNNER_TEMP}/pull.json" >/dev/null || {
+              printf '::error::expected PR %s head %s target %s (%s); received ' "$PR_NUMBER" "$EXPECTED_HEAD" "$EXPECTED_BASE" "$EXPECTED_TARGET"
+              jq -c '{number, head: .head.sha, target: .base.sha, branch: .base.ref, repository: .base.repo.full_name}' "${RUNNER_TEMP}/pull.json"
+              echo "Trigger a new PR event, for example by editing its body."; exit 1;
+            }
           delimiter="codeflow_body_$(openssl rand -hex 16)"
           {
             echo "text<<${delimiter}"
@@ -226,17 +247,24 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}
           ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
-        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"
-
-      # The registry is fetched explicitly with full history, never forced
-      # (R-20); the pull request head above was fetched as data only.
-      - name: Fetch the shared registry
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
-            git fetch --no-tags origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
-          else
-            echo "codeflow/registry is not on origin; the check reports it when records are tracked"
-          fi
+          set -euo pipefail
+          codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"
+          # Do not admit a verdict if its body, head or target changed while it ran.
+          curl -fsSL --retry 3 --max-time 60 \
+            -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull-after.json"
+          jq -e --slurpfile before "${RUNNER_TEMP}/pull.json" \
+            'def snapshot: [.number, .base.repo.full_name, .head.sha, .base.sha, .base.ref, .body, .state]; snapshot == ($before[0] | snapshot) and .state == "open"' \
+            "${RUNNER_TEMP}/pull-after.json" >/dev/null || {
+              echo "::error::pull request body, head or target changed during evaluation; use the new PR event's check"
+              jq -c --slurpfile before "${RUNNER_TEMP}/pull.json" \
+                'def identities: {number, head: .head.sha, target: .base.sha, branch: .base.ref}; {judged: ($before[0] | identities), current: identities}' \
+                "${RUNNER_TEMP}/pull-after.json"
+              exit 1;
+            }
 
       - name: codeflow ids check
         env:

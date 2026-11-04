@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 mod acceptance;
 mod adopter;
+mod capability_impact;
 mod change_class;
 mod classification;
 mod conflict_markers;
@@ -691,6 +692,7 @@ pub fn run(args: &CiArgs) -> i32 {
     // One checked tree diff decides what the body may leave out (TSK-135).
     // Asked only with a body. A range or project paths that cannot be read
     // stop the run, never a guessed class.
+    let mut body_inventory = None;
     let change = match (pr_body.as_ref(), base_sha.as_deref()) {
         (None, _) => None,
         (Some(_), None) => Some(ChangeClass::CODE),
@@ -719,7 +721,9 @@ pub fn run(args: &CiArgs) -> i32 {
                     return 2;
                 }
             };
-            Some(change_class::classify(Some(&inventory), &project))
+            let class = change_class::classify(Some(&inventory), &project);
+            body_inventory = Some(inventory);
+            Some(class)
         }
     };
     let work_class = if scope_ready {
@@ -763,6 +767,36 @@ pub fn run(args: &CiArgs) -> i32 {
     {
         visible_graph_check(&root, level, &mut tagged, &mut ran);
     }
+
+    let capability = capability_impact::evaluate(
+        &root,
+        configured,
+        &judging.raw,
+        authority.as_ref().map(Authority::sha),
+        base_sha.as_deref(),
+        &head,
+        pr_body.as_deref(),
+        body_inventory.as_deref(),
+        // The push set supplies this flag on every local push CI call, so it
+        // identifies local push context; it cannot authorize hosted deferral.
+        args.advertisement_stdin,
+        is_pr_event(|key| environment.get(key).cloned()),
+    );
+    for note in capability.notes {
+        println!("codeflow ci: {}", crate::cmd::shown(&note));
+    }
+    if capability.ran {
+        ran.push("capability impact");
+    }
+    tagged.extend(
+        capability
+            .findings
+            .into_iter()
+            .map(|violation| TaggedViolation {
+                sha: None,
+                violation,
+            }),
+    );
 
     // --- PR-body check ----------------------------------------------------
     // A Bitbucket PR without a body channel was warned about when resolving

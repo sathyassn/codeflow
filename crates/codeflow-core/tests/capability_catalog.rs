@@ -9,6 +9,70 @@ const VALID: &str = include_str!("fixtures/capability-catalog/valid.md");
 const VOCAB: &str = "inventory: incomplete\ngroups: [{name: records, about: Records}]\ntags: [{name: rust, about: Rust}]\n";
 
 #[test]
+fn tree_catalog_bounds_refuse_before_reading_or_parsing_payloads() {
+    use codeflow_core::capability::{
+        CAPABILITY_MAX_FILE_BYTES, CAPABILITY_MAX_TREE_BYTES, CAPABILITY_MAX_TREE_FILES,
+    };
+    for (count, size) in [
+        (CAPABILITY_MAX_TREE_FILES + 1, 1),
+        (
+            CAPABILITY_MAX_TREE_BYTES / CAPABILITY_MAX_FILE_BYTES + 1,
+            CAPABILITY_MAX_FILE_BYTES,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let blob = repo.blob(&vec![b'x'; size]).unwrap();
+        let mut catalog = repo.treebuilder(None).unwrap();
+        for n in 1..=count {
+            catalog
+                .insert(format!("CAP-{n:03}-example.md"), blob, 0o100_644)
+                .unwrap();
+        }
+        let mut docs = repo.treebuilder(None).unwrap();
+        docs.insert("capabilities", catalog.write().unwrap(), 0o040_000)
+            .unwrap();
+        let mut root = repo.treebuilder(None).unwrap();
+        root.insert("docs", docs.write().unwrap(), 0o040_000)
+            .unwrap();
+        let tree = root.write().unwrap().to_string();
+        let error = load_capability_catalog_from_tree(dir.path(), &tree)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("catalog exceeds"), "{error}");
+    }
+}
+
+#[test]
+fn tree_catalog_bounds_the_directory_walk_and_keeps_companion_assets() {
+    let dir = fixture();
+    write(dir.path(), "docs/capabilities/images/icon.svg", "<svg/>\n");
+    assert_eq!(
+        load_capability_catalog(dir.path()).unwrap(),
+        load_capability_catalog_from_tree(dir.path(), &tree(dir.path())).unwrap()
+    );
+
+    let repo = git2::Repository::open(dir.path()).unwrap();
+    let mut child = repo.treebuilder(None).unwrap().write().unwrap();
+    // Small shared metadata can describe paths too expensive to expand.
+    // The walk is iterative and stops before accumulating those path bytes.
+    for _ in 0..1_100 {
+        let mut parent = repo.treebuilder(None).unwrap();
+        parent.insert("x".repeat(120), child, 0o040_000).unwrap();
+        child = parent.write().unwrap();
+    }
+    let mut docs = repo.treebuilder(None).unwrap();
+    docs.insert("capabilities", child, 0o040_000).unwrap();
+    let mut root = repo.treebuilder(None).unwrap();
+    root.insert("docs", docs.write().unwrap(), 0o040_000)
+        .unwrap();
+    let error = load_capability_catalog_from_tree(dir.path(), &root.write().unwrap().to_string())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("path inventory exceeds"), "{error}");
+}
+
+#[test]
 fn record_fences_accept_only_ascii_trailing_whitespace() {
     let dir = fixture();
     write(
@@ -530,6 +594,41 @@ fn identities_are_unique_across_files() {
 
 fn fence(id: &str, status: &str) -> String {
     format!("```yaml\nid: {id}\nname: catalog\narea: engine\nstatus: {status}\nverified_by: ['test: crates/codeflow-core/tests/capability_catalog.rs']\n```\n")
+}
+
+#[test]
+fn legacy_prose_is_bound_to_each_entry() {
+    let dir = fixture();
+    let legacy = format!(
+        "# Catalog\n\n## First\n\n{}\nFirst contract.\n\n> ## Quoted heading\n\n### Details\n\nFirst details.\n\n# Another group\n\n## Second\n\n{}\nSecond contract.\n\n# Catalog schema\n\nGlobal guidance.\n",
+        fence("CAP-098", "planned"),
+        fence("CAP-099", "planned")
+    );
+    write(dir.path(), "docs/capabilities.md", &legacy);
+    let catalog = load_capability_catalog(dir.path()).unwrap();
+    let first = catalog
+        .records
+        .iter()
+        .find(|r| r.entry.id == "CAP-098")
+        .unwrap();
+    let second = catalog
+        .records
+        .iter()
+        .find(|r| r.entry.id == "CAP-099")
+        .unwrap();
+    assert!(first.prose.contains("First contract."));
+    assert!(first.prose.contains("Quoted heading"));
+    assert!(first.prose.contains("First details."));
+    assert!(!first.prose.contains("Another group"));
+    assert!(!first.prose.contains("Second"));
+    assert!(second.prose.contains("Second contract."));
+    assert!(!second.prose.contains("First"));
+    assert!(!second.prose.contains("Global guidance"));
+    assert!(!first.prose.contains("id: CAP-098"));
+    assert_eq!(
+        catalog,
+        load_capability_catalog_from_tree(dir.path(), &tree(dir.path())).unwrap()
+    );
 }
 
 #[test]

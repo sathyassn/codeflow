@@ -3271,6 +3271,12 @@ fn check_adopter_fit(opts: &Options) -> CheckResult {
         level.level, level.origin
     )];
     let mut status = Status::Pass;
+    if !policy.git.pr_capability_impact.is_active()
+        && crate::capability::load_capability_catalog(&root)
+            .is_ok_and(|catalog| !catalog.records.is_empty())
+    {
+        parts.push("catalog present, but git.pr_capability_impact is off or absent; capability declarations are not checked".into());
+    }
     if let Err(error) = &raw {
         status = Status::Warn(
             remedy::DOCTOR_POLICY_DECISION
