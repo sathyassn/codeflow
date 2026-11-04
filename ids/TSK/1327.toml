@@ -1,0 +1,11 @@
+id = "TSK-1327"
+uid = "6946f457-7c13-4ded-b216-452d431e614a"
+kind = "TSK"
+title = "A claim judges readiness on the tip it starts from"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-04T17:59:13Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
