@@ -6,6 +6,7 @@
 // has its unit; names before ids; times are wall clock with a zone; sources go in collapsed detail.
 const fs = require('fs'); const path = require('path');
 const { STAGE_LINE_FILL } = require('./stage-colours.cjs');
+const { blockText } = require('./record-blocks.cjs');
 const HERE = __dirname, OUT = path.resolve(HERE, '../prototype.html');
 const F = JSON.parse(fs.readFileSync(path.join(HERE, 'facts.json'), 'utf8'));
 const R = JSON.parse(fs.readFileSync(path.join(HERE, 'report.json'), 'utf8'));
@@ -154,7 +155,7 @@ function taskView(t) {
   ${crumbs(parts)}
   <div class="vhead"><h2>${esc(t.title)}</h2>${idTag(t.id)}${chip(esc(t.status), t.status === 'complete' ? 'ok' : t.status === 'blocked' ? 'danger' : 'plain')}</div>
   <p class="one">${esc(one)}</p>
-  ${whole || (t.context || []).length ? details('The whole outcome and context, from the record', `<h4>Outcome</h4><p class="small">${esc(t.about)}</p>${(t.context || []).length ? `<h4>Context</h4>${t.context.map(p => `<p class="small">${esc(plain(p))}</p>`).join('')}` : ''}`) : ''}
+  ${whole || (t.context || []).length ? details('The whole outcome and context, from the record', `<h4>Outcome</h4><p class="small">${esc(t.about)}</p>${(t.context || []).length ? `<h4>Context</h4>${recBlocks(t.context)}` : ''}`) : ''}
   ${fig(`${t.title}: where it is`, 'Where the task is on its way to main', taskPath(t), '', '', false)}
   ${facts([['Outcome', e ? `${link('o-' + e.id, esc(cap(e.title)))} ${idTag(e.id)}` : nr], ['Theme', e ? `<span class="wide-cell">${link(themeKey(e.id, t.theme), esc(t.theme))}</span>` : nr], ['Where it is', locChip(t)], ['State', esc(t.status)], ['Lane', nr], ['Window', nr], ['Record last changed', esc(when(t.lastMoved))], ['Pull request', t.prs.length ? t.prs.map(n => `<span class="mono">#${n}</span>`).join(' ') : 'none open']], 'Eight facts')}
   <div class="grid deps gap">
@@ -166,14 +167,24 @@ function taskView(t) {
 }
 // Record prose carries Markdown marks; the page draws them as plain text.
 const plain = s => s.replace(/\*\*|`/g, '');
+// A record's blocks on the page: a list stays a list, a table a table, a subheading a subheading.
+const recText = s => esc(plain(s));
+const recBlock = b => {
+  if (typeof b === 'string') return `<p class="small">${recText(b)}</p>`;
+  if (b.heading) return `<h5 class="rec-h">${recText(b.heading)}</h5>`;
+  if (b.table) return `<div class="rec-table" tabindex="0"><table><thead><tr>${b.table.head.map(c => `<th scope="col">${recText(c)}</th>`).join('')}</tr></thead><tbody>${b.table.rows.map(r => `<tr>${r.map(c => `<td>${recText(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  const tag = b.list, start = tag === 'ol' && b.start !== 1 ? ` start="${b.start}"` : '';
+  return `<${tag} class="small rec-list"${start}>${b.items.map(it => `<li>${recText(it.text)}${it.sub.map(recBlock).join('')}</li>`).join('')}</${tag}>`;
+};
+const recBlocks = bs => bs.map(recBlock).join('');
 // A feature is its capability entry (TSK-1098 AC-13): what it is, then its status, then the epics that build it; no empty group.
 function featureView(id) {
-  const c = CE[id], name = cap(CAPS[id] || c.name), about = plain(c.about.join(' ')) || 'not recorded', one = lead(plain(c.about[0] || about)), eps = c.epics.filter(x => F.epics[x]);
+  const c = CE[id], name = cap(CAPS[id] || c.name), about = plain(c.about.map(blockText).join(' ')) || 'not recorded', firstBlock = c.about[0], one = lead(plain(firstBlock ? (firstBlock.list ? firstBlock.items[0].text : blockText(firstBlock)) : about)), eps = c.epics.filter(x => F.epics[x]);
   return `${view()}<section class="view" id="f-${id}" data-title="${esc(name)}">
   ${crumbs([['overview', 'Release'], ['f-' + id, name]])}
   <div class="vhead"><h2>${esc(name)}</h2>${idTag(id)}${chip(esc(c.status || 'not recorded'), c.status === 'shipped' ? 'ok' : 'plain')}</div>
   <p class="one">${esc(one)}</p>
-  ${one.length < about.length ? details('The whole entry, from the record', c.about.map(p => `<p class="small">${esc(plain(p))}</p>`).join('')) : ''}
+  ${one.length < about.length ? details('The whole entry, from the record', recBlocks(c.about)) : ''}
   <div class="gap">${facts([['State', esc(c.status || 'not recorded')], ['Area', esc(c.area || 'not recorded')]], 'Two facts')}</div>
   ${eps.length ? `<div class="card gap" data-block="${esc(name)}: epics"><h4>Built by</h4>${points(eps.map(x => `${link('o-' + x, esc(cap(F.epics[x].title)))} ${idTag(x)}`))}</div>` : ''}
   ${details('Evidence', `<p class="small">The entry for ${esc(id)} in <code>docs/capabilities.md</code> on the line at ${esc(F.read.lineTip)}, read at ${esc(READ_AT)}.</p>`)}
@@ -376,6 +387,7 @@ svg .st-line-f{fill:${STAGE_LINE_FILL};stroke:var(--accent);stroke-width:1} :is(
 .dots{display:flex;flex-wrap:wrap;gap:4px} .dot{display:inline-block;width:14px;height:14px;border-radius:4px} .dot.none{background:var(--sunken)} a.dot:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .board,.matrix{display:grid;gap:4px;font-size:var(--fs-1)} .board-head,.board-row{display:grid;grid-template-columns:minmax(0,1.6fr) repeat(var(--cols,5),minmax(0,1fr));gap:6px;align-items:center} .board-head span{font-size:var(--fs-0);font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-2);overflow-wrap:anywhere} .board-row .cell{min-height:22px;display:flex;flex-wrap:wrap;gap:3px;align-items:center;padding:3px 0;border-top:1px solid var(--line)} .board-row .bar-l{border-top:1px solid var(--line);padding:3px 0}
 .matrix .board-head,.matrix .board-row{--cols:5}
+.rec-list{margin:0;padding-left:20px;display:grid;gap:4px} .rec-list .rec-list{margin-top:4px} .rec-list>li>p{margin:4px 0 0} .rec-h{margin:4px 0 0;font-size:var(--fs-1);font-weight:600} .rec-table{overflow-x:auto;font-size:var(--fs-1)} .rec-table table{border-collapse:collapse;width:100%} .rec-table th,.rec-table td{text-align:left;vertical-align:top;padding:4px 8px;border-bottom:1px solid var(--line)} .rec-table th{font-weight:600}
 .more{margin-top:12px;border-top:1px solid var(--line);padding-top:8px} .more>summary{cursor:pointer;color:var(--accent-ink);font-size:var(--fs-1);font-weight:500} .more-body{margin-top:8px;display:grid;gap:8px} .more.inline{margin:4px 0 0;border:0;padding:0} .more.inline>summary{font-size:var(--fs-0)} .terms{display:grid;gap:4px;margin:0} .terms div{display:grid;grid-template-columns:14ch minmax(0,1fr);gap:10px;font-size:var(--fs-1)} .terms dt{font-weight:600} .terms dd{margin:0;color:var(--text-2)}
 .fig-data{margin-top:10px;font-size:var(--fs-1)} .fig-data summary{cursor:pointer;color:var(--accent-ink);font-weight:500} .fig-data table{border-collapse:collapse;width:100%;margin-top:8px} .fig-data th,.fig-data td{text-align:left;padding:6px 8px;border-top:1px solid var(--line);font-weight:400;vertical-align:top} .fig-data thead th{font-size:var(--fs-0);text-transform:uppercase;letter-spacing:.04em;color:var(--text-2)}
 .path{max-width:460px}

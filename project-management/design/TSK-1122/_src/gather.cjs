@@ -8,6 +8,7 @@
 //        capability names, the docs diff) at the line tip already pinned in facts.json; counts, GitHub and work next
 //        stay as read. Used when the page needs more of a record than the last read kept.
 const { spawnSync } = require('child_process'); const fs = require('fs'); const path = require('path');
+const { blocks } = require('./record-blocks.cjs');
 const HERE = __dirname;
 const REPO = path.resolve(HERE, '../../../..');            // the codeflow worktree this script lives in
 const LINE = 'origin/integration/EPC-022-the-3-2-0-milestone-fixes', MAIN = 'origin/main';
@@ -28,9 +29,9 @@ function readTasks(ref) {
   for (const f of git('ls-tree', '--name-only', ref, 'project-management/tasks/').split('\n').filter(x => /TSK-\d+\.md$/.test(x))) {
     const id = path.basename(f, '.md'); const t = git('show', `${ref}:${f}`);
     const outcome = (t.match(/\n## Outcome\s*\n+([\s\S]*?)(?=\n## |\s*$(?![\s\S]))/) || [])[1];
-    // the record's Context is its ## Description: paragraphs kept, fenced figures left out because a disclosure draws no figure
+    // the record's Context is its ## Description: paragraphs, lists, tables and subheadings kept, fenced figures left out because a disclosure draws no figure
     const description = (t.match(/\n## Description\s*\n+([\s\S]*?)(?=\n## |\s*$(?![\s\S]))/) || [])[1];
-    const context = description ? description.replace(/```[\s\S]*?```/g, '').split(/\n\s*\n/).map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean) : [];
+    const context = description ? blocks(description) : [];
     const serves = [...t.matchAll(/serves (EPC-\d+) (AC-\d+)/g)].map(m => m[1] + ' ' + m[2]);
     out[id] = { id, epic: fm(t, 'epic_id'), status: fm(t, 'status'), work_type: fm(t, 'work_type'), title: unq(fm(t, 'title')), created: fm(t, 'created'),
       depends_on: (fm(t, 'depends_on') || '[]').replace(/[\[\]\s]/g, '').split(',').filter(Boolean).filter(x => /^TSK-\d+$/.test(x)),
@@ -75,7 +76,7 @@ const capabilityEntries = {};
 for (const m of git('show', `${LINE_AT}:docs/capabilities.md`).matchAll(/```yaml\n([\s\S]*?)```\n([\s\S]*?)(?=\n#{2,4} |\s*$(?![\s\S]))/g)) {
   const y = k => (m[1].match(new RegExp(`^${k}: (.*)$`, 'm')) || [])[1] || '';
   if (!/^CAP-\d+$/.test(y('id'))) continue;
-  const about = m[2].split(/\n\s*\n/).filter(p => !/^\s*\|/.test(p)).map(p => p.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const about = blocks(m[2].replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')).filter(b => !b.table);
   capabilityEntries[y('id')] = { name: y('name').replace(/-/g, ' '), area: y('area'), status: y('status'), epics: y('epics').replace(/[\[\]\s]/g, '').split(',').filter(Boolean), about };
 }
 

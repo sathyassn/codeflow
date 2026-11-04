@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Drives prototype.html from file:// and checks the operator's design decisions that AC-5 names, one line per check.
-// Usage: node audit-decisions.cjs   (exits 1 on any FAIL)
+// Usage: node audit-decisions.cjs   (exits 1 on any FAIL; AUDIT_PAGE names another built page)
 const path = require('path'); const fs = require('fs'); const { pathToFileURL } = require('url');
 const { chromium } = require('/Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/docs-portal/node_modules/playwright');
-const pagePath = path.resolve(__dirname, '../prototype.html'); const URL = pathToFileURL(pagePath).href;
+const pagePath = path.resolve(process.env.AUDIT_PAGE || path.join(__dirname, '../prototype.html')); const URL = pathToFileURL(pagePath).href;
 const rows = []; const check = (src, what, ok, note = '') => rows.push([ok ? 'PASS' : 'FAIL', src, what, note]);
 const KINDS = ['Status report', 'Epic close', 'Security review', 'Weekly workspace digest', 'Design review', 'Feature', 'Hand-off', 'Incident', 'Research or decision', 'Small project'];
 (async () => {
@@ -95,6 +95,9 @@ const KINDS = ['Status report', 'Epic close', 'Security review', 'Weekly workspa
     check('operator 2026-10-31 18:4x, entity pages', 'epic, theme, task and feature views open with what the item is about; no None group; tasks show Context', ent.bad.length === 0 && ent.feature > 0, JSON.stringify({ ...ent, bad: ent.bad.slice(0, 5) }));
     const chips = await page.evaluate(() => { const a = [...document.querySelectorAll('.view[id^="o-"] .chips a[data-view-link^="f-CAP-"]')]; return { n: a.length, dead: a.filter(x => !document.getElementById(x.dataset.viewLink)).length, inMenu: document.querySelectorAll('.menu [data-view-link^="f-CAP-"]').length }; });
     check('operator 2026-10-31 18:4x, entity pages', 'every capability chip opens a feature view and no menu row was added', chips.n > 0 && !chips.dead && !chips.inMenu, JSON.stringify(chips));
+    // A record's list, table or subheading stays one on the page: never one paragraph with its marks left inside. All five entity kinds.
+    const runOn = await page.evaluate(() => { const LIST = /^[-*+] \S|\s[-*+] \S.*\s[-*+] \S|(^|\s)1[.)] \S.*\s2[.)] \S|^\d+[.)] \S/, TABLE = /\|\s*:?-{3,}/, HEAD = /^#{1,6} \S/; const kinds = { 'outcome and epic': 'o-', theme: 't-', task: 'k-', feature: 'f-' }; const out = { lists: 0, bad: [] }; for (const [kind, pre] of Object.entries(kinds)) { out[kind] = 0; for (const v of document.querySelectorAll(`.view[id^="${pre}"]`)) { out[kind]++; out.lists += v.querySelectorAll('.more-body ul.rec-list, .more-body ol.rec-list').length; for (const p of v.querySelectorAll('p, dd')) { const t = p.textContent.trim().replace(/"[^"]*"/g, '""'); if (LIST.test(t) || TABLE.test(t) || HEAD.test(t)) out.bad.push(`${v.id}: ${t.slice(0, 80)}`); } } } return out; });
+    check('Coordinator 2026-11-03, list breaks', 'a record list, table or subheading is never a run-on paragraph, on epic, outcome, theme, task and feature views', runOn.bad.length === 0 && runOn.lists > 0, JSON.stringify({ ...runOn, n: runOn.bad.length, bad: runOn.bad.slice(0, 6) }));
   } finally { await browser.close(); }
   const fails = rows.filter(r => r[0] === 'FAIL').length;
   for (const r of rows) console.log(`${r[0]}  ${r[1]}: ${r[2]}${r[3] ? `  [${r[3]}]` : ''}`);
