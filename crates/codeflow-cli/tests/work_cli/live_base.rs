@@ -271,25 +271,25 @@ fn wrong_base_is_advisory_when_work_planning_is_warn() {
 }
 
 #[test]
-fn ci_merge_remedy_keeps_shell_metacharacters_in_the_target_literal() {
+fn ci_merge_remedy_names_the_exact_commit_for_unusual_targets() {
     let dir = lines();
     let root = dir.path();
-    let target = "integration/a$(id)";
+    let target = "integration/a'$(id)'z";
     git(root, &["branch", target, A]);
-    advance(root, target, "needed.txt");
+    let tip = advance(root, target, "needed.txt");
     git(root, &["switch", "-qc", CHILD, A]);
-    let out = cli(
-        root,
-        &[
-            "ci", "--base", "main", "--head", "HEAD", "--branch", CHILD, "--into", target,
-        ],
-        None,
-    );
+    let args = [
+        "ci", "--base", "main", "--head", "HEAD", "--branch", CHILD, "--into", target,
+    ];
+    let out = cli(root, &args, None);
     assert!(
-        text(&out).contains("git merge -- 'integration/a$(id)'"),
+        text(&out).contains(&format!("git merge -- \"{tip}\"`")),
         "{}",
         text(&out)
     );
+    git(root, &["merge", "-q", "--no-edit", "--", &tip]);
+    let out = cli(root, &args, None);
+    assert!(!text(&out).contains("work.target_tip"), "{}", text(&out));
 }
 
 #[test]
@@ -319,6 +319,14 @@ fn ci_warns_until_the_current_target_tip_is_merged_and_reports_unknown_tips() {
     git(root, &["branch", "-d", A]);
     let out = cli(root, &args, None);
     assert!(text(&out).contains("unverified"), "{}", text(&out));
+    let output = text(&out);
+    let warning = output.split_once("work.target_tip").unwrap().1;
+    let remedy = warning
+        .lines()
+        .find(|line| line.contains("sanctioned:"))
+        .unwrap();
+    assert!(remedy.contains("repair the target read"), "{output}");
+    assert!(!remedy.contains("git merge --"), "{output}");
 }
 
 #[cfg(unix)]

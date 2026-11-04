@@ -1410,7 +1410,7 @@ fn target_containment_warning(
     names: &Names<'_>,
     tagged: &mut Vec<TaggedViolation>,
 ) {
-    let result = (|| -> Result<Option<String>, String> {
+    let result = (|| -> Result<Option<(String, String)>, String> {
         // Reuse the live destination answer already obtained for the range.
         // A failed remote read never makes an older tracking ref current.
         let live = match names.release.get() {
@@ -1435,22 +1435,21 @@ fn target_containment_warning(
         if codeflow_core::workgraph::claim_base::head_contains(root, head, tip)? {
             return Ok(None);
         }
-        Ok(Some(format!(
-            "head does not contain target '{target}' at {tip}"
+        Ok(Some((
+            format!("head does not contain target '{target}' at {tip}"),
+            tip.clone(),
         )))
     })();
-    let message = match result {
+    let (message, next_step) = match result {
         Ok(None) => return,
-        Ok(Some(message)) => message,
-        Err(error) => format!("target '{target}' tip is unverified: {error}"),
-    };
-    let target_arg = if target
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || "_./-".contains(c))
-    {
-        target.to_string()
-    } else {
-        format!("'{}'", target.replace('\'', "'\\''"))
+        Ok(Some((message, tip))) => (
+            message,
+            format!("run `git merge -- \"{tip}\"` on the task branch and rerun `codeflow ci`"),
+        ),
+        Err(error) => (
+            format!("target '{target}' tip is unverified: {error}"),
+            "repair the target read and rerun `codeflow ci` until its tip is verified".into(),
+        ),
     };
     tagged.push(TaggedViolation {
         sha: None,
@@ -1458,7 +1457,7 @@ fn target_containment_warning(
             "work.target_tip",
             PolicyLevel::Warn,
             message,
-            codeflow_core::remedy::WORK_TARGET_TIP.with(&[("target", &target_arg)]),
+            codeflow_core::remedy::WORK_TARGET_TIP.with(&[("next_step", &next_step)]),
         ),
     });
 }

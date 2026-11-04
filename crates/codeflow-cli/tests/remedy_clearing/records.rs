@@ -76,9 +76,9 @@ impl Hosted {
         commit_all(&self.root, "docs: plan the work");
     }
 
-    /// Land `branch` on the destination's target, as a reviewed merge on
-    /// the platform does, then fast-forward the local target to it.
-    fn land(&self, branch: &str) {
+    /// Land `branch` on the destination and fetch its remote-tracking refs.
+    /// The local target branch stays where it was.
+    fn land_on_destination(&self, branch: &str) {
         git(
             &self.dest,
             &[
@@ -89,6 +89,11 @@ impl Hosted {
             ],
         );
         git(&self.root, &["fetch", "-q", "origin"]);
+    }
+
+    /// Land `branch`, then fast-forward the local target to it.
+    fn land(&self, branch: &str) {
+        self.land_on_destination(branch);
         git(
             &self.root,
             &[
@@ -583,12 +588,16 @@ fn clears_work_target_tip() {
     let root = &hosted.root;
     hosted.plan_task("plan/work");
     hosted.land("plan/work");
+    let old_target = rev(root, &hosted.target);
     hosted.branch(BRANCH);
     commit(root, "x.txt", "feat: add x");
     hosted.branch("plan/advance");
     commit(root, "target.txt", "docs: advance target");
-    hosted.land("plan/advance");
+    hosted.land_on_destination("plan/advance");
     git(root, &["switch", "-q", BRANCH]);
+    // Fetching the remote does not keep the local target branch current.
+    // The printed fix must merge the verified remote commit, not this ref.
+    assert_eq!(rev(root, &hosted.target), old_target);
     prove(
         "WORK_TARGET_TIP",
         "work.target_tip",

@@ -316,7 +316,11 @@ fn every_catalogued_row_is_proven_or_excluded_at_a_boundary() {
 // ---------------------------------------------------------------------------
 
 fn exe() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_codeflow"))
+    // Exercise the same proof against a preserved baseline for fail-before.
+    std::env::var_os("CODEFLOW_TEST_BINARY").map_or_else(
+        || PathBuf::from(env!("CARGO_BIN_EXE_codeflow")),
+        PathBuf::from,
+    )
 }
 
 fn home() -> &'static Path {
