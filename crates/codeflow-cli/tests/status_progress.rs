@@ -7,6 +7,8 @@ use std::process::{Command, Output};
 
 use serde_json::Value;
 
+#[path = "status_progress/journey.rs"]
+mod journey;
 #[path = "status_progress/review.rs"]
 mod review;
 #[path = "status_progress/stream.rs"]
