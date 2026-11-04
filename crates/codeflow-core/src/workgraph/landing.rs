@@ -145,6 +145,68 @@ pub(super) struct Outside<'a> {
     /// Bases the range reaches beyond its anchor (its own history): read
     /// only for a record that does not parse.
     pub(super) own: &'a [Oid],
+    /// The remote-tracking ref the run replaces, by its full name and the
+    /// exact tip it must still have (TSK-350 AC-4, AC-5): the old head a
+    /// push names for its destination, or the judged branch's own remote
+    /// copy. Its completions are the state the push removes, so the ref is
+    /// left out of the refs that make a landing unknown, and only while it
+    /// is still at that tip. A commit another ref also reaches still counts.
+    pub(super) replaced: Option<&'a Replaced>,
+}
+
+/// A remote-tracking ref a run replaces, by full name and exact tip.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Replaced {
+    /// The full ref name, `refs/remotes/<remote>/<branch>`.
+    pub name: Vec<u8>,
+    /// The tip the ref must still point at to be left out.
+    pub tip: Oid,
+}
+
+impl Replaced {
+    /// The remote-tracking ref of `branch` for the one configured remote
+    /// whose URL is exactly `url`, at the tip it has now: the destination's
+    /// own copy of the branch. `Ok(None)` when no remote or more than one
+    /// has that URL, or the ref does not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the repository, a remote or the ref cannot be read, or
+    /// that a remote's name is not UTF-8; the caller then sets nothing
+    /// aside.
+    pub fn tracking(
+        repo_root: &std::path::Path,
+        url: &str,
+        branch: &str,
+    ) -> Result<Option<Self>, String> {
+        let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+        let mut matching: Vec<String> = Vec::new();
+        for name in crate::git::name::remote_names(&repo).map_err(|error| error.to_string())? {
+            let name = std::str::from_utf8(name.bytes())
+                .map_err(|_| format!("remote {} is not UTF-8", name.display()))?;
+            let remote = repo.find_remote(name).map_err(|error| error.to_string())?;
+            if remote.url_bytes() == url.as_bytes() {
+                matching.push(name.to_string());
+            }
+        }
+        let [remote] = matching.as_slice() else {
+            return Ok(None);
+        };
+        let name = format!("refs/remotes/{remote}/{branch}");
+        let reference = match repo.find_reference(&name) {
+            Ok(reference) => reference,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
+        let tip = reference
+            .peel_to_commit()
+            .map_err(|error| error.to_string())?
+            .id();
+        Ok(Some(Self {
+            name: name.into_bytes(),
+            tip,
+        }))
+    }
 }
 
 /// What one tree holds of one task.
@@ -450,12 +512,25 @@ impl<'r> RecordStore<'r> {
         judged: &[Oid],
         outside: &Outside<'_>,
     ) -> TaskJudgement {
+        self.judge_split(task, judged, judged, outside)
+    }
+
+    /// [`Self::judge`] with the criteria read at `criteria_points` only,
+    /// a subset of `judged` (TSK-350 AC-6): every judged point still counts
+    /// for whether a completion of the task landed.
+    pub(super) fn judge_split(
+        &mut self,
+        task: &Identity,
+        criteria_points: &[Oid],
+        judged: &[Oid],
+        outside: &Outside<'_>,
+    ) -> TaskJudgement {
         if let Some(reason) = &self.overlay {
             return TaskJudgement::unreadable(reason.clone());
         }
         // The criteria at the judged points: the newest point's version.
         let mut points = Vec::new();
-        for point in judged {
+        for point in criteria_points {
             match self.held_at(*point, task) {
                 Ok(held) => points.push((*point, held)),
                 Err(reason) => return TaskJudgement::unreadable(reason),
@@ -493,7 +568,7 @@ impl<'r> RecordStore<'r> {
         let criteria = match at_points {
             Ok(Some(record)) => Authority::Held(Box::new(record)),
             Err(reason) => Authority::Unknown(reason),
-            Ok(None) => match self.recovered(task, judged) {
+            Ok(None) => match self.recovered(task, criteria_points) {
                 Ok(Some(record)) => Authority::Held(Box::new(record)),
                 Ok(None) => Authority::Absent,
                 Err(reason) => Authority::Unknown(reason),
@@ -907,7 +982,7 @@ impl<'r> RecordStore<'r> {
                 return Landing::Unreadable(doubt);
             }
         }
-        match self.holder_outside(task, outside.head) {
+        match self.holder_outside(task, outside.head, outside.replaced) {
             Ok(Some((holder, commit))) => Landing::Elsewhere { holder, commit },
             Ok(None) => Landing::Planned,
             Err(reason) => Landing::Unreadable(reason),
@@ -930,6 +1005,7 @@ impl<'r> RecordStore<'r> {
         &mut self,
         task: &Identity,
         head: Oid,
+        replaced: Option<&Replaced>,
     ) -> Result<Option<(String, Oid)>, String> {
         let unreadable =
             |error: git2::Error| format!("cannot read the branches of this clone: {error}");
@@ -945,6 +1021,13 @@ impl<'r> RecordStore<'r> {
                 continue;
             }
             let commit = reference.peel_to_commit().map_err(unreadable)?;
+            // The ref the run replaces, only while it is still at the tip
+            // the run named: its own completions are what it removes.
+            if replaced.is_some_and(|replaced| {
+                name.bytes() == replaced.name.as_slice() && commit.id() == replaced.tip
+            }) {
+                continue;
+            }
             let short = crate::git::name::reference_shorthand(&reference)
                 .display()
                 .to_string();
@@ -1269,6 +1352,7 @@ mod tests {
                 tips: &[],
                 at: None,
                 own: &[],
+                replaced: None,
             },
         )
     }
@@ -1390,10 +1474,12 @@ mod tests {
         let task = Identity::named("TSK-001", None, "TSK-001.md");
         let blob = repo.blob(b"not a commit").unwrap();
         std::fs::write(repo.path().join("refs/heads/broken"), format!("{blob}\n")).unwrap();
-        assert!(RecordStore::new(&repo).holder_outside(&task, head).is_err());
+        assert!(RecordStore::new(&repo)
+            .holder_outside(&task, head, None)
+            .is_err());
         std::fs::remove_file(repo.path().join("refs/heads/broken")).unwrap();
         assert!(RecordStore::new(&repo)
-            .holder_outside(&task, head)
+            .holder_outside(&task, head, None)
             .unwrap()
             .is_none());
     }
@@ -1558,6 +1644,7 @@ mod tests {
                 tips: &[],
                 at: None,
                 own: &[],
+                replaced: None,
             },
         )
     }
@@ -2071,6 +2158,7 @@ mod tests {
                 tips: &[],
                 at: None,
                 own: &[],
+                replaced: None,
             },
         )
     }

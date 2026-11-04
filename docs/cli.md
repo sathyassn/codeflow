@@ -193,7 +193,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--pr-body <TEXT>` | PR/MR body text to scan for AI attribution, emoji, policy characters (ADR-0067), and the required section structure. |
 | | `--pr-body-file <FILE>` | Read the PR/MR body from a file (scanned like `--pr-body`). |
 | | `--actor <ACTOR>` | The actor or app id that opened or updated the pull request, as the CI workflow passes it for trusted automation profiles (SPC-013 R-82). It is trusted only in a GitHub Actions pull request event from the same repository whose actor it names; a local run, another CI or a fork is `unknown` whatever is given. Default `unknown`. |
-| | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, the branch's declared target, a named --base, a unique protected or eligible epic line at the base commit, then the repository default). An ambiguous commit-ID base requires --into or --branch. A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). |
+| | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, the branch's declared target, a named --base, a unique protected or eligible epic line at the base commit, then the repository default). An ambiguous commit-ID base requires --into or --branch. A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). Deciding that asks the destination for its default branch and that branch's policy, so on a private repository the job running codeflow ci needs read access to it (for actions/checkout, `persist-credentials: true`). |
 | | `--line-tip <LINE>` | Judge the head as the next tip of this integration line, as a landing candidate is: every commit on the head's first-parent chain from the line's fetched tip (`origin/<LINE>`) must be a merge or a direct commit a landed `line_adoptions` entry names, the rule the pre-push hook applies to a push to the line (`work.epic_line`). Without it, a run with no pull request and no push context whose base is the fetched tip of exactly one epic line cannot tell how the head reaches the line and refuses when the head would add a direct commit; pass `--into <LINE>` or the body for a pull request head that lands by merge. |
 | `codeflow policy explain` | | Print the complete policy.json key schema: every key's type, default, valid values, and purpose |
 | `codeflow policy show` | | Print the effective policy: each key's current value, its source (project file or built-in default), and any invalid values |
@@ -239,6 +239,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
 | | `--preflight` | Print the seat, sandbox and tool evidence the orchestrator preflight reads, each value marked configured, observed or unavailable; exit 1 when Codex refuses the builder launch or a builder write is refused; when the builder write probe gives no result, the line says builder readiness is not established and the exit stays 0. |
+| | `--builder-write-probe` | Print whether this process can write each folder a Codex builder seat writes outside its worktree, then whether it can open the shared git config file for writing (one line each, never changing it), and exit 1 when a folder is denied. The preflight runs it inside `codex sandbox` under the builder launch. |
 | | `--profile <PROFILE>` | With `--check remote-perimeter`: compare the rulesets `codeflow remote protect` owns with this profile (solo-administrator or independent-review). A non-empty bypass list on the authority or line checks fails with or without it. One of `solo-administrator`, `independent-review`. |
 | `codeflow work next` | | List ready tasks first, then landed (work merged), waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
 | | `--epic <EPC-NNN>` | Only tasks of this epic. |
@@ -517,6 +518,9 @@ task's criteria; `codeflow ci` prints the delta as a `work.criteria_frozen`
 note and still refuses an added, removed, renumbered or reordered
 criterion, a changed tag or checkbox form, or an added list item that is
 no criterion (ADR-0080).
+`codeflow ci` reads the branch's task from the judged head, never the
+checkout; how it judges a task's own criteria on its integration line is
+in the [policy reference](policy-reference.md#own-task-criteria-on-an-integration-line).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
 another provider prints the manual checklist. It writes only rulesets it owns
 by name, never another ruleset or classic branch protection, and never weakens

@@ -143,7 +143,7 @@ jobs:
           WORKFLOW_REF: ${{ github.workflow_ref }}
           WINDOWS_IMAGE_OS: ${{ needs.windows-image.outputs.os }}
           WINDOWS_IMAGE_VERSION: ${{ needs.windows-image.outputs.version }}
-          DECIDER_SHA256: 5e4005a5b295d99e3d0c29c9bba133f9b3fb308efbb93d8114a56313f0c482e1
+          DECIDER_SHA256: b5a53a3f1239670b107c71f370534715ca66c6f32174c48a193e01dda38198af
         run: |
           actual=$(sha256sum scripts/ci-reuse.py | cut -d ' ' -f 1)
           if [ "$actual" != "$DECIDER_SHA256" ]; then
@@ -306,6 +306,49 @@ jobs:
 
       - name: Install exact npm for the owned presentation renderer
         run: npm install --global npm@11.17.0
+
+      # Line pushes skip gates-release. Prepare its apt cache here so a
+      # later push can reuse a verdict. No browser binaries are installed.
+      - name: Read the locked Playwright version
+        if: matrix.part == 'present' && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/')
+        id: playwright
+        run: |
+          present=$(node -p "require('./crates/codeflow-present/web/package-lock.json').packages['node_modules/playwright-core'].version")
+          portal=$(node -p "require('./docs-portal/package-lock.json').packages['node_modules/playwright-core'].version")
+          test "$present" = "$portal" || { echo "playwright-core differs: present $present, portal $portal"; exit 1; }
+          echo "version=$present" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright apt archives on the integration line
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: matrix.part == 'present' && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/')
+        id: line-apt
+        with:
+          path: ~/.cache/playwright-apt
+          key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}
+      - name: Prepare Playwright apt archives for line verdict reuse
+        if: matrix.part == 'present' && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/') && steps.line-apt.outputs.cache-hit != 'true'
+        timeout-minutes: 25
+        run: |
+          npm ci --ignore-scripts --prefix crates/codeflow-present/web
+          node=$(command -v node)
+          cli=crates/codeflow-present/web/node_modules/playwright-core/cli.js
+          archives="$HOME/.cache/playwright-apt"
+          mkdir -p "$archives/partial"
+          printf 'Dir::Cache::Archives "%s/";\nAPT::Keep-Downloaded-Packages "true";\n' "$archives" |
+            sudo tee /etc/apt/apt.conf.d/90codeflow-playwright-archives >/dev/null
+          echo "apt archives restored: $(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)"
+          for attempt in 1 2; do
+            if sudo timeout --kill-after=30s 10m "$node" "$cli" install-deps chromium firefox webkit; then
+              sudo apt-get autoclean || echo "::warning::apt-get autoclean failed; the cache keeps stale archives"
+              sudo chown -R "$(id -u):$(id -g)" "$archives" || echo "::warning::the apt archives may not be saved"
+              echo "apt archives kept: $(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)"
+              exit 0
+            fi
+            echo "::warning::Playwright install attempt ${attempt} failed or ran past 10 minutes"
+            sudo dpkg --configure -a || true
+          done
+          echo "::error::the Playwright install failed twice; see the attempts above"
+          exit 1
 
       - name: Fetch the codeflow build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -516,6 +559,70 @@ jobs:
   # after a build and setup of about 4 to 6 minutes, and gets the Windows
   # partitions' 30; the report job only reads files and fails a shard past
   # the 24 minute margin (TSK-1063).
+  # Measure beside the instrumented shards at the same workflow SHA.
+  # This manual-only job supplies evidence, never a required verdict.
+  linux-measurement:
+    if: github.event_name == 'workflow_dispatch'
+    name: measure uninstrumented Linux tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Record the measured revision and runner
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          echo "run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+      - name: Install the differential shells
+        run: sudo apt-get update && sudo apt-get install -y bash zsh dash
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-uninstrumented-v1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 26.4.0
+          cache: npm
+          cache-dependency-path: crates/codeflow-present/web/package-lock.json
+      - name: Install exact npm for the owned presentation renderer
+        run: npm install --global npm@11.17.0
+      - name: Install nextest
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest@0.9.129
+      - name: present-web-build
+        shell: bash
+        run: python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version "npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web"
+      - name: Remove previous test evidence
+        shell: bash
+        run: |
+          rm -rf target/nextest/codeflow
+          mkdir -p target/nextest/codeflow
+      - name: Run the full Linux suite without instrumentation
+        run: cargo nextest run --workspace --no-fail-fast --profile codeflow
+      - name: List the same build's tests
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: cargo nextest list --workspace --profile codeflow --message-format json > target/nextest/codeflow/tests.json
+      - name: Check Rust journey evidence
+        if: ${{ !cancelled() }}
+        run: python3 -I scripts/journey-gate.py --part results --results target/nextest/codeflow/junit.xml
+      - name: Check every test ran exactly once
+        if: ${{ !cancelled() }}
+        run: python3 -I scripts/linux-test-results.py --list target/nextest/codeflow/tests.json --results target/nextest/codeflow/junit.xml
+      - name: Keep the uninstrumented results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-measurement-results
+          path: |
+            target/nextest/codeflow/junit.xml
+            target/nextest/codeflow/tests.json
+          if-no-files-found: error
+          retention-days: 7
+
   gates-coverage:
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: codeflow gates (coverage ${{ matrix.shard }} of 2)
