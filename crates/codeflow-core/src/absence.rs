@@ -6,6 +6,8 @@ use std::path::Path;
 #[cfg(test)]
 thread_local! {
     static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static NAMED: std::cell::RefCell<Option<(String, usize)>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Entries this thread read through this module, so a test can prove a walk's
@@ -15,9 +17,36 @@ pub(crate) fn reads() -> usize {
     READS.with(std::cell::Cell::get)
 }
 
+/// Run `body` and count its reads through this module of a path holding a
+/// component called `name`, so a test can see whether a target was inspected.
+#[cfg(test)]
+pub(crate) fn reads_naming<T>(name: &str, body: impl FnOnce() -> T) -> (T, usize) {
+    NAMED.with(|named| *named.borrow_mut() = Some((name.to_owned(), 0)));
+    let value = body();
+    let (_, count) = NAMED
+        .with(|named| named.borrow_mut().take())
+        .expect("the count started above");
+    (value, count)
+}
+
+#[cfg(test)]
+fn note_read(path: &Path) {
+    READS.with(|reads| reads.set(reads.get() + 1));
+    NAMED.with(|named| {
+        if let Some((name, count)) = named.borrow_mut().as_mut() {
+            if path
+                .components()
+                .any(|part| part.as_os_str() == name.as_str())
+            {
+                *count += 1;
+            }
+        }
+    });
+}
+
 fn read_entry(path: &Path) -> io::Result<std::fs::Metadata> {
     #[cfg(test)]
-    READS.with(|reads| reads.set(reads.get() + 1));
+    note_read(path);
     std::fs::symlink_metadata(path)
 }
 
@@ -276,6 +305,8 @@ pub(crate) fn symlink_metadata_optional(path: &Path) -> io::Result<Option<std::f
 /// Obtain metadata through symbolic links, returning None only for proven
 /// absence. A dangling link exists, so it is an error, never absence.
 pub(crate) fn metadata_optional(path: &Path) -> io::Result<Option<std::fs::Metadata>> {
+    #[cfg(test)]
+    note_read(path);
     match std::fs::metadata(path) {
         Ok(metadata) => Ok(Some(metadata)),
         Err(error) if error.kind() == io::ErrorKind::NotFound && proven_absent(path)? => Ok(None),

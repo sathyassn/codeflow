@@ -1588,19 +1588,31 @@ mod tests {
 
     /// TSK-1258: a path the glob matcher cannot judge inside its bound is
     /// refused with the bound named, not reported as an enforcement path and
-    /// never allowed. Many short components keep each one a valid name.
+    /// never allowed, and before any read of the target, so a host's path
+    /// limit cannot stall it or change its cause. The short path shows that
+    /// the count sees an inspection. Many short components keep each one a
+    /// valid name.
     #[test]
     fn a_path_past_the_glob_bound_is_refused_with_its_cause() {
+        const TARGET: &str = "overlength-target";
         let fixture = Fixture::new();
-        let long = format!("notes/{}", "a/".repeat(20_000));
-        let error = evaluate(&synthetic("write", json!({"path": long})), &fixture.ctx())
-            .expect_err("a path past the bound must be refused");
+        let judge = |path: String| {
+            crate::absence::reads_naming(TARGET, || {
+                evaluate(&synthetic("write", json!({"path": path})), &fixture.ctx())
+            })
+        };
+        let (short, inspected) = judge(format!("{TARGET}/a/a/"));
+        assert!(short.is_ok_and(|violations| violations.is_empty()));
+        assert!(inspected > 0, "the count sees the short target's reads");
+        let (long, inspected) = judge(format!("{TARGET}/{}", "a/".repeat(20_000)));
+        let error = long.expect_err("a path past the bound must be refused");
         assert!(
             error
                 .to_string()
                 .contains("longer than the glob matcher's bound"),
             "{error}"
         );
+        assert_eq!(inspected, 0, "the long target is refused unread");
         assert!(!fixture.refused("notes.md"), "a normal path is unchanged");
     }
 
