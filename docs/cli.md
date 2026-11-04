@@ -172,6 +172,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--topic <TOPIC>` | Only items of this topic. |
 | | `--json` | Print the items as JSON, with every field. |
 | | `--write` | Write project-management/feedback/INDEX.md from every item. A written index is optional; `validate --docs` warns when it goes stale. |
+| `codeflow capability bootstrap` | | Start or resume the four-stage initial capability catalog |
 | `codeflow capability new <NAME>` | | Create a planned capability with a reserved id and stable uid |
 | | `<NAME>` | Lowercase capability slug, used in its filename. |
 | | `--summary <SUMMARY>` | One sentence describing the capability for its reader. Required. |
@@ -630,6 +631,20 @@ its remotes live, so a narrow fetch cannot hide work.
 | `present update --expected-revision` | Exits 8 when another revision is current |
 
 ### Create and inspect a capability
+
+`codeflow capability bootstrap` resumes four stages without changing policy.
+
+| Project state or input | Bootstrap result |
+|---|---|
+| Standard or full tier | One epic and four ordered stage tasks. |
+| Fresh standard without tracking | Creating the tasks enables durable tracking; output reports the change. |
+| Minimal with tracking | One epic and four tasks, only when the verb is invoked. |
+| Minimal without tracking | A four-stage checklist at `docs/capability-bootstrap.md`, only when invoked. |
+| Existing capability records | Seed the inventory without recreating entries. |
+| Rerun | Retain progress and report the first open stage. |
+| Existing checklist with tracking now enabled | Refuse tracked creation until the checklist is explicitly reconciled. |
+| Stage templates | Read `.codeflow/templates/capability-bootstrap/` before shipped fallbacks. |
+| Stage guide | `.codeflow/rules/capabilities.md`. |
 
 Create a planned record with a stable UUID and the next available CAP number:
 
