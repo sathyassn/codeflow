@@ -426,13 +426,11 @@ impl HookPayload {
             (false, Some(serde_json::Value::Object(socket))) => {
                 if !socket.get("url").is_some_and(serde_json::Value::is_string) {
                     Some("a `ws` socket watch with no `url` string".to_string())
-                } else if let Some(extra) = socket
-                    .keys()
-                    .find(|key| !matches!(key.as_str(), "url" | "protocols"))
-                {
-                    Some(format!("the field `ws.{extra}`"))
                 } else {
-                    None
+                    socket
+                        .keys()
+                        .find(|key| !matches!(key.as_str(), "url" | "protocols"))
+                        .map(|extra| format!("the field `ws.{extra}`"))
                 }
             }
             (false, Some(_)) => Some("a `ws` field that is not an object".to_string()),
