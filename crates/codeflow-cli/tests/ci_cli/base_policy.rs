@@ -8,6 +8,8 @@ use std::process::Output;
 const POLICY: &str = ".codeflow/policy.json";
 const LOOSER: &str =
     r#"{"git": {"commit_body_max_bullets": 10, "commit_body_bullet_max_len": 100}}"#;
+/// The body rules at block, since the shipped default only warns (TSK-450).
+const STRICT: &str = r#"{"git": {"commit_body": "block"}}"#;
 const FOUR_BULLETS: &str = "feat: add y\n\n- one\n- two\n- three\n- a fourth bullet\n";
 
 fn write(root: &Path, rel: &str, text: &str) {
@@ -56,7 +58,7 @@ fn said(out: &Output) -> String {
 
 #[test]
 fn a_head_that_loosens_its_own_policy_gets_the_base_verdict() {
-    let dir = fixture(Some("{}"));
+    let dir = fixture(Some(STRICT));
     let root = dir.path();
     write(root, POLICY, LOOSER);
     commit(root, "chore: loosen the commit body rules");
@@ -297,7 +299,9 @@ fn the_base_policy_also_lets_through_what_it_allows() {
 
 /// TSK-1077 AC-5: the adoption change itself, where the base proves the
 /// policy file absent, is judged by the shipped defaults. Before, the
-/// working copy the range wrote judged it, so a looser policy passed.
+/// working copy the range wrote judged it, so a looser policy passed. The
+/// shipped body rules warn (TSK-450), so the shipped limit's finding shows
+/// as a warning that the looser working copy would not have raised.
 #[test]
 fn a_base_without_a_policy_is_judged_by_the_shipped_defaults() {
     let dir = fixture(None);
@@ -308,7 +312,8 @@ fn a_base_without_a_policy_is_judged_by_the_shipped_defaults() {
     commit(root, FOUR_BULLETS);
     let out = ci(root);
     let said = said(&out);
-    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert!(said.contains("git.commit_body (warn)"), "{said}");
     assert!(said.contains("git.commit_body"), "{said}");
     assert!(
         said.contains(
@@ -373,7 +378,7 @@ fn policy_from_judges_with_the_target_tip_not_the_fork_point() {
     let dir = fixture(Some(LOOSER));
     let root = dir.path();
     git(root, &["switch", "-q", "main"]);
-    write(root, POLICY, "{}");
+    write(root, POLICY, STRICT);
     commit(root, "chore: tighten the commit body rules");
     git(root, &["switch", "-q", "feat/x"]);
     write(root, "y.txt", "y\n");
