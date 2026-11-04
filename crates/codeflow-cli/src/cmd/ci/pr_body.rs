@@ -1671,7 +1671,7 @@ mod tests {
         }
     }
 
-    /// `summary` draws exactly one blocking `git.pr_summary` finding that
+    /// `summary` draws exactly one warn-level `git.pr_summary` finding that
     /// says `said` and names the expected shape.
     fn assert_warned(case: &str, summary: &str, said: &str) {
         let found = shape(summary);
