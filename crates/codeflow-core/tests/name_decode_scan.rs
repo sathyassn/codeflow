@@ -4433,6 +4433,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // Drops the start time from a holder snapshot so a waiting run prints its line once per holder; admission never reads it.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "holder_without_age",
+        "lines",
+        1,
+        "display",
+    ),
     // Formats owner PID/directory and stale-lock notes after lock authority has been decided using the lock itself.
     (
         "crates/codeflow-core/src/testing/gate_guard.rs",
