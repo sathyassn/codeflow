@@ -515,6 +515,8 @@ mod tests {
             ci_skip: None,
             ci_skip_reason: None,
             timeout_seconds: None,
+            stall_timeout_seconds: None,
+            cleanup_grace_seconds: None,
             structural: Some(StructuralConfig {
                 source_glob: vec!["src/*.sh".to_string()],
                 test_glob: vec!["tests/test-*.sh".to_string()],

@@ -116,6 +116,41 @@ fn setup_conflict(args: &TestArgs) -> Option<&'static str> {
     }
 }
 
+fn print_target(r: &codeflow_core::testing::gate::GateTargetResult) {
+    let verdict = if r.passed() {
+        "ok".to_string()
+    } else {
+        r.supervision
+            .as_ref()
+            .filter(|info| info.status == r.status)
+            .map_or_else(
+                || r.status.label().to_string(),
+                codeflow_core::testing::runner::deadline::Supervision::detail,
+            )
+    };
+    // A target name is checkout text, shown as one line after a
+    // fixed label (TSK-388).
+    println!(
+        "target {}: {verdict} (exit {}, {} ms)",
+        codeflow_core::git::display_text(&r.name),
+        r.exit_code,
+        r.duration_ms
+    );
+    if let Some(reason) = r
+        .supervision
+        .as_ref()
+        .and_then(|s| s.early_stall_unavailable.as_ref())
+    {
+        println!(
+            "  early stall unavailable: {}",
+            codeflow_core::git::display_text(reason)
+        );
+    }
+    if !r.passed() {
+        print_failure(r);
+    }
+}
+
 pub fn run(args: &TestArgs) -> i32 {
     if let Some(TestCommand::Setup(setup_args)) = &args.command {
         if let Some(flag) = setup_conflict(args) {
@@ -164,19 +199,8 @@ pub fn run(args: &TestArgs) -> i32 {
             complete,
             ..
         }) => {
-            for r in &results {
-                let verdict = if r.passed() { "ok" } else { "FAILED" };
-                // A target name is checkout text, shown as one line after a
-                // fixed label (TSK-388).
-                println!(
-                    "target {}: {verdict} (exit {}, {} ms)",
-                    codeflow_core::git::display_text(&r.name),
-                    r.exit_code,
-                    r.duration_ms
-                );
-                if !r.passed() {
-                    print_failure(r);
-                }
+            for result in &results {
+                print_target(result);
             }
             print_coverage_report(&coverage);
             let verdict = if !passed {

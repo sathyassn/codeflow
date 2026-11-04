@@ -567,16 +567,16 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ),
     // a test target's captured output, shown
     (
-        "codeflow-core/src/testing/runner/mod.rs",
-        "render_capture",
+        "codeflow-core/src/testing/runner/output.rs",
+        "Output::rendered",
         "from_utf8_lossy",
         1,
         "display",
     ),
     // a test target's output scanned for progress words
     (
-        "codeflow-core/src/testing/runner/mod.rs",
-        "spawn_reader_with_progress",
+        "codeflow-core/src/testing/runner/output.rs",
+        "Output::ingest",
         "from_utf8_lossy",
         1,
         "grammar:test-progress",
@@ -4501,14 +4501,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "obtain-absent:var_os",
         1,
         "unproven",
-    ),
-    // Splits captured output only to render progress notifications; it neither changes the subprocess output buffer nor gate results.
-    (
-        "crates/codeflow-core/src/testing/runner/mod.rs",
-        "spawn_reader_with_progress",
-        "lines",
-        1,
-        "display",
     ),
     // Strips quote characters only from the displayed serialized runner enum label; target configuration and execution retain the typed Runner value.
     (
