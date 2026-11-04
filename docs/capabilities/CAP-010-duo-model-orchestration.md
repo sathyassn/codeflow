@@ -283,9 +283,9 @@ With tracking on, `codeflow ci` classifies every pull request as one of:
   epic whose record declares the line as its `parent_line`, targets it, it
   lands on the default target, and it holds merges or direct commits with
   landed `line_adoptions` entries in its epic record (SPC-013 R-52). One
-  level only: `parent_line` names the anchor epic's own line, so an epic
-  that declares another feature epic's line binds nothing on the anchor's
-  line (TSK-1286)
+  level only: `parent_line` names the anchor epic's own line, and when the
+  anchor epic itself declares a `parent_line`, a declaring epic's task is
+  refused (TSK-1286)
 - an automation profile
 
 Related rules:

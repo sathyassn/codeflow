@@ -899,9 +899,13 @@ line's exact name (TSK-1286, `work.epic_line`):
   branch's tip and the line's fetched `origin/<line>` tip. A `parent_line`
   added in the pushed head binds nothing, and a head that changes or
   removes a trusted declaration is refused.
-- One level only: `parent_line` names the anchor epic's own line. An epic
-  that declares another feature epic's line binds nothing on the anchor's
-  line.
+- One level only: `parent_line` names the anchor epic's own line, and the
+  anchor epic declares no `parent_line` of its own. When it does, a task of
+  a declaring epic is refused at every trusted anchor, naming the cause:
+
+  ```text
+  EPC-001, the epic of 'integration/EPC-001-anchor', itself declares parent_line 'integration/EPC-009-elsewhere' on <place>; one level only, so no other epic's parent_line binds this line
+  ```
 - A declaring epic that is cancelled or archived at any anchor refuses, as
   does a `parent_line` on a task record.
 
