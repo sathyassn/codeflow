@@ -354,7 +354,8 @@ evidence before increasing a limit.
 
 `stalled: no progress for N s (workers W of M)` and `timed out at the ceiling
 after S s` both fail, with exit 124. Dependents name the prerequisite's cause.
-Cleanup has a fixed five-second grace; an open descendant pipe or unconfirmed
+Cleanup has a grace, `cleanup_grace_seconds`, default five seconds; the gate
+kills a supervised group still running at half of it. An open descendant pipe or unconfirmed
 termination cannot turn a timeout into a pass. The run report retains
 `termination_unconfirmed` for the allocation/lease consumer (TSK-1279).
 

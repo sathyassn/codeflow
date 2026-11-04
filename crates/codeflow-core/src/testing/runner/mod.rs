@@ -139,6 +139,18 @@ fn run_target_with_workers(
             });
         }
     }
+    if target
+        .cleanup_grace_seconds
+        .is_some_and(|v| v == 0 || v > deadline::MAX_CLEANUP_GRACE_SECONDS)
+    {
+        return Err(TestingError::ConfigInvalid {
+            path: project_dir.join(".codeflow/test-config.json"),
+            message: format!(
+                "cleanup_grace_seconds must be in 1..={}",
+                deadline::MAX_CLEANUP_GRACE_SECONDS
+            ),
+        });
+    }
     let mode_cmd = target
         .modes
         .get(mode)
@@ -1169,17 +1181,23 @@ fn spawn_command(
     workers: Option<WorkerGrant>,
 ) -> Result<CommandOutcome, TestingError> {
     let cmd = build_command(command, cwd, &target.env, &target.name, target.shell)?;
+    let mut limits = deadline::Deadline::new(
+        timeout,
+        target.heavy == Some(true) || target.host_exclusive,
+        target
+            .stall_timeout_seconds
+            .unwrap_or(deadline::DEFAULT_STALL_SECONDS),
+        workers,
+    );
+    limits.cleanup_grace = Duration::from_secs(
+        target
+            .cleanup_grace_seconds
+            .unwrap_or(deadline::DEFAULT_CLEANUP_GRACE_SECONDS),
+    );
     spawn_prepared(
         cmd,
         &target.name,
-        deadline::Deadline::new(
-            timeout,
-            target.heavy == Some(true) || target.host_exclusive,
-            target
-                .stall_timeout_seconds
-                .unwrap_or(deadline::DEFAULT_STALL_SECONDS),
-            workers,
-        ),
+        limits,
         super::evidence::redacted_values(target).is_empty(),
         target.heavy == Some(true) || target.host_exclusive,
         false,
@@ -1589,6 +1607,7 @@ mod tests {
             ci_skip_reason: None,
             timeout_seconds: None,
             stall_timeout_seconds: None,
+            cleanup_grace_seconds: None,
             structural: None,
             tags: Vec::new(),
             test_files: Vec::new(),
@@ -1762,6 +1781,24 @@ mod tests {
         assert_eq!(result.status(), TargetStatus::Passed, "{result:?}");
         assert_eq!(result.exit_code, 0, "{result:?}");
         assert!(!result.termination_unconfirmed, "{result:?}");
+    }
+
+    /// The configured grace, not the default, decides when the group is ended.
+    #[cfg(unix)]
+    #[test]
+    fn a_configured_cleanup_grace_reaches_the_supervisor() {
+        let mut target = make_target("short-grace", "exit 0");
+        target.heavy = Some(true);
+        target.timeout_seconds = Some(60);
+        target.cleanup_grace_seconds = Some(1);
+        let dir = tempfile::tempdir().unwrap();
+        group_watch::SLOW_WATCHER_START.with(|delay| delay.set(60));
+        let result = run_target(&target, "full", dir.path());
+        group_watch::SLOW_WATCHER_START.with(|delay| delay.set(0));
+        let result = result.unwrap();
+        assert_eq!(result.status(), TargetStatus::Passed, "{result:?}");
+        target.cleanup_grace_seconds = Some(0);
+        assert!(run_target(&target, "full", dir.path()).is_err());
     }
 
     #[test]

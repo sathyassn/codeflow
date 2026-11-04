@@ -320,6 +320,13 @@
           "maximum": 4611686018427386,
           "default": 300,
           "description": "Heavy target inactivity window in seconds with complete target-scoped CPU accounting. New output or increasing scoped CPU refreshes activity. Unsupported or uncertain accounting uses the absolute ceiling and reports why. Omitted: 300."
+        },
+        "cleanup_grace_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600,
+          "default": 5,
+          "description": "Seconds allowed after a target stops for termination, reaping, watcher shutdown and pipe draining. A supervised process group still running at half this time is killed. Cleanup that does not finish is a non-pass. Omitted: 5."
         }
       },
       "additionalProperties": false

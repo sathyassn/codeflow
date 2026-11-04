@@ -6,11 +6,16 @@ use serde::{Deserialize, Serialize};
 // About four times the supplied quiet coverage run (1713s). TSK-1279 removes
 // the self-contention behind the observed fivefold slowdown. Tune with evidence.
 pub const HEAVY_TIMEOUT_MULTIPLIER: u64 = 4;
-pub const CLEANUP_GRACE: Duration = Duration::from_secs(5);
+/// Default per-target `cleanup_grace_seconds`: the bound on termination,
+/// reaping, watcher shutdown and pipe draining after termination starts.
+pub const DEFAULT_CLEANUP_GRACE_SECONDS: u64 = 5;
+/// Largest `cleanup_grace_seconds`. Cleanup is bounded work, and an hour
+/// keeps every deadline sum far inside `Instant` and `Duration` arithmetic.
+pub const MAX_CLEANUP_GRACE_SECONDS: u64 = 3600;
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(300);
 pub const DEFAULT_STALL_SECONDS: u64 = 300;
 pub const MAX_TIMEOUT_SECONDS: u64 =
-    (u64::MAX - CLEANUP_GRACE.as_secs() * 1_000) / (HEAVY_TIMEOUT_MULTIPLIER * 1_000);
+    (u64::MAX - DEFAULT_CLEANUP_GRACE_SECONDS * 1_000) / (HEAVY_TIMEOUT_MULTIPLIER * 1_000);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -124,6 +129,8 @@ pub fn result_status(exit: i32, error: Option<&str>, info: Option<&Supervision>)
 pub(super) struct Deadline {
     pub info: Supervision,
     pub ceiling: Duration,
+    /// The target's `cleanup_grace_seconds`, default five seconds.
+    pub cleanup_grace: Duration,
     last_activity: Duration,
     next_heartbeat: Duration,
 }
@@ -152,6 +159,7 @@ impl Deadline {
                 cgroup_identity: None,
                 cleanup_details: Vec::new(),
             },
+            cleanup_grace: Duration::from_secs(DEFAULT_CLEANUP_GRACE_SECONDS),
             last_activity: Duration::ZERO,
             next_heartbeat: HEARTBEAT_INTERVAL,
         }

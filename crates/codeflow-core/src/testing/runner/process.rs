@@ -1,5 +1,5 @@
 //! A bounded controller for execution, process-tree termination and pipe collection.
-use super::deadline::{Deadline, TargetStatus, CLEANUP_GRACE};
+use super::deadline::{Deadline, TargetStatus};
 use super::{CommandOutcome, TestingError, POLL_INTERVAL};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -77,6 +77,7 @@ pub(super) fn run_observed(
         deadline.unavailable("platform CPU accounting unavailable".into());
     }
 
+    let grace = deadline.cleanup_grace;
     let start = Instant::now();
     let mut child = super::spawn_inheriting_fences(&mut cmd, hand_over).map_err(spawn_err)?;
     let mut membership_uncertain: Option<String> = None;
@@ -111,7 +112,7 @@ pub(super) fn run_observed(
     {
         let pid = child.id();
         // Metadata must not postpone observing this already-running child.
-        let record_by = start + deadline.ceiling.min(CLEANUP_GRACE);
+        let record_by = start + deadline.ceiling.min(grace);
         if let Err(error) = complete_bookkeeping_before(record_by, move |until| {
             crate::testing::gate_guard::target_group_started_before(pid, until)
         }) {
@@ -161,6 +162,8 @@ pub(super) fn run_observed(
     let mut watcher_finished = watcher.is_none();
     let mut cleanup_errors = Vec::new();
     let mut termination_requested = false;
+    #[cfg(unix)]
+    let mut group_signalled = false;
 
     loop {
         let now = start.elapsed();
@@ -330,6 +333,29 @@ pub(super) fn run_observed(
                         cleanup_errors.push(format!("watcher confirmation: {error}"));
                     }
                 }
+                // A watcher closes every descriptor up to the limit before it
+                // reads the lifetime pipe. At a large limit on a loaded host
+                // that can outlast the grace. Halfway through, end the group
+                // here instead. The watcher is still a member while it has not
+                // finished, so the group id cannot belong to anything else.
+                if !watcher_finished && !group_signalled && now.saturating_sub(stopped) >= grace / 2
+                {
+                    group_signalled = true;
+                    // SAFETY: the unfinished watcher keeps the group id reserved.
+                    if unsafe {
+                        libc::kill(
+                            -i32::try_from(child.id()).unwrap_or(i32::MAX),
+                            libc::SIGKILL,
+                        )
+                    } != 0
+                    {
+                        let error = std::io::Error::last_os_error();
+                        // The group already ended: the watcher's pipe confirms it.
+                        if error.raw_os_error() != Some(libc::ESRCH) {
+                            cleanup_errors.push(format!("group kill at half grace: {error}"));
+                        }
+                    }
+                }
             }
             #[cfg(unix)]
             {
@@ -367,8 +393,8 @@ pub(super) fn run_observed(
                 }
                 break;
             }
-            let grace_elapsed = now.saturating_sub(stopped) >= CLEANUP_GRACE;
-            let absolute = deadline.ceiling.saturating_add(CLEANUP_GRACE);
+            let grace_elapsed = now.saturating_sub(stopped) >= grace;
+            let absolute = deadline.ceiling.saturating_add(grace);
             if grace_elapsed || now >= absolute {
                 if !stdout.finished() || !stderr.finished() {
                     cleanup_errors.push("output pipe remained open at drain deadline".into());
@@ -399,7 +425,7 @@ pub(super) fn run_observed(
             .checked_add(
                 stop.expect("cleanup follows a stop")
                     .min(deadline.ceiling)
-                    .saturating_add(CLEANUP_GRACE),
+                    .saturating_add(grace),
             )
             .unwrap_or_else(Instant::now);
         let pid = child.id();

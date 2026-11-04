@@ -247,6 +247,11 @@ pub struct TargetConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall_timeout_seconds: Option<u64>,
 
+    /// Bound on termination, reaping and pipe draining after a target stops;
+    /// default 5s. A supervised group still running at half of it is killed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup_grace_seconds: Option<u64>,
+
     /// Optional structural integrity configuration. When present, the
     /// structural integrity check validates bidirectional
     /// source↔test mapping for this target.
@@ -543,6 +548,7 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
         "ci_skip_reason",
         "timeout_seconds",
         "stall_timeout_seconds",
+        "cleanup_grace_seconds",
         "structural",
         "tags",
         "test_files",
@@ -608,6 +614,19 @@ fn validate_deadline(path: &Path, target: &TargetConfig) -> Result<(), TestingEr
                 ),
             });
         }
+    }
+    let max = super::runner::deadline::MAX_CLEANUP_GRACE_SECONDS;
+    if target
+        .cleanup_grace_seconds
+        .is_some_and(|v| v == 0 || v > max)
+    {
+        return Err(TestingError::ConfigInvalid {
+            path: path.to_path_buf(),
+            message: format!(
+                "target '{}': cleanup_grace_seconds must be in 1..={max}",
+                target.name
+            ),
+        });
     }
     Ok(())
 }
@@ -947,6 +966,34 @@ mod tests {
                 assert_eq!(load_test_config(&path).is_ok(), accepted, "{key}: {value}");
             }
         }
+        let max = super::super::runner::deadline::MAX_CLEANUP_GRACE_SECONDS;
+        let field = &schema["$defs"]["target"]["properties"]["cleanup_grace_seconds"];
+        assert_eq!(field["minimum"], 1);
+        assert_eq!(field["maximum"], max);
+        assert_eq!(
+            field["default"],
+            super::super::runner::deadline::DEFAULT_CLEANUP_GRACE_SECONDS
+        );
+        for (value, accepted) in [
+            (serde_json::json!(1), true),
+            (serde_json::json!(max), true),
+            (serde_json::json!(0), false),
+            (serde_json::json!(max + 1), false),
+            (serde_json::json!(-1), false),
+            (serde_json::json!(1.5), false),
+            (serde_json::json!("5"), false),
+        ] {
+            let mut raw = serde_json::json!({"schema_version":"1.0", "targets":[
+                {"name":"sample", "runner":"custom", "modes":{"full":{"command":"exit 0"}}}
+            ]});
+            raw["targets"][0]["cleanup_grace_seconds"] = value.clone();
+            std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+            assert_eq!(
+                load_test_config(&path).is_ok(),
+                accepted,
+                "cleanup_grace_seconds: {value}"
+            );
+        }
     }
 
     #[test]
@@ -1242,6 +1289,7 @@ mod tests {
                 ci_skip_reason: None,
                 timeout_seconds: None,
                 stall_timeout_seconds: None,
+                cleanup_grace_seconds: None,
                 structural: None,
                 tags: Vec::new(),
                 test_files: Vec::new(),
