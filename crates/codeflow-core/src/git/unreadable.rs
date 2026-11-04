@@ -43,10 +43,17 @@ impl Unreadable {
     pub fn report_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
         if !self.refs.is_empty() {
-            lines.push(format!(
-                "unreadable ref: {}. The file exists and this process is refused when it reads it. Git reports such a ref as broken (bad ref, bad object, a HEAD of zeros, every file staged as new) and `git fetch` can fail. A sandbox or file permissions refuse the read; this is not evidence of repository damage. Next: outside the sandbox, rename a local branch with `git branch -m <old> <new>`",
+            let mut line = format!(
+                "unreadable ref: {}. The file exists and this process is refused when it reads it. Git reports such a ref as broken (bad ref, bad object, a HEAD of zeros, every file staged as new) and `git fetch` can fail. A sandbox or file permissions refuse the read; this is not evidence of repository damage.",
                 listed(&self.refs)
-            ));
+            );
+            if self.refs.iter().any(|name| is_local_branch(name)) {
+                line.push_str(" Next: outside the sandbox, rename the local branch with `git branch -m <old> <new>`.");
+            }
+            if self.refs.iter().any(|name| !is_local_branch(name)) {
+                line.push_str(" A remote-tracking ref or tag is not renamed here: run git outside the sandbox for it.");
+            }
+            lines.push(line);
         }
         if !self.reflogs.is_empty() {
             lines.push(format!(
@@ -62,6 +69,12 @@ impl Unreadable {
         }
         lines
     }
+}
+
+/// Whether a refused name is a local branch, the one kind `git branch -m`
+/// renames. A refused `refs/heads` folder counts as local.
+fn is_local_branch(name: &str) -> bool {
+    name == "refs/heads" || name.starts_with("refs/heads/")
 }
 
 fn listed(names: &[String]) -> String {
@@ -264,6 +277,27 @@ mod tests {
         assert!(line.contains("not evidence of repository damage"), "{line}");
         assert!(line.contains("git branch -m"), "{line}");
         assert!(!line.contains("pack-refs"), "{line}");
+    }
+
+    /// `git branch -m` renames only a local branch, so a refused
+    /// remote-tracking ref or tag is never told to take that step.
+    #[test]
+    fn the_rename_step_is_offered_only_for_a_local_branch() {
+        let report = |refs: &[&str]| {
+            Unreadable {
+                refs: refs.iter().map(ToString::to_string).collect(),
+                reflogs: Vec::new(),
+                tracked: Vec::new(),
+            }
+            .report_lines()
+            .join("\n")
+        };
+        let others = report(&["refs/remotes/origin/a-secret-store", "refs/tags/v1-secret"]);
+        assert!(!others.contains("git branch -m"), "{others}");
+        assert!(others.contains("remote-tracking ref or tag"), "{others}");
+        let local = report(&["refs/heads/task/TSK-1-a-secret-store"]);
+        assert!(local.contains("git branch -m"), "{local}");
+        assert!(!local.contains("remote-tracking ref or tag"), "{local}");
     }
 
     /// A tracked file with a denied name stays legitimate: it is named,

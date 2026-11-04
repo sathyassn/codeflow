@@ -57,9 +57,12 @@ pub struct BranchSlug {
 /// read a file by its name, so a generated name stays clear of the configured
 /// words. Words are dropped before the length bound, so the bound keeps as
 /// much of the remaining title as it can. An entry matches anywhere inside a
-/// word, as the probed sandbox does: `secret` also drops `secrets`.
+/// word, as the probed sandbox does: `secret` also drops `secrets`. Entries
+/// are lower-cased first, because `Policy::load` does not run the schema
+/// check and a mis-cased entry must not let its word through.
 #[must_use]
 pub fn branch_slug(title: &str, omit: &[String]) -> BranchSlug {
+    let omit: Vec<String> = omit.iter().map(|entry| entry.to_ascii_lowercase()).collect();
     let mut kept = Vec::new();
     let mut omitted: Vec<String> = Vec::new();
     for word in slug_words(title) {
@@ -715,6 +718,20 @@ mod tests {
         assert!(named.slug.starts_with("word-word"), "{}", named.slug);
         assert!(named.slug.len() <= 48);
         assert!(!named.slug.ends_with('-'));
+    }
+
+    /// `Policy::load` does not run the schema check, so a mis-cased entry
+    /// can reach the slug; it must still leave its word out.
+    #[test]
+    fn branch_slug_leaves_out_a_word_whose_entry_is_mis_cased() {
+        let named = branch_slug(
+            "Deleting a configured secret store",
+            &words(&["Secret", "CREDENTIALS"]),
+        );
+        assert_eq!(named.slug, "deleting-a-configured-store");
+        assert_eq!(named.omitted, ["secret"]);
+        let named = branch_slug("Rotate credentials", &words(&["Secret", "CREDENTIALS"]));
+        assert_eq!(named.slug, "rotate");
     }
 
     #[test]
