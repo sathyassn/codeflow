@@ -50,17 +50,16 @@ jobs:
       - name: Report and verify the tested commit
         id: identity
         shell: bash
-        run: python -B ../runner/scripts/windows-daily.py identity --ref "$TESTED_REF" --sha "$TESTED_SHA"
+        run: python -I -B ../runner/scripts/windows-daily.py identity --ref "$TESTED_REF" --sha "$TESTED_SHA"
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
-      # Saved even when the build fails, so a red run does not force the next
-      # one to rebuild the dependencies from scratch. The cache holds
-      # dependencies only, never workspace crates. The key is the one the
-      # partitions used when each compiled the suite, so the cache carries over.
+      # Restore only. This job builds and runs a line's code under github.ref =
+      # main, so anything it saved would land in main's cache scope, where main's
+      # own runs restore it. A line's build script could plant files there.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: windows-tests
-          cache-on-failure: true
+          save-if: false
           workspaces: source -> target
 
       - name: Install nextest
@@ -139,7 +138,7 @@ jobs:
       - name: Report and verify the tested commit
         id: identity
         shell: bash
-        run: python -B ../runner/scripts/windows-daily.py identity --ref "$TESTED_REF" --sha "$TESTED_SHA"
+        run: python -I -B ../runner/scripts/windows-daily.py identity --ref "$TESTED_REF" --sha "$TESTED_SHA"
       - name: Install the differential shells
         id: shells
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
@@ -222,12 +221,13 @@ jobs:
       - name: Report and verify the tested commit
         id: identity
         shell: bash
-        run: python -B ../runner/scripts/windows-daily.py identity --ref "$TESTED_REF" --sha "$TESTED_SHA"
+        run: python -I -B ../runner/scripts/windows-daily.py identity --ref "$TESTED_REF" --sha "$TESTED_SHA"
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
+      # Restore only, for the same reason as the test build's cache.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          cache-on-failure: true
+          save-if: false
           workspaces: source -> target
 
       - name: cargo doctests
@@ -243,8 +243,9 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24.18.0
-          cache: npm
-          cache-dependency-path: source/docs-portal/package-lock.json
+          # No cache: setup-node cannot restore without saving, and a line's code
+          # runs here under main's cache scope.
+          package-manager-cache: false
 
       - name: docs portal JavaScript authority suite
         run: |
@@ -285,7 +286,7 @@ jobs:
       - name: Report and verify the tested commit
         id: identity
         shell: bash
-        run: python -B ../runner/scripts/windows-daily.py identity --ref "$TESTED_REF" --sha "$TESTED_SHA"
+        run: python -I -B ../runner/scripts/windows-daily.py identity --ref "$TESTED_REF" --sha "$TESTED_SHA"
 
       - name: journey gate (Python journeys)
         shell: bash
@@ -319,7 +320,7 @@ jobs:
       - name: Report and verify the tested commit
         id: identity
         shell: bash
-        run: python -B ../runner/scripts/windows-daily.py identity --ref "$TESTED_REF" --sha "$TESTED_SHA"
+        run: python -I -B ../runner/scripts/windows-daily.py identity --ref "$TESTED_REF" --sha "$TESTED_SHA"
 
       - name: Begin journey check
         shell: bash
@@ -375,7 +376,7 @@ jobs:
       - name: Require every Windows job at the requested SHA
         env:
           DAILY_WINDOWS_NEEDS: ${{ toJSON(needs) }}
-        run: python3 -B scripts/windows-daily.py verdict --ref "$TESTED_REF" --sha "$TESTED_SHA"
+        run: python3 -I -B scripts/windows-daily.py verdict --ref "$TESTED_REF" --sha "$TESTED_SHA"
       - name: Keep the exact source and its verdict
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
