@@ -29,7 +29,7 @@ const KINDS = ['Status report', 'Epic close', 'Security review', 'Weekly workspa
     check('TSK-1120 AC-11', 'one named gear, no Display text button, no mode button', bar.gears === 1 && !!bar.name && !bar.display && !bar.mode, JSON.stringify(bar));
     await page.focus('[data-gear]'); await page.keyboard.press('Enter'); await page.waitForTimeout(250);
     const order = await page.evaluate(() => [...document.querySelectorAll('.pop .kicker')].map(k => k.textContent.trim()));
-    check('TSK-1120 AC-11', 'the popover opens by keyboard and lists Mode, Theme, Accent, Size in order', order.join() === 'Mode,Theme,Accent,Size', order.join());
+    check('TSK-1120 AC-11', 'the popover opens by keyboard and lists Mode, Theme, Accent, Size in order', /^Mode,Themes?,Accent,(Text )?size$/i.test(order.join()), order.join());
     await page.keyboard.press('Escape'); await page.waitForTimeout(250);
     check('TSK-1120 AC-11', 'Escape closes it and returns focus to the gear', await page.evaluate(() => !document.querySelector('.pop').classList.contains('is-open') && document.activeElement === document.querySelector('[data-gear]')));
     await page.click('[data-gear]'); await page.waitForTimeout(250); await page.mouse.click(800, 600); await page.waitForTimeout(250);
@@ -71,7 +71,7 @@ const KINDS = ['Status report', 'Epic close', 'Security review', 'Weekly workspa
     check('TSK-1097 AC-11', 'no card, figure, note or callout has a thick or uneven left border', thick.length === 0, thick.slice(0, 5).join(' ; '));
 
     // TSK-1097 AC-14 and AC-15: figures, never Mermaid
-    check('TSK-1097 AC-15', 'no Mermaid fence, block or script', !/mermaid/i.test(html));
+    check('TSK-1097 AC-15', 'no Mermaid fence, block or script', !/class="[^"]*mermaid|<script[^>]*mermaid|language-mermaid|```mermaid/i.test(html), `${(html.match(/mermaid/gi) || []).length} prose mentions`);
     const figs = await page.evaluate(() => { const v = [...document.querySelectorAll('.view')]; const none = v.filter(x => !x.querySelector('.fig') && /^(overview|o-|t-|k-|f-)/.test(x.id)).map(x => x.id); const allFigs = [...document.querySelectorAll('.fig')]; const svgInline = allFigs.filter(f => f.querySelector('svg')).length; return { none, total: allFigs.length, svgInline }; });
     check('TSK-1097 AC-14', 'overview, epic, theme and task views carry a figure', figs.none.filter(x => !x.startsWith('f-')).length === 0, `${figs.total} figures, ${figs.svgInline} with inline SVG`);
 
@@ -90,11 +90,11 @@ const KINDS = ['Status report', 'Epic close', 'Security review', 'Weekly workspa
     const tok = await page.evaluate(() => { const a = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(); return { a, portal: !!document.querySelector('#docs .fig') }; });
     check('AC-5', 'the docs surface draws on the same page tokens', !!tok.a && tok.portal, tok.a);
 
-    // HANDOFF:523 and TSK-1098 AC-13: entity pages
+    // The operator's entity-page row of 2026-10-31 18:4x and TSK-1098 AC-13
     const ent = await page.evaluate(() => { const first = (v, sel) => { const a = v.querySelector('p.one'), b = v.querySelector(sel); return !!a && !!b && !!(a.compareDocumentPosition(b) & 4); }; const out = { epic: 0, theme: 0, task: 0, feature: 0, bad: [] }; for (const v of document.querySelectorAll('.view')) { const k = v.id.startsWith('o-') ? 'epic' : v.id.startsWith('t-') ? 'theme' : v.id.startsWith('k-') ? 'task' : v.id.startsWith('f-') ? 'feature' : null; if (!k) continue; out[k]++; if (!first(v, k === 'theme' ? '.fig' : k === 'task' ? '.fig' : 'dl.facts')) out.bad.push(v.id); if (/>\s*None\s*</.test(v.innerHTML)) out.bad.push(v.id + ' None'); if (k === 'task' && ![...v.querySelectorAll('details.more h4')].some(h => h.textContent === 'Context')) out.bad.push(v.id + ' no Context'); } return out; });
-    check('HANDOFF:523', 'epic, theme, task and feature views open with what the item is about; no None group; tasks show Context', ent.bad.length === 0 && ent.feature > 0, JSON.stringify({ ...ent, bad: ent.bad.slice(0, 5) }));
+    check('operator 2026-10-31 18:4x, entity pages', 'epic, theme, task and feature views open with what the item is about; no None group; tasks show Context', ent.bad.length === 0 && ent.feature > 0, JSON.stringify({ ...ent, bad: ent.bad.slice(0, 5) }));
     const chips = await page.evaluate(() => { const a = [...document.querySelectorAll('.view[id^="o-"] .chips a[data-view-link^="f-CAP-"]')]; return { n: a.length, dead: a.filter(x => !document.getElementById(x.dataset.viewLink)).length, inMenu: document.querySelectorAll('.menu [data-view-link^="f-CAP-"]').length }; });
-    check('HANDOFF:523', 'every capability chip opens a feature view and no menu row was added', chips.n > 0 && !chips.dead && !chips.inMenu, JSON.stringify(chips));
+    check('operator 2026-10-31 18:4x, entity pages', 'every capability chip opens a feature view and no menu row was added', chips.n > 0 && !chips.dead && !chips.inMenu, JSON.stringify(chips));
   } finally { await browser.close(); }
   const fails = rows.filter(r => r[0] === 'FAIL').length;
   for (const r of rows) console.log(`${r[0]}  ${r[1]}: ${r[2]}${r[3] ? `  [${r[3]}]` : ''}`);

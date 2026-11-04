@@ -74,7 +74,7 @@ Everything under `_src/` is the build; nothing in it runs in the product.
 |---|---|---|
 | gather | `node gather.cjs` | Reads the task and epic records on `origin/integration/EPC-022-the-3-2-0-milestone-fixes` and on `origin/main`, each record's last change on the line, `gh pr list` and `gh api compare` (read only) and `codeflow work next`; writes `facts.json` with the read's start and end time. `--refresh-records` re-reads only the record texts at the pinned tips. |
 | report facts | `report.json` (by hand) | The deliverable line, names before identifiers, each epic's short phrases (`epicShort`: one line, delivers, for whom, why now, menu label, with its source), streams, lanes, blockers with their short do, why and else (`blockerShort`), decisions, owed actions, terms, the four questions and the ten report kinds, each with its source and read time. |
-| build | `node build.cjs` | Writes `../prototype.html` (kit CSS and JS inlined, data embedded, every view rendered: 316 views) and `kit/index.html` (the same page linking the kit files, for the workspace navigation test). `figures.cjs` holds the docs drawings. |
+| build | `node build.cjs` | Writes `../prototype.html` (kit CSS and JS inlined, data embedded, every view rendered: 329 views, 13 of them feature views) and `kit/index.html` (the same page linking the kit files, for the workspace navigation test). `figures.cjs` holds the docs drawings. |
 | text lines | `node textlines.cjs` | Opens the page from `file://` at 1440 and 1280 px, activates every view with every tab panel shown, and measures the rendered line count of every visible text block; fails on any block over two lines outside a closed disclosure. |
 | render | `node render.cjs` | Opens the page from `file://`; captures 22 views at 1440, 1280, 1200 and 390 px in light and dark to `../captures/` from the top of the page (390 px also full page for the overview, an epic and a task); fails on horizontal scroll, a page error, a wrapped chip, clipped text, or the Comment button over content; checks Graphite, Slate and Sage with the default and large text size at 1200 and 390; checks every one of the 316 views at 1440, 1280, 1200 and 390 px at three scroll positions for the Comment button covering content; drives 49 journeys, among them the collapsed-rail hover (no tooltip, one delay, a passing mouse opens nothing, focus opens at once), Save through a mocked directory handle (file content and confirmation), the download fallback (file content and confirmation) and the draft surviving a reload. |
 | axe | `node axe.cjs` | WCAG 2.x A and AA rules over 17 views at 1440, 1280 and 390 px in both modes, plus Slate and Sage and the large size at 1200; fails on any violation of any impact. |
@@ -144,17 +144,19 @@ Mocked or absent, and said so on the page:
 
 | Check | Result |
 |---|---|
-| `textlines.cjs` | 316 views at 1440 and 1280 px, 26 566 text blocks measured, 0 over two lines outside a closed disclosure |
-| `render.cjs` | 248 renders at 1440, 1280, 1200 and 390 px in both modes plus Graphite, Slate and Sage at the default and large size: 0 horizontal scroll, 0 wrapped chips, 0 clipped text, 0 page errors; Comment button over content in 0 of 316 views at each of 1440, 1280, 1200 and 390 px; 49 of 49 journeys; 190 captures |
+| `textlines.cjs` | 329 views at 1440 and 1280 px, 27 378 text blocks measured, 0 over two lines outside a closed disclosure |
+| `render.cjs` | 248 renders at 1440, 1280, 1200 and 390 px in both modes plus Graphite, Slate and Sage at the default and large size: 0 horizontal scroll, 0 wrapped chips, 0 clipped text, 0 page errors; Comment button over content in 0 of 329 views at each of 1440, 1280, 1200 and 390 px; 55 of 55 journeys, rerun on their own after one script fix, the page unchanged |
 | `axe.cjs` | 118 view renders: 0 critical, 0 serious, 0 moderate, 0 minor |
-| `floors.cjs` | 228 pairs over 3 themes, 2 modes and 2 accents, the stage fills as the page renders them: 220 over, 8 under the 3:1 floor, all the stage line fill (55% accent in the surface) in light mode and in dark mode with plum; reported to the Coordinator, no colour changed |
-| scan of the page text | 19 788 text nodes outside script and style: 0 "..." in content, 0 identifiers as the only label of a link, 0 times without a zone |
-| workspace `textwall-check.cjs` | 0 paragraphs over 3 lines |
-| workspace `nav.test.cjs` on `_src/kit` | Historical result: 30 of 31 pass. The tooltip assertion now checks the pinned label and absence on the collapsed rail; a passing rerun is pending |
-| workspace `link-check.cjs` | 4 references; the one "missing" is the string `${E(h)}` inside the inlined `cf.js` source, a JavaScript template, not a link |
+| `floors.cjs` | 168 token pairs and 192 rendered stage pairs over 3 themes, 2 modes and 2 accents: 0 under the floor. Line against main is 15.54 at worst (floor 15). The 3:1 check reads the 1 px outline for line marks, 5.14:1 at worst; the fill alone is 2.71:1 at worst and does not meet 3:1 |
+| `audit-decisions.cjs` | 27 of 27: the operator's decisions AC-5 names, driven in Chromium |
+| scan of the page text | Earlier result, not rerun: 19 788 text nodes, 0 "..." in content, 0 identifiers as the only label of a link. The zone journey now skips Context, which is the record's own words |
+| workspace `textwall-check.cjs` | Earlier result, not rerun: 0 paragraphs over 3 lines |
+| workspace `nav.test.cjs` on `_src/kit` | 1 of 1 pages pass every check |
+| workspace `link-check.cjs` | Earlier result, not rerun: 4 references; the one "missing" is the string `${E(h)}` inside the inlined `cf.js` source, a JavaScript template, not a link |
 
-All runs open the page from `file://`; none starts a server. Run on
-2026-11-02 between 19:48 and 20:03 EST.
+All runs open the page from `file://`; none starts a server. Rows without
+"Earlier result" ran on 2026-11-03 between 20:59 and 21:35 EST on the page
+with SHA-256 prefix `174f2adf712bfb25`.
 
 Captures to look at first: `captures/overview-1440-light.png`,
 `overview-1440-dark.png`, `overview-390-light.png`, `overview-390-dark.png`,
@@ -173,13 +175,21 @@ Captures to look at first: `captures/overview-1440-light.png`,
   should draw them in the product.
 - The kit and page styles diverge from the vendored workspace kit;
   TSK-1162 and TSK-1120 decide what ships.
-- The colour floors are computed from tokens and the page's local stage
-  styles, not measured on the rendered page; axe's contrast rule is the
-  rendered text check. The stage line fill is under the 3:1 non-text
-  floor in light mode; the design owner decides the colour.
+- Stage fills are measured on the rendered page; the other token pairs
+  are computed from tokens. The stage bars and the dots for the stages a
+  task has passed share a 65% line fill with a 1 px accent outline; the
+  outline carries the 3:1 boundary (WCAG 1.4.11), and the fill alone is
+  2.71:1 at worst. On the approved page those dots were full accent. SVG
+  `.st-line` marks stay full accent, because the kit rule
+  `:is(.fig,.marks) .st-line` outranks the page's rule; they are the
+  "lines added" bars on Docs: what changed and one specimen mark.
+- `.part i` has a 2 px minimum width. At that width the outline fills the
+  whole segment, so it would read as "on main". The narrowest line segment
+  on this page is 14.4 px at 390 px wide, so this does not occur here.
+- Task Context is the record's Description with fenced figures left out,
+  because no task record has a section named Context.
 - The nine specimen kinds use generic content; representative content is
-  TSK-1127's. Task views read Outcome without Context and there is no
-  capability-backed feature view; TSK-1098 AC-13 and TSK-1120 own those.
+  TSK-1127's.
 - The figure check inspects the numbered figures present, not an
   inventory of required figures; the size matrix is default and large
   only; TSK-1127 owns both.

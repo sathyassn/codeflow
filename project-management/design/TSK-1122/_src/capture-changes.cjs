@@ -29,11 +29,27 @@ const out = name => path.join(root, 'captures', `post-approval-${name}-${phase}.
       return { main: paint(el.querySelector('.st-main')), line: paint(el.querySelector('.st-line')), lineMark: paint(document.querySelector('.st-line-f')) };
     });
     await go('k-TSK-1122');
+    // A task's stage figure: the dots for passed stages are full accent on the approved page and the line fill after it.
+    const passed = await page.evaluate(() => [...document.querySelectorAll('.view[id^="k-TSK-"]')].find(v => v.querySelector('svg.path .st-line-f')).id);
+    await go(passed);
+    await page.locator(`#${passed} .fig`).filter({ has: page.locator('svg.path') }).first().screenshot({ path: out('task-stage-figure') });
+    colours.taskFigure = await page.evaluate(id => { const marks = [...document.querySelectorAll(`#${id} svg.path .st-line-f`)]; return { task: id, passedStageMarks: marks.length, fill: getComputedStyle(marks[0]).fill }; }, passed);
+    await go('k-TSK-1122');
     const task = page.locator('#k-TSK-1122');
     await task.locator('details.more').first().evaluate(d => { d.open = true; });
     await task.locator('details.more').first().screenshot({ path: out('task-context') });
     await go('o-EPC-022');
     await page.locator('#o-EPC-022 .chips').first().screenshot({ path: out('epic-chips') });
+    await go('s-hand-off');
+    const panel = await page.evaluate(() => { const m = document.querySelector('#s-hand-off svg .st-pr'), t = m.closest('.tabpanel'); return t ? t.id : null; });
+    if (panel) await page.click(`[aria-controls="${panel}"]`);
+    await page.waitForTimeout(250);
+    await page.locator('#s-hand-off .fig').filter({ has: page.locator('svg .st-pr') }).first().screenshot({ path: out('specimen-marks') });
+    colours.specimenMark = await page.evaluate(() => getComputedStyle(document.querySelector('#s-hand-off svg .st-pr')).fill);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await go('t-EPC-022-4');
+    await page.locator('#t-EPC-022-4 .part').first().screenshot({ path: out('narrow-segment-390') });
+    await page.setViewportSize({ width: 1440, height: 900 });
     let feature = null;
     if (phase === 'after') {
       feature = await page.locator('#o-EPC-022 .chips a[data-view-link^="f-CAP-"]').first().getAttribute('data-view-link');

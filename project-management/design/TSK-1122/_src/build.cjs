@@ -154,7 +154,7 @@ function taskView(t) {
   ${crumbs(parts)}
   <div class="vhead"><h2>${esc(t.title)}</h2>${idTag(t.id)}${chip(esc(t.status), t.status === 'complete' ? 'ok' : t.status === 'blocked' ? 'danger' : 'plain')}</div>
   <p class="one">${esc(one)}</p>
-  ${whole || (t.context || []).length ? details('The whole outcome and context, from the record', `<h4>Outcome</h4><p class="small">${esc(t.about)}</p>${(t.context || []).length ? `<h4>Context</h4>${t.context.map(p => `<p class="small">${esc(p)}</p>`).join('')}` : ''}`) : ''}
+  ${whole || (t.context || []).length ? details('The whole outcome and context, from the record', `<h4>Outcome</h4><p class="small">${esc(t.about)}</p>${(t.context || []).length ? `<h4>Context</h4>${t.context.map(p => `<p class="small">${esc(plain(p))}</p>`).join('')}` : ''}`) : ''}
   ${fig(`${t.title}: where it is`, 'Where the task is on its way to main', taskPath(t), '', '', false)}
   ${facts([['Outcome', e ? `${link('o-' + e.id, esc(cap(e.title)))} ${idTag(e.id)}` : nr], ['Theme', e ? `<span class="wide-cell">${link(themeKey(e.id, t.theme), esc(t.theme))}</span>` : nr], ['Where it is', locChip(t)], ['State', esc(t.status)], ['Lane', nr], ['Window', nr], ['Record last changed', esc(when(t.lastMoved))], ['Pull request', t.prs.length ? t.prs.map(n => `<span class="mono">#${n}</span>`).join(' ') : 'none open']], 'Eight facts')}
   <div class="grid deps gap">
@@ -164,15 +164,17 @@ function taskView(t) {
   ${details('Evidence', vt({ cols: '12ch minmax(0,1fr)', head: ['Fact', 'Source'], label: 'Evidence', rows: [['record', `<code>project-management/tasks/${t.id}.md</code> on the line at ${esc(F.read.lineTip)}`], ['read at', esc(READ_AT)], ['where it is', 'origin/main and the open pull requests, read only'], ['ready or waiting', t.next ? `codeflow work next at ${esc(when(F.next.at))}: ${esc(t.next.state)}` : 'not listed by codeflow work next']].map(r => ({ cells: [`<span class="mono">${r[0]}</span>`, `<span class="mute">${r[1]}</span>`] })) }))}
 </section>`;
 }
+// Record prose carries Markdown marks; the page draws them as plain text.
+const plain = s => s.replace(/\*\*|`/g, '');
 // A feature is its capability entry (TSK-1098 AC-13): what it is, then its status, then the epics that build it; no empty group.
 function featureView(id) {
-  const c = CE[id], name = cap(CAPS[id] || c.name), about = c.about.join(' ') || 'not recorded', one = lead(c.about[0] || about), eps = c.epics.filter(x => F.epics[x]);
+  const c = CE[id], name = cap(CAPS[id] || c.name), about = plain(c.about.join(' ')) || 'not recorded', one = lead(plain(c.about[0] || about)), eps = c.epics.filter(x => F.epics[x]);
   return `${view()}<section class="view" id="f-${id}" data-title="${esc(name)}">
   ${crumbs([['overview', 'Release'], ['f-' + id, name]])}
   <div class="vhead"><h2>${esc(name)}</h2>${idTag(id)}${chip(esc(c.status || 'not recorded'), c.status === 'shipped' ? 'ok' : 'plain')}</div>
   <p class="one">${esc(one)}</p>
-  ${one.length < about.length ? details('The whole entry, from the record', c.about.map(p => `<p class="small">${esc(p)}</p>`).join('')) : ''}
-  ${facts([['State', esc(c.status || 'not recorded')], ['Area', esc(c.area || 'not recorded')]], 'Two facts')}
+  ${one.length < about.length ? details('The whole entry, from the record', c.about.map(p => `<p class="small">${esc(plain(p))}</p>`).join('')) : ''}
+  <div class="gap">${facts([['State', esc(c.status || 'not recorded')], ['Area', esc(c.area || 'not recorded')]], 'Two facts')}</div>
   ${eps.length ? `<div class="card gap" data-block="${esc(name)}: epics"><h4>Built by</h4>${points(eps.map(x => `${link('o-' + x, esc(cap(F.epics[x].title)))} ${idTag(x)}`))}</div>` : ''}
   ${details('Evidence', `<p class="small">The entry for ${esc(id)} in <code>docs/capabilities.md</code> on the line at ${esc(F.read.lineTip)}, read at ${esc(READ_AT)}.</p>`)}
 </section>`;
@@ -360,9 +362,9 @@ p.one{font-size:var(--fs-3);color:var(--text-2);max-width:none;margin:4px 0 14px
 .delta{display:inline-block;font-size:var(--fs-0);font-weight:600;padding:1px 7px;border-radius:var(--r-pill);background:var(--sunken);color:var(--text-2);vertical-align:middle;margin-left:6px} .delta.up{background:var(--ok-wash);color:var(--ok)} .delta.down{background:var(--danger-wash);color:var(--danger)}
 .facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));background:var(--surface);border:1px solid var(--line);border-right:0;border-bottom:0;border-radius:var(--r-2);overflow:hidden;box-shadow:var(--shadow-1);margin:0 0 4px} .facts>div{padding:10px 14px;display:grid;gap:3px;min-width:0;border-right:1px solid var(--line);border-bottom:1px solid var(--line)} .facts dt{font-size:var(--fs-0);font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-2)} .facts dd{margin:0;font-size:var(--fs-1);overflow-wrap:anywhere} .facts>div.wide{grid-column:span 2}
 .part{display:flex;gap:2px;height:30px;border-radius:6px;overflow:hidden} .part i{display:block;height:100%;min-width:2px} .part.mini{height:10px;border-radius:5px;margin:10px 0 8px}
-.st-main{background:var(--accent)} .st-line{background:${STAGE_LINE_FILL}} .st-pr{background:var(--warn-mark)} .st-todo{background:var(--stage-todo)} .st-block{background:var(--danger)} .st-todo-bg{background:var(--sunken)}
+.st-main{background:var(--accent)} .st-line{background:${STAGE_LINE_FILL};box-shadow:inset 0 0 0 1px var(--accent)} .st-pr{background:var(--warn-mark)} .st-todo{background:var(--stage-todo)} .st-block{background:var(--danger)} .st-todo-bg{background:var(--sunken)}
 .fig .st-main,.fig .st-line,.fig .st-pr,.fig .st-todo,.fig .st-block{stroke:none} svg .st-main{fill:var(--accent)} svg .st-line{fill:${STAGE_LINE_FILL}} svg .st-pr{fill:var(--warn-mark)} svg .st-todo{fill:var(--stage-todo)} svg .st-block{fill:var(--danger)}
-svg .st-line-f{fill:${STAGE_LINE_FILL}} svg .st-todo-f{fill:var(--stage-todo)} svg .st-block-f{fill:var(--danger)} svg .st-now{fill:var(--surface);stroke:var(--accent);stroke-width:3} svg text{fill:var(--text-2);font-size:12.5px} svg text.b{fill:var(--text);font-weight:600} svg text.s{fill:var(--text-2)}
+svg .st-line-f{fill:${STAGE_LINE_FILL};stroke:var(--accent);stroke-width:1} :is(.fig,.marks) svg .st-pr{fill:var(--warn-mark)} svg .st-todo-f{fill:var(--stage-todo)} svg .st-block-f{fill:var(--danger)} svg .st-now{fill:var(--surface);stroke:var(--accent);stroke-width:3} svg text{fill:var(--text-2);font-size:12.5px} svg text.b{fill:var(--text);font-weight:600} svg text.s{fill:var(--text-2)}
 .key{display:flex;flex-wrap:wrap;gap:6px 16px;margin:10px 0 0;padding:0;list-style:none;color:var(--text-2);font-size:var(--fs-0)} .key li{display:inline-flex;align-items:center;gap:6px} .key b{color:var(--text)} .sw{width:12px;height:12px;border-radius:3px;display:inline-block}
 .sm{display:inline-block;width:10px;height:10px;border-radius:50%;flex:none} .tc{display:inline-flex;gap:8px;align-items:baseline;min-width:0} .why{display:block;font-size:var(--fs-0);padding-left:18px} .tc .sm{transform:translateY(1px)} .tt{min-width:0;overflow-wrap:anywhere}
 .outcomes .outcome{display:block;color:inherit;text-decoration:none} .outcome:hover{box-shadow:var(--shadow-2)} .outcome .t,.kind .t,.epic .head span:not(.p){font-weight:600} .outcome .p,.epic .p{display:block;font-size:var(--fs-5);font-weight:600;letter-spacing:-.02em;margin-top:6px;font-variant-numeric:tabular-nums} .outcome .p small,.epic .p small,.hero .num small{font-size:var(--fs-3);color:var(--text-2);font-weight:500}

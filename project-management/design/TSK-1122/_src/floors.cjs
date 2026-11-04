@@ -58,7 +58,7 @@ const renderedRgb = raw => {
 (async () => {
   const pagePath = path.resolve(__dirname, '../prototype.html');
   const bytes = fs.readFileSync(pagePath);
-  if (!bytes.toString().includes(`.st-line{background:${STAGE_LINE_FILL}}`)) throw new Error('prototype.html has a stale line mix; run build.cjs before floors.cjs');
+  if (!bytes.toString().includes(`.st-line{background:${STAGE_LINE_FILL};`)) throw new Error('prototype.html has a stale line mix; run build.cjs before floors.cjs');
   console.log(`Page SHA256 ${crypto.createHash('sha256').update(bytes).digest('hex')}; shared line mix ${STAGE_LINE_PERCENT}%`);
   const tokenCount = rows.length;
   const browser = await chromium.launch();
@@ -91,7 +91,14 @@ const renderedRgb = raw => {
             el.after(peer);
             try { main = getComputedStyle(peer)[property]; } finally { peer.remove(); }
           }
-          const sample = { variant, property, colour, main, surface };
+          // A line mark's visible boundary is its 1 px accent outline: an inset shadow on HTML, a stroke on SVG. SVG .st-line draws no outline.
+          let outline = null;
+          if (stage === 'st-line' || stage === 'st-line-f') {
+            const cs = getComputedStyle(el);
+            if (svg) { if (parseFloat(cs.strokeWidth) > 0 && cs.stroke !== 'none') outline = cs.stroke; }
+            else { const m = cs.boxShadow.match(/^(rgba?\([^)]*\)|color\([^)]*\))/); if (m) outline = m[1]; }
+          }
+          const sample = { variant, property, colour, main, surface, outline };
           const key = JSON.stringify(sample);
           if (!found.has(key)) found.set(key, { ...sample, view: el.closest('.view')?.id || 'page', count: 0 });
           found.get(key).count++;
@@ -104,8 +111,16 @@ const renderedRgb = raw => {
       for (const sample of samples) {
         console.log('RENDERED ' + JSON.stringify({ theme, mode, accent, ...sample }));
         const colour = renderedRgb(sample.colour), surface = renderedRgb(sample.surface);
-        const r = ratio(colour, surface); if (r < 3) bad++;
-        rows.push([theme, mode, accent, `${sample.variant} ${sample.property} on surface (rendered)`, fmt(r), '3:1', r >= 3 ? 'ok' : 'UNDER']);
+        const r = ratio(colour, surface);
+        if (sample.outline) {
+          // WCAG 1.4.11: a mark is identified by its boundary, so the outline carries 3:1 and the fill is reported beside it.
+          const o = ratio(renderedRgb(sample.outline), surface); if (o < 3) bad++;
+          rows.push([theme, mode, accent, `${sample.variant} 1 px outline on surface (rendered)`, fmt(o), '3:1', o >= 3 ? 'ok' : 'UNDER']);
+          rows.push([theme, mode, accent, `${sample.variant} fill on surface (reported)`, fmt(r), 'none', 'info']);
+        } else {
+          if (r < 3) bad++;
+          rows.push([theme, mode, accent, `${sample.variant} ${sample.property} on surface (rendered)`, fmt(r), '3:1', r >= 3 ? 'ok' : 'UNDER']);
+        }
         if (sample.main !== null) {
           const d = separation(colour, renderedRgb(sample.main));
           const ok = d >= STAGE_SEPARATION_FLOOR; if (!ok) bad++;
