@@ -1332,16 +1332,18 @@ def real_directory(path: str, name: str) -> os.stat_result:
 
 def fixture_identity(repository: Path) -> dict:
     """Captured once at launch, before the subject starts: the repository and
-    its common directory. A worktree peer is measured against this record. A
-    failure is recorded rather than raised: root peers do not depend on it and
-    every worktree peer then refuses."""
+    its common directory, its own `.git`, read from the filesystem so launch
+    starts no process. Git's own answer for the repository is checked at each
+    worktree check. A worktree peer is measured against this record. A failure
+    is recorded rather than raised: root peers do not depend on it and every
+    worktree peer then refuses."""
     try:
         root = os.path.realpath(repository)
-        common = os.path.realpath(os.path.join(root, clean_git(root, "rev-parse", "--git-common-dir").strip()))
+        common = os.path.join(root, ".git")
         real_directory(root, "the fixture repository")
-        real_directory(os.path.join(root, ".git"), "the fixture's .git")
-        if common != os.path.join(root, ".git"):
-            raise Refused("the fixture's common directory is not its own .git")
+        real_directory(common, "the fixture's .git")
+        if os.path.lexists(os.path.join(common, "commondir")):
+            raise Refused("the fixture's .git names another common directory")
         return {"repository": root, "common_dir": common}
     except (Refused, OSError, ValueError) as exc:
         return {"error": str(exc)}
@@ -1412,7 +1414,9 @@ def worktree_identity(identity: dict, cwd: str) -> dict:
     shared, shared_digest = one_line_file(os.path.join(admin, "commondir"), "the admin commondir file")
     if os.path.realpath(os.path.join(admin, shared)) != common:
         raise Refused("the admin commondir file does not name the fixture's common directory")
-    # Git's own view.
+    # Git's own view, the repository's common directory included.
+    if os.path.realpath(os.path.join(root, clean_git(root, "rev-parse", "--git-common-dir").strip())) != common:
+        raise Refused("git reports another common directory for the fixture repository")
     listed_worktree(root, cwd)
     if os.path.realpath(os.path.join(cwd, clean_git(cwd, "rev-parse", "--git-common-dir").strip())) != common:
         raise Refused("git reports another common directory for this worktree")
@@ -2134,16 +2138,17 @@ def finish(args) -> None:
                   "error": "no pre-trial snapshot recorded after seat readiness"}
     result["observation_limitations"] = run.get("observation_limitations", [])
     try:
-        accepted_paths = peer_trust_acceptances(peer_record, run["repository"])
+        repository = run.get("repository")
+        accepted_paths = peer_trust_acceptances(peer_record, repository) if repository else set()
         run["config_finish"] = config_snapshot(
             run["environment"], plugin_repository=Path(run["repository"])
             if run.get("hook_trust", {}).get("flag_used") or run.get("hook_trust", {}).get("option") == "bypass"
             else None, repository=Path(run["repository"]) if "codex_trust" in run.get("config_start", {}) else None,
-            worktrees=sorted(accepted_paths - {run["repository"]}))
+            worktrees=sorted(accepted_paths - {repository}))
         if "config_start" not in run:
             result["validity_flags"].append("evaluator_config_unreadable")
         else:
-            drift = config_drift(run["config_start"], run["config_finish"], run["repository"] in accepted_paths)
+            drift = config_drift(run["config_start"], run["config_finish"], repository in accepted_paths)
             result["validity_flags"].extend(drift)
             if not drift:
                 allowances = config_allowances(run["config_start"], run["config_finish"])

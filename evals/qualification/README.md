@@ -557,7 +557,9 @@ The method puts a review seat in the subject's task worktree, so a peer may
 also start in a registered linked worktree of the fixture. At launch the
 runner records the fixture's identity in `launch.json`
 (`peers.fixture_identity`): the realpath of the repository and of its common
-directory, which must be the repository's own `.git`. A directory `C` other
+directory, which must be the repository's own `.git`, a real directory with no
+`commondir` redirect. Launch reads this from the filesystem and starts no
+process; git confirms it at each worktree check. A directory `C` other
 than the repository is accepted only when every check below passes, on the
 raw path first and on realpaths second, using `lstat` so that a symlink is
 seen rather than followed:
@@ -571,7 +573,8 @@ seen rather than followed:
 - reciprocal pair: `A/gitdir` names exactly `C/.git`, and `A/commondir`
   names exactly the fixture's common directory; both are regular files;
 - git's own view, read with every `GIT_*` variable unset, no global or system
-  config and an empty HOME: `git worktree list --porcelain` lists `C` once as
+  config and an empty HOME: in the repository `git rev-parse` reports its own
+  `.git` as the common directory, `git worktree list --porcelain` lists `C` once as
   a non-main entry that is neither bare nor prunable, and in `C`
   `git rev-parse` reports the fixture's common directory and `C` as the top
   level.
