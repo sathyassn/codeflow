@@ -161,6 +161,7 @@ def artifact(run_id=77, head=HEAD, windows=False, **changes):
 class FakeApi:
     def __init__(self, pulls=None, runs=None, jobs=None, caches=None, base="main", artifacts=None, zips=None,
                  logs=None):
+        self.cache_queries = []
         self.logs = logs or {}
         self.cache_list = caches if caches is not None else [{"key": APT_KEY, "ref": MAIN_REF}]
         self.pull_list = pulls if pulls is not None else [
@@ -199,6 +200,7 @@ class FakeApi:
         return found if found is not None else log(*PUSH_IMAGE[JOB_LABEL[job_id]])
 
     def caches(self, key, ref):
+        self.cache_queries.append((key, ref))
         if isinstance(self.cache_list, Exception):
             raise self.cache_list
         return self.cache_list
@@ -583,6 +585,18 @@ class RefusalTests(unittest.TestCase):
 
     def test_a_missing_apt_cache_runs_everything(self):
         self.assertIn("holds apt cache", self.skipped(api=FakeApi(caches=[])))
+
+    def test_a_missing_line_cache_names_the_key_refs_and_conditional_save(self):
+        api = FakeApi(base=LINE, caches=[])
+        reason = self.skipped(api=api, ref=LINE_REF)
+        self.assertEqual(api.cache_queries, [(APT_KEY, LINE_REF), (APT_KEY, MAIN_REF)])
+        self.assertIn(f"neither {LINE_REF} nor {MAIN_REF} holds apt cache {APT_KEY!r}", reason)
+        self.assertIn("saving the cache requires that job to succeed", reason)
+
+    def test_the_exact_line_cache_allows_reuse(self):
+        api = FakeApi(base=LINE, caches=[{"key": APT_KEY, "ref": LINE_REF}])
+        self.assertEqual(decide(api=api, ref=LINE_REF), 77)
+        self.assertEqual(api.cache_queries, [(APT_KEY, LINE_REF), (APT_KEY, MAIN_REF)])
 
     def test_a_failed_apt_cache_lookup_runs_everything(self):
         self.assertIn("lookup failed", self.skipped(api=FakeApi(caches=OSError("HTTP 403"))))
