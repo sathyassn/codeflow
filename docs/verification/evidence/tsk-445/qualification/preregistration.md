@@ -215,3 +215,13 @@ registered above is unchanged.
 
 No trial can run on Claude Code 2.1.318 until `runner.py` accepts that row
 layout. That fix is outside this task. Attempts 1 to 3 are `not_run`.
+- Runner fix: `ef7209a9b` teaches `runner.py` both 2.1.318 frames, with
+  tests on the captures from attempts 1 and 3. The candidate pin is
+  unchanged, since no skill file or suite entry moved.
+- Attempt 4, at 11:49 EST with the fixed runner: trust accepted, seat ready,
+  prompt delivered with one Enter. The evaluator account answered "You've
+  hit your weekly limit · resets 6am (America/Toronto)" before any model
+  output. `finish` ran with no validity flags, and the tab was closed so
+  the session could not resume unobserved at 6am. The trial is `not_run`.
+  The retry candidate trial is next, as the first trial of this cohort,
+  once the evaluator account has usage.
