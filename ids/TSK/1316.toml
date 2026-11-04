@@ -1,0 +1,11 @@
+id = "TSK-1316"
+uid = "5a27df5e-c846-47af-9855-794c08839027"
+kind = "TSK"
+title = "Import authority finds a completed task's real landing when a planning merge carried its record"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-04T03:08:41Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
