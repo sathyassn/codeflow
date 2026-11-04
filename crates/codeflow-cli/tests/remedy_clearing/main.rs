@@ -176,6 +176,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("CI_BODY_UNSUPPLIED", Runs),
     ("CI_SECURITY_LEVEL_LOWERED", Runs),
     ("CI_SETUP_HOOK_CHANGED", Runs),
+    ("CI_WORKFLOW_CHANGED", Runs),
     ("SCAFFOLD_MANIFEST_BROKEN", Excluded(Network)),
     ("PATH_POLICY", Runs),
     ("ENV_FILE_STAGED", Runs),
@@ -542,6 +543,20 @@ fn ci(root: &Path, extra: &[&str]) -> String {
     ];
     args.extend(extra);
     codeflow(root, &args)
+}
+
+/// [`ci`] with the exit status kept, for a test that must tell a clean run
+/// from one that stopped early.
+fn ci_status(root: &Path, extra: &[&str]) -> (Option<i32>, String) {
+    let mut args = vec![
+        "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x",
+    ];
+    args.extend(extra);
+    let out = command(exe().to_str().unwrap(), root)
+        .args(&args)
+        .output()
+        .unwrap();
+    (out.status.code(), text(&out))
 }
 
 /// A fresh `codeflow init --yes <tier>` project, made once per tier, kept
@@ -1148,6 +1163,71 @@ fn clears_ci_setup_hook_changed() {
         git(root, &["commit", "-q", "-m", "ci: restore the setup hook"]);
         let after = ci(root, &[]);
         assert!(!after.contains("codeflow ci: note: this change"), "{after}");
+    }
+}
+
+#[test]
+fn clears_ci_workflow_changed() {
+    const WORKFLOW: &str = ".github/workflows/codeflow-policy.yml";
+    const TARGET: &str = "on:\n  pull_request_target:\njobs:\n  verdict:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: exit 1\n";
+    for verb in ["adds", "edits", "removes"] {
+        let dir = ci_repo(DEFAULTS);
+        let root = dir.path();
+        if verb != "adds" {
+            git(root, &["switch", "-q", "main"]);
+            write(root, WORKFLOW, TARGET);
+            git(root, &["add", WORKFLOW]);
+            git(
+                root,
+                &["commit", "-q", "-m", "ci: seed the policy workflow"],
+            );
+            git(root, &["switch", "-q", "feat/x"]);
+            git(root, &["merge", "--ff-only", "main"]);
+        }
+        if verb == "removes" {
+            std::fs::remove_file(root.join(WORKFLOW)).unwrap();
+        } else {
+            write(
+                root,
+                WORKFLOW,
+                "on:\n  push:\njobs:\n  verdict:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: exit 0\n",
+            );
+        }
+        git(root, &["add", WORKFLOW]);
+        git(
+            root,
+            &["commit", "-q", "-m", "ci: change the policy workflow"],
+        );
+        let before = ci(root, &[]);
+        let finding = format!("this change edits {WORKFLOW}");
+        assert_prints_row(block(&before, &finding), "CI_WORKFLOW_CHANGED");
+        // The printed step: restore the workflow to its target state,
+        // including absence for a new one.
+        if verb == "adds" {
+            std::fs::remove_file(root.join(WORKFLOW)).unwrap();
+        } else {
+            write(root, WORKFLOW, TARGET);
+        }
+        git(root, &["add", WORKFLOW]);
+        git(
+            root,
+            &["commit", "-q", "-m", "ci: restore the policy workflow"],
+        );
+        // The after run must succeed and name the workflow check among the
+        // checks it ran, so an early error or an empty run cannot pass.
+        let (status, after) = ci_status(root, &[]);
+        assert_eq!(status, Some(0), "{after}");
+        assert!(!after.contains("ci.workflow_change"), "{after}");
+        let clean = after
+            .lines()
+            .find(|line| line.starts_with("codeflow ci: clean — "))
+            .unwrap_or_else(|| panic!("no clean report in:\n{after}"));
+        assert!(
+            clean
+                .split(['—', ','])
+                .any(|check| check.trim().starts_with("workflow-change")),
+            "the workflow check did not run: {clean}"
+        );
     }
 }
 

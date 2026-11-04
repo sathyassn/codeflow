@@ -591,6 +591,9 @@ catalog! {
     /// A project setup hook change that runs with the gate's authority.
     CI_SETUP_HOOK_CHANGED = Step::Edit(".codeflow/ci-setup.sh"),
         "restore .codeflow/ci-setup.sh to its target state; a change kept on purpose prints this note until it lands, so the operator reviews it as they would the CI file";
+    /// A change to a managed workflow or the release workflow (TSK-336).
+    CI_WORKFLOW_CHANGED = Step::Edit("{path}"),
+        "review {path} as a change to who judges pull requests, and restore it to its target state if that was not meant; the default branch's copy judges until this change lands there, and the operator lands it";
     /// A codeflow build whose embedded scaffold manifest does not load.
     SCAFFOLD_MANIFEST_BROKEN = Step::Codeflow("codeflow doctor"),
         "this codeflow build is damaged: install a release build, then `codeflow doctor` reports its managed files again";
