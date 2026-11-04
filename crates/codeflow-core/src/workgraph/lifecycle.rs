@@ -185,10 +185,15 @@ impl Graph {
     /// Returns an error if an inventory or record cannot be read, decoded or parsed.
     pub fn from_worktree(repo_root: &Path) -> Result<Self, String> {
         let pm = repo_root.join("project-management");
-        let repo = Repository::discover(repo_root).ok();
+        let repo = crate::hooks::repo::open(repo_root)?;
+        let revision = repo
+            .as_ref()
+            .map(|repo| resolve_commit(repo, "HEAD"))
+            .transpose()?
+            .flatten();
         let mut graph = Self {
             repository: repo.as_ref().map(|repo| repo.path().to_path_buf()),
-            revision: repo.as_ref().and_then(|repo| repo.head().ok()?.target()),
+            revision,
             ..Self::default()
         };
         for (kind, files) in [

@@ -53,7 +53,12 @@ pub(super) fn has_note(criterion: &Criterion) -> bool {
 }
 
 fn transfer_line(line: &str) -> bool {
-    line.starts_with("- Amended ") && line.split_whitespace().nth(3) == Some("transferred")
+    line.starts_with("- Amended ")
+        && line
+            .split([' ', '\t'])
+            .filter(|word| !word.is_empty())
+            .nth(3)
+            == Some("transferred")
 }
 
 fn destination(criterion: &Criterion) -> Result<(String, String), String> {
@@ -68,7 +73,11 @@ fn destination(criterion: &Criterion) -> Result<(String, String), String> {
     if !note.note {
         return Err("the transfer needs a dated Amended note".into());
     }
-    let words: Vec<_> = note.line.split_whitespace().collect();
+    let words: Vec<_> = note
+        .line
+        .split([' ', '\t'])
+        .filter(|word| !word.is_empty())
+        .collect();
     let ["-", "Amended", date, "transferred", "to", epic, criterion] = words.as_slice() else {
         return Err("use `- Amended YYYY-MM-DD: transferred to EPC-NNN AC-n.`".into());
     };
@@ -281,7 +290,8 @@ pub(super) fn read(graph: &Graph) -> Transfers {
     let repo = graph
         .repository
         .as_ref()
-        .and_then(|path| Repository::open(path).ok());
+        .ok_or_else(|| "cannot read transfer history: no repository".to_string())
+        .and_then(|path| Repository::open(path).map_err(|error| error.to_string()));
     let history = repo.as_ref().map(|repo| TransferHistory {
         repo,
         records: RefCell::default(),
@@ -300,7 +310,7 @@ pub(super) fn read(graph: &Graph) -> Transfers {
         {
             let result = history
                 .as_ref()
-                .ok_or_else(|| "cannot read transfer history".to_string())
+                .map_err(|error| error.to_string())
                 .and_then(|history| resolve(history, graph, source, criterion));
             transfers.insert((source.id.clone(), criterion.id.clone()), result);
         }
@@ -339,11 +349,11 @@ pub(super) fn close_source(
         .find(|(id, _)| id == &criterion.id)
         .map(|(_, result)| result)
         .ok_or("a transferred criterion needs its own waiver")?;
-    let repo = graph
+    let repository = graph
         .repository
         .as_ref()
-        .and_then(|path| Repository::open(path).ok())
         .ok_or("cannot read transfer history")?;
+    let repo = Repository::open(repository).map_err(|error| error.to_string())?;
     if result.outcome != "waived" {
         return Err(
             "a transferred criterion needs a waiver naming the commit that records the transfer"
