@@ -150,7 +150,7 @@ class WorkflowTests(unittest.TestCase):
     def test_schedule_discovers_lines_and_calls_the_runner_without_write_permissions(self):
         scheduler = workflow("windows-daily")
         self.assertIn('cron: "23 6 * * *"', scheduler)
-        self.assertIn("run: python3 -B scripts/windows-daily.py discover", scheduler)
+        self.assertIn("run: python3 -I -B scripts/windows-daily.py discover", scheduler)
         self.assertIn("matrix: ${{ fromJSON(needs.sources.outputs.matrix) }}", scheduler)
         self.assertIn("uses: ./.github/workflows/windows-daily-run.yml", scheduler)
         self.assertIn("source-sha: ${{ matrix.sha }}", scheduler)
@@ -273,6 +273,52 @@ class ActiveLineTests(unittest.TestCase):
             raise subprocess.CalledProcessError(128, "git")
         with self.assertRaises(subprocess.CalledProcessError):
             daily.select_active({"include": [{"ref": LINE, "sha": SHA, "key": "k"}]}, NEEDS, read)
+
+
+class DailyCacheTests(unittest.TestCase):
+    """A daily job runs a line's code under github.ref = main, so whatever it saved
+    would land in main's cache scope, where main's own runs restore it."""
+
+    def steps_using(self, action):
+        pattern = rf"^      - uses: {re.escape(action)}@[^\n]*\n((?:        .*\n)*)"
+        return re.findall(pattern, workflow("windows-daily-run"), re.M)
+
+    def test_each_rust_cache_restores_and_never_saves(self):
+        steps = self.steps_using("Swatinem/rust-cache")
+        self.assertEqual(len(steps), 2)
+        for step in steps:
+            self.assertIn("save-if: false", step)
+            self.assertNotIn("cache-on-failure", step)
+
+    def test_node_uses_no_package_cache(self):
+        steps = self.steps_using("actions/setup-node")
+        self.assertEqual(len(steps), 1)
+        self.assertIn("package-manager-cache: false", steps[0])
+        self.assertNotRegex(steps[0], r"(?m)^\s*(cache|cache-dependency-path):")
+
+    def test_a_new_action_in_a_daily_workflow_needs_a_decision_here(self):
+        """Actions with no cache, or whose cache the two tests above pin. Artifacts
+        belong to their own run."""
+        known = {"actions/checkout", "actions/upload-artifact", "actions/download-artifact", "actions/setup-node",
+                 "Swatinem/rust-cache", "taiki-e/install-action", "msys2/setup-msys2",
+                 "./.github/workflows/windows-daily-run.yml"}
+        for name in ("windows-daily", "windows-daily-run"):
+            used = set(re.findall(r"uses: ([^@\s]+)", workflow(name)))
+            self.assertLessEqual(used, known, name)
+
+    def test_msys2_saves_before_any_line_code_runs(self):
+        """setup-msys2 keeps its cache on, since it has no post step and so saves
+        inside its own step. Only the identity check, from the scheduler's code, runs first."""
+        job = jobs(workflow("windows-daily-run"))["windows-tests"]
+        before = job[:job.index("uses: msys2/setup-msys2@")]
+        commands = re.findall(r"^        run: (.*)$", before, re.M)
+        self.assertEqual(len(commands), 1, commands)
+        self.assertIn("../runner/scripts/windows-daily.py identity", commands[0])
+
+    def test_the_reporting_script_runs_isolated(self):
+        for name in ("windows-daily", "windows-daily-run"):
+            for command in re.findall(r"^\s*run: (.*windows-daily\.py.*)$", workflow(name), re.M):
+                self.assertRegex(command, r"^python3? -I -B ", command)
 
 
 # A hook or a gate may set these; each journey names its own repository.
