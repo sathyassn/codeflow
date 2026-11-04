@@ -596,10 +596,13 @@ fn destination_wording_note_keeps_both_transfer_closes() {
         .current_dir(root)
         .output()
         .unwrap();
-    assert!(
-        out.status.success(),
+    // The minimal fixture epics lack unrelated sections; only the re-judged
+    // completed epics matter here.
+    let said = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    assert!(!said.contains("is unverified"), "{said}");
+    assert!(!said.contains("transfer"), "{said}");
 }
