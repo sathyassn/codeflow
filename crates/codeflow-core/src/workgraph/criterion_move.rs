@@ -310,7 +310,7 @@ pub(super) fn read(graph: &Graph) -> Transfers {
         {
             let result = history
                 .as_ref()
-                .map_err(|error| error.to_string())
+                .map_err(|error| (*error).clone())
                 .and_then(|history| resolve(history, graph, source, criterion));
             transfers.insert((source.id.clone(), criterion.id.clone()), result);
         }
