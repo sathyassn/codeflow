@@ -235,7 +235,10 @@ Codex's project-trust dialog naming this trial's exact materialized subject
 path (see the [Codex trust renderer][codex-trust]). It re-reads the visible
 pane before each selection key and confirmation, requires the affirmative
 choice visibly selected for menu dialogs, and records harness, path,
-screen-text SHA-256 and time in `trust_acceptances`. This implements
+screen-text SHA-256 and time in `trust_acceptances`. After its one
+selection key it polls the visible pane for up to 3 seconds until the
+affirmative choice shows (Claude Code 2.1.318 can take longer than one
+repaint), and otherwise refuses without Enter. This implements
 the operator's standing authorization for harness-created disposable samples.
 A different path, truncated path, import dialog or other trust prompt
 refuses. The kit never writes trust grants into config. This workspace
@@ -321,6 +324,7 @@ proven by the release harness, with one of these sets of rows under it:
 | a context row, then the mode row | any |
 | the branch row with the editor hint, then the mode row | with input only |
 | the status line, the mode row, then the editor hint on its own row | with input only |
+| the status line with the editor hint on the same row, then the mode row (Claude Code 2.1.318) | with input only |
 
 - The mode row is manual, auto or bypass mode, or `paste again to expand`.
 - A context row is `codeflow-qualify`, Claude Code's own branch row, or

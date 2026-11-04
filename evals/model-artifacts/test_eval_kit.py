@@ -6053,6 +6053,70 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual(1, runner.deliver_claude("owned", prompt, {}, 1, branch, None, status))
         self.assertEqual(1, sum(c.args[:2] == ("pane", "send-keys") for c in transport.call_args_list))
 
+    def test_claude_2_1_318_trust_waits_for_the_moved_selection(self):
+        runner = self.runner()
+        # Captured from a refused TSK-445 launch on 2026-11-04: Claude Code
+        # 2.1.318 opens the dialog on "No, exit" when the fixture pre-approves
+        # tools, and the cursor had not moved 0.2 s after one Down.
+        no = (ROOT / "evals/qualification/screens/claude-2.1.318-trust-no-selected.txt").read_text(encoding="utf-8")
+        path = Path("/private/tmp/tsk445-native-retry-cand/run-subjects/fbf7a7f6c8ff1ec52335/repository")
+        self.assertEqual("no", runner.trust_choice(no, "claude", path))
+        # One Down a second later showed this frame (the cursor on the second row).
+        yes = no.replace(" ❯ No, exit\n   Yes, I trust this folder", "   No, exit\n ❯ Yes, I trust this folder")
+        self.assertEqual("yes", runner.trust_choice(yes, "claude", path))
+        # The first read after the key still shows "no"; the poll waits for "yes".
+        with patch.object(runner, "herdr", side_effect=[no, {}, no, no, yes, {}]) as transport, \
+             patch.object(runner.time, "sleep"):
+            event = runner.accept_workspace_trust("own-pane", "claude", path, no)
+        keys = [c.args[-1] for c in transport.call_args_list if c.args[:2] == ("pane", "send-keys")]
+        self.assertEqual(["Down", "Enter"], keys)
+        self.assertEqual("sha256:" + hashlib.sha256(yes.encode()).hexdigest(), event["screen_sha256"])
+        # A selection that never moves refuses after the bound, with one key only.
+        reads = lambda *args, **kwargs: {} if args[:2] == ("pane", "send-keys") else no
+        with patch.object(runner, "herdr", side_effect=reads) as transport, patch.object(runner.time, "sleep"), \
+             patch.object(runner.time, "monotonic", side_effect=[0, 1, 2, 3.5]), \
+             self.assertRaisesRegex(runner.Refused, "not visibly selected within 3 s"):
+            runner.accept_workspace_trust("own-pane", "claude", path, no)
+        self.assertEqual(["Down"], [c.args[-1] for c in transport.call_args_list if c.args[:2] == ("pane", "send-keys")])
+        # Another screen during the wait still refuses without Enter.
+        with patch.object(runner, "herdr", side_effect=[no, {}, no, "Allow external CLAUDE.md file imports?"]) as transport, \
+             patch.object(runner.time, "sleep"), self.assertRaises(runner.Refused):
+            runner.accept_workspace_trust("own-pane", "claude", path, no)
+        self.assertEqual(["Down"], [c.args[-1] for c in transport.call_args_list if c.args[:2] == ("pane", "send-keys")])
+
+    def test_claude_2_1_318_hint_on_the_status_line_row_holds_only_the_prompt(self):
+        runner = self.runner()
+        # Captured from a refused TSK-445 launch on 2026-11-04 (Claude Code
+        # 2.1.318): the ready frame, then the pasted prompt with the editor
+        # hint drawn on the status line row instead of a row of its own.
+        ready = (ROOT / "evals/qualification/screens/claude-2.1.318-status-line-ready.txt").read_text(encoding="utf-8")
+        pending = (ROOT / "evals/qualification/screens/claude-2.1.318-status-line-hint-pending.txt").read_text(encoding="utf-8")
+        branch = "fixture/work"
+        status = {"model": "claude-opus-5-5", "folder": "repository"}
+        prompt = "Open a review page that explains how our job retries work, so I can sign off on the design.\n"
+        hinted = next(line for line in pending.splitlines() if "ctrl+g to edit in Nvim" in line)
+        self.assertTrue(hinted.startswith("  Opus 5.5 (claude-opus-5-5) | v2.1.318 |"))
+        self.assertEqual('Try "fix typecheck errors"', runner.editor(ready, branch, status))
+        self.assertTrue(runner.holds(runner.editor(pending, branch, status), prompt))
+        # It still refuses an editor that does not hold this prompt.
+        self.assertFalse(runner.holds(runner.editor(pending, branch, status), "Another prompt.\n"))
+        draft = next(line for line in pending.splitlines() if line.startswith("❯"))
+        for editor_line in ['❯ Try "fix typecheck errors"', "❯ "]:
+            self.assertIsNone(runner.editor(pending.replace(draft, editor_line), branch, status), editor_line)
+        # And a hinted row for another model, branch or folder, or a reworded hint.
+        for bad in [hinted.replace("claude-opus-5-5", "claude-sonnet-5-5"),
+                    hinted.replace("(fixture/work)", "(fixture/other)"),
+                    hinted.replace(" repository ", " other "),
+                    hinted.replace("ctrl+g to edit in Nvim", "allow import"),
+                    hinted.replace("ctrl+g to edit in Nvim", "ctrl+g to edit in Vim"),
+                    hinted.replace("(0%)                       ctrl+g", "(0%)ctrl+g")]:
+            self.assertIsNone(runner.editor(pending.replace(hinted, bad), branch, status), bad)
+        # Delivery: the captured ready frame, then the captured pending frame, then one Enter.
+        with patch.object(runner, "herdr", side_effect=[ready, "sent", pending, "sent"]) as transport, \
+             patch.object(runner, "started", return_value=True), patch.object(runner.time, "sleep"):
+            self.assertEqual(1, runner.deliver_claude("owned", prompt, {}, 1, branch, None, status))
+        self.assertEqual(1, sum(c.args[:2] == ("pane", "send-keys") for c in transport.call_args_list))
+
     def test_claude_readiness_waits_for_renderer_then_verified_editor(self):
         runner = self.runner(); events = []; displays = []
         screen = self.renderer_screen(); selected = self.renderer_screen(True)

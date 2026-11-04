@@ -1,0 +1,23 @@
+sathya@BlackSwan-mPro repository % claude --model opus --effort high --permission-mode auto
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ /private/tmp/tsk445-native-retry-cand/run-subjects/fbf7a7f6c8ff1ec52335/repository
+
+ Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your
+ team). If not, take a moment to review what's in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ ⚠ This folder pre-approves 58 tool permissions in .claude/settings.json:
+   WebSearch, WebFetch, Bash(cargo *), Bash(codeflow *), Bash(git add *), Bash(git commit *), Bash(git checkout *), Bash(git switch *), and 50
+ more
+ These will apply without asking. Only proceed if you trust this configuration.
+
+ Security guide
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel
