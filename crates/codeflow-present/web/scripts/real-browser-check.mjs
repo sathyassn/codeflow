@@ -239,7 +239,7 @@ try {
     await page.getByTestId("composer").waitFor({ state: "detached" });
   };
 
-  await page.getByRole("button", { name: "Pick element" }).click();
+  await page.getByRole("button", { name: "Pick part" }).click();
   await page.locator("code[data-cf-language='rust']").click();
   await saveComposerNote("Keep the implementation example aligned with the verified contract.");
 

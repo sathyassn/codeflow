@@ -45,6 +45,26 @@ fn assert_passes(root: &Path, which: &str, shell: &str) {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn clears_secret_selection() {
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    write(root, "src/public.txt", "token\n");
+    std::os::unix::fs::symlink("loop", root.join("loop")).unwrap();
+    let printed = refused(
+        root,
+        "exec-guard",
+        "grep -r token loop",
+        "security.secret_reads",
+        "SECRET_SELECTION",
+    );
+    assert!(printed.contains("narrow the search roots"));
+    assert_passes(root, "exec-guard", "grep -r token src");
+    let output = run("grep", root, &["-r", "token", "src"]);
+    assert!(String::from_utf8(output.stdout).unwrap().contains("token"));
+}
+
 /// The block a guard prints for `bad`, checked against the row.
 fn refused(root: &Path, which: &str, bad: &str, finding: &str, row: &str) -> String {
     let out = guard(root, which, bad);

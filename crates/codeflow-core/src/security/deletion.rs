@@ -109,10 +109,9 @@
 //! path that exists is also judged where it really lands (the real path of
 //! its longest existing prefix), so a link to `/` is `/`.
 //!
-//! **Residual (ADR-0009).** A value from the environment or the output of
-//! a command the reader does not run (`$(git rev-parse …)`) is judged by
-//! its spelling and passes; `read` is the exception above, since the
-//! builtin exists to take such a value. The deletions inside a sourced
+//! **Unread values.** Output of an unmodeled command is unknown, never a
+//! literal path containing the command's spelling. A recursive deletion
+//! using it refuses as unproven. The deletions inside a sourced
 //! file, a program in another language, or a function a sourced file
 //! defines are not seen.
 
@@ -173,6 +172,7 @@ fn read_deletion(command: &str, base: Option<&Path>, rooted_unplaced: bool) -> O
         traps: Vec::new(),
         in_trap: false,
         status: None,
+        script_states: Vec::new(),
     };
     let mut state = State::start();
     reader.script(command, &mut state);
@@ -1857,6 +1857,8 @@ mod why {
     pub const NAMEREF: &str = "a name reference (`declare -n`)";
     pub const COMMAND: &str = "a command whose name the guard cannot resolve";
     pub const NAME: &str = "a variable name the guard cannot resolve";
+    pub const SCRIPT_READINGS: &str =
+        "shell code exceeds the bounded directory and variable reading";
     pub const EVAL: &str = "`eval` of text the guard cannot resolve";
     pub const ALIAS: &str = "an alias the guard cannot resolve";
     pub const DEPTH: &str = "a function call or nested script deeper than the guard follows";
@@ -2138,9 +2140,9 @@ impl State {
     /// Change directory. A `cd` to a literal path gives a known directory
     /// again, even after a construct made it unknown.
     fn set_cwd(&mut self, cwd: Values) {
-        let cwd = bounded(cwd);
+        let cwd = bounded_directories(cwd);
         self.oldpwd = std::mem::replace(&mut self.cwd, cwd);
-        self.visited = bounded(self.visited.union(&self.cwd).cloned().collect());
+        self.visited = bounded_directories(self.visited.union(&self.cwd).cloned().collect());
     }
 
     /// A construct that may change any variable and the working directory
@@ -2222,9 +2224,9 @@ impl State {
             let joined: Values = self.var(&name).union(&other.var(&name)).cloned().collect();
             self.vars.insert(name, bounded(joined));
         }
-        self.cwd = bounded(self.cwd.union(&other.cwd).cloned().collect());
-        self.oldpwd = bounded(self.oldpwd.union(&other.oldpwd).cloned().collect());
-        self.visited = bounded(self.visited.union(&other.visited).cloned().collect());
+        self.cwd = bounded_directories(self.cwd.union(&other.cwd).cloned().collect());
+        self.oldpwd = bounded_directories(self.oldpwd.union(&other.oldpwd).cloned().collect());
+        self.visited = bounded_directories(self.visited.union(&other.visited).cloned().collect());
         self.arg0 = bounded(self.arg0.union(&other.arg0).cloned().collect());
         let unset: Values = [String::new()].into();
         let len = self.args.len().max(other.args.len());
@@ -2370,7 +2372,17 @@ impl State {
 /// Keep at most [`MAX_VALUES`], protected and unknown values first; a set
 /// that had to drop values also holds an unknown one.
 fn bounded(values: Values) -> Values {
-    if values.len() <= MAX_VALUES {
+    bounded_to(values, MAX_VALUES)
+}
+
+/// Directory alternatives also bound the PWD-by-cwd product at a later
+/// deletion. Preserve protected values and an unknown for any omitted path.
+fn bounded_directories(values: Values) -> Values {
+    bounded_to(values, super::composed::paths::MAX_SCRIPT_READINGS)
+}
+
+fn bounded_to(values: Values, limit: usize) -> Values {
+    if values.len() <= limit {
         return values;
     }
     let (mut kept, rest): (Values, Values) = values
@@ -2378,7 +2390,7 @@ fn bounded(values: Values) -> Values {
         .partition(|value| unproven(value).is_some() || dangerous_rm_target(value).is_some());
     kept.insert(taint(why::MANY));
     for value in rest {
-        if kept.len() >= MAX_VALUES {
+        if kept.len() >= limit {
             break;
         }
         kept.insert(value);
@@ -2535,6 +2547,9 @@ struct Reader<'a> {
     /// Where the last simple command left the line when it succeeds and
     /// when it fails, when those differ (a `cd` that may fail).
     status: Option<Status>,
+    /// Concrete readings of inline bodies share the same per-line budget as
+    /// the checkout expansion reader. Repeated state/text pairs cost once.
+    script_states: Vec<(State, String)>,
 }
 
 /// The working directory and `OLDPWD` after a `cd` that succeeds and
@@ -2602,9 +2617,33 @@ impl Reader<'_> {
         // value unknown, so a deletion there is still judged.
         if self.depth > MAX_DEPTH {
             if st.wild.is_some() {
+                if st.wild == Some(why::SCRIPT_READINGS) {
+                    self.report(
+                        Judged::Unproven(Unproven {
+                            reason: why::SCRIPT_READINGS.into(),
+                            cwd: false,
+                        }),
+                        false,
+                    );
+                }
                 return;
             }
             st.go_wild(why::DEPTH);
+        }
+        if self.depth > 0
+            && !self
+                .script_states
+                .iter()
+                .any(|(before, text)| before == st && text == script)
+        {
+            if self.script_states.len() >= super::composed::paths::MAX_SCRIPT_READINGS {
+                // Keep inspecting the body for literal protected deletions,
+                // but stop multiplying concrete directory/variable readings.
+                // A later deletion through those unknown values refuses.
+                st.go_wild(why::SCRIPT_READINGS);
+            } else {
+                self.script_states.push((st.clone(), script.to_owned()));
+            }
         }
         self.depth += 1;
         let node = Parser::parse(script);
@@ -3378,6 +3417,15 @@ impl Reader<'_> {
     ) {
         if self.depth > MAX_DEPTH {
             if st.wild.is_some() {
+                if st.wild == Some(why::SCRIPT_READINGS) {
+                    self.report(
+                        Judged::Unproven(Unproven {
+                            reason: why::SCRIPT_READINGS.into(),
+                            cwd: false,
+                        }),
+                        false,
+                    );
+                }
                 return;
             }
             st.go_wild(why::DEPTH);
@@ -4261,7 +4309,19 @@ impl Reader<'_> {
         forced: bool,
         ambiguous: bool,
     ) {
-        if self.done() || self.depth > MAX_DEPTH {
+        if self.done() {
+            return;
+        }
+        if self.depth > MAX_DEPTH {
+            if st.wild == Some(why::SCRIPT_READINGS) {
+                self.report(
+                    Judged::Unproven(Unproven {
+                        reason: why::SCRIPT_READINGS.into(),
+                        cwd: false,
+                    }),
+                    ambiguous,
+                );
+            }
             return;
         }
         let Some(run) = unwrap(argv) else {
@@ -4285,7 +4345,7 @@ impl Reader<'_> {
         };
         let ambiguous = ambiguous || st.cwd.len() > 1;
         match program_name(first).as_str() {
-            "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash" | "fish" | "mksh" => {
+            name if crate::hooks::git_guard::is_shell(name) => {
                 // A new shell: its own arguments, no function calls.
                 let mut child = st.clone();
                 child.scopes.clear();
@@ -4306,7 +4366,7 @@ impl Reader<'_> {
             }
             "eval" => {
                 let mut child = st.clone();
-                self.child_script(&argv[1..].join(" "), &mut child);
+                self.child_script(&super::composed::paths::eval_body(&argv[1..]), &mut child);
             }
             "rm" => self.judge_rm(&argv, &st, forced, ambiguous),
             "rmdir" | "unlink" | "shred" | "srm" if forced => {
@@ -5067,8 +5127,7 @@ impl Reader<'_> {
                 let kind = if *quoted { Kind::Quoted } else { Kind::Split };
                 match self.substitution(script, st) {
                     Output::Known(outputs) => outputs.into_iter().map(|v| (v, kind)).collect(),
-                    Output::External => vec![(format!("$({script})"), Kind::Quoted)],
-                    Output::Unknown => vec![(taint(why::OUTPUT), Kind::Quoted)],
+                    Output::External | Output::Unknown => vec![(taint(why::OUTPUT), Kind::Quoted)],
                 }
             }
             Part::Array(elements) => {
@@ -5235,6 +5294,15 @@ impl Reader<'_> {
                 "printf" if operands.first().map(String::as_str) != Some("-v") => {
                     printf(operands).map_or(Output::Unknown, |text| Output::Known([text].into()))
                 }
+                // `pwd -P` prints the physical directory, which the logical
+                // set does not hold (TSK-1002 review 06).
+                "pwd"
+                    if operands
+                        .iter()
+                        .any(|a| a.starts_with('-') && a.contains('P')) =>
+                {
+                    Output::Unknown
+                }
                 "pwd" => Output::Known(
                     st.cwd
                         .iter()
@@ -5265,6 +5333,13 @@ impl Reader<'_> {
             "echo" => Output::Known(echo_output(&run.argv[1..])),
             "printf" => {
                 printf(&run.argv[1..]).map_or(Output::Unknown, |text| Output::Known([text].into()))
+            }
+            "pwd"
+                if run.argv[1..]
+                    .iter()
+                    .any(|a| a.starts_with('-') && a.contains('P')) =>
+            {
+                Output::Unknown
             }
             "pwd" => Output::Known(
                 st.cwd
@@ -6142,7 +6217,7 @@ fn builtin_prefix(argv: &[String]) -> Option<(usize, bool)> {
                     at += 1;
                 }
             }
-            Some("noglob" | "nocorrect" | "-") => at += 1,
+            Some(name) if crate::hooks::git_guard::is_shell_modifier(name) => at += 1,
             _ => return Some((at, functions)),
         }
     }
@@ -6826,9 +6901,9 @@ fn runs_remover(argv: &[String], depth: usize) -> bool {
     match program_name(first).as_str() {
         "rm" | "rmdir" | "unlink" | "shred" | "srm" => true,
         "xargs" => runs_remover(after_xargs_options(&run.argv[1..]).command, depth + 1),
-        "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash" | "fish" | "mksh" | "eval" => {
+        name if name == "eval" || crate::hooks::git_guard::is_shell(name) => {
             let script = if program_name(first) == "eval" {
-                run.argv[1..].join(" ")
+                super::composed::paths::eval_body(&run.argv[1..])
             } else {
                 shell_script(&run.argv[1..])
                     .map(|(script, _)| script.to_string())
@@ -7720,6 +7795,59 @@ fn is_name(name: &str) -> bool {
 #[cfg(test)]
 #[cfg_attr(not(unix), allow(dead_code, unused_imports))]
 mod tests {
+    #[test]
+    fn tsk1002_unread_command_output_is_not_a_literal_deletion_path() {
+        for line in [
+            "rm -rf \"$(git rev-parse --show-toplevel)\"",
+            "rm -rf `git rev-parse --show-toplevel`",
+            "rm -rf \"$(git rev-parse --show-toplevel)/.git\"",
+        ] {
+            let finding =
+                super::composed_deletion_in(line, Some(std::path::Path::new("/fixture"))).unwrap();
+            assert!(finding.unproven.is_some(), "{line}");
+        }
+    }
+
+    #[test]
+    fn bounded_shell_readings_keep_literal_deletions_and_repeated_controls() {
+        let repeated = std::iter::repeat_n("eval true", 80)
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(super::composed_deletion_in(&format!("{repeated}; rm -rf build"), None).is_none());
+        let distinct = (0..20)
+            .map(|n| format!("eval 'n={n}'"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let nested = (0..6).fold("rm -rf /".to_string(), |body, _| {
+            format!("eval '{}'", body.replace('\'', "'\\''"))
+        });
+        for tail in [
+            "eval 'rm -rf /'",
+            "sh -c 'rm -rf /'",
+            "rm -rf $n",
+            nested.as_str(),
+        ] {
+            assert!(
+                super::composed_deletion_in(&format!("{distinct}; {tail}"), None).is_some(),
+                "{tail}"
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_directory_alternatives_preserve_late_deletions() {
+        let chain = (0..80)
+            .map(|n| format!("cd d{n}"))
+            .collect::<Vec<_>>()
+            .join(" && ");
+        for tail in ["rm -rf /", "rm -rf $PWD/x", "rm -rf relative"] {
+            assert!(
+                super::composed_deletion_in(&format!("{chain}; {tail}"), None).is_some(),
+                "{tail}"
+            );
+        }
+    }
+
     // R22-DELETION-TESTS-BEGIN
     #[test]
     fn r22_glob_entry_failure_is_unproven() {
@@ -7782,6 +7910,7 @@ mod tests {
                 traps: vec![],
                 in_trap: false,
                 status: None,
+                script_states: Vec::new(),
             };
             let output = std::process::Command::new("/bin/bash")
                 .args(["--noprofile", "--norc", "-c", "printf '%s' ~/ordinary"])
@@ -8102,6 +8231,7 @@ mod tests {
             traps: Vec::new(),
             in_trap: false,
             status: None,
+            script_states: Vec::new(),
         };
         let fed = reader.producer_values(&super::Parser::parse("echo x"), &super::State::start());
         assert!(fed.complete);
@@ -8153,6 +8283,7 @@ mod tests {
             traps: Vec::new(),
             in_trap: false,
             status: None,
+            script_states: Vec::new(),
         };
         let input = super::Fed {
             complete: true,
@@ -8203,6 +8334,7 @@ mod tests {
             traps: Vec::new(),
             in_trap: false,
             status: None,
+            script_states: Vec::new(),
         };
         for expression in ["x\u{a0}=1", "x[0]\u{a0}=1", "+\u{a0}+x"] {
             let mut state = super::State::start();

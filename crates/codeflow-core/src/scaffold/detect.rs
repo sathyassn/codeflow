@@ -105,11 +105,26 @@ impl GitDirHooks {
     /// The setup report line: what stops running, and the adopter's
     /// options. Nothing is moved or deleted.
     #[must_use]
-    pub fn report_note(&self) -> String {
-        format!(
-            "existing git hooks in {dir}: {names}. git no longer runs them once CodeFlow's hooks are wired (core.hooksPath = {CODEFLOW_HOOKS_PATH}); nothing was moved or deleted. For each, choose one: (1) move its check into the project's CI or a supported hook manager (husky, lefthook), then delete the file; (2) keep it: set core.hooksPath to a project-relative hooks folder the project owns, whose hooks call both the check and the CodeFlow shim. `codeflow doctor` warns while they stay in {dir}",
-            dir = self.dir,
-            names = self.names.join(", "),
+    pub fn report_note(&self) -> super::Shown {
+        use super::Shown;
+        let dir = Shown::path(&self.dir);
+        // A name is one git runs as a hook ([`GIT_HOOK_NAMES`]), shown as
+        // that list holds it.
+        let names = Shown::join(
+            self.names.iter().filter_map(|name| {
+                GIT_HOOK_NAMES
+                    .iter()
+                    .find(|known| **known == name.as_str())
+                    .map(|known| Shown::fixed(known))
+            }),
+            ", ",
+        );
+        crate::shown!(
+            "existing git hooks in {}: {}. git no longer runs them once CodeFlow's hooks are wired (core.hooksPath = {}); nothing was moved or deleted. For each, choose one: (1) move its check into the project's CI or a supported hook manager (husky, lefthook), then delete the file; (2) keep it: set core.hooksPath to a project-relative hooks folder the project owns, whose hooks call both the check and the CodeFlow shim. `codeflow doctor` warns while they stay in {}",
+            dir,
+            names,
+            Shown::fixed(CODEFLOW_HOOKS_PATH),
+            dir
         )
     }
 }

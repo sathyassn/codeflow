@@ -111,9 +111,6 @@ pub fn run(args: &GitHookArgs) -> i32 {
             );
             return 1;
         }
-        for warning in policy_schema::deprecation_warnings(&root) {
-            eprintln!("{}", warning.line("codeflow commit-msg", "warning"));
-        }
     }
 
     let (policy, _armed) = match Policy::load_effective(&root) {

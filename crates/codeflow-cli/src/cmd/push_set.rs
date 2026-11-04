@@ -2,18 +2,13 @@
 //!
 //! - `codeflow ci` runs once per pushed branch on git data: the range from
 //!   the destination's own history to the pushed sha.
-//! - The tree checks (`codeflow validate --docs` and the test-config targets
-//!   with a `quick` mode) read the working tree, so they run only when a
-//!   pushed sha is the checked-out commit, no tracked file differs from it,
-//!   and the checkout is complete (no sparse checkout, every submodule
-//!   initialized at its recorded commit, no hidden index flags). This path
-//!   runs before any exemption. For other checkouts, only history held by an
-//!   advertised destination branch needs no tree checks. Otherwise the hook
-//!   refuses at `block` and notes the unchecked tree at lower levels; checks are never
-//!   reported as passed for a tree they did not see. Untracked files are part
-//!   of the working checkout and can influence a quick target, which the pass
-//!   line says. The gate uses the strictest level from the working copy,
-//!   HEAD and the destination authority.
+//! - The push set runs no tree checks (TSK-449): `codeflow validate --docs`
+//!   is `codeflow ci`'s own `work.valid_graph` check, and the test-config
+//!   targets belong to `codeflow test`, cited when the pull request is made
+//!   ready. A push is a backup; it neither runs nor waits for a test target.
+//!   The conflict-marker check runs inside each `codeflow ci`; staged
+//!   secrets are refused by the pre-commit hook and by the hosted gitleaks
+//!   scan, not here.
 //! - The hook blocks on what it can see and never claims more: the range
 //!   leaves out only history known to be on the destination: the branch and
 //!   tag tips the push location advertises now (one `git ls-remote`, never
@@ -182,8 +177,6 @@ fn run_checked_with_binary(
         }
     }
 
-    run_tree_checks(&exe, root, &destination, &pushed, report, &mut steps)?;
-
     let total = started.elapsed();
     if let Some(note) = git_hook::over_budget_note(&steps, total, git_hook::PUSH_SET_BUDGET) {
         report.notes.push(note);
@@ -192,140 +185,6 @@ fn run_checked_with_binary(
         .status
         .push(format!("push set finished in {:.1}s", total.as_secs_f64()));
     Ok(())
-}
-
-/// Check the working checkout only for commits it represents; refuse any
-/// unchecked pushed tree at block and retain an explicit note at lower levels.
-fn run_tree_checks(
-    exe: &Path,
-    root: &Path,
-    destination: &Destination<'_>,
-    pushed: &[&PushRef],
-    report: &mut StageReport,
-    steps: &mut Vec<PushStep>,
-) -> Result<(), String> {
-    let head = rev_parse(root, "HEAD")?;
-    let policy = tree_policy(root, head.as_deref(), destination)?;
-    if !policy.test_gate_on_push.is_active() {
-        for r in pushed {
-            unchecked_tree(
-                &policy,
-                r,
-                &format!("the gate is {}", policy.test_gate_on_push),
-                report,
-            );
-        }
-        return Ok(());
-    }
-    let inspection = incomplete_checkout(root).and_then(|incomplete| {
-        if let Some(reason) = incomplete {
-            Ok(Some(reason))
-        } else {
-            tracked_tree_clean(root).map(|clean| {
-                (!clean).then(|| "tracked files differ from the checked-out commit".to_string())
-            })
-        }
-    });
-    let reason = match inspection {
-        Ok(reason) => reason,
-        Err(error) => Some(format!("cannot inspect the checkout: {error}")),
-    };
-    let at_head = |r: &&PushRef| reason.is_none() && head.as_deref() == Some(r.local_sha.as_str());
-    if pushed.iter().any(at_head) {
-        run_check(exe, root, &["validate", "--docs"], &policy, report, steps);
-        steps.extend(git_hook::run_push_targets(root, &policy, report));
-    }
-    for r in pushed.iter().filter(|r| !at_head(r)) {
-        let started = Instant::now();
-        let reachability = already_on_destination_branch(root, &r.local_sha, destination);
-        steps.push(PushStep {
-            name: format!(
-                "destination branch ancestry ({})",
-                r.remote_branch().unwrap_or_default()
-            ),
-            duration: started.elapsed(),
-            configurable: false,
-        });
-        if reachability == Ok(true) {
-            report.status.push(format!(
-                "tree checks not needed for '{}': commit {} is already on the destination through an advertised branch",
-                r.remote_branch().unwrap_or_default(),
-                short(&r.local_sha)
-            ));
-            continue;
-        }
-        let mut why = reason
-            .clone()
-            .unwrap_or_else(|| format!("{} is not the checked-out commit", short(&r.local_sha)));
-        if let Err(error) = reachability {
-            write!(why, "; destination branch ancestry is unproven: {error}").unwrap();
-        }
-        unchecked_tree(&policy, r, &why, report);
-    }
-    Ok(())
-}
-
-/// A working-copy edit cannot weaken either committed policy authority.
-fn tree_policy(
-    root: &Path,
-    head: Option<&str>,
-    destination: &Destination<'_>,
-) -> Result<GitPolicy, String> {
-    let mut policy = destination.policy.clone();
-    let committed = match head.map(|head| target_policy(root, head)) {
-        Some(TargetPolicy::Valid(policy)) => policy.test_gate_on_push,
-        Some(TargetPolicy::Malformed(why)) => return Err(format!("HEAD policy {why}")),
-        _ => GitPolicy::default().test_gate_on_push,
-    };
-    let mut levels = vec![committed];
-    if let Some(Ok(anchor)) = destination.anchor.get() {
-        if let TargetPolicy::Valid(authority) = &anchor.policy {
-            levels.push(authority.test_gate_on_push);
-        }
-    }
-    for level in levels {
-        if policy.test_gate_on_push.lower(level) == policy.test_gate_on_push {
-            policy.test_gate_on_push = level;
-        }
-    }
-    Ok(policy)
-}
-
-/// Only locally provable advertised branch ancestry counts. The core reader
-/// disables commit-graph, replace refs and grafts while reading commit objects.
-fn already_on_destination_branch(
-    root: &Path,
-    sha: &str,
-    destination: &Destination<'_>,
-) -> Result<bool, &'static str> {
-    let Advertised::Tips(tips) = destination.advertised(root) else {
-        return Ok(false);
-    };
-    let branches = tips
-        .branches
-        .values()
-        .filter(|tip| tips.commits.contains(tip))
-        .cloned()
-        .collect::<Vec<_>>();
-    codeflow_core::git::commit_reachable_from(root, sha, &branches)
-}
-
-fn unchecked_tree(policy: &GitPolicy, r: &PushRef, why: &str, report: &mut StageReport) {
-    let message = format!(
-        "tree checks (`codeflow validate --docs`, quick targets) did not run for '{}': {why}",
-        r.remote_branch().unwrap_or_default()
-    );
-    if policy.test_gate_on_push == codeflow_core::hooks::PolicyLevel::Block {
-        report.violations.push(violation(
-            policy,
-            message,
-            remedy::PUSH_TREE_REQUIRED.remedy(),
-        ));
-    } else {
-        report
-            .notes
-            .push(Finding::new(message, remedy::PUSH_TREE_UNCHECKED.remedy()));
-    }
 }
 
 fn violation(
@@ -343,12 +202,8 @@ fn violation(
 
 /// How to clear a push-set check: rerun it by hand after fixing its findings.
 fn check_remedy(args: &[&str]) -> codeflow_core::remedy::Remedy {
-    let (clearing, rest) = match args.split_first() {
-        Some((&"validate", rest)) => (&codeflow_core::remedy::PUSH_SET_VALIDATE, rest),
-        Some((_, rest)) => (&codeflow_core::remedy::PUSH_SET_CI, rest),
-        None => (&codeflow_core::remedy::PUSH_SET_CI, args),
-    };
-    clearing.with(&[("args", &rest.join(" "))])
+    let rest = args.split_first().map_or(args, |(_, rest)| rest);
+    codeflow_core::remedy::PUSH_SET_CI.with(&[("args", &rest.join(" "))])
 }
 
 /// Run `codeflow ci` over each pushed ref's range. A release branch is
@@ -443,7 +298,7 @@ fn run_ci_ranges(
             args.extend(["--branch", branch, "--run-level", &running]);
             // Range boundaries can be unnamed merge bases. Pass destination
             // intent separately so CI does not infer it from coincident refs.
-            let into = ci_target(root, r, branch, &judged, policy, report)?;
+            let into = ci_target(root, r, branch, &judged, destination, report)?;
             let into_arg = into.map(|target| format!("--into={target}"));
             // The push's target is the branch itself: its current tip's
             // baseline list governs the record check, not the boundary's,
@@ -483,24 +338,39 @@ fn run_ci_ranges(
 }
 
 /// The target the hook hands `codeflow ci`: the branch's declared target
-/// when the same judgement `codeflow ci` makes accepts it, otherwise the
-/// destination's default.
+/// when it may bound the push's range ([`declared_bounds`]), otherwise the
+/// destination's default. The range and every check that reads the
+/// target, the Outcome marker among them, use the same one, so a
+/// declaration the range rejected never names the target the change is
+/// judged against.
 fn ci_target(
     root: &Path,
     pushed: &PushRef,
     branch: &str,
     judged: &Judged,
-    policy: &GitPolicy,
+    destination: &Destination<'_>,
     report: &mut StageReport,
 ) -> Result<Option<String>, String> {
     use super::ci::Declared;
+    let policy = destination.policy;
+    let mut dropped = false;
     let declared = match super::ci::judged_declared_target(
         root,
         branch,
         &pushed.local_sha,
         &policy.protected_branches,
     )? {
-        Some(Declared::Eligible(target)) => Some(target),
+        Some(Declared::Eligible(target)) if declared_bounds(root, destination, &target) => {
+            Some(target)
+        }
+        Some(Declared::Eligible(target)) => {
+            dropped = true;
+            report.status.push(format!(
+                "declared target '{}' is a protected branch other than the destination's default; the check uses the destination's default target",
+                display_text(&target)
+            ));
+            None
+        }
         Some(Declared::Rejected { target, reason }) => {
             report.status.push(format!(
                 "declared target '{target}' {reason}; the check uses the destination's default target"
@@ -510,6 +380,15 @@ fn ci_target(
         None => None,
     };
     let target = declared.or_else(|| match judged {
+        // A protected declaration the range set aside used to name the
+        // target itself; where the destination's default is no stable line,
+        // the hook hands none, and `codeflow ci` reads that default from
+        // the advertisement, as the range did.
+        Judged::Target { target, .. }
+            if dropped && !codeflow_core::workgraph::is_stable_work_target(target) =>
+        {
+            None
+        }
         Judged::Target { target, .. } => Some(target.clone()),
         _ => None,
     });
@@ -719,7 +598,6 @@ fn release_preflight(
     steps.push(PushStep {
         name: format!("release preflight ({shown_branch})"),
         duration: started.elapsed(),
-        configurable: false,
     });
     match result {
         Ok(outcome) => {
@@ -758,19 +636,8 @@ fn release_preflight(
     }
 }
 
-/// Run one built-in check through this binary and time it.
-fn run_check(
-    exe: &Path,
-    root: &Path,
-    args: &[&str],
-    policy: &GitPolicy,
-    report: &mut StageReport,
-    steps: &mut Vec<PushStep>,
-) {
-    run_check_with(exe, root, args, None, policy, report, steps);
-}
-
-/// As [`run_check`], with `input` on the check's stdin.
+/// Run one built-in check through this binary, with `input` on its stdin,
+/// and time it.
 fn run_check_with(
     exe: &Path,
     root: &Path,
@@ -818,7 +685,6 @@ fn run_check_with(
     steps.push(PushStep {
         name: shown.clone(),
         duration: started.elapsed(),
-        configurable: false,
     });
     match output {
         Ok(out) if out.status.success() => {
@@ -1229,7 +1095,6 @@ impl Destination<'_> {
                 steps.push(PushStep {
                     name: "target policy".to_string(),
                     duration: started.elapsed(),
-                    configurable: false,
                 });
                 anchor
             })
@@ -1520,6 +1385,24 @@ fn range_base(
 /// Match the pull request's base without excluding any destination-missing
 /// commit: the selected base is either an advertised tip or its ancestor.
 /// Line rewrites and unavailable eligible targets retain the historical fallback.
+/// Whether an eligible declared target may bound a push's range and name
+/// the target its checks read: an unprotected line may; a protected branch
+/// only when the destination advertises it as its default branch's tip.
+/// Both the range ([`target_base`]) and the target handed to `codeflow ci`
+/// ([`ci_target`]) ask this, so they never disagree.
+fn declared_bounds(root: &Path, destination: &Destination<'_>, target: &str) -> bool {
+    if !destination.policy.branch_is_protected(target) {
+        return true;
+    }
+    let Advertised::Tips(tips) = destination.advertised(root) else {
+        return false;
+    };
+    matches!(destination.answer(root), Ok(Ok(answer)) if answer
+        .default
+        .as_ref()
+        .is_some_and(|(_, tip)| tips.branches.get(target) == Some(&tip.to_string())))
+}
+
 fn target_base(
     root: &Path,
     r: &PushRef,
@@ -1557,10 +1440,7 @@ fn target_base(
         };
         let target = match declared {
             super::ci::Declared::Eligible(target)
-                if !policy.branch_is_protected(&target)
-                    || default.is_some_and(|(_, tip)| {
-                        tips.branches.get(&target) == Some(&tip.to_string())
-                    }) =>
+                if declared_bounds(root, destination, &target) =>
             {
                 target
             }
@@ -1858,75 +1738,6 @@ fn boundary(listed: &str, local_sha: &str, note: Option<Finding>) -> Option<Rang
         })
 }
 
-/// Why the working checkout is not the whole committed tree, if it is not:
-/// a sparse checkout, or a submodule that is uninitialized, at another
-/// commit or conflicted.
-fn incomplete_checkout(root: &Path) -> Result<Option<String>, String> {
-    let sparse = git(root, &["config", "--bool", "core.sparseCheckout"])?;
-    if sparse.as_deref() == Some("true\n") {
-        return Ok(Some("the checkout is sparse".to_string()));
-    }
-    let entries = git(root, &["ls-files", "-v", "-z", "--recurse-submodules"])?
-        .ok_or("cannot read index flags")?;
-    for entry in entries.split_terminator('\0') {
-        let flag = entry
-            .as_bytes()
-            .first()
-            .copied()
-            .ok_or("missing index flag")?;
-        let bit = if flag.is_ascii_lowercase() {
-            "assume-unchanged"
-        } else if flag == b'S' {
-            "skip-worktree"
-        } else {
-            continue;
-        };
-        let path = entry.get(2..).ok_or("missing index path")?;
-        return Ok(Some(format!(
-            "tracked path {} has {bit} set",
-            codeflow_core::git::GitName::from_text(path).display()
-        )));
-    }
-    // Missing mappings and malformed output are inspection errors.
-    let status = git(root, &["submodule", "status", "--recursive"])?
-        .ok_or("cannot read submodule status")?;
-    for line in status.split_terminator('\n') {
-        if let Some(reason) = submodule_problem(line)? {
-            return Ok(Some(reason));
-        }
-    }
-    Ok(None)
-}
-
-/// The first byte is status, followed by the object id, a space and the
-/// complete path. Initialized entries can append a parenthesized description.
-fn submodule_problem(line: &str) -> Result<Option<String>, String> {
-    let (object, rest) = line
-        .get(1..)
-        .and_then(|text| text.split_once(' '))
-        .ok_or("cannot parse submodule status")?;
-    if !matches!(object.len(), 40 | 64) || !object.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("cannot parse submodule object id".into());
-    }
-    let flag = line.as_bytes()[0];
-    let path = if flag != b'-' && rest.ends_with(')') {
-        rest.rsplit_once(" (").map_or(rest, |(path, _)| path)
-    } else {
-        rest
-    };
-    let name = codeflow_core::git::GitName::from_text(path);
-    let path = name.display();
-    match flag {
-        b'-' => Ok(Some(format!("submodule {path} is not initialized"))),
-        b'+' => Ok(Some(format!(
-            "submodule {path} is not at its recorded commit"
-        ))),
-        b'U' => Ok(Some(format!("submodule {path} has merge conflicts"))),
-        b' ' => Ok(None),
-        _ => Err("cannot parse submodule status flag".into()),
-    }
-}
-
 /// Git for the hook's own queries: never fetches a missing object, even in
 /// a partial clone.
 ///
@@ -2026,25 +1837,6 @@ fn rev_parse(root: &Path, rev: &str) -> Result<Option<String>, String> {
 
 fn is_commit(root: &Path, sha: &str) -> Result<bool, String> {
     Ok(rev_parse(root, sha)?.is_some())
-}
-
-/// `true` when no tracked file differs from the checked-out commit.
-fn tracked_tree_clean(root: &Path) -> Result<bool, String> {
-    Ok(git(
-        root,
-        &[
-            "-c",
-            "core.fsmonitor=false",
-            "-c",
-            "diff.ignoreSubmodules=none",
-            "status",
-            "--porcelain",
-            "--untracked-files=no",
-            "--ignore-submodules=none",
-        ],
-    )?
-    .ok_or("cannot read worktree status")?
-    .is_empty())
 }
 
 fn short(sha: &str) -> &str {

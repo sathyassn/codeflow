@@ -9,13 +9,15 @@
 
 use std::path::Path;
 
-use crate::testing::config::{load_test_config, ExecutionConfig, TargetConfig};
+use crate::testing::config::{
+    self, load_named_test_config, load_test_config, ExecutionConfig, TargetConfig,
+};
 use crate::testing::coverage::FileCoverage;
 use crate::testing::delivery;
 pub use crate::testing::delivery::{matches as inputs_match, GateOptions};
 use crate::testing::error::TestingError;
 use crate::testing::report::{CanonicalTestReport, CtrfStatus};
-use crate::testing::runner::{run_dependency_targets, TargetRunResult};
+use crate::testing::runner::TargetRunResult;
 use crate::testing::setup::detect::detect_stacks;
 use crate::testing::validation;
 
@@ -31,8 +33,8 @@ pub struct GateTargetResult {
     pub duration_ms: u64,
     pub stdout: String,
     pub stderr: String,
-    /// Set when the target failed before producing an exit code
-    /// (spawn failure, missing mode, panic).
+    /// Failure detail beyond an ordinary exit code (timeout, signal, runner
+    /// error, or a target that could not run).
     pub error: Option<String>,
     /// Structured failure detail parsed from the target's JUnit/CTRF report
     /// artifact, when one was configured and produced. `None` when the target
@@ -113,6 +115,8 @@ pub enum GateOutcome {
     Completed {
         results: Vec<GateTargetResult>,
         passed: bool,
+        /// Conditions that fail the gate independently of target exit statuses.
+        failure_reasons: Vec<String>,
         coverage: Vec<CoverageReport>,
         /// Targets omitted by selection or CI configuration.
         skipped: Vec<String>,
@@ -189,10 +193,38 @@ fn run_gate_resolved(
             mode.to_string()
         }
     };
+    if let Some(named) = &options.config {
+        let (config, bytes) = load_named_test_config(named)?;
+        if config.targets.is_empty() {
+            return Ok(GateOutcome::NoTargets {
+                reason: format!("{} defines no targets", named.display()),
+            });
+        }
+        let effective = resolve(&config.targets);
+        // Diagnostics name the config this run read, never the default
+        // path it ignored (TSK-1020 review 1).
+        let default = project_dir.join(TEST_CONFIG_PATH);
+        return run_configured(
+            project_dir,
+            mode,
+            options,
+            (config.targets, config.execution, effective),
+            &delivery::digest(&bytes),
+        )
+        .map_err(|error| match error {
+            TestingError::ConfigInvalid { path, message } if path == default => {
+                TestingError::ConfigInvalid {
+                    path: named.clone(),
+                    message,
+                }
+            }
+            other => other,
+        });
+    }
     let config_path = project_dir.join(TEST_CONFIG_PATH);
 
     let has_config = !crate::absence::proven_absent(&config_path)?;
-    let (mut targets, execution, effective_mode) = if has_config {
+    let (targets, execution, effective_mode) = if has_config {
         let config = load_test_config(&config_path)?;
         if config.targets.is_empty() {
             return Ok(GateOutcome::NoTargets {
@@ -219,6 +251,25 @@ fn run_gate_resolved(
     } else {
         delivery::digest(&serde_json::to_vec(&(&targets, &execution))?)
     };
+    run_configured(
+        project_dir,
+        mode,
+        options,
+        (targets, execution, effective_mode),
+        &config_digest,
+    )
+}
+
+/// Select and run `targets` from a loaded config whose evidence binds to
+/// `config_digest`.
+#[allow(clippy::too_many_lines)]
+fn run_configured(
+    project_dir: &Path,
+    mode: &str,
+    options: &GateOptions,
+    (mut targets, execution, effective_mode): (Vec<TargetConfig>, ExecutionConfig, String),
+    config_digest: &str,
+) -> Result<GateOutcome, TestingError> {
     delivery::check_only(project_dir, &targets, &effective_mode, &options.only)?;
     let home = crate::registry::codeflow_home();
     let selection = delivery::select(
@@ -228,7 +279,7 @@ fn run_gate_resolved(
         &effective_mode,
         options,
         home.as_deref(),
-        &config_digest,
+        config_digest,
     );
     for target in &targets {
         let reason = selection.reasons.get(&target.name).map_or_else(
@@ -304,14 +355,24 @@ fn run_gate_resolved(
         &run_dir,
         options.all,
     )?;
+    // Resolve fallback weight before scheduling; the original declarations remain evidence inputs.
+    for target in &mut targets {
+        if mode == "quick" && target.heavy.is_none() {
+            target.heavy = Some(
+                effective_mode == "essential"
+                    || execution.quick_default_class == config::QuickTargetClass::Heavy,
+            );
+        }
+    }
     let before = delivery::tracked(project_dir)?;
-    let raw = run_dependency_targets(
+    let raw = crate::testing::runner::run_dependency_targets_with_admission(
         &targets,
         &effective_mode,
         project_dir,
         &execution,
         &run_dir,
         &declarations,
+        mode == "quick",
     );
     let after = delivery::tracked(project_dir)?;
     // Producers are complete now. This is the named candidate; a writer that
@@ -362,12 +423,12 @@ fn run_gate_resolved(
                     duration_ms: run.duration_ms,
                     stdout: run.stdout,
                     stderr: run.stderr,
-                    error: None,
+                    error: run.error,
                     report,
                 }
             }
             Err(e) => GateTargetResult {
-                name: "(unrunnable)".to_string(),
+                name: "(gate)".to_string(),
                 exit_code: -1,
                 duration_ms: 0,
                 stdout: String::new(),
@@ -378,15 +439,19 @@ fn run_gate_resolved(
         })
         .collect();
 
+    let mut failure_reasons = Vec::new();
     if !generation_unchanged {
-        let changed: Vec<_> = after
-            .iter()
-            .filter(|(p, hash)| before.get(*p) != Some(*hash))
-            .map(|(p, _)| p.as_str())
+        let changed: std::collections::BTreeSet<_> = before
+            .keys()
+            .chain(after.keys())
+            .filter(|path| before.get(*path) != after.get(*path))
+            .map(String::as_str)
             .collect();
+        let changed = changed.into_iter().collect::<Vec<_>>().join(", ");
+        failure_reasons.push(format!("tracked files changed during the gate: {changed}"));
         progress!(
             "[codeflow test] generation changed the candidate: {}",
-            changed.join(", ")
+            changed
         );
     }
     let passed = generation_unchanged && gate_verdict(&results, &coverage);
@@ -424,6 +489,7 @@ fn run_gate_resolved(
         "selection": selection, "passed": passed, "complete": complete, "clean": clean,
         "ci_skipped": ci_skipped,
         "generation_unchanged": generation_unchanged, "dirty_paths": dirty_paths,
+        "failure_reasons": failure_reasons,
         "results": results, "coverage": coverage,
         "targets": targets.iter().map(|t| serde_json::json!({"name":t.name,"command":super::evidence::redact(declarations.iter().find(|d| d.name == t.name).unwrap_or(t), &t.modes[&effective_mode].command),"requires":t.requires})).collect::<Vec<_>>(),
         "environment": {"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"target_dir":target_dir},
@@ -457,6 +523,7 @@ fn run_gate_resolved(
         complete,
         results,
         passed,
+        failure_reasons,
         coverage,
     })
 }
@@ -576,8 +643,13 @@ fn copy_evidence(from: &Path, to: &Path) -> Result<(), TestingError> {
 /// defines the mode (after the `quick` alias) uses the cargo runner or names
 /// `cargo` in its command, or, with no config, a Rust stack is detected. An
 /// unreadable config reads as `false`; [`run_gate`] reports that error itself.
+/// `named` is the config a caller names with `--config`, read instead.
 #[must_use]
-pub fn gate_uses_cargo(project_dir: &Path, mode: &str) -> bool {
+pub fn gate_uses_cargo(project_dir: &Path, mode: &str, named: Option<&Path>) -> bool {
+    if let Some(named) = named {
+        return load_named_test_config(named)
+            .is_ok_and(|(config, _)| any_cargo(&config.targets, mode));
+    }
     let config_path = project_dir.join(TEST_CONFIG_PATH);
     let Ok(absent) = crate::absence::proven_absent(&config_path) else {
         return false; // The actual gate reports this obtaining error.
@@ -593,7 +665,12 @@ pub fn gate_uses_cargo(project_dir: &Path, mode: &str) -> bool {
             Err(_) => return false,
         }
     };
-    let effective = resolve_mode(mode, &targets);
+    any_cargo(&targets, mode)
+}
+
+/// Whether an enabled target that defines `mode` runs cargo.
+fn any_cargo(targets: &[TargetConfig], mode: &str) -> bool {
+    let effective = resolve_mode(mode, targets);
     targets
         .iter()
         .filter(|t| t.enabled)
@@ -1045,11 +1122,12 @@ mod tests {
     fn quick_resolves_to_essential_on_template_config() {
         // Shipped templates (and stack detection) define `essential`/`full`,
         // never `quick`. A `--mode quick` run must resolve to `essential` and
-        // actually execute — the pre-push gate depends on this.
+        // actually execute. This no-op fixture is explicitly light so the
+        // enclosing gate's reservation does not prevent testing mode resolution.
         let dir = tempfile::tempdir().unwrap();
         write_config(
             dir.path(),
-            &format!("[{}]", essential_full_target("ok", "exit 0")),
+            r#"[{"name":"ok","runner":"custom","heavy":false,"modes":{"essential":{"command":"exit 0"},"full":{"command":"exit 0"}}}]"#,
         );
 
         let outcome = run_gate(dir.path(), "quick").unwrap();

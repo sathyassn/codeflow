@@ -53,7 +53,10 @@ Check the preferred seat, then each fallback in the transport order: the
 callee's CLI and an authenticated interactive canary, a reachable Herdr
 server (`herdr status server`), and for Codex the app-server daemon
 (`codex app-server daemon version`). A missing plugin or a missing
-`HERDR_ENV` is not proof that a seat is unavailable.
+`HERDR_ENV` is not proof that a seat is unavailable. Run this check before
+each consult or handoff: an earlier failure or usage-limit message is a lead,
+never a fact (`.codeflow/rules/workflow-discipline.md` "Check changeable
+state live").
 
 If no qualified native route remains, record the unavailable seat and reduced
 assurance; never silently substitute your own vendor or claim duo completion.

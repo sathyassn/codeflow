@@ -1,0 +1,15 @@
+{
+  "composition": {
+    "minWidth": 120,
+    "wideMaxWidth": 720,
+    "narrowMaxWidth": 368,
+    "minHeight": 40,
+    "maxHeight": 2400
+  },
+  "factChecks": [
+    "contains",
+    "count-items",
+    "json"
+  ],
+  "jsonSourceCheck": "json"
+}

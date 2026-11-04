@@ -1,0 +1,1682 @@
+[
+  [
+    "noglob rm -rf .worktrees/w",
+    2,
+    null
+  ],
+  [
+    "noglob eval 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "noglob eval -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "nocorrect rm -rf .worktrees/w",
+    2,
+    null
+  ],
+  [
+    "nocorrect eval - 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "- rm -rf .worktrees/w",
+    2,
+    null
+  ],
+  [
+    "exec rm -rf .worktrees/w",
+    2,
+    null
+  ],
+  [
+    "exec eval - 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "noglob printf x > .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "noglob git commit -m x",
+    2,
+    null
+  ],
+  [
+    "noglob git config core.hooksPath /x",
+    2,
+    2
+  ],
+  [
+    "noglob python3 tool.py .worktrees/w",
+    null,
+    2
+  ],
+  [
+    "nocorrect git commit -m x",
+    2,
+    null
+  ],
+  [
+    "noglob bash -c 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "eval 'rm -rf $PWD/build'",
+    0,
+    0
+  ],
+  [
+    "eval - 'rm -rf $PWD/build'",
+    0,
+    0
+  ],
+  [
+    "eval -- 'rm -rf build'",
+    0,
+    0
+  ],
+  [
+    "eval -- \"rm -rf $PWD/build\"",
+    0,
+    0
+  ],
+  [
+    "bash -c -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "sh -c -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "zsh -c -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "dash -c -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "ksh -c -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -c - 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -ec -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -c -- 'git commit -m x'",
+    2,
+    null
+  ],
+  [
+    "bash -c -- 'git config core.hooksPath /x'",
+    2,
+    2
+  ],
+  [
+    "bash -c -- 'printf x > .claude/settings.json'",
+    2,
+    null
+  ],
+  [
+    "env bash -c -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -c -- \"rm -rf $PWD/.worktrees/w\"",
+    2,
+    null
+  ],
+  [
+    "bash -c -- 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "bash -c -- 'python3 -c \"import shutil;shutil.rmtree(\\\".worktrees/w\\\")\"'",
+    null,
+    2
+  ],
+  [
+    "bash -c -x 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -c +x 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -c -o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "./scripts/evil.sh",
+    null,
+    null
+  ],
+  [
+    "printf 'rm -rf .worktrees/w' > s.sh && chmod +x s.sh && ./s.sh",
+    null,
+    null
+  ],
+  [
+    "bash scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "sh scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "./scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "bash ./scripts/clean.sh",
+    0,
+    0
+  ],
+  [
+    "bash -n scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "bash -x scripts/build.sh arg",
+    0,
+    0
+  ],
+  [
+    "zsh scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "source scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    ". scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "pwsh -Command 'Remove-Item -Recurse -Force .worktrees/w'",
+    null,
+    null
+  ],
+  [
+    "pwsh -Command 'Set-Content .claude/settings.json x'",
+    null,
+    null
+  ],
+  [
+    "dd if=/dev/null of=.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && dd if=/dev/null of=L/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s ../.worktrees/w docs/ && rm -rf docs/w/.claude",
+    2,
+    null
+  ],
+  [
+    "ln -s ../.worktrees/w docs && rm -rf docs/w/.claude",
+    2,
+    null
+  ],
+  [
+    "ln -s $PWD/.worktrees/w docs/ && rm -rf docs/w",
+    2,
+    null
+  ],
+  [
+    "ln -s ../.worktrees/w/.claude docs/ && printf x > docs/.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -st docs ../.worktrees && rm -rf docs/.worktrees/w",
+    2,
+    null
+  ],
+  [
+    "ln -t docs -s ../.worktrees && rm -rf docs/.worktrees/w",
+    2,
+    null
+  ],
+  [
+    "ln --target-directory=docs -s ../.worktrees && rm -rf docs/.worktrees/w",
+    2,
+    null
+  ],
+  [
+    "/bin/ln -s .claude L && printf x > L/settings.json",
+    2,
+    null
+  ],
+  [
+    "/usr/bin/env ln -s .claude L && printf x > L/settings.json",
+    2,
+    null
+  ],
+  [
+    "./ln -s .claude L && printf x > L/settings.json",
+    null,
+    null
+  ],
+  [
+    "/opt/homebrew/bin/gln -s .claude L && printf x > L/settings.json",
+    2,
+    null
+  ],
+  [
+    "/bin/cp -s $PWD/.claude/settings.json S && printf x > S",
+    2,
+    null
+  ],
+  [
+    "/bin/link .claude/settings.json H && printf x > H",
+    2,
+    null
+  ],
+  [
+    "/bin/ln .claude/settings.json H && printf x > H",
+    2,
+    null
+  ],
+  [
+    "/bin/ln -s .worktrees L && python3 tool.py L/w",
+    null,
+    2
+  ],
+  [
+    "cp -l .claude/settings.json H && printf x > H",
+    2,
+    null
+  ],
+  [
+    "cp -l .claude/settings.json H; printf x > H",
+    2,
+    null
+  ],
+  [
+    "cp -al .claude L && printf x > L/settings.json",
+    2,
+    null
+  ],
+  [
+    "cp -Rl .worktrees/w L && printf x > L/.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "cp -l .codeflow/policy.json P && python3 tool.py P",
+    null,
+    2
+  ],
+  [
+    "cp -l .claude/settings.json H && python3 -c \"open('H','w').write('x')\"",
+    null,
+    2
+  ],
+  [
+    "gcp --link .claude/settings.json H && printf x > H",
+    2,
+    null
+  ],
+  [
+    "cp -l src/app.py app2.py && printf x > app2.py",
+    0,
+    0
+  ],
+  [
+    "/bin/ln -s src L && rm -rf L/",
+    0,
+    0
+  ],
+  [
+    "zsh =(echo 'git commit -m x')",
+    2,
+    null
+  ],
+  [
+    "bash =(echo 'git commit -m x')",
+    2,
+    null
+  ],
+  [
+    "sh =(echo 'git push -f origin main')",
+    2,
+    null
+  ],
+  [
+    "bash =(echo 'rm -rf .worktrees/w')",
+    2,
+    null
+  ],
+  [
+    "bash =(echo 'git config core.hooksPath /x')",
+    2,
+    2
+  ],
+  [
+    "env bash =(echo 'git commit -m x')",
+    2,
+    null
+  ],
+  [
+    "bash =(echo 'printf x > .claude/settings.json')",
+    2,
+    null
+  ],
+  [
+    "python3 =(echo 'import shutil; shutil.rmtree(\".worktrees/w\")')",
+    null,
+    2
+  ],
+  [
+    "bash <(echo 'git commit -m x')",
+    2,
+    null
+  ],
+  [
+    "bash -c -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -c -- 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "bash -c -- 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "bash -c - 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -c - 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "bash -c - 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "bash -ec -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -ec -- 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "bash -ec -- 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "bash -c -x 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -c -x 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "bash -c -x 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "bash -c +x 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -c +x 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "bash -c +x 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "bash -c -o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -c -o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "bash -c -o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "bash -c +o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -c +o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "bash -c +o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "bash -c -O extglob 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -c -O extglob 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "bash -c -O extglob 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "bash -c +O extglob 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -c +O extglob 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "bash -c +O extglob 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "sh -c -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "sh -c -- 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "sh -c -- 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "sh -c - 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "sh -c - 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "sh -c - 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "sh -ec -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "sh -ec -- 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "sh -ec -- 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "sh -c -x 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "sh -c -x 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "sh -c -x 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "sh -c +x 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "sh -c +x 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "sh -c +x 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "sh -c -o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "sh -c -o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "sh -c -o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "sh -c +o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "sh -c +o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "sh -c +o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "sh -c -O extglob 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "sh -c -O extglob 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "sh -c -O extglob 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "sh -c +O extglob 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "sh -c +O extglob 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "sh -c +O extglob 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "zsh -c -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "zsh -c -- 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "zsh -c -- 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "zsh -c - 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "zsh -c - 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "zsh -c - 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "zsh -ec -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "zsh -ec -- 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "zsh -ec -- 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "zsh -c -x 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "zsh -c -x 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "zsh -c -x 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "zsh -c +x 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "zsh -c +x 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "zsh -c +x 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "zsh -c -o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "zsh -c -o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "zsh -c -o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "zsh -c +o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "zsh -c +o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "zsh -c +o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "zsh -c -O extglob 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "zsh -c -O extglob 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "zsh -c -O extglob 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "zsh -c +O extglob 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "zsh -c +O extglob 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "zsh -c +O extglob 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "dash -c -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "dash -c -- 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "dash -c -- 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "dash -c - 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "dash -c - 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "dash -c - 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "dash -ec -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "dash -ec -- 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "dash -ec -- 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "dash -c -x 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "dash -c -x 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "dash -c -x 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "dash -c +x 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "dash -c +x 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "dash -c +x 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "dash -c -o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "dash -c -o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "dash -c -o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "dash -c +o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "dash -c +o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "dash -c +o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "dash -c -O extglob 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "dash -c -O extglob 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "dash -c -O extglob 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "dash -c +O extglob 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "dash -c +O extglob 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "dash -c +O extglob 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "ksh -c -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "ksh -c -- 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "ksh -c -- 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "ksh -c - 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "ksh -c - 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "ksh -c - 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "ksh -ec -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "ksh -ec -- 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "ksh -ec -- 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "ksh -c -x 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "ksh -c -x 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "ksh -c -x 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "ksh -c +x 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "ksh -c +x 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "ksh -c +x 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "ksh -c -o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "ksh -c -o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "ksh -c -o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "ksh -c +o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "ksh -c +o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "ksh -c +o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "ksh -c -O extglob 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "ksh -c -O extglob 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "ksh -c -O extglob 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "ksh -c +O extglob 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "ksh -c +O extglob 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "ksh -c +O extglob 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "env bash -c -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "env bash -c -- 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "env bash -c -- 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "env bash -c - 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "env bash -c - 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "env bash -c - 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "env bash -ec -- 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "env bash -ec -- 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "env bash -ec -- 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "env bash -c -x 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "env bash -c -x 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "env bash -c -x 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "env bash -c +x 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "env bash -c +x 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "env bash -c +x 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "env bash -c -o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "env bash -c -o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "env bash -c -o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "env bash -c +o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "env bash -c +o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "env bash -c +o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "env bash -c -O extglob 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "env bash -c -O extglob 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "env bash -c -O extglob 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "env bash -c +O extglob 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "env bash -c +O extglob 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "env bash -c +O extglob 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "/bin/ln .claude/settings.json H && dd if=/dev/null of=H",
+    2,
+    null
+  ],
+  [
+    "/bin/ln src/app.py H && dd if=/dev/null of=H",
+    0,
+    0
+  ],
+  [
+    "/bin/link .claude/settings.json H && dd if=/dev/null of=H",
+    2,
+    null
+  ],
+  [
+    "/bin/link src/app.py H && dd if=/dev/null of=H",
+    0,
+    0
+  ],
+  [
+    "cp -l .claude/settings.json H && dd if=/dev/null of=H",
+    2,
+    null
+  ],
+  [
+    "cp -l src/app.py H && dd if=/dev/null of=H",
+    0,
+    0
+  ],
+  [
+    "cp -al .claude/settings.json H && dd if=/dev/null of=H",
+    2,
+    null
+  ],
+  [
+    "cp -al src/app.py H && dd if=/dev/null of=H",
+    0,
+    0
+  ],
+  [
+    "cp -Rl .claude/settings.json H && dd if=/dev/null of=H",
+    2,
+    null
+  ],
+  [
+    "cp -Rl src/app.py H && dd if=/dev/null of=H",
+    0,
+    0
+  ],
+  [
+    "gcp --link .claude/settings.json H && dd if=/dev/null of=H",
+    2,
+    null
+  ],
+  [
+    "gcp --link src/app.py H && dd if=/dev/null of=H",
+    0,
+    0
+  ],
+  [
+    "source <(cat script.sh)",
+    0,
+    0
+  ],
+  [
+    "bash <(cat script.sh)",
+    0,
+    0
+  ],
+  [
+    "mystery-program -c \"hello\"",
+    0,
+    0
+  ],
+  [
+    "mystery-program -s < input.txt",
+    0,
+    0
+  ],
+  [
+    "bash -c --",
+    2,
+    2
+  ],
+  [
+    "bash -c -o errexit",
+    2,
+    2
+  ],
+  [
+    "sh -c --",
+    2,
+    2
+  ],
+  [
+    "sh -c -o errexit",
+    2,
+    2
+  ],
+  [
+    "zsh -c --",
+    2,
+    2
+  ],
+  [
+    "zsh -c -o errexit",
+    2,
+    2
+  ],
+  [
+    "dash -c --",
+    2,
+    2
+  ],
+  [
+    "dash -c -o errexit",
+    2,
+    2
+  ],
+  [
+    "ksh -c --",
+    2,
+    2
+  ],
+  [
+    "ksh -c -o errexit",
+    2,
+    2
+  ],
+  [
+    "bash -co errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -co errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "bash -co errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "bash -c +o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "bash -c +o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "bash -c +o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "sh -co errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "sh -co errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "sh -co errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "sh -c +o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "sh -c +o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "sh -c +o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "zsh -co errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "zsh -co errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "zsh -co errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "zsh -c +o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "zsh -c +o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "zsh -c +o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "dash -co errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "dash -co errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "dash -co errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "dash -c +o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "dash -c +o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "dash -c +o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "ksh -co errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "ksh -co errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "ksh -co errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "ksh -c +o errexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "ksh -c +o errexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "ksh -c +o errexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "zsh -c -oerrexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "zsh -c -oerrexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "zsh -c -oerrexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "ksh -c -oerrexit 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "ksh -c -oerrexit 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "ksh -c -oerrexit 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "fish --command='rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "fish --command='python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "fish --command='printf ok'",
+    0,
+    0
+  ],
+  [
+    "fish -C 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "fish -C 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "fish -C 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "fish --init-command 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "fish --init-command 'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "fish --init-command 'printf ok'",
+    0,
+    0
+  ],
+  [
+    "fish --init-command='rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "fish --init-command='python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "fish --init-command='printf ok'",
+    0,
+    0
+  ],
+  [
+    "fish -C'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "fish -C'python3 tool.py .worktrees/w'",
+    null,
+    2
+  ],
+  [
+    "fish -C'printf ok'",
+    0,
+    0
+  ],
+  [
+    "fish -C 'printf ok' -c 'rm -rf .worktrees/w'",
+    2,
+    null
+  ],
+  [
+    "fish -C 'rm -rf .worktrees/w' -c 'printf ok'",
+    2,
+    null
+  ],
+  [
+    "BASH_ENV=<(echo 'rm -rf .worktrees/w') bash -c true",
+    null,
+    2
+  ],
+  [
+    "busybox ln .claude/settings.json H && dd if=/dev/null of=H",
+    2,
+    null
+  ],
+  [
+    "/bin/busybox ln .claude/settings.json H && dd if=/dev/null of=H",
+    2,
+    null
+  ],
+  [
+    "busybox link .claude/settings.json H && dd if=/dev/null of=H",
+    2,
+    null
+  ],
+  [
+    "busybox cp -l .claude/settings.json H && dd if=/dev/null of=H",
+    2,
+    null
+  ],
+  [
+    "env busybox cp -al .claude/settings.json H && dd if=/dev/null of=H",
+    2,
+    null
+  ],
+  [
+    "busybox ln -s .worktrees L && rm -rf L/w",
+    2,
+    null
+  ],
+  [
+    "busybox ln -s .worktrees L; python3 tool.py L/w",
+    null,
+    2
+  ],
+  [
+    "busybox ln -s .worktrees L || true; rm -rf L/w",
+    2,
+    null
+  ],
+  [
+    "busybox ln -s .worktrees L & python3 tool.py L/w",
+    null,
+    2
+  ],
+  [
+    "busybox ln -s .worktrees L\nrm -rf L/w",
+    2,
+    null
+  ],
+  [
+    "busybox ln -s src L && printf x > L/app.py",
+    0,
+    0
+  ]
+]

@@ -45,6 +45,22 @@ pub struct TestConfig {
     pub targets: Vec<TargetConfig>,
 }
 
+/// Default class for undeclared targets in a configured quick mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QuickTargetClass {
+    #[default]
+    Light,
+    Heavy,
+}
+
+impl QuickTargetClass {
+    #[allow(clippy::trivially_copy_pass_by_ref)] // Serde skip_serializing_if borrows the field.
+    fn is_light(&self) -> bool {
+        *self == Self::Light
+    }
+}
+
 /// Execution settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionConfig {
@@ -55,6 +71,18 @@ pub struct ExecutionConfig {
     /// Maximum number of concurrently running targets. Omitted uses CPU count.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_parallel: Option<usize>,
+
+    /// Default for undeclared targets in a configured quick mode; fallback stays heavy.
+    #[serde(default, skip_serializing_if = "QuickTargetClass::is_light")]
+    pub quick_default_class: QuickTargetClass,
+
+    /// Maximum wait for heavy quick targets to acquire the shared gate lock.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub heavy_wait_seconds: u64,
+
+    /// Total workers shared by concurrent heavy targets. Omitted leaves tools unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_budget: Option<usize>,
 
     /// Changes to these shared inputs select every target.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -154,6 +182,16 @@ pub struct TargetConfig {
     /// Audited dependencies used to compare an execution with candidate evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<EvidenceConfig>,
+
+    /// Heavy work requires admission in quick mode. False explicitly declares light work.
+    /// Omitted is light in a real quick mode, heavy in quick's essential fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heavy: Option<bool>,
+
+    /// Workers this heavy target needs from `execution.worker_budget` before it starts.
+    /// Omitted targets divide the currently available workers among ready heavy targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workers: Option<usize>,
 
     /// Run with no other target alongside it.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -469,6 +507,11 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires a reference
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
 fn default_true() -> bool {
     true
 }
@@ -496,6 +539,8 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
         "input_class",
         "evidence",
         "exclusive",
+        "heavy",
+        "workers",
     ];
     if let Some(targets) = raw.get("targets").and_then(|targets| targets.as_array()) {
         for (index, target) in targets.iter().enumerate() {
@@ -554,6 +599,12 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
         validate_globs(&rule.include)?;
         validate_globs(&rule.exclude)?;
     }
+    if config.execution.worker_budget == Some(0) {
+        return Err(TestingError::ConfigInvalid {
+            path: path.to_path_buf(),
+            message: "worker_budget must be positive".into(),
+        });
+    }
     if config.execution.max_parallel == Some(0) {
         return Err(TestingError::ConfigInvalid {
             path: path.to_path_buf(),
@@ -563,6 +614,20 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
     let mut seen_names = std::collections::HashSet::new();
     for target in &config.targets {
         validate_globs(&target.narrow)?;
+        if let Some(workers) = target.workers {
+            if workers == 0
+                || target.heavy != Some(true)
+                || config
+                    .execution
+                    .worker_budget
+                    .is_none_or(|budget| workers > budget)
+            {
+                return Err(TestingError::ConfigInvalid {
+                    path: path.to_path_buf(),
+                    message: format!("target '{}': workers requires heavy=true and must be within the positive execution.worker_budget", target.name),
+                });
+            }
+        }
         if !seen_names.insert(&target.name) {
             return Err(TestingError::DuplicateTarget(target.name.clone()));
         }
@@ -689,10 +754,56 @@ pub fn load_test_config(path: &Path) -> Result<TestConfig, TestingError> {
     }
 
     let content = std::fs::read_to_string(path)?;
+    parse_test_config(path, &content)
+}
 
+/// The largest named test config `codeflow test --config` reads.
+const NAMED_CONFIG_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Load the test config a caller names (`codeflow test --config`, TSK-1001
+/// and TSK-1020), with the exact bytes it was parsed from. The path itself
+/// must be a regular file: a missing path, a symbolic link (whatever it
+/// points to), a directory or other special file, and an unreadable or
+/// oversized file are refused, so a caller that names a trusted copy reads
+/// exactly that copy.
+///
+/// # Errors
+///
+/// `ConfigNotFound` for a missing path, `ConfigInvalid` for a link, a file
+/// that is not regular, unreadable or changed while read, and the errors of
+/// [`load_test_config`] for its contents.
+pub fn load_named_test_config(path: &Path) -> Result<(TestConfig, Vec<u8>), TestingError> {
+    let refuse = |message: String| TestingError::ConfigInvalid {
+        path: path.to_path_buf(),
+        message,
+    };
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(TestingError::ConfigNotFound(path.to_path_buf()));
+        }
+        Err(error) => return Err(refuse(format!("cannot be read: {error}"))),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(refuse(
+            "is a symbolic link; name the config file itself".to_string(),
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(refuse("is not a regular file".to_string()));
+    }
+    let bytes = crate::bounded_file::read_bounded_regular(path, NAMED_CONFIG_MAX_BYTES)
+        .map_err(|error| refuse(format!("cannot be read: {error}")))?;
+    let content =
+        String::from_utf8(bytes.clone()).map_err(|_| refuse("is not UTF-8 text".to_string()))?;
+    Ok((parse_test_config(path, &content)?, bytes))
+}
+
+/// Parse and validate test config text read from `path`.
+fn parse_test_config(path: &Path, content: &str) -> Result<TestConfig, TestingError> {
     // First, check schema_version before full parse
     let raw: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| TestingError::ConfigInvalid {
+        serde_json::from_str(content).map_err(|e| TestingError::ConfigInvalid {
             path: path.to_path_buf(),
             message: format!("{e}"),
         })?;
@@ -1041,6 +1152,8 @@ mod tests {
                 input_class: None,
                 evidence: None,
                 exclusive: false,
+                heavy: None,
+                workers: None,
                 runner: RunnerType::Custom,
                 modes: BTreeMap::from([(
                     "full".to_string(),

@@ -4894,6 +4894,49 @@ mod tests {
     }
 
     #[test]
+    fn figure_text_selectors_validate_and_reanchor_like_prose() {
+        let declaration = serde_json::json!({"figure": {
+            "title": "T", "caption": "C",
+            "wide": {"draw": [{"text": "Box 🧭"}]},
+            "narrow": {"draw": [{"text": "Box 🧭"}]},
+            "states": [{"means": "Legend"}]
+        }});
+        let block = crate::document::Block::Figure {
+            id: "words".into(),
+            declaration,
+        };
+        let framing = crate::document::Framing::default();
+        let text = block.canonical_review_text(&framing);
+        let selector = TextSelector {
+            exact: "Box 🧭".into(),
+            prefix: "T\nC\n".into(),
+            suffix: "\nBox 🧭\nLegend".into(),
+            start_utf16: 4,
+            end_utf16: 10,
+        };
+        assert!(validate_selector_anchor(&selector, &text).is_ok());
+        assert!(matches!(
+            reanchor_text(&selector, false, &block, Some(&block), &framing),
+            FeedbackAnchor::Reanchored {
+                start_utf16: 4,
+                end_utf16: 10,
+                changed: false
+            }
+        ));
+        let mut wrong = selector.clone();
+        wrong.start_utf16 = 5;
+        assert!(validate_selector_anchor(&wrong, &text).is_err());
+        let removed = crate::document::Block::Figure {
+            id: "words".into(),
+            declaration: serde_json::json!({"figure": {"title": "Unrelated", "caption": "Other"}}),
+        };
+        assert!(matches!(
+            reanchor_text(&selector, false, &removed, Some(&block), &framing),
+            FeedbackAnchor::BlockFallback { .. }
+        ));
+    }
+
+    #[test]
     fn feedback_resolution_requires_current_version_and_fuzzy_reanchoring_is_marked_changed() {
         let (_temp, store) = store();
         let session = store.create(parsed()).unwrap();

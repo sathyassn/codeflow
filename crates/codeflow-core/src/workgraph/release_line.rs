@@ -1486,7 +1486,11 @@ fn judge(
                     match (source, active_block(&now)) {
                         (Some(source), Some(block)) => {
                             let introduced = introduced_at(&repo, &now, &block, source)?;
-                            let bound = bind_completion(
+                            // The attributed source line is where the task
+                            // landed: a receiving line for its landing merge,
+                            // never a clean-merge stacking authority.
+                            let run = super::acceptance::RunBases::new(default_tip);
+                            let bound = super::acceptance::bind_completion_with_amendment(
                                 &repo,
                                 &now,
                                 &graph,
@@ -1494,6 +1498,9 @@ fn judge(
                                 default_tip,
                                 Transport::TaskLanding,
                                 super::acceptance::source_landing_base(&repo, source, introduced)?,
+                                None,
+                                &run.stacking().with_landing_line(source),
+                                &run.criteria(),
                             )
                             .findings;
                             // Where the task's own line landed it, when the

@@ -18,6 +18,7 @@ run("node", ["--test", "scripts/toolchain.test.mjs", "scripts/likeness.test.mjs"
 await checkSelectorOffsets();
 await checkEntityLabelParity();
 await checkAnswerRuleParity();
+await checkFigureRuleParity();
 
 const scratch = await mkdtemp(join(tmpdir(), "cf-present-check-"));
 try {
@@ -240,4 +241,22 @@ async function treeDigest(root, ignoredNames = []) {
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: webRoot, encoding: "utf8", stdio: "pipe" });
   if (result.status !== 0) throw new Error(`${command} failed\n${result.stdout}\n${result.stderr}`);
+}
+
+async function checkFigureRuleParity() {
+  const { validateDeclaration } = await import("../src/figure-grammar.mjs");
+  const document = JSON.parse(await readFile(join(crateRoot, "tests/fixtures/contract-v2/documents/v2-framed.json"), "utf8"));
+  const original = document.blocks.find(block => block.type === "figure").declaration;
+  for (const [variant, width, valid] of [["wide", 119, false], ["wide", 120, true], ["wide", 720, true], ["wide", 721, false], ["narrow", 368, true], ["narrow", 369, false]]) {
+    const declaration = structuredClone(original);
+    declaration.figure[variant].width = width;
+    let accepted = true;
+    try { validateDeclaration(declaration); } catch { accepted = false; }
+    if (accepted !== valid) throw new Error(`${variant}.width ${width}: expected ${valid}, got ${accepted}`);
+  }
+  const bad = structuredClone(original);
+  bad.figure.facts[0].source = "facts.json";
+  let refused = false;
+  try { validateDeclaration(bad); } catch (error) { refused = error.message.includes("JSON source takes the json check"); }
+  if (!refused) throw new Error("the grammar accepted a contains check on JSON");
 }

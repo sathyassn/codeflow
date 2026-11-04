@@ -209,7 +209,8 @@ fn update_pin_and_doctor_name_an_unparseable_version() {
         );
         let said = text(&refused);
         assert!(
-            said.contains(&format!("`{version}` is not a codeflow version")),
+            said.contains("the `--pin` value is not a codeflow version")
+                && !said.contains(&format!("`{version}`")),
             "{said}"
         );
         assert!(!said.contains("cannot download"), "{version}: {said}");
@@ -249,8 +250,11 @@ fn update_pin_and_doctor_name_an_unparseable_version() {
     );
     let pin = fx.codeflow(&["update", "--pin", "99.0.0"]);
     assert_eq!(pin.status.code(), Some(1), "{}", text(&pin));
+    // The pin is named by its key; the value the project wrote is not shown
+    // (TSK-1029).
     assert!(
-        text(&pin).contains("\"10.0\" is not a parseable version"),
+        text(&pin).contains("scaffold_version is not a parseable version")
+            && !text(&pin).contains("\"10.0\""),
         "{}",
         text(&pin)
     );
@@ -259,7 +263,8 @@ fn update_pin_and_doctor_name_an_unparseable_version() {
 
     let doctor = fx.codeflow(&["doctor", "--check", "ci-perimeter"]);
     assert!(
-        text(&doctor).contains("\"10.0\" is not a parseable version"),
+        text(&doctor).contains("scaffold_version is not a parseable version")
+            && !text(&doctor).contains("\"10.0\""),
         "{}",
         text(&doctor)
     );
@@ -297,13 +302,15 @@ fn update_pin_refuses_a_state_the_installers_would_refuse() {
     .unwrap();
     commit("chore: a note");
     // The line as it stands in the file, after comments and blank lines the
-    // rewrite would drop.
-    let line = format!("line {} (", state.lines().count() + 6);
+    // rewrite would drop, named by number; its text, which the project
+    // wrote, is not shown (TSK-1029).
+    let line = format!("at line {};", state.lines().count() + 6);
     let refused = fx.codeflow(&["update", "--pin", "99.0.0"]);
     assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
     assert!(
         text(&refused).contains("a name with a character outside printable ASCII")
-            && text(&refused).contains(&format!("{line}\"\\\"caf\u{e9}\\\" = \\\"kept\\\"\")"))
+            && text(&refused).contains(&line)
+            && !text(&refused).contains("kept")
             && text(&refused).contains("nothing was written"),
         "{}",
         text(&refused)

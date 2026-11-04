@@ -886,12 +886,10 @@
     "extra-family-review": [
       "operator instruction",
       "complex architecture",
-      "material technical depth",
       "security-sensitive change",
       "capability-sensitive or long-horizon work",
       "unresolved standing-pair disagreement or unclear settlement",
       "consequential or irreversible work",
-      "high or xhigh complexity",
       "standing pair cannot reach justified confidence"
     ]
   },

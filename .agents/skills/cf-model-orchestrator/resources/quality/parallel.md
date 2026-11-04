@@ -23,6 +23,7 @@ before swap pressure, duplicate caches or builds, or context dilution affects
 evidence quality. Never use concurrent writers in one worktree, and never
 rebase a shared integration branch.
 
-Reviewed task heads land together as a batch candidate in dependency order,
-and one full gate runs on that exact candidate before the integration line
-moves. Passing task-local checks does not prove the integration.
+Reviewed task heads land as the `cf-method` skill's "Managing a body of
+work" states; passing task-local checks does not prove the integration.
+Lane sizing and the queue classes are the discipline rules' "Lanes and
+queues".

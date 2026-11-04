@@ -1113,7 +1113,8 @@ fn listed_block_printers() -> std::collections::BTreeMap<String, usize> {
         ("crates/codeflow-cli/src/cmd/report.rs", 1),
         ("crates/codeflow-cli/src/cmd/status.rs", 2),
         ("crates/codeflow-cli/src/cmd/work.rs", 2),
-        ("crates/codeflow-cli/src/main.rs", 4),
+        // update's two report prints share `say_report` (TSK-1029).
+        ("crates/codeflow-cli/src/main.rs", 3),
     ]
     .into_iter()
     .map(|(rel, count)| (rel.to_string(), count))

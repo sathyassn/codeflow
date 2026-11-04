@@ -55,17 +55,17 @@ rounds enter the brief as checks within that pass, never as its whole scope.
 The reviewer returns the verdict, the findings with their remedy, what was
 verified and what was not verified; the verdict names the head it covers and
 what the pass widened. Every review and consult brief, same-family or
-cross-family, follows this contract; `cf-herdr` states how a review seat runs
+cross-family, follows this contract, and the findings it returns live in
+the one findings record linked from the PR; `cf-herdr` states how a review seat runs
 in Herdr.
 
 ### Review rounds
 
-Review is one holistic pass per revision: every assigned reviewer reviews the
-whole change in parallel on that revision, with no minimum or maximum number
-of passes. A round after fixes, or after merging the base, reviews the whole
-unit again at the new head, not only the delta; the one pass that is not a
-round is the probe rerun the workflow discipline rules name under "Review
-verdicts". The builder collects the findings into one dependency-ordered batch
+The review stages, the finder's delta confirmation between them, the one
+final holistic pass, the pre-review sibling sweep and the rule that only
+material findings block are stated once in
+`.codeflow/rules/workflow-discipline.md` "Review verdicts". This section
+covers what the builder does with findings. The builder collects the findings into one dependency-ordered batch
 with provenance preserved, deduplicates them by mechanism, evaluates each
 proposed remedy against the diagnosed mechanism and the impact set, and
 records accept, modify or reject with the reason. Rejecting a remedy never
@@ -79,15 +79,12 @@ fixed in the open task's PR; nits are recorded with a disposition and never
 start another pass.
 
 Apply the accepted batch as one apply-and-verify cycle (stacked dependents from
-Change impact stay separate) and re-verify the impact set. The finder confirms
-each material fix inside its next pass, as "Review verdicts" in
-`.codeflow/rules/workflow-discipline.md` says. Nits need no confirmation. A cycle that introduces an attributable regression is a
-failed cycle. The required gates and the [completion](completion.md) section
+Change impact stay separate) and re-verify the impact set. The finder
+confirms each material fix on the delta, as "Review verdicts" in
+`.codeflow/rules/workflow-discipline.md` says. A cycle that introduces an attributable regression is a failed cycle. The required gates and the [completion](completion.md) section
 are unchanged.
 
-Review ends on evidence: every criterion not marked deferred has evidence on
-the reviewed revision, the needed checks are green, no material finding is
-open and every nit has a disposition. Continue while repairs produce relevant
+Continue while repairs produce relevant
 evidence; diagnose a stalled mechanism, an invalid assumption or a materially
 changed scope, then split, redesign or take the intent question to the
 operator. That decision is never made by a round counter and never by

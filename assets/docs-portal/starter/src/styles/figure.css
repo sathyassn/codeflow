@@ -84,3 +84,12 @@
 .cf-m-limit { stroke: var(--cf-fig-line); stroke-width: 2; stroke-linecap: butt; }
 .cf-m-optional { fill: none; stroke: var(--cf-fig-line-mid); stroke-width: 1.5; stroke-dasharray: 6 4; }
 .cf-m-denied { fill: none; stroke: var(--cf-fig-line-soft); stroke-width: 1.5; stroke-dasharray: 2 4; }
+
+/* Tones (figure-grammar.md section 4): a named peer may carry a companion hue, and a governing region the accent.
+   A tone changes hue only: fill kind, edge, width, dash and shape stay the mark's own, and a label names every toned mark. */
+[data-cf-tone="accent"] { --cf-fig-tone: var(--cf-fig-accent); --cf-fig-tone-soft: var(--cf-fig-accent-soft); }
+[data-cf-tone="cat1"] { --cf-fig-tone: var(--cf-fig-cat1); --cf-fig-tone-soft: var(--cf-fig-cat1-soft); }
+[data-cf-tone="cat2"] { --cf-fig-tone: var(--cf-fig-cat2); --cf-fig-tone-soft: var(--cf-fig-cat2-soft); }
+[data-cf-tone] :is(.cf-m-layer, .cf-m-layer--remote) { fill: var(--cf-fig-tone-soft); stroke: var(--cf-fig-tone); }
+[data-cf-tone] .cf-m-cap { fill: var(--cf-fig-tone); }
+[data-cf-tone] :is(.cf-m-state, .cf-m-node, .cf-m-optional, .cf-m-denied) { stroke: var(--cf-fig-tone); }

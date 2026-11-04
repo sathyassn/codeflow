@@ -101,6 +101,24 @@ pub struct StatusDetails {
     pub acceptance: Option<PathBuf>,
 }
 
+/// The receiving target a task completion binds against: the pins local
+/// `task status` needs to grant authority in a clone with remotes. Only
+/// `task status` takes them.
+#[derive(Debug, Clone, Default, Args)]
+pub struct TaskTarget {
+    /// The receiving target's tip a task completion binds against, such as
+    /// `origin/main`. In a clone with remotes, `task status` grants landing,
+    /// stacking and waiver authority only with `--base` and `--into`, because
+    /// any process in the clone can change the git settings that would
+    /// otherwise decide it; hosted CI pins its own base and is the authority.
+    #[arg(long, value_name = "REF", requires = "into")]
+    pub base: Option<String>,
+    /// The receiving target's branch name, such as `main`; given with
+    /// `--base`.
+    #[arg(long, value_name = "BRANCH", requires = "base")]
+    pub into: Option<String>,
+}
+
 /// Arguments for `codeflow task`.
 #[derive(Debug, Args)]
 pub struct TaskArgs {
@@ -160,6 +178,8 @@ pub enum TaskCommand {
         status: TaskStatusArg,
         #[command(flatten)]
         details: StatusDetails,
+        #[command(flatten)]
+        target: TaskTarget,
     },
 }
 
@@ -213,7 +233,14 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
                 EpicStatusArg::Cancelled => "cancelled",
                 EpicStatusArg::Archived => "archived",
             };
-            return run_status(RecordKind::Epic, id, target, details, None);
+            return run_status(
+                RecordKind::Epic,
+                id,
+                target,
+                details,
+                &TaskTarget::default(),
+                None,
+            );
         }
     };
     let root = match super::repo_root() {
@@ -326,14 +353,15 @@ pub fn run_task(args: &TaskArgs) -> i32 {
             id,
             status,
             details,
+            target: pin,
         } => {
-            let target = match status {
+            let status_target = match status {
                 TaskStatusArg::Todo => "todo",
                 TaskStatusArg::Blocked => "blocked",
                 TaskStatusArg::Complete => "complete",
                 TaskStatusArg::Cancelled => "cancelled",
             };
-            return run_status(RecordKind::Task, id, target, details, None);
+            return run_status(RecordKind::Task, id, status_target, details, pin, None);
         }
     };
     if epic
@@ -715,6 +743,7 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
                 id,
                 target,
                 &StatusDetails::default(),
+                &TaskTarget::default(),
                 by.clone(),
             );
         }
@@ -773,6 +802,7 @@ fn run_status(
     id: &str,
     target: &str,
     details: &StatusDetails,
+    pin: &TaskTarget,
     by: Option<String>,
 ) -> i32 {
     let acceptance = match &details.acceptance {
@@ -805,6 +835,8 @@ fn run_status(
         scope: details.scope.clone(),
         by,
         acceptance,
+        base: pin.base.clone(),
+        into: pin.into.clone(),
     };
     let root = match super::repo_root() {
         Ok(root) => root,

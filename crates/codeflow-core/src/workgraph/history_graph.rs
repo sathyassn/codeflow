@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use git2::{Oid, Repository};
 
+use crate::bounded_file::FileIdentity;
+
 struct Entry {
     oid: Oid,
     tree: Oid,
@@ -25,16 +27,14 @@ fn word(bytes: &[u8], offset: usize) -> Result<u32, String> {
 }
 
 /// Unix ctime detects in-place writes even when mtime and the trailer are restored.
-/// Off Unix, identity retains size, mtime and the trailer (or full manifest),
-/// together with the path stored in `File`; inode, device and ctime are unavailable.
+/// On every platform the opened handle's `FileIdentity` detects a file replaced
+/// by another with the same size, mtime and contents (TSK-1021); off Unix,
+/// ctime is unavailable.
 #[derive(Debug, PartialEq, Eq)]
 struct Identity {
     size: u64,
     modified: std::time::SystemTime,
-    #[cfg(unix)]
-    inode: u64,
-    #[cfg(unix)]
-    device: u64,
+    file: FileIdentity,
     #[cfg(unix)]
     changed_seconds: i64,
     #[cfg(unix)]
@@ -62,36 +62,71 @@ fn changed(path: &Path) -> String {
     )
 }
 
+/// Where [`Verified::read_with_hook`] lets a test change the path: after the
+/// file is opened, before and after its contents are read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadPoint {
+    BeforeRead,
+    AfterRead,
+}
+
 fn identity(path: &Path, graph: bool) -> Result<Option<Identity>, String> {
+    Ok(snapshot(path, graph, false, &mut |_| ())?.map(|(identity, _)| identity))
+}
+
+/// The identity of the file at `path` and, when `whole`, all of its bytes,
+/// both read through the one handle opened here, so the bytes belong to the
+/// file the identity names.
+fn snapshot(
+    path: &Path,
+    graph: bool,
+    whole: bool,
+    hook: &mut dyn FnMut(ReadPoint),
+) -> Result<Option<(Identity, Vec<u8>)>, String> {
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("{} ({error})", changed(path))),
     };
-    let mut read = || -> std::io::Result<Identity> {
+    let mut read = || -> std::io::Result<(Identity, Vec<u8>)> {
         let metadata = file.metadata()?;
         if !metadata.is_file() {
             return Err(std::io::Error::other("not a regular file"));
         }
+        hook(ReadPoint::BeforeRead);
+        let mut bytes = Vec::new();
         // Graphs carry a SHA-1 trailer. Manifests are small and retained whole.
-        if graph {
-            file.seek(SeekFrom::Start(metadata.len().saturating_sub(20)))?;
-        }
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)?;
-        Ok(Identity {
+        let contents = if whole {
+            file.read_to_end(&mut bytes)?;
+            if bytes.len() as u64 != metadata.len() {
+                return Err(std::io::Error::other("size changed while reading"));
+            }
+            if graph {
+                bytes[bytes.len().saturating_sub(20)..].to_vec()
+            } else {
+                bytes.clone()
+            }
+        } else {
+            if graph {
+                file.seek(SeekFrom::Start(metadata.len().saturating_sub(20)))?;
+            }
+            let mut contents = Vec::new();
+            file.read_to_end(&mut contents)?;
+            contents
+        };
+        hook(ReadPoint::AfterRead);
+        let identity = Identity {
             size: metadata.len(),
             modified: metadata.modified()?,
-            #[cfg(unix)]
-            inode: std::os::unix::fs::MetadataExt::ino(&metadata),
-            #[cfg(unix)]
-            device: std::os::unix::fs::MetadataExt::dev(&metadata),
+            // A failed identity read reports the file as changed.
+            file: FileIdentity::of(&file)?,
             #[cfg(unix)]
             changed_seconds: std::os::unix::fs::MetadataExt::ctime(&metadata),
             #[cfg(unix)]
             changed_nanoseconds: std::os::unix::fs::MetadataExt::ctime_nsec(&metadata),
             contents,
-        })
+        };
+        Ok((identity, bytes))
     };
     read()
         .map(Some)
@@ -100,11 +135,20 @@ fn identity(path: &Path, graph: bool) -> Result<Option<Identity>, String> {
 
 impl Verified {
     fn read(&mut self, path: &Path, graph: bool) -> Result<Option<Vec<u8>>, String> {
-        let before = identity(path, graph)?;
-        let bytes = if before.is_some() {
-            Some(std::fs::read(path).map_err(|error| format!("{} ({error})", changed(path)))?)
-        } else {
-            None
+        self.read_with_hook(path, graph, &mut |_| ())
+    }
+
+    /// [`Verified::read`]: the bytes and the first identity come from one
+    /// handle, and the path is identified again afterwards.
+    fn read_with_hook(
+        &mut self,
+        path: &Path,
+        graph: bool,
+        hook: &mut dyn FnMut(ReadPoint),
+    ) -> Result<Option<Vec<u8>>, String> {
+        let (before, bytes) = match snapshot(path, graph, true, hook)? {
+            Some((identity, bytes)) => (Some(identity), Some(bytes)),
+            None => (None, None),
         };
         let after = identity(path, graph)?;
         if before != after {
@@ -414,6 +458,65 @@ mod tests {
             .check()
             .unwrap_err()
             .contains("commit-graph changed"));
+    }
+
+    /// TSK-1021 AC-6: a file replaced by another with the same size, mtime
+    /// and contents is detected by the opened handle's identity, on every
+    /// platform.
+    #[test]
+    fn replacement_refuses_even_when_size_mtime_and_contents_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("commit-graph");
+        std::fs::write(&path, [0; 40]).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let mut verified = Verified::default();
+        verified.read(&path, true).unwrap();
+        verified.check().unwrap();
+        let replacement = dir.path().join("replacement");
+        std::fs::write(&replacement, [0; 40]).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let after = std::fs::metadata(&path).unwrap();
+        assert_eq!(after.len(), 40);
+        assert_eq!(after.modified().unwrap(), modified);
+        assert_eq!(std::fs::read(&path).unwrap(), [0; 40]);
+        assert!(verified
+            .check()
+            .unwrap_err()
+            .contains("commit-graph changed"));
+    }
+
+    /// TSK-1021 review: when the cache path is a link, retargeting it for
+    /// the read and back before the path is identified again does not change
+    /// the bytes read, which come from the handle the identity was read from.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_retargeted_for_the_read_does_not_supply_the_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("commit-graph");
+        let real = dir.path().join("real");
+        let other = dir.path().join("other");
+        std::fs::write(&real, [0; 40]).unwrap();
+        std::fs::write(&other, [7; 40]).unwrap();
+        std::os::unix::fs::symlink(&real, &path).unwrap();
+        let retarget = |target: &Path| {
+            std::fs::remove_file(&path).unwrap();
+            std::os::unix::fs::symlink(target, &path).unwrap();
+        };
+        let mut verified = Verified::default();
+        let bytes = verified
+            .read_with_hook(&path, true, &mut |point| match point {
+                ReadPoint::BeforeRead => retarget(&other),
+                ReadPoint::AfterRead => retarget(&real),
+            })
+            .unwrap();
+        assert_eq!(bytes.unwrap(), [0; 40], "the bytes are the opened file's");
+        verified.check().unwrap();
     }
 
     #[test]

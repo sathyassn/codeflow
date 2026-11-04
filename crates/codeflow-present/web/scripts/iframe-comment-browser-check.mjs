@@ -22,7 +22,7 @@ export async function checkIframeComments(browser, origin) {
       parent: document.querySelector("#frame-figure").getAttribute("style"),
       root: document.querySelector("#cf-present-document").getAttribute("style"),
     }));
-    const comment = page.getByRole("button", { name: /Comment/ });
+    const comment = page.getByTestId("comment-btn");
     await comment.click();
     await page.waitForFunction(() => getComputedStyle(document.querySelector("iframe")).pointerEvents === "none");
     await frame.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
@@ -31,7 +31,7 @@ export async function checkIframeComments(browser, origin) {
     // anchor, not a viewport-sized synthetic cover or a neighboring block.
     for (const width of [1280, 320]) {
       await page.setViewportSize({ width, height: 900 });
-      if (await page.locator(".cf-feedback-close").isVisible()) await page.locator(".cf-feedback-close").click();
+      if (await page.getByTestId('notes-expand').isVisible() && await page.getByTestId('notes-dock').getAttribute('data-expanded') === 'true') await page.getByTestId('notes-expand').click();
       await page.locator("#frame-scroll").evaluate((el) => { el.scrollTop = 80; el.scrollIntoView({ block: "center", behavior: "instant" }); });
       const point = await page.locator("#frame-scroll").evaluate((el) => {
         const r = el.getBoundingClientRect();
@@ -43,7 +43,7 @@ export async function checkIframeComments(browser, origin) {
       assert.equal((await page.getByTestId("float-chip").locator(".lab").innerText()).trim(), "Element");
       await page.keyboard.press("Escape");
       await page.getByTestId("float-chip").waitFor({ state: "detached" });
-      if (await page.locator(".cf-feedback-close").isVisible()) await page.locator(".cf-feedback-close").click();
+      if (await page.getByTestId('notes-expand').isVisible() && await page.getByTestId('notes-dock').getAttribute('data-expanded') === 'true') await page.getByTestId('notes-expand').click();
     }
 
     const target = await page.locator("#frame-scroll").evaluate((el) => {
@@ -59,21 +59,24 @@ export async function checkIframeComments(browser, origin) {
     assert.equal((await page.getByTestId("float-chip").locator(".lab").innerText()).trim(), "Area");
     await page.keyboard.press("Escape");
     await page.getByTestId("float-chip").waitFor({ state: "detached" });
-    if (await page.locator(".cf-feedback-close").isVisible()) await page.locator(".cf-feedback-close").click();
+    if (await page.getByTestId('notes-expand').isVisible() && await page.getByTestId('notes-dock').getAttribute('data-expanded') === 'true') await page.getByTestId('notes-expand').click();
     await page.mouse.click(target.x, target.y);
     await page.getByTestId("float-comment").click();
     await page.getByTestId("composer-text").fill("Review the embedded figure.");
     await page.getByTestId("composer-save").click();
     // At phone width a saved note leaves the notes sheet expanded, with Submit.
     await page.locator("#cf-feedback-panel[data-open='true'][data-expanded='true']").waitFor();
+    await page.getByLabel("Verdict").selectOption("approve_with_notes");
     await page.getByTestId("submit-all").click();
-    await page.waitForFunction(() => document.querySelector("#cf-comment-toggle")?.getAttribute("aria-pressed") === "false");
+    await page.getByTestId("review-sent").waitFor();
     assert.equal(reviews.length, 1);
     assert.equal(reviews[0].notes[0].block_id, "frame-block");
     assert.equal(reviews[0].notes[0].element_selector.tag_name, "figure");
     assert.equal(reviews[0].notes[0].element_selector.element_path, "div:nth-of-type(1) > figure:nth-of-type(1)");
 
-    // Submission exits Comment and restores iframe interaction and styles.
+    // Comment stays on after a send (the sent card is in the notes panel);
+    // leaving it restores iframe interaction and styles.
+    await page.getByTestId("comment-leave").click();
     await page.waitForFunction(() => getComputedStyle(document.querySelector("iframe")).pointerEvents === "auto");
     assert.deepEqual(await page.evaluate(() => ({
       frame: document.querySelector("iframe").style.cssText,

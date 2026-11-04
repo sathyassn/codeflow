@@ -1,7 +1,9 @@
+import { enhanceTabs } from "./tabs";
 const observed = new WeakSet<Element>();
 const MAX_EAGER_ENHANCEMENT_MILLISECONDS = 5_000;
 
 export function enhanceDocument(root: HTMLElement, eager = false): () => void {
+  enhanceTabs(root);
   for (const stage of root.querySelectorAll<SVGSVGElement>(".block--html .cf-stage-svg")) {
     const width = stage.viewBox.baseVal.width;
     if (!Number.isFinite(width) || width <= 0) continue;

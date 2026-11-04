@@ -50,6 +50,10 @@ export function visibleTextOf(element: Element): string {
  * read with a separator, never run together as one sentence (QA defect 8).
  */
 export function labelTextOf(element: Element): string {
+  if (element.localName === "svg") {
+    const title = element.querySelector(":scope > title")?.textContent;
+    return collapse(title ?? element.getAttribute("aria-label") ?? "");
+  }
   if (!(element instanceof HTMLElement) || element.querySelector("text, tspan")) return visibleTextOf(element);
   const parts = readableText(element).split(/[\n\t]+/u).map(collapse).filter(Boolean);
   // A part that ends in a colon introduces the next.

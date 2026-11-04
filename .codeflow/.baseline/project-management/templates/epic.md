@@ -23,6 +23,25 @@ created: {{DATE}}
      the remaining ambiguity is a consequential operator-owned choice under
      the cf-plan clarity gate. -->
 
+## Outcome
+
+<!-- One line saying the value this epic delivers once it lands, in the form
+     "after this merges, <who> can <do what>". `codeflow validate --docs`
+     refuses an open record created after the project adopted this section
+     when the line is missing (`outcome_present_uids` in
+     `.codeflow/project.toml`), and warns for an older open record. -->
+
+## Deliverables
+
+<!-- Each output this epic produces and its home, one line each as
+     `- <output>: <path>`: files or a folder, a decision record, a research
+     note, evidence, a record update or a human board, at its path in the
+     project's structure. Check each home against the project's structure
+     authority (the document that says where things live) where one exists.
+     Where a home is not known yet, give what is known, mark it provisional
+     and name what decides it. `codeflow validate --docs` warns about an open
+     epic created after adoption with no entry here. -->
+
 ## Acceptance Criteria
 
 <!-- Testable statements, preferably in EARS ("When <trigger>, the system shall

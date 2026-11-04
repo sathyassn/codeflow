@@ -103,11 +103,47 @@ each batch.
   operator merges. Its required checks count only when they ran on the
   current tip of `main`; under ADR-0081 the `main` ruleset requires an
   up-to-date branch, so a pull request that is behind is updated first. A
-  clean update leaves a completed task's acceptance block standing only when
-  the pull request did not reopen its task; a hand-resolved update
-  invalidates it, and a pull request that reopened its task inside its own
-  range needs a new review and a new binding after the update (SPC-013 R-60,
-  R-119).
+  clean update leaves a completed task's acceptance block standing, also
+  when the pull request reopened its task; a hand-resolved update
+  invalidates it (SPC-013 R-60, R-119).
+- A task can be blocked, completed, reopened and completed again, and its
+  epic closed after it, with ordinary commands that `task status`, the task
+  pull request's `codeflow ci` and the line's pull request into `main` all
+  accept:
+
+  ```text
+  task branch    review -> task status blocked -> task status todo
+                 -> task status complete            (task PR, lands)
+  fix branch     task status todo --reason -> fix -> review
+                 -> task status complete            (fix PR, lands)
+                 [a clean merge of the line after the review is allowed]
+  planning PR    epic status complete               (closeout, lands)
+  line -> main   codeflow ci accepts the whole sequence
+  ```
+
+  The Blocker that `task status` writes and removes is not reviewed scope.
+  Each reopen appends the block it supersedes to one chronological
+  archive, so the record reads the same against the line and against
+  `main`. Archived blocks stay byte for byte (only a validated redaction
+  rewords one), and the blocks the range archives are every completion
+  its history made, in order, none missing (each completion is an
+  occurrence, so an identical block completed again after a reopen
+  counts twice), each with real provenance (a
+  reviewed commit and waiver commits it contains). An archived
+  completion is not judged again: reopening is how a completion that
+  failed its binding is repaired. A reopening pull
+  request takes the same clean target merge after its review as any task
+  pull request, and the same per-commit walk: a post-review edit to any
+  other path, even one reverted later, needs a new review. A waiver names
+  an amendment the reviewed commit contains, on the target as in the
+  branch, so no merge after the review, whichever way its parents run,
+  brings one in. A completion's span ends at the completion, and the epic's Closeout rides its own
+  planning pull request, since a completion commit changes only its own
+  record. A reopen of a landed completion keeps its criteria, so its
+  waiver names a planning commit on the target; a reopen of a completion
+  that never landed is still the task's own pull request and keeps the
+  in-branch waiver route, as does a task pull request on a branch whose
+  name carries no task id.
 - A later task may build on a predecessor before it lands, named with
   `--on TSK-NNN@<sha>`. The pin names the predecessor branch tip. Its Reviews
   section must approve that tip or an ancestor whose later commits change
@@ -149,6 +185,52 @@ pull request cites the full gate by run id and revision, and the review
 verdict lives on the pull request, so the evidence survives the cleanup of
 worktrees and build directories.
 
+### Completed work imported from another line
+
+An ordinary merge can bring completed work from `main` or a verified epic
+line. CI and pre-push bind an unchanged imported completion at its home,
+so later receiving-line commits do not require that source task to reopen.
+A task branch can carry the same imports while delivering its own work.
+A receiver's first push still proves its own task landings.
+
+- The guarded history reader checks the source line, record identity, exact
+  contents, ancestry and home landing. Equal record text alone is not proof.
+  With a remote configured, the home must be published at
+  the selected fetch remote. The gate uses the configured upstream; a
+  retired line can use the default target's fetch remote (normally
+  `origin`). A local branch ahead of the remote-tracking ref supplies no
+  authority.
+  Local homes are usable only in a repository with no remotes. The local
+  gate trusts local remote-tracking refs and remoteless clones; git-guard
+  and hosted CI are the backstop.
+- After a home line lands on the default target and is deleted, the exact
+  record's first-parent landing on the published default target supplies
+  the proof. The landing and its source span must still pass the guarded
+  checks; a missing home without that landing remains unavailable.
+- A source task that merged its home after review retains its binding only
+  when that merge was clean and came from the home line. A task reopened
+  before its first landing keeps the criteria accepted at that landing.
+- Criteria amendments, reopenings and records brought unchanged from the
+  target stay attributed to its history. A task PR does not claim those
+  records as its own additions.
+- Receiving-line record edits and competing criteria introductions still
+  need their own judgment. A source landing with an unreviewed resolution,
+  an unavailable home without a proven default-target landing, or an
+  overlaid history supplies no import proof.
+  The receiver's own completion still binds all its product work. A line
+  merge that adds product changes outside verified source history and
+  reviewed task heads refuses even when no task completes in that range.
+  A line push after landing work whose completion is still pending waits
+  until the completion record lands, even if the work was reviewed earlier.
+
+When `work.import_authority` refuses, fetch the named home and its full
+history, or the default target's history if the home has been retired.
+Repair invalid source acceptance through that task's pull request on its
+home, then merge the reviewed result. A refusal naming target history does
+not ask the receiver to reopen an unrelated task. Pass the intended
+`--branch` and `--base` when checking a detached or historical range; naming
+the same base by ref or commit id does not change the proof.
+
 ### Acceptance waivers and redactions
 
 A completed task can have personal or customer names removed from its
@@ -171,7 +253,14 @@ changes that criterion and planning records only, and the completion
 contains it. A task may name an amendment on its target. Before its first
 landing, its own record-only amendment may also be after the range's
 merge-base and strictly before `reviewed` in ancestry, never equal to either
-endpoint. Reopened ranges do not use that own-range allowance.
+endpoint. A range that reopens a completion that never landed keeps that
+own-range allowance, whatever caused the reopen; a range that reopens a
+landed completion does not. A waiver refused as not on the target says what
+that requires: a receiving line the run pins holds the commit (the pull
+request's base in `codeflow ci`, `--base` in `task status`). The refusal also
+names the route: amend the criterion through a planning pull request into
+the target, merge the target into the branch before the review, and name
+that planning commit.
 
 The installed `cf-method/references/project-organization.md` section
 "Acceptance waivers and redactions" owns the field definitions and workflow.

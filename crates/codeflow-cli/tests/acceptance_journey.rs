@@ -9,8 +9,12 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "support/outcome.rs"]
+mod outcome;
 #[path = "support/process_folders.rs"]
 mod process_folders;
+#[path = "acceptance_journey/sequence.rs"]
+mod sequence;
 use process_folders::isolated_home;
 
 fn with_env(command: &mut Command) -> &mut Command {
@@ -37,6 +41,13 @@ fn with_env(command: &mut Command) -> &mut Command {
         .env_remove("GITHUB_BASE_REF")
         .env_remove("GITHUB_HEAD_REF")
         .env_remove("GITHUB_EVENT_NAME")
+        // A caller's agent session must not judge the fixture's own
+        // commits (`git.root_checkout_commits` reads these markers).
+        .env_remove("CLAUDECODE")
+        .env_remove("CODEX_SESSION_ID")
+        .env_remove("CODEX_THREAD_ID")
+        .env_remove("CODEX_CI")
+        .env_remove("GROK_SESSION_ID")
 }
 
 fn codeflow(root: &Path, args: &[&str]) -> Output {
@@ -83,7 +94,10 @@ fn fails(out: &Output, what: &str, reason: &str) {
     );
 }
 
+/// Commit everything, with each new record's Outcome stated as its author
+/// states it before committing (TSK-435).
 fn commit(root: &Path, message: &str) -> String {
+    outcome::state_outcomes(root);
     git(root, &["add", "-A"]);
     git(root, &["commit", "-q", "-m", message]);
     git(root, &["rev-parse", "HEAD"])
@@ -184,6 +198,7 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
         &codeflow(&root, &["init", "--yes", "--full"]),
         "init --full",
     );
+    let main = git(&root, &["branch", "--show-current"]);
     git(&root, &["switch", "-q", "-c", LINE]);
 
     // Plan: an epic and two tasks; the first has a journey criterion, the
@@ -222,6 +237,10 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
     )
     .unwrap();
     commit(&root, "chore: plan the acceptance journey");
+    // The plan also lands on `main`, so the records at the default target
+    // name the line its tasks target (TSK-340: only base records qualify a
+    // line for `task status`).
+    sequence::host_merge(&root, &main, "plan/acceptance");
     git(&root, &["switch", "-q", LINE]);
     git(
         &root,
@@ -289,7 +308,7 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
     fails(
         &ci(&root, branch, "TSK-001"),
         "a stale block after a later code change",
-        "src/lib.rs changed after the reviewed commit",
+        "first: src/lib.rs",
     );
     git(&root, &["reset", "-q", "--hard", &completed]);
 
@@ -921,6 +940,25 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
     // The scaffold's default branch is the default target.
     let start = git(&root, &["branch", "--show-current"]);
     let main = start.as_str();
+    // The policy lands on the default branch, through its own reviewed
+    // branch, before the lines branch: a planning merge carries records and
+    // plans only (TSK-1004 AC-4).
+    git(&root, &["switch", "-q", "-c", "chore/product-paths"]);
+    let policy_path = root.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&policy_path).unwrap()).unwrap();
+    policy["git"]["product_paths"] = serde_json::json!(["src/**"]);
+    std::fs::write(
+        &policy_path,
+        serde_json::to_string_pretty(&policy).unwrap() + "\n",
+    )
+    .unwrap();
+    commit(&root, "chore: name the product paths");
+    git(&root, &["switch", "-q", main]);
+    ok(
+        &codeflow(&root, &["integrate", "chore/product-paths", "--into", main]),
+        "integrate the policy",
+    );
     git(&root, &["branch", LINE_A]);
     git(&root, &["branch", LINE_B]);
 
@@ -965,30 +1003,35 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
         "created:",
         "role: release-integration\ncreated:",
     );
-    let policy_path = root.join(".codeflow/policy.json");
-    let mut policy: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&policy_path).unwrap()).unwrap();
-    policy["git"]["product_paths"] = serde_json::json!(["src/**"]);
-    std::fs::write(
-        &policy_path,
-        serde_json::to_string_pretty(&policy).unwrap() + "\n",
-    )
-    .unwrap();
     commit(&root, "chore: plan the release journey");
+    // Both lines take the plan with one message at one pinned second, so
+    // the two merges are one commit P that both lines hold (TSK-1004; hosted
+    // run 40158545922). Each line then advances past P on its own, and P's
+    // planning records are shared provenance, never an import from the
+    // other, still unpublished, line.
     for line in [LINE_A, LINE_B] {
         git(&root, &["switch", "-q", line]);
-        git(
-            &root,
-            &[
+        let out = with_env(&mut Command::new("git"))
+            .env("GIT_AUTHOR_DATE", "2026-10-25T00:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2026-10-25T00:00:00Z")
+            .args([
                 "merge",
                 "-q",
                 "--no-ff",
                 "plan/release",
                 "-m",
                 "chore: land the plan",
-            ],
-        );
+            ])
+            .current_dir(&root)
+            .output()
+            .expect("git runs");
+        assert!(out.status.success(), "plan merge: {}", text(&out));
     }
+    assert_eq!(
+        git(&root, &["rev-parse", LINE_A]),
+        git(&root, &["rev-parse", LINE_B]),
+        "both lines hold one planning merge"
+    );
 
     // Each line lands a task completed in its own pull request.
     for (line, id, file) in [
@@ -1125,7 +1168,7 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
     // its pull request is: the late code follows the owner's completion.
     assert!(
         said.contains(&format!(
-            "TSK-003 (completed directly on the release line at {}): src/late.rs changed after the reviewed commit",
+            "TSK-003 (completed directly on the release line at {}): 1 path changed between the reviewed commit",
             &completed[..9]
         )),
         "{said}"
@@ -1147,7 +1190,7 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
         ),
         "code after the completion",
         &format!(
-            "TSK-003 (completed directly on the release line at {}): src/late.rs changed after the reviewed commit",
+            "TSK-003 (completed directly on the release line at {}): 1 path changed between the reviewed commit",
             &completed[..9]
         ),
     );

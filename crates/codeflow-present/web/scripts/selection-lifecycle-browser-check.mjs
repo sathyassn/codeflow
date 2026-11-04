@@ -37,7 +37,9 @@ export async function checkSelectionLifecycle(browser, origin) {
     }
     async function expectQuote(quote) {
       await chip.waitFor({ state: "visible" });
-      await page.waitForFunction((expected) => document.querySelector('[data-testid="float-chip"] .q')?.textContent === expected, quote);
+      // A quote cut inside a word carries an ellipsis (TSK-443 AC-8); the
+      // captured characters themselves must match exactly.
+      await page.waitForFunction((expected) => document.querySelector('[data-testid="float-chip"] .q')?.textContent.replace(/^…|…$/gu, "") === expected, quote);
     }
     async function dismiss() {
       await page.keyboard.press("Escape");
@@ -48,10 +50,11 @@ export async function checkSelectionLifecycle(browser, origin) {
       await page.getByTestId("composer-save").click();
       await page.getByTestId("composer").waitFor({ state: "detached" });
       posts.length = 0;
+      await page.getByLabel("Verdict").selectOption("approve_with_notes");
       await page.getByTestId("submit-all").click();
       // A previous submit can leave this toast visible while the next one runs.
-      await page.locator('.cf-chrome-frame[data-commenting="false"]').waitFor({ state: "attached" });
-      await page.getByTestId("toast").getByText(/Review received/).waitFor();
+      await page.getByTestId("review-sent").waitFor();
+      await page.getByTestId("comment-leave").click();
       assert.equal(posts.length, 1);
       assert.equal(posts[0].notes.length, 1);
       return posts[0].notes[0];

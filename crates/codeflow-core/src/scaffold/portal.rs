@@ -17,7 +17,8 @@ use unicode_normalization::UnicodeNormalization;
 
 use super::report::{Action, Report};
 use super::state::guard_beneath_root;
-use super::{sha256_hex, AssetSource, ScaffoldError};
+use super::{sha256_hex, AssetSource, ScaffoldError, Shown};
+use crate::shown;
 
 const ASSET_PREFIX: &str = "docs-portal/starter/";
 const MANIFEST_ASSET: &str = "docs-portal/manifest.json";
@@ -119,7 +120,7 @@ impl PortalMutationPlan {
         path: &str,
         bytes: Vec<u8>,
         maximum: u64,
-        label: &str,
+        label: &'static str,
     ) -> Result<(), ScaffoldError> {
         let before = snapshot_project_file(root, path, maximum, label)?;
         self.insert(PortalMutation {
@@ -134,7 +135,7 @@ impl PortalMutationPlan {
         root: &PortalIo,
         path: &str,
         maximum: u64,
-        label: &str,
+        label: &'static str,
     ) -> Result<(), ScaffoldError> {
         let before = snapshot_project_file(root, path, maximum, label)?;
         self.insert(PortalMutation {
@@ -147,31 +148,30 @@ impl PortalMutationPlan {
     fn insert(&mut self, mutation: PortalMutation) -> Result<(), ScaffoldError> {
         match self.mutations.get(&mutation.path) {
             Some(existing) if existing.after == mutation.after => Ok(()),
-            Some(_) => Err(ScaffoldError::InvalidState {
-                what: mutation.path,
-                detail: "portal transaction planned conflicting mutations".into(),
-            }),
+            Some(_) => Err(ScaffoldError::invalid(
+                Shown::path(&mutation.path),
+                Shown::fixed("portal transaction planned conflicting mutations"),
+            )),
             None => {
                 let mut snapshot_budget = self.snapshot_budget;
                 let mut output_budget = self.output_budget;
                 if let Some(before) = &mutation.before {
                     snapshot_budget.charge(before.len()).map_err(|error| {
-                        ScaffoldError::InvalidState {
-                            what: mutation.path.clone(),
-                            detail: format!(
-                                "portal transaction snapshots exceed their aggregate byte limit: {error}"
-                            ),
-                        }
+                        ScaffoldError::invalid(Shown::path(&mutation.path), shown!(
+                                "portal transaction snapshots exceed their aggregate byte limit: {}",
+                                Shown::io(&error)
+                            ))
                     })?;
                 }
                 if let Some(after) = &mutation.after {
                     output_budget.charge(after.len()).map_err(|error| {
-                        ScaffoldError::InvalidState {
-                            what: mutation.path.clone(),
-                            detail: format!(
-                                "portal transaction outputs exceed their aggregate byte limit: {error}"
+                        ScaffoldError::invalid(
+                            Shown::path(&mutation.path),
+                            shown!(
+                                "portal transaction outputs exceed their aggregate byte limit: {}",
+                                Shown::io(&error)
                             ),
-                        }
+                        )
                     })?;
                 }
                 self.snapshot_budget = snapshot_budget;
@@ -234,21 +234,25 @@ impl PortalMutationPlan {
             };
             let result = result.and_then(|()| {
                 if fault_after == Some(index) {
-                    Err(ScaffoldError::InvalidState {
-                        what: mutation.path.clone(),
-                        detail: "injected portal transaction failure".into(),
-                    })
+                    Err(ScaffoldError::invalid(
+                        Shown::path(&mutation.path),
+                        Shown::fixed("injected portal transaction failure"),
+                    ))
                 } else {
                     Ok(())
                 }
             });
             if let Err(error) = result {
                 rollback_mutations(root, &applied, &missing_directories).map_err(
-                    |rollback_error| ScaffoldError::InvalidState {
-                        what: "docs portal transaction".into(),
-                        detail: format!(
-                            "commit failed ({error}); rollback also failed ({rollback_error})"
-                        ),
+                    |rollback_error| {
+                        ScaffoldError::invalid(
+                            Shown::fixed("docs portal transaction"),
+                            shown!(
+                                "commit failed ({}); rollback also failed ({})",
+                                Shown::from(&error),
+                                Shown::from(&rollback_error)
+                            ),
+                        )
                     },
                 )?;
                 remove_portal_transaction(root, portal_root)?;
@@ -291,10 +295,10 @@ impl PortalMutationPlan {
                 None => root.remove(&mutation.path)?,
             }
             if index == mutation_index {
-                return Err(ScaffoldError::InvalidState {
-                    what: mutation.path.clone(),
-                    detail: "injected abrupt portal transaction interruption".into(),
-                });
+                return Err(ScaffoldError::invalid(
+                    Shown::path(&mutation.path),
+                    Shown::fixed("injected abrupt portal transaction interruption"),
+                ));
             }
         }
         remove_portal_transaction(root, portal_root)
@@ -330,10 +334,10 @@ fn acquire_portal_transaction_lease(
 ) -> Result<PortalTransactionLease, ScaffoldError> {
     match root.metadata(TRANSACTION_LOCK_PATH) {
         Ok(metadata) if !metadata.is_file() => {
-            return Err(ScaffoldError::InvalidState {
-                what: TRANSACTION_LOCK_PATH.into(),
-                detail: "portal transaction lock is not a regular file".into(),
-            })
+            return Err(ScaffoldError::invalid(
+                Shown::path(TRANSACTION_LOCK_PATH),
+                Shown::fixed("portal transaction lock is not a regular file"),
+            ))
         }
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -342,11 +346,15 @@ fn acquire_portal_transaction_lease(
     let file = root
         .lock_file(TRANSACTION_LOCK_PATH)
         .map_err(|error| lease_open_error(root, error))?;
-    file.try_lock_exclusive()
-        .map_err(|error| ScaffoldError::InvalidState {
-            what: TRANSACTION_LOCK_PATH.into(),
-            detail: format!("another portal setup/update is already in progress: {error}"),
-        })?;
+    file.try_lock_exclusive().map_err(|error| {
+        ScaffoldError::invalid(
+            Shown::path(TRANSACTION_LOCK_PATH),
+            shown!(
+                "another portal setup/update is already in progress: {}",
+                Shown::io(&error)
+            ),
+        )
+    })?;
     Ok(PortalTransactionLease { file })
 }
 
@@ -357,11 +365,12 @@ fn lease_open_error(root: &PortalIo, error: std::io::Error) -> ScaffoldError {
     {
         // A newly created lease retains DELETE access for rejection cleanup;
         // another no-delete-sharing opener can be excluded before fs2 locking.
-        return ScaffoldError::InvalidState {
-            what: TRANSACTION_LOCK_PATH.into(),
-            detail: "another portal setup/update is already in progress (lock sharing violation)"
-                .into(),
-        };
+        return ScaffoldError::invalid(
+            Shown::path(TRANSACTION_LOCK_PATH),
+            Shown::fixed(
+                "another portal setup/update is already in progress (lock sharing violation)",
+            ),
+        );
     }
     ScaffoldError::io(root.join(TRANSACTION_LOCK_PATH), error)
 }
@@ -373,10 +382,10 @@ fn prepare_portal_transaction(
 ) -> Result<(), ScaffoldError> {
     let portal_root = validate_portal_root(portal_root)?;
     if root.inspect(TRANSACTION_PATH)?.is_some() {
-        return Err(ScaffoldError::InvalidState {
-            what: TRANSACTION_PATH.into(),
-            detail: "an unrecovered portal transaction already exists".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::path(TRANSACTION_PATH),
+            Shown::fixed("an unrecovered portal transaction already exists"),
+        ));
     }
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -445,10 +454,10 @@ fn recover_portal_transaction(
         Err(error) => return Err(ScaffoldError::io(&transaction, error)),
     };
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(ScaffoldError::InvalidState {
-            what: TRANSACTION_PATH.into(),
-            detail: "portal transaction journal is not a regular directory".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::path(TRANSACTION_PATH),
+            Shown::fixed("portal transaction journal is not a regular directory"),
+        ));
     }
     let journal = read_transaction_journal(root, TRANSACTION_PATH)?;
     validate_transaction_journal(&journal, &expected_portal_root, TRANSACTION_PATH)?;
@@ -470,11 +479,14 @@ fn recover_portal_transaction(
             .max()
             .unwrap_or(0);
         let current = snapshot_project_file(root, &mutation.path, maximum, "transaction recovery")
-            .map_err(|error| ScaffoldError::InvalidState {
-                what: mutation.path.clone(),
-                detail: format!(
-                    "portal transaction recovery found a concurrent edit; preserving it: {error}"
-                ),
+            .map_err(|error| {
+                ScaffoldError::invalid(
+                    Shown::path(&mutation.path),
+                    shown!(
+                        "portal transaction recovery found a concurrent edit; preserving it: {}",
+                        Shown::from(&error)
+                    ),
+                )
             })?;
         if snapshot_matches(
             current.as_deref(),
@@ -488,10 +500,10 @@ fn recover_portal_transaction(
             mutation.before_bytes,
             mutation.before_sha256.as_deref(),
         ) {
-            return Err(ScaffoldError::InvalidState {
-                what: mutation.path.clone(),
-                detail: "portal transaction recovery found a concurrent edit; preserving it".into(),
-            });
+            return Err(ScaffoldError::invalid(
+                Shown::path(&mutation.path),
+                Shown::fixed("portal transaction recovery found a concurrent edit; preserving it"),
+            ));
         }
         match (
             &mutation.staged_file,
@@ -501,25 +513,29 @@ fn recover_portal_transaction(
             (Some(staged), Some(expected_bytes), Some(expected_hash)) => {
                 let bytes = root
                     .read(&format!("{TRANSACTION_PATH}/{staged}"), expected_bytes)
-                    .map_err(|error| ScaffoldError::InvalidState {
-                        what: mutation.path.clone(),
-                        detail: format!("staged portal transaction output is unreadable: {error}"),
+                    .map_err(|error| {
+                        ScaffoldError::invalid(
+                            Shown::path(&mutation.path),
+                            shown!(
+                                "staged portal transaction output is unreadable: {}",
+                                Shown::io(&error)
+                            ),
+                        )
                     })?;
                 if bytes.len() as u64 != expected_bytes || sha256_hex(&bytes) != expected_hash {
-                    return Err(ScaffoldError::InvalidState {
-                        what: mutation.path.clone(),
-                        detail: "staged portal transaction output does not match its journal"
-                            .into(),
-                    });
+                    return Err(ScaffoldError::invalid(
+                        Shown::path(&mutation.path),
+                        Shown::fixed("staged portal transaction output does not match its journal"),
+                    ));
                 }
                 root.write(&mutation.path, &bytes)?;
             }
             (None, None, None) => root.remove(&mutation.path)?,
             _ => {
-                return Err(ScaffoldError::InvalidState {
-                    what: mutation.path.clone(),
-                    detail: "portal transaction journal mutation is inconsistent".into(),
-                });
+                return Err(ScaffoldError::invalid(
+                    Shown::path(&mutation.path),
+                    Shown::fixed("portal transaction journal mutation is inconsistent"),
+                ));
             }
         }
     }
@@ -544,13 +560,20 @@ fn read_transaction_journal(
 ) -> Result<PortalTransactionJournal, ScaffoldError> {
     let manifest = root
         .read(&format!("{directory}/manifest.json"), 512 * 1024)
-        .map_err(|error| ScaffoldError::InvalidState {
-            what: directory.into(),
-            detail: format!("portal transaction journal is unreadable: {error}"),
+        .map_err(|error| {
+            ScaffoldError::invalid(
+                Shown::path(directory),
+                shown!(
+                    "portal transaction journal is unreadable: {}",
+                    Shown::io(&error)
+                ),
+            )
         })?;
-    crate::strict_json::parse_strict_json(&manifest).map_err(|_| ScaffoldError::InvalidState {
-        what: directory.into(),
-        detail: "portal transaction journal schema is invalid".into(),
+    crate::strict_json::parse_strict_json(&manifest).map_err(|_| {
+        ScaffoldError::invalid(
+            Shown::path(directory),
+            Shown::fixed("portal transaction journal schema is invalid"),
+        )
     })
 }
 
@@ -568,10 +591,10 @@ fn validate_transaction_journal(
         || journal.mutations.is_empty()
         || journal.mutations.len() > 2_048
     {
-        return Err(ScaffoldError::InvalidState {
-            what: label.into(),
-            detail: "portal transaction journal has an invalid or mismatched envelope".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::path(label),
+            Shown::fixed("portal transaction journal has an invalid or mismatched envelope"),
+        ));
     }
     Ok(())
 }
@@ -585,10 +608,10 @@ fn validate_journal_mutation(
     bytes_remaining: &mut u64,
 ) -> Result<(), ScaffoldError> {
     if mutation.path.len() > 4_096 || mutation.path.contains('\\') {
-        return Err(ScaffoldError::InvalidState {
-            what: mutation.path.clone(),
-            detail: "portal transaction journal has an unsafe destination".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::path(&mutation.path),
+            Shown::fixed("portal transaction journal has an unsafe destination"),
+        ));
     }
     guard_beneath_root(root, Path::new(&mutation.path))?;
     let portal_prefix = format!("{}/", path_text(portal_root));
@@ -597,17 +620,18 @@ fn validate_journal_mutation(
     let baseline_hash = mutation.path.strip_prefix(&baseline_prefix);
     let in_baseline = baseline_hash.is_some_and(valid_lower_sha256);
     if mutation.path != STATE_PATH && !in_portal && !in_baseline {
-        return Err(ScaffoldError::InvalidState {
-            what: mutation.path.clone(),
-            detail: "portal transaction journal destination is outside its adopted namespaces"
-                .into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::path(&mutation.path),
+            Shown::fixed(
+                "portal transaction journal destination is outside its adopted namespaces",
+            ),
+        ));
     }
     if !paths.insert(portable_key(&mutation.path)) {
-        return Err(ScaffoldError::InvalidState {
-            what: mutation.path.clone(),
-            detail: "portal transaction journal repeats a destination".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::path(&mutation.path),
+            Shown::fixed("portal transaction journal repeats a destination"),
+        ));
     }
     for (size, hash) in [
         (mutation.before_bytes, mutation.before_sha256.as_deref()),
@@ -621,20 +645,18 @@ fn validate_journal_mutation(
                         .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
             })
         {
-            return Err(ScaffoldError::InvalidState {
-                what: mutation.path.clone(),
-                detail: "portal transaction journal has an invalid snapshot claim".into(),
-            });
+            return Err(ScaffoldError::invalid(
+                Shown::path(&mutation.path),
+                Shown::fixed("portal transaction journal has an invalid snapshot claim"),
+            ));
         }
         if let Some(size) = size {
-            *bytes_remaining =
-                bytes_remaining
-                    .checked_sub(size)
-                    .ok_or_else(|| ScaffoldError::InvalidState {
-                        what: TRANSACTION_PATH.into(),
-                        detail: "portal transaction journal exceeds its aggregate byte limit"
-                            .into(),
-                    })?;
+            *bytes_remaining = bytes_remaining.checked_sub(size).ok_or_else(|| {
+                ScaffoldError::invalid(
+                    Shown::path(TRANSACTION_PATH),
+                    Shown::fixed("portal transaction journal exceeds its aggregate byte limit"),
+                )
+            })?;
         }
     }
     if let Some(baseline_hash) = baseline_hash {
@@ -643,10 +665,10 @@ fn validate_journal_mutation(
             .as_deref()
             .or(mutation.before_sha256.as_deref());
         if content_hash != Some(baseline_hash) {
-            return Err(ScaffoldError::InvalidState {
-                what: mutation.path.clone(),
-                detail: "portal baseline destination is not bound to its content hash".into(),
-            });
+            return Err(ScaffoldError::invalid(
+                Shown::path(&mutation.path),
+                Shown::fixed("portal baseline destination is not bound to its content hash"),
+            ));
         }
     }
     let expected_stage = format!("after/{index:04}");
@@ -656,10 +678,10 @@ fn validate_journal_mutation(
             .as_deref()
             .is_some_and(|path| path != expected_stage)
     {
-        return Err(ScaffoldError::InvalidState {
-            what: mutation.path.clone(),
-            detail: "portal transaction journal has an invalid staged output".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::path(&mutation.path),
+            Shown::fixed("portal transaction journal has an invalid staged output"),
+        ));
     }
     Ok(())
 }
@@ -685,10 +707,10 @@ fn remove_portal_transaction(root: &PortalIo, portal_root: &Path) -> Result<(), 
     let transaction = guard_beneath_root(root, Path::new(TRANSACTION_PATH))?;
     match root.metadata(TRANSACTION_PATH) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            Err(ScaffoldError::InvalidState {
-                what: TRANSACTION_PATH.into(),
-                detail: "portal transaction journal is not a regular directory".into(),
-            })
+            Err(ScaffoldError::invalid(
+                Shown::path(TRANSACTION_PATH),
+                Shown::fixed("portal transaction journal is not a regular directory"),
+            ))
         }
         Ok(_) => {
             let journal = read_transaction_journal(root, TRANSACTION_PATH)?;
@@ -699,10 +721,10 @@ fn remove_portal_transaction(root: &PortalIo, portal_root: &Path) -> Result<(), 
             );
             let cleanup = guard_beneath_root(root, Path::new(&cleanup_relative))?;
             if root.inspect(&cleanup_relative)?.is_some() {
-                return Err(ScaffoldError::InvalidState {
-                    what: cleanup_relative,
-                    detail: "portal transaction cleanup tombstone already exists".into(),
-                });
+                return Err(ScaffoldError::invalid(
+                    Shown::path(&cleanup_relative),
+                    Shown::fixed("portal transaction cleanup tombstone already exists"),
+                ));
             }
             root.rename(TRANSACTION_PATH, &cleanup_relative)?;
             remove_transaction_tombstone(root, &cleanup, portal_root, &journal.transaction_id)
@@ -718,32 +740,29 @@ fn remove_transaction_tombstone(
     portal_root: &Path,
     expected_id: &str,
 ) -> Result<(), ScaffoldError> {
-    let relative =
-        path_text(
-            tombstone
-                .strip_prefix(root)
-                .map_err(|_| ScaffoldError::InvalidState {
-                    what: path_text(tombstone),
-                    detail: "portal transaction tombstone escaped the repository".into(),
-                })?,
-        );
+    let relative = path_text(tombstone.strip_prefix(root).map_err(|_| {
+        ScaffoldError::invalid(
+            Shown::path(path_text(tombstone)),
+            Shown::fixed("portal transaction tombstone escaped the repository"),
+        )
+    })?);
     let metadata = root
         .metadata(&relative)
         .map_err(|error| ScaffoldError::io(tombstone, error))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(ScaffoldError::InvalidState {
-            what: relative.clone(),
-            detail: "portal transaction cleanup tombstone is not a regular directory".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::path(relative),
+            Shown::fixed("portal transaction cleanup tombstone is not a regular directory"),
+        ));
     }
     if !valid_lower_sha256(expected_id)
         || tombstone.file_name().and_then(|name| name.to_str())
             != Some(&format!("{TRANSACTION_CLEANUP_PREFIX}{expected_id}"))
     {
-        return Err(ScaffoldError::InvalidState {
-            what: relative,
-            detail: "invalid portal cleanup identity".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::path(relative),
+            Shown::fixed("invalid portal cleanup identity"),
+        ));
     }
     if root
         .entries(&relative, 2)
@@ -760,10 +779,10 @@ fn remove_transaction_tombstone(
         || tombstone.file_name().and_then(|name| name.to_str())
             != Some(&format!("{TRANSACTION_CLEANUP_PREFIX}{expected_id}"))
     {
-        return Err(ScaffoldError::InvalidState {
-            what: relative,
-            detail: "portal transaction cleanup tombstone identity does not match".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::path(relative),
+            Shown::fixed("portal transaction cleanup tombstone identity does not match"),
+        ));
     }
     remove_authenticated_transaction_tree(root, &relative, &journal, portal_root, true)
 }
@@ -789,18 +808,18 @@ fn remove_abandoned_transaction_debris(
         }
         debris_seen += 1;
         if debris_seen > 64 {
-            return Err(ScaffoldError::InvalidState {
-                what: ".codeflow".into(),
-                detail: "too many abandoned portal transaction recovery entries".into(),
-            });
+            return Err(ScaffoldError::invalid(
+                Shown::fixed(".codeflow"),
+                Shown::fixed("too many abandoned portal transaction recovery entries"),
+            ));
         }
         let relative = format!(".codeflow/{name}");
         if let Some(id) = cleanup_id {
             if !valid_lower_sha256(id) {
-                return Err(ScaffoldError::InvalidState {
-                    what: relative,
-                    detail: "invalid portal transaction cleanup name".into(),
-                });
+                return Err(ScaffoldError::invalid(
+                    Shown::path(relative),
+                    Shown::fixed("invalid portal transaction cleanup name"),
+                ));
             }
             remove_transaction_tombstone(root, &root.join(&relative), portal_root, id)?;
         } else {
@@ -820,10 +839,10 @@ fn remove_staged_transaction(
         .map_err(|e| ScaffoldError::io(root.join(directory), e))?
         .is_dir()
     {
-        return Err(ScaffoldError::InvalidState {
-            what: directory.into(),
-            detail: "portal transaction stage is not a regular directory".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::path(directory),
+            Shown::fixed("portal transaction stage is not a regular directory"),
+        ));
     }
     let name = Path::new(directory)
         .file_name()
@@ -841,10 +860,10 @@ fn remove_staged_transaction(
                 && nonce.bytes().all(|byte| byte.is_ascii_digit())
         });
     if !valid_name {
-        return Err(ScaffoldError::InvalidState {
-            what: directory.into(),
-            detail: "unrecognized portal stage name; preserving contents".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::path(directory),
+            Shown::fixed("unrecognized portal stage name; preserving contents"),
+        ));
     }
     if root
         .entries(directory, 2)
@@ -938,10 +957,7 @@ fn authenticated_cleanup_outputs(
         }
     }
     if completed && !all_before && !all_after {
-        return Err(ScaffoldError::InvalidState {
-            what: directory.into(),
-            detail: "cleanup journal does not describe a completed application or rollback; preserving recovery evidence".into(),
-        });
+        return Err(ScaffoldError::invalid(Shown::path(directory), Shown::fixed("cleanup journal does not describe a completed application or rollback; preserving recovery evidence")));
     }
     let entries = root
         .entries(directory, 2)
@@ -950,10 +966,10 @@ fn authenticated_cleanup_outputs(
         .iter()
         .any(|name| name != "after" && name != "manifest.json")
     {
-        return Err(ScaffoldError::InvalidState {
-            what: directory.into(),
-            detail: "unknown portal transaction cleanup entry".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::path(directory),
+            Shown::fixed("unknown portal transaction cleanup entry"),
+        ));
     }
     let after = format!("{directory}/after");
     let staged = match root.entries(&after, 2048) {
@@ -967,26 +983,28 @@ fn authenticated_cleanup_outputs(
         // staged name is looked up in the transaction's own list of outputs,
         // so a name that is not valid UTF-8 is foreign state, and the cleanup
         // refuses it instead of deleting around it.
-        let name = name.to_str().ok_or_else(|| ScaffoldError::InvalidState {
-            what: directory.into(),
-            detail: "non-UTF-8 staged output name".into(),
+        let name = name.to_str().ok_or_else(|| {
+            ScaffoldError::invalid(
+                Shown::path(directory),
+                Shown::fixed("non-UTF-8 staged output name"),
+            )
         })?;
         let stage = format!("after/{name}");
-        let (size, hash) = allowed
-            .get(&stage)
-            .ok_or_else(|| ScaffoldError::InvalidState {
-                what: directory.into(),
-                detail: "unknown staged portal output".into(),
-            })?;
+        let (size, hash) = allowed.get(&stage).ok_or_else(|| {
+            ScaffoldError::invalid(
+                Shown::path(directory),
+                Shown::fixed("unknown staged portal output"),
+            )
+        })?;
         let relative = format!("{directory}/{stage}");
         let bytes = root
             .read(&relative, *size)
             .map_err(|e| ScaffoldError::io(root.join(&relative), e))?;
         if bytes.len() as u64 != *size || sha256_hex(&bytes) != **hash {
-            return Err(ScaffoldError::InvalidState {
-                what: directory.into(),
-                detail: "staged portal output changed before cleanup".into(),
-            });
+            return Err(ScaffoldError::invalid(
+                Shown::path(directory),
+                Shown::fixed("staged portal output changed before cleanup"),
+            ));
         }
         removals.push((relative, bytes));
     }
@@ -1022,13 +1040,15 @@ fn charge_bundle_asset(
     asset: &[u8],
 ) -> Result<(), ScaffoldError> {
     if asset.len() as u64 > MAX_MANAGED_FILE_BYTES {
-        return Err(ScaffoldError::ManifestInvalid(format!(
-            "{path} exceeds the managed portal file byte limit"
+        return Err(ScaffoldError::ManifestInvalid(shown!(
+            "{} exceeds the managed portal file byte limit",
+            Shown::path(path)
         )));
     }
     budget.charge(asset.len()).map_err(|error| {
-        ScaffoldError::ManifestInvalid(format!(
-            "docs portal bundle exceeds its aggregate byte limit: {error}"
+        ScaffoldError::ManifestInvalid(shown!(
+            "docs portal bundle exceeds its aggregate byte limit: {}",
+            Shown::io(&error)
         ))
     })
 }
@@ -1151,23 +1171,23 @@ fn setup_portal_locked(
     let relative_root = validate_portal_root(portal_root)?;
     if let Some(metadata) = repo_root.inspect(&path_text(&relative_root))? {
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(ScaffoldError::InvalidState {
-                what: path_text(&relative_root),
-                detail: "portal root exists but is not a regular directory".into(),
-            });
+            return Err(ScaffoldError::invalid(
+                Shown::path(path_text(&relative_root)),
+                Shown::fixed("portal root exists but is not a regular directory"),
+            ));
         }
     }
 
     let previous = load_state(repo_root)?;
     if let Some(state) = &previous {
         if !roots_equal(&state.root, &path_text(&relative_root)) {
-            return Err(ScaffoldError::InvalidState {
-                what: STATE_PATH.into(),
-                detail: format!(
-                    "portal is already adopted at {:?}; refusing a second root",
-                    state.root
+            return Err(ScaffoldError::invalid(
+                Shown::path(STATE_PATH),
+                shown!(
+                    "portal is already adopted at {}; refusing a second root",
+                    Shown::path(&state.root)
                 ),
-            });
+            ));
         }
     }
     if previous
@@ -1178,15 +1198,17 @@ fn setup_portal_locked(
     }
     let manifest_bytes = source
         .read(MANIFEST_ASSET)
-        .map_err(|error| ScaffoldError::InvalidState {
-            what: MANIFEST_ASSET.into(),
-            detail: error.to_string(),
+        .map_err(|_| {
+            ScaffoldError::invalid(
+                Shown::path(MANIFEST_ASSET),
+                Shown::fixed("the binary could not read its embedded asset"),
+            )
         })?
-        .ok_or_else(|| ScaffoldError::ManifestMissing(MANIFEST_ASSET.into()))?;
+        .ok_or_else(|| ScaffoldError::ManifestMissing(Shown::fixed(MANIFEST_ASSET)))?;
     if manifest_bytes.len() > MAX_MANIFEST_BYTES {
-        return Err(ScaffoldError::ManifestInvalid(
-            "docs portal manifest exceeds its byte limit".into(),
-        ));
+        return Err(ScaffoldError::ManifestInvalid(Shown::fixed(
+            "docs portal manifest exceeds its byte limit",
+        )));
     }
     let manifest: BundleManifest = crate::strict_json::parse_strict_json(&manifest_bytes)?;
     if manifest.schema_version != 1
@@ -1195,23 +1217,23 @@ fn setup_portal_locked(
         || manifest.files.is_empty()
         || manifest.files.len() > MAX_BUNDLE_FILES
     {
-        return Err(ScaffoldError::ManifestInvalid(
-            "docs portal manifest must use schema 1 and contain files".into(),
-        ));
+        return Err(ScaffoldError::ManifestInvalid(Shown::fixed(
+            "docs portal manifest must use schema 1 and contain files",
+        )));
     }
     let mut seen = BTreeSet::new();
     for file in &manifest.files {
         validate_asset_path(&file.path)?;
         if !seen.insert(portable_key(&file.path)) {
-            return Err(ScaffoldError::ManifestInvalid(format!(
-                "duplicate docs portal path {:?}",
-                file.path
+            return Err(ScaffoldError::ManifestInvalid(shown!(
+                "duplicate docs portal path {}",
+                Shown::path(&file.path)
             )));
         }
     }
-    let mut report = Report::new(format!(
+    let mut report = Report::new(shown!(
         "codeflow portal setup ({})",
-        relative_root.display()
+        Shown::path(&relative_root)
     ));
     let mut read_budget = ReadBudget::new();
     let mut bundle_budget = ReadBudget::new();
@@ -1230,12 +1252,18 @@ fn setup_portal_locked(
     for file in &manifest.files {
         let asset = source
             .read(&format!("{ASSET_PREFIX}{}", file.path))
-            .map_err(|error| ScaffoldError::InvalidState {
-                what: file.path.clone(),
-                detail: error.to_string(),
+            .map_err(|_| {
+                ScaffoldError::invalid(
+                    Shown::path(&file.path),
+                    Shown::fixed("the binary could not read its embedded asset"),
+                )
             })?
             .ok_or_else(|| {
-                ScaffoldError::ManifestMissing(format!("{ASSET_PREFIX}{}", file.path))
+                ScaffoldError::ManifestMissing(shown!(
+                    "{}{}",
+                    Shown::fixed(ASSET_PREFIX),
+                    Shown::path(&file.path)
+                ))
             })?;
         charge_bundle_asset(&mut bundle_budget, &file.path, &asset)?;
         let mut pristine = asset;
@@ -1243,10 +1271,10 @@ fn setup_portal_locked(
         let dest_text = path_text(&dest_rel);
         if let Some(metadata) = repo_root.inspect(&dest_text)? {
             if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err(ScaffoldError::InvalidState {
-                    what: dest_text.clone(),
-                    detail: "portal destination exists but is not a regular file".into(),
-                });
+                return Err(ScaffoldError::invalid(
+                    Shown::path(&dest_text),
+                    Shown::fixed("portal destination exists but is not a regular file"),
+                ));
             }
         }
         if previous.is_none()
@@ -1284,9 +1312,11 @@ fn setup_portal_locked(
                         "formerly managed portal file",
                         &mut read_budget,
                     )?
-                    .ok_or_else(|| ScaffoldError::InvalidState {
-                        what: dest_text.clone(),
-                        detail: "portal file disappeared during preflight".into(),
+                    .ok_or_else(|| {
+                        ScaffoldError::invalid(
+                            Shown::path(&dest_text),
+                            Shown::fixed("portal file disappeared during preflight"),
+                        )
                     })?;
                     if current != pristine
                         && old_file
@@ -1295,7 +1325,7 @@ fn setup_portal_locked(
                         report.file_with_notes(
                             dest_text,
                             Action::Conflicted,
-                            vec!["edited managed file; portal update stopped".into()],
+                            vec![Shown::fixed("edited managed file; portal update stopped")],
                         );
                     } else {
                         report.file(dest_text, Action::Skipped);
@@ -1307,7 +1337,7 @@ fn setup_portal_locked(
                 report.file_with_notes(
                     dest_text,
                     Action::Skipped,
-                    vec!["project-owned file is missing; not recreated".into()],
+                    vec![Shown::fixed("project-owned file is missing; not recreated")],
                 );
             } else {
                 mutations.write(
@@ -1356,7 +1386,7 @@ fn setup_portal_locked(
                     report.file_with_notes(
                         relative,
                         Action::Skipped,
-                        vec!["project-owned file is missing; not recreated".into()],
+                        vec![Shown::fixed("project-owned file is missing; not recreated")],
                     );
                 }
             }
@@ -1385,7 +1415,9 @@ fn setup_portal_locked(
                 report.file_with_notes(
                     dest_text,
                     Action::Conflicted,
-                    vec!["edited retiring managed file; portal update stopped".into()],
+                    vec![Shown::fixed(
+                        "edited retiring managed file; portal update stopped",
+                    )],
                 );
             }
         }
@@ -1406,11 +1438,12 @@ fn setup_portal_locked(
                 Action::Created | Action::Added | Action::Changed | Action::Removed
             ) {
                 file.action = Action::Skipped;
-                file.notes
-                    .push("planned change not applied: portal preflight failed".into());
+                file.notes.push(Shown::fixed(
+                    "planned change not applied: portal preflight failed",
+                ));
             }
         }
-        report.notes.push("Portal update stopped without changes. Rehome supported customization, explicitly restore reviewed managed bytes, or use codeflow portal transfer --confirm. Ownership is never transferred automatically.".into());
+        report.notes.push(Shown::fixed("Portal update stopped without changes. Rehome supported customization, explicitly restore reviewed managed bytes, or use codeflow portal transfer --confirm. Ownership is never transferred automatically."));
         return Ok(report);
     }
     let state = PortalState {
@@ -1470,7 +1503,7 @@ fn reconcile_managed(
         }
         Some(_) => {
             context.report.file_with_notes(dest_text, Action::Conflicted,
-                vec!["modified managed file or unknown incoming-path collision; no portal changes applied".into()]);
+                vec![Shown::fixed("modified managed file or unknown incoming-path collision; no portal changes applied")]);
             return Ok(());
         }
     };
@@ -1488,27 +1521,34 @@ fn reconcile_managed(
 fn read_project_file(
     root: &PortalIo,
     relative: &str,
-    label: &str,
+    label: &'static str,
     budget: &mut ReadBudget,
 ) -> Result<Option<Vec<u8>>, ScaffoldError> {
     let maximum = MAX_MANAGED_FILE_BYTES.min(budget.remaining);
     match root.read(relative, maximum) {
         Ok(bytes) => {
-            budget
-                .charge(bytes.len())
-                .map_err(|error| ScaffoldError::InvalidState {
-                    what: relative.into(),
-                    detail: format!("{label} exceeds the reconciliation read budget: {error}"),
-                })?;
+            budget.charge(bytes.len()).map_err(|error| {
+                ScaffoldError::invalid(
+                    Shown::path(relative),
+                    shown!(
+                        "{} exceeds the reconciliation read budget: {}",
+                        Shown::fixed(label),
+                        Shown::io(&error)
+                    ),
+                )
+            })?;
             Ok(Some(bytes))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(ScaffoldError::InvalidState {
-            what: relative.into(),
-            detail: format!(
-                "{label} is not a stable regular file or exceeds {maximum} bytes: {error}"
+        Err(error) => Err(ScaffoldError::invalid(
+            Shown::path(relative),
+            shown!(
+                "{} is not a stable regular file or exceeds {} bytes: {}",
+                Shown::fixed(label),
+                Shown::number(maximum),
+                Shown::io(&error)
             ),
-        }),
+        )),
     }
 }
 
@@ -1524,10 +1564,8 @@ fn read_state_bytes(root: &PortalIo) -> Result<Option<Vec<u8>>, ScaffoldError> {
 fn load_state(root: &PortalIo) -> Result<Option<PortalState>, ScaffoldError> {
     read_state_bytes(root)?
         .map(|bytes| {
-            state::parse(&bytes).map_err(|detail| ScaffoldError::InvalidState {
-                what: STATE_PATH.into(),
-                detail,
-            })
+            state::parse(&bytes)
+                .map_err(|detail| ScaffoldError::invalid(Shown::path(STATE_PATH), detail))
         })
         .transpose()
 }
@@ -1542,20 +1580,17 @@ fn recover_adoption(
         .map(|bytes| {
             state::recovery_root(&bytes)
                 .map(PathBuf::from)
-                .map_err(|detail| ScaffoldError::InvalidState {
-                    what: STATE_PATH.into(),
-                    detail,
-                })
+                .map_err(|detail| ScaffoldError::invalid(Shown::path(STATE_PATH), detail))
         })
         .transpose()?;
     let expected = match (explicit, adopted.as_deref()) {
         (Some(requested), Some(adopted)) => {
             let requested = validate_portal_root(requested)?;
             if !roots_equal(&path_text(&requested), &path_text(adopted)) {
-                return Err(ScaffoldError::InvalidState {
-                    what: STATE_PATH.into(),
-                    detail: "portal is already adopted at another root".into(),
-                });
+                return Err(ScaffoldError::invalid(
+                    Shown::path(STATE_PATH),
+                    Shown::fixed("portal is already adopted at another root"),
+                ));
             }
             Some(requested)
         }
@@ -1565,12 +1600,7 @@ fn recover_adoption(
     if let Some(expected) = &expected {
         recover_portal_transaction(root, expected)?;
     } else if root.inspect(TRANSACTION_PATH)?.is_some() {
-        return Err(ScaffoldError::InvalidState {
-            what: TRANSACTION_PATH.into(),
-            detail:
-                "pending portal transaction needs an adopted or explicit setup root before recovery"
-                    .into(),
-        });
+        return Err(ScaffoldError::invalid(Shown::path(TRANSACTION_PATH), Shown::fixed("pending portal transaction needs an adopted or explicit setup root before recovery")));
     }
     Ok(expected)
 }
@@ -1600,38 +1630,36 @@ fn plan_legacy_baseline_removal(
     };
     for (index, entry) in entries.into_iter().enumerate() {
         if index >= MAX_BASELINE_ENTRIES {
-            return Err(ScaffoldError::InvalidState {
-                what: BASELINE_ROOT.into(),
-                detail: "baseline directory contains too many entries".into(),
-            });
+            return Err(ScaffoldError::invalid(
+                Shown::path(BASELINE_ROOT),
+                Shown::fixed("baseline directory contains too many entries"),
+            ));
         }
         // Kept strict for the reason given for staged names above: an entry
         // that is not valid UTF-8 is unknown content, and the migration
         // preserves all content.
-        let name = entry
-            .into_string()
-            .map_err(|_| ScaffoldError::InvalidState {
-                what: BASELINE_ROOT.into(),
-                detail: "unknown non-UTF-8 legacy baseline entry".into(),
-            })?;
+        let name = entry.into_string().map_err(|_| {
+            ScaffoldError::invalid(
+                Shown::path(BASELINE_ROOT),
+                Shown::fixed("unknown non-UTF-8 legacy baseline entry"),
+            )
+        })?;
         if !expected.contains(name.as_str()) {
-            return Err(ScaffoldError::InvalidState {
-                what: BASELINE_ROOT.into(),
-                detail: "unknown legacy baseline entry; preserving all content".into(),
-            });
+            return Err(ScaffoldError::invalid(
+                Shown::path(BASELINE_ROOT),
+                Shown::fixed("unknown legacy baseline entry; preserving all content"),
+            ));
         }
         let relative = baseline_path(&name);
         let bytes =
             read_project_file(root, &relative, "legacy baseline", budget)?.ok_or_else(|| {
-                ScaffoldError::InvalidState {
-                    what: BASELINE_ROOT.into(),
-                    detail: "legacy baseline disappeared during preflight".into(),
-                }
+                ScaffoldError::invalid(
+                    Shown::path(BASELINE_ROOT),
+                    Shown::fixed("legacy baseline disappeared during preflight"),
+                )
             })?;
         if sha256_hex(&bytes) != name {
-            return Err(ScaffoldError::InvalidState {
-                what: BASELINE_ROOT.into(), detail: "legacy baseline content does not match its recorded hash; preserving all content".into(),
-            });
+            return Err(ScaffoldError::invalid(Shown::path(BASELINE_ROOT), Shown::fixed("legacy baseline content does not match its recorded hash; preserving all content")));
         }
         mutations.remove(
             root,
@@ -1642,7 +1670,7 @@ fn plan_legacy_baseline_removal(
         report.file_with_notes(
             relative,
             Action::Removed,
-            vec!["authenticated legacy baseline".into()],
+            vec![Shown::fixed("authenticated legacy baseline")],
         );
     }
     Ok(())
@@ -1653,16 +1681,14 @@ fn plan_state(
     state: &PortalState,
     mutations: &mut PortalMutationPlan,
 ) -> Result<(), ScaffoldError> {
-    state::validate(state).map_err(|detail| ScaffoldError::InvalidState {
-        what: STATE_PATH.into(),
-        detail,
-    })?;
+    state::validate(state)
+        .map_err(|detail| ScaffoldError::invalid(Shown::path(STATE_PATH), detail))?;
     let bytes = serde_json::to_vec_pretty(state)?;
     if bytes.len() as u64 > MAX_STATE_BYTES {
-        return Err(ScaffoldError::InvalidState {
-            what: STATE_PATH.into(),
-            detail: "portal adoption state exceeds its byte limit".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::path(STATE_PATH),
+            Shown::fixed("portal adoption state exceeds its byte limit"),
+        ));
     }
     mutations.write(
         root,
@@ -1673,9 +1699,13 @@ fn plan_state(
     )
 }
 
-fn transferred_report(root: &str, operation: &str) -> Report {
-    let mut report = Report::new(format!("codeflow portal {operation} ({root})"));
-    report.notes.push("Runtime is project-owned after transfer; no runtime files, configuration or transferred-from provenance changed. Upstream reconciliation is the project's responsibility.".into());
+fn transferred_report(root: &str, operation: &'static str) -> Report {
+    let mut report = Report::new(shown!(
+        "codeflow portal {} ({})",
+        Shown::fixed(operation),
+        Shown::path(root)
+    ));
+    report.notes.push(Shown::fixed("Runtime is project-owned after transfer; no runtime files, configuration or transferred-from provenance changed. Upstream reconciliation is the project's responsibility."));
     report
 }
 
@@ -1685,10 +1715,10 @@ fn transferred_report(root: &str, operation: &str) -> Report {
 /// Requires explicit confirmation, valid adoption and safely recoverable state.
 pub fn transfer_portal(root: &Path, confirmed: bool) -> Result<Report, ScaffoldError> {
     if !confirmed {
-        return Err(ScaffoldError::InvalidState {
-            what: "portal transfer".into(),
-            detail: "explicit --confirm is required".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::fixed("portal transfer"),
+            Shown::fixed("explicit --confirm is required"),
+        ));
     }
     if !root.join(".codeflow/project.toml").exists() {
         return Err(ScaffoldError::NotInitialized);
@@ -1696,25 +1726,29 @@ pub fn transfer_portal(root: &Path, confirmed: bool) -> Result<Report, ScaffoldE
     let io = PortalIo::open(root)?;
     let root = &io;
     let _lease = acquire_portal_transaction_lease(root)?;
-    let portal = recover_adoption(root, None)?.ok_or_else(|| ScaffoldError::InvalidState {
-        what: STATE_PATH.into(),
-        detail: "no portal is adopted".into(),
+    let portal = recover_adoption(root, None)?.ok_or_else(|| {
+        ScaffoldError::invalid(
+            Shown::path(STATE_PATH),
+            Shown::fixed("no portal is adopted"),
+        )
     })?;
     let destination = guard_beneath_root(root, &portal)?;
     match root.metadata(&path_text(&portal)) {
         Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
-            return Err(ScaffoldError::InvalidState {
-                what: path_text(&portal),
-                detail: "adopted portal root is not a regular directory".into(),
-            });
+            return Err(ScaffoldError::invalid(
+                Shown::path(path_text(&portal)),
+                Shown::fixed("adopted portal root is not a regular directory"),
+            ));
         }
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(ScaffoldError::io(&destination, error)),
     }
-    let mut state = load_state(root)?.ok_or_else(|| ScaffoldError::InvalidState {
-        what: STATE_PATH.into(),
-        detail: "portal adoption disappeared after recovery".into(),
+    let mut state = load_state(root)?.ok_or_else(|| {
+        ScaffoldError::invalid(
+            Shown::path(STATE_PATH),
+            Shown::fixed("portal adoption disappeared after recovery"),
+        )
     })?;
     if state.runtime_ownership == RuntimeOwnership::Transferred {
         return Ok(transferred_report(
@@ -1734,7 +1768,10 @@ pub fn transfer_portal(root: &Path, confirmed: bool) -> Result<Report, ScaffoldE
         )?;
     }
     let mut mutations = PortalMutationPlan::default();
-    let mut report = Report::new(format!("codeflow portal transfer ({})", portal.display()));
+    let mut report = Report::new(shown!(
+        "codeflow portal transfer ({})",
+        Shown::path(&portal)
+    ));
     if state.schema_version == 1 {
         plan_legacy_baseline_removal(root, &state, &mut budget, &mut mutations, &mut report)?;
     }
@@ -1742,7 +1779,7 @@ pub fn transfer_portal(root: &Path, confirmed: bool) -> Result<Report, ScaffoldE
     state.runtime_ownership = RuntimeOwnership::Transferred;
     plan_state(root, &state, &mut mutations)?;
     mutations.commit(root, &portal)?;
-    report.notes.push("Whole runtime ownership transferred to the project. Existing bytes and deletions are preserved; adopted starter version and hashes are frozen transferred-from provenance.".into());
+    report.notes.push(Shown::fixed("Whole runtime ownership transferred to the project. Existing bytes and deletions are preserved; adopted starter version and hashes are frozen transferred-from provenance."));
     Ok(report)
 }
 
@@ -1750,17 +1787,20 @@ fn snapshot_project_file(
     root: &PortalIo,
     relative: &str,
     maximum: u64,
-    label: &str,
+    label: &'static str,
 ) -> Result<Option<Vec<u8>>, ScaffoldError> {
     match root.read(relative, maximum) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(ScaffoldError::InvalidState {
-            what: relative.into(),
-            detail: format!(
-                "{label} is not a stable regular file or exceeds {maximum} bytes: {error}"
+        Err(error) => Err(ScaffoldError::invalid(
+            Shown::path(relative),
+            shown!(
+                "{} is not a stable regular file or exceeds {} bytes: {}",
+                Shown::fixed(label),
+                Shown::number(maximum),
+                Shown::io(&error)
             ),
-        }),
+        )),
     }
 }
 
@@ -1768,26 +1808,26 @@ fn ensure_snapshot_unchanged(
     root: &PortalIo,
     relative: &str,
     expected: Option<&[u8]>,
-    phase: &str,
+    phase: &'static str,
 ) -> Result<(), ScaffoldError> {
     let maximum = expected.map_or(0, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX));
     let current = snapshot_project_file(root, relative, maximum, phase).map_err(|error| {
-        ScaffoldError::InvalidState {
-            what: relative.into(),
-            detail: format!(
-                "portal transaction {phase} snapshot changed; refusing to overwrite concurrent edits: {error}"
-            ),
-        }
+        ScaffoldError::invalid(Shown::path(relative), shown!(
+                "portal transaction {} snapshot changed; refusing to overwrite concurrent edits: {}",
+                Shown::fixed(phase),
+                Shown::from(&error)
+            ))
     })?;
     if current.as_deref() == expected {
         Ok(())
     } else {
-        Err(ScaffoldError::InvalidState {
-            what: relative.into(),
-            detail: format!(
-                "portal transaction {phase} snapshot changed; refusing to overwrite concurrent edits"
+        Err(ScaffoldError::invalid(
+            Shown::path(relative),
+            shown!(
+                "portal transaction {} snapshot changed; refusing to overwrite concurrent edits",
+                Shown::fixed(phase)
             ),
-        })
+        ))
     }
 }
 
@@ -1806,10 +1846,10 @@ fn missing_parent_directories<'a>(
             match root.metadata(&path_text(ancestor)) {
                 Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
                 Ok(_) => {
-                    return Err(ScaffoldError::InvalidState {
-                        what: path_text(ancestor),
-                        detail: "portal transaction parent is not a regular directory".into(),
-                    });
+                    return Err(ScaffoldError::invalid(
+                        Shown::path(path_text(ancestor)),
+                        Shown::fixed("portal transaction parent is not a regular directory"),
+                    ));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     missing.insert(path_text(ancestor));
@@ -1843,10 +1883,10 @@ fn rollback_mutations(
             continue;
         }
         if current != mutation.after {
-            return Err(ScaffoldError::InvalidState {
-                what: mutation.path.clone(),
-                detail: "portal transaction rollback found a concurrent edit; preserving it".into(),
-            });
+            return Err(ScaffoldError::invalid(
+                Shown::path(&mutation.path),
+                Shown::fixed("portal transaction rollback found a concurrent edit; preserving it"),
+            ));
         }
         match &mutation.before {
             Some(bytes) => root.write(&mutation.path, bytes)?,
@@ -1890,10 +1930,10 @@ fn validate_portal_root(path: &Path) -> Result<PathBuf, ScaffoldError> {
             .components()
             .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
     {
-        return Err(ScaffoldError::InvalidState {
-            what: "portal path".into(),
-            detail: "expected a non-empty repository-relative path without traversal".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::fixed("portal path"),
+            Shown::fixed("expected a non-empty repository-relative path without traversal"),
+        ));
     }
     let normalized: PathBuf = path
         .components()
@@ -1903,27 +1943,27 @@ fn validate_portal_root(path: &Path) -> Result<PathBuf, ScaffoldError> {
         })
         .collect();
     if normalized.as_os_str().is_empty() {
-        return Err(ScaffoldError::InvalidState {
-            what: "portal path".into(),
-            detail: "expected a named repository-relative directory".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::fixed("portal path"),
+            Shown::fixed("expected a named repository-relative directory"),
+        ));
     }
     let text = path_text(&normalized);
     if !text.split('/').all(portable_segment) {
-        return Err(ScaffoldError::InvalidState {
-            what: "portal path".into(),
-            detail: "path is not portable across macOS, Linux, Windows, and WSL".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::fixed("portal path"),
+            Shown::fixed("path is not portable across macOS, Linux, Windows, and WSL"),
+        ));
     }
     if text == ".git"
         || text.starts_with(".git/")
         || text == ".codeflow"
         || text.starts_with(".codeflow/")
     {
-        return Err(ScaffoldError::InvalidState {
-            what: "portal path".into(),
-            detail: "reserved .git and .codeflow state cannot contain the portal".into(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::fixed("portal path"),
+            Shown::fixed("reserved .git and .codeflow state cannot contain the portal"),
+        ));
     }
     Ok(normalized)
 }
@@ -1959,13 +1999,16 @@ fn validate_asset_path(path: &str) -> Result<(), ScaffoldError> {
             if path_text(&normalized) == path {
                 Ok(())
             } else {
-                Err(ScaffoldError::ManifestInvalid(
-                    "noncanonical portal asset path".into(),
-                ))
+                Err(ScaffoldError::ManifestInvalid(Shown::fixed(
+                    "noncanonical portal asset path",
+                )))
             }
         })
         .map_err(|_| {
-            ScaffoldError::ManifestInvalid(format!("unsafe docs portal asset path {path:?}"))
+            ScaffoldError::ManifestInvalid(shown!(
+                "unsafe docs portal asset path {}",
+                Shown::path(path)
+            ))
         })
 }
 

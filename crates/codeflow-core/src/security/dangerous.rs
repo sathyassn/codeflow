@@ -78,11 +78,12 @@ fn command_tokens(command: &str) -> Vec<String> {
 }
 
 pub(super) fn program_name(token: &str) -> String {
-    token
+    let name = token
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(token)
-        .to_ascii_lowercase()
+        .to_ascii_lowercase();
+    crate::hooks::git_guard::program_name(&name).to_string()
 }
 
 /// Resolve the common launch layers agents use on supported hosts. The hard
@@ -863,7 +864,7 @@ fn check_disk_operations(cmd: &str) -> Option<Verdict> {
             .map(|arg| arg.to_ascii_lowercase())
             .collect::<Vec<_>>();
 
-        if program == "dd" && dd_disk_re().is_match(&normalized) {
+        if super::unresolved::writer_name(&program) == "dd" && dd_disk_re().is_match(&normalized) {
             return Some(block(
                 "Dangerous Command",
                 "Direct disk write operation",

@@ -134,7 +134,11 @@ Its facts cite CodeFlow's own `AGENTS.md`; substitute your repository's
 sources before you copy it. The service checks the envelope (schema version,
 a family from the nine, the authored binding, a title and a caption, at most
 64 KiB); the runtime validates the rest with the grammar module before it
-draws and shows the refusal in place of the figure.
+draws and shows the refusal in place of the figure. `present check` also checks
+composition dimensions and fact-check kinds from the same rule data as the
+renderer, including the 720-unit wide limit and JSON-source checks. It warns
+when a Concept section has no figure or when narrative text dominates; these
+warnings do not refuse a document.
 Present draws authored figures only, and it draws each fact as declared: only
 the portal re-derives facts from their sources, so cite sources a reviewer
 can check. A document draws at most 24 figure blocks.
@@ -144,7 +148,11 @@ can check. A document draws at most 24 figure blocks.
 `disclosure.blocks` and each `tabs[].blocks` use the same block catalog. Nest
 only when the hierarchy improves comprehension; the runtime rejects excessive
 depth and total blocks. Avoid tabs when readers need to compare the content
-side by side.
+side by side. A `tabs` block accepts an optional `title`, used above the control
+and in the section list (otherwise "Views"). The first panel opens initially;
+click a tab or use Left, Right, Home and End while its tab has focus. In Comment
+mode a click pins the tab label; leave Comment to change panels. An export
+opened with JavaScript off shows only the first tab panel.
 
 ### Sandboxed HTML
 
@@ -156,6 +164,10 @@ runtime scopes authored style selectors and contains its layout/paint so it
 cannot style or overlay review controls. Scripts, forms, navigation, network
 loads, reserved runtime identities, and top-layer controls are prohibited.
 Offline exports additionally place authored HTML in a sandboxed frame.
+The export renderer copies the computed theme and project tokens into it so
+SVG paint stays visible.
+Stages using those variables need the export renderer's JavaScript; a stage
+with its own styles can draw without it.
 Never use it as a component SDK, a way around the schema, or a
 place for product runtime code. Prefer a standard block over equivalent custom
 HTML, and never make ASCII stand in for a figure the claim deserves.
@@ -349,13 +361,24 @@ surface that takes no note.
 | `code` | yes: its code | yes: one line | yes |
 | `diff` | yes: its lines | yes: one line | yes |
 | `tree` | yes: a node's label | yes: a node | yes |
-| `figure` | no: its words are part labels, so selecting one names the part it labels | yes: a part (its mark id) | yes |
+| `figure` | yes: a drawn label, axis name or legend entry's words | yes: a part (its mark id) | yes |
 | `media` | yes: the caption's words, when there is a caption | yes: the image, video or audio | yes |
 | `disclosure` | yes: the summary, and the words of an opened block | yes: the summary, and the parts of an opened block | yes, on what shows |
 | `tabs` | yes: the tab labels, and the words of an opened tab | yes: a tab label, and the parts of an opened tab | yes, on what shows |
 | `feedback_prompt` | yes: the prompt | yes: the prompt | yes |
 | `html` | yes: a stage's visible words | yes: a stage entity, else the shape or element clicked | yes |
 | `form` | yes: its title, prompt, field labels and option labels | yes: a field, the title or the prompt | yes |
+
+Figure text uses the same exact quote, context and UTF-16 selector as prose.
+A drag selects words within one label or legend entry; a click still pins its
+part. Hover highlights that part, and a drag starting on empty drawing space
+makes an area. Geometry-only revisions preserve the text anchor. Changed
+wording uses the existing exact/context and fuzzy matching rules; no match
+falls back to the figure block, and removing that block orphans the note.
+The canonical text order is title, caption, wide labels, narrow labels, then
+legend meanings. Repeated words retain their own positions. Offline exports
+allow native selection and include stored selectors with `--with-notes`, but
+accept no new comments.
 
 An area over a closed disclosure or an unopened tab belongs to that block,
 never to the blocks it hides.

@@ -432,6 +432,32 @@ impl Tree {
         })
     }
 
+    /// Open, creating it and its folders if needed, a regular file read
+    /// only, to hold a lock on without ever writing it.
+    ///
+    /// # Errors
+    ///
+    /// When a component is a link or the leaf is not a regular file.
+    pub(crate) fn create_read_only(&self, relative: &str) -> io::Result<File> {
+        self.explained(relative, || {
+            let (parent, name) = self.parent(relative, true)?;
+            platform::create_read_only(&parent, &name)
+        })
+    }
+
+    /// Open an existing regular file for reading.
+    ///
+    /// # Errors
+    ///
+    /// When a component is a link, the leaf is missing, or it is not a
+    /// regular file.
+    pub(crate) fn open_regular(&self, relative: &str) -> io::Result<File> {
+        self.explained(relative, || {
+            let (parent, name) = self.parent(relative, false)?;
+            platform::open_regular(&parent, &name)
+        })
+    }
+
     /// Open (creating if needed) a regular file to hold a lock on.
     ///
     /// # Errors
@@ -618,6 +644,48 @@ mod platform {
         Ok(file)
     }
 
+    /// Open, creating if needed, a regular file read only: never through a
+    /// link, never truncated, without blocking on a special file; the type
+    /// is checked on the opened descriptor.
+    pub(super) fn create_read_only(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<File> {
+        let name = name(leaf)?;
+        let flags =
+            libc::O_RDONLY | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
+        // SAFETY: live directory descriptor and NUL-terminated basename; mode is
+        // supplied because O_CREAT is set. A successful descriptor is owned once.
+        let descriptor =
+            unsafe { libc::openat(parent.file.as_raw_fd(), name.as_ptr(), flags, 0o666) };
+        if descriptor == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: openat returned this owned descriptor.
+        let file = unsafe { File::from_raw_fd(descriptor) };
+        if !file.metadata()?.is_file() {
+            return Err(invalid());
+        }
+        Ok(file)
+    }
+
+    /// Open an existing regular file for reading, never through a link and
+    /// without blocking on a special file; the type is checked on the
+    /// opened descriptor.
+    pub(super) fn open_regular(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<File> {
+        let name = name(leaf)?;
+        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
+        // SAFETY: live directory descriptor and NUL-terminated basename. A
+        // successful descriptor is owned once.
+        let descriptor = unsafe { libc::openat(parent.file.as_raw_fd(), name.as_ptr(), flags) };
+        if descriptor == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: openat returned this owned descriptor.
+        let file = unsafe { File::from_raw_fd(descriptor) };
+        if !file.metadata()?.is_file() {
+            return Err(invalid());
+        }
+        Ok(file)
+    }
+
     pub(super) fn metadata(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<Metadata> {
         let name = name(leaf)?;
         let mut info = std::mem::MaybeUninit::<libc::stat>::uninit();
@@ -783,7 +851,7 @@ mod platform {
     use std::os::windows::ffi::OsStringExt;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Wdk::Storage::FileSystem::{
-        FileRenameInformation, NtSetInformationFile, FILE_CREATE, FILE_OPEN,
+        FileRenameInformation, NtSetInformationFile, FILE_CREATE, FILE_OPEN, FILE_OPEN_IF,
         FILE_RENAME_INFORMATION,
     };
     use windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES;
@@ -824,6 +892,32 @@ mod platform {
             }
             result => result?,
         };
+        if !file.metadata()?.is_file() {
+            return Err(invalid());
+        }
+        Ok(file)
+    }
+
+    pub(super) fn create_read_only(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<File> {
+        // Open-or-create in one call, with read access only: `FILE_CREATE`
+        // would add `DELETE` access, and a handle holding it without
+        // `FILE_SHARE_DELETE` makes every later open of the lock fail with a
+        // sharing violation (TSK-1003, hosted run 40419008471).
+        let file = open_relative(
+            parent.ancestors.last().ok_or_else(invalid)?,
+            leaf,
+            FILE_GENERIC_READ,
+            FILE_OPEN_IF,
+            Some(false),
+        )?;
+        if !file.metadata()?.is_file() {
+            return Err(invalid());
+        }
+        Ok(file)
+    }
+
+    pub(super) fn open_regular(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<File> {
+        let file = open(parent, leaf, FILE_GENERIC_READ, false)?;
         if !file.metadata()?.is_file() {
             return Err(invalid());
         }

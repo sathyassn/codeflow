@@ -82,6 +82,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DISCARD_LOCAL_WORK", Runs),
     ("ABSENT_WORKTREE", Runs),
     ("OUTWARD_ACTION", Excluded(HumanAuthority)),
+    ("SECRET_SELECTION", Runs),
     ("PUSH_WITHOUT_FOLLOW_TAGS", Runs),
     ("TASK_STATUS", Runs),
     ("EPIC_STATUS", Runs),
@@ -92,6 +93,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("DUAL_IDENTITY", Runs),
     ("STANDALONE_SPLIT", Runs),
     ("TASK_DELIVERABLES", Runs),
+    ("RECORD_OUTCOME", Runs),
+    ("EPIC_DELIVERABLES", Runs),
     ("DOCS_LAYER_ABSENT", Runs),
     ("DOCS_EPICS_UNCHECKED", Runs),
     ("DOCS_SPECS_UNCHECKED", Runs),
@@ -113,6 +116,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("ACCEPTANCE_BOUND", Excluded(HumanAuthority)),
     ("PLANNING_AMENDMENT", Excluded(HumanAuthority)),
     ("LINE_ADOPTION_OUTSIDE_RANGE", Excluded(HumanAuthority)),
+    ("UNVERIFIED_LINE_FROZEN", Excluded(HumanAuthority)),
     ("CRITERIA_DELTA", Excluded(HumanAuthority)),
     ("CRITERIA_AUTHORITY", Excluded(HumanAuthority)),
     ("CRITERIA_CORRECTION", Excluded(HumanAuthority)),
@@ -122,6 +126,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("RECORD_BASELINE_EXEMPT", Runs),
     ("BASELINE_REVIEW", Runs),
     ("POLICY_DEPRECATED", Runs),
+    ("POLICY_UNSUPPORTED", Runs),
     ("PROTECTED_BRANCH", Runs),
     ("PROTECTED_DELETE", Runs),
     ("PROTECTED_REWRITE", Runs),
@@ -169,40 +174,36 @@ const ROWS: &[(&str, Proof)] = &[
     ("CI_SECURITY_LEVEL_LOWERED", Runs),
     ("CI_SETUP_HOOK_CHANGED", Runs),
     ("SCAFFOLD_MANIFEST_BROKEN", Excluded(Network)),
+    ("PATH_POLICY", Runs),
     ("ENV_FILE_STAGED", Runs),
     ("SECRET_SCAN_INCOMPLETE", Runs),
     ("SECRET_STAGED", Runs),
-    ("PUSH_SET_FAILED", Runs),
     ("PUSH_SET_CI", Runs),
-    ("PUSH_SET_VALIDATE", Runs),
     ("PUSH_SET_BY_HAND", Runs),
-    ("PUSH_TREE_UNCHECKED", Runs),
-    ("PUSH_TREE_REQUIRED", Runs),
     ("PUSH_RANGE_UNRESOLVED", Runs),
     ("PUSH_DESTINATION_SILENT", Runs),
     ("PUSH_REWRITE", Runs),
-    ("PUSH_OVER_BUDGET_TARGET", Runs),
     ("PUSH_OVER_BUDGET_BUILTIN", Runs),
-    ("PUSH_TARGETS_UNCONFIGURED", Runs),
-    ("PUSH_TARGETS_NONE", Runs),
     ("IDS_PENDING_LOCAL", Runs),
     ("IDS_SYNC_FAILED", Runs),
     ("RELEASE_PREFLIGHT_NOTE", Runs),
     ("RELEASE_PREFLIGHT_UNRUN", Runs),
     ("RELEASE_PREFLIGHT", Runs),
-    ("TEST_CONFIG_REPAIR", Runs),
     ("DOCTOR_HOOKS_PATH", Runs),
     ("DOCTOR_INIT", Runs),
+    ("DOCTOR_OUTCOME_MARKER", Runs),
     ("DOCTOR_TOOL_MISSING", Runs),
     ("DOCTOR_HOOK_MANAGER", Runs),
     ("DOCTOR_HOOK_WIRING_UNSEEN", Confirms),
     ("DOCTOR_GIT_DIR_HOOKS", Runs),
     ("DOCTOR_HARNESS_APPROVAL", Excluded(HarnessApproval)),
     ("DOCTOR_GATE_DIRS", Excluded(HumanAuthority)),
+    ("DOCTOR_GATE_DIRS_CODEX", Excluded(HumanAuthority)),
     ("DOCTOR_SANDBOX_UNSEEN", Excluded(HumanAuthority)),
     ("DOCTOR_GROK_HOOKS", Runs),
     ("DOCTOR_GROK_UNMANAGED_HOOKS", Runs),
     ("DOCTOR_GROK_MISSING_GUARD", Runs),
+    ("DOCTOR_GUARD_TIMEOUTS", Runs),
     ("DOCTOR_NETWORK", Excluded(Network)),
     ("DOCTOR_DELEGATES", Runs),
     ("DOCTOR_DELEGATES_SIGN_IN", Excluded(HumanAuthority)),
@@ -244,6 +245,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("HOOK_UNEVALUATED", Runs),
     ("HOOK_STDIN_UNREAD", Runs),
     ("GUARD_PAYLOAD_MALFORMED", Runs),
+    // The operator repairs or removes the input the guard waits on.
+    ("GUARD_DEADLINE", Excluded(HumanAuthority)),
     ("SESSION_SUMMARY_UNWRITTEN", Runs),
     ("REFUSAL_UNRECORDED", Runs),
     ("REGISTRY_UNWRITTEN", Runs),
@@ -1254,10 +1257,37 @@ fn planned() -> tempfile::TempDir {
         let out = codeflow(&root, &args);
         assert!(!out.contains("error"), "{args:?}: {out}");
     }
+    // A record made after the project adopted the Outcome section states
+    // it, and an epic names its Deliverables (TSK-435).
+    for rel in [EPIC, TASK] {
+        state_outcome(&root, rel);
+    }
+    let epic = read(&root, EPIC).replacen(
+        "\n## Acceptance Criteria\n",
+        &format!("\n{EPIC_DELIVERABLE}\n\n## Acceptance Criteria\n"),
+        1,
+    );
+    write(&root, EPIC, &epic);
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-q", "-m", "docs: plan the work"]);
     dir
 }
+
+/// Write `OUTCOME_LINE` under the `## Outcome` section of the record at
+/// `rel`, as its author does after `task new` or `epic new` (TSK-435).
+fn state_outcome(root: &Path, rel: &str) {
+    let filled = read(root, rel).replacen(
+        "\n## Deliverables\n",
+        &format!("\n{OUTCOME_LINE}\n\n## Deliverables\n"),
+        1,
+    );
+    write(root, rel, &filled);
+}
+
+/// The Outcome line `planned` writes into each record.
+const OUTCOME_LINE: &str = "after this merges, an adopter can use the outcome";
+/// The Deliverables entry `planned` writes into the epic.
+const EPIC_DELIVERABLE: &str = "- the outcome: `docs/outcome.md`";
 
 /// Replace the frontmatter line `field: ...` of a record with
 /// `field: value`.
@@ -1441,6 +1471,61 @@ fn clears_task_deliverables() {
                 1,
             );
             write(&root, TASK, &filled);
+        },
+    );
+}
+
+/// TSK-435: an open record with no filled `## Outcome` warns where the
+/// project has no adoption marker, until the section states one line.
+#[test]
+fn clears_record_outcome() {
+    let dir = planned();
+    let root = project(&dir);
+    let state: String = read(&root, ".codeflow/project.toml")
+        .lines()
+        .filter(|line| !line.starts_with("outcome_"))
+        .flat_map(|line| [line, "\n"])
+        .collect();
+    write(&root, ".codeflow/project.toml", &state);
+    let record = read(&root, TASK).replacen(&format!("\n{OUTCOME_LINE}\n"), "\n", 1);
+    write(&root, TASK, &record);
+    prove(
+        "RECORD_OUTCOME",
+        "open record has no filled `## Outcome` section",
+        || validate(&root),
+        |printed| {
+            assert!(
+                printed.contains(&format!("in {TASK}, add one line")),
+                "{printed}"
+            );
+            state_outcome(&root, TASK);
+        },
+    );
+}
+
+/// TSK-435: an open epic made after adoption warns until its
+/// `## Deliverables` names an output and its home.
+#[test]
+fn clears_epic_deliverables() {
+    let dir = planned();
+    let root = project(&dir);
+    let epic = read(&root, EPIC).replacen(&format!("\n{EPIC_DELIVERABLE}\n"), "\n", 1);
+    write(&root, EPIC, &epic);
+    prove(
+        "EPIC_DELIVERABLES",
+        "open epic names no deliverables",
+        || validate(&root),
+        |printed| {
+            assert!(
+                printed.contains(&format!("in {EPIC}, list each output")),
+                "{printed}"
+            );
+            let filled = read(&root, EPIC).replacen(
+                "\n## Acceptance Criteria\n",
+                &format!("\n{EPIC_DELIVERABLE}\n\n## Acceptance Criteria\n"),
+                1,
+            );
+            write(&root, EPIC, &filled);
         },
     );
 }
@@ -1667,9 +1752,90 @@ fn clears_policy_deprecated() {
     );
 }
 
+#[test]
+fn clears_policy_unsupported() {
+    let dir = ci_repo(r#"{"security":{"script_bypass":"block"}}"#);
+    let root = dir.path();
+    prove(
+        "POLICY_UNSUPPORTED",
+        "security.script_bypass is not supported, has no effect",
+        || codeflow(root, &["doctor", "--check", "policy-source"]),
+        |printed| {
+            assert!(
+                printed.contains("removes security.script_bypass from .codeflow/policy.json"),
+                "{printed}"
+            );
+            let mut value: serde_json::Value =
+                serde_json::from_str(&read(root, ".codeflow/policy.json")).unwrap();
+            value["security"]
+                .as_object_mut()
+                .unwrap()
+                .remove("script_bypass");
+            write(root, ".codeflow/policy.json", &value.to_string());
+            // Doctor also reads committed policy authority, so publish the edit
+            // to this fixture's local authority before checking the remedy.
+            git(
+                root,
+                &["commit", "-q", "-am", "fix: remove unsupported policy"],
+            );
+        },
+    );
+}
+
 fn commit_all(root: &Path, message: &str) -> String {
     git(root, &["add", "-A"]);
     text(&run("git", root, &["commit", "-q", "-m", message]))
+}
+
+#[test]
+fn clears_path_policy() {
+    let dir = ci_repo(r#"{"git":{"secret_scan":"off"}}"#);
+    let root = dir.path();
+    commit(root, "public/fixture.pem", "feat: add a public fixture");
+    let finding = "blocked name changed: public/fixture.pem";
+    prove(
+        "PATH_POLICY",
+        finding,
+        || {
+            let out = run(
+                exe().to_str().unwrap(),
+                root,
+                &[
+                    "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x",
+                ],
+            );
+            let said = text(&out);
+            assert!(out.status.success() || said.contains(finding), "{said}");
+            said
+        },
+        |printed| {
+            let Step::Edit(path) = catalogued("PATH_POLICY").step else {
+                panic!("path policy remedy must name its policy file");
+            };
+            assert!(printed.contains(path), "{printed}");
+            // The remedy requires the exception on the target, not the branch.
+            git(root, &["switch", "-q", "main"]);
+            write(
+                root,
+                path,
+                &serde_json::json!({"git": {
+                    "secret_scan": "off",
+                    "blocked_names": [{
+                        "pattern": "*.pem",
+                        "except_under": ["public/fixture.pem"],
+                        "reason": "Public test certificate fixture"
+                    }]
+                }})
+                .to_string(),
+            );
+            git(root, &["add", path]);
+            git(
+                root,
+                &["commit", "-q", "-m", "feat: allow the public fixture"],
+            );
+            git(root, &["switch", "-q", "feat/x"]);
+        },
+    );
 }
 
 #[test]
@@ -1749,6 +1915,7 @@ fn a_target_behind_its_upstream_prints_no_step() {
         ],
     );
     assert!(out.contains("TSK-001"), "{out}");
+    state_outcome(&root, TASK);
     commit_all(&root, "docs: plan the work");
     git(
         &dest,
@@ -1806,99 +1973,6 @@ fn pushed(root: &Path) -> String {
 }
 
 #[test]
-fn clears_push_targets_unconfigured() {
-    let dir = scaffolded("--standard");
-    let root = project(&dir);
-    with_destination(&root);
-    write(&root, "x.txt", "x\n");
-    commit_all(&root, "feat: add x");
-    prove(
-        "PUSH_TARGETS_UNCONFIGURED",
-        "no .codeflow/test-config.json",
-        || pushed(&root),
-        |printed| {
-            assert!(
-                printed.contains("create .codeflow/test-config.json"),
-                "{printed}"
-            );
-            write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
-            commit_all(&root, "chore: add a quick target");
-        },
-    );
-}
-
-#[test]
-fn clears_push_targets_none() {
-    let dir = scaffolded("--standard");
-    let root = project(&dir);
-    with_destination(&root);
-    write(
-        &root,
-        ".codeflow/test-config.json",
-        &QUICK_CONFIG.replace("\"quick\"", "\"full\""),
-    );
-    commit_all(&root, "chore: add a full target");
-    prove(
-        "PUSH_TARGETS_NONE",
-        "quick targets skipped",
-        || pushed(&root),
-        |printed| {
-            assert!(printed.contains(".codeflow/test-config.json"), "{printed}");
-            write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
-            commit_all(&root, "chore: give the target a quick mode");
-        },
-    );
-}
-
-#[test]
-fn clears_push_set_failed() {
-    let dir = scaffolded("--standard");
-    let root = project(&dir);
-    with_destination(&root);
-    write(
-        &root,
-        ".codeflow/test-config.json",
-        &QUICK_CONFIG.replace("\"true\"", "\"false\""),
-    );
-    commit_all(&root, "chore: add a failing target");
-    prove(
-        "PUSH_SET_FAILED",
-        "push set failed for: check",
-        || pushed(&root),
-        |printed| {
-            write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
-            commit_all(&root, "chore: fix the target");
-            let step = printed_command(printed, "PUSH_SET_FAILED", None);
-            run_printed(&root, &step, &[], &[]);
-        },
-    );
-}
-
-#[test]
-fn clears_test_config_repair() {
-    let dir = scaffolded("--standard");
-    let root = project(&dir);
-    with_destination(&root);
-    write(&root, ".codeflow/test-config.json", "{ not json");
-    commit_all(&root, "chore: add a broken test config");
-    prove(
-        "TEST_CONFIG_REPAIR",
-        "could not load test-config.json",
-        || pushed(&root),
-        |printed| {
-            assert!(
-                printed.contains("repair .codeflow/test-config.json"),
-                "{printed}"
-            );
-            write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
-            commit_all(&root, "chore: repair the test config");
-            let step = printed_command(printed, "TEST_CONFIG_REPAIR", Some("codeflow test"));
-            run_printed(&root, &step, &[], &[]);
-        },
-    );
-}
-
-#[test]
 fn clears_push_set_ci() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
@@ -1931,99 +2005,6 @@ fn clears_push_set_ci() {
             git(&root, &["commit", "-q", "--amend", "-m", "feat: add x"]);
         },
     );
-}
-
-#[test]
-fn clears_push_set_validate() {
-    let dir = scaffolded("--standard");
-    let root = project(&dir);
-    with_destination(&root);
-    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
-    let registry = read(&root, "docs/capabilities.md");
-    write(
-        &root,
-        "docs/capabilities.md",
-        &format!(
-            "{registry}{}",
-            CAPABILITY.replace("adrs: []", "adrs: [ADR-0777]")
-        ),
-    );
-    commit_all(&root, "docs: add a capability");
-    prove(
-        "PUSH_SET_VALIDATE",
-        "push set check failed: `codeflow validate",
-        || pushed(&root),
-        |printed| {
-            write(
-                &root,
-                "docs/capabilities.md",
-                &format!("{registry}{CAPABILITY}"),
-            );
-            commit_all(&root, "docs: drop the missing decision");
-            let step = printed_command(printed, "PUSH_SET_VALIDATE", None);
-            run_printed(&root, &step, &[], &[]);
-        },
-    );
-}
-
-#[test]
-fn clears_push_tree_unchecked() {
-    clear_push_tree("warn", "PUSH_TREE_UNCHECKED");
-}
-
-#[test]
-fn clears_push_tree_required() {
-    clear_push_tree("block", "PUSH_TREE_REQUIRED");
-}
-
-fn clear_push_tree(level: &str, row: &str) {
-    let dir = scaffolded("--standard");
-    let root = project(&dir);
-    git(&root, &["switch", "-q", "-c", "chore/tree-gate"]);
-    push::set_policy(&root, &[("test_gate_on_push", level.into())]);
-    git(&root, &["add", "-A"]);
-    git(
-        &root,
-        &[
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "chore: configure the tree gate",
-        ],
-    );
-    with_destination(&root);
-    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
-    commit_all(&root, "chore: add a quick target");
-    git(&root, &["branch", "feat/y"]);
-    write(&root, "x.txt", "x\n");
-    commit_all(&root, "feat: add x");
-    // Pushing feat/y from a checkout of feat/x.
-    let check = || push(&root, &["origin", "feat/y"]);
-    let before = check();
-    let printed = block(&before, "did not run for").to_string();
-    assert_prints_row(&printed, row);
-    assert_eq!(before.contains("BLOCKED"), level == "block", "{before}");
-    if level == "block" {
-        let switch = printed_command(&printed, row, None);
-        run_printed(&root, &switch, &[("<branch>", "feat/y")], &[]);
-    } else {
-        git(&root, &["switch", "-q", "feat/y"]);
-    }
-    write(&root, "y.txt", "y\n");
-    commit_all(&root, "feat: add y");
-    if level == "warn" {
-        let validate = printed_command(&printed, row, None);
-        run_printed(&root, &validate, &[], &[]);
-        let quick = printed
-            .split('`')
-            .find(|span| span.starts_with("codeflow test "))
-            .expect("the remedy names its quick check");
-        run_printed(&root, quick, &[], &[]);
-    }
-    let after = check();
-    assert!(!after.contains("did not run for"), "{after}");
-    assert!(after.contains("quick targets passed"), "{after}");
 }
 
 #[test]
@@ -2207,7 +2188,7 @@ fn clears_doctor_grok_hooks_in_an_edited_hook_file() {
         .unwrap();
     let edited = old.replace(
         exec_line,
-        &exec_line.replace("\"timeout\": 10", "\"timeout\": 15"),
+        &exec_line.replace("\"timeout\": 30", "\"timeout\": 15"),
     );
     assert_ne!(edited, old);
     write(&root, ".grok/hooks/codeflow.json", &edited);
@@ -2244,7 +2225,7 @@ fn clears_doctor_grok_hooks_in_an_edited_hook_file() {
                 .find(|line| line.contains("hook exec-guard"))
                 .unwrap();
             let resolved =
-                shipped.replace(line, &line.replace("\"timeout\": 10", "\"timeout\": 15"));
+                shipped.replace(line, &line.replace("\"timeout\": 30", "\"timeout\": 15"));
             write(&root, ".grok/hooks/codeflow.json", &resolved);
             std::fs::remove_file(root.join(".grok/hooks/codeflow.json.new")).unwrap();
         },
@@ -2253,6 +2234,90 @@ fn clears_doctor_grok_hooks_in_an_edited_hook_file() {
     let after = doctor(&root, "grok");
     assert!(
         after.contains("canary: the shipped shell guard grok runs refused a dangerous command"),
+        "{after}"
+    );
+}
+
+/// TSK-1082: a project installed before the guard entries carried the
+/// shared timeout and Claude's `"onFailure": "block"`, its baselines
+/// recorded as that release shipped them. Doctor names each guard entry
+/// in each harness file; `codeflow update`, the printed step, moves them
+/// all to the shipped fields and doctor passes.
+#[test]
+fn clears_doctor_guard_timeouts() {
+    let dir = scaffolded("--minimal");
+    let root = project(&dir);
+    let timeout = "\"timeout\": 30";
+    // The guard entries as earlier releases shipped them: neither field.
+    let strip = |text: &str| {
+        let mut value: serde_json::Value = serde_json::from_str(text).unwrap();
+        let mut stripped = 0;
+        for group in value["hooks"]["PreToolUse"].as_array_mut().unwrap() {
+            for handler in group["hooks"].as_array_mut().unwrap() {
+                let handler = handler.as_object_mut().unwrap();
+                if handler.remove("onFailure").is_some() {
+                    assert!(handler.remove("timeout").is_some());
+                    stripped += 1;
+                }
+            }
+        }
+        assert_eq!(stripped, 2, "{text}");
+        serde_json::to_string_pretty(&value).unwrap()
+    };
+    write(
+        &root,
+        ".claude/settings.json",
+        &strip(&read(&root, ".claude/settings.json")),
+    );
+    write(
+        &root,
+        ".codeflow/.baseline/.claude/settings.json",
+        &strip(include_str!(
+            "../../../../assets/base/settings/default.json"
+        )),
+    );
+    for (path, shipped) in [
+        (
+            ".grok/hooks/codeflow.json",
+            include_str!("../../../../assets/base/grok/hooks.json"),
+        ),
+        (
+            ".codex/hooks.json",
+            include_str!("../../../../assets/base/codex/hooks.json"),
+        ),
+    ] {
+        let old = shipped.replace(&format!("{timeout} }}"), "\"timeout\": 10 }");
+        assert_ne!(old, shipped, "{path}");
+        write(&root, path, &old);
+        write(&root, &format!(".codeflow/.baseline/{path}"), &old);
+    }
+
+    let finding = "a guard that does not answer in time can let the tool call through";
+    let before = doctor(&root, "guard-timeouts");
+    for named in [
+        ".claude/settings.json: git-guard has no `timeout` and no `\"onFailure\": \"block\"`",
+        ".grok/hooks/codeflow.json: edit-guard has `timeout` 10, not the shipped 30",
+        ".codex/hooks.json: exec-guard has `timeout` 10, not the shipped 30",
+    ] {
+        assert!(before.contains(named), "{named}: {before}");
+    }
+    prove(
+        "DOCTOR_GUARD_TIMEOUTS",
+        finding,
+        || doctor(&root, "guard-timeouts"),
+        |printed| {
+            let step = printed_command(printed, "DOCTOR_GUARD_TIMEOUTS", None);
+            assert_eq!(step, "codeflow update");
+            run_printed(&root, &step, &[], &[]);
+        },
+    );
+    let after = doctor(&root, "guard-timeouts");
+    assert!(
+        after.contains("every CodeFlow guard hook entry carries the shipped 30 second timeout"),
+        "{after}"
+    );
+    assert!(
+        after.contains("Grok and Codex have no fail-closed setting"),
         "{after}"
     );
 }
@@ -2608,6 +2673,29 @@ fn clears_doctor_init() {
         |printed| {
             let step = printed_command(printed, "DOCTOR_INIT", None);
             run_printed(&root, &step, &[], &["--yes", "--minimal"]);
+        },
+    );
+}
+
+/// TSK-435: a project with no Outcome adoption marker warns in `doctor
+/// --check config` until `codeflow update` writes it.
+#[test]
+fn clears_doctor_outcome_marker() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let state: String = read(&root, ".codeflow/project.toml")
+        .lines()
+        .filter(|line| !line.starts_with("outcome_"))
+        .flat_map(|line| [line, "\n"])
+        .collect();
+    write(&root, ".codeflow/project.toml", &state);
+    prove(
+        "DOCTOR_OUTCOME_MARKER",
+        "no `outcome_present_uids` marker",
+        || doctor(&root, "config"),
+        |printed| {
+            let step = printed_command(printed, "DOCTOR_OUTCOME_MARKER", None);
+            run_printed(&root, &step, &[], &[]);
         },
     );
 }

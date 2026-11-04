@@ -45,10 +45,10 @@ const RECIPES = {
   code: { block: "snippet", text: { in: "code", words: "256 * 1024" }, element: { click: ".cf-line:nth-of-type(2)", label: "let limit = 256 * 1024;" } },
   diff: { block: "change", text: { in: "del", words: "128 * 1024" }, element: { click: "ins", label: "let limit = 256 * 1024;" } },
   tree: { block: "files", text: { in: "li", words: "state.rs" }, element: { click: "li li li:nth-of-type(2) > span", label: "limits.rs" } },
-  figure: { block: "flow", element: { entities: true } },
+  figure: { block: "flow", text: { in: "svg text", words: "Task branch" }, element: { entities: true } },
   media: { block: "screenshot", text: { in: "figcaption", words: "stands in" }, element: { click: "img", label: "Four coloured quadrants" }, area: { box: "img", plain: true } },
   disclosure: { block: "more", text: { in: "summary", words: "More detail", context: false }, element: { click: "summary", label: "More detail" }, area: { closed: "details" } },
-  tabs: { block: "views", text: { in: ".tabs__labels", words: "Risks" }, element: { click: "details:nth-of-type(2) > summary", label: "Risks" }, area: { closed: "details" } },
+  tabs: { block: "views", text: { in: ".tabs__labels", words: "Risks" }, element: { click: "[role=tab]:nth-of-type(2)", label: "Risks" }, area: {} },
   feedback_prompt: { block: "ask", text: { in: "p", words: "Mark anything" }, element: { click: "p", label: "Mark anything that is wrong, then submit the review." } },
   html: { block: "stage", text: { in: "svg text", words: "Service" }, element: { entities: true } },
   // TSK-119: a form's option label is its words; a click on a field's input
@@ -132,7 +132,7 @@ try {
   for (const shown of ["prose", "more", "views"]) assert.ok(listed.includes(`#${shown}`), `the sections list lacks ${shown}: ${listed.join(" ")}`);
   await phoneWidth(page);
   for (const width of [1280, 375]) await closeMarkers(page, width);
-  process.stdout.write("close markers passed: at 1280 and 375 px, thirteen notes (two adjacent diff lines, two adjacent code lines, nine on one prose line, three of them on the same words) have markers that do not overlap and sit off their anchors, each in the gutter level with its line on a desktop, 2 px clear of the sections list, or just above it on a phone, leaving that row only when no free stretch of it holds the marker, also after widening from 375 px with the rail closed, and a click at each marker's centre opens its own note\n");
+  process.stdout.write("close markers passed: at 1280 and 375 px, thirteen notes (two adjacent diff lines, two adjacent code lines, nine on one prose line, three of them on the same words) have markers that do not overlap and sit off their anchors, each in the gutter level with its line on a desktop, 2 px clear of the sections list, or just above it on a phone, leaving that row only when no free stretch of it holds the marker, also after widening from 375 px with the rail open, and a click at each marker's centre opens its own note\n");
   process.stdout.write("sections and phone width passed: no hidden block in the sections list; at 375 px the sheet stays closed on arming, a gesture, a save and a pin, the float keeps ESC on screen, markers stay off the heading and the selected line, Comment opens the sheet and dismisses the save hint, and Done leaves\n");
 
   const expected = [];
@@ -604,7 +604,8 @@ try {
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
   await armComment(page);
-  const restored = await page.getByTestId("toast").innerText();
+  // The restore notice sits in the notes panel, never over the page (TSK-443 AC-8).
+  const restored = await page.getByTestId("restore-notice").innerText();
   assert.match(restored, /Restored 3 unsent notes from revision 1\./u, "lifecycle, draft: no restore notice");
   await armComment(page);
   assert.equal(await page.getByTestId("note-row").count(), 3, "lifecycle, draft: an unsent note is gone");
@@ -631,7 +632,8 @@ try {
   await armComment(page);
   const earlier = page.getByTestId("feedback-history");
   await earlier.waitFor({ timeout: 20_000 });
-  await earlier.locator("summary").click();
+  // A sent review leaves Earlier feedback open; open it only if it is closed.
+  if (!(await earlier.evaluate((el) => el.open))) await earlier.locator("summary").click();
   const notices = await earlier.innerText();
   assert.match(notices, /Unpositioned: /u, `lifecycle, update: no orphan notice: ${notices.slice(0, 800)}`);
   assert.match(notices, /Matched uniquely in this revision\.|Moved: /u, `lifecycle, update: no re-anchor notice`);
@@ -738,9 +740,9 @@ async function armComment(page) {
 // At desktop width the rail sits beside the document; where it covers it (the
 // phone sheet, expanded after a pin or a save), close it.
 async function closeCoveringRail(page) {
-  if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) === "true" && await page.locator(".cf-feedback-close").isVisible()) {
-    await page.locator(".cf-feedback-close").click({ force: true });
-    await page.waitForFunction(() => document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "false");
+  if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) === "true" && await page.getByTestId("notes-expand").isVisible() && (await page.getByTestId("notes-dock").getAttribute("data-expanded")) === "true") {
+    await page.getByTestId("notes-expand").click();
+    await page.waitForFunction(() => document.getElementById("cf-feedback-panel")?.getAttribute("data-expanded") === "false");
   }
 }
 
@@ -760,6 +762,7 @@ async function gesture(page, cell) {
     const span = await page.evaluate(({ scope, within, words }) => {
       // The words may cross text nodes, as highlighted code does.
       for (const element of document.querySelectorAll(`${scope} ${within}`)) {
+        if (!element.checkVisibility()) continue;
         const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
         const nodes = [];
         let text = "";
@@ -792,7 +795,10 @@ async function gesture(page, cell) {
     await page.mouse.move(span.x1, span.y1, { steps: 8 });
     await page.mouse.up();
     const selected = await page.evaluate(() => String(getSelection()));
-    if (selected !== cell.recipe.words) throw new Error(`the drag selected ${JSON.stringify(selected)}`);
+    if (selected !== cell.recipe.words) {
+      const under = await page.evaluate(({ x, y }) => { const el = document.elementFromPoint(x, y); return el ? `${el.tagName.toLowerCase()}.${[...el.classList].join(".")}[${el.getAttribute("data-testid") ?? ""}]` : "nothing"; }, { x: span.x0, y: span.y0 });
+      throw new Error(`the drag selected ${JSON.stringify(selected)}; the press landed on ${under}`);
+    }
     const summary = await chip(page, "Text");
     return { summary };
   }
@@ -935,7 +941,6 @@ async function phoneWidth(page) {
       throw new Error(`phone width, ${name}: ${error.message.split("\n")[0]}`, { cause: error });
     }
   };
-  const sheetOpen = async () => (await page.locator("#cf-feedback-panel").getAttribute("data-open")) === "true";
   const sheetIs = (open, expanded) => page.waitForFunction(([open, expanded]) => {
     const panel = document.getElementById("cf-feedback-panel");
     return panel?.getAttribute("data-open") === open && panel.getAttribute("data-expanded") === expanded;
@@ -961,7 +966,7 @@ async function phoneWidth(page) {
       await page.mouse.click(heading.x + heading.width - 4, heading.y + heading.height / 2);
       const escape = await page.getByTestId("float-esc").boundingBox();
       assert.ok(escape.x >= 0 && escape.x + escape.width <= 375, `ESC at ${escape.x}..${escape.x + escape.width} of 375`);
-      await sheetIs("true", "true");
+      await sheetIs("true", "false");
     });
     await step("save", async () => {
       await page.getByTestId("float-comment").click();
@@ -970,16 +975,16 @@ async function phoneWidth(page) {
       await markerClear(await page.locator("[data-cf-block-id='prose'] h2").boundingBox(), "the heading");
     });
     await step("Comment reopens the sheet", async () => {
-      await page.locator(".cf-feedback-close").click();
-      assert.equal(await sheetOpen(), false, "Close left the sheet open");
+      await page.getByTestId("notes-expand").click();
+      await sheetIs("true", "false");
       await page.locator("#cf-comment-toggle").click();
       await sheetIs("true", "true");
-      await page.locator(".cf-feedback-close").click();
+      await page.getByTestId("notes-expand").click();
     });
     await step("reopen from the pin", async () => {
       await page.getByTestId("note-marker").first().click();
       await page.getByTestId("composer").waitFor();
-      assert.equal(await sheetOpen(), false, "the sheet opened from a pin");
+      await sheetIs("true", "false");
       await page.getByTestId("composer-delete").click();
       await page.getByTestId("composer").waitFor({ state: "detached" });
       assert.equal(await page.getByTestId("note-marker").count(), 0, "the phone note was not removed");
@@ -999,6 +1004,8 @@ async function phoneWidth(page) {
         return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
       }, RECIPES.narrative.text.words);
       await markerClear(line, "the selected line");
+      // The taller phone sheet (TSK-443 AC-8) is collapsed before a marker is pressed.
+      await closeCoveringRail(page);
       await page.getByTestId("note-marker").first().click();
       await page.getByTestId("composer-delete").click();
       await page.getByTestId("composer").waitFor({ state: "detached" });
@@ -1157,12 +1164,13 @@ async function closeMarkers(page, width) {
       await closeCoveringRail(page);
     }
     if (width < 800) {
-      // Armed at phone width, the rail stays closed; widened, the desktop
-      // rule applies with the sections list shown and the rail still closed.
+      // Armed at phone width, the sheet is collapsed to its bar; widened, the
+      // bar becomes the desktop rail beside the document, as in Comment mode
+      // on a desktop, and the desktop marker rule applies with it.
       await page.setViewportSize({ width: 1280, height: 900 });
       await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
-      assert.equal(await page.locator("#cf-feedback-panel").getAttribute("data-open"), "false", "close markers after widening: the rail opened");
-      await checkLayout(1280, `widened from ${width} to 1280 px with the rail closed`);
+      assert.equal(await page.locator("#cf-feedback-panel").getAttribute("data-open"), "true", "close markers after widening: the rail closed");
+      await checkLayout(1280, `widened from ${width} to 1280 px with the rail open`);
     }
   } finally {
     // The last marker drawn is on top, so it takes the click even where

@@ -13,7 +13,6 @@ use git2::Repository;
 
 use crate::error::HookError;
 use crate::remedy::{Finding, JUDGE_SOURCE_DRIFT};
-use crate::testing::gate::{run_gate_exact, GateOutcome, GateTargetResult};
 
 use super::policy::{GitPolicy, PolicyLevel};
 use super::repo::current_branch;
@@ -142,6 +141,20 @@ pub fn pre_commit(
             policy,
             &crate::root_checkout::process_env,
         ));
+
+    match super::landed_policy::staged_paths(root, policy)
+        .and_then(|paths| super::path_policy::staged(&repo, &paths))
+    {
+        Ok(paths) => {
+            report.violations.extend(paths.violations);
+            report.status.extend(paths.notes);
+        }
+        Err(error) => report.violations.push(Violation::always_blocking(
+            "git.path_policy",
+            format!("cannot verify staged paths: {error}"),
+            "repair the named policy source or Git object, then retry",
+        )),
+    }
 
     if policy.secret_scan.is_active() {
         scan_staged(&repo, policy, &mut report, false);
@@ -1466,108 +1479,14 @@ pub const PUSH_SET_BUDGET: std::time::Duration = std::time::Duration::from_secs(
 /// One timed step of the push set.
 #[derive(Debug, Clone)]
 pub struct PushStep {
-    /// A test-config target name, or the built-in command.
+    /// The built-in command; the push set runs no test-config target
+    /// (TSK-449).
     pub name: String,
     pub duration: std::time::Duration,
-    /// `true` for a test-config target, which its `modes.quick` key moves
-    /// out of the push set; `false` for a built-in check.
-    pub configurable: bool,
-}
-
-/// Run the test-config targets that define a `quick` mode, and only those
-/// (charter §6.1 `test_gate_on_push`). The test suite belongs to the full
-/// gate, so there is no `quick` to `essential` alias here. A missing config or
-/// an empty set is a loud note, never a violation. Returns each target's
-/// timing for the push-set budget.
-pub fn run_push_targets(
-    root: &Path,
-    policy: &GitPolicy,
-    report: &mut StageReport,
-) -> Vec<PushStep> {
-    let cfg_path = root.join(".codeflow").join("test-config.json");
-    let outcome = match crate::absence::proven_absent(&cfg_path) {
-        Ok(true) => {
-            report.notes.push(crate::remedy::Finding::new(
-                "quick targets skipped: no .codeflow/test-config.json (executed 0; skipped 0; not complete)",
-                crate::remedy::PUSH_TARGETS_UNCONFIGURED.remedy(),
-            ));
-            return Vec::new();
-        }
-        Ok(false) => run_gate_exact(root, "quick"),
-        Err(error) => Err(crate::testing::error::TestingError::Io(error)),
-    };
-    match outcome {
-        Ok(GateOutcome::NoTargets { reason }) => {
-            report.notes.push(crate::remedy::Finding::new(
-                format!(
-                    "quick targets skipped: {reason} (executed 0; skipped 0; not complete; the push set runs the targets with a \
-                     `quick` mode)"
-                ),
-                crate::remedy::PUSH_TARGETS_NONE.remedy(),
-            ));
-            Vec::new()
-        }
-        Ok(GateOutcome::Completed {
-            results,
-            passed,
-            skipped,
-            ..
-        }) => {
-            if passed {
-                report.status.push(format!(
-                    "quick targets {} on the working checkout (executed {}; skipped {}{}; untracked \
-                     files there can influence them, CI checks the pushed commit)",
-                    if results.is_empty() || !skipped.is_empty() { "not complete" } else { "passed" },
-                    results.len(), skipped.len(), if skipped.is_empty() && !results.is_empty() { "" } else { "; not complete" }
-                ));
-            } else {
-                let failed: Vec<String> = results
-                    .iter()
-                    .filter(|r| !r.passed())
-                    .map(|r| r.name.clone())
-                    .collect();
-                report.violations.push(Violation::new(
-                    "git.test_gate_on_push",
-                    policy.test_gate_on_push,
-                    format!(
-                        "push set failed for: {} (executed {}; skipped {}{})",
-                        failed.join(", "),
-                        results.len(),
-                        skipped.len(),
-                        if skipped.is_empty() {
-                            ""
-                        } else {
-                            "; not complete"
-                        }
-                    ),
-                    crate::remedy::PUSH_SET_FAILED.remedy(),
-                ));
-            }
-            results.iter().map(target_step).collect()
-        }
-        Err(e) => {
-            report.violations.push(Violation::new(
-                "git.test_gate_on_push",
-                policy.test_gate_on_push,
-                format!("push set could not load test-config.json: {e}"),
-                crate::remedy::TEST_CONFIG_REPAIR.remedy(),
-            ));
-            Vec::new()
-        }
-    }
-}
-
-fn target_step(result: &GateTargetResult) -> PushStep {
-    PushStep {
-        name: result.name.clone(),
-        duration: std::time::Duration::from_millis(result.duration_ms),
-        configurable: true,
-    }
 }
 
 /// When the whole push set took longer than `budget`, the note naming its
-/// slowest step and what moves it: the `modes.quick` key for a test-config
-/// target, or the push-set rule for a built-in check.
+/// slowest built-in step and the push-set rule that drops it.
 #[must_use]
 pub fn over_budget_note(
     steps: &[PushStep],
@@ -1583,14 +1502,6 @@ pub fn over_budget_note(
         budget.as_secs()
     );
     Some(match steps.iter().max_by_key(|s| s.duration) {
-        Some(slow) if slow.configurable => crate::remedy::Finding::new(
-            format!(
-                "{head}; slowest step: target '{}' ({:.1}s)",
-                slow.name,
-                slow.duration.as_secs_f64()
-            ),
-            crate::remedy::PUSH_OVER_BUDGET_TARGET.with(&[("target", &slow.name)]),
-        ),
         Some(slow) => crate::remedy::Finding::new(
             format!(
                 "{head}; slowest step: built-in `{}` ({:.1}s), which has no push-set key",
@@ -1605,27 +1516,6 @@ pub fn over_budget_note(
 
 #[cfg(test)]
 mod tests {
-
-    #[test]
-    fn r19_missing_test_config_keeps_all_absence_results() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(matches!(
-            crate::testing::config::load_test_config(
-                &dir.path().join(".codeflow/test-config.json")
-            ),
-            Err(crate::testing::error::TestingError::ConfigNotFound(_))
-        ));
-        assert!(matches!(
-            run_gate_exact(dir.path(), "quick"),
-            Ok(GateOutcome::NoTargets { .. })
-        ));
-        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
-        assert!(steps.is_empty() && report.violations.is_empty());
-        assert!(report
-            .notes
-            .iter()
-            .any(|n| n.text.contains("no .codeflow/test-config.json")));
-    }
 
     #[cfg(unix)]
     #[test]
@@ -1643,45 +1533,6 @@ mod tests {
         )
         .unwrap();
         assert!(!keeps_value(&repo, name, &oid.to_string(), &"0".repeat(40)));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn r19_test_config_leaf_refuses_hook() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join(".codeflow");
-        let path = config.join("test-config.json");
-        std::fs::create_dir(&config).unwrap();
-        std::os::unix::fs::symlink(dir.path().join("missing"), &path).unwrap();
-        let mut report = StageReport::default();
-        let steps = run_push_targets(dir.path(), &GitPolicy::default(), &mut report);
-        assert!(steps.is_empty());
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.rule == "git.test_gate_on_push" && v.level == PolicyLevel::Block),
-            "{:?}",
-            report.violations
-        );
-    }
-    #[cfg(unix)]
-    #[test]
-    fn r19_test_config_ancestor_refuses_hook() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join(".codeflow");
-        std::os::unix::fs::symlink(dir.path().join("missing"), &config).unwrap();
-        let mut report = StageReport::default();
-        let steps = run_push_targets(dir.path(), &GitPolicy::default(), &mut report);
-        assert!(steps.is_empty());
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.rule == "git.test_gate_on_push" && v.level == PolicyLevel::Block),
-            "{:?}",
-            report.violations
-        );
     }
 
     #[cfg(unix)]
@@ -1955,12 +1806,19 @@ mod tests {
     }
 
     #[test]
-    fn test_pre_commit_allows_env_example() {
+    fn test_pre_commit_env_example_needs_a_path_exception() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), ".env.example", "DB_PASSWORD=\n");
         let report = pre_commit(dir.path(), &scan_policy(), false, false).unwrap();
-        assert!(report.violations.is_empty());
+        assert!(report
+            .violations
+            .iter()
+            .all(|v| v.rule != "git.secret_scan"));
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.path_policy"));
     }
 
     #[test]
@@ -1980,7 +1838,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pre_commit_secret_scan_off_skips() {
+    fn test_pre_commit_secret_scan_off_keeps_path_policy() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), ".env", "X=1\n");
@@ -1989,7 +1847,14 @@ mod tests {
             ..scan_policy()
         };
         let report = pre_commit(dir.path(), &policy, false, false).unwrap();
-        assert!(report.violations.is_empty());
+        assert!(report
+            .violations
+            .iter()
+            .all(|v| v.rule != "git.secret_scan"));
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.path_policy"));
     }
 
     #[test]
@@ -3714,13 +3579,7 @@ mod tests {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
-    // -- push set: quick targets (the CLI hook binds them to the pushed tree) --
-
-    fn run_targets(dir: &Path, policy: &GitPolicy) -> (StageReport, Vec<PushStep>) {
-        let mut report = StageReport::default();
-        let steps = run_push_targets(dir, policy, &mut report);
-        (report, steps)
-    }
+    // -- push set: no test-config target runs on push (TSK-449) --
 
     #[test]
     fn pre_push_ref_checks_never_run_targets() {
@@ -3730,23 +3589,6 @@ mod tests {
         let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
         let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, false).unwrap();
         assert!(report.violations.is_empty(), "{:?}", report.violations);
-    }
-
-    #[test]
-    fn test_gate_skips_without_config() {
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
-        assert!(report.violations.is_empty());
-        assert!(steps.is_empty());
-        assert!(
-            report
-                .notes
-                .iter()
-                .any(|n| n.text.contains("quick targets skipped")),
-            "absence must be loud: {:?}",
-            report.notes
-        );
     }
 
     fn write_test_config(dir: &Path, command: &str) {
@@ -3768,175 +3610,30 @@ mod tests {
         std::fs::write(cf.join("test-config.json"), config).unwrap();
     }
 
-    /// Write raw bytes to `.codeflow/test-config.json`.
-    fn write_raw_test_config(dir: &Path, body: &str) {
-        let cf = dir.join(".codeflow");
-        std::fs::create_dir_all(&cf).unwrap();
-        std::fs::write(cf.join("test-config.json"), body).unwrap();
-    }
-
-    #[test]
-    fn push_set_blocks_by_default() {
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_test_config(dir.path(), "false");
-        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
-        let gate: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.rule == "git.test_gate_on_push")
-            .collect();
-        assert_eq!(gate.len(), 1, "{:?}", report.violations);
-        assert_eq!(gate[0].level, PolicyLevel::Block);
-        assert!(gate[0].message.contains("push set failed for: demo"));
-        assert_eq!(steps.len(), 1);
-        assert!(steps[0].configurable);
-    }
-
-    #[test]
-    fn test_gate_pass_is_quiet() {
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_test_config(dir.path(), "true");
-        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
-        assert!(report.violations.is_empty(), "{:?}", report.violations);
-    }
-
-    #[test]
-    fn test_gate_no_targets_is_a_skip_note() {
-        // The only target is disabled, so NoTargets: a loud note, never a
-        // violation (charter principle 8: degradation stays legible).
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_raw_test_config(
-            dir.path(),
-            r#"{"schema_version": "1.0", "targets": [
-  {"name": "demo", "runner": "custom", "enabled": false,
-   "modes": { "quick": { "command": "true" } } }]}"#,
-        );
-        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
-        assert!(report.violations.is_empty(), "{:?}", report.violations);
-        assert!(
-            report
-                .notes
-                .iter()
-                .any(|n| n.text.contains("quick targets skipped")
-                    && n.text.contains("no enabled target")),
-            "{:?}",
-            report.notes
-        );
-    }
-
-    #[test]
-    fn push_set_runs_only_quick_targets_and_never_aliases_essential() {
-        // TSK-132: a target without a `quick` mode is out of the push set even
-        // when its `essential` mode would fail.
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_raw_test_config(
-            dir.path(),
-            r#"{"schema_version": "1.0", "targets": [
-    { "name": "lint", "runner": "custom",
-      "modes": { "quick": { "command": "true" }, "essential": { "command": "true" } } },
-    { "name": "suite", "runner": "custom",
-      "modes": { "essential": { "command": "false" }, "full": { "command": "false" } } }
-]}"#,
-        );
-        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
-        assert!(report.violations.is_empty(), "{:?}", report.violations);
-        let names: Vec<&str> = steps.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, vec!["lint"]);
-    }
-
-    #[test]
-    fn push_set_is_empty_for_an_essential_only_config() {
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_raw_test_config(
-            dir.path(),
-            r#"{"schema_version": "1.0", "targets": [
-    { "name": "suite", "runner": "custom",
-      "modes": { "essential": { "command": "false" }, "full": { "command": "false" } } }
-]}"#,
-        );
-        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
-        assert!(report.violations.is_empty(), "{:?}", report.violations);
-        assert!(steps.is_empty());
-        assert!(
-            report.notes.iter().any(
-                |n| n.text.contains("quick targets skipped") && n.text.contains("`quick` mode")
-            ),
-            "{:?}",
-            report.notes
-        );
-    }
-
-    #[test]
-    fn test_gate_unreadable_config_is_a_violation() {
-        // A populated but malformed config is a broken gate, not absence.
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_raw_test_config(dir.path(), "{ not json");
-        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
-        let gate: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.rule == "git.test_gate_on_push")
-            .collect();
-        assert_eq!(gate.len(), 1, "{:?}", report.violations);
-        assert!(gate[0].message.contains("could not load"));
-        assert!(gate[0].message.contains("invalid test config"));
-        assert!(!report.notes.iter().any(|n| n.text.contains("skipped")));
-    }
-
-    fn step(name: &str, secs: u64, configurable: bool) -> PushStep {
+    fn step(name: &str, secs: u64) -> PushStep {
         PushStep {
             name: name.into(),
             duration: std::time::Duration::from_secs(secs),
-            configurable,
         }
     }
 
     #[test]
-    fn over_budget_names_a_slow_target_and_its_key() {
+    fn over_budget_names_the_slowest_built_in_check() {
         let steps = [
-            step("rust-format", 1, true),
-            step("rust-clippy", 50, true),
-            step("codeflow validate --docs", 2, false),
-        ];
-        let total = std::time::Duration::from_secs(61);
-        let note = over_budget_note(&steps, total, PUSH_SET_BUDGET)
-            .unwrap()
-            .to_string();
-        assert!(note.contains("61.0s, over its 60s budget"), "{note}");
-        assert!(note.contains("target 'rust-clippy'"), "{note}");
-        assert!(note.contains("`modes.quick`"), "{note}");
-        assert!(over_budget_note(&steps, PUSH_SET_BUDGET, PUSH_SET_BUDGET).is_none());
-    }
-
-    #[test]
-    fn over_budget_names_a_slow_built_in_check_without_a_quick_hint() {
-        // Built-in work takes the total over budget while every configured
-        // target is fast (T132-5).
-        let steps = [
-            step("lint", 2, true),
-            step("codeflow ci --head abc --branch feat/x", 70, false),
+            step("codeflow ci --head abc --branch feat/x", 70),
+            step("release preflight (feat/x)", 2),
         ];
         let note = over_budget_note(&steps, std::time::Duration::from_secs(72), PUSH_SET_BUDGET)
             .unwrap()
             .to_string();
+        assert!(note.contains("72.0s, over its 60s budget"), "{note}");
         assert!(note.contains("built-in `codeflow ci"), "{note}");
         assert!(!note.contains("modes.quick"), "{note}");
-        // No configured targets at all still gets a diagnosis.
-        let only_builtin = [step("codeflow validate --docs", 65, false)];
-        let note = over_budget_note(
-            &only_builtin,
-            std::time::Duration::from_secs(65),
-            PUSH_SET_BUDGET,
-        )
-        .unwrap()
-        .to_string();
-        assert!(note.contains("validate --docs"), "{note}");
+        assert!(over_budget_note(&steps, PUSH_SET_BUDGET, PUSH_SET_BUDGET).is_none());
+        let note = over_budget_note(&[], std::time::Duration::from_secs(65), PUSH_SET_BUDGET)
+            .unwrap()
+            .to_string();
+        assert!(note.contains("65.0s, over its 60s budget"), "{note}");
     }
 
     // Regression: a one-parent commit named `Merge ...` is checked; a real

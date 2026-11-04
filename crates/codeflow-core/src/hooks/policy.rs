@@ -154,14 +154,22 @@ pub enum MappingState {
     Custom,
 }
 
-impl fmt::Display for MappingState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+impl MappingState {
+    /// The state as the policy file writes it.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
             Self::Diagnosed => "diagnosed",
             Self::Accepted => "accepted",
             Self::Refused => "refused",
             Self::Custom => "custom",
-        })
+        }
+    }
+}
+
+impl fmt::Display for MappingState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -246,6 +254,8 @@ pub struct GitPolicy {
     /// Additional remotes whose branches count as advisory work claims.
     /// Origin and the target's fetch remote always count. Empty by default.
     pub claim_remotes: Vec<String>,
+    /// Days since a line sync before orient suggests syncing; zero disables it.
+    pub line_sync_interval: u32,
     /// The status check names a protected branch requires before merging,
     /// on a branch that is up to date with its base (`codeflow remote
     /// protect`, `codeflow doctor --check remote-perimeter`). Default
@@ -421,6 +431,9 @@ pub struct GitPolicy {
     pub branch_naming: PolicyLevel,
     pub branch_prefixes: Vec<String>,
     pub secret_scan: PolicyLevel,
+    pub path_policy: PolicyLevel,
+    pub blocked_names: Vec<super::path_policy::BlockedName>,
+    pub protected_paths: Vec<super::path_policy::ProtectedPath>,
     /// Managed CI only: read from the trusted commit, default `trusted`.
     pub secret_scan_inline_allow: SecretScanInlineAllow,
     /// Unresolved conflict markers on the lines a change adds to a text
@@ -436,9 +449,9 @@ pub struct GitPolicy {
     /// --hard`, `clean`, `stash drop`), judged by git-guard (TSK-172).
     /// Default `block`.
     pub discard_uncommitted: PolicyLevel,
-    /// Regenerable directories `git clean` may remove without refusal
-    /// (TSK-172).
-    pub clean_regenerable: Vec<String>,
+    /// Unsupported legacy key; discard checks do not read this list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clean_regenerable: Option<Vec<String>>,
 }
 
 thread_local! {
@@ -488,6 +501,27 @@ pub fn non_ascii_aliasing() -> bool {
         .unwrap_or(true)
 }
 
+const DEFAULT_BRANCH_PREFIXES: &[&str] = &[
+    "feat/",
+    "fix/",
+    "docs/",
+    "refactor/",
+    "test/",
+    "chore/",
+    "ci/",
+    "hotfix/",
+    "plan/",
+    "task/",
+    "spike/",
+    "experiment/",
+    INTEGRATION_BRANCH_PREFIX,
+];
+
+/// The PR sections every pull request needs by default.
+pub const DEFAULT_PR_REQUIRED_SECTIONS: [&str; 2] = ["Summary", "Changes"];
+/// The PR sections a pull request that changes code needs by default.
+pub const DEFAULT_PR_CODE_SECTIONS: [&str; 1] = ["Testing"];
+
 impl Default for GitPolicy {
     fn default() -> Self {
         Self {
@@ -509,6 +543,7 @@ impl Default for GitPolicy {
                 .map(ToString::to_string)
                 .collect(),
             claim_remotes: Vec::new(),
+            line_sync_interval: 0,
             required_checks: DEFAULT_REQUIRED_CHECKS
                 .iter()
                 .map(ToString::to_string)
@@ -543,8 +578,8 @@ impl Default for GitPolicy {
             pr_release_impact: PolicyLevel::Warn,
             pr_summary: PolicyLevel::Block,
             pr_breaking_level: "major".into(),
-            pr_required_sections: vec!["Summary".into(), "Changes".into()],
-            pr_code_sections: vec!["Testing".into()],
+            pr_required_sections: DEFAULT_PR_REQUIRED_SECTIONS.map(String::from).to_vec(),
+            pr_code_sections: DEFAULT_PR_CODE_SECTIONS.map(String::from).to_vec(),
             pr_body_max_words: 1000,
             work_records: PolicyLevel::Block,
             work_planning: PolicyLevel::Block,
@@ -555,43 +590,21 @@ impl Default for GitPolicy {
             pr_section_mapping: None,
             release_branch_pattern: None,
             branch_naming: PolicyLevel::Block,
-            branch_prefixes: [
-                "feat/",
-                "fix/",
-                "docs/",
-                "refactor/",
-                "test/",
-                "chore/",
-                "ci/",
-                "hotfix/",
-                "plan/",
-                "task/",
-                "spike/",
-                "experiment/",
-                INTEGRATION_BRANCH_PREFIX,
-            ]
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
+            branch_prefixes: DEFAULT_BRANCH_PREFIXES
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             secret_scan: PolicyLevel::Block,
+            path_policy: PolicyLevel::Block,
+            blocked_names: super::path_policy::default_names(),
+            protected_paths: Vec::new(),
             secret_scan_inline_allow: SecretScanInlineAllow::Trusted,
             conflict_markers: PolicyLevel::Block,
             test_gate_on_push: PolicyLevel::Block,
             security_review: PolicyLevel::Warn,
             dep_audit: PolicyLevel::Warn,
             discard_uncommitted: PolicyLevel::Block,
-            clean_regenerable: [
-                "target/",
-                "node_modules/",
-                "dist/",
-                "build/",
-                ".venv/",
-                "__pycache__/",
-                "coverage/",
-            ]
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
+            clean_regenerable: None,
         }
     }
 }
@@ -742,8 +755,7 @@ impl GitPolicy {
 /// (ADR-0008, amended by ADR-0075). Separate from the `git` section:
 /// `dangerous_commands` is accepted only as the explicit `block` marker and
 /// remains enforced as a block despite a stale or hand-edited weaker value.
-/// The keys after `headless_peer_runs` are read by the guard families of
-/// TSK-172 to TSK-174; this unit ships their defaults (TSK-171).
+/// Unsupported legacy keys remain optional for policy-file compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SecuritySection {
@@ -764,82 +776,30 @@ pub struct SecuritySection {
     /// session or recheckable thread. Default `block` (D4, ADR-0075); a
     /// project can set `headless_peer_runs` to warn or off.
     pub headless_peer_runs: PolicyLevel,
-    /// Findings in a script file a command runs (TSK-172). Default `warn`.
-    pub script_bypass: PolicyLevel,
+    /// Unsupported legacy key; accepted values have no effect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script_bypass: Option<PolicyLevel>,
     /// Outward actions the text rules cannot spell: publishing, releases,
     /// tag pushes and account changes behind flags or wrappers (TSK-172).
     /// Default `block`.
     pub outward_actions: PolicyLevel,
-    /// Interpreter-embedded forms of the refused actions (TSK-172). Default
-    /// `block`.
-    pub interpreter_scan: PolicyLevel,
+    /// Unsupported legacy key; interpreter checks do not read this level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpreter_scan: Option<PolicyLevel>,
     /// Shell reads of the secret stores (TSK-172). Default `block`.
     pub secret_reads: PolicyLevel,
-    /// Commits and ref moves whose enforcement entries match no approved
-    /// identity of the enforcement baseline (TSK-172). Default `block`.
-    pub enforcement_baseline: PolicyLevel,
-    /// A push that introduces a `.github/workflows/` change: `queue` refuses
-    /// it and queues it for the operator, `allow` lets it through for an
-    /// agent credential with workflow rights (D9, TSK-172 AC-23).
-    pub workflow_pushes: String,
-    /// Claude's unsandboxed retry: `allowlist` permits only an argument
-    /// vector an entry of `sandbox_retry_allow` spells out, `block` refuses
-    /// every retry (TSK-174).
-    pub sandbox_retry: String,
-    /// The argument-bound retry entries (TSK-174). The shipped entry is the
-    /// Codex plugin companion; its qualification fields are filled by
-    /// TSK-174.
-    pub sandbox_retry_allow: Vec<serde_json::Value>,
-}
-
-/// The shipped retry entry: the Codex plugin companion, argument-bound. The
-/// placeholders are replaced by the values TSK-174 records at qualification;
-/// until then no command can match the entry, since its program path is not
-/// absolute.
-fn default_retry_allow() -> Vec<serde_json::Value> {
-    let flags_review = serde_json::json!(["--wait", "--background", "--json"]);
-    let values_review = serde_json::json!({
-        "--base": "git-ref",
-        "--scope": ["auto", "working-tree", "branch"],
-        "--model": "word"
-    });
-    vec![serde_json::json!({
-        "program": "node",
-        "script": "~/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs",
-        "program_options": [],
-        "cwd": "project",
-        "refuse_if_env": ["NODE_OPTIONS", "NODE_PATH", "NODE_REPL_EXTERNAL_MODULE"],
-        "subcommands": {
-            "review": {"flags": flags_review, "values": values_review, "positionals": 0},
-            "adversarial-review": {
-                "flags": flags_review,
-                "values": values_review,
-                "positionals": "text"
-            },
-            "task": {
-                "flags": ["--background", "--write", "--resume-last", "--resume", "--fresh", "--json"],
-                "values": {
-                    "--model": "word",
-                    "--effort": ["none", "minimal", "low", "medium", "high", "xhigh"]
-                },
-                "positionals": "text"
-            },
-            "status": {
-                "flags": ["--all", "--wait", "--json"],
-                "values": {"--timeout-ms": "integer", "--poll-interval-ms": "integer"},
-                "positionals": "job-id"
-            },
-            "result": {"flags": ["--json"], "values": {}, "positionals": "job-id"},
-            "cancel": {"flags": ["--json"], "values": {}, "positionals": "job-id"}
-        },
-        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>",
-        "script_digest": {
-            "scripts/codex-companion.mjs": "<sha256 at qualification>",
-            "scripts/lib/*.mjs": "<sha256 per file at qualification>"
-        },
-        "child_executables": {"codex": "<absolute path recorded at qualification>"},
-        "refuse_writable_path_entries": true
-    })]
+    /// Unsupported legacy key; landed-policy checks do not read this level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enforcement_baseline: Option<PolicyLevel>,
+    /// Unsupported legacy key; workflow push checks do not read this value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_pushes: Option<String>,
+    /// Unsupported legacy key; accepted values have no effect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_retry: Option<String>,
+    /// Unsupported legacy entries; accepted values have no effect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_retry_allow: Option<Vec<serde_json::Value>>,
 }
 
 impl Default for SecuritySection {
@@ -848,14 +808,14 @@ impl Default for SecuritySection {
             dangerous_commands: PolicyLevel::Block,
             privilege_escalation: PolicyLevel::Block,
             headless_peer_runs: PolicyLevel::Block,
-            script_bypass: PolicyLevel::Warn,
+            script_bypass: None,
             outward_actions: PolicyLevel::Block,
-            interpreter_scan: PolicyLevel::Block,
+            interpreter_scan: None,
             secret_reads: PolicyLevel::Block,
-            enforcement_baseline: PolicyLevel::Block,
-            workflow_pushes: "queue".to_string(),
-            sandbox_retry: "allowlist".to_string(),
-            sandbox_retry_allow: default_retry_allow(),
+            enforcement_baseline: None,
+            workflow_pushes: None,
+            sandbox_retry: None,
+            sandbox_retry_allow: None,
         }
     }
 }
@@ -913,6 +873,30 @@ impl Policy {
         Self::load_file(&root.join(".codeflow").join("policy.json"))
     }
 
+    /// [`Policy::load`] for a caller inside the display boundary of
+    /// `codeflow update` (TSK-1029): a failure names the file and the I/O
+    /// category or the parse place, built as `Shown` text.
+    /// # Errors
+    /// An existing policy cannot be read or decoded.
+    pub fn load_shown(root: &Path) -> Result<Self, crate::scaffold::Shown> {
+        use crate::scaffold::{ParsePlace, Shown};
+        let path = root.join(".codeflow").join("policy.json");
+        let unreadable = |error: std::io::Error| {
+            crate::shown!("cannot read {}: {}", Shown::path(&path), Shown::io(&error))
+        };
+        if crate::absence::proven_absent(&path).map_err(unreadable)? {
+            return Ok(Self::default());
+        }
+        let text = std::fs::read_to_string(&path).map_err(unreadable)?;
+        serde_json::from_str(&text).map_err(|error| {
+            crate::shown!(
+                "cannot parse policy {}: {}",
+                Shown::path(&path),
+                Shown::place(&ParsePlace::json(&error))
+            )
+        })
+    }
+
     /// Describe the source without converting unreadable input into absence.
     #[must_use]
     pub fn source(root: &Path) -> PolicySource {
@@ -931,8 +915,16 @@ impl Policy {
     /// An existing policy cannot be read or decoded.
     pub fn load_file(path: &Path) -> Result<Self, String> {
         match optional_text(path)? {
-            Some(data) => serde_json::from_str(&data)
-                .map_err(|error| format!("cannot parse policy {}: {error}", path.display())),
+            // The parser quotes the offending value, which the project wrote
+            // and which can be a secret, so only its place is shown
+            // (TSK-1029).
+            Some(data) => serde_json::from_str(&data).map_err(|error| {
+                format!(
+                    "cannot parse policy {}: {}",
+                    path.display(),
+                    crate::scaffold::json_error(&error)
+                )
+            }),
             None => Ok(Self::default()),
         }
     }
@@ -951,6 +943,12 @@ impl Policy {
     /// Policy or project configuration cannot be read.
     pub fn load_effective(root: &Path) -> Result<(Self, bool), String> {
         let mut policy = Self::load(root)?;
+        for warning in super::policy_schema::deprecation_warnings(root)
+            .into_iter()
+            .filter(|warning| super::policy_schema::first_unsupported_warning(&warning.text))
+        {
+            eprintln!("{}", warning.line("codeflow policy", "warning"));
+        }
         let armed = effective_armed(root)?;
         if !armed {
             policy.git.suspend_for_bootstrap();
@@ -1275,18 +1273,15 @@ mod tests {
         assert_eq!(s.dangerous_commands, PolicyLevel::Block);
         assert_eq!(s.privilege_escalation, PolicyLevel::Block);
         assert_eq!(s.headless_peer_runs, PolicyLevel::Block);
-        assert_eq!(s.script_bypass, PolicyLevel::Warn);
-        for level in [
-            s.outward_actions,
-            s.interpreter_scan,
-            s.secret_reads,
-            s.enforcement_baseline,
-        ] {
+        assert!(s.script_bypass.is_none());
+        for level in [s.outward_actions, s.secret_reads] {
             assert_eq!(level, PolicyLevel::Block);
         }
-        assert_eq!(s.workflow_pushes, "queue");
-        assert_eq!(s.sandbox_retry, "allowlist");
-        assert_eq!(s.sandbox_retry_allow.len(), 1);
+        assert!(s.interpreter_scan.is_none());
+        assert!(s.enforcement_baseline.is_none());
+        assert!(s.workflow_pushes.is_none());
+        assert!(s.sandbox_retry.is_none());
+        assert!(s.sandbox_retry_allow.is_none());
     }
 
     #[test]

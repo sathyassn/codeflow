@@ -997,50 +997,7 @@ qualify_git_hooks() {
   git -C "$DIR" branch -q -D feat/qualification-hooks 2>/dev/null || true
 }
 
-qualify_records() {
-  # The record lifecycle exists only at the full tier.
-  git -C "$DIR" checkout -q -B chore/qualification-records main
-
-  cf epic new "sample epic for qualification"
-  record "$SAMPLE" "$TIER" "epic new" "allocate and scaffold an epic" \
-    "$(status_for_match 0 'EPC-')" "exit 0 and an allocated EPC-NNN record" "$(observed_exit)"
-
-  cf task new --epic EPC-001 --into main "sample task for qualification"
-  record "$SAMPLE" "$TIER" "task new" "allocate an epic-linked task" \
-    "$(status_for_match 0 'TSK-')" "exit 0 and an allocated TSK-NNN record" "$(observed_exit)"
-
-  cf spec new --for EPC-001 "sample spec for qualification"
-  record "$SAMPLE" "$TIER" "spec new" "allocate a spec and link its consumer" \
-    "$(status_for_match 0 'SPC-')" "exit 0 and an allocated SPC-NNN record" "$(observed_exit)"
-
-  cf validate --docs
-  record "$SAMPLE" "$TIER" "validate --docs" "the freshly allocated graph is clean" \
-    "$(status_for_match 0 'doc graph clean')" "exit 0, doc graph clean" "$(observed_exit)"
-
-  # The refusal: the planning record is not yet at the merge base.
-  git -C "$DIR" checkout -q -B task/TSK-001-sample-task
-  cf work start TSK-001 --into main
-  record "$SAMPLE" "$TIER" "work start" "rejecting: planning record not anchored" \
-    "$(status_for_match 1 'not present at the merge-base')" \
-    "exit 1 because TSK-001 is not at the merge base" "$(observed_exit)"
-
-  # Land the planning records, with the spec approved, then start again.
-  git -C "$DIR" checkout -q chore/qualification-records
-  sed -e 's/^status: draft/status: approved/' "$DIR/project-management/specs/SPC-001.md" >"$WORK/spc.tmp"
-  mv "$WORK/spc.tmp" "$DIR/project-management/specs/SPC-001.md"
-  git -C "$DIR" add -A
-  git -C "$DIR" commit -q -m "docs: plan the qualification sample work"
-  cf integrate chore/qualification-records --into main
-
-  git -C "$DIR" checkout -q main
-  git -C "$DIR" checkout -q -B task/TSK-001-sample-task
-  cf work start TSK-001 --into main
-  record "$SAMPLE" "$TIER" "work start" "positive: anchored task on its task branch" \
-    "$(status_for_match 0 'anchored at')" \
-    "exit 0 naming the anchor commit, the epic and the spec" "$(observed_exit)"
-
-  git -C "$DIR" checkout -q main
-}
+# qualify_records lives in lib.sh, so a test can run the record rows alone.
 
 qualify_portal() {
   cf portal setup --path docs-portal

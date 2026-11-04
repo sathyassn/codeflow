@@ -13,6 +13,8 @@
 mod acceptance_fix;
 #[path = "ci_cli/base_policy.rs"]
 mod base_policy;
+#[path = "ci_cli/cancelled_standalone.rs"]
+mod cancelled_standalone;
 #[path = "ci_cli/change_class_probes.rs"]
 mod change_class_probes;
 #[cfg(unix)]
@@ -20,6 +22,8 @@ mod change_class_probes;
 mod destination;
 #[path = "ci_cli/document_indexes.rs"]
 mod document_indexes;
+#[path = "ci_cli/outcome_marker.rs"]
+mod outcome_marker;
 #[path = "ci_cli/pr_body_fixtures.rs"]
 mod pr_body_fixtures;
 #[path = "ci_cli/range_context.rs"]
@@ -86,10 +90,12 @@ fn run_in(dir: &Path, args: &[&str]) -> Output {
         .expect("binary runs")
 }
 
-fn git(dir: &Path, args: &[&str]) {
+/// A fixture Git command in `dir`: no global or system configuration, the
+/// installed hooks bound to the binary under test, an isolated home and no
+/// agent session marker.
+fn git_command(dir: &Path) -> Command {
     let mut cmd = Command::new("git");
-    cmd.args(args)
-        .current_dir(dir)
+    cmd.current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
@@ -100,7 +106,11 @@ fn git(dir: &Path, args: &[&str]) {
     for name in codeflow_core::root_checkout::AGENT_MARKERS {
         cmd.env_remove(name);
     }
-    let out = cmd.output().expect("git runs");
+    cmd
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = git_command(dir).args(args).output().expect("git runs");
     assert!(
         out.status.success(),
         "git {args:?} failed with {}: {}",

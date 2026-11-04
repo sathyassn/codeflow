@@ -76,7 +76,8 @@ fn explain() -> i32 {
             println!();
             println!("{group}");
         }
-        let default = lookup(&defaults, spec.path).map_or_else(String::new, render_value);
+        let default =
+            lookup(&defaults, spec.path).map_or_else(|| "absent".to_string(), render_value);
         println!(
             "  {}  ({}, default: {default})",
             spec.path,
@@ -146,10 +147,11 @@ fn show(root: &Path) -> i32 {
         let file_value = file.as_ref().and_then(|f| lookup(f, spec.path));
         let (tag, value) = match file_value {
             Some(v) if errors.iter().any(|e| e.key == spec.path) => ("INVALID", render_value(v)),
+            Some(v) if spec.is_unsupported() => ("UNSUPPORTED", render_value(v)),
             Some(v) => ("project", render_value(v)),
             None => (
                 "default",
-                lookup(&defaults, spec.path).map_or_else(String::new, render_value),
+                lookup(&defaults, spec.path).map_or_else(|| "absent".to_string(), render_value),
             ),
         };
         println!("  {tag:>7}  {:<30}  {value}", spec.path);

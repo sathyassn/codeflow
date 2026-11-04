@@ -1,0 +1,101 @@
+/* TSK-444 design options: candidate marks, scales and page anatomy. Class-only selectors so the same sheet works scoped inside a present html block. */
+
+/* Category hues (option C2), derived live from the skin accent in OKLCH.
+   s = 1 for a warm accent (Slate, hue under 100), 0 for Graphite and Sage; d = 1 in dark mode (accent lightness over 0.65).
+   The committed values would be the hex table in the option notes; this derivation only follows the live skin. */
+.opt-cat {
+  --cf-fig-cat1: oklch(from var(--cf-fig-accent) calc(l - clamp(0, (100 - h) * 1000, 1) * (1 - clamp(0, (l - 0.65) * 1000, 1)) * 0.05) max(c, 0.10) calc(h + 76 + clamp(0, (100 - h) * 1000, 1) * 107));
+  --cf-fig-cat1-soft: oklch(from var(--cf-fig-accent-soft) l max(c, 0.025) calc(h + 76 + clamp(0, (100 - h) * 1000, 1) * 98));
+  --cf-fig-cat2: oklch(from var(--cf-fig-accent) calc(l - clamp(0, (100 - h) * 1000, 1) * (1 - clamp(0, (l - 0.65) * 1000, 1)) * 0.05) max(c, 0.10) calc(h + 129 + clamp(0, (100 - h) * 1000, 1) * 124));
+  --cf-fig-cat2-soft: oklch(from var(--cf-fig-accent-soft) l max(c, 0.025) calc(h + 129 + clamp(0, (100 - h) * 1000, 1) * 115));
+}
+
+/* Governing region: accent-soft field with an accent edge; the cap stays, in accent */
+.v-region > rect:first-child { fill: var(--cf-fig-accent-soft); stroke: var(--cf-fig-accent); stroke-width: 2; }
+.v-region > .cf-m-cap { fill: var(--cf-fig-accent); }
+li.v-region .cf-m-layer--remote, li.v-region .cf-m-layer { fill: var(--cf-fig-accent-soft); stroke: var(--cf-fig-accent); stroke-width: 2; }
+li.v-region .cf-m-cap { fill: var(--cf-fig-accent); }
+/* Category regions and planes: a category tint with its ink as the edge; dash, width and cap are untouched */
+.v-cat1 > rect:first-child { fill: var(--cf-fig-cat1-soft); stroke: var(--cf-fig-cat1); }
+.v-cat2 > rect:first-child { fill: var(--cf-fig-cat2-soft); stroke: var(--cf-fig-cat2); }
+li.v-cat1 .cf-key > *:first-child { fill: var(--cf-fig-cat1-soft); stroke: var(--cf-fig-cat1); }
+li.v-cat2 .cf-key > *:first-child { fill: var(--cf-fig-cat2-soft); stroke: var(--cf-fig-cat2); }
+/* Tonal ramp (option C3): two tints of the accent below the governing region */
+.v-mid > rect:first-child { fill: color-mix(in oklab, var(--cf-fig-accent-soft) 55%, var(--cf-fig-ground)); stroke: var(--cf-fig-accent); stroke-opacity: 0.6; }
+.v-faint > rect:first-child { fill: color-mix(in oklab, var(--cf-fig-accent-soft) 22%, var(--cf-fig-ground)); stroke: var(--cf-fig-accent); stroke-opacity: 0.35; }
+li.v-mid .cf-key > *:first-child { fill: color-mix(in oklab, var(--cf-fig-accent-soft) 55%, var(--cf-fig-ground)); stroke: var(--cf-fig-accent); stroke-opacity: 0.6; }
+li.v-faint .cf-key > *:first-child { fill: color-mix(in oklab, var(--cf-fig-accent-soft) 22%, var(--cf-fig-ground)); stroke: var(--cf-fig-accent); stroke-opacity: 0.35; }
+/* Participants in a sequence (option C2): lifeline and name take the participant's hue; the label still names it */
+.v-p0 { stroke: var(--cf-fig-accent); fill: var(--cf-fig-accent); }
+.v-p1 { stroke: var(--cf-fig-cat1); fill: var(--cf-fig-cat1); }
+.v-p2 { stroke: var(--cf-fig-cat2); fill: var(--cf-fig-cat2); }
+line.v-p0, line.v-p1, line.v-p2 { stroke-width: 2; }
+/* Coverage (options C1 to C3): the covered cell carries the accent, the rest stay ink tones */
+.v-cov .cf-m-cov { fill: var(--cf-fig-accent); }
+li.v-cov .cf-m-cov { fill: var(--cf-fig-accent); }
+
+/* Sample page: anatomy and type scale. The scale variables are set per candidate wrapper. */
+.pg { max-width: 880px; margin: 0 auto; padding: 8px 0 24px; }
+.pg-topbar { display: flex; align-items: center; gap: 12px; height: 44px; margin: 0 0 24px; padding: 0 14px; border: 1px solid var(--cf-border); border-radius: 10px; background: var(--cf-surface); font-size: 15px; }
+.pg-topbar .k { font-family: var(--cf-font-mono); font-size: 12.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--cf-text-muted); }
+.pg-topbar .r { margin-left: auto; font-size: 13px; color: var(--cf-text-muted); }
+.pg-kicker { margin: 0 0 8px; font-family: var(--cf-font-mono); font-size: var(--s-micro); font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--cf-text-muted); }
+.pg-title { margin: 0 0 10px; font-size: var(--s-display); font-weight: 600; line-height: 1.12; letter-spacing: -0.018em; text-wrap: balance; max-width: 24ch; }
+.pg-lede { margin: 0 0 14px; max-width: 68ch; font-size: var(--s-lede); font-weight: 450; line-height: 1.4; letter-spacing: -0.01em; text-wrap: balance; color: var(--cf-text); }
+.pg-meta { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 0 0 36px; font-family: var(--cf-font-mono); font-size: var(--s-micro); color: var(--cf-text-muted); }
+.pg-anchor { margin: 0 0 36px; padding: 0; list-style: none; max-width: 68ch; display: grid; gap: 4px; }
+.pg-anchor li { display: grid; grid-template-columns: 9ch 1fr; gap: 10px; font-size: var(--s-body); line-height: 1.5; }
+.pg-anchor li b { font-family: var(--cf-font-mono); font-size: var(--s-micro); font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--cf-text-muted); padding-top: .25em; }
+.pg-h2 { margin: 0 0 8px; font-size: var(--s-h2); font-weight: 600; line-height: 1.25; letter-spacing: -0.014em; text-wrap: balance; }
+.pg-lead { margin: 0 0 14px; max-width: 68ch; font-size: var(--s-body); line-height: 1.55; color: var(--cf-text); }
+.pg-lead--lede { font-size: var(--s-lede); font-weight: 450; line-height: 1.4; letter-spacing: -0.01em; }
+.pg-h3 { margin: 28px 0 6px; font-size: var(--s-h3); font-weight: 600; line-height: 1.35; letter-spacing: -0.006em; }
+.pg-p { margin: 0 0 .75em; max-width: 68ch; font-size: var(--s-body); line-height: 1.58; }
+.pg-section { margin: 44px 0 0; }
+/* Section plate (anatomy B): numbered kicker, title, lead, hairline */
+.pg-plate { margin: 48px 0 18px; padding: 0 0 14px; border-bottom: 1px solid var(--cf-border); }
+.pg-plate .pg-kicker { margin-bottom: 6px; }
+.pg-plate .pg-h2 { margin-bottom: 6px; }
+.pg-plate .pg-lead { margin-bottom: 0; }
+/* Blocks whose titles must sit under the subsection: comparison columns and the decision */
+.pg-cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 14px 0 22px; }
+.pg-cmp article { padding-top: 10px; border-top: 3px solid var(--cf-accent); }
+.pg-cmp h4, .pg-dec h4, .pg-tbl-title { margin: 0 0 6px; font-size: var(--s-title); font-weight: 600; line-height: 1.35; }
+.pg-cmp p, .pg-dec p { margin: 0; font-size: var(--s-body); line-height: 1.5; }
+.pg-dec { margin: 14px 0 22px; padding: 12px 0; border-top: 1px solid var(--cf-border); border-bottom: 1px solid var(--cf-border); }
+.pg-dec .pg-opts { display: flex; gap: 18px; margin: 8px 0 0; padding: 0; list-style: none; font-size: var(--s-body); }
+.pg-dec .pg-opts li::before { content: "○ "; color: var(--cf-text-muted); }
+.pg-fig-title { margin: 0 0 10px; font-size: var(--s-title); font-weight: 600; }
+.pg-fig-title .n { font-family: var(--cf-font-mono); font-size: .86em; font-weight: 500; color: var(--cf-text-muted); }
+.pg .cf-fig { margin: 12px 0 10px; }
+.pg .cf-fig .cf-fig-title { font-size: var(--s-title); }
+/* Scale candidates, px at the default size */
+.sc-today { --s-display: 57.6px; --s-lede: 16px; --s-h2: 28.2px; --s-h3: 17.9px; --s-title: 18.4px; --s-body: 16px; --s-caption: 13px; --s-micro: 12.5px; }
+.sc-kit { --s-display: 30px; --s-lede: 20px; --s-h2: 22px; --s-h3: 16.5px; --s-title: 14px; --s-body: 15px; --s-caption: 13px; --s-micro: 12.5px; }
+.sc-wide { --s-display: 34px; --s-lede: 19px; --s-h2: 24px; --s-h3: 18px; --s-title: 15px; --s-body: 15px; --s-caption: 13px; --s-micro: 12.5px; }
+/* Ladder: one line per role at its size, with the measured px beside it */
+.ladder { display: grid; gap: 6px; margin: 10px 0 24px; }
+.ladder > div { display: grid; grid-template-columns: 1fr 7ch; align-items: baseline; gap: 16px; }
+.ladder .px { font-family: var(--cf-font-mono); font-size: 12.5px; color: var(--cf-text-muted); text-align: right; }
+.ladder .l-display { font-size: var(--s-display); font-weight: 600; letter-spacing: -0.018em; line-height: 1.12; }
+.ladder .l-lede { font-size: var(--s-lede); font-weight: 450; }
+.ladder .l-h2 { font-size: var(--s-h2); font-weight: 600; letter-spacing: -0.014em; }
+.ladder .l-h3 { font-size: var(--s-h3); font-weight: 600; }
+.ladder .l-title { font-size: var(--s-title); font-weight: 600; }
+.ladder .l-body { font-size: var(--s-body); }
+.ladder .l-caption { font-size: var(--s-caption); color: var(--cf-text-muted); }
+.ladder .l-bad { color: var(--cf-danger); }
+/* Lab-only framing */
+.lab-sheet { max-width: 1100px; margin: 0 auto; padding: 28px 24px 64px; }
+.lab-h { margin: 44px 0 6px; padding-top: 18px; border-top: 2px solid var(--cf-border-strong); font-family: var(--cf-font-mono); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--cf-text-muted); }
+.lab-h:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
+.lab-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+.lab-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+.lab-cap { font-size: 13px; color: var(--cf-text-muted); margin: 4px 0 14px; }
+.lab-opt { padding: 16px 18px 6px; border: 1px solid var(--cf-border); border-radius: 12px; background: var(--cf-canvas); }
+.lab-opt > .lab-opt-t { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+.lab-opt > .lab-opt-t .tag { margin-left: 8px; font-family: var(--cf-font-mono); font-size: 12px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--cf-text-muted); }
+.swatches { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 16px; }
+.sw { display: grid; grid-template-columns: 34px 1fr; gap: 10px; align-items: center; min-width: 190px; padding: 6px 8px; border: 1px solid var(--cf-border); border-radius: 8px; background: var(--cf-surface); font-size: 13px; }
+.sw i { display: block; width: 34px; height: 34px; border-radius: 7px; border: 2px solid transparent; }
+.sw .n { font-family: var(--cf-font-mono); font-size: 12px; color: var(--cf-text-muted); }

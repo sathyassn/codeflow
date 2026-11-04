@@ -43,7 +43,7 @@ const CODEX_PROMPT_BLOCK: &str = r#",
         ]
       }
     ]"#;
-const GROK_GUARDS_END: &str = r#"          { "type": "command", "command": "codeflow hook edit-guard", "timeout": 10 }
+const GROK_GUARDS_END: &str = r#"          { "type": "command", "command": "codeflow hook edit-guard", "timeout": 30 }
         ]
       }
     ]"#;

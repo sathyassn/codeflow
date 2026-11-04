@@ -6064,20 +6064,46 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual("sent\n", runner.herdr("pane", "send-text", "own-pane", "prompt"))
 
     def test_codex_runtime_executable_links_are_not_config_links(self):
+        for layout in ["arg0", "arg0-macos", "arg0-linux", "arg0-windows", "arg0-futureos"]:
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / ".codeflow-eval/codex"
+                helpers = root / "tmp" / layout / "codex-arg0ABC123"
+                helpers.mkdir(parents=True)
+                binary = Path(temp) / "bin/codex"
+                with patch.object(eval_kit.shutil, "which", return_value=str(binary)):
+                    for name in ["applypatch", "apply_patch", "codex-execve-wrapper"]:
+                        (helpers / name).symlink_to(binary)
+                    self.assertTrue(eval_kit.evaluator_directory(root))
+                    (helpers / "settings.json").symlink_to(binary)
+                    self.assertFalse(eval_kit.evaluator_directory(root))
+                    (helpers / "settings.json").unlink()
+                    (helpers / "apply_patch").unlink()
+                    (helpers / "apply_patch").symlink_to(Path(temp) / ".codex/config.toml")
+                    self.assertFalse(eval_kit.evaluator_directory(root))
+
+    def test_codex_runtime_links_require_the_native_location_and_executable(self):
+        for location in [
+            "tmp/arg0-/codex-arg0ABC123/apply_patch",
+            "tmp/arg0macos/codex-arg0ABC123/apply_patch",
+            "tmp/arg01/codex-arg0ABC123/apply_patch",
+            "other/arg0-macos/codex-arg0ABC123/apply_patch",
+            "tmp/arg0-macos/not-a-dispatch-directory/apply_patch",
+            "tmp/arg0-macos/codex-arg0ABC123/extra/apply_patch",
+        ]:
+            with self.subTest(location=location), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / ".codeflow-eval/codex"
+                link = root / location
+                link.parent.mkdir(parents=True)
+                binary = Path(temp) / "bin/codex"
+                link.symlink_to(binary)
+                with patch.object(eval_kit.shutil, "which", return_value=str(binary)):
+                    self.assertFalse(eval_kit.evaluator_directory(root))
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / ".codeflow-eval/codex"
-            helpers = root / "tmp/arg0/codex-arg0ABC123"
-            helpers.mkdir(parents=True)
-            binary = Path(temp) / "bin/codex"
-            with patch.object(eval_kit.shutil, "which", return_value=str(binary)):
-                for name in ["applypatch", "apply_patch", "codex-execve-wrapper"]:
-                    (helpers / name).symlink_to(binary)
-                self.assertTrue(eval_kit.evaluator_directory(root))
-                (helpers / "settings.json").symlink_to(binary)
-                self.assertFalse(eval_kit.evaluator_directory(root))
-                (helpers / "settings.json").unlink()
-                (helpers / "apply_patch").unlink()
-                (helpers / "apply_patch").symlink_to(Path(temp) / ".codex/config.toml")
+            link = root / "tmp/arg0-macos/codex-arg0ABC123/apply_patch"
+            link.parent.mkdir(parents=True)
+            link.symlink_to(Path(temp) / "bin/codex")
+            with patch.object(eval_kit.shutil, "which", return_value=None):
                 self.assertFalse(eval_kit.evaluator_directory(root))
 
     def test_disposable_macos_home_links_only_the_real_keychains_folder(self):

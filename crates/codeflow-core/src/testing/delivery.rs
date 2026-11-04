@@ -18,6 +18,10 @@ pub struct GateOptions {
     pub all: bool,
     /// Named targets to run with their prerequisites; empty means no limit.
     pub only: Vec<String>,
+    /// A test config to read instead of the repository's
+    /// `.codeflow/test-config.json`, with no fallback to it or to stack
+    /// detection (`codeflow test --config`, TSK-1020).
+    pub config: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]

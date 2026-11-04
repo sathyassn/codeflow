@@ -350,18 +350,20 @@ fn could_enforce(target: &Path, root: &Path) -> bool {
             return true;
         };
         let first = first.as_os_str();
+        // The name test comes first: it reads nothing, and every lookup
+        // now asks this for each owner (TSK-1050).
         first.eq_ignore_ascii_case(".git")
-            || (git_directory(&root).unwrap_or(true)
-                && [
-                    "config",
-                    "config.worktree",
-                    "hooks",
-                    "HEAD",
-                    "packed-refs",
-                    "refs",
-                ]
-                .iter()
-                .any(|name| first.eq_ignore_ascii_case(name)))
+            || ([
+                "config",
+                "config.worktree",
+                "hooks",
+                "HEAD",
+                "packed-refs",
+                "refs",
+            ]
+            .iter()
+            .any(|name| first.eq_ignore_ascii_case(name))
+                && git_directory(&root).unwrap_or(true))
             || crate::security::actions::table()
                 .claude_edit_denies
                 .iter()
@@ -486,7 +488,14 @@ pub(super) fn target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>
 }
 
 fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut roots = vec![session.to_path_buf()];
+    // Roots are listed, compared and kept in the spelling `normalized` gives
+    // the ancestors below: the plain `C:\` form, never the verbatim `\\?\C:\`
+    // form `std::fs::canonicalize` returns on Windows. A session spelled the
+    // verbatim way was listed beside its own plain ancestor, so one owner was
+    // opened twice for every lookup and kept under two keys (TSK-1050).
+    let mut roots = vec![crate::portable_path::without_verbatim(
+        session.to_path_buf(),
+    )];
     for resolve in [false, true] {
         let target =
             super::edit_guard::normalized(target, resolve).map_err(|error| error.to_string())?;
@@ -504,19 +513,36 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
             }
         }
     }
+    distinct_owners(target, &roots)
+}
+
+/// The owners in `roots` that `target` must be judged against. An owner
+/// `target` could not enforce through may take the reading kept earlier in
+/// this scope. Two owners opened now that share a common directory keep the
+/// first. An owner whose reading was kept is always listed: its metadata
+/// shows that it changed, never that it is still the same repository, so a
+/// kept reading never removes an owner as a duplicate (review 03 of PR
+/// 386). Every consumer refuses when any owner protects the target, so an
+/// owner listed twice over one common directory changes no verdict.
+fn distinct_owners(target: &Path, roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+    // The common directories of the owners opened now.
     let mut common = std::collections::BTreeSet::new();
     let mut distinct = Vec::new();
     for root in roots {
         // Main and linked checkouts share the complete protection set. Open
         // each discovered owner first, so deduplication cannot hide a broken
-        // pointer or a disagreement with its registration.
-        let opened = match open(&root) {
-            Ok(repo) => repo,
-            Err(error) if could_enforce(target, &root) => {
+        // pointer or a disagreement with its registration. An owner whose
+        // enforcement paths `target` may name is always opened now, so a
+        // kept reading never stands in for the refusal a broken owner gives.
+        let enforced = could_enforce(target, root);
+        let (opened, kept) = owner_common(root, !enforced);
+        let opened = match opened {
+            Ok(opened) => opened,
+            Err(error) if enforced => {
                 if error.starts_with("Cannot read repository marker ") {
                     return Err(error);
                 }
-                let marker = if git_directory(&root).unwrap_or(false) {
+                let marker = if git_directory(root).unwrap_or(false) {
                     root.clone()
                 } else {
                     root.join(".git")
@@ -528,14 +554,127 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
             }
             Err(_) => continue,
         };
-        if let Some(repo) = opened {
-            if !common.insert(canonical(repo.commondir(), "target common directory")?) {
+        if let (Some(directory), false) = (opened, kept) {
+            if !common.insert(directory?) {
                 continue;
             }
         }
-        distinct.push(root);
+        distinct.push(root.clone());
     }
     Ok(distinct)
+}
+
+/// What opening one discovered owner gave: the error [`open`] reported, or
+/// for what it opened the canonical common directory (`None` for a proven
+/// non-repository, an error when that directory cannot be resolved).
+type OwnerCommon = Result<Option<Result<PathBuf, String>>, String>;
+
+/// The metadata of the files an owner's reading starts from: `.git` (a
+/// directory, or a file naming a linked worktree's Git directory) and
+/// `HEAD` (where the root is itself a Git directory), each `None` when
+/// proven absent. A reading is reused only while these are unchanged, so an
+/// owner replaced, broken or mended during the scope is opened again. This
+/// detects a change; it does not prove the repository is the same, so a
+/// reused reading only ever adds an owner (see [`distinct_owners`]).
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct Marker(Vec<Option<MarkerFile>>);
+
+#[derive(Clone, PartialEq, Eq)]
+struct MarkerFile {
+    dir: bool,
+    len: u64,
+    modified: std::time::SystemTime,
+    id: u64,
+}
+
+/// The [`Marker`] of the owner at `root`, or `None` when any of its
+/// metadata cannot be read: such an owner is opened again on every lookup
+/// and its reading is not kept.
+fn marker(root: &Path) -> Option<Marker> {
+    [".git", "HEAD"]
+        .iter()
+        .map(
+            |name| match crate::absence::symlink_metadata_optional(&root.join(name)).ok()? {
+                None => Some(None),
+                Some(meta) => Some(Some(MarkerFile {
+                    dir: meta.is_dir(),
+                    len: meta.len(),
+                    modified: meta.modified().ok()?,
+                    id: file_id(&meta),
+                })),
+            },
+        )
+        .collect::<Option<Vec<_>>>()
+        .map(Marker)
+}
+
+#[cfg(unix)]
+fn file_id(meta: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.ino()
+}
+
+#[cfg(not(unix))]
+fn file_id(_meta: &std::fs::Metadata) -> u64 {
+    0
+}
+
+/// An owner reading kept for one guard evaluation: a proven non-repository
+/// or a resolved common directory, with the [`Marker`] it was read from.
+type KeptOwner = (Option<PathBuf>, Marker);
+
+thread_local! {
+    /// The successful owner readings of one guard evaluation (TSK-1050),
+    /// present only while a [`super::edit_guard::RepoFactsScope`] is open. A
+    /// failure is never kept.
+    pub(super) static OWNERS: std::cell::RefCell<Option<std::collections::HashMap<PathBuf, KeptOwner>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The reading of the owner at `root`, and whether it was kept from earlier
+/// in this [`super::edit_guard::RepoFactsScope`]. With `reuse`, a kept
+/// successful reading answers while the owner's [`Marker`] reads the same;
+/// otherwise the owner is opened now, and a successful reading is kept for
+/// later lookups when its marker could be read. A failure is never kept, so
+/// the next lookup opens the owner again.
+///
+/// Callers never reuse for a target the owner could enforce, and a kept
+/// reading never removes an owner (see [`distinct_owners`]). One evaluation
+/// asks for the owners of many ordinary targets in the same repository, so
+/// those lookups share one open.
+fn owner_common(root: &Path, reuse: bool) -> (OwnerCommon, bool) {
+    let now = marker(root);
+    if let (true, Some(now)) = (reuse, &now) {
+        if let Some((kept, _)) = OWNERS.with(|cache| {
+            cache
+                .borrow()
+                .as_ref()
+                .and_then(|map| map.get(root))
+                .filter(|(_, read_from)| read_from == now)
+                .cloned()
+        }) {
+            return (Ok(kept.map(Ok)), true);
+        }
+    }
+    #[cfg(test)]
+    OWNER_OPENS.with(|opens| opens.set(opens.get() + 1));
+    let value = open(root)
+        .map(|repo| repo.map(|repo| canonical(repo.commondir(), "target common directory")));
+    let success = match &value {
+        Ok(None) => Some(None),
+        Ok(Some(Ok(directory))) => Some(Some(directory.clone())),
+        Ok(Some(Err(_))) | Err(_) => None,
+    };
+    OWNERS.with(|cache| match (cache.borrow_mut().as_mut(), success, now) {
+        (Some(map), Some(reading), Some(now)) => {
+            map.insert(root.to_path_buf(), (reading, now));
+        }
+        (Some(map), _, _) => {
+            map.remove(root);
+        }
+        (None, _, _) => {}
+    });
+    (value, false)
 }
 
 /// A checkout hidden from Git's registration list still names its common
@@ -754,6 +893,8 @@ pub(super) fn registered_marker(admin: &Path) -> Result<PathBuf, String> {
 #[cfg(test)]
 thread_local! {
     static VALIDATION_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many times [`owner_common`] opened a discovered owner.
+    static OWNER_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Both pointers must agree: the registration names a checkout containing
@@ -1501,5 +1642,454 @@ mod r16_obtaining_regressions {
         }
         std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
         assert!(super::open(dir.path()).is_err());
+    }
+}
+
+/// TSK-1050: one guard evaluation opens each repository once for ordinary
+/// targets, and a kept reading never turns a refusal into an allow.
+#[cfg(test)]
+mod owner_opens {
+    use super::OWNER_OPENS;
+    use crate::hooks::edit_guard::RepoFactsScope;
+    use std::path::{Path, PathBuf};
+
+    type Roots = Result<Vec<PathBuf>, String>;
+
+    fn opens() -> usize {
+        OWNER_OPENS.with(std::cell::Cell::get)
+    }
+
+    fn reset() {
+        OWNER_OPENS.with(|count| count.set(0));
+    }
+
+    /// A repository with one commit at the physical path of a new
+    /// directory, spelled as git writes it (no Windows verbatim prefix), so
+    /// every spelling of a target names one owner.
+    fn repository() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = crate::portable_path::canonicalize(dir.path()).unwrap();
+        let repo = git2::Repository::init(&root).unwrap();
+        let tree = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree).unwrap();
+        let sig = git2::Signature::now("t", "t@example.test").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "one", &tree, &[])
+            .unwrap();
+        (dir, root)
+    }
+
+    fn roots(root: &Path, word: &str) -> Roots {
+        super::target_roots(&root.join(word), root)
+    }
+
+    /// The owners a target gets with no scope, so nothing is kept.
+    fn fresh(root: &Path, word: &str) -> Roots {
+        roots(root, word)
+    }
+
+    fn break_head(root: &Path) -> Vec<u8> {
+        let head = root.join(".git/HEAD");
+        let bytes = std::fs::read(&head).unwrap();
+        std::fs::remove_file(&head).unwrap();
+        bytes
+    }
+
+    fn mend_head(root: &Path, bytes: &[u8]) {
+        std::fs::write(root.join(".git/HEAD"), bytes).unwrap();
+    }
+
+    /// Ordinary targets in one repository share one open per scope, a new
+    /// scope opens again, and no scope keeps nothing.
+    #[test]
+    fn each_owner_is_opened_once_per_guard_evaluation() {
+        let (_dir, root) = repository();
+        for _ in 0..2 {
+            let _scope = RepoFactsScope::enter();
+            reset();
+            assert_eq!(roots(&root, "d0/x"), Ok(vec![root.clone()]));
+            assert_eq!(opens(), 1, "the first lookup in a scope opens its owner");
+            for word in 1..16 {
+                assert_eq!(roots(&root, &format!("d{word}/x")), Ok(vec![root.clone()]));
+            }
+            assert_eq!(opens(), 1, "later ordinary targets reuse the opened owner");
+        }
+        reset();
+        assert!(roots(&root, "d0/x").is_ok());
+        assert!(roots(&root, "d0/x").is_ok());
+        assert_eq!(opens(), 2, "outside a scope every lookup opens again");
+    }
+
+    /// A session root in the verbatim spelling Windows `canonicalize` gives
+    /// (`\\?\C:\`) and a target's plain ancestors name one owner, which is
+    /// listed, opened and kept once, in the plain spelling. On other
+    /// platforms both spellings are the same path, so only the hosted
+    /// Windows lane exercises two of them.
+    #[test]
+    fn a_session_in_another_spelling_names_one_owner() {
+        let (_dir, root) = repository();
+        let verbatim = root.canonicalize().unwrap();
+        let _scope = RepoFactsScope::enter();
+        reset();
+        for word in ["a/x", ".claude/settings.json", "b/y"] {
+            assert_eq!(
+                super::target_roots(&root.join(word), &verbatim),
+                Ok(vec![root.clone()]),
+                "{word}"
+            );
+        }
+        assert_eq!(
+            opens(),
+            2,
+            "one open for the ordinary targets, one for the protected target"
+        );
+    }
+
+    /// A linked worktree and its main checkout share one common directory.
+    /// The first lookup opens both and lists the session's owner once; later
+    /// ordinary targets reuse both readings and list both owners, since a
+    /// kept reading never removes one. 16 targets in the worktree open the
+    /// two owners once each, whether the session is the main checkout or the
+    /// worktree (reviews 02 and 03 of PR 386).
+    #[test]
+    fn a_linked_worktree_and_its_main_checkout_are_opened_once() {
+        let (_dir, root) = repository();
+        let repo = git2::Repository::open(&root).unwrap();
+        let linked = root.join("w");
+        repo.worktree("w", &linked, None).unwrap();
+        for (session, other) in [
+            (root.clone(), linked.clone()),
+            (linked.clone(), root.clone()),
+        ] {
+            let _scope = RepoFactsScope::enter();
+            reset();
+            for word in 0..16 {
+                let target = linked.join(format!("d{word}/x"));
+                let expected = if word == 0 {
+                    vec![session.clone()]
+                } else {
+                    vec![session.clone(), other.clone()]
+                };
+                assert_eq!(
+                    super::target_roots(&target, &session),
+                    Ok(expected),
+                    "{word}"
+                );
+            }
+            assert_eq!(opens(), 2, "each owner is opened once: {session:?}");
+        }
+    }
+
+    /// Whichever owner a scope opens first, each is opened once: a lookup
+    /// that finds a kept reading and a fresh one sharing a common directory
+    /// lists both rather than reading them again (review 03 of PR 386).
+    #[test]
+    fn a_kept_reading_and_a_fresh_one_list_both_owners() {
+        let (_dir, root) = repository();
+        let repo = git2::Repository::open(&root).unwrap();
+        let linked = root.join("w");
+        repo.worktree("w", &linked, None).unwrap();
+        let both = vec![root.clone(), linked.clone()];
+        let _scope = RepoFactsScope::enter();
+        reset();
+        let main = super::target_roots(&root.join("a/x"), &root);
+        assert_eq!(main, Ok(vec![root.clone()]));
+        assert_eq!(opens(), 1, "the main checkout alone");
+        let first = super::target_roots(&linked.join("b/x"), &root);
+        assert_eq!(first, Ok(both.clone()));
+        assert_eq!(opens(), 2, "the worktree once more");
+        let later = super::target_roots(&linked.join("c/x"), &root);
+        assert_eq!(later, Ok(both));
+        assert_eq!(opens(), 2, "both readings are kept");
+    }
+
+    /// An owner whose metadata cannot be read has no marker, so its reading
+    /// is never reused; one whose `.git` and `HEAD` are proven absent has
+    /// one (review 03 of PR 386).
+    #[cfg(unix)]
+    #[test]
+    fn an_owner_whose_metadata_cannot_be_read_has_no_marker() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // A superuser reads through the mode, so there is nothing to test.
+        let enforced = std::fs::read_dir(&locked).is_err();
+        let unreadable = super::marker(&locked.join("r"));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if enforced {
+            assert!(unreadable.is_none());
+        }
+        assert!(super::marker(dir.path()).is_some());
+    }
+
+    /// Two owners, an outer repository and an independent one nested in
+    /// it, keep their own readings: each target gets exactly its owners,
+    /// in any order, and each owner is opened once.
+    #[test]
+    fn two_owners_keep_their_own_roots() {
+        let (_dir, root) = repository();
+        let nested = root.join("nested");
+        git2::Repository::init(&nested).unwrap();
+        let both = vec![root.clone(), nested.clone()];
+        let _scope = RepoFactsScope::enter();
+        reset();
+        for word in 0..6 {
+            let (outer, inner) = (format!("o{word}/x"), format!("nested/i{word}/x"));
+            let pairs = if word % 2 == 0 {
+                [(outer, vec![root.clone()]), (inner, both.clone())]
+            } else {
+                [(inner, both.clone()), (outer, vec![root.clone()])]
+            };
+            for (target, owners) in pairs {
+                assert_eq!(roots(&root, &target), Ok(owners), "{target}");
+            }
+        }
+        assert_eq!(opens(), 2, "each owner is opened once");
+    }
+
+    /// An owner that breaks during the scope refuses an unseen protected
+    /// target as it does with no scope, whichever kind of target opened it
+    /// first (Codex review 01 of PR 386).
+    #[test]
+    fn a_protected_target_sees_an_owner_that_breaks_mid_scope() {
+        for ordinary_first in [true, false] {
+            let (_dir, root) = repository();
+            let scope = RepoFactsScope::enter();
+            let first = if ordinary_first {
+                "ordinary.txt"
+            } else {
+                ".claude/a.json"
+            };
+            assert_eq!(roots(&root, first), Ok(vec![root.clone()]));
+            let head = break_head(&root);
+            let after = roots(&root, ".claude/notes.txt");
+            let ordinary = roots(&root, "plain.txt");
+            drop(scope);
+            let expected = fresh(&root, ".claude/notes.txt");
+            assert!(expected.is_err(), "{expected:?}");
+            assert_eq!(after, expected, "ordinary first: {ordinary_first}");
+            // An ordinary target may keep an owner the fresh reading skips;
+            // it never loses one the fresh reading keeps.
+            let (Ok(kept), Ok(fresh_owners)) = (ordinary, fresh(&root, "plain.txt")) else {
+                panic!("an ordinary target never fails on a broken owner");
+            };
+            assert!(fresh_owners.iter().all(|owner| kept.contains(owner)));
+            mend_head(&root, &head);
+        }
+    }
+
+    /// An owner mended during the scope is opened again, so an unseen
+    /// target of either kind gets the owner a fresh reading gives.
+    #[test]
+    fn a_mended_owner_is_read_again_in_the_same_scope() {
+        for ordinary_first in [true, false] {
+            let (_dir, root) = repository();
+            let head = break_head(&root);
+            let _scope = RepoFactsScope::enter();
+            if ordinary_first {
+                assert_eq!(roots(&root, "src/a.rs"), Ok(Vec::new()));
+            } else {
+                assert!(roots(&root, ".claude/a.json").is_err());
+            }
+            mend_head(&root, &head);
+            for word in ["src/b.rs", ".claude/b.json"] {
+                assert_eq!(roots(&root, word), Ok(vec![root.clone()]), "{word}");
+            }
+        }
+    }
+
+    /// A broken owner fails every protected target and skips every
+    /// ordinary one, exactly as with no scope. Each unseen target opens it
+    /// again: a failure is never kept.
+    #[test]
+    fn a_broken_owner_fails_closed_for_every_protected_target_in_a_scope() {
+        let (_dir, root) = repository();
+        break_head(&root);
+        let passes = [
+            [
+                ".claude/settings.json",
+                "src/a.rs",
+                ".git/config",
+                "notes.txt",
+            ],
+            [
+                "src/b.rs",
+                ".claude/hooks/x",
+                "docs/c.md",
+                ".git/hooks/pre-push",
+            ],
+        ];
+        let expected: Vec<Vec<Roots>> = passes
+            .iter()
+            .map(|pass| pass.iter().map(|word| fresh(&root, word)).collect())
+            .collect();
+        let _scope = RepoFactsScope::enter();
+        reset();
+        for (pass, results) in passes.iter().zip(&expected) {
+            for (word, result) in pass.iter().zip(results) {
+                assert_eq!(result.is_err(), word.starts_with('.'), "{word}: {result:?}");
+                assert_eq!(&roots(&root, word), result, "{word}");
+            }
+        }
+        assert_eq!(
+            opens(),
+            8,
+            "every unseen target opens the broken owner again"
+        );
+    }
+
+    /// A kept reading never removes an owner as a duplicate. A linked
+    /// worktree shares its main checkout's common directory, so it is
+    /// folded into it; once the worktree is replaced by an independent
+    /// repository, an unseen target inside it gets both owners, as a fresh
+    /// reading does.
+    #[test]
+    fn a_kept_reading_never_removes_an_owner() {
+        let (_dir, root) = repository();
+        let repo = git2::Repository::open(&root).unwrap();
+        let linked = root.join("w");
+        repo.worktree("w", &linked, None).unwrap();
+        let scope = RepoFactsScope::enter();
+        assert_eq!(roots(&root, "w/a.txt"), Ok(vec![root.clone()]));
+        std::fs::remove_file(linked.join(".git")).unwrap();
+        git2::Repository::init(&linked).unwrap();
+        let after = roots(&root, "w/b.txt");
+        drop(scope);
+        assert_eq!(
+            fresh(&root, "w/b.txt"),
+            Ok(vec![root.clone(), linked.clone()])
+        );
+        assert_eq!(after, Ok(vec![root, linked]));
+    }
+
+    /// A repository with one commit at `path`.
+    fn committed(path: &Path) -> git2::Repository {
+        let repo = git2::Repository::init(path).unwrap();
+        {
+            let tree = repo.treebuilder(None).unwrap().write().unwrap();
+            let tree = repo.find_tree(tree).unwrap();
+            let sig = git2::Signature::now("t", "t@example.test").unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "one", &tree, &[])
+                .unwrap();
+        }
+        repo
+    }
+
+    /// A main checkout `r` with a linked worktree `r/w`, and an independent
+    /// repository `c` beside it. `c` has a linked worktree `d` inside
+    /// `r/w/b`, so its enforcement files lie there, and a registration `x`
+    /// that names `r/w` as its checkout, so `r/w/.git` can be pointed at
+    /// `c` with text of the same length.
+    fn retarget_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let base = crate::portable_path::canonicalize(dir.path()).unwrap();
+        let (root, other) = (base.join("r"), base.join("c"));
+        let main = committed(&root);
+        let independent = committed(&other);
+        let linked = root.join("w");
+        main.worktree("w", &linked, None).unwrap();
+        std::fs::create_dir_all(linked.join("b")).unwrap();
+        independent
+            .worktree("d", &linked.join("b/d"), None)
+            .unwrap();
+        independent.worktree("x", &base.join("x"), None).unwrap();
+        let registration = std::fs::read(root.join(".git/worktrees/w/gitdir")).unwrap();
+        std::fs::write(other.join(".git/worktrees/x/gitdir"), registration).unwrap();
+        (dir, root, linked)
+    }
+
+    /// Point `linked/.git` at `c`'s registration `x` in place, with text of
+    /// the same length and the old modification time, so its inode, length,
+    /// type and time are all unchanged, and drop the main checkout's own
+    /// registration of it, as moving a worktree between repositories does.
+    /// The main checkout's `.git` entries are unchanged.
+    fn retarget(linked: &Path) {
+        use std::io::Write;
+        let gitfile = linked.join(".git");
+        let before = std::fs::read_to_string(&gitfile).unwrap();
+        let after = before
+            .replace("/r/.git/worktrees/w", "/c/.git/worktrees/x")
+            .replace("\\r\\.git\\worktrees\\w", "\\c\\.git\\worktrees\\x");
+        assert_ne!(before, after, "{before}");
+        assert_eq!(before.len(), after.len());
+        let modified = std::fs::metadata(&gitfile).unwrap().modified().unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&gitfile)
+            .unwrap();
+        file.write_all(after.as_bytes()).unwrap();
+        file.set_modified(modified).unwrap();
+        let root = linked.parent().unwrap();
+        std::fs::remove_dir_all(root.join(".git/worktrees/w")).unwrap();
+    }
+
+    type Admission = (
+        Result<bool, String>,
+        Result<bool, String>,
+        Result<Option<(bool, PathBuf)>, String>,
+    );
+
+    /// What the three edit-guard readers that walk a target's owners say
+    /// about `target`: whether it is an enforcement target, whether it holds
+    /// enforcement files, and the checkout a recursive delete would remove.
+    fn admission(target: &Path, root: &Path) -> Admission {
+        use crate::hooks::edit_guard::{self, Checkout};
+        (
+            edit_guard::repository_enforcement_target(target, root, true),
+            edit_guard::holds_enforcement_files(target, root),
+            edit_guard::registered_checkout_under(target, root, None).map(|found| {
+                found.map(|checkout| match checkout {
+                    Checkout::Registered(path) => (true, path),
+                    Checkout::Hidden(path) => (false, path),
+                })
+            }),
+        )
+    }
+
+    /// A worktree pointed at an independent repository during the scope,
+    /// with every metadata field the owner fingerprint compares unchanged,
+    /// keeps its owner: an unseen target inside it gets the owners and the
+    /// admission results a fresh reading gives (Codex review 03 of PR 386).
+    #[test]
+    fn a_worktree_retargeted_with_unchanged_metadata_keeps_its_owner() {
+        for session_is_main in [true, false] {
+            let (_dir, root, linked) = retarget_fixture();
+            let session = if session_is_main {
+                root.clone()
+            } else {
+                linked.clone()
+            };
+            let target = linked.join("b");
+            let scope = RepoFactsScope::enter();
+            assert_eq!(
+                super::target_roots(&linked.join("a/x"), &session),
+                Ok(vec![session.clone()]),
+                "both owners read afresh share one common directory"
+            );
+            let fingerprint = super::marker(&linked);
+            assert!(fingerprint.is_some());
+            retarget(&linked);
+            assert!(
+                super::marker(&linked) == fingerprint,
+                "the retarget keeps every compared metadata field"
+            );
+            let owners = super::target_roots(&target.join("y"), &session);
+            let admitted = admission(&target, &session);
+            drop(scope);
+            let fresh_owners = super::target_roots(&target.join("y"), &session);
+            let mut both = vec![root.clone(), linked.clone()];
+            if !session_is_main {
+                both.reverse();
+            }
+            assert_eq!(fresh_owners, Ok(both), "two repositories now");
+            assert_eq!(owners, fresh_owners, "session is main: {session_is_main}");
+            let fresh_admitted = admission(&target, &session);
+            assert_eq!(fresh_admitted.1, Ok(true), "c's worktree d lies in w/b");
+            assert_eq!(
+                admitted, fresh_admitted,
+                "session is main: {session_is_main}"
+            );
+        }
     }
 }

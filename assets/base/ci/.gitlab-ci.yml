@@ -71,11 +71,11 @@ codeflow:
           remote=origin
           [ "${CI_MERGE_REQUEST_PROJECT_ID:-}" = "${CI_PROJECT_ID:-}" ] ||
             remote="${CI_MERGE_REQUEST_PROJECT_URL:-}.git"
-          git fetch -q --no-tags "$remote" "+refs/heads/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}:refs/codeflow/target" || {
+          git fetch -q --no-tags "$remote" "+refs/heads/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}:refs/remotes/origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}" || {
             echo "codeflow: error: cannot fetch the merge request's target branch ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}; the pinned install never judges by the diff base" >&2
             exit 1
           }
-          BASE=$(git rev-parse refs/codeflow/target)
+          BASE=$(git rev-parse "refs/remotes/origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}")
         fi
       else
         BASE="$CI_COMMIT_SHA"

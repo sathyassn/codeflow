@@ -154,8 +154,8 @@ fn assert_scaffold_carries_map_and_hooks(case: &str, record: &Value, fixture: &P
         "{case}"
     );
     assert!(
-        agents
-            .contains("| report status or hand off | each item by its outcome in words, IDs after"),
+        agents.contains("| report status or hand off |")
+            && agents.contains("each item by its outcome in words, IDs after"),
         "{case}"
     );
     assert!(agents.contains("| show something complex |"), "{case}");
@@ -182,7 +182,7 @@ fn assert_local_window_and_reinjection(case: &str, plan: &Value, fixture: &Path,
     )
     .expect("shared settings JSON");
     assert_eq!(
-        shared["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "50",
+        shared["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "35",
         "{case}: the project default the pin overrides"
     );
     let tracked = Command::new("git")

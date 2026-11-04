@@ -164,11 +164,18 @@ impl Line {
             .unwrap()
             .replace("AC-1 Work runs.", "AC-1 The planned work runs.");
         self.write(path, &record);
-        let reviewed = self.commit("feat: implement planned work");
-        self.write(path, &format!("{}\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: https://example.test/review/2\n  criteria:\n    AC-1: verified | focused test\n    AC-2: verified | journey\n  journey: verified | exercised command\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n```\n", record.replace("status: todo", "status: complete")));
-        self.commit("docs: complete planned work");
+        self.commit("feat: implement planned work");
+        self.complete_task();
         self.git(&["switch", "-q", LINE]);
         self.merge("task/TSK-001-work");
+    }
+    /// Record the review of the current task head before its line landing.
+    pub fn complete_task(&self) {
+        let reviewed = self.git(&["rev-parse", "HEAD"]);
+        let path = "project-management/tasks/TSK-001.md";
+        let record = std::fs::read_to_string(self.root().join(path)).unwrap();
+        self.write(path, &format!("{}\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: https://example.test/review/2\n  criteria:\n    AC-1: verified | focused test\n    AC-2: verified | journey\n  journey: verified | exercised command\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n```\n", record.replace("status: todo", "status: complete")));
+        self.commit("docs: complete planned work");
     }
     pub fn direct(&self) -> String {
         self.write("src/lib.rs", "pub fn direct() {}\n");

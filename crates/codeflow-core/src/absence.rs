@@ -103,6 +103,35 @@ pub(crate) fn existing_metadata(path: &Path) -> io::Result<Option<std::fs::Metad
     }
 }
 
+/// What the filesystem says about the entry at a path a guard must map.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Entry {
+    /// Something exists there, possibly a dangling link.
+    Exists,
+    /// Nothing exists there now, but its nearest existing ancestor is a
+    /// directory, so a command could still create an entry there.
+    Creatable,
+    /// Nothing can exist there: see [`cannot_exist`].
+    Impossible,
+}
+
+/// Classify `path` as [`Entry`]. A read failure that settles none of the
+/// three is returned, so a caller that cannot classify a path fails closed.
+pub(crate) fn entry(path: &Path) -> io::Result<Entry> {
+    if path.as_os_str().as_encoded_bytes().contains(&0) {
+        return Ok(Entry::Impossible);
+    }
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(Entry::Exists),
+        Err(error) if refuses_name(&error) => Ok(Entry::Impossible),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(match missing_leaf(path)? {
+            Missing::Absent => Entry::Creatable,
+            Missing::BelowNonDirectory(_) | Missing::Unnameable(_) => Entry::Impossible,
+        }),
+        Err(error) => Err(error),
+    }
+}
+
 /// Whether reading `path` failing with `error` proves nothing can exist
 /// there: the platform refused the name ([`refuses_name`]), a component is
 /// not a directory, or the leaf is not found and its ancestors settle it
@@ -193,6 +222,28 @@ mod tests {
         assert!(!proven_absent(&dir.path().join("file")).unwrap());
         assert!(proven_absent(&dir.path().join("file/child")).is_err());
         assert!(proven_absent(std::path::Path::new("r18-absent-relative-parent/child")).unwrap());
+    }
+
+    /// TSK-1002 Windows repair: a short-name mapper refuses a name a command
+    /// could still create, but not one nothing can ever hold.
+    #[test]
+    fn entries_separate_creatable_from_impossible_names() {
+        use super::{entry, Entry};
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(entry(dir.path()).unwrap(), Entry::Exists);
+        assert_eq!(
+            entry(&dir.path().join("missing/HEAD~1")).unwrap(),
+            Entry::Creatable
+        );
+        std::fs::write(dir.path().join("file"), "x").unwrap();
+        assert_eq!(
+            entry(&dir.path().join("file/RUNNER~1")).unwrap(),
+            Entry::Impossible
+        );
+        assert_eq!(
+            entry(&dir.path().join("nul\0name")).unwrap(),
+            Entry::Impossible
+        );
     }
 
     #[cfg(unix)]

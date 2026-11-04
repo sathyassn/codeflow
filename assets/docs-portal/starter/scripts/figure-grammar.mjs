@@ -1,3 +1,5 @@
+import declarationRules from "./figure-declaration-rules.json" with { type: "json" };
+
 // The figure grammar runtime (figure-grammar.md, ADR-0068). One module, shared
 // byte for byte by the portal adapter (Node) and the present review surface
 // (browser, crates/codeflow-present/web/src/figure-grammar.mjs). It validates a
@@ -25,8 +27,8 @@ export const THRESHOLDS = Object.freeze({
   overprintDepthPx: 1,
   widthChannelPx: 0.5,
   minChannels: 2,
-  wideMaxWidth: 720,
-  narrowMaxWidth: 368,
+  wideMaxWidth: declarationRules.composition.wideMaxWidth,
+  narrowMaxWidth: declarationRules.composition.narrowMaxWidth,
 });
 
 // The twelve rules, numbered as figure-grammar.md section 2 numbers them.
@@ -80,6 +82,18 @@ export const MARKS = Object.freeze({
   nc: { className: "cf-m-nc", shapes: SOLID, key: "cell", cross: "cf-m-nc-cross" },
 });
 
+// Tones (figure-grammar.md section 4). A drawn mark may carry a companion hue
+// (cat1, cat2) when it is a peer the subject names, or the accent when it is
+// the governing region. A tone changes hue only, so it is never a channel:
+// it goes only on marks whose kind, edge, width and dash the figure sheet
+// leaves as they are, and only on a mark a text item labels.
+export const TONES = Object.freeze(["accent", "cat1", "cat2"]);
+const TONED_MARKS = Object.freeze({
+  accent: Object.freeze(["layer", "layer-remote", "state", "node"]),
+  cat1: Object.freeze(["layer", "layer-remote", "state", "node", "optional", "denied"]),
+  cat2: Object.freeze(["layer", "layer-remote", "state", "node", "optional", "denied"]),
+});
+
 // The rendered channels rule 3 counts. Paint kind is read as two channels,
 // the interior and the edge, so a solid disc, a hollow ring, a faint outline
 // and a hatch are told apart without reading a hue.
@@ -88,7 +102,7 @@ export const CHANNELS = Object.freeze(["interior", "edge", "width", "dash", "sha
 // The closed set of fact checks (rule 6). Each re-derives one value from a
 // committed source so a wrong fact fails even when its anchor exists. The
 // portal adapter and the Rust validator implement the same three.
-export const FACT_CHECKS = Object.freeze(["contains", "count-items", "json"]);
+export const FACT_CHECKS = Object.freeze(declarationRules.factChecks);
 
 const DECORATIONS = Object.freeze({ rule: "cf-f-rule", axis: "cf-f-axis", tick: "cf-f-tick" });
 const TEXT_STYLES = Object.freeze({ strong: "cf-t--strong", mute: "cf-t--mute", head: "cf-t--head", mono: "cf-t--mono" });
@@ -201,7 +215,7 @@ function validateFact(fact, index, fail) {
     if (source !== null && (source.anchor !== null || !source.path.endsWith(".json"))) fail(`${where}: a json check reads a JSON file with no anchor`);
     if (fact.value === undefined) fail(`${where}: a json check asserts a value`);
   }
-  if (source !== null && fact.check.kind !== "json" && source.path.endsWith(".json")) fail(`${where}: a JSON source takes the json check`);
+  if (source !== null && fact.check.kind !== declarationRules.jsonSourceCheck && source.path.endsWith(".json")) fail(`${where}: a JSON source takes the json check`);
 }
 
 function validateLayout(figure, fail) {
@@ -254,11 +268,12 @@ function validateLayout(figure, fail) {
 
 function validateComposition(composition, name, stateNames, maxWidth, fail) {
   if (!isObject(composition)) { fail(`${name} must declare width, height and draw`); return; }
-  if (!(Number.isFinite(composition.width) && composition.width >= 120 && composition.width <= maxWidth)) fail(`${name}.width must be 120 to ${maxWidth} units`);
-  if (!(Number.isFinite(composition.height) && composition.height >= 40 && composition.height <= 2400)) fail(`${name}.height must be 40 to 2400 units`);
+  if (!(Number.isFinite(composition.width) && composition.width >= declarationRules.composition.minWidth && composition.width <= maxWidth)) fail(`${name}.width must be ${declarationRules.composition.minWidth} to ${maxWidth} units`);
+  if (!(Number.isFinite(composition.height) && composition.height >= declarationRules.composition.minHeight && composition.height <= declarationRules.composition.maxHeight)) fail(`${name}.height must be ${declarationRules.composition.minHeight} to ${declarationRules.composition.maxHeight} units`);
   if (!Array.isArray(composition.draw) || composition.draw.length === 0 || composition.draw.length > LIMITS.draw) { fail(`${name}.draw must list 1 to ${LIMITS.draw} items`); return; }
   const ids = new Set();
   const references = [];
+  const toned = [];
   for (const [index, item] of composition.draw.entries()) {
     const where = `${name}.draw[${index}]`;
     if (!isObject(item)) { fail(`${where} must be an object`); continue; }
@@ -288,9 +303,17 @@ function validateComposition(composition, name, stateNames, maxWidth, fail) {
     }
     if (!stateNames.has(item.state)) { fail(`${where} draws undeclared state ${item.state}`); continue; }
     const mark = MARKS[stateNames.get(item.state)];
-    if (mark !== undefined) validateShape(item, mark.shapes, where, fail, ["state", "id"]);
+    if (mark !== undefined) validateShape(item, mark.shapes, where, fail, ["state", "id", "tone"]);
+    if (item.tone !== undefined) {
+      if (!TONES.includes(item.tone)) fail(`${where} tone must be one of ${TONES.join(", ")}`);
+      else if (!TONED_MARKS[item.tone].includes(stateNames.get(item.state))) fail(`${where} tone ${item.tone} goes only on the ${TONED_MARKS[item.tone].join(", ")} marks`);
+      else if (item.id === undefined) fail(`${where} a toned mark needs an id a text item labels: hue is never alone`);
+      else toned.push([where, item.id]);
+    }
   }
   for (const [where, id] of references) if (!ids.has(id)) fail(`${where} labels unknown mark ${id}`);
+  const labelled = new Set(references.map(([, id]) => id));
+  for (const [where, id] of toned) if (!labelled.has(id)) fail(`${where} is toned but no text item labels ${id}: hue is never alone`);
 }
 
 function validateShape(item, shapes, where, fail, extraKeys) {
@@ -677,7 +700,11 @@ export function renderFigure(declaration, { idPrefix = "cf-fig", bound = null, f
   const legend = declared.map((name) => {
     const state = states.get(name);
     const wideOnly = wideDrawn.has(name) && !narrowDrawn.has(name);
-    const sample = [...wide.draw, ...narrow.draw].find((item) => item.state === name);
+    const drawnItems = [...wide.draw, ...narrow.draw].filter((item) => item.state === name);
+    const sample = drawnItems[0];
+    // The key takes a tone only when every drawn mark of the state shares it.
+    const tones = new Set(drawnItems.map((item) => item.tone));
+    const keyTone = tones.size === 1 && sample?.tone !== undefined ? ` data-cf-tone="${escapeAttribute(sample.tone)}"` : "";
     const keyId = `${prefix}-key-${name}`;
     const key = legendKey(state, sample, keyId);
     const drawing = key.replaceAll(keyId, "");
@@ -685,7 +712,7 @@ export function renderFigure(declaration, { idPrefix = "cf-fig", bound = null, f
     keyed.set(drawing, name);
     const entity = `legend-${name}`;
     const target = ENTITY_ID.test(entity) ? ` data-cf-entity="${entity}" data-cf-entity-label="${escapeAttribute(entityLabel(state.means))}"` : "";
-    return `<li data-state="${escapeAttribute(name)}"${wideOnly ? " data-cf-wide" : ""}${target}>${key}${escapeText(state.means)}</li>`;
+    return `<li data-state="${escapeAttribute(name)}"${wideOnly ? " data-cf-wide" : ""}${target}${keyTone}>${key}${escapeText(state.means)}</li>`;
   }).join("");
   // The title is always visible, numbered when the host numbers its figures;
   // the kicker only qualifies it. One disclosure holds the description and
@@ -749,7 +776,8 @@ function drawItem(item, states, hatchId, idPrefix, entities) {
   const value = item.value === undefined ? "" : ` data-cf-value="${escapeAttribute(String(item.value))}"`;
   const primary = shapeElement(item, mark.className, extra);
   const parts = markParts(item, state.mark, mark);
-  return `<g data-state="${escapeAttribute(item.state)}"${id}${value}>${primary}${parts}</g>`;
+  const tone = item.tone === undefined ? "" : ` data-cf-tone="${escapeAttribute(item.tone)}"`;
+  return `<g data-state="${escapeAttribute(item.state)}"${id}${value}${tone}>${primary}${parts}</g>`;
 }
 
 function shapeElement(item, className, extra) {

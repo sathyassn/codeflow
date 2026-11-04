@@ -707,6 +707,14 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--cf-focus); outl
 .cf-main .sl-container { max-width: none; }
 .cf-main h1 { margin: 0 0 10px; font-size: var(--cf-fs-display); }
 .cf-main .sl-markdown-content { font-family: var(--cf-font-sans); font-size: var(--cf-fs-body); }
+/* Page anatomy A1 and type scale S2 (TSK-444), as in present: the section and
+   subsection headings take the kit scale, so title > section > subsection >
+   block title at every size step, and the paragraph after a section heading
+   is its lead, set as a lede. The altitude heading and statement keep their
+   own treatment (more specific rules above). */
+.cf-main .sl-markdown-content h2 { font-size: var(--cf-fs-h2); font-weight: 600; line-height: 1.25; letter-spacing: -0.014em; text-wrap: balance; }
+.cf-main .sl-markdown-content h3 { font-size: var(--cf-fs-h3); font-weight: 600; line-height: 1.35; letter-spacing: -0.006em; text-wrap: balance; }
+.cf-main .sl-markdown-content :is(h2, .sl-heading-wrapper:has(> h2)) + p { font-size: var(--cf-fs-lede); font-weight: 450; line-height: 1.4; letter-spacing: -0.01em; text-wrap: pretty; color: var(--cf-text); }
 .portal-altitude-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--cf-border); margin-block: 24px; }
 /* margin: 0 undoes Starlight's sibling gap (.sl-markdown-content :not(...) + :not(...) sets margin-top), which pushed every tab after the first down. */
 .portal-altitude-tabs [role="tab"] { position: relative; margin: 0; border: 0; border-radius: 0; padding: 10px 0; font-family: var(--cf-font-sans); font-size: var(--cf-fs-ui); font-weight: 500; text-transform: none; letter-spacing: normal; color: var(--cf-text-muted); background: transparent; }

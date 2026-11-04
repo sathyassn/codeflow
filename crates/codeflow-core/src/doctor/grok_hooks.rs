@@ -550,10 +550,11 @@ mod tests {
             .find(|line| line.contains("hook exec-guard"))
             .unwrap();
         let with = |metadata: &str| {
-            SHIPPED.replace(exec_line, &exec_line.replace(r#""timeout": 10"#, metadata))
+            SHIPPED.replace(exec_line, &exec_line.replace(r#""timeout": 30"#, metadata))
         };
         for metadata in [
-            r#""timeout": 10, "env": { "PATH": "/tmp/elsewhere" }"#,
+            r#""timeout": 30, "env": { "PATH": "/tmp/elsewhere" }"#,
+            r#""timeout": 10"#,
             r#""timeout": 1"#,
             r#""timeout": 0"#,
         ] {
@@ -567,8 +568,8 @@ mod tests {
             );
         }
         for metadata in [
-            r#""timeout": 10, "env": {}"#,
-            r#""timeout": 10, "env": null"#,
+            r#""timeout": 30, "env": {}"#,
+            r#""timeout": 30, "env": null"#,
         ] {
             let dir = project(&[(".grok/hooks/codeflow.json", &with(metadata))]);
             assert_eq!(shell_guard(dir.path()), ShellGuard::Shipped, "{metadata}");

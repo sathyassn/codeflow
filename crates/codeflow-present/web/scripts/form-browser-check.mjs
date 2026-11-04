@@ -530,7 +530,9 @@ try {
     })), draftKey);
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
-    await page.getByTestId("toast").getByText(/Restored 1 unsent note/u).waitFor({ timeout: 20_000 });
+    // The restore notice waits in the notes panel until Comment opens (TSK-443 AC-8).
+    await page.getByTestId("restore-notice").waitFor({ state: "attached", timeout: 20_000 });
+    assert.match(await page.getByTestId("restore-notice").textContent(), /Restored 1 unsent note/u);
     // The reload shows the stored decline and its reason, read only. Amend
     // corrects the decline: the reason is editable and the main action sends
     // it as a decline naming the original. Answering instead is its own

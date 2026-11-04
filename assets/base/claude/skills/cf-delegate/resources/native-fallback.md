@@ -17,7 +17,7 @@ model/effort, read-only or edit scope, Git/secret controls and cleanup.
 A Herdr tab hosts the interactive CLI, or tmux when no Herdr server is
 reachable; pane stability alone never proves completion. A native App action must be exposed by the host, not an invented
 API. Record the tested client, version, direction, launching host and capabilities
-in the orchestrator's run evidence ledger. A canary in one direction never
+in the orchestrator's run evidence. A canary in one direction never
 qualifies the other. Required tools are checked for the task, not inferred
 from earlier versions or a successful login.
 

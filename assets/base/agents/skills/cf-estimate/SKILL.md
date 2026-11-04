@@ -16,6 +16,12 @@ drivers, duration assumptions and feasibility, then reconcile from evidence.
 Do not restart an already settled interview or choose model effort from a grade.
 An unavailable peer follows the existing evidenced-degradation contract.
 
+Base every estimate of planned work on planned throughput, the pace the
+`cf-method` workflow lifecycle reference sets in "Planned work moves at
+speed" (at least one task per build lane per hour, preferably two), and
+never extrapolate from a slow pace. A lane running slower than that is a
+coordinator finding to act on, not a new estimate basis.
+
 ## Establish the project and the decision
 
 Read its purpose, current scope and acceptance, architecture, work authority,

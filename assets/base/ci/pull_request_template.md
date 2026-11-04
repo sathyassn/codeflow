@@ -36,7 +36,8 @@ Task: `TSK-NNN | EPC-NNN | EPC-001, EPC-002 | <unit name>`
 ## Changes
 
 <!-- One bullet per logical change, most important first; number them only
-     for a sequence; one line per task for an epic. -->
+     for a sequence; one line per task for an epic. A criterion this PR
+     removes from its own task gets a line `AC-n removed: <reason>`. -->
 
 -
 
@@ -44,9 +45,10 @@ Task: `TSK-NNN | EPC-NNN | EPC-001, EPC-002 | <unit name>`
 
 <!-- Evidence already run: the tested revision and command, then the
      summary lines in a fenced block, never a full log. A task PR pastes its
-     targeted tests and its quick run; the full gate on the landing
-     candidate is cited by run id and revision when the batch lands, and a
-     standalone PR runs it as its own candidate.
+     targeted tests; once ready, a code PR also cites its
+     `codeflow test --mode quick` run for the head tree, and a draft owes
+     none. The full gate on the landing candidate is cited by run id and
+     revision when the batch lands; a standalone PR is its own candidate.
      Coverage when the range is code: the measured TOTAL from the project's
      command; name revision, command, metric, and scope; CI PASS alone is
      insufficient; unmeasured is a stated gap. New tests: count and suites.
@@ -70,9 +72,11 @@ Task: `TSK-NNN | EPC-NNN | EPC-001, EPC-002 | <unit name>`
 ## Reviews
 
 <!-- One row per current review: reviewer (human or tool), scope
-     (`whole unit at <reviewed>`, the acceptance block's commit in full),
-     verdict. Findings live in the linked record. A row is review
-     provenance, not authorship attribution. "None: reason" if unreviewed. -->
+     (`whole unit at <reviewed>`), verdict; a stacked claim reads it. Once
+     the task is complete, `codeflow ci` derives and prints the row from its
+     acceptance block, so the section may point at the record instead. A row
+     is review provenance, not authorship attribution. "None: reason" if
+     unreviewed. -->
 
 | Reviewer | Scope | Verdict |
 |---|---|---|

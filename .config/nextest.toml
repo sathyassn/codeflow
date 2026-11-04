@@ -18,8 +18,7 @@ test-group = "serial"
 # Keep its overrides equal to profile.codeflow; doctests run after nextest.
 [profile.essential]
 fail-fast = false
-# Eight workers were chosen by this task (dbc79ec7b) on the 10-core reference host; not measured because timing trials stopped.
-test-threads = 8
+# The gate supplies NEXTEST_TEST_THREADS from execution.worker_budget.
 
 [profile.essential.junit]
 path = "junit.xml"

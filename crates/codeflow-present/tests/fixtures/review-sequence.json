@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "review-sequence",
+    "family": "sequence",
+    "binding": "authored",
+    "question": "Who receives the review request?",
+    "idea": "The author sends the change to the reviewer.",
+    "title": "The author requests a review",
+    "caption": "The author sends the change to the reviewer before landing.",
+    "description": "Two participants are joined by a request sent from the author to the reviewer.",
+    "states": [
+      {
+        "name": "person",
+        "mark": "human",
+        "means": "Participant"
+      },
+      {
+        "name": "request",
+        "mark": "trans",
+        "means": "Review request"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "Review precedes landing",
+        "source": "review.json",
+        "derive": "Read the required step",
+        "check": {
+          "kind": "json",
+          "select": "step"
+        },
+        "value": "review"
+      }
+    ],
+    "twin": "facts",
+    "wide": {
+      "width": 720,
+      "height": 200,
+      "draw": [
+        {
+          "state": "person",
+          "shape": "circle",
+          "id": "author",
+          "cx": 80,
+          "cy": 45,
+          "r": 10
+        },
+        {
+          "state": "person",
+          "shape": "circle",
+          "id": "reviewer",
+          "cx": 630,
+          "cy": 45,
+          "r": 10
+        },
+        {
+          "text": "Author",
+          "x": 80,
+          "y": 20,
+          "anchor": "middle",
+          "for": [
+            "author"
+          ]
+        },
+        {
+          "text": "Reviewer",
+          "x": 630,
+          "y": 20,
+          "anchor": "middle",
+          "for": [
+            "reviewer"
+          ]
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 80,
+          "y1": 62,
+          "x2": 80,
+          "y2": 180
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 630,
+          "y1": 62,
+          "x2": 630,
+          "y2": 180
+        },
+        {
+          "state": "request",
+          "shape": "line",
+          "id": "request",
+          "x1": 80,
+          "y1": 120,
+          "x2": 630,
+          "y2": 120
+        },
+        {
+          "text": "Review request",
+          "x": 355,
+          "y": 98,
+          "anchor": "middle",
+          "for": [
+            "request"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "width": 360,
+      "height": 200,
+      "draw": [
+        {
+          "state": "person",
+          "shape": "circle",
+          "id": "author",
+          "cx": 55,
+          "cy": 45,
+          "r": 10
+        },
+        {
+          "state": "person",
+          "shape": "circle",
+          "id": "reviewer",
+          "cx": 305,
+          "cy": 45,
+          "r": 10
+        },
+        {
+          "text": "Author",
+          "x": 55,
+          "y": 20,
+          "anchor": "middle",
+          "for": [
+            "author"
+          ]
+        },
+        {
+          "text": "Reviewer",
+          "x": 305,
+          "y": 20,
+          "anchor": "middle",
+          "for": [
+            "reviewer"
+          ]
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 55,
+          "y1": 62,
+          "x2": 55,
+          "y2": 180
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 305,
+          "y1": 62,
+          "x2": 305,
+          "y2": 180
+        },
+        {
+          "state": "request",
+          "shape": "line",
+          "id": "request",
+          "x1": 55,
+          "y1": 120,
+          "x2": 305,
+          "y2": 120
+        },
+        {
+          "text": "Review request",
+          "x": 180,
+          "y": 98,
+          "anchor": "middle",
+          "for": [
+            "request"
+          ]
+        }
+      ],
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same"
+    }
+  }
+}

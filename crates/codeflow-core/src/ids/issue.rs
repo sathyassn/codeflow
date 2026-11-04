@@ -261,16 +261,22 @@ fn choose(git: &Git, ledgers: &[&Ledger], request: &Request) -> Result<RegId, Id
         }
     }
     let kind = request.kind;
-    let history = ledgers
-        .iter()
-        .map(|ledger| ledger.max_seq(kind))
-        .max()
-        .unwrap_or(0);
+    let mut history = 0;
+    for ledger in ledgers {
+        history = history.max(ledger.max_seq(kind)?);
+    }
     let refs = inventory::max_seq_on_refs(git, kind)?;
-    let worktree = inventory::max_seq_in_worktree(git.root(), kind).map_err(|error| {
-        IdsError::Invalid(format!("cannot inventory work records before issuing an ID: {error}; restore readable record directories, then retry"))
+    let worktree = inventory::max_seq_in_worktree(git.root(), kind)?;
+    successor(kind, history.max(refs).max(worktree))
+}
+
+/// The id after the highest issued sequence, or an error when none is left.
+fn successor(kind: Kind, highest: u64) -> Result<RegId, IdsError> {
+    let next = highest.checked_add(1).ok_or_else(|| {
+        IdsError::Invalid(format!(
+            "{kind}-{highest} is the last {kind} number there is, so no next id exists"
+        ))
     })?;
-    let next = history.max(refs).max(worktree) + 1;
     Ok(RegId::canonical(kind, next))
 }
 
@@ -1024,6 +1030,25 @@ pub fn resume(root: &Path, id: &RegId) -> Result<Unwritten, IdsError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_last_sequence_has_no_successor() {
+        use crate::ids::Kind;
+        assert_eq!(
+            super::successor(Kind::Tsk, 999).unwrap().to_string(),
+            "TSK-1000"
+        );
+        assert_eq!(
+            super::successor(Kind::Adr, u64::MAX - 1)
+                .unwrap()
+                .to_string(),
+            "ADR-18446744073709551615"
+        );
+        let error = super::successor(Kind::Tsk, u64::MAX)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no next id exists"), "{error}");
+    }
+
     #[test]
     fn failed_push_redacts_urls_without_changing_classification() {
         let text =

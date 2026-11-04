@@ -75,3 +75,23 @@ requires the same bar against SPC-005.
 
 none — runtime boundaries of ADR-0048 and ADR-0049 stand; this ADR adds the
 utility presentation design-system scope and freezes stack for EPC-005 recovery.
+
+## Update 2026-10-23: page anatomy, type scale and figure companions
+
+TSK-444 settled the design direction with the operator from rendered options
+(`docs/verification/evidence/tsk-444/`) and changed the shared kit and both
+products together. The stack decision above stands.
+
+- Page anatomy A1: the document title, summary and provenance meta open the
+  present document column, as the portal's title and lede already open a
+  page; the paragraph after a section heading is that section's lead. No
+  section block is added; headings stay in narrative Markdown.
+- Type scale S2 in `tokens.css` and every product sheet: display 34, lede 19,
+  h2 24, h3 18, block title 15 (floor 15), body 15, caption 13, micro 12.5 px
+  at the default size, times 0.94 compact and 1.12 large, so title > section
+  > subsection > block title at every size step.
+- Four colour roles join `tokens.json` (`fig-cat1`, `fig-cat1-soft`,
+  `fig-cat2`, `fig-cat2-soft`, palette "Cobalt and plum"), one set per mode
+  shared by Graphite, Slate and Sage; accents and greys are unchanged. The
+  design kit test holds every companion ink at 4.5:1 on surface, canvas,
+  figure fill and its tint, and the figure ink at 4.5:1 on each tint.

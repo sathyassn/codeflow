@@ -709,8 +709,15 @@ fn ac1_exec_guard_retargets_git_policy_without_borrowing_session_levels() {
     .unwrap();
     other.git(&["add", ".codeflow/policy.json"]);
     other.git(&["commit", "-qm", "chore: permitted"]);
+    session.check(
+        "exec-guard",
+        &format!("git -C '{}' push origin --tags", other.root().display()),
+        0,
+    );
+    // A Git directory that is not the one Git finds from the directory the
+    // call runs in refuses since TSK-1002 Fable review 13: it may move the
+    // work tree onto a store.
     for command in [
-        format!("git -C '{}' push origin --tags", other.root().display()),
         format!(
             "git --git-dir='{}' push origin --tags",
             other.root().join(".git").display()
@@ -720,7 +727,12 @@ fn ac1_exec_guard_retargets_git_policy_without_borrowing_session_levels() {
             other.root().join(".git").display()
         ),
     ] {
-        session.check("exec-guard", &command, 0);
+        let out = session.check("exec-guard", &command, 2);
+        let message = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            message.contains("is the repository Git would use without it"),
+            "{command}: {message}"
+        );
     }
 }
 
