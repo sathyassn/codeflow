@@ -137,8 +137,8 @@ fn reviewed_own_commits(
         }
         let branch_base = task.branch_base.unwrap_or(base);
         let mut at = reviewed;
-        while !(task.branch_base.is_none() && receiving_commits.contains(&at))
-            && !is_ancestor_or_same(repo, at, branch_base)?
+        while !(task.branch_base.is_none() && receiving_commits.contains(&at)
+            || is_ancestor_or_same(repo, at, branch_base)?)
         {
             let commit = repo
                 .find_commit(at)
