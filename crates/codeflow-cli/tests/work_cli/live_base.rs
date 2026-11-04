@@ -368,8 +368,8 @@ fn reviewed_pins_older_than_the_target_are_valid_until_the_head_moves() {
             &["cat-file", "-p", &format!("refs/codeflow/claims/{CHILD}")],
         );
         assert!(
-            metadata.contains(&pin),
-            "the claim's original base changed: {metadata}"
+            metadata.contains(&moved),
+            "reviewed claim was not renewed: {metadata}"
         );
     }
 }
@@ -395,6 +395,93 @@ fn a_landed_predecessor_no_longer_needs_its_deleted_review_branch() {
         git(root, &["branch", "-d", branch]);
         git(root, &["switch", "-q", CHILD]);
         succeeds(&cli(root, &["work", "start", "TSK-002"], None));
+    }
+}
+
+#[cfg(unix)]
+fn rewritten_reviewed_claim(state: &str) -> (tempfile::TempDir, tempfile::TempDir, String, String) {
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        ".codeflow/policy.json",
+        r#"{"git":{"work_planning":"warn"}}"#,
+    );
+    commit(root, "chore: warn on planning findings");
+    let bin = tempfile::tempdir().unwrap();
+    let predecessor = "task/TSK-001-work";
+    let (_, old) = super::reviewed_predecessor(root, predecessor);
+    super::review_tool(bin.path(), predecessor, &old, true);
+    ledger(root, state);
+    succeeds(&cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-002",
+            "--on",
+            &format!("TSK-001@{old}"),
+        ],
+        Some(bin.path()),
+    ));
+    git(root, &["switch", "-q", CHILD]);
+    write(root, "own.txt", "dependent work\n");
+    commit(root, "fix: build dependent work");
+    git(root, &["switch", "-qc", "fix/rewrite", "main"]);
+    write(root, "rewritten.txt", "new predecessor work\n");
+    commit(root, "fix: rewrite predecessor");
+    let current = git(root, &["rev-parse", "HEAD"]);
+    git(root, &["branch", "-f", predecessor, &current]);
+    git(root, &["switch", "-q", CHILD]);
+    (dir, bin, old, current)
+}
+
+#[cfg(unix)]
+#[test]
+fn reviewed_claim_renewal_waits_for_review_ancestry_planning_and_a_durable_write() {
+    for state in ["present", "absent", "damaged"] {
+        let (dir, bin, old, current) = rewritten_reviewed_claim(state);
+        let root = dir.path();
+        let predecessor = "task/TSK-001-work";
+        let on = format!("TSK-001@{current}");
+        let args = ["work", "start", "TSK-002", "--on", &on];
+        let reference = format!("refs/codeflow/claims/{CHILD}");
+        let peeled = format!("{reference}^{{commit}}");
+        super::review_tool(bin.path(), predecessor, &current, false);
+        let out = cli(root, &args, Some(bin.path()));
+        assert!(text(&out).contains("no review names"), "{}", text(&out));
+        assert_eq!(git(root, &["rev-parse", &peeled]), old);
+        super::review_tool(bin.path(), predecessor, &current, true);
+        let out = cli(root, &args, Some(bin.path()));
+        assert!(text(&out).contains("not an ancestor"), "{}", text(&out));
+        assert_eq!(git(root, &["rev-parse", &peeled]), old);
+        git(root, &["rebase", "--onto", &current, &old, CHILD]);
+        let task_path = "project-management/tasks/TSK-002.md";
+        let planned = std::fs::read_to_string(root.join(task_path)).unwrap();
+        write(root, task_path, &planned.replace("[TSK-001]", "[TSK-999]"));
+        let out = cli(root, &args, Some(bin.path()));
+        assert!(text(&out).contains("invalid"), "{}", text(&out));
+        assert_eq!(git(root, &["rev-parse", &peeled]), old);
+        write(root, task_path, &planned);
+        let lock = root.join(".git").join(format!("{reference}.lock"));
+        std::fs::write(&lock, "fixture lock\n").unwrap();
+        let out = cli(root, &args, Some(bin.path()));
+        assert!(!out.status.success(), "{}", text(&out));
+        assert!(
+            text(&out).contains("recording reviewed claim base failed"),
+            "{}",
+            text(&out)
+        );
+        assert_eq!(git(root, &["rev-parse", &peeled]), old);
+        std::fs::remove_file(lock).unwrap();
+        let out = cli(root, &args, Some(bin.path()));
+        succeeds(&out);
+        assert!(
+            text(&out).contains("reviewed claim renewed"),
+            "{}",
+            text(&out)
+        );
+        assert_eq!(git(root, &["rev-parse", &peeled]), current);
     }
 }
 

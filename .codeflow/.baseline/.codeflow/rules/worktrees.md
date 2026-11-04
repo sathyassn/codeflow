@@ -63,7 +63,9 @@ delete mutation, make three ordered work-start assertions:
    lines require line sync first. An unlanded predecessor uses its exact
    reviewed head with `--on TSK-NNN@<sha>`. The claim records its base and
    source in Git. `work start` fetches and refuses a HEAD missing that base;
-   a source advancing after the claim does not revoke it. Without claim
+   a source advancing after the claim does not revoke it. An explicit new
+   reviewed pin renews only a reviewed claim after current review, ancestry
+   and planning checks pass and Git records the new base. Without claim
    metadata, start requires the base selected from the current fetched refs.
    A failed fetch refuses admission. Before review, merge the target's current
    tip into the task branch; `codeflow ci` warns until it is contained.

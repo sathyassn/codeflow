@@ -14,6 +14,7 @@ use super::history;
 use super::work_start::{self, Record, ReviewedPin};
 
 const CLAIM_VERSION: u32 = 1;
+const REVIEWED_SOURCE: &str = "reviewed pins";
 
 /// The fixed base a claim selected, or the live base an unclaimed start needs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,8 +24,8 @@ pub struct Base {
     pub source: String,
     /// Full commit identity, never a rev expression.
     pub revision: String,
-    /// Original reviewed pins. Unlanded starts check the current reviewed
-    /// heads of these same predecessors, retaining this claim's base.
+    /// Reviewed pins at claim or its last explicit validated renewal.
+    /// Replacement pins must name these same predecessors.
     pub pins: Vec<String>,
 }
 
@@ -156,7 +157,7 @@ pub fn select(root: &Path, task: &str, target: &str, pins: &[ReviewedPin]) -> Re
         if base != tip && !contains(&repo, stack, base)? {
             return Err(format!("reviewed stack does not contain {reference}@{base}; use the line sync pull request route (issue #280) first"));
         }
-        reference = "reviewed pins".into();
+        reference = REVIEWED_SOURCE.into();
         base = stack;
     }
     Ok(Base {
@@ -188,7 +189,7 @@ fn pin_tasks(values: &[String]) -> Result<BTreeSet<String>, String> {
     Ok(tasks)
 }
 
-/// Persist a claim snapshot after allocating a previously absent branch.
+/// Persist a new claim or an explicitly validated reviewed-claim renewal.
 ///
 /// # Errors
 /// Refuses mismatched old metadata, an invalid base or a failed Git write.
@@ -264,7 +265,16 @@ pub fn recorded(
     repo.find_commit(tag.target_id())
         .map_err(|e| e.to_string())?;
     pin_tasks(&claim.base.pins)?;
+    if (claim.base.source == REVIEWED_SOURCE) == claim.base.pins.is_empty() {
+        return Err("claim source and reviewed pins disagree".into());
+    }
     Ok(Some(claim.base))
+}
+
+struct Decision {
+    base: Base,
+    note: Option<String>,
+    renew: bool,
 }
 
 /// Check containment and report a source advancing after a fixed claim.
@@ -278,10 +288,20 @@ pub fn check(
     target: &str,
     pins: &[ReviewedPin],
 ) -> Result<Option<String>, String> {
+    decide(root, task, branch, target, pins).map(|decision| decision.note)
+}
+
+fn decide(
+    root: &Path,
+    task: &str,
+    branch: &str,
+    target: &str,
+    pins: &[ReviewedPin],
+) -> Result<Decision, String> {
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
     let recorded = recorded(root, task, branch, target)?;
     let fixed = recorded.is_some();
-    let base = match recorded {
+    let mut base = match recorded {
         Some(base) => base,
         None => select(root, task, target, pins)?,
     };
@@ -291,6 +311,17 @@ pub fn check(
     // a deleted review branch cannot keep a landed dependency unstartable.
     if !pins.is_empty() && pin_tasks(&base.pins)? != actual {
         return Err("claim's reviewed dependencies differ; supply --on pins for the same predecessors and verify their current review".into());
+    }
+    let supplied: BTreeSet<_> = pins
+        .iter()
+        .map(|p| format!("{}@{}", p.task_id(), p.revision()))
+        .collect();
+    let renew =
+        fixed && !pins.is_empty() && base.pins.iter().cloned().collect::<BTreeSet<_>>() != supplied;
+    if renew {
+        // The caller's explicit new pins have current native review evidence.
+        // This proposal remains read-only until all planning checks pass.
+        base = select(root, task, target, pins)?;
     }
     let oid = Oid::from_str(&base.revision).map_err(|e| e.to_string())?;
     let head = repo
@@ -307,13 +338,47 @@ pub fn check(
             if !contains(&repo, now, oid)? {
                 return Err(format!("source {} no longer contains the recorded base {oid}; reconcile its history before starting", base.source));
             }
-            return Ok(Some(format!(
+            let note = Some(format!(
                 "source {} advanced to {now}; recorded base {oid} remains valid",
                 base.source
-            )));
+            ));
+            return Ok(Decision { base, note, renew });
         }
     }
-    Ok(None)
+    Ok(Decision {
+        base,
+        note: None,
+        renew,
+    })
+}
+
+/// Persist an explicit reviewed-pin renewal after the caller's planning check.
+///
+/// # Errors
+/// Refuses a changed branch, invalid base or failed metadata write. The CLI
+/// treats a write failure as missing admission evidence at every policy level.
+pub fn renew_reviewed(
+    root: &Path,
+    task: &str,
+    branch: &str,
+    target: &str,
+    pins: &[ReviewedPin],
+) -> Result<Option<String>, String> {
+    let decision = decide(root, task, branch, target, pins)?;
+    if !decision.renew {
+        return Ok(None);
+    }
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let head = repo.head().map_err(|e| e.to_string())?;
+    let current = crate::git::name::reference_shorthand(&head);
+    if current.rule_text().map_err(|e| e.to_string())? != branch {
+        return Err("branch changed before recording the reviewed claim".into());
+    }
+    record(root, task, branch, target, &decision.base)?;
+    Ok(Some(format!(
+        "reviewed claim renewed at {}",
+        decision.base.revision
+    )))
 }
 
 /// Project only landed predecessor records from verified shared history.

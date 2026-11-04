@@ -366,8 +366,28 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
         eprintln!("work start: error: {}", crate::cmd::shown(&error));
         return 1;
     }
-    let Err(findings) = plan_check(&root, task_id, target, on) else {
-        return 0;
+    let findings = match plan_check(&root, task_id, target, on) {
+        Ok(verified) => {
+            match codeflow_core::workgraph::claim_base::renew_reviewed(
+                &root,
+                task_id,
+                &verified.branch,
+                &verified.target,
+                &verified.pins,
+            ) {
+                Ok(Some(note)) => println!("  {}", crate::cmd::shown(&note)),
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!(
+                        "work start: error: recording reviewed claim base failed: {}",
+                        crate::cmd::shown(&error)
+                    );
+                    return 1;
+                }
+            }
+            return 0;
+        }
+        Err(findings) => findings,
     };
     let warn = level == PolicyLevel::Warn;
     let label = if warn { "warning" } else { "error" };
@@ -386,12 +406,18 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
 
 /// The planning checks behind `work start`: the anchor report printed on
 /// success, or every finding.
+struct VerifiedClaim {
+    branch: String,
+    target: String,
+    pins: Vec<codeflow_core::workgraph::work_start::ReviewedPin>,
+}
+
 fn plan_check(
     root: &std::path::Path,
     task_id: &str,
     target: Option<&str>,
     on: &[String],
-) -> Result<(), Vec<String>> {
+) -> Result<VerifiedClaim, Vec<String>> {
     let workgraph = validate_workgraph(root);
     if !workgraph.is_clean() {
         let mut findings = workgraph.issues;
@@ -440,7 +466,11 @@ fn plan_check(
             error = crate::cmd::shown(&error)
         ),
     }
-    Ok(())
+    Ok(VerifiedClaim {
+        branch: report.branch,
+        target: report.target,
+        pins,
+    })
 }
 
 fn resolve_pins(
