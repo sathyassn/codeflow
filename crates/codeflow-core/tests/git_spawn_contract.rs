@@ -60,6 +60,12 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
         "tests re-running their own binary with an inherited CDPATH (TSK-397)",
     ),
     (
+        "codeflow-core/src/git/ci.rs",
+        "gh_program()",
+        2,
+        "the two `gh` spawns take their program from `gh_program()`, which is `gh`, or in a unit test a fake `gh` script, never git (TSK-1156)",
+    ),
+    (
         "codeflow-core/src/doctor/mod.rs",
         "std::env::current_exe().unwrap()",
         1,

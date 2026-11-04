@@ -14,6 +14,25 @@ fn repo_root() -> PathBuf {
         .expect("repo root resolves")
 }
 
+/// A repo-relative path with forward slashes. Windows displays `\\`, and
+/// every lookup, comparison and message in this file uses `/`.
+fn slashed(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+#[test]
+fn paths_are_compared_with_forward_slashes() {
+    assert_eq!(
+        slashed(r"assets\base\ci\codeflow-policy.yml"),
+        "assets/base/ci/codeflow-policy.yml"
+    );
+    assert_eq!(
+        slashed(r".codeflow\.baseline\.github\workflows\a.yml"),
+        ".codeflow/.baseline/.github/workflows/a.yml"
+    );
+    assert_eq!(slashed("a/b.yml"), "a/b.yml");
+}
+
 /// Every workflow file: this repository's, the shipped templates and the
 /// installed baseline.
 fn workflows() -> Vec<(String, Value)> {
@@ -67,7 +86,7 @@ fn workflows() -> Vec<(String, Value)> {
                 .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
             if value.get("jobs").is_some() {
                 found.push((
-                    path.strip_prefix(&root).unwrap().display().to_string(),
+                    slashed(&path.strip_prefix(&root).unwrap().display().to_string()),
                     value,
                 ));
             }

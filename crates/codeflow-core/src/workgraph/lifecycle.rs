@@ -53,6 +53,9 @@ pub struct RecordView {
     pub supersedes: Vec<String>,
     pub superseded_by: Option<String>,
     pub integration_target: Option<String>,
+    /// An epic's `parent_line`: the epic line its tasks land on when that
+    /// line is another epic's (TSK-1286).
+    pub parent_line: Option<String>,
     /// A task's `role` frontmatter value (SPC-013 R-120:
     /// `release-integration`), when set.
     pub role: Option<String>,
@@ -111,6 +114,7 @@ impl RecordView {
             supersedes: list("supersedes"),
             superseded_by: field("superseded_by"),
             integration_target: field("integration_target"),
+            parent_line: field(super::line_adoption::PARENT_LINE_FIELD),
             role: field("role"),
             // Spaces and tabs only (issue 79): another whitespace character
             // is part of the id, so a lookalike never names a task.
