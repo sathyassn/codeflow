@@ -347,6 +347,15 @@ A pin left out keeps the edge unmet.
   `ready` (TSK-1038).
 - `work claim` fetches, refuses a task a visible branch already carries, and
   pushes `task/TSK-NNN-<slug>` as an advisory claim.
+- Claim selects the live target tip or one line holding a completed code
+  predecessor and records its base in Git independently of the ledger.
+  Start fetches and checks containment while preserving the planning anchor.
+  Missing shared planning or two unmerged sources require line sync.
+  Source advancement keeps a recorded base valid. Explicit replacement pins
+  renew only reviewed claims after current review, ancestry and planning
+  checks and a successful Git write.
+  CI warns until the head contains its target's current tip and names the
+  verified commit to merge. See [the command details](../cli.md#verify-notes).
 - `work claim` and `work start` accept a code predecessor that is reviewed but
   not complete only through `--on TSK-NNN@<sha>`. The pin must equal the
   predecessor branch's tip. The Reviews section must approve that tip or an
