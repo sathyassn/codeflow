@@ -24,14 +24,29 @@ evidence" define; the brief follows
 ## Procedure
 
 1. Read the acceptance criteria and list them.
-2. Inspect the diff (`git diff <base>...HEAD`) and every touched file. Challenge
+2. Inspect the diff (`git diff <base>...HEAD`) and every touched file. Ask of
+   every file the diff adds whether the project needs it long term and
+   whether this is the smallest form that serves its use (the discipline
+   rules' "Write only what earns its keep"); an unneeded or oversized
+   addition, such as run output, a log, a review verdict file, a per-task
+   evidence folder, a superseded draft, build output or a duplicate copy no
+   tool manages, is a material finding. Oversized means shown unnecessary
+   content or avoidable bulk, never a wording or structure preference, and
+   an admitted use outranks the exclusions: fixtures, a lockfile or a
+   bundle the project ships stay. Challenge
    whether a smaller, clearer solution meets the same criteria; flag speculative
    features, abstractions, dependencies, configuration, compatibility layers,
    dead paths, and complexity without a current requirement or risk. Also flag
    brittle under-design: unexplained hard-coding, duplicated business knowledge
    or existing abstractions, non-idiomatic structure, swallowed errors,
    missing accepted edge/error handling, and an unmarked shortcut (the
-   discipline rules' shortcut rule). Calibrate that judgment to the accepted
+   discipline rules' shortcut rule). Ask whether the change copies a value
+   (a name, id, path, setting, limit or closed set of strings) or code that
+   already has a home: a new copy that neither reads, is generated from nor
+   is checked against that home is a major finding that names the copy and
+   the home, each at file:line, unless it is one of the deliberate copies
+   the discipline rules' declare-once rule lists and its reason is stated
+   at the site. Calibrate that judgment to the accepted
    lifetime, change rate, contributor/integration breadth, operational risk, and
    reversibility, not project size alone. For UI changes, check reuse and
    composition of existing tokens, accessible primitives, and components before
@@ -151,6 +166,7 @@ verdict: approved | changes_requested
 head: <the block's reviewed commit in full; an earlier head's approval never carries>
 widened: <what the pass read beyond the brief, and why | none>
 not_verified: <what this pass did not establish>
+added_files: <how many added files were checked; each unneeded or oversized one is a finding below | none added>
 
 criteria:
   - criterion: <text>

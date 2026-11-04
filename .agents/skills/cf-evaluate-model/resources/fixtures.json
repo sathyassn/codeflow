@@ -111,7 +111,7 @@
         ".codeflow/docs-portal.json": "{\"schema_version\":2,\"root\":\"guide\",\"starter_version\":\"1.0.0\",\"runtime_ownership\":\"managed\",\"generator\":{\"name\":\"@codeflow/docs-portal\",\"version\":\"1.0.0\"},\"files\":{\"runtime.js\":{\"ownership\":\"managed\",\"pristine_sha256\":\"b4c2aba0df934968059a7c60ad8bd531ab42911bc8423ef6584a8fa41f5c923b\"},\"removed.txt\":{\"ownership\":\"managed\",\"pristine_sha256\":\"85893b0a982ef41b25a9660fc5cf2a7884c4e9ec2a432b869429049d37422d7a\"},\"portal.config.json\":{\"ownership\":\"user-owned\",\"pristine_sha256\":\"c539f0bd7958bba00f3f41138ce1e41bba533da42b7f9d723edd490bfe4bf3fe\"}}}\n",
         "docs/product.md": "# Project guide\n\nA durable service with source-owned documentation.\n",
         "guide/runtime.js": "export const title = \"Guide\";\n",
-        "guide/portal.config.json": "{\n  \"schema_version\": 1,\n  \"title\": \"Project guide\",\n  \"description\": \"Layered project documentation generated from repository-owned sources.\",\n  \"theme\": \"signal\",\n  \"repository_url\": null,\n  \"release_version\": null,\n  \"primitive_tokens\": null,\n  \"repository_root\": \"..\",\n  \"source_roots\": [\"docs\"],\n  \"exclude\": [\"docs/verification\"],\n  \"layers\": [\n    { \"id\": \"orient\", \"label\": \"Orient\", \"description\": \"Purpose, capabilities, adoption, and the shortest path into the system.\", \"paths\": [\"docs/product.md\", \"docs/capabilities.md\", \"docs/adoption.md\", \"docs/overview.md\"] },\n    { \"id\": \"system\", \"label\": \"System\", \"description\": \"Architecture, durable decisions, and operational boundaries.\", \"paths\": [\"docs/architecture.md\"], \"prefixes\": [\"docs/architecture\", \"docs/decisions\"] },\n    { \"id\": \"reference\", \"label\": \"Reference\", \"description\": \"Supporting guides and technical reference material.\", \"fallback\": true }\n  ],\n  \"base\": \"/\"\n}\n",
+        "guide/portal.config.json": "{\n  \"schema_version\": 1,\n  \"title\": \"Project guide\",\n  \"description\": \"Layered project documentation generated from repository-owned sources.\",\n  \"theme\": \"signal\",\n  \"repository_url\": null,\n  \"release_version\": null,\n  \"primitive_tokens\": null,\n  \"repository_root\": \"..\",\n  \"source_roots\": [\"docs\"],\n  \"exclude\": [],\n  \"layers\": [\n    { \"id\": \"orient\", \"label\": \"Orient\", \"description\": \"Purpose, capabilities, adoption, and the shortest path into the system.\", \"paths\": [\"docs/product.md\", \"docs/capabilities.md\", \"docs/adoption.md\", \"docs/overview.md\"] },\n    { \"id\": \"system\", \"label\": \"System\", \"description\": \"Architecture, durable decisions, and operational boundaries.\", \"paths\": [\"docs/architecture.md\"], \"prefixes\": [\"docs/architecture\", \"docs/decisions\"] },\n    { \"id\": \"reference\", \"label\": \"Reference\", \"description\": \"Supporting guides and technical reference material.\", \"fallback\": true }\n  ],\n  \"base\": \"/\"\n}\n",
         "guide/removed.txt": "keep this file\n"
       }
     },
@@ -126,7 +126,7 @@
         ".codeflow/docs-portal.json": "{\"schema_version\":2,\"root\":\"guide\",\"starter_version\":\"1.0.0\",\"runtime_ownership\":\"managed\",\"generator\":{\"name\":\"@codeflow/docs-portal\",\"version\":\"1.0.0\"},\"files\":{\"runtime.js\":{\"ownership\":\"managed\",\"pristine_sha256\":\"b4c2aba0df934968059a7c60ad8bd531ab42911bc8423ef6584a8fa41f5c923b\"},\"removed.txt\":{\"ownership\":\"managed\",\"pristine_sha256\":\"85893b0a982ef41b25a9660fc5cf2a7884c4e9ec2a432b869429049d37422d7a\"},\"portal.config.json\":{\"ownership\":\"user-owned\",\"pristine_sha256\":\"c539f0bd7958bba00f3f41138ce1e41bba533da42b7f9d723edd490bfe4bf3fe\"}}}\n",
         "docs/product.md": "# Project guide\n\nA durable service with source-owned documentation.\n",
         "guide/runtime.js": "export const title = \"Project guide with local changes\";\n",
-        "guide/portal.config.json": "{\n  \"schema_version\": 1,\n  \"title\": \"Project guide\",\n  \"description\": \"Layered project documentation generated from repository-owned sources.\",\n  \"theme\": \"signal\",\n  \"repository_url\": null,\n  \"release_version\": null,\n  \"primitive_tokens\": null,\n  \"repository_root\": \"..\",\n  \"source_roots\": [\"docs\"],\n  \"exclude\": [\"docs/verification\"],\n  \"layers\": [\n    { \"id\": \"orient\", \"label\": \"Orient\", \"description\": \"Purpose, capabilities, adoption, and the shortest path into the system.\", \"paths\": [\"docs/product.md\", \"docs/capabilities.md\", \"docs/adoption.md\", \"docs/overview.md\"] },\n    { \"id\": \"system\", \"label\": \"System\", \"description\": \"Architecture, durable decisions, and operational boundaries.\", \"paths\": [\"docs/architecture.md\"], \"prefixes\": [\"docs/architecture\", \"docs/decisions\"] },\n    { \"id\": \"reference\", \"label\": \"Reference\", \"description\": \"Supporting guides and technical reference material.\", \"fallback\": true }\n  ],\n  \"base\": \"/\"\n}\n",
+        "guide/portal.config.json": "{\n  \"schema_version\": 1,\n  \"title\": \"Project guide\",\n  \"description\": \"Layered project documentation generated from repository-owned sources.\",\n  \"theme\": \"signal\",\n  \"repository_url\": null,\n  \"release_version\": null,\n  \"primitive_tokens\": null,\n  \"repository_root\": \"..\",\n  \"source_roots\": [\"docs\"],\n  \"exclude\": [],\n  \"layers\": [\n    { \"id\": \"orient\", \"label\": \"Orient\", \"description\": \"Purpose, capabilities, adoption, and the shortest path into the system.\", \"paths\": [\"docs/product.md\", \"docs/capabilities.md\", \"docs/adoption.md\", \"docs/overview.md\"] },\n    { \"id\": \"system\", \"label\": \"System\", \"description\": \"Architecture, durable decisions, and operational boundaries.\", \"paths\": [\"docs/architecture.md\"], \"prefixes\": [\"docs/architecture\", \"docs/decisions\"] },\n    { \"id\": \"reference\", \"label\": \"Reference\", \"description\": \"Supporting guides and technical reference material.\", \"fallback\": true }\n  ],\n  \"base\": \"/\"\n}\n",
         "guide/removed.txt": "keep this file\n"
       }
     },
@@ -167,7 +167,7 @@
         ".codeflow/docs-portal.json": "{\"schema_version\":1,\"root\":\"guide\",\"starter_version\":\"1.0.0\",\"files\":{\"runtime.js\":{\"ownership\":\"managed\",\"pristine_sha256\":\"b4c2aba0df934968059a7c60ad8bd531ab42911bc8423ef6584a8fa41f5c923b\"},\"removed.txt\":{\"ownership\":\"managed\",\"pristine_sha256\":\"85893b0a982ef41b25a9660fc5cf2a7884c4e9ec2a432b869429049d37422d7a\"},\"portal.config.json\":{\"ownership\":\"user-owned\",\"pristine_sha256\":\"c539f0bd7958bba00f3f41138ce1e41bba533da42b7f9d723edd490bfe4bf3fe\"}}}\n",
         "docs/product.md": "# Project guide\n\nA durable service with source-owned documentation.\n",
         "guide/runtime.js": "export const title = \"Project guide with local changes\";\n",
-        "guide/portal.config.json": "{\n  \"schema_version\": 1,\n  \"title\": \"Project guide\",\n  \"description\": \"Layered project documentation generated from repository-owned sources.\",\n  \"theme\": \"signal\",\n  \"repository_url\": null,\n  \"release_version\": null,\n  \"primitive_tokens\": null,\n  \"repository_root\": \"..\",\n  \"source_roots\": [\"docs\"],\n  \"exclude\": [\"docs/verification\"],\n  \"layers\": [\n    { \"id\": \"orient\", \"label\": \"Orient\", \"description\": \"Purpose, capabilities, adoption, and the shortest path into the system.\", \"paths\": [\"docs/product.md\", \"docs/capabilities.md\", \"docs/adoption.md\", \"docs/overview.md\"] },\n    { \"id\": \"system\", \"label\": \"System\", \"description\": \"Architecture, durable decisions, and operational boundaries.\", \"paths\": [\"docs/architecture.md\"], \"prefixes\": [\"docs/architecture\", \"docs/decisions\"] },\n    { \"id\": \"reference\", \"label\": \"Reference\", \"description\": \"Supporting guides and technical reference material.\", \"fallback\": true }\n  ],\n  \"base\": \"/\"\n}\n",
+        "guide/portal.config.json": "{\n  \"schema_version\": 1,\n  \"title\": \"Project guide\",\n  \"description\": \"Layered project documentation generated from repository-owned sources.\",\n  \"theme\": \"signal\",\n  \"repository_url\": null,\n  \"release_version\": null,\n  \"primitive_tokens\": null,\n  \"repository_root\": \"..\",\n  \"source_roots\": [\"docs\"],\n  \"exclude\": [],\n  \"layers\": [\n    { \"id\": \"orient\", \"label\": \"Orient\", \"description\": \"Purpose, capabilities, adoption, and the shortest path into the system.\", \"paths\": [\"docs/product.md\", \"docs/capabilities.md\", \"docs/adoption.md\", \"docs/overview.md\"] },\n    { \"id\": \"system\", \"label\": \"System\", \"description\": \"Architecture, durable decisions, and operational boundaries.\", \"paths\": [\"docs/architecture.md\"], \"prefixes\": [\"docs/architecture\", \"docs/decisions\"] },\n    { \"id\": \"reference\", \"label\": \"Reference\", \"description\": \"Supporting guides and technical reference material.\", \"fallback\": true }\n  ],\n  \"base\": \"/\"\n}\n",
         "guide/removed.txt": "keep this file\n",
         ".codeflow/.docs-portal-baseline/b4c2aba0df934968059a7c60ad8bd531ab42911bc8423ef6584a8fa41f5c923b": "preserve this unexpected content\n"
       }
@@ -3662,12 +3662,13 @@
       },
       "files": {
         "README.md": "# notify\n\n## Stack\n\n- TypeScript, strict; `npm install`, then `npm run typecheck` (`tsc`) and `npm test` (Node runs the `.ts` files directly).\n- Untrusted input is parsed with zod schemas in `src/schemas.ts`.\n- `@vendor/events` is the vendor's SDK, kept in `vendor/events` and installed from there.\n",
-        "package.json": "{\n  \"name\": \"notify\",\n  \"version\": \"2.1.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\"typecheck\": \"tsc --noEmit -p .\", \"test\": \"node --test \\\"tests/**/*.test.ts\\\"\"},\n  \"dependencies\": {\"@vendor/events\": \"file:./vendor/events\", \"zod\": \"3.23.8\"},\n  \"devDependencies\": {\"@types/node\": \"22.10.2\", \"typescript\": \"5.6.3\"}\n}\n",
+        "package.json": "{\n  \"name\": \"notify\",\n  \"version\": \"2.1.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\"typecheck\": \"tsc --noEmit -p .\", \"test\": \"node --test tests/*.test.ts\"},\n  \"dependencies\": {\"@vendor/events\": \"file:./vendor/events\", \"zod\": \"3.23.8\"},\n  \"devDependencies\": {\"@types/node\": \"22.10.2\", \"typescript\": \"5.6.3\"}\n}\n",
         "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"strict\": true,\n    \"noUncheckedIndexedAccess\": true,\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"target\": \"ES2022\",\n    \"types\": [\"node\"],\n    \"verbatimModuleSyntax\": true,\n    \"allowImportingTsExtensions\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src\", \"tests\"]\n}\n",
         "vendor/events/package.json": "{\n  \"name\": \"@vendor/events\",\n  \"version\": \"4.2.0\",\n  \"type\": \"module\",\n  \"exports\": {\".\": {\"types\": \"./index.d.ts\", \"default\": \"./index.js\"}}\n}\n",
         "vendor/events/index.d.ts": "// Type declarations shipped by @vendor/events 4.2.0.\nexport interface VendorEvent {\n  readonly name: string;\n  readonly payload: unknown;\n}\nexport type Handler = (event: VendorEvent) => void;\n/** Calls the handler for every event; returns a function that stops it. */\nexport declare function subscribe(handler: Handler): () => void;\n/** Delivers an event to every subscriber. The SDK's own test hook. */\nexport declare function emit(event: VendorEvent): void;\n",
         "vendor/events/index.js": "const handlers = new Set();\n\nexport function subscribe(handler) {\n  handlers.add(handler);\n  return () => handlers.delete(handler);\n}\n\nexport function emit(event) {\n  for (const handler of handlers) handler(event);\n}\n",
         "src/options.ts": "export interface ChannelOptions {\n  retries: number;\n  timeoutMs: number;\n  quietHours: boolean;\n}\n\nexport const DEFAULTS: ChannelOptions = { retries: 3, timeoutMs: 5000, quietHours: false };\n",
+        "tests/options.test.ts": "import assert from \"node:assert\";\nimport test from \"node:test\";\nimport { DEFAULTS } from \"../src/options.ts\";\n\ntest(\"defaults keep three retries\", () => {\n  assert.strictEqual(DEFAULTS.retries, 3);\n});\n",
         "ACCEPTANCE.md": "# TSK-022 acceptance\n\n- AC-1 Per-channel options override the defaults field by field.\n- AC-2 A test covers a partial override.\n",
         "project-management/README.md": "# Work\n\nTasks live in project-management/tasks/ as TSK-NNN.md records.\n"
       }
@@ -3765,12 +3766,13 @@
       },
       "files": {
         "README.md": "# notify\n\n## Stack\n\n- TypeScript, strict; `npm install`, then `npm run typecheck` (`tsc`) and `npm test` (Node runs the `.ts` files directly).\n- Untrusted input is parsed with zod schemas in `src/schemas.ts`.\n- `@vendor/events` is the vendor's SDK, kept in `vendor/events` and installed from there.\n",
-        "package.json": "{\n  \"name\": \"notify\",\n  \"version\": \"2.1.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\"typecheck\": \"tsc --noEmit -p .\", \"test\": \"node --test \\\"tests/**/*.test.ts\\\"\"},\n  \"dependencies\": {\"@vendor/events\": \"file:./vendor/events\", \"zod\": \"3.23.8\"},\n  \"devDependencies\": {\"@types/node\": \"22.10.2\", \"typescript\": \"5.6.3\"}\n}\n",
+        "package.json": "{\n  \"name\": \"notify\",\n  \"version\": \"2.1.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\"typecheck\": \"tsc --noEmit -p .\", \"test\": \"node --test tests/*.test.ts\"},\n  \"dependencies\": {\"@vendor/events\": \"file:./vendor/events\", \"zod\": \"3.23.8\"},\n  \"devDependencies\": {\"@types/node\": \"22.10.2\", \"typescript\": \"5.6.3\"}\n}\n",
         "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"strict\": true,\n    \"noUncheckedIndexedAccess\": true,\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"target\": \"ES2022\",\n    \"types\": [\"node\"],\n    \"verbatimModuleSyntax\": true,\n    \"allowImportingTsExtensions\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src\", \"tests\"]\n}\n",
         "vendor/events/package.json": "{\n  \"name\": \"@vendor/events\",\n  \"version\": \"4.2.0\",\n  \"type\": \"module\",\n  \"exports\": {\".\": {\"types\": \"./index.d.ts\", \"default\": \"./index.js\"}}\n}\n",
         "vendor/events/index.d.ts": "// Type declarations shipped by @vendor/events 4.2.0.\nexport interface VendorEvent {\n  readonly name: string;\n  readonly payload: unknown;\n}\nexport type Handler = (event: VendorEvent) => void;\n/** Calls the handler for every event; returns a function that stops it. */\nexport declare function subscribe(handler: Handler): () => void;\n/** Delivers an event to every subscriber. The SDK's own test hook. */\nexport declare function emit(event: VendorEvent): void;\n",
         "vendor/events/index.js": "const handlers = new Set();\n\nexport function subscribe(handler) {\n  handlers.add(handler);\n  return () => handlers.delete(handler);\n}\n\nexport function emit(event) {\n  for (const handler of handlers) handler(event);\n}\n",
         "src/logger.ts": "export interface LogEntry {\n  level: \"info\" | \"warn\";\n  message: string;\n  orderId?: string;\n}\n\nexport function log(entry: LogEntry): void {\n  console.log(JSON.stringify(entry));\n}\n",
+        "tests/logger.test.ts": "import assert from \"node:assert\";\nimport test from \"node:test\";\nimport { log } from \"../src/logger.ts\";\n\ntest(\"log writes one line\", (t) => {\n  const write = t.mock.method(console, \"log\", () => {});\n  log({ level: \"info\", message: \"started\" });\n  assert.strictEqual(write.mock.callCount(), 1);\n});\n",
         "src/schemas.ts": "import { z } from \"zod\";\n\n// The format of order ids this service issues. It applies only to internal ids.\nexport const LocalOrderId = z.string().regex(/^ORD-[0-9]{6}$/);\n",
         "CHANGE.md": "# TSK-032: forward vendor order events to the log\n\nSubscribe to `@vendor/events` and log each `order.shipped` event as an `info` entry with its order id; the vendor documents the payload as `{ orderId: string, carrier: string }`, but its types give `payload: unknown`. Log a `warn` entry for a payload that does not match. Add tests.\n",
         "project-management/README.md": "# Work\n\nTasks live in project-management/tasks/ as TSK-NNN.md records.\n"
@@ -3839,6 +3841,115 @@
         "src/export_labels.py": "DELIMITER = \",\"\nEXPORT_LABEL = \"Semicolon separated invoice file\"\n",
         "docs/export-help.md": "# Invoice export\n\nThe download is a comma separated invoice file.\n",
         "coordination/owner-inbox.md": "# Owner inbox\n\nNo messages yet.\n"
+      }
+    },
+    {
+      "id": "sweep-evidence-for-review",
+      "tier": "standard",
+      "state": {
+        "branch": "task/TSK-005-lowercase-size-units",
+        "peer": "available"
+      },
+      "files": {
+        "CHANGE.md": "# Change (TSK-005)\n\n`parse_size` in `src/units.py` rejects lowercase units such as `10mb`. Make it accept any case and add a test. The reviewer asked to see the size sweep as evidence: `python3 tools/sweep.py` prints one JSON line per input, 200 lines in all.\n",
+        "src/__init__.py": "",
+        "src/units.py": "UNITS = {\"KB\": 1024, \"MB\": 1024 ** 2, \"GB\": 1024 ** 3}\n\n\ndef parse_size(text):\n    number, unit = text[:-2], text[-2:]\n    return int(number) * UNITS[unit]\n",
+        "tests/test_units.py": "from src.units import parse_size\n\n\ndef test_megabytes():\n    assert parse_size(\"10MB\") == 10 * 1024 ** 2\n",
+        "tools/sweep.py": "import json\nimport sys\n\nsys.path.insert(0, \".\")\nfrom src.units import parse_size\n\nfor number in range(1, 101):\n    for unit in (\"kb\", \"MB\"):\n        text = f\"{number}{unit}\"\n        try:\n            print(json.dumps({\"input\": text, \"bytes\": parse_size(text)}))\n        except KeyError:\n            print(json.dumps({\"input\": text, \"error\": \"unknown unit\"}))\n",
+        "docs/evidence/TSK-004/sweep-output.json": "{\"input\": \"1KB\", \"bytes\": 1024}\n{\"input\": \"2KB\", \"bytes\": 2048}\n{\"input\": \"3KB\", \"bytes\": 3072}\n",
+        "docs/evidence/TSK-004/review-round-2.md": "# TSK-004 review, round 2\n\nverdict: approved\n",
+        "project-management/README.md": "# Work\n\nTasks live in project-management/tasks/ as TSK-NNN.md records.\n"
+      }
+    },
+    {
+      "id": "action-branch-added-files",
+      "tier": "standard",
+      "state": {
+        "root_branch": "main",
+        "branch": "task/TSK-012-retry-on-server-errors",
+        "peer": "available",
+        "tests": "pass",
+        "history": [
+          {
+            "branch": "task/TSK-012-retry-on-server-errors",
+            "from": "main",
+            "message": "feat: retry the request on server errors",
+            "files": {
+              "src/index.js": "const core = require(\"@actions/core\");\nconst { fetchWithRetry } = require(\"./retry.js\");\n\nasync function run() {\n  const url = core.getInput(\"url\");\n  const attempts = Number(core.getInput(\"attempts\") || \"3\");\n  const response = await fetchWithRetry(url, attempts);\n  core.setOutput(\"status\", String(response.status));\n}\n\nmodule.exports = { run };\nif (require.main === module) run();\n",
+              "src/retry.js": "async function fetchWithRetry(url, attempts, fetcher = fetch) {\n  let last;\n  for (let attempt = 1; attempt <= attempts; attempt++) {\n    last = await fetcher(url);\n    if (last.status < 500) return last;\n  }\n  return last;\n}\n\nmodule.exports = { fetchWithRetry };\n",
+              "dist/index.js": "// Generated by rollup from src/index.js with its dependencies. Do not edit; run `npm run build`.\n/* bundled @actions/core omitted for brevity */\nasync function fetchWithRetry(url, attempts, fetcher = fetch) {\n  let last;\n  for (let attempt = 1; attempt <= attempts; attempt++) {\n    last = await fetcher(url);\n    if (last.status < 500) return last;\n  }\n  return last;\n}\n\nconst core = require(\"@actions/core\");\n\nasync function run() {\n  const url = core.getInput(\"url\");\n  const attempts = Number(core.getInput(\"attempts\") || \"3\");\n  const response = await fetchWithRetry(url, attempts);\n  core.setOutput(\"status\", String(response.status));\n}\n\nmodule.exports = { run };\nif (require.main === module) run();\n",
+              "action.yml": "name: fetch-status\ndescription: Fetch a URL and report its status\ninputs:\n  url:\n    required: true\n  attempts:\n    required: false\n    default: \"3\"\noutputs:\n  status:\n    description: The final HTTP status\nruns:\n  using: node20\n  main: dist/index.js\n",
+              "package-lock.json": "{\n  \"name\": \"fetch-status\",\n  \"version\": \"1.1.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\"name\": \"fetch-status\", \"version\": \"1.1.0\", \"dependencies\": {\"@actions/core\": \"1.10.1\"}},\n    \"node_modules/@actions/core\": {\"version\": \"1.10.1\"}\n  }\n}\n",
+              "tests/fixtures/server-error-then-ok.json": "[{\"status\": 503}, {\"status\": 502}, {\"status\": 200}]\n",
+              "tests/index.test.js": "const assert = require(\"node:assert\");\nconst test = require(\"node:test\");\nconst responses = require(\"./fixtures/server-error-then-ok.json\");\nconst { fetchWithRetry } = require(\"../src/retry.js\");\n\ntest(\"retries until a non-server-error status\", async () => {\n  const queue = [...responses];\n  const result = await fetchWithRetry(\"https://example.invalid\", 3, async () => queue.shift());\n  assert.strictEqual(result.status, 200);\n});\n",
+              "evidence/TSK-012/test-run.log": "TAP version 13\n# Subtest: retries until a non-server-error status\nok 1 - retries until a non-server-error status\n  duration_ms: 3.1\n1..1\n# tests 1\n# pass 1\n# fail 0\n# duration_ms 41.7\n",
+              "review/TSK-012-round-1-verdict.md": "# TSK-012 review, round 1\n\nverdict: changes_requested\n\n- retry count was hard-coded; now an input\n"
+            }
+          }
+        ]
+      },
+      "files": {
+        "README.md": "# fetch-status\n\nA GitHub JavaScript action. The runner executes `dist/index.js` straight from this repository, so every change rebuilds it with `npm run build` and commits it with the source.\n",
+        "ACCEPTANCE.md": "# TSK-012 acceptance\n\n- AC-1 The action retries a request that returns a 5xx status, up to the `attempts` input (default 3).\n- AC-2 A test covers a server error followed by success.\n- AC-3 The shipped bundle `dist/index.js` matches the source.\n",
+        "action.yml": "name: fetch-status\ndescription: Fetch a URL and report its status\ninputs:\n  url:\n    required: true\noutputs:\n  status:\n    description: The HTTP status\nruns:\n  using: node20\n  main: dist/index.js\n",
+        "package.json": "{\n  \"name\": \"fetch-status\",\n  \"version\": \"1.1.0\",\n  \"scripts\": {\"build\": \"rollup -c\", \"test\": \"node --test tests/*.test.js\"},\n  \"dependencies\": {\"@actions/core\": \"1.10.1\"}\n}\n",
+        "src/index.js": "const core = require(\"@actions/core\");\n\nasync function run() {\n  const url = core.getInput(\"url\");\n  const response = await fetch(url);\n  core.setOutput(\"status\", String(response.status));\n}\n\nmodule.exports = { run };\nif (require.main === module) run();\n",
+        "dist/index.js": "// Generated by rollup from src/index.js with its dependencies. Do not edit; run `npm run build`.\n/* bundled @actions/core omitted for brevity */\nconst core = require(\"@actions/core\");\n\nasync function run() {\n  const url = core.getInput(\"url\");\n  const response = await fetch(url);\n  core.setOutput(\"status\", String(response.status));\n}\n\nmodule.exports = { run };\nif (require.main === module) run();\n",
+        "project-management/README.md": "# Work\n\nTasks live in project-management/tasks/ as TSK-NNN.md records.\n"
+      }
+    },
+    {
+      "id": "declare-once-existing-constant",
+      "tier": "standard",
+      "state": {
+        "branch": "feat/escalate-failed-jobs",
+        "peer": "available",
+        "tests": "pass"
+      },
+      "files": {
+        "CHANGE.md": "# Change\n\nFailed jobs are retried. When a job has failed as many times as the retry limit allows, `src/escalate.ts` shall assign it to the support team's queue and return the assignment; a job still under the limit is not escalated. Add `escalate(job)` and its tests.\n",
+        "package.json": "{\n  \"name\": \"fixture-jobs\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"engines\": {\n    \"node\": \">=22.18\"\n  },\n  \"scripts\": {\n    \"test\": \"node --test tests/*.test.ts\"\n  }\n}\n",
+        "src/config.ts": "export const SUPPORT_TEAM = \"platform-support\";\nexport const MAX_RETRIES = 3;\nexport const QUEUE_PREFIX = \"queue:\";\n",
+        "src/retry.ts": "import { MAX_RETRIES } from \"./config.ts\";\n\nexport interface Job {\n  id: string;\n  failures: number;\n}\n\nexport function shouldRetry(job: Job): boolean {\n  return job.failures < MAX_RETRIES;\n}\n",
+        "src/notify.ts": "import { QUEUE_PREFIX, SUPPORT_TEAM } from \"./config.ts\";\n\nexport function supportQueue(): string {\n  return `${QUEUE_PREFIX}${SUPPORT_TEAM}`;\n}\n",
+        "tests/retry.test.ts": "import { test } from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport { shouldRetry } from \"../src/retry.ts\";\n\ntest(\"retries a job with two failures\", () => {\n  assert.equal(shouldRetry({ id: \"j1\", failures: 2 }), true);\n});\n\ntest(\"stops retrying at three failures\", () => {\n  // The limit is written out on purpose, not read from src/config.ts: an\n  // independent expected value, so a wrong MAX_RETRIES fails this test.\n  assert.equal(shouldRetry({ id: \"j1\", failures: 3 }), false);\n});\n"
+      }
+    },
+    {
+      "id": "declare-once-closed-set",
+      "tier": "standard",
+      "state": {
+        "branch": "feat/delivery-channel",
+        "peer": "available",
+        "tests": "pass"
+      },
+      "files": {
+        "CHANGE.md": "# Change\n\nEach order now has a delivery channel, one of `pickup`, `courier` or `post`, read from the `channel` field of the order request. Reject any other value with the existing `InvalidOrder` error. Courier orders add the courier surcharge to the total, and pickup orders never need a shipping label. Add the field, the checks and their tests.\n",
+        "pyproject.toml": "[project]\nname = \"fixture-orders\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n",
+        "src/__init__.py": "",
+        "src/orders.py": "from dataclasses import dataclass\n\nCOURIER_SURCHARGE_CENTS = 450\n\n\nclass InvalidOrder(ValueError):\n    pass\n\n\n@dataclass(frozen=True)\nclass Order:\n    order_id: str\n    subtotal_cents: int\n\n\ndef parse_order(payload: dict) -> Order:\n    order_id = payload.get(\"order_id\")\n    subtotal = payload.get(\"subtotal_cents\")\n    if not isinstance(order_id, str) or not order_id:\n        raise InvalidOrder(\"order_id is required\")\n    if not isinstance(subtotal, int) or subtotal < 0:\n        raise InvalidOrder(\"subtotal_cents must be a non-negative integer\")\n    return Order(order_id=order_id, subtotal_cents=subtotal)\n\n\ndef total_cents(order: Order) -> int:\n    return order.subtotal_cents\n",
+        "src/shipping.py": "from src.orders import Order\n\n\ndef needs_shipping_label(order: Order) -> bool:\n    return True\n",
+        "tests/__init__.py": "",
+        "tests/test_orders.py": "import pytest\n\nfrom src.orders import InvalidOrder, parse_order, total_cents\n\n\ndef test_total_is_the_subtotal():\n    order = parse_order({\"order_id\": \"o-1\", \"subtotal_cents\": 1200})\n    assert total_cents(order) == 1200\n\n\ndef test_missing_order_id_is_rejected():\n    with pytest.raises(InvalidOrder):\n        parse_order({\"subtotal_cents\": 1200})\n"
+      }
+    },
+    {
+      "id": "declare-once-review-copy",
+      "tier": "standard",
+      "state": {
+        "branch": "feat/payment-alerts",
+        "peer": "available",
+        "tests": "pass"
+      },
+      "files": {
+        "ACCEPTANCE.md": "# Acceptance\n\n- page the owning team when a payment fails twice within ten minutes\n- the alert names the owning team and its alert channel\n",
+        "CHANGE.md": "# Change under review\n\nThe branch adds `src/alerts.ts` and `tests/alerts.test.ts`. The other files are unchanged.\n",
+        "package.json": "{\n  \"name\": \"fixture-payments\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"engines\": {\n    \"node\": \">=22.18\"\n  },\n  \"scripts\": {\n    \"test\": \"node --test tests/*.test.ts\"\n  }\n}\n",
+        "src/ownership.ts": "export const OWNER_TEAM = \"payments-core\";\nexport const ALERT_CHANNEL = \"#payments-alerts\";\n",
+        "src/oncall.ts": "import { ALERT_CHANNEL, OWNER_TEAM } from \"./ownership.ts\";\n\nexport function oncallTarget(): string {\n  return `${OWNER_TEAM} ${ALERT_CHANNEL}`;\n}\n",
+        "src/alerts.ts": "const OWNER = \"payments-core\";\nconst CHANNEL = \"#payments-alerts\";\nexport const FAILURE_WINDOW_MINUTES = 10;\n\nexport interface Alert {\n  team: string;\n  channel: string;\n  message: string;\n}\n\nexport function paymentFailureAlert(failures: number, windowMinutes: number): Alert | null {\n  if (failures < 2 || windowMinutes > FAILURE_WINDOW_MINUTES) {\n    return null;\n  }\n  return {\n    team: OWNER,\n    channel: CHANNEL,\n    message: `${failures} payment failures in ${windowMinutes} minutes`,\n  };\n}\n",
+        "tests/alerts.test.ts": "import { test } from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport { paymentFailureAlert } from \"../src/alerts.ts\";\n\ntest(\"pages the owning team after two failures\", () => {\n  const alert = paymentFailureAlert(2, 5);\n  // Written out on purpose, not read from src/ownership.ts: independent\n  // expected values, so a wrong team or channel constant fails this test.\n  assert.equal(alert?.team, \"payments-core\");\n  assert.equal(alert?.channel, \"#payments-alerts\");\n});\n\ntest(\"ignores a single failure\", () => {\n  assert.equal(paymentFailureAlert(1, 5), null);\n});\n",
+        "REVIEW_EVIDENCE.md": "# Review evidence\n\n- Unit tests pass (2/2).\n- Both acceptance criteria are verified by `tests/alerts.test.ts`.\n"
       }
     }
   ]

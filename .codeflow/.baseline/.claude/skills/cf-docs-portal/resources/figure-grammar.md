@@ -150,11 +150,12 @@ value and the legend key.
 
 ## 5. The evidence board and its anti-patterns
 
-`docs/verification/tsk-014-w5/` is the evidence board behind this grammar. Its
-`shared/svg.js` carries the mark vocabulary the table above distils, and its
-`baselines/` (p1, p2, p3, d1, d2, d3: plain chat, plain Markdown and plain HTML
-for every scorable surface) are the negative controls a figure must beat. How
-the board may be used is the shared doctrine's section 0.
+CodeFlow's own TSK-014 evidence board settled this grammar; CodeFlow's
+history keeps it, and it is not shipped. Its `shared/svg.js` carries the mark
+vocabulary the table above distils, and its `baselines/` (p1, p2, p3, d1, d2,
+d3: plain chat, plain Markdown and plain HTML for every scorable surface) are
+the negative controls a figure must beat. How the board may be used is the
+shared doctrine's section 0.
 
 Named anti-patterns, each observed on that board and each now a rule:
 
