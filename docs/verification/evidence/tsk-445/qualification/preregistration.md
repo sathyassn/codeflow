@@ -205,3 +205,13 @@ Amendment before any further launch: the requested model is the exact id,
 arms. It names the same intended model, Opus 5.5, and lets the status line
 check compare the requested id with the one displayed. Everything else
 registered above is unchanged.
+- Attempt 3, with `--model claude-opus-5-5`: trust was accepted, the seat
+  was ready and the prompt was pasted whole, but the runner refused with
+  "the visible editor does not hold this prompt; no Enter sent". With input
+  in the editor, Claude Code 2.1.318 draws the "ctrl+g to edit in Nvim" hint
+  on the status line row, and `footer_rows` knows that hint only on the
+  branch row or on its own row under the mode row. No Enter was sent and
+  no model turn ran. The tab was closed with the prompt unsent.
+
+No trial can run on Claude Code 2.1.318 until `runner.py` accepts that row
+layout. That fix is outside this task. Attempts 1 to 3 are `not_run`.
