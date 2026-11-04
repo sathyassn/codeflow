@@ -87,6 +87,18 @@ is assumed. Upgrade the local and CI binaries before committing the new keys
 from `codeflow update`: an older binary fails every `codeflow ci` run with exit
 2 and `unknown key git.pr_release_impact`.
 
+`git.pr_capability_impact` compares the body's `## Capability impact` section
+with the catalog records the pull request adds or changes
+(`.codeflow/rules/capabilities.md`). `init` and `update` write it at off for
+the minimal tier and warn for standard and full, and only once the pinned
+binary is 4.0.0 or later, so an older binary never meets the key. On GitHub,
+the enforcing job reads the body when it runs and checks it twice: before
+`codeflow ci`, that the pull request's head, base, number, repository and
+state match the event; after it, that none of these or the body changed
+while it ran. Either mismatch fails the job and asks for a new event. GitLab
+passes the merge request description, and the generic wrapper reads
+`CODEFLOW_PR_BODY`; without a body, an active rule refuses.
+
 ## What `codeflow init` scaffolds
 
 `codeflow init` scaffolds the **GitHub** workflow (`codeflow-ci.yml`) today. The

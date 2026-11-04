@@ -7,11 +7,20 @@ use serde_json::{json, Value};
 
 const BODY: &str = "Task: TSK-001\n## Summary\nMake the command easier to use.\n\n- Explain the result.\n\n## Changes\n- Explain the command's result.\n\n## Testing\nAt fixture HEAD, ran python -m unittest:\n```text\nRan 3 tests\nOK\n```\nCoverage: not measured; this fixture has no coverage tool.\nNot tested: Windows.\n\n## Reviews\nNone: awaiting the maintainer's review.\n\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify output; this project has no release automation.\n- Migration: none\n- Package: fictional-tool\n";
 
+/// The running release, which knows every key the current assets name.
+const CURRENT: &str = env!("CARGO_PKG_VERSION");
+
 fn source() -> DirSource {
     DirSource::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets"))
 }
 
 fn install(root: &Path, tier: Tier, source: &dyn AssetSource) {
+    install_at(root, tier, source, "3.0.0");
+}
+
+/// [`install`] by a binary of `version`, which also reads the policy it
+/// writes (TSK-1136: a key newer than the reader is withheld).
+fn install_at(root: &Path, tier: Tier, source: &dyn AssetSource, version: &str) {
     if tier == Tier::Full {
         let branch = std::process::Command::new("git")
             .args(["branch", "--show-current"])
@@ -37,7 +46,7 @@ fn install(root: &Path, tier: Tier, source: &dyn AssetSource) {
         &InitOptions {
             tier: Some(tier),
             force: false,
-            binary_version: "3.0.0".into(),
+            binary_version: version.into(),
             answers: InitAnswers::default(),
         },
     )
@@ -45,12 +54,16 @@ fn install(root: &Path, tier: Tier, source: &dyn AssetSource) {
 }
 
 fn update(root: &Path, source: &dyn AssetSource) {
+    update_at(root, source, "3.0.1");
+}
+
+fn update_at(root: &Path, source: &dyn AssetSource, version: &str) {
     scaffold::update(
         source,
         root,
         &UpdateOptions {
             force: false,
-            binary_version: "3.0.1".into(),
+            binary_version: version.into(),
             diff_out: None,
         },
     )
@@ -101,7 +114,7 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
         std::fs::write(dir.path().join("tool.py"), "print('result')\n").unwrap();
         git(dir.path(), &["add", "."]);
         git(dir.path(), &["commit", "-m", "fix: clarify result"]);
-        install(dir.path(), tier, &source());
+        install_at(dir.path(), tier, &source(), CURRENT);
         let template = std::fs::read(dir.path().join(".github/pull_request_template.md")).unwrap();
         assert_eq!(
             template,
@@ -135,8 +148,20 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
             .collect();
         assert_eq!(
             headings,
-            ["Summary", "Changes", "Testing", "Reviews", "Release impact"]
+            [
+                "Summary",
+                "Changes",
+                "Testing",
+                "Reviews",
+                "Release impact",
+                "Capability impact"
+            ]
         );
+        // TSK-1136: the tier's capability level. A fresh standard or full
+        // project has no catalog records yet, so its product PRs carry the
+        // bootstrap warning until the catalog exists; minimal does not check.
+        let capability = if tier == Tier::Minimal { "off" } else { "warn" };
+        assert_eq!(policy["git"]["pr_capability_impact"], capability);
         for section in policy["git"]["pr_required_sections"].as_array().unwrap() {
             assert!(headings.contains(&section.as_str().unwrap()));
         }
@@ -152,19 +177,42 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
             "Task: `TSK-NNN | none: <reason>`"
                 | "Task: `TSK-NNN | EPC-NNN | EPC-001, EPC-002 | <unit name>`"
         ));
-        assert_clean(
+        assert_clean_but_capability_bootstrap(
             dir.path(),
             &fill_installed_template(std::str::from_utf8(&template).unwrap()),
+            tier != Tier::Minimal,
         );
-        update(dir.path(), &source());
-        update(dir.path(), &source());
+        update_at(dir.path(), &source(), CURRENT);
+        update_at(dir.path(), &source(), CURRENT);
         assert_eq!(
             std::fs::read(dir.path().join(".github/pull_request_template.md")).unwrap(),
             template
         );
         assert_eq!(read_policy(dir.path()), policy);
-        assert_clean(dir.path(), BODY);
+        assert_clean_but_capability_bootstrap(dir.path(), BODY, tier != Tier::Minimal);
     }
+}
+
+/// [`assert_clean`], except that where the capability rule is at warn with no
+/// catalog records its one bootstrap warning is expected and is the only
+/// `git.pr_` line.
+fn assert_clean_but_capability_bootstrap(root: &Path, body: &str, warned: bool) {
+    if !warned {
+        assert_clean(root, body);
+        return;
+    }
+    if root.join(".codeflow").join("policy.json").is_file() {
+        land_policy(root);
+    }
+    let output = ci_with_body(root, body);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let rules: Vec<&str> = stderr.lines().filter(|l| l.contains("git.pr_")).collect();
+    assert!(
+        rules.iter().all(|l| l.contains("git.pr_capability_impact")),
+        "{stderr}"
+    );
+    assert!(stderr.contains("bootstrap the catalog"), "{stderr}");
 }
 
 /// The prior shipped defaults, with only the two new keys absent. The existing
@@ -495,6 +543,10 @@ fn fill_installed_template(template: &str) -> String {
         .replace(
             "- Migration: `none`, steps, or \"see Breaking change\"",
             "- Migration: none",
+        )
+        .replace(
+            "\n- None: <reason>\n",
+            "\n- None: clarifies output without changing behaviour.\n",
         )
 }
 

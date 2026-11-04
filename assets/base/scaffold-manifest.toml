@@ -168,6 +168,14 @@ dest = ".codeflow/rules/writing.md"
 ownership = "managed"
 tiers = ["minimal", "standard", "full"]
 
+# How a pull request declares capability impact, at every tier: a minimal
+# project that opts in to git.pr_capability_impact needs it too.
+[[entry]]
+src = "rules/capabilities.md"
+dest = ".codeflow/rules/capabilities.md"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
 # --- policy (user-owned, schema-versioned) ----------------------------------
 
 [[entry]]

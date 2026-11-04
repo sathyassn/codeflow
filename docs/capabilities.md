@@ -2,8 +2,9 @@
 
 <!-- WHAT layer: the registry of what the system does. Consult before building
      ("does this exist? what does it touch?"). Updated in the same PR that
-     ships the work; the ship flow carries that discipline, and there is no
-     blocking gate.
+     ships the work, which declares it in `## Capability impact`; where
+     `git.pr_capability_impact` is active, `codeflow ci` compares that
+     declaration with the catalog delta.
      The yaml fence under each capability is the machine-read authority: the
      portal generates the summary table and each definition table from it, and
      `status`, `orient` and `validate --docs` parse it. The four-column table
@@ -691,9 +692,9 @@ Records contain YAML frontmatter and Markdown prose, checked by `validate --docs
 | `record: docs/verification/<path>` | A non-empty verification record. Currency is a review judgment: the check proves the record exists. |
 | `gap: <proof>: <reason>` | A declared gap, not proof. `<proof>` is what is still owed: `test`, `journey`, `hosted` or `native`. |
 | Refused | A source file named alone, a command, free text or an unresolved reference, naming the capability and the entry. |
-| Reading | Nothing an entry names is run. Files are read through the repository-confined reader, and links are refused. Where a sandbox denies reading a path, a whole-file entry resolves only when the Git index tracks that path. |
+| Reading | Nothing an entry names is run. Files are read through the repository-confined reader, and links are refused. Where a sandbox denies reading a path, a whole-file entry resolves only when the Git index tracks that path as a regular file. |
 | Read bound | `CAPABILITY_MAX_EVIDENCE_FILE_BYTES`: 16 MiB for the file read to find a `::<name>`. It is a constant for now; it moves to the limits registry under TSK-1299, which lands through the EPC-022 line. |
-| Legacy fences | A legacy file with no typed entry keeps validating with one warning through 4.x. Its first typed entry makes every fence entry in the file subject to these rules. |
+| Legacy fences | A legacy file with no typed entry keeps validating with one warning until its first typed entry. Its first typed entry makes every fence entry in the file subject to these rules. |
 
 | Validation rule | Contract |
 |---|---|

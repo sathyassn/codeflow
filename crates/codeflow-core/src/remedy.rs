@@ -559,7 +559,7 @@ catalog! {
         "declare Impact, Breaking, Rationale and Migration under Release impact using the project's breaking level; `codeflow ci --pr-body-file <body.md>` checks the new text";
     /// A capability declaration that cannot be verified against catalog data.
     PR_CAPABILITY_IMPACT = Step::Codeflow("codeflow ci"),
-        "supply one ## Capability impact section with '- Added CAP-NNN <name>: <context>', Changed or Improved entries (Improved says 'entry unchanged'), or '- None: <reason>'; bootstrap an empty catalog with valid records and matching Added entries; deprecate capabilities instead of deleting them; rerun `codeflow ci --pr-body-file <body.md>`";
+        "supply one ## Capability impact section with '- Added CAP-NNN <name>: <context>', Changed or Improved entries (Improved says 'entry unchanged'), or '- None: <reason>'; bootstrap an empty catalog with valid records and matching Added entries; deprecate capabilities instead of deleting them; `.codeflow/rules/capabilities.md` explains each case; rerun `codeflow ci --pr-body-file <body.md>`";
 
     // `codeflow ci` itself.
 

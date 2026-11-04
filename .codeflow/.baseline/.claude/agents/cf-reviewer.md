@@ -96,7 +96,9 @@ evidence" define; the brief follows
    user-facing surface, record `UI: N/A` as `quality/verification.md` says.
 6. Check discipline: tests accompany the change; required doc mutations are in
    the same diff (capability entry for a closing FEAT epic, architecture.md when
-   an ADR declares architecture impact, spec frozen at ship); commit subjects
+   an ADR declares architecture impact, spec frozen at ship); the
+   `## Capability impact` section is true, including each `None` and
+   `Improved` claim the check cannot prove; commit subjects
    follow `type(scope): description` with no AI attribution and no emoji.
    For release impact, apply the project's policy and
    `.claude/skills/cf-ship/references/release-policy.md`: challenge the

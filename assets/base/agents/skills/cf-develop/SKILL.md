@@ -16,9 +16,10 @@ records the required interactive seat unavailable and the reduced assurance.
    planning, never a bypass. When a work item is planned, started, blocked,
    completed or cancelled, follow
    [the work lifecycle](../cf-method/references/project-organization.md#the-work-lifecycle).
-2. Reuse the current evidence set; consult `docs/capabilities.md` and
+2. Reuse the current evidence set; consult the capability catalog and
    `docs/architecture.md` for what it lacks, then name the bounded impact
-   set (quality contract). For a material product, UX, interaction, or
+   set (quality contract) and each capability it adds, changes or improves;
+   edit those records in this branch. For a material product, UX, interaction, or
    visual-design change, require the plan's settled `DESIGN_INTENT`; if it is
    absent, apply `cf-design` before implementation. A valid `N/A` or
    `conform` record does not add ceremony.

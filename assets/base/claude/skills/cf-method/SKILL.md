@@ -85,8 +85,8 @@ orchestrator point here). Do not draft until you can state all six:
    nonexistent epic ID, `codeflow validate --docs` shall exit non-zero in
    CI." Bad: "validation works correctly", or a 14-item list restating the
    implementation plan (that is design, not acceptance).
-5. **Touched surface.** Which areas and which existing capabilities
-   (`docs/capabilities.md`) this creates or changes.
+5. **Touched surface.** Which areas, and which capabilities in the catalog
+   each task adds, changes or improves, or `none` with the reason.
 6. **Deliverables and homes.** What each task produces (files or a folder,
    a decision record, a research note, evidence, a record update, a human
    board) and its home as a path in the project's structure, in the task's
@@ -248,23 +248,24 @@ an accepted decision.
 
 ## Capability registry discipline
 
-`docs/capabilities.md` is the agent's index of what the system actually does:
-the first thing to consult before building ("does this exist? what does it
-touch?"). Entry fields: `id` (CAP-###), `name`, `area`, `status`
-(planned → building → shipped → deprecated), `verified_by` (test tags),
-`epics[]`, `adrs[]`, plus exactly one paragraph of prose.
+The capability catalog (`docs/capabilities/CAP-NNN-<slug>.md` records, or a
+legacy `docs/capabilities.md`) is the agent's index of what the system
+actually does: the first thing to consult before building ("does this exist?
+what does it touch?").
 
-- One entry per user-meaningful capability: what the system *does*, not how.
-  "Secret scanning at commit time" is a capability; "the regex module" is not.
-- The entry is updated in the same PR that ships the work; the discipline is
-  the ship flow itself, not a blocking gate; `validate --docs` does not gate an
-  epic from closing.
-- `verified_by` names the real test tags that prove the capability. `validate
-  --docs` requires a shipped entry to carry a non-empty `verified_by`, but it
-  does not resolve the tags, so a stale tag is a lie only the reviewer will catch.
+- One entry per capability someone relies on: an external user, an operator
+  or contributor, or an agent working here. It says what the system *does*,
+  not how. "Secret scanning at commit time" is a capability; "the regex
+  module" is not.
+- The record is edited in the same branch as the change it describes, and the
+  PR declares it in `## Capability impact`. Where `git.pr_capability_impact`
+  is warn or block, `codeflow ci` compares that section with the catalog
+  delta; `.codeflow/rules/capabilities.md` says what to write and what
+  passes.
+- `verified_by` entries are typed (`test:`, `journey:`, `record:`, `gap:`)
+  and `validate --docs` resolves each one; a `gap:` declares missing proof,
+  never proof. Whether the prose matches the code stays a review judgment.
 - Deprecate, never delete; the ID spine must stay resolvable.
-- At roughly 15 entries, graduate the single file to `docs/capabilities/`
-  (one CAP-*.md each); the registry file becomes an index.
 
 ## Spec lifecycle
 

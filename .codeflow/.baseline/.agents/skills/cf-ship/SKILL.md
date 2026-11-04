@@ -34,9 +34,10 @@ description: Land finished work (docs and capability updates, then a PR through 
    gaps. Never restart the whole lifecycle or force every failure through
    development.
 2. Same-PR doc mutations (this is how docs stay true):
-   - a capability entry created or updated: status, `verified_by` test tags,
-     epic and ADR links (required at full tier; keep `verified_by` non-empty so
-     `validate --docs` stays clean; it does not gate epic close);
+   - a capability record created or updated: status, typed `verified_by`
+     evidence, epic and ADR links, and a `## Capability impact` section that
+     matches the catalog delta (`.codeflow/rules/capabilities.md`;
+     `codeflow ci` checks it where `git.pr_capability_impact` is active);
    - an ADR finalized if a Tier-3 decision was made; `docs/architecture.md`
      updated when the ADR declares architecture impact;
    - no spec status is written at ship: `implemented` is derived once every
