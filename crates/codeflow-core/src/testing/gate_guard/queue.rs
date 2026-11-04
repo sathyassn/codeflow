@@ -2,8 +2,8 @@
 //! closed records. Every publication, inspection and removal holds the same
 //! queue mutex. None of the existing Windows sharing flags need to change.
 use super::{
-    describe_holder, holder_record, lock_anchor, os_lock, parse_record, try_open_and_lock,
-    AcquiredFile, LockHeld, Slot,
+    holder_record, lock_anchor, os_lock, parse_record, try_open_and_lock, AcquiredFile, LockHeld,
+    Slot,
 };
 use crate::contained::Tree;
 use std::io;
@@ -373,6 +373,7 @@ impl Ticket {
         Ok(ticket)
     }
 
+    /// The holder record of the ticket ahead of this one, if any.
     pub(super) fn waiting_for(&self, trusted: &[String]) -> Result<Option<String>, String> {
         let dirs: Vec<_> = self.owned.iter().map(|owner| owner.dir.clone()).collect();
         let _locks = metadata_mutexes(&dirs)?;
@@ -384,7 +385,7 @@ impl Ticket {
                 .map_err(|error| unavailable(&owned.dir, error).to_string())?;
             match first {
                 Some((name, _)) if owned.record.as_ref() == Some(&name) => {}
-                Some((_, record)) => return Ok(Some(describe_holder(&record))),
+                Some((_, record)) => return Ok(Some(record)),
                 None => {
                     return Err("gate lock unavailable: own exclusive ticket disappeared".into())
                 }
@@ -521,7 +522,7 @@ mod tests {
         let _locks = mutexes(&dirs).unwrap();
         let error = bounded_mutexes(&dirs, Instant::now()).unwrap_err();
         assert!(error.holder.contains("pid=unknown"));
-        assert!(error.to_string().contains("pid unknown"));
+        assert!(error.to_string().contains("updating the exclusive queue"));
         assert!(error.to_string().contains(QUEUE_MUTEX));
     }
 

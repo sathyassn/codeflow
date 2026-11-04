@@ -552,7 +552,11 @@ pub fn run_dependency_targets_with_admission(
                         host_hold = Some((index, hold));
                     }
                     Err(message) => {
-                        let reason = format!("not run: host-exclusive target refused: {message}");
+                        let reason = if message.starts_with(super::gate_guard::HOST_HELD) {
+                            format!("not run: {message}")
+                        } else {
+                            format!("not run: host-exclusive target refused: {message}")
+                        };
                         progress!("[codeflow test] {}: {reason}", target.name);
                         results.insert(index, Ok(not_run(target, &reason)));
                         completed.insert(target.name.clone(), false);

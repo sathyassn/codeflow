@@ -46,6 +46,17 @@ pub struct GateTargetResult {
 }
 
 impl GateTargetResult {
+    /// Whether a host-exclusive target did not start because another run
+    /// held the host. The gate still fails; the target itself was not tested.
+    #[must_use]
+    pub fn host_was_held(&self) -> bool {
+        self.error.as_deref().is_some_and(|error| {
+            error
+                .strip_prefix("not run: ")
+                .is_some_and(|rest| rest.starts_with(super::gate_guard::HOST_HELD))
+        })
+    }
+
     /// Whether this target passed.
     #[must_use]
     pub fn passed(&self) -> bool {

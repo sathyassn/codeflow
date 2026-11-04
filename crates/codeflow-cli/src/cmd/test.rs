@@ -165,7 +165,13 @@ pub fn run(args: &TestArgs) -> i32 {
             ..
         }) => {
             for r in &results {
-                let verdict = if r.passed() { "ok" } else { "FAILED" };
+                let verdict = if r.passed() {
+                    "ok"
+                } else if r.host_was_held() {
+                    "NOT RUN, host held"
+                } else {
+                    "FAILED"
+                };
                 // A target name is checkout text, shown as one line after a
                 // fixed label (TSK-388).
                 println!(

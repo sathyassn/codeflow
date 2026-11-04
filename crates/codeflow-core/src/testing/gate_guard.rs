@@ -478,6 +478,10 @@ impl std::fmt::Display for LockHeld {
 /// The directory under the `CodeFlow` home that holds the machine-wide lock.
 pub const HOME_LOCK_DIR: &str = "locks";
 
+/// How a host-exclusive target's refusal starts when another run held the
+/// host, a cause distinct from the target failing.
+pub(crate) const HOST_HELD: &str = "the host was held by";
+
 /// The directory under the `CodeFlow` home that keeps full-run evidence.
 pub const HOME_EVIDENCE_DIR: &str = "gate-runs";
 
@@ -1424,12 +1428,11 @@ pub fn hold_host_exclusive_in(
     let mut announced = String::new();
     loop {
         if !announced.is_empty() && std::time::Instant::now() >= deadline {
-            return Err(format!(
-                "a host-exclusive target waits for {announced}; bounded wait expired after {}s",
-                wait.as_secs()
-            ));
+            return Err(host_held_refusal(&announced, wait));
         }
-        let mut busy = ticket.waiting_for(&trusted)?;
+        let mut busy = ticket
+            .waiting_for(&trusted)?
+            .map(|record| holder_texts(&record, ""));
         let mut host = Vec::new();
         if busy.is_none() {
             for dir in dirs {
@@ -1442,10 +1445,9 @@ pub fn hold_host_exclusive_in(
                             .unwrap_or_else(|| path.clone());
                         let record = read_holder(&holder_path, None, &trusted)
                             .map_err(|error| format!("gate lock unavailable: {error}"))?;
-                        busy = Some(format!(
-                            "{} (lock: {})",
-                            describe_holder(&record),
-                            crate::git::display_path(&path)
+                        busy = Some(holder_texts(
+                            &record,
+                            &format!(" (lock: {})", crate::git::display_path(&path)),
                         ));
                         break;
                     }
@@ -1457,31 +1459,71 @@ pub fn hold_host_exclusive_in(
                 {
                     let record =
                         read_holder(&path, None, &trusted).map_err(|error| error.to_string())?;
-                    busy = Some(format!(
-                        "{} (legacy slot or live target: {})",
-                        describe_holder(&record),
-                        crate::git::display_path(&path)
+                    busy = Some(holder_texts(
+                        &record,
+                        &format!(
+                            " (legacy slot or live target: {})",
+                            crate::git::display_path(&path)
+                        ),
                     ));
                 }
             }
         }
-        if let Some(holder) = busy {
+        if let Some((identity, holder)) = busy {
             // No partial exclusive acquisition is held while queueing.
             drop(host);
-            if holder != announced {
+            if identity != announced {
                 eprintln!("[codeflow test] host-exclusive target waiting for {holder}");
-                announced.clone_from(&holder);
+                announced = identity;
             }
             if std::time::Instant::now() >= deadline {
-                return Err(format!(
-                    "a host-exclusive target waits for {holder}; bounded wait expired after {}s",
-                    wait.as_secs()
-                ));
+                return Err(host_held_refusal(&holder, wait));
             }
             std::thread::sleep(std::time::Duration::from_millis(25));
             continue;
         }
         return register_exclusive(dirs, root, &trusted, host, fences, ticket);
+    }
+}
+
+/// The refusal of a host-exclusive target that waited for its whole bound.
+/// It starts with [`HOST_HELD`], so the result can tell this cause from a
+/// failure of the target.
+fn host_held_refusal(holder: &str, wait: std::time::Duration) -> String {
+    format!(
+        "{HOST_HELD} {holder}, so this host-exclusive target did not start and this says \
+         nothing about the target itself; waited {}s; pass --wait-seconds <seconds> to wait \
+         for the host",
+        wait.as_secs()
+    )
+}
+
+/// Holder records an exclusive admission wrote before it was registered. A
+/// failure clears them while the locks are still held; declared after the
+/// admission so it drops first, and the host locks are parameters, which drop
+/// after every local.
+#[derive(Default)]
+struct UnregisteredRecords {
+    host: Vec<PathBuf>,
+    slots: Vec<PathBuf>,
+}
+
+impl Drop for UnregisteredRecords {
+    fn drop(&mut self) {
+        let results = self.host.iter().map(|path| (path, write_record(path, "")));
+        let slots = self.slots.iter().map(|path| {
+            let cleared = with_record_lock(path, || write_record(path, "")).and_then(|done| done);
+            (path, cleared)
+        });
+        for (path, result) in results.chain(slots) {
+            if let Err(error) = result {
+                eprintln!(
+                    "warning: the holder record beside {} could not be cleared after a refused \
+                     admission: {error}; it names a hold that never began",
+                    crate::git::display_path(path)
+                );
+            }
+        }
     }
 }
 
@@ -1494,18 +1536,6 @@ fn register_exclusive(
     mut ticket: queue::Ticket,
 ) -> Result<HostExclusive, String> {
     let record = holder_record(root, "exclusive");
-    for (path, _) in &host {
-        write_record(path, &record)
-            .map_err(|error| format!("gate lock unavailable: host-exclusive record: {error}"))?;
-    }
-    // Older readers name the holder from the fence record; this is an admission.
-    for (fence, _) in &fences {
-        with_record_lock(fence, || write_record(fence, &record))
-            .and_then(|written| written)
-            .map_err(|error| format!("gate lock unavailable: fence record: {error}"))?;
-    }
-    // Exclusive admission now takes its own slot for watcher copies and
-    // orphan records. Queued requesters had no slot to deadlock on.
     let mut admission = GateLock {
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
         files: Vec::new(),
@@ -1515,9 +1545,24 @@ fn register_exclusive(
         runs: 1,
         notes: Vec::new(),
     };
+    let mut written = UnregisteredRecords::default();
+    for (path, _) in &host {
+        written.host.push(path.clone());
+        write_record(path, &record)
+            .map_err(|error| format!("gate lock unavailable: host-exclusive record: {error}"))?;
+    }
+    // Older readers name the holder from the fence record; this is an admission.
+    for (fence, _) in &admission.fences {
+        with_record_lock(fence, || write_record(fence, &record))
+            .and_then(|written| written)
+            .map_err(|error| format!("gate lock unavailable: fence record: {error}"))?;
+    }
+    // Exclusive admission now takes its own slot for watcher copies and
+    // orphan records. Queued requesters had no slot to deadlock on.
     for dir in dirs {
         let (file, path, _) = take_slot(dir, trusted, &mut admission.notes)
             .map_err(|held| with_repair_pointer(&held))?;
+        written.slots.push(path.clone());
         write_record(&path, &record).map_err(|error| error.to_string())?;
         admission.files.push(file);
         admission.paths.push(path);
@@ -1570,6 +1615,9 @@ fn register_exclusive(
         #[cfg(unix)]
         fences: fence_descriptors,
     });
+    // Registered: the hold's own drop clears these records from here on.
+    written.host.clear();
+    written.slots.clear();
     let mut hold = HostExclusive {
         admission: Some(admission),
         ticket: None,
@@ -2492,6 +2540,24 @@ fn is_sharing_violation(error: &std::io::Error) -> bool {
     matches!(error.raw_os_error(), Some(5 | 32))
 }
 
+/// A holder's identity, which a wait compares to announce each holder once,
+/// and the text it shows, both ending in `note`.
+fn holder_texts(record: &str, note: &str) -> (String, String) {
+    (
+        format!("{}{note}", holder_without_age(record)),
+        format!("{}{note}", describe_holder(record)),
+    )
+}
+
+/// `describe_holder` without the age, which changes every second.
+fn holder_without_age(record: &str) -> String {
+    let stripped: Vec<&str> = record
+        .lines()
+        .filter(|line| !line.starts_with("started="))
+        .collect();
+    describe_holder(&stripped.join("\n"))
+}
+
 /// Render a holder record as `pid N in DIR, started S s ago`.
 fn describe_holder(record: &str) -> String {
     let field = |key: &str| {
@@ -2500,7 +2566,16 @@ fn describe_holder(record: &str) -> String {
             .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
             .map(str::trim)
     };
-    let pid = field("pid").unwrap_or("unknown");
+    let pid = field("pid").filter(|pid| *pid != "unknown");
+    if pid.is_none() && field("dir").is_none() {
+        let who = if field("mode") == Some("queue metadata") {
+            "a run updating the exclusive queue"
+        } else {
+            "another heavy run"
+        };
+        return format!("{who}, not named by any record");
+    }
+    let pid = pid.unwrap_or("unknown");
     let dir = field("dir").map_or_else(
         || " in an unknown directory".to_string(),
         |d| format!(" in {}", crate::git::display_line(d)),
@@ -2673,7 +2748,7 @@ mod tests {
         let other = open_lock_file(&dirs[0].join(HOST_LOCK_FILE)).unwrap();
         os_lock::try_lock_shared(&other).unwrap();
         let waited = hold_host_exclusive_in(&dirs, &work, none).unwrap_err();
-        assert!(waited.contains("host-exclusive target waits"), "{waited}");
+        assert!(waited.starts_with(HOST_HELD), "{waited}");
         os_lock::unlock(&other);
         drop(hold_host_exclusive_in(&dirs, &work, none).expect("the other run ended"));
     }
@@ -4766,6 +4841,61 @@ mod old_binary_fence_tests {
         for dir in &dirs {
             drop(old_take_eventually(dir));
         }
+    }
+
+    /// A failure after exclusive admission wrote its records leaves none
+    /// behind, so no later busy read names a hold that never began.
+    #[test]
+    fn a_failed_exclusive_admission_clears_its_holder_records() {
+        let record_text =
+            |lock: PathBuf| std::fs::read_to_string(record_path(&lock)).unwrap_or_default();
+        let (_tmp, work, dirs) = setup();
+        for dir in &dirs {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        // Only the fence record's rewrite takes this lock, after the host record.
+        let mut fence_record = record_path(&dirs[1].join(LOCK_FILE)).into_os_string();
+        fence_record.push(".lock");
+        std::fs::create_dir(&fence_record).unwrap();
+        let refused = hold_host_exclusive_in(&dirs, &work, Duration::ZERO).unwrap_err();
+        assert!(refused.contains("fence record"), "{refused}");
+        for dir in &dirs {
+            assert_eq!(record_text(dir.join(HOST_LOCK_FILE)), "", "host record");
+        }
+        std::fs::remove_dir(&fence_record).unwrap();
+
+        // The first folder's slot is recorded before the second folder fails.
+        let slot_record = record_path(&dirs[1].join(slot_file(1)));
+        std::fs::create_dir(&slot_record).unwrap();
+        hold_host_exclusive_in(&dirs, &work, Duration::ZERO).unwrap_err();
+        for dir in &dirs {
+            assert_eq!(record_text(dir.join(HOST_LOCK_FILE)), "", "host record");
+        }
+        assert_eq!(record_text(dirs[0].join(slot_file(1))), "", "slot record");
+    }
+
+    /// A holder's age changes every second; the text a wait compares does not.
+    #[test]
+    fn a_holder_description_can_leave_out_its_age() {
+        let older = "pid=9\ndir=/work\nstarted=1\nmode=full\n";
+        let newer = "pid=9\ndir=/work\nstarted=2\nmode=full\n";
+        assert_eq!(holder_without_age(older), holder_without_age(newer));
+        assert_eq!(holder_without_age(older), "pid 9 in /work, full mode");
+        assert!(describe_holder(older).contains("s ago"));
+    }
+
+    /// A holder with no pid and no directory says what is known about it.
+    #[test]
+    fn a_holder_with_no_record_says_what_is_known() {
+        assert_eq!(
+            describe_holder("pid=unknown\nmode=queue metadata"),
+            "a run updating the exclusive queue, not named by any record"
+        );
+        assert_eq!(
+            describe_holder(""),
+            "another heavy run, not named by any record"
+        );
+        assert!(describe_holder("pid=9\n").contains("pid 9 in an unknown directory"));
     }
 
     /// R4: while an older binary's gate holds the fence, a standalone

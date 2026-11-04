@@ -480,6 +480,58 @@ fn exclusive_targets_recover_their_width_after_the_other_run_ends() {
     assert_eq!(jobs(&exclusive, "marker"), "4");
 }
 
+/// A host-exclusive target that finds the host held reads as not run, names
+/// the holder and the flag that waits, and still fails the gate. A wait
+/// announces one holder once, though the holder's age changes every second.
+#[cfg(unix)]
+#[test]
+fn a_held_host_reads_as_not_run_and_names_the_wait() {
+    let home = tempfile::tempdir().unwrap();
+    let first = repo(&holding("full", ""));
+    let exclusive = linked_worktree(
+        first.path(),
+        "exclusive-refused",
+        &marking("full", "", r#","host_exclusive":true"#),
+    );
+    let (mut holder, rx, _stdout) = spawn(command(
+        first.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx, "starting target 'holder'");
+
+    let refused = run(&exclusive, home.path(), &["test", "--mode", "full"]);
+    let waited = run(
+        &exclusive,
+        home.path(),
+        &["test", "--mode", "full", "--wait-seconds", "3"],
+    );
+    release(first.path());
+    assert!(holder.wait().unwrap().success());
+
+    let stdout = String::from_utf8_lossy(&refused.stdout);
+    let errors = stderr(&refused);
+    assert_eq!(refused.status.code(), Some(1), "{stdout}{errors}");
+    assert!(
+        stdout.contains("target marker: NOT RUN, host held"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("target marker: FAILED"), "{stdout}");
+    assert!(stdout.contains("test gate: FAILED"), "{stdout}");
+    assert!(errors.contains("the host was held by"), "{errors}");
+    assert!(errors.contains("pid "), "{errors}");
+    assert!(errors.contains("--wait-seconds"), "{errors}");
+    assert!(!exclusive.join("ran").exists());
+
+    let errors = stderr(&waited);
+    assert_eq!(waited.status.code(), Some(1), "{errors}");
+    assert_eq!(
+        errors.matches("host-exclusive target waiting for").count(),
+        1,
+        "{errors}"
+    );
+}
+
 /// R483-04: under a budget lowered to two jobs, targets that declare four
 /// workers still run, each with two jobs, in full and in quick runs. Before
 /// the fix a full run left them pending and failed with "unsatisfied
