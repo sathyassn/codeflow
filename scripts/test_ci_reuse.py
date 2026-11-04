@@ -120,7 +120,9 @@ PUSH_JOBS = [job("reuse a pull request verdict", label="ubuntu-24.04"),
              job("read the Windows runner image", label="windows-latest")]
 
 
-GREEN_JOBS = [job("codeflow gates (coverage)"), job("codeflow gates"), job("windows tests (1 of 12)"),
+GREEN_JOBS = [job("codeflow gates (coverage)"), job("codeflow gates"),
+              *(job(f"windows tests ({n} of 12)") for n in range(1, 13)),
+              job("windows tier", label="ubuntu-24.04"), job("windows tier journeys", "skipped"),
               job("windows"), job("secret scan"), job("reuse a pull request verdict", "skipped")]
 
 
@@ -501,7 +503,8 @@ class ImageBindingTests(unittest.TestCase):
         self.assertIn("runner images cannot be compared", self.skipped(FakeApi(), text=None))
 
     def test_a_run_with_no_reused_job_is_refused(self):
-        jobs = [j for j in GREEN_JOBS if j["name"] not in ("codeflow gates (coverage)", "windows tests (1 of 12)")]
+        jobs = [j for j in GREEN_JOBS if j["name"] != "codeflow gates (coverage)"
+                and not j["name"].startswith("windows tests (")]
         self.assertIn("no image was compared", self.skipped(FakeApi(jobs={77: jobs})))
 
     def test_the_reused_jobs_come_from_the_pushed_workflow(self):
@@ -767,6 +770,62 @@ class AdmissionTests(unittest.TestCase):
         code, text, _ = run_main(Broken(), 0)
         self.assertEqual(code, 1)
         self.assertIn("refused: the decision failed", text)
+
+
+class WindowsTierTests(unittest.TestCase):
+    """A reduced-tier result never counts as full-tier evidence, so a line
+    push from such a run runs every job and the partitions run there."""
+
+    REDUCED = [item for item in GREEN_JOBS if not item["name"].startswith("windows tests (")
+               and item["name"] != "windows tier journeys"] + [
+        job("windows tests (${{ matrix.partition }} of 12)", "skipped"),
+        job("windows test build", "skipped"), job("windows journeys", "skipped"),
+        job("windows tier journeys")]
+
+    def reason(self, jobs, ref=LINE_REF):
+        api = FakeApi(base=LINE if ref == LINE_REF else "main", jobs={77: jobs})
+        with self.assertRaises(reuse.Skip) as caught:
+            reuse.decide("push", PUSHED, WORKFLOW, PUSH_ONLY, REQUIRED, FakeGit(), api, APT_KEY, ref, IMAGES,
+                         WORKFLOW_TEXT, run_id=PUSH_RUN)
+        return str(caught.exception)
+
+    def test_a_reduced_tier_run_is_not_reused_by_a_line_push(self):
+        self.assertIn("reduced Windows tier", self.reason(self.REDUCED))
+
+    def test_the_named_reason_says_the_partitions_run_on_this_push(self):
+        self.assertIn("partitions run on this push", self.reason(self.REDUCED))
+
+    def test_a_missing_or_repeated_partition_is_not_a_full_tier(self):
+        full = [item for item in GREEN_JOBS if item["name"] != "windows tests (12 of 12)"]
+        self.assertIn("did not run every Windows test partition", self.reason(full))
+        self.assertIn("did not run every Windows test partition",
+                      self.reason(GREEN_JOBS + [job("windows tests (1 of 12)")]))
+
+    def test_mixed_partition_counts_are_not_a_full_tier(self):
+        mixed = [item for item in GREEN_JOBS if item["name"] != "windows tests (12 of 12)"]
+        self.assertIn("did not run every Windows test partition",
+                      self.reason(mixed + [job("windows tests (12 of 13)")]))
+
+    def test_a_skipped_partition_job_is_refused_by_its_conclusion(self):
+        skipped = [item for item in GREEN_JOBS if not item["name"].startswith("windows tests (")] + [
+            job("windows tests (${{ matrix.partition }} of 12)", "skipped")]
+        self.assertIn("concluded skipped", self.reason(skipped))
+
+    def test_a_run_with_no_partition_job_at_all_is_not_a_full_tier(self):
+        none = [item for item in GREEN_JOBS if not item["name"].startswith("windows tests (")]
+        self.assertIn("did not run every Windows test partition", self.reason(none))
+
+    def test_a_full_tier_run_still_reuses_on_a_line_and_on_main(self):
+        for ref, base in ((LINE_REF, LINE), (MAIN_REF, "main")):
+            with self.subTest(ref=ref):
+                api = FakeApi(base=base)
+                self.assertEqual(reuse.decide("push", PUSHED, WORKFLOW, PUSH_ONLY, REQUIRED, FakeGit(), api, APT_KEY,
+                                              ref, IMAGES, WORKFLOW_TEXT, run_id=PUSH_RUN), 77)
+
+    def test_a_tier_journey_job_that_ran_refuses_even_beside_every_partition(self):
+        ran = [item for item in GREEN_JOBS if item["name"] != "windows tier journeys"] + [
+            job("windows tier journeys")]
+        self.assertIn("reduced Windows tier", self.reason(ran))
 
 
 class GitTests(unittest.TestCase):
