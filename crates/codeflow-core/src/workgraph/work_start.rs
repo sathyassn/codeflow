@@ -24,6 +24,9 @@ use crate::workgraph::{
 /// Shared wording for a tracking state that cannot be determined.
 pub const TRACKING_STATE_MESSAGE: &str = "cannot determine durable-work tracking";
 
+/// Maximum provider wait for the review evidence of one predecessor pin.
+pub const REVIEW_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Render the tracking-state refusal consistently across commands.
 #[must_use]
 pub fn tracking_state_message(error: impl std::fmt::Display) -> String {

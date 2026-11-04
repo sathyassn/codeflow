@@ -6,6 +6,14 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
+#[cfg(test)]
+thread_local! {
+    /// Seconds a test's watcher waits before it reads the lifetime pipe,
+    /// standing in for the slow descriptor loop seen with a limit of 1048576
+    /// on a loaded host.
+    pub(super) static SLOW_WATCHER_START: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 pub(super) struct GroupWatch {
     controller: UnixStream,
     child_end: Option<UnixStream>,
@@ -35,6 +43,8 @@ impl GroupWatch {
         }
         let writer = controller.as_raw_fd();
         let reader = child_end.as_raw_fd();
+        #[cfg(test)]
+        let slow_start = SLOW_WATCHER_START.with(std::cell::Cell::get);
         // SAFETY: the closure uses only async-signal-safe libc operations and
         // constructs errors from errno. No allocation, locks or Rust I/O run after fork.
         unsafe {
@@ -62,6 +72,10 @@ impl GroupWatch {
                             libc::close(fd);
                         }
                     }
+                    // After the loop, so only the watcher's own exit is slow,
+                    // never the spawn that waits for exec.
+                    #[cfg(test)]
+                    libc::sleep(slow_start);
                     let mut byte = 0_u8;
                     loop {
                         if libc::read(reader, (&raw mut byte).cast(), 1) == 0 {
@@ -115,20 +129,36 @@ impl GroupWatch {
         self.locks.clear();
         drop(self.child_end.take());
     }
+
+    pub(super) fn signal(&mut self) -> io::Result<()> {
+        drop(self.child_end.take());
+        self.controller.set_nonblocking(true)?;
+        self.controller.shutdown(std::net::Shutdown::Write)
+    }
+
+    pub(super) fn finished(&mut self) -> io::Result<bool> {
+        let mut byte = [0];
+        match self.controller.read(&mut byte) {
+            Ok(0) => Ok(true),
+            Ok(_) => Ok(false),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
 }
 
 impl Drop for GroupWatch {
     fn drop(&mut self) {
-        // Close our spare child endpoint even when spawn failed. Half-close the
-        // lifetime pipe, then wait for the watcher to close its end as it exits.
+        // A Drop must never block the controller on a surviving descendant.
+        // Explicit cleanup polls finished() under the shared cleanup deadline.
         drop(self.child_end.take());
         let _ = self.controller.shutdown(std::net::Shutdown::Write);
-        let mut byte = [0];
-        loop {
-            match self.controller.read(&mut byte) {
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                _ => break,
-            }
-        }
     }
 }
