@@ -786,8 +786,8 @@ fn authenticated_tool_configuration_remains_available() {
 /// two shell tools — `Bash` and `PowerShell` — and a permission rule is keyed
 /// by the tool that carries the command, so `Bash(...)` alone leaves the
 /// Windows/graphical launchers ungated on the `PowerShell` tool. The shell guard
-/// matcher (`^(Bash|PowerShell)$`) already covers both; the permission layer
-/// now does too.
+/// matcher (`^(Bash|PowerShell|Monitor)$`, TSK-1058) already covers both; the
+/// permission layer now does too.
 const PRIVILEGE_ESCALATION_PATTERNS: [&str; 8] = [
     "sudo *",
     "su *",

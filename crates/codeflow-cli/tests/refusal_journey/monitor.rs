@@ -18,6 +18,9 @@ fn monitor_command_is_refused_where_the_same_bash_text_is_refused() {
         ("timeout 1 sudo true", "security.privilege_escalation"),
         ("git push origin v1.2.3", "security.outward_actions"),
         ("gh -R o/r release create v1", "security.outward_actions"),
+        // A git-policy text, so the criterion's "refused by git-guard" is
+        // met by git-guard's own rule and not only by exec-guard's.
+        ("git push --force origin main", "git.force_push_protected"),
     ] {
         let bash = project.replay("claude", "Bash", json!({"command": command}));
         let monitor = project.replay("claude", "Monitor", json!({"command": command}));

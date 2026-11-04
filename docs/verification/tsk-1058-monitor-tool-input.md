@@ -65,7 +65,11 @@ and exited 2 when the payload held a marker path. The files are in
   `description`, `timeout_ms`, `persistent`, `allowed_domains`, `ws`. Any
   other shape is refused (exit 2): neither `command` nor `ws`, an unknown
   field, both `command` and `ws`, or a malformed `ws`. The three keys of the
-  native payload are all in the list, so ordinary use is not refused.
+  native payload are all in the list, so ordinary use is not refused. One
+  field is outside the list and is still accepted: `dangerouslyDisableSandbox`.
+  Both guards read it as the sandbox flag on every shell tool, so it is never
+  counted as an unknown field. It carries no shell text, and setting it only
+  tightens the judgment (the sandbox-state check treats it as a strict reason).
 - The refusal reads "unrecognised Monitor payload, not a bad command", names
   the field, and says the command was not judged. It points to the fix.
 - The field list is configurable: `security.monitor_extra_fields` in
