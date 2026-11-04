@@ -1,0 +1,11 @@
+id = "TSK-1321"
+uid = "b530ea6c-1c62-47df-b1ee-2feee38758e5"
+kind = "TSK"
+title = "The Windows test plan's measurements are refreshed before they go stale"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-04T16:18:18Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
