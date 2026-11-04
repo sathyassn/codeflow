@@ -4,13 +4,12 @@
 //! different commit.
 
 use super::*;
-use std::process::Command;
 
 const LINE: &str = "integration/x";
 const CANDIDATE: &str = "candidate/c1";
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = crate::git::command()
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")

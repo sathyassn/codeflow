@@ -129,10 +129,9 @@ pub(crate) fn checked_out(repo: &Repository) -> Result<BTreeSet<Vec<u8>>, String
 mod tests {
     use super::*;
     use std::path::Path;
-    use std::process::Command;
 
     fn git(dir: &Path, args: &[&str]) {
-        let status = Command::new("git")
+        let status = crate::git::command()
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_NOSYSTEM", "1")
