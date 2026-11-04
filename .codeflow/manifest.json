@@ -413,7 +413,7 @@
     ".agents/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "0c62d91e24068e4a83a8677f64582e77b4b8890498565773f920a0931ca90470",
+      "sha256": "01c55c4e83283d30e03f5444287fc9c7f1f2c688bf3cfd897e68c9825e2373e8",
       "exec": false
     },
     ".agents/skills/cf-method/references/autonomy.md": {
@@ -1259,7 +1259,7 @@
     ".claude/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "0c62d91e24068e4a83a8677f64582e77b4b8890498565773f920a0931ca90470",
+      "sha256": "01c55c4e83283d30e03f5444287fc9c7f1f2c688bf3cfd897e68c9825e2373e8",
       "exec": false
     },
     ".claude/skills/cf-method/references/autonomy.md": {
@@ -1811,13 +1811,19 @@
     ".github/workflows/codeflow-ci.yml": {
       "src": "ci/codeflow-ci.yml",
       "ownership": "managed",
-      "sha256": "552d3b715112feaf07213f119ae4bd179a0cd7280092d0811a1c1a0a0f89b52e",
+      "sha256": "d77f14212e9232eb0963c8e1ad353e67003d350917578889dc6a82276d421e8b",
       "exec": false
     },
     ".github/workflows/codeflow-policy.yml": {
       "src": "ci/codeflow-policy.yml",
       "ownership": "managed",
-      "sha256": "a6f6e1309ee70d413dbe7fd527c608fbd8b361b976cc8d93ec3ef1b193ff8d2c",
+      "sha256": "d31a79a8b31f54df8e5a57f010131b821dd3e0bc6f68cff43fde4c1a16e1cd9d",
+      "exec": false
+    },
+    ".github/workflows/codeflow-registry.yml": {
+      "src": "ci/codeflow-registry.yml",
+      "ownership": "managed",
+      "sha256": "0e3ff453fb571fe66a1f021a6cd7b724461852d537aa1a652d4b9b54b7a9edd6",
       "exec": false
     },
     ".gitignore": {
@@ -1883,7 +1889,7 @@
     "project-management/templates/epic.md": {
       "src": "pm/epic.md.tmpl",
       "ownership": "managed",
-      "sha256": "89f10126f0b0f22b7eef53e4c82c7588656ed7a623720ab83925555bf9a0e8c3",
+      "sha256": "c8f53bc47b98703c9e743e773f0830d378a467f39491181af7bc839510cddbf6",
       "exec": false
     },
     "project-management/templates/feedback.md": {

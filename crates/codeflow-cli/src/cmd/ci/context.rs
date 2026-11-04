@@ -168,7 +168,9 @@ pub(in crate::cmd) enum Declared {
 /// pre-push hook. A protected branch counts. An epic line counts only when
 /// trusted records bind it to the branch's epic or a standalone task's
 /// declared target: those on the protected branch, or those at the line's
-/// own remote-tracking ref. A local branch
+/// own remote-tracking ref. Both are read when they exist, and a refusal
+/// or an unreadable record at either wins over a binding at the other
+/// (TSK-1286). A local branch
 /// never binds anything, because the change's author can create one at any
 /// commit; the remote is trusted only as far as the host protects
 /// `integration/*` and every name in `protected_branches`.
@@ -206,23 +208,31 @@ pub(in crate::cmd) fn judged_declared_target(
         Some(anchor) => bind(&anchor, "the protected branch")?,
         None => EpicLineBinding::Unbound("has no protected branch to read records from".into()),
     };
-    let unbound = match first {
-        EpicLineBinding::Bound => return Ok(Some(Declared::Eligible(target))),
-        EpicLineBinding::Refused(reason) => {
-            let reason = format!("{reason}, so it is not a bound epic line");
-            return Ok(Some(Declared::Rejected { target, reason }));
-        }
-        EpicLineBinding::Unbound(reason) => reason,
-    };
+    if let EpicLineBinding::Refused(reason) = &first {
+        let reason = format!("{reason}, so it is not a bound epic line");
+        return Ok(Some(Declared::Rejected { target, reason }));
+    }
+    // Every applicable anchor is read before a binding is accepted: the
+    // line's tip is read even when the protected branch binds, and a
+    // refusal or an unreadable record there wins (TSK-1286).
     let remote = format!("origin/{name}");
-    let reason = match rev_parse(root, &format!("refs/remotes/{remote}"))? {
-        None => {
+    let second = match rev_parse(root, &format!("refs/remotes/{remote}"))? {
+        None => None,
+        Some(tip) => Some(bind(&tip, &format!("'{remote}'"))?),
+    };
+    if let Some(EpicLineBinding::Refused(reason)) = &second {
+        let reason = format!("{reason}, so it is not a bound epic line");
+        return Ok(Some(Declared::Rejected { target, reason }));
+    }
+    let reason = match (first, second) {
+        (EpicLineBinding::Bound, _) | (_, Some(EpicLineBinding::Bound)) => {
+            return Ok(Some(Declared::Eligible(target)));
+        }
+        (EpicLineBinding::Unbound(unbound), None) => {
             format!("{unbound}, and '{remote}' does not exist (a local-only line never counts)")
         }
-        Some(tip) => match bind(&tip, &format!("'{remote}'"))? {
-            EpicLineBinding::Bound => return Ok(Some(Declared::Eligible(target))),
-            EpicLineBinding::Refused(reason) | EpicLineBinding::Unbound(reason) => reason,
-        },
+        (_, Some(EpicLineBinding::Unbound(reason) | EpicLineBinding::Refused(reason)))
+        | (EpicLineBinding::Refused(reason), None) => reason,
     };
     let reason = format!("{reason}, so it is not a bound epic line");
     Ok(Some(Declared::Rejected { target, reason }))
@@ -373,7 +383,7 @@ fn branch(
     Ok((name, source.into()))
 }
 
-fn normalize(name: &str) -> String {
+pub(super) fn normalize(name: &str) -> String {
     named_branch(name).unwrap_or_else(|| name.to_string())
 }
 

@@ -62,6 +62,10 @@ pub fn display_urls(text: &str) -> String {
     shown
 }
 
+/// The reason [`ls_remote`] and [`fetch_objects`] give when the remote
+/// refused for want of a credential, so a caller can name the fix.
+pub const AUTHENTICATION_FAILED: &str = "remote authentication failed";
+
 /// `git ls-remote <args>`, never interactive and bounded by
 /// [`LS_REMOTE_DEADLINE`] per attempt and [`MAX_ANSWER_BYTES`]. A default
 /// advertisement (`--symref`) retries only timeouts, at most twice, with a
@@ -111,7 +115,7 @@ fn ls_remote_attempts(
                         .into(),
                 )
             }
-            Err(Failure::Authentication) => return Err("remote authentication failed".into()),
+            Err(Failure::Authentication) => return Err(AUTHENTICATION_FAILED.into()),
             Err(Failure::Other(why)) => return Err(why),
         }
     }
@@ -139,7 +143,7 @@ pub fn fetch_objects(root: &Path, url: &str, refs: &[&str]) -> Result<(), String
         .map(|_| ())
         .map_err(|why| match why {
             Failure::Exit(_) => format!("`git fetch {}` failed", display_url(url)),
-            Failure::Authentication => "remote authentication failed".into(),
+            Failure::Authentication => AUTHENTICATION_FAILED.into(),
             Failure::Timeout(deadline) => format!("no answer within {}s", deadline.as_secs()),
             Failure::Other(why) => why,
         })

@@ -1153,14 +1153,36 @@ fn update_installs_the_enforcing_workflow_for_an_existing_adopter() {
     assert!(codeflow(dir.path(), &["init", "--minimal", "--yes"])
         .status
         .success());
-    // An adopter from before the enforcing workflow existed.
+    // An adopter from before the enforcing workflow and the registry
+    // workflow existed.
     std::fs::remove_file(dir.path().join(".github/workflows/codeflow-policy.yml")).unwrap();
+    std::fs::remove_file(dir.path().join(".github/workflows/codeflow-registry.yml")).unwrap();
     let out = codeflow(dir.path(), &["update"]);
     let all = text(&out);
     assert_eq!(out.status.code(), Some(0), "{all}");
     let policy =
         std::fs::read_to_string(dir.path().join(".github/workflows/codeflow-policy.yml")).unwrap();
     assert!(policy.contains("pull_request_target:"));
+    // TSK-336: pushes, the schedule and manual runs check the registry in a
+    // workflow of their own, installed as shipped, whose one job is not a
+    // `trusted:` verdict.
+    let registry =
+        std::fs::read_to_string(dir.path().join(".github/workflows/codeflow-registry.yml"))
+            .unwrap();
+    assert_eq!(
+        registry,
+        include_str!("../../../assets/base/ci/codeflow-registry.yml")
+    );
+    let parsed: serde_yaml::Value = serde_yaml::from_str(&registry).unwrap();
+    assert!(parsed["on"].get("push").is_some());
+    assert!(parsed["on"].get("pull_request_target").is_none());
+    let names: Vec<&str> = parsed["jobs"]
+        .as_mapping()
+        .unwrap()
+        .values()
+        .filter_map(|job| job["name"].as_str())
+        .collect();
+    assert_eq!(names, ["registry check"]);
     let ci = std::fs::read_to_string(dir.path().join(".github/workflows/codeflow-ci.yml")).unwrap();
     assert!(!ci.contains("name: commit standards"));
 }

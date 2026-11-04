@@ -7,6 +7,10 @@
 #   proposed merge tree and the host's published state. It blocks. The
 #   block's own fields are judged by `codeflow ci`'s one evaluator, which
 #   release.py calls; this job judges nothing of the block separately.
+#   It runs the pull request's own copy of this file and builds the head,
+#   so the head controls it. `trusted: release impact` in
+#   codeflow-policy.yml gives the same verdict from the default branch's
+#   code (TSK-336); this job is removed in the last change before main.
 # - release state: the merged state on main and on every integration line,
 #   without writes. Publication reads this job's result on main.
 name: codeflow-release
