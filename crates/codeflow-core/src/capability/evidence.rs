@@ -69,7 +69,7 @@ pub fn parse_evidence(entry: &str) -> Result<Evidence<'_>, String> {
     let Some((kind, reference)) = entry.split_once(':') else {
         return Err(FORMAT.to_string());
     };
-    let reference = reference.trim();
+    let reference = reference.trim_ascii();
     if reference.is_empty() {
         return Err(format!("the reference is empty; {FORMAT}"));
     }
@@ -414,6 +414,13 @@ mod unix_tests {}
             assert!(!rust_test_defined(source, name, false), "{name}");
         }
         assert!(rust_test_defined(source, "not_tests", true));
+    }
+
+    #[test]
+    fn unicode_whitespace_around_a_reference_is_refused() {
+        assert!(parse_evidence("test: tests/flow.rs").is_ok());
+        assert!(parse_evidence("test:\u{a0}tests/flow.rs").is_err());
+        assert!(parse_evidence("record: docs/verification/run.md\u{a0}").is_err());
     }
 
     #[test]

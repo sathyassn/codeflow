@@ -122,6 +122,15 @@ const GIT2_TEXT: &[&str] = &["shorthand", "symbolic_target"];
 /// only reaches a person or is not a git or OS name: (file, enclosing item,
 /// call, how many, closed reason tag); the comment states the precise contract.
 const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // The contents of a test file, searched for a declared test name. U+FFFD is
+    // not a test name character, so a replaced byte can only fail to match.
+    (
+        "codeflow-core/src/capability/evidence.rs",
+        "resolve_test",
+        "from_utf8_lossy",
+        1,
+        "grammar:test-source-text",
+    ),
     // Catalog paths are constructed only from validated UTF-8 checkout names or
     // Git tree text; invalid UTF-8 is refused before any record is constructed.
     (
@@ -1539,6 +1548,58 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // Reads the indentation and line structure of a test file to find a declaration; Rust lexes Unicode separators as whitespace, and the source text only accepts or refuses an entry, so no name is taken from it.
+    (
+        "crates/codeflow-core/src/capability/evidence.rs",
+        "attributes_above",
+        "trim_start",
+        1,
+        "grammar:rust-source-whitespace",
+    ),
+    (
+        "crates/codeflow-core/src/capability/evidence.rs",
+        "declares",
+        "is_whitespace",
+        1,
+        "grammar:rust-source-whitespace",
+    ),
+    (
+        "crates/codeflow-core/src/capability/evidence.rs",
+        "declares",
+        "trim_start",
+        5,
+        "grammar:rust-source-whitespace",
+    ),
+    (
+        "crates/codeflow-core/src/capability/evidence.rs",
+        "rust_test_defined",
+        "lines",
+        1,
+        "grammar:rust-source-whitespace",
+    ),
+    // A gap reason is prose; the trim only refuses a blank reason.
+    (
+        "crates/codeflow-core/src/capability/evidence.rs",
+        "parse_gap",
+        "trim",
+        1,
+        "prose",
+    ),
+    // Refuses a test or record reference holding whitespace; an accepted reference is unchanged.
+    (
+        "crates/codeflow-core/src/capability/evidence.rs",
+        "parse_record",
+        "is_whitespace",
+        1,
+        "schema-reject-only",
+    ),
+    (
+        "crates/codeflow-core/src/capability/evidence.rs",
+        "parse_test_identity",
+        "is_whitespace",
+        1,
+        "schema-reject-only",
+    ),
     // rev-parse emits a validated hexadecimal tree id and a terminal newline;
     // this does not trim a revision supplied by the caller or a repository name.
     (
@@ -7004,6 +7065,8 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/capability/evidence.rs", "existing_file", "ErrorKind::NotFound", 1, "The confined Tree opens every ancestor without following links; a missing file refuses the evidence entry, so absence never passes."),
+    ("crates/codeflow-core/src/capability/evidence.rs", "existing_file", "is_file", 1, "Type check on confined metadata; anything but a regular file refuses the evidence entry."),
     ("crates/codeflow-core/src/capability.rs", "collect_catalog_paths", "ErrorKind::NotFound", 1, "The confined Tree opens every ancestor without following links; only a missing component is optional, while linked, unreadable and non-directory parents refuse."),
     ("crates/codeflow-core/src/capability.rs", "collect_catalog_paths", "is_dir", 1, "Type check on confined metadata whose errors propagate; real subdirectories are examined to refuse nested CAP files, never followed through symlinks."),
     ("crates/codeflow-core/src/capability.rs", "inspect_capability_catalog", "ErrorKind::NotFound", 1, "The confined regular-file reader rejects symlinks and unsafe ancestors before absence is accepted; missing optional legacy/config inputs are omitted, and modern records still require project areas."),

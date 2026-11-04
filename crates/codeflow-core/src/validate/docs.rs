@@ -533,9 +533,11 @@ fn lint_capability_evidence(root: &Path, catalog: &CapabilityCatalog, report: &m
             return;
         }
     };
-    let index = git2::Repository::discover(root)
-        .and_then(|repo| repo.index())
-        .ok();
+    // Without a readable index, a denied read refuses the entry.
+    let index = match crate::hooks::repo::open(root) {
+        Ok(Some(repo)) => repo.index().ok(),
+        Ok(None) | Err(_) => None,
+    };
     let legacy_typed =
         entries().any(|(record, value)| record.uid.is_none() && is_typed_evidence(value));
     let mut untyped = BTreeSet::new();
