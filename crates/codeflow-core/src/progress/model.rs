@@ -370,7 +370,7 @@ pub struct WorkerFact {
 
 /// One session fact, labelled `session`.
 #[derive(Debug, Clone, Serialize)]
-pub struct SessionLaneFact {
+pub struct SessionWorkerFact {
     pub label: &'static str,
     pub worker: Known<String>,
     pub task: Known<String>,
@@ -389,7 +389,7 @@ pub struct WorkersFact {
     pub source: &'static str,
     pub note: Known<String>,
     pub workers: Vec<WorkerFact>,
-    pub session: Known<Vec<SessionLaneFact>>,
+    pub session: Known<Vec<SessionWorkerFact>>,
     pub overall_percent: Known<f64>,
 }
 

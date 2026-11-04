@@ -191,31 +191,38 @@ fn run_progress(root: &std::path::Path, args: &StatusArgs) -> i32 {
         }
     } else {
         print!("{}", progress::text::render(&facts));
-        if let Some(changes) = value
-            .pointer("/since/changes")
-            .and_then(serde_json::Value::as_array)
-        {
-            println!(
-                "\nSince {}:",
-                value
-                    .pointer("/since/previous_at")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("the previous snapshot")
-            );
-            for change in changes {
-                println!(
-                    "  {} {}",
-                    change
-                        .get("change")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or(""),
-                    change
-                        .get("subject")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("")
-                );
-            }
-        }
+        print_since(&value);
     }
     0
+}
+
+/// The `--since` changes under the text view, when a previous snapshot was
+/// given.
+fn print_since(value: &serde_json::Value) {
+    let Some(changes) = value
+        .pointer("/since/changes")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return;
+    };
+    println!(
+        "\nSince {}:",
+        value
+            .pointer("/since/previous_at")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("the previous snapshot")
+    );
+    for change in changes {
+        println!(
+            "  {} {}",
+            change
+                .get("change")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(""),
+            change
+                .get("subject")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+        );
+    }
 }

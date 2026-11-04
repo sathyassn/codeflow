@@ -7,7 +7,7 @@ use super::compute::{count_f64, mean, pull_for, stage, time_text, Stage};
 use super::inputs::{ForgeIn, Inputs, LedgerIn, RequiredCheckIn, TaskIn};
 use super::model::{
     DecisionFact, EvidenceFact, IssueFact, IssuesFact, Known, OperatorItemFact, OperatorSet,
-    PaceDay, PaceFact, SessionLaneFact, SourceCheck, Unblocker, WorkerFact, WorkersFact,
+    PaceDay, PaceFact, SessionWorkerFact, SourceCheck, Unblocker, WorkerFact, WorkersFact,
 };
 use super::owed::{OwedKind, OwedRead};
 use super::plan::{is_open, Plan, Win};
@@ -504,7 +504,29 @@ fn records_problem(inputs: &Inputs) -> Option<String> {
     (!problems.is_empty()).then(|| problems.join("; "))
 }
 
-/// The workers view.
+/// The session file's Workers, labelled `session`.
+fn session_workers(inputs: &Inputs) -> Option<Vec<SessionWorkerFact>> {
+    inputs.session.as_ref().map(|session| {
+        session
+            .facts
+            .iter()
+            .filter(|fact| fact.worker.is_some() || fact.task.is_some())
+            .map(|fact| SessionWorkerFact {
+                label: "session",
+                worker: Known::or_word(fact.worker.clone(), "none"),
+                task: Known::or_word(fact.task.clone(), "none"),
+                builder: Known::or_word(fact.builder.clone(), "not recorded"),
+                reviewer: Known::or_word(fact.reviewer.clone(), "not recorded"),
+                seat: Known::or_word(fact.seat.clone(), "not recorded"),
+                verdict_in_flight: Known::or_word(fact.verdict_in_flight.clone(), "none"),
+                blocker: Known::or_word(fact.blocker.clone(), "none"),
+                observed_at: fact.observed_at.clone(),
+            })
+            .collect()
+    })
+}
+
+/// The Workers view.
 #[must_use]
 pub fn workers(inputs: &Inputs, ids: &BTreeSet<String>, _plan: &Plan) -> WorkersFact {
     let percent_of = |scope: &[String]| {
@@ -580,24 +602,7 @@ pub fn workers(inputs: &Inputs, ids: &BTreeSet<String>, _plan: &Plan) -> Workers
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let session = inputs.session.as_ref().map(|session| {
-        session
-            .facts
-            .iter()
-            .filter(|fact| fact.worker.is_some() || fact.task.is_some())
-            .map(|fact| SessionLaneFact {
-                label: "session",
-                worker: Known::or_word(fact.worker.clone(), "none"),
-                task: Known::or_word(fact.task.clone(), "none"),
-                builder: Known::or_word(fact.builder.clone(), "not recorded"),
-                reviewer: Known::or_word(fact.reviewer.clone(), "not recorded"),
-                seat: Known::or_word(fact.seat.clone(), "not recorded"),
-                verdict_in_flight: Known::or_word(fact.verdict_in_flight.clone(), "none"),
-                blocker: Known::or_word(fact.blocker.clone(), "none"),
-                observed_at: fact.observed_at.clone(),
-            })
-            .collect()
-    });
+    let session = session_workers(inputs);
     let note = if source == "observed" && inputs.session.is_none() {
         Known::Value("Workers: observed only".into())
     } else {
