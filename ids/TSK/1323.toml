@@ -1,0 +1,11 @@
+id = "TSK-1323"
+uid = "523e0b7c-48e4-4b97-99b0-e329bc444bd4"
+kind = "TSK"
+title = "A stacked claim finds its predecessor on an integration line from any checkout"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-04T16:58:58Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
