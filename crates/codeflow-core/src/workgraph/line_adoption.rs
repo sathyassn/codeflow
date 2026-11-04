@@ -172,7 +172,7 @@ pub(crate) fn parse_parent_line(value: Option<&Value>) -> Result<Option<String>,
 }
 
 /// Check an epic record's `parent_line` value against the epic's own id:
-/// the shape [`parse_parent_line`] reads, and never the epic's own line.
+/// the shape `parse_parent_line` reads, and never the epic's own line.
 ///
 /// # Errors
 /// Returns why the declaration is not one the binding can use.
