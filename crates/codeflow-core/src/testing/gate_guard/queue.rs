@@ -658,9 +658,14 @@ mod tests {
                         }
                         let bytes = domain.tree.read(&domain.record(&name), 8192).unwrap();
                         if String::from_utf8(bytes).unwrap().starts_with(&mine) {
-                            std::fs::write(
+                            // Renamed into place: the parent reads this file as
+                            // soon as it exists, and must never see it empty.
+                            let partial =
+                                published_root.join(format!(".sequence-{published_label}"));
+                            std::fs::write(&partial, name).unwrap();
+                            std::fs::rename(
+                                &partial,
                                 published_root.join(format!("sequence-{published_label}")),
-                                name,
                             )
                             .unwrap();
                         }
