@@ -1,0 +1,11 @@
+id = "ADR-0096"
+uid = "93b551be-8a61-4102-8967-6fc684b79ad0"
+kind = "ADR"
+title = "Tasks carry a graded time band, and CodeFlow runs on it"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-04T23:42:56Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
