@@ -29,9 +29,10 @@ pub fn route_event_type(event_type: &str) -> Result<&'static str, LedgerError> {
         "session_start" | "session_end" => Ok(files::SESSIONS),
 
         // memory-events.jsonl — recall's zero-ceremony corpus (charter §3.3)
-        "session_summary" | "decision" | "finding" | "milestone" | "progress" | "blocker" => {
-            Ok(files::MEMORY_EVENTS)
-        }
+        // `candidate_removed`: a landing candidate branch removed by
+        // tree-equality proof (TSK-1308), kept where `recall` finds it.
+        "session_summary" | "decision" | "finding" | "milestone" | "progress" | "blocker"
+        | "candidate_removed" => Ok(files::MEMORY_EVENTS),
 
         // config.jsonl
         "config_set" | "config_updated" => Ok(files::CONFIG),

@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 78] = [
+pub const SCHEMA: [KeySpec; 80] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -405,6 +405,22 @@ pub const SCHEMA: [KeySpec; 78] = [
                 must be configured when work claim lists their branches. The \
                 shipped policy file does not list it, so an older binary never \
                 meets the key.",
+    },
+    KeySpec {
+        path: "git.candidate_prefix",
+        kind: KeyKind::String,
+        valid: "a branch name prefix ending in /, such as candidate/",
+        purpose: "The name prefix of landing candidate branches that `codeflow work remove-candidate` may remove.",
+        notes: "Default candidate/. A protected branch is never removed, whatever its name. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.candidate_search_depth",
+        kind: KeyKind::UInt,
+        valid: "a positive number of commits",
+        purpose: "How many commits of the line's first-parent history `codeflow work remove-candidate` searches for the candidate's tree.",
+        notes: "Default 200. A tree older than the depth is not found, so the removal is refused. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
     },
     KeySpec {
         path: "git.required_checks",
@@ -1279,6 +1295,32 @@ fn release_pattern_errors(obj: &serde_json::Map<String, Value>, errors: &mut Vec
     }
 }
 
+/// The value checks for the candidate-removal keys (TSK-1308):
+/// `git.candidate_prefix` is a branch name prefix ending in `/`, and
+/// `git.candidate_search_depth` is positive.
+fn validate_candidate_key(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    if path == "git.candidate_prefix" {
+        if let Some(prefix) = value.as_str() {
+            let stem = prefix.strip_suffix('/').unwrap_or("");
+            if stem.is_empty() || !crate::root_checkout::is_valid_branch_name(stem) {
+                errors.push(PolicyError {
+                    key: path.to_string(),
+                    message: format!(
+                        "invalid value '{prefix}' for {path}; use a branch name prefix that ends in /, such as candidate/"
+                    ),
+                });
+            }
+        }
+    } else if value.as_u64() == Some(0) {
+        errors.push(PolicyError {
+            key: path.to_string(),
+            message: format!(
+                "{path} is 0, so no line commit would be searched; use a positive number of commits"
+            ),
+        });
+    }
+}
+
 /// The value checks for the root-checkout keys that their kind alone does
 /// not catch: `git.root_branch` must be a branch name, and each
 /// `git.worktree_locations` entry must be a folder `doctor` can expand.
@@ -1326,6 +1368,9 @@ fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<Policy
                     });
                 }
             }
+        }
+        "git.candidate_prefix" | "git.candidate_search_depth" => {
+            validate_candidate_key(path, value, errors);
         }
         "git.required_checks" => {
             let entries = value.as_array().map_or(&[][..], Vec::as_slice);

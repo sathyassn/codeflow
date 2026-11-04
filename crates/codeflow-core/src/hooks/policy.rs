@@ -266,6 +266,14 @@ pub struct GitPolicy {
     /// Additional remotes whose branches count as advisory work claims.
     /// Origin and the target's fetch remote always count. Empty by default.
     pub claim_remotes: Vec<String>,
+    /// The name prefix of landing candidate branches, which
+    /// `codeflow work remove-candidate` removes by tree-equality proof
+    /// (TSK-1308). Default `candidate/`.
+    pub candidate_prefix: String,
+    /// How many commits of a line's first-parent history
+    /// `codeflow work remove-candidate` searches for the candidate's tree.
+    /// Default 200.
+    pub candidate_search_depth: u32,
     /// Days since a line sync before orient suggests syncing; zero disables it.
     pub line_sync_interval: u32,
     /// The status check names a protected branch requires before merging,
@@ -572,6 +580,8 @@ impl Default for GitPolicy {
                 .map(ToString::to_string)
                 .collect(),
             claim_remotes: Vec::new(),
+            candidate_prefix: "candidate/".to_string(),
+            candidate_search_depth: 200,
             line_sync_interval: 0,
             required_checks: DEFAULT_REQUIRED_CHECKS
                 .iter()
