@@ -795,15 +795,16 @@ const UNSHIPPED_FILES: [&str; 6] = [
 /// The present review example stays: the visual guide line (EPC-016) made
 /// it the figure-block example that document-authoring and the present tests
 /// read, so the release line keeps it.
-const RETIRED_FILES: [&str; 7] = [
+const RETIRED_FILES: [&str; 6] = [
     "agents/skills/cf-model-orchestrator/references/other-hosts.md",
     "agents/skills/cf-model-orchestrator/resources/routing/assignment.md",
     "agents/skills/cf-model-orchestrator/resources/routing/effort.md",
     "agents/skills/cf-model-orchestrator/resources/routing/hosts.md",
     "agents/skills/cf-model-orchestrator/resources/routing/review.md",
     "agents/skills/cf-model-orchestrator/resources/routing/roles.md",
-    // Its registry check is a step of ci/codeflow-policy.yml now.
-    "ci/codeflow-registry.yml",
+    // ci/codeflow-registry.yml was retired by TSK-184 and is shipped again
+    // by TSK-336: push, schedule and dispatch check the registry there, so
+    // they create no check under a `trusted:` name.
 ];
 
 /// Directory prefixes under `assets/base` whose files are embedded and

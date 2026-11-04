@@ -121,14 +121,14 @@ class GateContracts(unittest.TestCase):
         self.assertIn("needs.windows-tests.result != 'skipped'", jobs['windows-journeys'])
 
     # TSK-1040: pull request runs share one group per pull request and queue
-    # (`queue: max`, no cancellation), so no event cancels or replaces a run;
-    # push, schedule and dispatch runs each get a group of their own run id.
+    # (`queue: max`, no cancellation), so no event cancels or replaces a run.
+    # The policy workflow runs only on pull_request_target (TSK-336); push,
+    # schedule and dispatch start codeflow-registry.yml, which has no group.
     # The exact text is pinned: a group keyed on the ref, or any cancellation,
     # would cancel the run that judges a pushed head.
     POLICY_CONCURRENCY = (
         "\nconcurrency:\n"
-        "  group: ${{ github.event_name == 'pull_request_target' && format('{0}-pr-{1}', github.workflow, "
-        "github.event.pull_request.number) || format('{0}-run-{1}', github.workflow, github.run_id) }}\n"
+        "  group: ${{ format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) }}\n"
         "  cancel-in-progress: false\n"
         "  queue: max\n\n"
     )
@@ -148,24 +148,38 @@ class GateContracts(unittest.TestCase):
         self.assertIn('          GH_TOKEN: ${{ github.token }}\n', workflow)
         self.assertIn('          BODY_FILE: ${{ runner.temp }}/pr-body.md\n', workflow)
         self.assertIn('--pr-body-file "$BODY_FILE"', workflow)
-        self.assertNotIn('CODEFLOW_PR_BODY', workflow)
+        # The commit standards job takes the body as a file. The release impact
+        # job TSK-336 added still takes it through `env:`.
+        commit_lint = workflow.split('\njobs:\n', 1)[1].split('\n  release-impact:\n', 1)[0]
+        self.assertNotIn('CODEFLOW_PR_BODY', commit_lint)
         self.assertNotIn('github.event.pull_request.body', workflow)
         actions = '      actions: read\n' if admission else ''
         self.assertIn(f'    permissions:\n      contents: read\n      pull-requests: read\n{actions}    steps:\n', workflow)
         self.assertNotIn(': write', workflow)
         self.assertIn('    timeout-minutes: 45\n' if admission else '    timeout-minutes: 20\n', workflow)
 
-    def test_one_target_source_build_judges_policy_and_registry_and_cancels_only_pr_runs(self):
+    def test_each_verdict_job_builds_the_authority_and_the_registry_runs_apart(self):
+        # TSK-336: each trusted verdict job builds the default branch's own
+        # source once; push, schedule and dispatch check the registry in their
+        # own workflow, which builds the event commit once and has no group.
         workflow = read('.github/workflows/codeflow-policy.yml')
         self.assertIn('pull_request_target:', workflow)
         self.assertIn('github.event.pull_request.base.sha', workflow)
-        self.assertEqual(workflow.count('cargo build --release'), 1)
+        self.assertEqual(workflow.count('cargo build --release'), 2, 'trusted: commit standards and release impact')
         self.assertIn('codeflow ids check --base', workflow)
         self.assertIn('codeflow ci --base', workflow)
         self.assert_policy_cancels_only_superseded_pull_request_runs(workflow, admission=True)
         self.assertIn('Swatinem/rust-cache@', workflow)
         self.assertNotIn('github.event.pull_request.head.sha }}\n          fetch-depth', workflow)
-        self.assertFalse((ROOT / '.github/workflows/codeflow-registry.yml').exists())
+        for event in ('  push:', '  schedule:', '  workflow_dispatch:'):
+            self.assertNotIn(event, workflow.split('\njobs:\n', 1)[0])
+        registry = read('.github/workflows/codeflow-registry.yml')
+        self.assertEqual(registry.count('cargo build --release'), 1)
+        self.assertNotIn('concurrency:', registry)
+        # Its one job is the registry check, never a `trusted:` verdict; its
+        # comments may name the prefix to say why.
+        self.assertEqual(re.findall(r'^    name: (.+)$', registry, re.M), ['registry check'])
+        self.assertIn('run: codeflow ids check\n', registry)
 
     def test_commit_standards_admits_only_the_exact_heads_ready_run(self):
         # TSK-449 AC-6: merge admission is the required `commit standards`
