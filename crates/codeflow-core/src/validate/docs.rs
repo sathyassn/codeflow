@@ -14,6 +14,7 @@
 //!   epic `adrs[]` references resolve
 //! * epic/task `specs[]` resolve to specification records
 //! * task `epic_id` resolves, or an explicit standalone reason exists
+//! * epic `parent_line` names the line of an existing epic
 //! * task `depends_on[]` references resolve and form an acyclic graph
 //! * operator feedback items are well formed ([`crate::feedback::lint`])
 //!
@@ -678,6 +679,36 @@ fn lint_epics(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
                 }
             }
         }
+
+        lint_epic_parent_line(&rel, &content, &data, graph, report);
+    }
+}
+
+/// An epic's `parent_line` names the line of an epic that exists (TSK-1286).
+/// Its shape is checked with the record itself (`validate_epic`); here only
+/// the epic the line's name carries is resolved.
+fn lint_epic_parent_line(
+    rel: &Path,
+    content: &[u8],
+    data: &std::collections::HashMap<String, serde_yaml::Value>,
+    graph: &DocGraph,
+    report: &mut DocsLintReport,
+) {
+    let field = crate::workgraph::line_adoption::PARENT_LINE_FIELD;
+    let Some(serde_yaml::Value::String(line)) = data.get(field) else {
+        return;
+    };
+    let Ok(named) = crate::workgraph::line_adoption::epic_id(line) else {
+        return;
+    };
+    match &graph.epics {
+        None => report.unchecked(EPICS_LAYER, named),
+        Some(ids) if !ids.contains(named) => report.issues.push(DocsLintIssue {
+            file: rel.to_path_buf(),
+            line: find_line(content, &format!("{field}:")).unwrap_or(1),
+            message: format!("epic {field} '{line}' names {named}, but no matching epic exists"),
+        }),
+        Some(_) => {}
     }
 }
 
@@ -1599,6 +1630,33 @@ mod tests {
 
         let report = lint_docs(dir.path());
         assert!(report.issues.iter().any(|i| i.message.contains("ADR-0777")));
+    }
+
+    /// TSK-1286: an epic's `parent_line` must name the line of an epic that
+    /// exists; the line of an existing epic is clean.
+    #[test]
+    fn epic_parent_line_must_name_an_existing_epic() {
+        for (line, dangling) in [
+            ("integration/EPC-001-outcome", false),
+            ("integration/EPC-777-missing", true),
+        ] {
+            let dir = clean_repo();
+            write(
+                dir.path(),
+                "project-management/epics/EPC-002.md",
+                &format!(
+                    "---\nid: EPC-002\ntitle: epic\ncapabilities: []\nadrs: []\nparent_line: {line}\n---\n\n## Intent\n"
+                ),
+            );
+            let report = lint_docs(dir.path());
+            let found = report.issues.iter().find(|issue| {
+                issue.message.contains("parent_line") && issue.message.contains("EPC-777")
+            });
+            assert_eq!(found.is_some(), dangling, "{line}: {:?}", report.issues);
+            if let Some(issue) = found {
+                assert_eq!(issue.line, 6, "{issue:?}");
+            }
+        }
     }
 
     /// A project whose `.codeflow/project.toml` records `tier`.

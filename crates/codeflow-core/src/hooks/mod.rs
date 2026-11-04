@@ -172,6 +172,25 @@ impl Violation {
         )
     }
 
+    /// Render a finding that has no policy key and names the authority that
+    /// judges it, for a rule that is neither a policy rule nor a lifecycle
+    /// invariant.
+    #[must_use]
+    pub fn render_with_authority(&self, plane: &str, authority: &str) -> String {
+        let verdict = match self.level {
+            PolicyLevel::Block => "BLOCKED",
+            PolicyLevel::Warn => "warning",
+            PolicyLevel::Allow | PolicyLevel::Off => "note",
+        };
+        format!(
+            "codeflow {plane}: {verdict} — {rule} ({level})\n  {msg}\n  sanctioned: {remedy}\n  authority: {authority}",
+            rule = self.rule,
+            level = self.level,
+            msg = crate::git::display_message(&self.message),
+            remedy = crate::git::display_message(&self.remedy),
+        )
+    }
+
     /// Render a non-configurable lifecycle invariant without falsely
     /// attributing it to `policy.json`.
     #[must_use]
