@@ -1,0 +1,11 @@
+id = "TSK-1319"
+uid = "6d196f44-8c56-4528-bf51-9d64b0a5f140"
+kind = "TSK"
+title = "The Windows test plan stays runnable when a pull request adds tests"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-04T04:18:06Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
