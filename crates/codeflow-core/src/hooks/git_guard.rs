@@ -424,13 +424,13 @@ impl HookPayload {
         match (command, input.ws.as_ref().filter(|ws| !ws.is_null())) {
             (true, None) => None,
             (false, Some(serde_json::Value::Object(socket))) => {
-                if !socket.get("url").is_some_and(serde_json::Value::is_string) {
-                    Some("a `ws` socket watch with no `url` string".to_string())
-                } else {
+                if socket.get("url").is_some_and(serde_json::Value::is_string) {
                     socket
                         .keys()
                         .find(|key| !matches!(key.as_str(), "url" | "protocols"))
                         .map(|extra| format!("the field `ws.{extra}`"))
+                } else {
+                    Some("a `ws` socket watch with no `url` string".to_string())
                 }
             }
             (false, Some(_)) => Some("a `ws` field that is not an object".to_string()),
@@ -15771,7 +15771,7 @@ mod tests {
             HookPayload::parse(json).unwrap().monitor_problem(&extra)
         };
         for input in [
-            r#"{}"#,
+            r"{}",
             r#"{"description":"d"}"#,
             r#"{"script":"sudo true"}"#,
             r#"{"command":"git status","script":"sudo true"}"#,

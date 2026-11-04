@@ -10,11 +10,11 @@ const DEFAULT: &str =
 const WIDENED: &str = r#"{"git":{"protected_branches":["main","master"],"root_checkout_commits":"off"},"security":{"monitor_extra_fields":["script"]}}"#;
 
 fn monitor(guard: &str, root: &Path, input: serde_json::Value) -> Output {
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "tool_name": "Monitor",
-        "tool_input": input,
         "cwd": root,
     });
+    payload["tool_input"] = input;
     run_with_stdin(
         codeflow()
             .args(["hook", guard, "--contract", "3"])

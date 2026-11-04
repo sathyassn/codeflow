@@ -384,19 +384,26 @@ fn inspect_discard(
     codeflow_core::hooks::git_discard::inspect(cwd, query.target, query.intent)
 }
 
+/// Parse the git-guard payload, or print why it is refused. The error is the
+/// exit code the hook returns: a bad payload and an unrecognised `Monitor`
+/// payload both refuse before any command is judged.
+fn git_guard_payload(stdin: &str) -> Result<git_guard::HookPayload, i32> {
+    let payload = git_guard::HookPayload::parse(stdin).map_err(|e| {
+        let finding = payload_finding("git-guard", &e);
+        eprintln!("{}", finding.line("codeflow git-guard", "error"));
+        2
+    })?;
+    if monitor_refusal("git-guard", stdin, &mut std::io::stderr()) {
+        return Err(2);
+    }
+    Ok(payload)
+}
+
 fn git_guard(stdin: &str) -> i32 {
     let _facts = edit_guard::RepoFactsScope::enter();
-    let payload = match git_guard::HookPayload::parse(stdin) {
-        Ok(p) => p,
-        Err(e) => {
-            let finding = payload_finding("git-guard", &e);
-            eprintln!("{}", finding.line("codeflow git-guard", "error"));
-            return 2;
-        }
-    };
-    if monitor_refusal("git-guard", stdin, &mut std::io::stderr()) {
+    let Ok(payload) = git_guard_payload(stdin) else {
         return 2;
-    }
+    };
     let Some(command) = payload.shell_command() else {
         return 0; // not a supported shell tool call
     };
