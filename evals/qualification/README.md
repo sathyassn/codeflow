@@ -567,7 +567,7 @@ seen rather than followed:
 - placement: `C` is exactly `<repository>/.worktrees/<name>`, one level down
   and normalized; the repository, `.worktrees` and `C` are real directories
   and `C` is its own realpath;
-- link file: `C/.git` is a regular file under 4 KiB holding one line
+- link file: `C/.git` is a regular file of at most 4 KiB holding one line
   `gitdir: <A>`, where `A` is exactly `<repository>/.git/worktrees/<id>`, a
   real directory that is its own realpath;
 - reciprocal pair: `A/gitdir` names exactly `C/.git`, and `A/commondir`
