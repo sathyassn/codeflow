@@ -34,8 +34,9 @@ never from a pull request's branch name or other text it controls:
    this runner image and the locked Playwright version, keyed exactly as the
    workflow keys it (a pull request restores from its base and from main).
    That key names the runner image and has no fallback; when it is missing
-   (a new runner image), this push runs every job so the present part saves
-   it;
+   (a new runner image), this push runs every job. The normal present part
+   prepares it on integration pushes; the release present part prepares it
+   on main. A successful job saves the cache;
 7. the newest codeflow-ci run with event pull_request, that head commit and
    this workflow file that names the merged pull request (by number) with
    the pushed line as its base, concluded success, and every job of its
@@ -392,7 +393,7 @@ def decide(event: str, sha: str, workflow_path: str, push_only: set[str], requir
         raise Skip(f"the apt cache lookup failed ({type(error).__name__}: {error})") from error
     if not any(cache.get("key") == apt_key and cache.get("ref") in (ref, MAIN) for cache in caches):
         raise Skip(f"neither {ref} nor {MAIN} holds apt cache {apt_key!r}; every job runs so the present part "
-                   "saves it")
+                   "can prepare it; saving the cache requires that job to succeed")
     runs = [run for run in api.runs(head)
             if run.get("event") == "pull_request" and run.get("head_sha") == head
             and run.get("path") == workflow_path and isinstance(run.get("id"), int)

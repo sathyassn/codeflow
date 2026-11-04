@@ -284,3 +284,15 @@ narrowed to epic tasks: a standalone task's own single record lands with
 its code in one reviewed PR, and its planning anchor is the record at head
 (SPC-013 R-78, R-110). The registry, the `uid` binding and every other
 clause of this record are unchanged. The accepted text above is unchanged.
+
+## Note, 2026-11-03: the enforcing job checks out the default branch
+
+TSK-336 implements ADR-0091 in the hosted policy job. The job that runs the
+registry check for a pull request, now named `trusted: commit standards`,
+checks out the default branch at the run's one commit, never the pull
+request's base, so the default branch's pin and policy judge a pull request
+into an integration line too. Push, schedule and dispatch runs check the
+registry in their own workflow, `codeflow-registry.yml`, under their own
+name, `registry check`, so none of them creates a check under the verdict's
+name, not even a skipped one. The 2026-09-27 note's base-commit checkout
+is superseded by this. The accepted text above is unchanged.

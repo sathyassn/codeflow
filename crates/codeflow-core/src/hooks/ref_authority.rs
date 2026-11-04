@@ -823,11 +823,18 @@ mod tests {
     /// configuration, written as bytes so the lines can hold text that is not
     /// valid UTF-8.
     fn repository_with_config(extra: &[u8]) -> tempfile::TempDir {
+        repository_with_url("https://example.invalid/origin.git", extra)
+    }
+
+    /// As [`repository_with_config`], with `url` as `origin`. A test that
+    /// lets the guard reach the remote uses a `file:` URL, so no lookup
+    /// leaves the machine (TSK-1156: a Codex builder seat's sandbox aborts
+    /// the whole process on a blocked lookup).
+    fn repository_with_url(url: &str, extra: &[u8]) -> tempfile::TempDir {
         use std::io::Write as _;
         let dir = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
-        repo.remote("origin", "https://example.invalid/origin.git")
-            .unwrap();
+        repo.remote("origin", url).unwrap();
         let mut config = std::fs::OpenOptions::new()
             .append(true)
             .open(dir.path().join(".git").join("config"))
@@ -931,14 +938,17 @@ mod tests {
 
     #[test]
     fn r20_fetch_mismatch_and_no_rewrite_controls() {
-        let rewritten = repository_with_config(
-            b"[url \"https://other.invalid/\"]\n\tinsteadOf = https://example.invalid/\n",
+        let rewritten = repository_with_url(
+            "file:///nonexistent/codeflow-origin.git",
+            b"[url \"file:///other/\"]\n\tinsteadOf = file:///nonexistent/\n",
         );
         assert!(r20_report(rewritten.path())
             .violations
             .iter()
             .any(|v| v.rule == "git.policy_authority"));
-        let plain = repository_with_config(b"");
+        // No rewrite and no lookup: the remote is a local path that does not
+        // exist, so the fetch check cannot reach any host.
+        let plain = repository_with_url("file:///nonexistent/codeflow-origin.git", b"");
         assert!(r20_report(plain.path()).violations.is_empty());
         assert!(recovery_fetch("git fetch origin", plain.path()));
     }

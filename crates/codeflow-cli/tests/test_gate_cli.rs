@@ -344,6 +344,395 @@ fn a_killed_gate_keeps_its_lock_until_its_target_exits() {
     killed_gate_keeps_its_lock_until_its_target_exits("essential");
 }
 
+/// TSK-1256: a full-gate target that outlives its killed gate keeps an older
+/// binary's exclusive take of `full-gate.lock` refused until its process
+/// group ends. The older take is simulated as 3.1 makes it: `flock`
+/// exclusive, without waiting.
+#[cfg(unix)]
+#[test]
+fn a_killed_gates_surviving_target_keeps_older_binaries_out() {
+    use std::os::fd::AsRawFd;
+    let home = tempfile::tempdir().unwrap();
+    let first = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "survivor", "runner": "custom",
+   "modes": {"full": {"command": "echo $$ > group.txt; sleep 30"}}}
+]}"#,
+    );
+    let (mut gate, rx, _stdout) = spawn(command(
+        first.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx, "starting target 'survivor'");
+    let group_file = first.path().join("group.txt");
+    let group = (0..200)
+        .find_map(|_| {
+            let text = std::fs::read_to_string(&group_file).unwrap_or_default();
+            let parsed = text.trim().parse::<u32>().ok();
+            if parsed.is_none() {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            parsed
+        })
+        .expect("the target wrote its group");
+    gate.kill().unwrap();
+    gate.wait().unwrap();
+    let alive = |g: u32| {
+        Command::new("kill")
+            .args(["-0", "--", &format!("-{g}")])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    assert!(alive(group), "the target outlived its gate");
+
+    let fence = home.path().join("locks/full-gate.lock");
+    let older_take = || {
+        let file = std::fs::File::open(&fence).unwrap();
+        // SAFETY: flock on a descriptor this closure owns; it closes on drop.
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
+    };
+    assert!(
+        !older_take(),
+        "an older binary's gate must stay out while the killed gate's target runs"
+    );
+
+    Command::new("kill")
+        .args(["-KILL", "--", &format!("-{group}")])
+        .status()
+        .unwrap();
+    let freed = (0..100).any(|_| {
+        if older_take() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        false
+    });
+    assert!(freed, "the fence frees once the target's group ends");
+}
+
+/// TSK-1256 R1: an older binary's gate that was killed while its target ran
+/// leaves the target's group in its record. That target runs alone, as its
+/// gate did, so a new full gate refuses at once and starts no target until
+/// the group ends.
+#[cfg(unix)]
+#[test]
+fn an_older_gates_surviving_target_keeps_a_new_gate_out() {
+    use std::os::unix::process::CommandExt;
+    let home = tempfile::tempdir().unwrap();
+    let root = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "marker", "runner": "custom",
+   "modes": {"full": {"command": "touch ran"}}}
+]}"#,
+    );
+    let mut survivor = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = survivor.id();
+    // The record a 3.1 gate keeps inside its lock file; its pid is gone.
+    let locks = home.path().join("locks");
+    std::fs::create_dir_all(&locks).unwrap();
+    std::fs::write(
+        locks.join("full-gate.lock"),
+        format!("pid=999999\nstarted=1\nmode=full\ngroup={group}\n"),
+    )
+    .unwrap();
+    let refused = run(root.path(), home.path(), &["test", "--mode", "full"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    let message = stderr(&refused);
+    assert!(message.contains("older CodeFlow binary"), "{message}");
+    assert!(
+        message.contains(&format!("process groups {group}")),
+        "{message}"
+    );
+    assert!(message.contains("last recorded holder"), "{message}");
+    assert!(
+        !root.path().join("ran").exists(),
+        "no target starts while the survivor lives"
+    );
+    assert!(!locks.join("full-gate-1.lock").exists(), "no slot is taken");
+
+    survivor.kill().unwrap();
+    survivor.wait().unwrap();
+    let admitted = run(root.path(), home.path(), &["test", "--mode", "full"]);
+    assert!(admitted.status.success(), "{}", stderr(&admitted));
+    assert!(
+        root.path().join("ran").exists(),
+        "the target runs once it ends"
+    );
+}
+
+/// An older binary's take of the fence in `home`: a fresh open of
+/// `full-gate.lock`, locked exclusively without waiting, then released.
+#[cfg(unix)]
+fn older_take(home: &Path) -> bool {
+    use std::os::fd::AsRawFd;
+    let file = std::fs::File::open(home.join("locks/full-gate.lock")).unwrap();
+    // SAFETY: flock on a descriptor this function owns; it closes on drop.
+    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
+}
+
+/// The pid a target wrote to `file`, waiting for it.
+#[cfg(unix)]
+fn written_pid(file: &Path) -> u32 {
+    (0..400)
+        .find_map(|_| {
+            let parsed = std::fs::read_to_string(file)
+                .unwrap_or_default()
+                .trim()
+                .parse::<u32>()
+                .ok();
+            if parsed.is_none() {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            parsed
+        })
+        .expect("the target wrote the pid")
+}
+
+/// Whether process `pid` still runs.
+#[cfg(unix)]
+fn pid_runs(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// Ends process `pid` and asserts the fence frees once it has ended.
+#[cfg(unix)]
+fn end_and_expect_the_fence_free(home: &Path, pid: u32) {
+    Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .status()
+        .unwrap();
+    let freed = (0..200).any(|_| {
+        if older_take(home) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+        false
+    });
+    assert!(freed, "the fence frees once the descendant ends");
+}
+
+/// TSK-1256 R1-B: the target's shell exits and leaves a grandchild that
+/// keeps the output pipes, and the gate is killed while it drains them.
+/// The grandchild inherited the fence, so older binaries stay out until it
+/// ends, with no process of the gate left.
+#[cfg(unix)]
+#[test]
+fn a_grandchild_that_outlives_its_shell_and_a_killed_gate_keeps_older_binaries_out() {
+    let home = tempfile::tempdir().unwrap();
+    let root = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "parent", "runner": "custom",
+   "modes": {"full": {"command": "sleep 30 & echo $! > grandchild.txt; exit 0"}}}
+]}"#,
+    );
+    let (mut gate, rx, _stdout) = spawn(command(
+        root.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx, &start("parent", "full"));
+    let grandchild = written_pid(&root.path().join("grandchild.txt"));
+    // The shell has exited; the gate waits for the pipes the grandchild
+    // still holds.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(gate.try_wait().unwrap().is_none(), "the gate is draining");
+    gate.kill().unwrap();
+    gate.wait().unwrap();
+    assert!(pid_runs(grandchild), "the grandchild outlived its gate");
+    assert!(
+        !older_take(home.path()),
+        "an older gate must stay out while the grandchild runs"
+    );
+    end_and_expect_the_fence_free(home.path(), grandchild);
+}
+
+/// TSK-1256 R1-B: a gate that completes normally while a descendant with
+/// redirected output still runs leaves the fence held by that descendant.
+#[cfg(unix)]
+#[test]
+fn a_descendant_that_outlives_a_completed_gate_keeps_older_binaries_out() {
+    let home = tempfile::tempdir().unwrap();
+    let root = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "parent", "runner": "custom",
+   "modes": {"full": {"command": "sleep 30 > /dev/null 2>&1 & echo $! > grandchild.txt; exit 0"}}}
+]}"#,
+    );
+    let done = run(root.path(), home.path(), &["test", "--mode", "full"]);
+    assert!(done.status.success(), "{}", stderr(&done));
+    let grandchild = written_pid(&root.path().join("grandchild.txt"));
+    assert!(pid_runs(grandchild), "the descendant outlived its gate");
+    assert!(
+        !older_take(home.path()),
+        "an older gate must stay out while the descendant runs"
+    );
+    end_and_expect_the_fence_free(home.path(), grandchild);
+}
+
+/// TSK-1256 R1-A: a completed new run leaves `full-gate.record`; a 3.1
+/// gate killed afterwards leaves its surviving target's group only in the
+/// record inside `full-gate.lock`. A reserve is still refused before it
+/// takes a slot or the host, and starts nothing.
+#[cfg(unix)]
+#[test]
+fn a_3_1_orphan_behind_a_completed_runs_record_refuses_a_reserve() {
+    use std::os::unix::process::CommandExt;
+    let home = tempfile::tempdir().unwrap();
+    let root = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "quick", "runner": "custom", "modes": {"full": {"command": "true"}}}
+]}"#,
+    );
+    let done = run(root.path(), home.path(), &["test", "--mode", "full"]);
+    assert!(done.status.success(), "{}", stderr(&done));
+    let locks = home.path().join("locks");
+    assert!(
+        std::fs::read_to_string(locks.join("full-gate.record"))
+            .unwrap()
+            .contains("pid="),
+        "the completed run's record stays"
+    );
+    let slot_record = std::fs::read_to_string(locks.join("full-gate-1.record")).unwrap();
+    let mut survivor = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = survivor.id();
+    std::fs::write(
+        locks.join("full-gate.lock"),
+        format!("pid=999999\nstarted=1\ngroup={group}\n"),
+    )
+    .unwrap();
+    let refused = run(
+        root.path(),
+        home.path(),
+        &["reserve", "--", "touch", "reserved-ran"],
+    );
+    assert_ne!(refused.status.code(), Some(0), "{}", stderr(&refused));
+    let message = stderr(&refused);
+    assert!(message.contains("older CodeFlow binary"), "{message}");
+    assert!(
+        message.contains(&format!("process groups {group}")),
+        "{message}"
+    );
+    assert!(!root.path().join("reserved-ran").exists());
+    assert_eq!(
+        std::fs::read_to_string(locks.join("full-gate-1.record")).unwrap(),
+        slot_record,
+        "no slot was taken"
+    );
+    assert!(
+        !locks.join("full-gate-2.lock").exists(),
+        "no slot was taken"
+    );
+    survivor.kill().unwrap();
+    survivor.wait().unwrap();
+    let admitted = run(
+        root.path(),
+        home.path(),
+        &["reserve", "--", "touch", "reserved-ran"],
+    );
+    assert!(admitted.status.success(), "{}", stderr(&admitted));
+    assert!(root.path().join("reserved-ran").exists());
+}
+
+/// TSK-1256, Windows: a killed gate's target and its grandchild end with
+/// the gate (the kill-on-close job), and an older binary's exclusive take
+/// of `full-gate.lock` succeeds only once both are gone, never while one
+/// still runs.
+#[cfg(windows)]
+#[test]
+fn a_killed_gates_target_tree_ends_before_older_binaries_get_in() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        LockFileEx, UnlockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+    };
+    use windows_sys::Win32::System::IO::OVERLAPPED;
+    // An older binary's take: the byte at offset 1 << 40, exclusively.
+    let older_take = |path: &Path| -> bool {
+        let Ok(file) = std::fs::File::open(path) else {
+            return false;
+        };
+        // SAFETY: OVERLAPPED is plain data; zero is a valid start.
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        overlapped.Anonymous.Anonymous.OffsetHigh = 1 << 8;
+        // SAFETY: the handle is open for this call and the OVERLAPPED
+        // outlives it; FAIL_IMMEDIATELY makes the call synchronous.
+        let taken = unsafe {
+            LockFileEx(
+                file.as_raw_handle(),
+                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                0,
+                1,
+                0,
+                &raw mut overlapped,
+            )
+        } != 0;
+        if taken {
+            // SAFETY: as above; this releases the byte just locked.
+            unsafe { UnlockFileEx(file.as_raw_handle(), 0, 1, 0, &raw mut overlapped) };
+        }
+        taken
+    };
+    let home = tempfile::tempdir().unwrap();
+    let root = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "tree", "runner": "custom",
+   "modes": {"full": {"command": "powershell -NoProfile -NonInteractive -Command \"Set-Content -Path pid.txt -Value $PID; $c = Start-Process -PassThru -NoNewWindow powershell -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 120'; Set-Content -Path grandchild.txt -Value $c.Id; Start-Sleep -Seconds 120\""}}}
+]}"#,
+    );
+    let (child, rx, _stdout) = spawn(command(
+        root.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    let mut gate = EndGate(child);
+    let target = wait_for_target_pid(&mut gate.0, &rx, &root.path().join("pid.txt"));
+    let grandchild = wait_for_target_pid(&mut gate.0, &rx, &root.path().join("grandchild.txt"));
+    let _end = (EndTarget(Some(target)), EndTarget(Some(grandchild)));
+    let fence = home.path().join("locks").join("full-gate.lock");
+    assert!(still_runs(target) && still_runs(grandchild));
+    assert!(
+        !older_take(&fence),
+        "the running gate keeps older binaries out"
+    );
+    gate.0.kill().unwrap();
+    gate.0.wait().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let alive_before = still_runs(target) || still_runs(grandchild);
+        let taken = older_take(&fence);
+        let alive_after = still_runs(target) || still_runs(grandchild);
+        if taken {
+            assert!(
+                !alive_after,
+                "an older take succeeded while the killed gate's target tree still ran \
+                 (alive before the take: {alive_before})"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the fence never freed after the gate was killed (tree alive: {alive_after})"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!still_runs(target) && !still_runs(grandchild));
+}
+
 #[cfg(unix)]
 fn killed_gate_keeps_its_lock_until_its_target_exits(mode: &str) {
     let home = tempfile::tempdir().unwrap();
@@ -376,7 +765,7 @@ fn killed_gate_keeps_its_lock_until_its_target_exits(mode: &str) {
     // The gate records the group in its holder record just after the target
     // starts, and the target can write its file first: wait for the record
     // before killing the gate, or the kill can land between the two.
-    let lock_file = home.path().join("locks/full-gate.record");
+    let lock_file = home.path().join("locks/full-gate-1.record");
     let recorded = (0..200).any(|_| {
         let text = std::fs::read_to_string(&lock_file).unwrap_or_default();
         let found = text.lines().any(|l| l == format!("group={group}"));
@@ -407,7 +796,7 @@ fn killed_gate_keeps_its_lock_until_its_target_exits(mode: &str) {
         let beside = run(dir, home.path(), &["test", "--mode", mode]);
         let err = stderr(&beside);
         assert_eq!(beside.status.code(), Some(0), "{err}");
-        assert!(home.path().join("locks/full-gate-1.lock").exists(), "{err}");
+        assert!(home.path().join("locks/full-gate-2.lock").exists(), "{err}");
         assert!(
             std::fs::read_to_string(&lock_file)
                 .unwrap()
@@ -640,6 +1029,21 @@ fn a_killed_full_gate_never_runs_beside_its_target_in_a_fresh_scaffold() {
     let pid = wait_for_target_pid(&mut gate.0, &rx, &root.join("pid.txt"));
     let mut target = EndTarget(Some(pid));
     assert!(still_runs(pid), "the target runs under its gate");
+    if cfg!(unix) {
+        // The gate records the target's group just after it starts, and
+        // the target can write its pid first: wait for the record before
+        // the kill, or the kill can land between the two.
+        let record = home.path().join("locks/full-gate-1.record");
+        let recorded = (0..400).any(|_| {
+            let text = std::fs::read_to_string(&record).unwrap_or_default();
+            let found = text.lines().any(|line| line == format!("group={pid}"));
+            if !found {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            found
+        });
+        assert!(recorded, "the gate recorded the target's group");
+    }
     gate.0.kill().unwrap();
     gate.0.wait().unwrap();
 
@@ -651,7 +1055,7 @@ fn a_killed_full_gate_never_runs_beside_its_target_in_a_fresh_scaffold() {
         let beside = run(other.path(), home.path(), &["test", "--mode", "full"]);
         let err = stderr(&beside);
         assert_eq!(beside.status.code(), Some(0), "{err}");
-        assert!(home.path().join("locks/full-gate-1.lock").exists(), "{err}");
+        assert!(home.path().join("locks/full-gate-2.lock").exists(), "{err}");
         Command::new("kill")
             .args(["-KILL", "--", &format!("-{pid}")])
             .status()
@@ -684,7 +1088,7 @@ fn a_stale_lock_from_a_dead_gate_is_reclaimed() {
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(home.path().join("locks")).unwrap();
     std::fs::write(
-        home.path().join("locks/full-gate.lock"),
+        home.path().join("locks/full-gate-1.record"),
         "pid=999999\nstarted=1\ndir=/gone\n",
     )
     .unwrap();
@@ -1334,7 +1738,7 @@ fn a_gate_takes_a_slot_through_the_identity_check_beside_a_contender() {
     let error = stderr(&contender);
     assert_eq!(contender.status.code(), Some(0), "{error}");
     assert!(
-        home.path().join("locks/full-gate-1.lock").exists(),
+        home.path().join("locks/full-gate-2.lock").exists(),
         "{error}"
     );
     std::fs::write(repo.path().join("release"), "").unwrap();
@@ -1623,6 +2027,7 @@ fn reserve_refuses_when_the_holder_record_cannot_be_written() {
     let locks = home.path().join("locks");
     std::fs::create_dir(&locks).unwrap();
     std::fs::write(locks.join("full-gate.lock"), "").unwrap();
+    std::fs::write(locks.join("full-gate-1.lock"), "").unwrap();
     std::fs::write(locks.join("host.lock"), "").unwrap();
     std::fs::set_permissions(&locks, std::fs::Permissions::from_mode(0o500)).unwrap();
     let reserved = run(
@@ -1694,7 +2099,7 @@ fn quick_default_class_controls_undeclared_targets_and_keeps_explicit_light_work
 fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
     let home = tempfile::tempdir().unwrap();
     let root = held_until_released("essential");
-    let path = home.path().join("locks/full-gate.record");
+    let path = home.path().join("locks/full-gate-1.record");
     let empty = run(root.path(), home.path(), &["test", "--lock-status"]);
     assert!(empty.status.success(), "{}", stderr(&empty));
     assert!(String::from_utf8_lossy(&empty.stdout).contains("no recorded holder"));
@@ -1725,7 +2130,17 @@ fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
     let status = run(root.path(), home.path(), &["test", "--lock-status"]);
     assert!(status.status.success(), "{}", stderr(&status));
     let text = String::from_utf8_lossy(&status.stdout);
-    assert_eq!(text.matches("recorded holder:").count(), 2, "{text}");
+    // Slot 1 of both folders names the run, and the fence of both names it
+    // as the last recorded holder (TSK-1256).
+    assert_eq!(text.matches(": recorded holder:").count(), 2, "{text}");
+    assert_eq!(
+        text.matches(
+            ": last recorded holder (may have ended; the slot lines show the recorded slots and target groups): "
+        )
+        .count(),
+        2,
+        "{text}"
+    );
     for value in [
         format!("pid {}", child.id()),
         "essential mode".into(),
@@ -1740,12 +2155,19 @@ fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
     assert!(child.wait().unwrap().success());
     let after = run(root.path(), home.path(), &["test", "--lock-status"]);
     assert!(after.status.success());
+    let after = String::from_utf8_lossy(&after.stdout);
     assert_eq!(
-        String::from_utf8_lossy(&after.stdout)
-            .matches("no recorded holder")
-            .count(),
+        after.matches("no recorded holder").count(),
         4,
-        "the host lock and slot 0 of both folders"
+        "the host lock and slot 1 of both folders: {after}"
+    );
+    // The fence record names the last admitted run, which has ended.
+    assert_eq!(
+        after
+            .matches(": last recorded holder (may have ended")
+            .count(),
+        2,
+        "{after}"
     );
 }
 
