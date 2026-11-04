@@ -441,6 +441,59 @@ fn perm_array(value: &serde_json::Value, key: &str) -> Vec<String> {
         .collect()
 }
 
+/// TSK-1058: the `Monitor` tool runs shell text, so the guard matcher covers
+/// it in every preset and in the repository's own installed copies.
+#[test]
+fn shell_guard_matcher_covers_the_monitor_tool_everywhere() {
+    let mut files: Vec<(String, serde_json::Value)> = preset_files()
+        .into_iter()
+        .map(|name| (name.clone(), load(&name)))
+        .collect();
+    for rel in [
+        ".claude/settings.json",
+        ".codeflow/.baseline/.claude/settings.json",
+    ] {
+        files.push((rel.to_string(), read_json(&repo_root().join(rel))));
+    }
+    for (name, value) in files {
+        let guards: Vec<&serde_json::Value> = value["hooks"]["PreToolUse"]
+            .as_array()
+            .expect("PreToolUse hook array")
+            .iter()
+            .filter(|group| {
+                group["hooks"].as_array().is_some_and(|hooks| {
+                    hooks.iter().any(|hook| {
+                        hook["command"]
+                            .as_str()
+                            .is_some_and(|c| c.starts_with("codeflow hook git-guard"))
+                    })
+                })
+            })
+            .collect();
+        assert!(!guards.is_empty(), "{name}: no git-guard group");
+        for tool in ["Bash", "PowerShell", "Monitor"] {
+            assert!(
+                guards.iter().any(|group| {
+                    regex::Regex::new(group["matcher"].as_str().unwrap_or_default())
+                        .unwrap()
+                        .is_match(tool)
+                }),
+                "{name}: git-guard matcher does not cover {tool}"
+            );
+        }
+        for tool in ["Read", "MonitorX", "XMonitor"] {
+            assert!(
+                !guards.iter().any(|group| {
+                    regex::Regex::new(group["matcher"].as_str().unwrap_or_default())
+                        .unwrap()
+                        .is_match(tool)
+                }),
+                "{name}: git-guard matcher must stay anchored, but it covers {tool}"
+            );
+        }
+    }
+}
+
 #[test]
 fn exec_guard_wired_in_every_preset() {
     // The security stage covers both shell tools Claude exposes across Unix,
@@ -733,8 +786,8 @@ fn authenticated_tool_configuration_remains_available() {
 /// two shell tools — `Bash` and `PowerShell` — and a permission rule is keyed
 /// by the tool that carries the command, so `Bash(...)` alone leaves the
 /// Windows/graphical launchers ungated on the `PowerShell` tool. The shell guard
-/// matcher (`^(Bash|PowerShell)$`) already covers both; the permission layer
-/// now does too.
+/// matcher (`^(Bash|PowerShell|Monitor)$`, TSK-1058) already covers both; the
+/// permission layer now does too.
 const PRIVILEGE_ESCALATION_PATTERNS: [&str; 8] = [
     "sudo *",
     "su *",

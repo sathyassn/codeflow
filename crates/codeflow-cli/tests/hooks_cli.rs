@@ -16,6 +16,9 @@ mod checkout_identity;
 mod host_isolation;
 use host_isolation::{git_command, isolate_clone, isolate_git};
 
+#[path = "hooks_cli/monitor_fields.rs"]
+mod monitor_fields;
+
 #[path = "hooks_cli/target_repository.rs"]
 mod target_repository;
 
