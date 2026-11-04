@@ -1,0 +1,11 @@
+id = "TSK-1326"
+uid = "b762a8d6-18ca-4d69-96c3-eda1dee45b07"
+kind = "TSK"
+title = "The Monitor guard's recognised payload shape is confirmed on each new Claude Code release"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-04T17:58:50Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
