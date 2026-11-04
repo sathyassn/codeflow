@@ -1209,6 +1209,31 @@ pub fn epic_line_bound_at(
     Ok(bound_in(&records, line, epic_id, place))
 }
 
+/// Whether the trusted records at commit `tip` bind `line`, judged by
+/// [`bound_in`] as every other reader judges it, so `codeflow task status`
+/// picks a receiving line exactly as `codeflow ci` would bind it (TSK-1286).
+///
+/// # Errors
+///
+/// Returns why the commit or a record at it could not be read.
+pub(crate) fn line_bound_at_tip(
+    repo: &Repository,
+    tip: git2::Oid,
+    line: &str,
+) -> Result<EpicLineBinding, String> {
+    let line = logical_target(line);
+    let epic_id = match super::line_adoption::epic_id(line) {
+        Ok(epic_id) => epic_id,
+        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+    };
+    let tree = repo
+        .find_commit(tip)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| format!("{tip}: {error}"))?;
+    let records = records_from_tree(repo, &tree).map_err(|error| error.to_string())?;
+    Ok(bound_in(&records, line, epic_id, "the tip"))
+}
+
 /// Whether one trusted record set (named `place`) binds `line`, whose name
 /// carries `epic_id`: that epic exists there without being cancelled or
 /// archived, and a task there targets this exact line as a task of that
@@ -4679,6 +4704,64 @@ mod tests {
             epic_line_bound_at(root, DECLARED_LINE, "main", "protected branch").unwrap(),
             EpicLineBinding::Unbound(_)
         ));
+    }
+
+    /// TSK-1286 review F1: once the anchor holds a line epic that itself
+    /// declares a `parent_line` and a declaring epic's task on the line, the
+    /// whole line refuses, its own epic's tasks included, until the chain or
+    /// the declaring tasks are removed through a planning pull request.
+    #[test]
+    fn a_chained_line_refuses_its_own_epics_tasks_too() {
+        let cause =
+            "EPC-001, the epic of 'integration/EPC-001-outcome', itself declares parent_line";
+        let declared = second_epic(Some(DECLARED_LINE), "planning");
+        let dir = declared_fixture(Some(declared.as_str()), Some(declared.as_str()));
+        let root = dir.path();
+        git(root, &["switch", "main"]);
+        fs::write(
+            root.join("project-management/tasks/TSK-003.md"),
+            format!("---\nid: TSK-003\nepic_id: EPC-002\nstandalone_reason: null\nintegration_target: {DECLARED_LINE}\nstatus: todo\n---\n"),
+        )
+        .unwrap();
+        let owner = root.join("project-management/epics/EPC-001.md");
+        fs::write(
+            &owner,
+            fs::read_to_string(&owner).unwrap().replacen(
+                "---\n",
+                "---\nparent_line: integration/EPC-009-elsewhere\n",
+                1,
+            ),
+        )
+        .unwrap();
+        git(root, &["add", "-A"]);
+        git(
+            root,
+            &["commit", "-qm", "a chained line with a declaring task"],
+        );
+        git(root, &["switch", "-q", "task/TSK-002-work"]);
+        git(root, &["merge", "-q", "--no-edit", "main"]);
+        // The branch's task now belongs to the line's own epic.
+        let task = root.join("project-management/tasks/TSK-002.md");
+        fs::write(
+            &task,
+            fs::read_to_string(&task)
+                .unwrap()
+                .replace("epic_id: EPC-002", "epic_id: EPC-001"),
+        )
+        .unwrap();
+        git(root, &["commit", "-qam", "an own-epic task"]);
+        for (reader, binding) in [
+            ("own-epic branch", bind_declared(root)),
+            (
+                "line tip",
+                epic_line_bound_at(root, DECLARED_LINE, "main", "protected branch").unwrap(),
+            ),
+        ] {
+            assert!(
+                matches!(&binding, EpicLineBinding::Refused(reason) if reason.contains(cause)),
+                "{reader}: {binding:?}"
+            );
+        }
     }
 
     /// TSK-1286 AC-3: one level only. When the line's own epic itself

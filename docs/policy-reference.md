@@ -900,8 +900,15 @@ line's exact name (TSK-1286, `work.epic_line`):
   added in the pushed head binds nothing, and a head that changes or
   removes a trusted declaration is refused.
 - One level only: `parent_line` names the anchor epic's own line, and the
-  anchor epic declares no `parent_line` of its own. When it does, a task of
-  a declaring epic is refused at every trusted anchor, naming the cause:
+  anchor epic declares no `parent_line` of its own. When it does:
+  - A task of a declaring epic is refused at every trusted anchor.
+  - Once that anchor also holds a declaring epic's task targeting the
+    line, the whole line refuses: its own epic's tasks, standalone tasks,
+    the line-tip check, the line's proof to `main` and the receiving line
+    `codeflow task status` picks. It stays refused until a planning pull
+    request removes the chain or the declaring tasks.
+
+  Each refusal names the cause:
 
   ```text
   EPC-001, the epic of 'integration/EPC-001-anchor', itself declares parent_line 'integration/EPC-009-elsewhere' on <place>; one level only, so no other epic's parent_line binds this line
