@@ -431,10 +431,10 @@
       "runner": "custom",
       "modes": {
         "essential": {
-          "command": "\"$CODEFLOW_BIN\" validate --docs"
+          "command": "\"$CODEFLOW_BIN\" validate --docs && python3 -B scripts/journey-gate.py --check-pending"
         },
         "full": {
-          "command": "\"$CODEFLOW_BIN\" validate --docs"
+          "command": "\"$CODEFLOW_BIN\" validate --docs && python3 -B scripts/journey-gate.py --check-pending"
         }
       },
       "requires": [
@@ -442,7 +442,9 @@
       ],
       "narrow": [
         "docs/**",
-        "project-management/**"
+        "project-management/**",
+        "scripts/journey-gate.py",
+        "crates/codeflow-cli/tests/journey_gate.toml"
       ]
     },
     {

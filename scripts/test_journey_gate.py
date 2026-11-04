@@ -239,5 +239,47 @@ class PartTests(unittest.TestCase):
                 self.assertIsNone(gate.run(key, names, None, None))
 
 
+class PendingCheckTests(unittest.TestCase):
+    """A pending journey names a task that is not complete (TSK-1151).
+
+    The check reads task records, so a records-only landing runs it through
+    the docs-validation record check.
+    """
+
+    def check(self, status: str | None, control: list[str] | None = None) -> list[str]:
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            tasks = root / "project-management" / "tasks"
+            tasks.mkdir(parents=True)
+            if status is not None:
+                (tasks / "TSK-900.md").write_text(f"---\nid: TSK-900\nstatus: {status}  # note\n---\n")
+            journeys = [
+                {"text": "a shipped journey", "control": ["a"], "fault": ["b"]},
+                {"text": "a later journey", "pending": "TSK-900", "control": control or [], "fault": []},
+            ]
+            return gate.pending_problems(journeys, root)
+
+    def test_an_open_pending_task_passes(self):
+        self.assertEqual(self.check("in-progress"), [])
+
+    def test_a_completed_pending_task_fails(self):
+        problems = self.check("complete")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("pending on TSK-900, which is complete", problems[0])
+
+    def test_a_pending_journey_that_names_tests_fails(self):
+        problems = self.check("todo", control=["codeflow-cli --test x y"])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("names no tests", problems[0])
+
+    def test_a_missing_pending_record_fails_closed(self):
+        problems = self.check(None)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("TSK-900", problems[0])
+
+    def test_the_live_map_has_no_stale_pending_journey(self):
+        self.assertEqual(gate.pending_problems(gate.load_journeys(), gate.ROOT), [])
+
+
 if __name__ == "__main__":
     unittest.main()
