@@ -1,13 +1,13 @@
 # Install and upgrade journey for the anchored presentation skill
 
-Both journeys passed on 2026-11-03: a fresh standard install and a project
+Both journeys passed on 2026-11-04, at the review fix head: a fresh standard install and a project
 updated from 3.1.1 carry the new skill text and example, every relative
 Markdown link in the skill resolves, and the example passes `present check`
 with no faults or warnings.
 
 | Input | Value |
 |---|---|
-| Candidate | `codeflow 4.0.0`, source `9e0ba03e266842b65290518ad1a16c5d9a9b2e08`, `dirty=false`, SHA-256 `2af8ab99879e4ef33d12f369e1c43e5b4016261b7ea2d14e36201d1997ffa4ba` |
+| Candidate | `codeflow 4.0.0`, source `c5de5a9743e1bc12cce1c0ea7f60a044106421a3`, `dirty=false`, SHA-256 `a896e6dd09a7b299a48ef5812e2f89f04a409577ed10ce72884957c96da9af54` |
 | Baseline | `codeflow 3.1.1`, source `48104f48b4291ee3510a73c487eeb97e51fe9d2a`, `dirty=false`, the release asset, SHA-256 `b20efcaf432e24fccf1708850534b4c1b115ab3d6b0155adbb162279bd8f854d` |
 
 | Check | Fresh install | Update from 3.1.1 |

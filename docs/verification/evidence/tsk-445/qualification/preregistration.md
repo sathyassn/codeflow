@@ -149,3 +149,34 @@ evidence.
   this worktree's `target/`. It must be found and verified, or rebuilt and
   registered under its new digest, before the comparison arm runs.
 - State: no trial in this cohort has launched.
+
+## Cohort registered 2026-11-04, at the review fix head
+
+This registration supersedes every candidate, comparison executable, suite
+and harness selection above for new trials. The review fixes changed the
+skill text and `requirements_version`, so the `9e0ba03e2` pin cannot qualify
+this head. No trial of any earlier cohort ran. Requested subject, seat,
+order, prompts, pass rule and evidence stay as registered on 2026-11-03.
+
+- Candidate source: `c5de5a9743e1bc12cce1c0ea7f60a044106421a3`, which carries
+  integration tip `9c5f665cf014b3e1aa3213c1fd6175db952d2b1c` and the review
+  fixes.
+- Candidate executable: `target/qualification-pins/c5de5a974/codeflow`, copied
+  from the clean `target/debug/codeflow` built at that commit. Version:
+  `codeflow 4.0.0`, source as above, `dirty=false`, hook inputs
+  `d84c012f36a202d8094dd883da1cc4c1a75e5f7aeea6b8344d2ee296392746af`.
+  SHA-256: `a896e6dd09a7b299a48ef5812e2f89f04a409577ed10ce72884957c96da9af54`.
+- Comparison executable: the binary with SHA-256 `70426e4e...` registered
+  earlier was not found on this host after the 2026-11-04 restart. It was
+  rebuilt from source `0f08dd7f805f7efb8b04e04f180687e08236f481` in its own
+  worktree and target. Version: `codeflow 3.2.0`, source as above,
+  `dirty=false`, hook inputs
+  `4d6bc8929722dfb1059d6735b22fa903d68d5070a2984a3a31c9a16a0f6a3eeb`.
+  Pinned at `target/qualification-pins/0f08dd7f8/codeflow`, SHA-256
+  `923439d2e68341151be6106b8671992eed532e209c2f0434c3de95271dfc8dcd`.
+- Suite: `sha256:793e2a8ab5fa82811a9eb27f1523376012213c637d7ed88921777e8ed883e7cd`,
+  from `suite_digest()` in `eval_kit.py` at the candidate.
+- Harness: `claude --version` reports `2.1.318`.
+- Commits after this registration change evidence only. A change to the
+  skills or the suite needs a new registration before any trial.
+- State: no trial in this cohort has launched.
