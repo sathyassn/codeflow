@@ -3,7 +3,8 @@
 use clap::{ArgGroup, Args, Subcommand};
 use codeflow_core::registry::codeflow_home;
 use codeflow_core::testing::gate::{
-    gate_uses_cargo, run_gate_with_options, CoverageReport, FailureReport, GateOptions, GateOutcome,
+    configured_heavy_wait, gate_uses_cargo, run_gate_with_options, CoverageReport, FailureReport,
+    GateOptions, GateOutcome,
 };
 use codeflow_core::testing::gate_guard::{
     acquire_gate_lock, check_cargo_target_dir, gate_lock_status, lock_dirs, GateLock,
@@ -28,7 +29,8 @@ pub struct TestArgs {
     pub mode: String,
 
     /// Seconds heavy work waits for a host-exclusive target, or a
-    /// host-exclusive target for other heavy runs. Default zero.
+    /// host-exclusive target for other heavy runs. Overrides
+    /// `execution.heavy_wait_seconds`, whose default is zero.
     #[arg(long, value_name = "SECONDS")]
     pub wait_seconds: Option<u64>,
 
@@ -299,7 +301,9 @@ fn guard_gate(
     let dirs = lock_dirs(root, codeflow_home().as_deref()).map_err(|error| {
         format!("gate lock unavailable: cannot discover repository: {error}; repair repository metadata, then rerun `codeflow doctor --check permissions`")
     })?;
-    let wait = std::time::Duration::from_secs(wait_seconds.unwrap_or(0));
+    let wait = std::time::Duration::from_secs(
+        wait_seconds.unwrap_or_else(|| configured_heavy_wait(root, config)),
+    );
     let start = std::time::Instant::now();
     let mut announced = false;
     let lock = loop {

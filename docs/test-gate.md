@@ -106,12 +106,14 @@ lease and slot, then queues for exclusivity in FIFO publication order. New
 shared arrivals and ordinary successors reacquiring admission inspect the
 queue under the same mutex used to publish tickets; they cannot slip ahead
 of a published exclusive request. Queue waits report their holder and are
-bounded by `--wait-seconds`, default zero, then return a named not-run result:
-the summary prints `NOT RUN, host held` for the target, the message names the
-holder and the flag, and the gate still fails. A full gate with a
-`host_exclusive` target on a host shared with other gates passes a wait, such
-as `--wait-seconds 1800`; hosted runs have the machine to themselves. New heavy
-runs stay behind the queued request during that wait.
+bounded by `execution.heavy_wait_seconds`, default zero, which `--wait-seconds`
+overrides. They then return a named not-run result: the summary prints `NOT RUN,
+host held` for the target, the message names the holder and the flag, and the
+gate still fails. A project with a `host_exclusive` target whose full gates
+share a host with other gates sets a wait in its test config; this repository
+sets 600 seconds, and a change to that value cites the wait a real candidate
+needed. New heavy runs stay behind a queued request during that wait; when
+their own wait ends, their refusal names the waiting target and says to retry.
 Short queue-metadata transactions have their own bounded serialization wait.
 Legacy busy slots and live orphan groups still exclude exclusive work.
 Older binaries do not inspect the queue and can delay a writer until refusal;

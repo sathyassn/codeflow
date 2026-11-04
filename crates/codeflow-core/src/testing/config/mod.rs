@@ -76,12 +76,12 @@ pub struct ExecutionConfig {
     #[serde(default, skip_serializing_if = "QuickTargetClass::is_light")]
     pub quick_default_class: QuickTargetClass,
 
-    /// Maximum wait for a host-exclusive target: for a heavy run while one
-    /// holds or queues for the host, and for one while other heavy runs hold it. Set only
-    /// by `codeflow test --wait-seconds`, never by the config file; heavy
-    /// runs never wait for each other (TSK-1145).
-    #[serde(skip)]
-    pub heavy_wait_seconds: u64,
+    /// Maximum seconds to wait for a host-exclusive target: for a heavy run
+    /// while one holds or queues for the host, and for one while other heavy
+    /// runs hold it. Omitted means zero; `--wait-seconds` overrides it. Heavy
+    /// runs never wait for each other (TSK-1145), and a wait is always announced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heavy_wait_seconds: Option<u64>,
 
     /// Jobs all heavy runs on this host share. Omitted computes it from the
     /// logical cores and available memory (`testing::capacity`).

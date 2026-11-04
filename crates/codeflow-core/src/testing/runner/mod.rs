@@ -505,7 +505,8 @@ pub fn run_dependency_targets_with_admission(
                 // Heavy runs never wait for each other (TSK-1145): admission
                 // refuses only while a host-exclusive target holds the host,
                 // and then waits up to the run's bound.
-                let bound = Duration::from_secs(execution.heavy_wait_seconds);
+                let wait_seconds = execution.heavy_wait_seconds.unwrap_or(0);
+                let bound = Duration::from_secs(wait_seconds);
                 match super::gate_guard::acquire_project_gate_lock(
                     project_dir,
                     if quick { "quick" } else { mode },
@@ -524,8 +525,7 @@ pub fn run_dependency_targets_with_admission(
                         if message.contains("host-exclusive") && since.elapsed() < bound {
                             if first_wait {
                                 progress!(
-                                    "[codeflow test] waiting up to {}s for heavy work: {message}",
-                                    execution.heavy_wait_seconds
+                                    "[codeflow test] waiting up to {wait_seconds}s for heavy work: {message}"
                                 );
                             }
                             waiting = true;
@@ -542,7 +542,7 @@ pub fn run_dependency_targets_with_admission(
             }
             if target.host_exclusive {
                 _admission = None;
-                let bound = Duration::from_secs(execution.heavy_wait_seconds);
+                let bound = Duration::from_secs(execution.heavy_wait_seconds.unwrap_or(0));
                 match super::gate_guard::hold_host_exclusive(project_dir, bound) {
                     Ok(hold) => {
                         progress!(

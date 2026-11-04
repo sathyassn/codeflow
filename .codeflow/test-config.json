@@ -58,6 +58,7 @@
       "scripts/fixtures/coverage-merge/**",
       "scripts/test_gate_portal_windows.py"
     ],
+    "heavy_wait_seconds": 600,
     "worker_budget": 9
   },
   "defaults": {

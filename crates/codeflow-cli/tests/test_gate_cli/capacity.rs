@@ -532,6 +532,123 @@ fn a_held_host_reads_as_not_run_and_names_the_wait() {
     );
 }
 
+/// `execution.heavy_wait_seconds` makes a host-exclusive target wait for the
+/// host with no flag, and `--wait-seconds` overrides it.
+#[cfg(unix)]
+#[test]
+fn a_configured_wait_holds_for_the_host_and_the_flag_overrides_it() {
+    let home = tempfile::tempdir().unwrap();
+    let first = repo(&holding("full", ""));
+    let exclusive = linked_worktree(
+        first.path(),
+        "exclusive-configured",
+        &marking(
+            "full",
+            r#""heavy_wait_seconds":30"#,
+            r#","host_exclusive":true"#,
+        ),
+    );
+    let (mut holder, rx, _stdout) = spawn(command(
+        first.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx, "starting target 'holder'");
+
+    let refused = run(
+        &exclusive,
+        home.path(),
+        &["test", "--mode", "full", "--wait-seconds", "0"],
+    );
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(!exclusive.join("ran").exists());
+
+    let (mut waiting, waiting_rx, _waiting_out) =
+        spawn(command(&exclusive, home.path(), &["test", "--mode", "full"]));
+    wait_for(&waiting_rx, "host-exclusive target waiting for");
+    release(first.path());
+    assert!(holder.wait().unwrap().success());
+    assert!(waiting.wait().unwrap().success());
+    assert!(exclusive.join("ran").exists());
+}
+
+/// A reserve reads the same configured wait, and its flag overrides it.
+#[cfg(unix)]
+#[test]
+fn a_reserve_waits_as_configured_and_its_flag_overrides_it() {
+    let home = tempfile::tempdir().unwrap();
+    let first = repo(&holding("full", "").replace(
+        r#""runner":"custom""#,
+        r#""heavy":true,"host_exclusive":true,"runner":"custom""#,
+    ));
+    let other = linked_worktree(
+        first.path(),
+        "reserving",
+        &marking("full", r#""heavy_wait_seconds":30"#, ""),
+    );
+    let (mut holder, rx, _stdout) = spawn(command(
+        first.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx, "starting target 'holder'");
+
+    let refused = run(
+        &other,
+        home.path(),
+        &["reserve", "--wait-seconds", "0", "--", "true"],
+    );
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+
+    let (mut reserve, reserve_rx, _reserve_out) =
+        spawn(command(&other, home.path(), &["reserve", "--", "true"]));
+    wait_for(&reserve_rx, "waiting up to 30s");
+    release(first.path());
+    assert!(holder.wait().unwrap().success());
+    assert!(reserve.wait().unwrap().success());
+}
+
+/// While a candidate's host-exclusive target queues for the host, another
+/// run is refused with a message that names the candidate and says to retry,
+/// so nobody diagnoses the refusal as a defect.
+#[cfg(unix)]
+#[test]
+fn a_run_refused_behind_a_waiting_candidate_names_it_and_says_to_retry() {
+    let home = tempfile::tempdir().unwrap();
+    let first = repo(&holding("full", ""));
+    let candidate = linked_worktree(
+        first.path(),
+        "waiting-candidate",
+        &marking("full", "", r#","host_exclusive":true"#),
+    );
+    let other = linked_worktree(first.path(), "other", &marking("full", "", ""));
+    let (mut holder, rx, _stdout) = spawn(command(
+        first.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx, "starting target 'holder'");
+    let (mut waiting, waiting_rx, _waiting_out) = spawn(command(
+        &candidate,
+        home.path(),
+        &["test", "--mode", "full", "--wait-seconds", "30"],
+    ));
+    wait_for(&waiting_rx, "host-exclusive target waiting for");
+
+    let refused = run(&other, home.path(), &["test", "--mode", "full"]);
+    let errors = stderr(&refused);
+    release(first.path());
+    assert!(holder.wait().unwrap().success());
+    assert!(waiting.wait().unwrap().success());
+
+    assert_eq!(refused.status.code(), Some(1), "{errors}");
+    assert!(errors.contains("is waiting for the host"), "{errors}");
+    assert!(errors.contains("waiting-candidate"), "{errors}");
+    assert!(errors.contains("retry"), "{errors}");
+    assert!(errors.contains("not a defect"), "{errors}");
+    assert!(!other.join("ran").exists());
+}
+
 /// R483-04: under a budget lowered to two jobs, targets that declare four
 /// workers still run, each with two jobs, in full and in quick runs. Before
 /// the fix a full run left them pending and failed with "unsatisfied

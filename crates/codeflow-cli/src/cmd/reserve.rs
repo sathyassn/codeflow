@@ -12,8 +12,9 @@ use std::time::{Duration, Instant};
 pub struct ReserveArgs {
     /// Maximum seconds to wait for an active or queued host-exclusive target.
     /// Zero refuses immediately. Ordinary shared runs do not make a reserve wait.
-    #[arg(long, default_value_t = 0)]
-    pub wait_seconds: u64,
+    /// Overrides `execution.heavy_wait_seconds`, whose default is zero.
+    #[arg(long)]
+    pub wait_seconds: Option<u64>,
     /// Stop the command and its descendants after this many seconds.
     #[arg(long, default_value_t = 3600)]
     pub timeout_seconds: u64,
@@ -53,7 +54,11 @@ pub fn run(args: &ReserveArgs) -> i32 {
     }
     let width = cap.width(execution.worker_budget);
     let start = Instant::now();
-    let wait = Duration::from_secs(args.wait_seconds);
+    let wait_seconds = args
+        .wait_seconds
+        .or(execution.heavy_wait_seconds)
+        .unwrap_or(0);
+    let wait = Duration::from_secs(wait_seconds);
     let mut announced = false;
     let lock = loop {
         match acquire_project_gate_lock(&root, "reserve") {
@@ -66,8 +71,7 @@ pub fn run(args: &ReserveArgs) -> i32 {
                 if !announced {
                     announced = true;
                     eprintln!(
-                        "codeflow reserve: waiting up to {}s: {message}",
-                        args.wait_seconds
+                        "codeflow reserve: waiting up to {wait_seconds}s: {message}"
                     );
                 }
                 std::thread::sleep(Duration::from_millis(50));

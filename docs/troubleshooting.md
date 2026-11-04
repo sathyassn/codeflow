@@ -139,7 +139,8 @@ lists accepted forms, normalization and refusal details.
 Timing-sensitive targets declare `host_exclusive: true`. After their own
 siblings finish, they release shared admission and queue for the host in FIFO
 order. Later queue-aware shared arrivals defer; waits name the holder and end
-within `--wait-seconds` (default zero) in admission or refusal. Legacy slots
+within `execution.heavy_wait_seconds` or `--wait-seconds` (default zero) in
+admission or refusal. Legacy slots
 and live orphan groups still exclude them. Older binaries ignore the queue,
 so mixed-version fairness is not guaranteed. An enclosing reserve cannot
 release its parent's reservation to run an exclusive target.

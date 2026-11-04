@@ -282,7 +282,7 @@ fn run_configured(
     config_digest: &str,
 ) -> Result<GateOutcome, TestingError> {
     if let Some(seconds) = options.heavy_wait_seconds {
-        execution.heavy_wait_seconds = seconds;
+        execution.heavy_wait_seconds = Some(seconds);
     }
     delivery::check_only(project_dir, &targets, &effective_mode, &options.only)?;
     let home = crate::registry::codeflow_home();
@@ -727,6 +727,21 @@ fn copy_folder(
             .map_err(|error| (true, target.clone(), error))?;
     }
     Ok(())
+}
+
+/// The test config's `execution.heavy_wait_seconds`. An unreadable config reads
+/// as zero; [`run_gate`] reports that error itself. `named` is the config a
+/// caller names with `--config`, read instead.
+#[must_use]
+pub fn configured_heavy_wait(project_dir: &Path, named: Option<&Path>) -> u64 {
+    let config = match named {
+        Some(named) => load_named_test_config(named).map(|(config, _)| config),
+        None => load_test_config(&project_dir.join(TEST_CONFIG_PATH)),
+    };
+    config
+        .ok()
+        .and_then(|config| config.execution.heavy_wait_seconds)
+        .unwrap_or(0)
 }
 
 /// Whether a gate run in `mode` would run cargo: an enabled target that

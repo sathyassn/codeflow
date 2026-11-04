@@ -465,7 +465,19 @@ impl std::fmt::Display for LockHeld {
             .file_name()
             .is_some_and(|name| name == std::ffi::OsStr::new(queue::QUEUE_MUTEX))
         {
-            return write!(f, "host-exclusive admission is pending behind {holder}; heavy work waits for the queue (lock: {lock})");
+            if self.holder.contains("mode=queue metadata") {
+                return write!(
+                    f,
+                    "host-exclusive admission is pending behind {holder}; this run started \
+                     nothing, so retry it (lock: {lock})"
+                );
+            }
+            return write!(
+                f,
+                "a host-exclusive target is waiting for the host: {holder}. This run started \
+                 nothing and this is not a defect in it; heavy runs start after that target \
+                 has run, so retry then, or pass --wait-seconds <seconds> (lock: {lock})"
+            );
         }
         write!(
             f,
