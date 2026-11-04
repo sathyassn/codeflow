@@ -237,7 +237,7 @@ The hold lasts as long as the targets of the run that took it:
 | Case | Effect on older gates |
 |---|---|
 | Unix: every target of an admitted 4.0 run | Inherits the run's shared hold on `full-gate.lock`, so older gates stay out while any process of the target that kept it runs: after the gate ends, after it is killed, and for grandchildren too |
-| Windows | A target and all its descendants end when the gate exits or is killed (a kill-on-close job object), so nothing outlives the hold |
+| Windows | A target and all its descendants end when the gate exits or is killed (a kill-on-close job object). The hold is released as the gate exits, and nothing orders that release after the tree's end, so after a kill an older gate can start while the tree is still ending (TSK-1317) |
 | A daemon that closes the descriptors it inherited | It does not keep the hold, so an older gate can start beside it |
 | A daemon that keeps them, such as a build cache server a target starts | Older gates stay out until it exits; new runs are not affected. Stop the daemon to let an older gate in |
 | A target that unlocks the inherited descriptor itself | The hold ends for every process sharing it |

@@ -1288,8 +1288,10 @@ fn spawn_prepared(
         progress!("[codeflow test] warning: {error}");
     }
     // On Windows the target's tree ends with this process instead: the job
-    // is closed when the gate exits or is killed, so the lock never frees
-    // while a target of the gate runs.
+    // is closed when the gate exits or is killed. The OS also releases the
+    // gate's locks as it exits, and nothing orders that release after the
+    // tree's end, so a killed gate's lock can free while its tree is still
+    // ending (TSK-1317).
     #[cfg(windows)]
     let target_job = adopt_or_stop(target_job::TargetJob::adopt(&child), target_name, || {
         let _ = child.kill();
@@ -2625,8 +2627,8 @@ mod tests {
     }
 
     /// TSK-142 AC-3: when a gate is killed on Windows, its running target's
-    /// whole tree ends with it, so the OS never frees the gate lock while a
-    /// target of that gate still runs. The gate is this test binary run as
+    /// whole tree ends with it. Nothing orders the gate lock's release after
+    /// that end (TSK-1317). The gate is this test binary run as
     /// [`windows_gate_helper`]; the recorded pid is the target's grandchild
     /// (`cmd.exe` runs `powershell`), so the check covers the tree.
     ///
