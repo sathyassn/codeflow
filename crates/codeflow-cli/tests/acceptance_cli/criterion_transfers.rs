@@ -102,7 +102,17 @@ fn close_transfer_criterion(
     criterion: &str,
     result: &str,
 ) -> (bool, String) {
-    let acceptance = format!("acceptance:\n  reviewed: {}\n  review: session:transfer@sha256:00\n  criteria:\n    {criterion}: {result}\n  journey: none | ordinary criterion\n  not_verified: none\n  follow_ups: none: transfer recorded\n  verdict: approved\n", head(root));
+    close_transfer_reviewed(root, epic, criterion, result, &head(root))
+}
+
+fn close_transfer_reviewed(
+    root: &Path,
+    epic: &str,
+    criterion: &str,
+    result: &str,
+    reviewed: &str,
+) -> (bool, String) {
+    let acceptance = format!("acceptance:\n  reviewed: {reviewed}\n  review: session:transfer@sha256:00\n  criteria:\n    {criterion}: {result}\n  journey: none | ordinary criterion\n  not_verified: none\n  follow_ups: none: transfer recorded\n  verdict: approved\n");
     // Outside the repository: the completion binding must see no unrelated edit.
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(file.path(), acceptance).unwrap();
@@ -458,4 +468,64 @@ fn cancelled_native_task_cli_keeps_complete_moved_task_proof() {
     commit(root, "docs: cancel native task beside moved proof");
     let result = close_transfer(root, "EPC-002", "verified | own proof");
     assert!(result.0, "{}", result.1);
+}
+
+#[test]
+fn cancelled_foreign_membership_cli_requires_cancellation_at_both_points() {
+    for (before, now) in [
+        ("cancelled", "cancelled"),
+        ("todo", "cancelled"),
+        ("todo", "todo"),
+    ] {
+        let (dir, amendment) = transfer_plan("valid");
+        let root = dir.path();
+        let foreign_path = record_path("TSK-002");
+        let foreign = |status: &str| {
+            task(
+                "TSK-002",
+                status,
+                "- AC-1 Foreign work (serves EPC-001 AC-1)\n",
+                if status == "cancelled" {
+                    "- cancelled: withdrawn\n- scope: carried elsewhere\n"
+                } else {
+                    "Pending.\n"
+                },
+            )
+            .replacen("epic_id: EPC-001", "epic_id: EPC-003", 1)
+        };
+        write(
+            root,
+            "project-management/epics/EPC-003.md",
+            &transfer_epic("EPC-003", "planning", "- AC-1 Other work."),
+        );
+        write(root, &foreign_path, &foreign(before));
+        let reviewed = commit(root, "docs: record foreign membership at review");
+        if before != now {
+            write(root, &foreign_path, &foreign(now));
+            commit(root, "docs: cancel foreign task after review");
+        }
+        let result = close_transfer_reviewed(
+            root,
+            "EPC-001",
+            "AC-1",
+            &format!("waived | {amendment}"),
+            &reviewed,
+        );
+        assert_eq!(
+            result.0,
+            before == "cancelled",
+            "{before} -> {now}: {}",
+            result.1
+        );
+        if before != "cancelled" {
+            assert!(
+                result.1.contains("not a moved serving task"),
+                "{}",
+                result.1
+            );
+            if now == "cancelled" {
+                assert!(result.1.contains("cancelled after review"), "{}", result.1);
+            }
+        }
+    }
 }

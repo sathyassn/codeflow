@@ -245,12 +245,21 @@ fn resolve(
         let at_review = history
             .at(reviewed, task)?
             .ok_or("moved task missing at review")?;
-        if task.epic_id.as_deref() != Some(target.0.as_str())
-            || at_review.epic_id != task.epic_id
-            || at_review.criteria.signature() != task.criteria.signature()
+        let cancelled_at_both = task.status == "cancelled" && at_review.status == "cancelled";
+        // A discarded task supplies no proof and imposes no membership
+        // constraint. Its reviewed identity and criteria still must exist.
+        if at_review.criteria.signature() != task.criteria.signature()
+            || (!cancelled_at_both
+                && (task.epic_id.as_deref() != Some(target.0.as_str())
+                    || at_review.epic_id != task.epic_id))
         {
+            let cancellation = if task.status == "cancelled" && at_review.status != "cancelled" {
+                "; cancelled after review, so membership is still required"
+            } else {
+                ""
+            };
             return Err(format!(
-                "{} is not a moved serving task in the destination at review",
+                "{} is not a moved serving task in the destination at review{cancellation}",
                 task.id
             ));
         }

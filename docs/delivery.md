@@ -258,7 +258,10 @@ A, adds `- Amended YYYY-MM-DD: transferred to EPC-NNN AC-n.` beneath it,
 and introduces that destination criterion in open epic B. B's criterion
 must have the same obligation text and `(journey)` and `(after release)`
 tags; an aggregate summary or a criterion B already had does not qualify.
-The serving tasks belong to B at review. The reviewed commit contains this
+The serving tasks belong to B at review. A task cancelled both now and at
+review is excluded from that membership check and never supplies proof.
+A cancellation only after review grants no exception.
+The reviewed commit contains this
 planning commit, and A closes the source criterion only with `waived |
 <transfer commit SHA>`. A tick, a `verified` row and a different amendment
 commit do not close it. An after-release source keeps the deferral rule

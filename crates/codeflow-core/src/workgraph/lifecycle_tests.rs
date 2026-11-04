@@ -4277,3 +4277,60 @@ fn a_cancelled_native_task_does_not_replace_or_block_moved_task_proof() {
     )
     .unwrap();
 }
+
+#[test]
+fn cancelled_foreign_membership_is_ignored_only_when_the_review_already_saw_cancellation() {
+    for (before, now) in [
+        ("cancelled", "cancelled"),
+        ("todo", "cancelled"),
+        ("todo", "todo"),
+    ] {
+        let (repo, amendment) =
+            transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
+        let foreign_path = "project-management/tasks/TSK-002.md";
+        let foreign = |status: &str| {
+            task(
+                "TSK-002",
+                status,
+                TRANSFER_TAG,
+                if status == "cancelled" {
+                    "- cancelled: withdrawn\n- scope: carried elsewhere"
+                } else {
+                    "Pending."
+                },
+            )
+            .replacen("epic_id: EPC-001", "epic_id: EPC-003", 1)
+        };
+        repo.write(
+            "project-management/epics/EPC-003.md",
+            &epic("planning", "", "- AC-1 Other work.").replace("EPC-001", "EPC-003"),
+        );
+        repo.write(foreign_path, &foreign(before));
+        let reviewed = repo.commit("record foreign membership at review");
+        if before != now {
+            repo.write(foreign_path, &foreign(now));
+            repo.commit("cancel foreign task after review");
+        }
+        let acceptance = block(&["AC-1"], "none | ordinary criterion")
+            .replace(&"a".repeat(40), &reviewed)
+            .replace(
+                "verified | cargo test AC-1",
+                &format!("waived | {amendment}"),
+            );
+        let result = set_status(
+            repo.root(),
+            RecordKind::Epic,
+            "EPC-001",
+            &StatusChange {
+                acceptance: Some(acceptance),
+                ..change("complete")
+            },
+        )
+        .map(drop);
+        if before == "cancelled" {
+            assert!(result.is_ok(), "cancelled at both points: {result:?}");
+        } else {
+            assert!(refusal(result).contains("not a moved serving task"));
+        }
+    }
+}
