@@ -315,6 +315,8 @@ class DiscoverJourneyTests(unittest.TestCase):
             self.commit(origin, "integration/whole", whole)
             self.commit(origin, "integration/behind", behind)
             self.commit(origin, "integration/old", {"README": "x"})
+            folder = {key: text for key, text in whole.items() if key != "scripts/windows-test-times.json"}
+            self.commit(origin, "integration/folder", {**folder, "scripts/windows-test-times.json/x": "{}"})
             self.git(origin, "checkout", "-q", "--orphan", "other")
             clone = temp / "clone"
             self.git(temp, "clone", "-q", "--depth=1", "-b", "main", f"file://{origin.as_posix()}", str(clone))
@@ -327,6 +329,7 @@ class DiscoverJourneyTests(unittest.TestCase):
             self.assertIn("Left out: not proven active", summary)
             self.assertRegex(summary, r"integration/behind` at `[0-9a-f]{40}`: .*windows-partitions.py has no drift")
             self.assertRegex(summary, r"integration/old` at `[0-9a-f]{40}`: no scripts/")
+            self.assertRegex(summary, r"integration/folder` at `[0-9a-f]{40}`: no scripts/windows-test-times.json")
 
     def test_an_unreadable_remote_fails_the_run_and_offers_no_lines(self):
         with tempfile.TemporaryDirectory() as name:
