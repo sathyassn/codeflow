@@ -120,3 +120,32 @@ instruction diagnostic, not qualification of a production model binding.
 - State: no trial in this cohort has launched. Host reports build, fmt,
   clippy and rustdoc passed at the candidate; tests paused before the first
   Cargo test. These passes are not behavioral qualification evidence.
+
+## Resume cohort re-registered 2026-11-03, after the line merge
+
+This registration supersedes the 2026-11-03 candidate, suite and harness
+selections above for new trials. The merge of the integration line changed
+the suite and the embedded skills, so the earlier pin cannot qualify this
+head. No trial of the earlier cohort ran. Everything else above stays in
+force: requested subject, seat, comparison, order, prompts, pass rule and
+evidence.
+
+- Candidate source: `03c6e4b40a7af4dc7d18ffab05010bbd3699ca23`, the merge of
+  integration tip `a52b721389bf1dd4406d9368f1839d9bc3c25b0b`.
+- Candidate executable: `target/qualification-pins/03c6e4b40/codeflow`, copied
+  from the `target/debug/codeflow` built at that commit before this record
+  changed. Version: `codeflow 4.0.0`, source as above, `dirty=false`, hook
+  inputs `d84c012f36a202d8094dd883da1cc4c1a75e5f7aeea6b8344d2ee296392746af`.
+  SHA-256: `925c496b8a5d0deed2c588a64f493d3cef552a9c946013377171a3a6e9bb00bc`.
+  The commit carrying this record changes evidence only. Later builds must
+  not replace this pin. A later change to the skills or the suite needs a new
+  registration before any trial.
+- Suite: `sha256:72104600edd82c7c151e6d373795b3121f4654ccf5f39db808054003cb61701e`,
+  from `suite_digest()` in `eval_kit.py` at this commit.
+- Harness: `claude --version` reports `2.1.318` in this builder environment.
+  The host verifies the same version at launch.
+- Comparison executable: source `0f08dd7f8`, SHA-256
+  `70426e4eead8ff8f7bed53a7686154303f995c635fca2f408a7832540f066e49`, is not in
+  this worktree's `target/`. It must be found and verified, or rebuilt and
+  registered under its new digest, before the comparison arm runs.
+- State: no trial in this cohort has launched.
