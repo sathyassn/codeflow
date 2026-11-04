@@ -214,7 +214,8 @@ registered above is unchanged.
   no model turn ran. The tab was closed with the prompt unsent.
 
 No trial can run on Claude Code 2.1.318 until `runner.py` accepts that row
-layout. That fix is outside this task. Attempts 1 to 3 are `not_run`.
+layout. The coord/catalog ruling of 2026-11-04 put that fix in this task.
+Attempts 1 to 3 are `not_run`.
 - Runner fix: `ef7209a9b` teaches `runner.py` both 2.1.318 frames, with
   tests on the captures from attempts 1 and 3. The candidate pin is
   unchanged, since no skill file or suite entry moved.
