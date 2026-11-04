@@ -326,7 +326,7 @@
           "minimum": 1,
           "maximum": 3600,
           "default": 5,
-          "description": "Seconds allowed after a target stops for termination, reaping, watcher shutdown and pipe draining. A supervised process group still running at half this time is killed. Cleanup that does not finish is a non-pass. Omitted: 5."
+          "description": "Seconds allowed after a target stops for termination, reaping, watcher shutdown and pipe draining. On Unix a supervised process group still running at half this time is killed; on Windows the target's job is terminated when it stops. Cleanup that does not finish is a non-pass. Omitted: 5."
         }
       },
       "additionalProperties": false

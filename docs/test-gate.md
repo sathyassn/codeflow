@@ -92,10 +92,10 @@ continue executing their targets until their dependencies are declared.
 | `evidence.covers_modes` | Other modes, `quick` or `essential`, covered by this target's full command. The command must be identical; matching membership and other dependencies are still required |
 | `requires` and `outputs` | Producer relationships and their output files. A missing or changed producer output executes the consumer and its prerequisites |
 | `timeout_seconds` | Base deadline, default 600 seconds. Heavy targets have a ceiling four times this value; light targets retain a fixed deadline |
-| `cleanup_grace_seconds` | Time allowed after a target stops for termination, reaping and pipe draining, default 5 seconds, from 1 through 3600. A supervised process group still running at half this time is killed; cleanup that does not finish is a non-pass |
+| `cleanup_grace_seconds` | Time allowed after a target stops for termination, reaping and pipe draining, default 5 seconds, from 1 through 3600. On Unix a supervised process group still running at half this time is killed; on Windows the target's job is terminated when it stops. Cleanup that does not finish is a non-pass |
 | `stall_timeout_seconds` | Heavy-target inactivity window, default 300 seconds. Early stalls require valid scoped CPU accounting; otherwise the run explicitly uses its ceiling |
 
-Both deadline fields accept integers from 1 through 4611686018427386 seconds.
+`timeout_seconds` and `stall_timeout_seconds` accept integers from 1 through 4611686018427386 seconds.
 The loader and schema reject zero, fractional values and values beyond that
 bound. A stall window greater than the ceiling is valid; the ceiling wins.
 New stdout/stderr or increasing scoped CPU counts as activity. Process
@@ -127,9 +127,10 @@ reports `timed out at the ceiling after S s`. Both fail the gate with target
 exit 124; dependents retain the prerequisite's stall or timeout cause.
 An exit first observed after the ceiling cannot pass. Termination and pipe
 collection have a cleanup grace, `cleanup_grace_seconds`, default five
-seconds, including a descendant that keeps a pipe open. At half the grace a
-supervised group that has not ended is killed by the gate itself, so a slow
-watcher on a loaded host cannot turn a passing target into a failure. Incomplete cleanup remains a failure. Target summaries
+seconds, including a descendant that keeps a pipe open. On Unix, at half the
+grace a supervised group that has not ended is killed by the gate itself, so a
+slow watcher on a loaded host cannot turn a passing target into a failure. On
+Windows the target's job is terminated when the target stops. Incomplete cleanup remains a failure. Target summaries
 and saved `result.json` reports retain monitoring mode, deadline cause and
 `termination_unconfirmed`. Once membership or population evidence becomes
 uncertain, a direct-child exit, closed pipes and an empty original group do
