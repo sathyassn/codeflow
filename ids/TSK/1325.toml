@@ -1,0 +1,11 @@
+id = "TSK-1325"
+uid = "27a42a71-c2be-4c08-a7e7-67e63d12861d"
+kind = "TSK"
+title = "The group watcher closes descriptors in batches, not one call per descriptor"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-04T17:58:34Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
