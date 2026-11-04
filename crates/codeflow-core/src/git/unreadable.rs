@@ -94,9 +94,11 @@ pub fn scan_refs(repo: &git2::Repository) -> Unreadable {
 /// Whether reading the file at `git_path` under `workdir` is refused.
 #[must_use]
 pub fn is_refused(workdir: &Path, git_path: &[u8]) -> bool {
-    read_regular_file(&workdir.join(path_of(git_path)))
-        .as_ref()
-        .is_err_and(refused)
+    path_of(git_path).is_some_and(|relative| {
+        read_regular_file(&workdir.join(relative))
+            .as_ref()
+            .is_err_and(refused)
+    })
 }
 
 /// Stat `path`, then open it when it is a regular file. A sandbox refuses the
@@ -171,7 +173,7 @@ fn tracked_refused(repo: &git2::Repository, read: &dyn Fn(&Path) -> io::Result<(
         .iter()
         .filter(|entry| entry.mode & FILE_KIND_MASK == REGULAR_FILE)
         .filter_map(|entry| {
-            let relative = path_of(&entry.path);
+            let relative = path_of(&entry.path)?;
             read(&workdir.join(&relative))
                 .as_ref()
                 .is_err_and(refused)
@@ -180,15 +182,10 @@ fn tracked_refused(repo: &git2::Repository, read: &dyn Fn(&Path) -> io::Result<(
         .collect()
 }
 
-#[cfg(unix)]
-fn path_of(bytes: &[u8]) -> PathBuf {
-    use std::os::unix::ffi::OsStrExt;
-    PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
-}
-
-#[cfg(not(unix))]
-fn path_of(bytes: &[u8]) -> PathBuf {
-    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+/// The path of a git name, or `None` when this platform cannot hold its
+/// bytes: such a file cannot exist here, so nothing refused this process.
+fn path_of(bytes: &[u8]) -> Option<PathBuf> {
+    crate::git::GitName::from_bytes(bytes).os_path().ok()
 }
 
 /// A sandbox gives EPERM and file permissions give EACCES; both are this kind.
