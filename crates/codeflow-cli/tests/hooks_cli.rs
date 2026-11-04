@@ -3863,7 +3863,7 @@ fn pre_push_blocks_protected_and_honors_glob_extension() {
                 "git-hook",
                 "pre-push",
                 "origin",
-                "https://example.com/r.git",
+                "file:///nonexistent/r.git",
             ])
             .current_dir(dir.path()),
         &stdin,

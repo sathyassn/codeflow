@@ -1091,6 +1091,123 @@ fn standalone_task_does_not_trust_decoy_lines_or_another_epic() {
     }
 }
 
+/// TSK-1286: a task of an epic that declares the line as its `parent_line` in
+/// the line's fetched records is judged on that line; the same declaration
+/// made only in the head binds nothing, and a head that changes the trusted
+/// declaration is refused. Before the change every case was refused as
+/// "not the epic of branch".
+#[test]
+fn declared_parent_line_binds_only_from_the_line_records() {
+    const SECOND: &str = "project-management/epics/EPC-002.md";
+    let epic = |parent: &str| {
+        format!("---\nid: EPC-002\ntitle: Feature\nstatus: planning\nwork_type: feat\nspecs: []\n{parent}created: 2026-10-06\n---\n\n# Feature\n\n## Summary\n\nDeliver a feature.\n\n## Acceptance Criteria\n\n- AC-1 The feature runs.\n")
+    };
+    let declared = epic(&format!("parent_line: {LINE}\n"));
+    let plain = epic("");
+    let elsewhere = epic("parent_line: integration/EPC-009-elsewhere\n");
+    // (case, EPC-002 on the line, EPC-002 at the head, a text the run shows)
+    for (case, anchor, head, expected) in [
+        (
+            "declared",
+            &declared,
+            &declared,
+            format!("acceptance target '{LINE}' (branch declared target)"),
+        ),
+        ("head only", &plain, &declared, "is not trusted".to_string()),
+        (
+            "head changes",
+            &declared,
+            &elsewhere,
+            "a branch cannot change the line".to_string(),
+        ),
+    ] {
+        let (f, tip) = Line::standalone_on_remote_line();
+        let path = "project-management/tasks/TSK-002.md";
+        let record = std::fs::read_to_string(f.root().join(path)).unwrap();
+        f.git(&["switch", "-qc", "fixture/anchor", &tip]);
+        f.write(SECOND, anchor);
+        let anchor_tip = f.commit("docs: plan the feature epic");
+        f.git(&[
+            "update-ref",
+            &format!("refs/remotes/origin/{LINE}"),
+            &anchor_tip,
+        ]);
+        f.git(&["switch", "-q", "task/TSK-002-repair"]);
+        f.git(&["merge", "-q", "--no-edit", "fixture/anchor"]);
+        f.write(SECOND, head);
+        f.write(
+            path,
+            &record.replace("epic_id: null", "epic_id: EPC-002").replace(
+                "standalone_reason: Bounded repair",
+                "standalone_reason: null",
+            ),
+        );
+        f.commit("docs: move the repair to the feature epic");
+        let text = output(&ci(&f, &[], None));
+        assert!(text.contains(&expected), "{case}: {text}");
+        if case == "declared" {
+            assert!(
+                text.contains(&format!("range {}..", &anchor_tip[..8])),
+                "{case}: {text}"
+            );
+        } else {
+            assert!(
+                !text.contains(&format!("acceptance target '{LINE}'")),
+                "{case}: {text}"
+            );
+            assert!(
+                text.contains("base falls back to the policy protected branches"),
+                "{case}: {text}"
+            );
+        }
+    }
+}
+
+/// TSK-1286 review: when the protected branch binds the line, the line's
+/// fetched tip is still read, and a refusal or an unreadable record there
+/// wins. At 5dcc8d8ce the protected binding returned before the tip was
+/// read, so both cases selected the line.
+#[test]
+fn a_refusing_or_unreadable_line_tip_outweighs_the_protected_binding() {
+    for case in ["cancelled", "unreadable"] {
+        let f = Line::new();
+        f.git(&["push", "-q", "origin", "main"]);
+        let epic = std::fs::read_to_string(f.root().join(super::line_adoption::fixture::EPIC_PATH))
+            .unwrap();
+        let changed = if case == "cancelled" {
+            epic.replace("status: planning", "status: cancelled")
+        } else {
+            "---\nid: [unclosed\n---\n".to_string()
+        };
+        f.write(super::line_adoption::fixture::EPIC_PATH, &changed);
+        f.commit("docs: change the line's records");
+        f.git(&["push", "-q", "origin", LINE]);
+        f.git(&["switch", "-qc", "task/TSK-001-work", "main"]);
+        f.write("src/lib.rs", "pub fn work() {}\n");
+        f.commit("feat: work");
+        let out = ci(&f, &[], None);
+        let text = output(&out);
+        assert!(
+            !text.contains(&format!(
+                "acceptance target '{LINE}' (branch declared target)"
+            )),
+            "{case}: {text}"
+        );
+        if case == "cancelled" {
+            // The rejection is a warning: the run falls back to the
+            // protected branch instead of judging the head on the line.
+            assert!(
+                text.contains(&format!("which is cancelled on 'origin/{LINE}'"))
+                    && text.contains("base falls back to the policy protected branches"),
+                "{case}: {text}"
+            );
+        } else {
+            // An unreadable record at the tip stops the run.
+            assert_ne!(out.status.code(), Some(0), "{case}: {text}");
+        }
+    }
+}
+
 /// TSK-398: a local branch named `origin/main` (`refs/heads/origin/main`)
 /// at an author commit never stands in for the remote-tracking
 /// `refs/remotes/origin/main`, whichever source names the base branch. The

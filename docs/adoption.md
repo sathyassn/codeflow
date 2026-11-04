@@ -371,9 +371,10 @@ unverified.
   `pull_request_target`.
 - GitHub runs that workflow from the default branch, so a pull request cannot
   edit the job that judges it.
-- The job checks out the pull request's base commit, so a pull request into
-  an integration branch is judged by that branch's pin and policy, not the
-  default branch's.
+- The job checks out the default branch's commit, whose pin and policy judge
+  every pull request (ADR-0091); it fails without `.codeflow/policy.json`.
+- Other events check the id registry in `codeflow-registry.yml`, never under
+  a `trusted:` name.
 
 An upgrade therefore takes two pull requests, in order:
 
@@ -424,8 +425,7 @@ The pin does not defend the CI file itself.
 - On a GitHub `pull_request` event, and on every GitLab and Bitbucket
   pipeline, the job file runs from the pull request, so a pull request that
   edits it can change its own install step.
-- Only `codeflow-policy.yml`, which also carries the id registry check, runs
-  from the default branch.
+- Only `codeflow-policy.yml` runs from the default branch.
 
 Require review of your CI files (`.github/workflows/`, `.gitlab-ci.yml`,
 `bitbucket-pipelines.yml`) and `.codeflow/` in your host's rules, for example

@@ -155,10 +155,18 @@ when the checkout changes the table. Requiring the
 table there would leave a fresh `codeflow init`, and the first upgrade that
 adds it, unable to pass, since the target they are judged by has no table
 yet. A missing checksum file, a missing entry or a mismatch fails the job;
-nothing unverified is installed. The enforcing jobs run on
-`pull_request_target`, which takes the workflow from the default branch; they
-check out the pull request's base commit, so the target's pin and policy
-apply, and read the pull request head only as git data.
+nothing unverified is installed. The verdict job, `trusted: commit
+standards`, runs on `pull_request_target`, which takes the workflow from the
+default branch for every pull request whatever it targets. It checks that
+the run is for the default branch, checks out exactly that commit
+(`github.sha`), so the default branch's pin and policy apply to a pull
+request into a line too (ADR-0091), fetches the pull request's base and head
+only as git data, and asserts after every step that the checkout has not
+moved, and it refuses when that commit has no `.codeflow/policy.json`.
+Push, schedule and dispatch runs only check the id registry, in their own
+workflow, `codeflow-registry.yml`, under the name `registry check`: a
+workflow those events start creates no check under a `trusted:` name, not
+even a skipped one, which GitHub would count as passing.
 
 The GitLab, Bitbucket and generic wrappers run one shared script (the text
 between the `codeflow pinned run` markers is the same in all three). It reads
@@ -235,9 +243,9 @@ by a body edit sends two events seconds apart. Pull request runs share one
 concurrency group per pull request, so the newer run cancels the older one.
 The run that judges reads the pull request's body from the API when it runs,
 not from its event, so the newest body is judged whichever run survives; for
-that, the job's token gains `pull-requests: read` and stays read-only. Push,
-schedule and dispatch runs each get a group of their own and are never
-cancelled, so a registry check is never replaced by a newer event.
+that, the job's token gains `pull-requests: read` and stays read-only.
+`codeflow-registry.yml` has no concurrency group, so a registry check is
+never replaced by a newer event.
 Concurrency groups are shared across the repository, so any workflow that
 names the same group can cancel the policy check; that fails closed, since
 a cancelled check never passes, and requiring approval to run workflows
