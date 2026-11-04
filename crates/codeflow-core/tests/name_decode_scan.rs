@@ -4186,14 +4186,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // A failed open returns an unknown working state, and classify_cleanup maps it to RetainUnproven.
-    (
-        "crates/codeflow-core/src/status.rs",
-        "working_state",
-        "obtain-absent:Repository::open",
-        1,
-        "unproven",
-    ),
     // A non-string schema_version becomes unsupported version Err; the empty placeholder is never an accepted default. run_gate propagates UnsupportedSchemaVersion as TestingError.
     (
         "crates/codeflow-core/src/testing/config/mod.rs",
