@@ -171,8 +171,9 @@ legacy base is recorded as `unknown`; restart cannot turn it into deletion
 authority. A present orphan with no base is kept and unmanaged
 (SPC-015 R-1/R-6/R-14/R-19).
 
-Only a non-template, non-region file whose bytes exactly match a retained
-release is eligible for `release`. R-5/R-8 allow a proven source-only
+Only a non-template file whose base bytes (the file, or for a region the
+block the binary extracts from it without project inputs) the recorded
+release's `src` reproduces exactly is eligible for `release`. R-5/R-8 allow a proven source-only
 conversion on publication without a shared stamp: store the release source
 before removing the redundant pack. Unrelated resyncs keep other entries
 unchanged.
