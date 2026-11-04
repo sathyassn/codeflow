@@ -172,7 +172,7 @@ impl QueryLimits {
     fn set_by(self) -> String {
         match self.source {
             Source::Policy => {
-                format!("{TIMEOUT_KEY} and {ATTEMPTS_KEY} on the default branch set these")
+                format!("{TIMEOUT_KEY} and {ATTEMPTS_KEY} in the policy this run reads set these")
             }
             Source::Guard => format!(
                 "a session guard waits at most {}s for each such lookup, whatever {TIMEOUT_KEY} says, and its {}s deadline bounds the whole command inside the harness's {}s hook timeout",
@@ -335,7 +335,7 @@ pub fn fetch_objects(
             Failure::Exit(_) => format!("`git fetch {}` failed", display_url(url)),
             Failure::Authentication => AUTHENTICATION_FAILED.into(),
             Failure::Timeout(deadline) => format!(
-                "no answer within {}; {FETCH_TIMEOUT_KEY} on the default branch sets this",
+                "no answer within {}; {FETCH_TIMEOUT_KEY} in the policy this run reads sets this",
                 seconds(deadline)
             ),
             Failure::Other(why) => why,

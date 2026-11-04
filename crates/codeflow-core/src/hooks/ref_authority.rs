@@ -509,7 +509,11 @@ pub fn recovery_fetch(command: &str, root: &Path) -> bool {
     if !command.chars().all(plain) || super::git_guard::transport_config_environment(command) {
         return false;
     }
-    let words: Vec<String> = command.split_whitespace().map(str::to_string).collect();
+    let words: Vec<String> = command
+        .split([' ', '\t'])
+        .filter(|word| !word.is_empty())
+        .map(str::to_string)
+        .collect();
     words.len() <= 3
         && words.first().is_some_and(|word| word == "git")
         && words.get(1).is_some_and(|word| word == "fetch")
@@ -980,6 +984,10 @@ mod tests {
             "git fetch ori\\gin",
             "git fetch $NAME",
             "git fetch origin # note",
+            "git\u{a0}fetch origin",
+            "git fetch\u{2003}origin",
+            "git fetch origin\u{85}",
+            "git\u{3000}fetch\u{3000}origin",
         ] {
             assert!(!recovery_fetch(line, plain.path()), "{line}");
         }
