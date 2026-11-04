@@ -491,7 +491,8 @@ fn binding(
         .integration_target
         .as_deref()
         .filter(|target| !target.is_empty());
-    match super::release_line::checkout_scope(repo_root, into) {
+    let limits = crate::git::remote_query::QueryLimits::from_authority_or_default(repo_root);
+    match super::release_line::checkout_scope(repo_root, into, limits) {
         Ok(scope) if scope.release() => shown(at_head),
         Ok(_) => {
             // In the task's own pull request, a waiver may name a record-only
