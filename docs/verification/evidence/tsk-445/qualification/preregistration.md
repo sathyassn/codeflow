@@ -130,13 +130,13 @@ head. No trial of the earlier cohort ran. Everything else above stays in
 force: requested subject, seat, comparison, order, prompts, pass rule and
 evidence.
 
-- Candidate source: `03c6e4b40a7af4dc7d18ffab05010bbd3699ca23`, the merge of
-  integration tip `a52b721389bf1dd4406d9368f1839d9bc3c25b0b`.
-- Candidate executable: `target/qualification-pins/03c6e4b40/codeflow`, copied
+- Candidate source: `9e0ba03e266842b65290518ad1a16c5d9a9b2e08`, the merge of
+  integration tip `fe66d4c627408656b982d341ddf1d0dada5dec19`.
+- Candidate executable: `target/qualification-pins/9e0ba03e2/codeflow`, copied
   from the `target/debug/codeflow` built at that commit before this record
   changed. Version: `codeflow 4.0.0`, source as above, `dirty=false`, hook
   inputs `d84c012f36a202d8094dd883da1cc4c1a75e5f7aeea6b8344d2ee296392746af`.
-  SHA-256: `925c496b8a5d0deed2c588a64f493d3cef552a9c946013377171a3a6e9bb00bc`.
+  SHA-256: `2af8ab99879e4ef33d12f369e1c43e5b4016261b7ea2d14e36201d1997ffa4ba`.
   The commit carrying this record changes evidence only. Later builds must
   not replace this pin. A later change to the skills or the suite needs a new
   registration before any trial.

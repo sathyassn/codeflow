@@ -7,7 +7,7 @@ with no faults or warnings.
 
 | Input | Value |
 |---|---|
-| Candidate | `codeflow 4.0.0`, source `03c6e4b40a7af4dc7d18ffab05010bbd3699ca23`, `dirty=false`, SHA-256 `925c496b8a5d0deed2c588a64f493d3cef552a9c946013377171a3a6e9bb00bc` |
+| Candidate | `codeflow 4.0.0`, source `9e0ba03e266842b65290518ad1a16c5d9a9b2e08`, `dirty=false`, SHA-256 `2af8ab99879e4ef33d12f369e1c43e5b4016261b7ea2d14e36201d1997ffa4ba` |
 | Baseline | `codeflow 3.1.1`, source `48104f48b4291ee3510a73c487eeb97e51fe9d2a`, `dirty=false`, the release asset, SHA-256 `b20efcaf432e24fccf1708850534b4c1b115ab3d6b0155adbb162279bd8f854d` |
 
 | Check | Fresh install | Update from 3.1.1 |
