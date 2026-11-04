@@ -127,8 +127,8 @@ line tip. `codeflow ci --base <line-tip> --head <candidate> --into <line>`
 reports its landing class. A **records-only** candidate needs
 `codeflow validate --docs`, a clean `codeflow ci` on that range, the
 built-in secret scan of every introduced commit, each target the project
-lists in `execution.record_checks` of `.codeflow/test-config.json` (run in
-full mode) and `codeflow test --mode quick --all`.
+lists in `execution.record_checks` of its test config (run in full mode)
+and `codeflow test --mode quick --all`.
 A **code** candidate keeps one full gate on the exact candidate. A protected
 target, or one matching the release branch pattern (`integration/release-*`
 or `git.release_branch_pattern`), keeps its full gate whatever the diff. A
