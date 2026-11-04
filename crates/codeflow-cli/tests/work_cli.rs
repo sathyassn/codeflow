@@ -3056,11 +3056,16 @@ fn claim_checks_out_a_tracked_harness_symlink_without_writing_its_target() {
     let shared = tempfile::tempdir().unwrap();
     write(shared.path(), "agents/worker.md", "shared instructions\n");
     std::os::unix::fs::symlink(shared.path(), root.join(".claude")).unwrap();
-    git(root, &["add", ".claude"]);
+    write(
+        root,
+        ".codeflow/policy.json",
+        r#"{"schema_version":1,"git":{"worktree_locations":[".claude/worktrees",".worktrees"]}}"#,
+    );
+    git(root, &["add", ".claude", ".codeflow/policy.json"]);
     git(root, &["commit", "-qm", "chore: link harness instructions"]);
     let permissions = std::fs::metadata(shared.path()).unwrap().permissions();
     // The requested destination is under .worktrees, so validation must
-    // not read the unrelated .claude/worktrees location through this link.
+    // not require access to the unrelated .claude/worktrees alternative.
     std::fs::set_permissions(shared.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
     let out = cli(
         root,

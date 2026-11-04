@@ -2146,13 +2146,20 @@ fn claim_destination(repo_root: &Path, destination: &Path) -> Result<PathBuf, St
     let path = resolve(&path)?;
     let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root)?;
     let mut allowed = false;
+    let mut unavailable = None;
     for location in &policy.git.worktree_locations {
         if let Some(location) = crate::root_checkout::expand_location(
             location,
             &root,
             &crate::root_checkout::process_env,
         ) {
-            let location = resolve(&location)?;
+            let location = match resolve(&location) {
+                Ok(location) => location,
+                Err(error) => {
+                    unavailable = Some(error);
+                    continue;
+                }
+            };
             if path != location && path.starts_with(&location) {
                 allowed = true;
                 break;
@@ -2160,6 +2167,11 @@ fn claim_destination(repo_root: &Path, destination: &Path) -> Result<PathBuf, St
         }
     }
     if !allowed {
+        if let Some(error) = unavailable {
+            return Err(format!(
+                "cannot establish an allowed worktree location: {error}"
+            ));
+        }
         return Err(format!(
             "worktree destination {} is outside git.worktree_locations",
             crate::git::display_path(&path)
