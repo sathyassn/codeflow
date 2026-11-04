@@ -147,7 +147,6 @@ release its parent's reservation to run an exclusive target.
 `exclusive: true` excludes siblings only. Ordinary work after host exclusivity
 reacquires a fresh share. Unconfirmed termination starts no successors and
 retains the allocation and exclusive lease until confirmation or gate exit.
-The reference explains ownership files and Unix watcher protection.
 
 Two runs that share a build output folder, such as two gates in one
 worktree, would write the same report or coverage file. nextest fixes its
@@ -205,12 +204,11 @@ heavy targets and records their Cargo, nextest, Rust-test and shell-oracle
 counts. A heavy target can set `workers` to wait until that many workers
 are free; when its run's budget is lower, it runs at the budget. Otherwise
 it shares the available workers with other ready heavy targets.
-Smaller requests may share accounted workers. A request taking the whole
-effective run budget drains all siblings, including light or unclassified
-work, and then runs alone within its gate. A contention reduction prints
-`workers N of M (host busy)` in progress and saved target stderr; caller caps
-and host capacity name their own causes. This repository sets nine workers
-and gives clippy a separate
+A request taking the whole effective run budget drains all siblings,
+including light or unclassified work, and then runs alone within its gate.
+A contention reduction prints `workers N of M (host busy)` in progress and
+saved target stderr; caller caps and host capacity name their own causes.
+This repository sets nine workers and gives clippy a separate
 `target/clippy` directory; its binary build waits for the all-target build.
 Each Cargo producer takes the full budget to avoid package-cache and
 build-directory waits, and timing-sensitive `read-benchmark` requests host
