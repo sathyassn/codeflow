@@ -130,6 +130,29 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "from_utf8_lossy",
         1,
         "grammar:test-source-text",
+    // These name() receivers are the closed Stage enum, not git2 objects.
+    // They return fixed ASCII labels for markers, checklist text and a template
+    // name allowlist; no Git or OS bytes are decoded by any of these calls.
+    (
+        "codeflow-core/src/capability/bootstrap.rs",
+        "Stage::marker",
+        "name",
+        1,
+        "format-contract",
+    ),
+    (
+        "codeflow-core/src/capability/bootstrap.rs",
+        "checklist",
+        "name",
+        3,
+        "format-contract",
+    ),
+    (
+        "codeflow-core/src/capability/bootstrap.rs",
+        "load_body",
+        "name",
+        1,
+        "format-contract",
     ),
     // Catalog paths are constructed only from validated UTF-8 checkout names or
     // Git tree text; invalid UTF-8 is refused before any record is constructed.
@@ -1599,6 +1622,39 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "is_whitespace",
         1,
         "schema-reject-only",
+    // The bootstrap reader owns LF/CRLF Markdown marker and checkbox records.
+    // lines() removes only physical record delimiters, not Unicode separators
+    // or bytes from paths, ids, marker contents or capability text.
+    (
+        "crates/codeflow-core/src/capability/bootstrap.rs",
+        "existing",
+        "lines",
+        1,
+        "framing:bootstrap-record-marker-lines",
+    ),
+    (
+        "crates/codeflow-core/src/capability/bootstrap.rs",
+        "run",
+        "lines",
+        1,
+        "framing:bootstrap-tracked-checklist-lines",
+    ),
+    (
+        "crates/codeflow-core/src/capability/bootstrap.rs",
+        "checklist",
+        "lines",
+        2,
+        "framing:bootstrap-checklist-lines",
+    ),
+    // Section assembly trims explicit ASCII blanks to reject empty sections,
+    // and only CR/LF framing around content. Indentation and Unicode spacing
+    // in nonempty template content are preserved, never normalized as identity.
+    (
+        "crates/codeflow-core/src/capability/bootstrap.rs",
+        "with_body",
+        "trim_matches",
+        3,
+        "framing:bootstrap-template-sections",
     ),
     // rev-parse emits a validated hexadecimal tree id and a terminal newline;
     // this does not trim a revision supplied by the caller or a repository name.
@@ -6465,6 +6521,26 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
 
 const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
     (
+        "bootstrap-record-marker-lines",
+        "crates/codeflow-core/src/capability/bootstrap.rs",
+        "existing",
+    ),
+    (
+        "bootstrap-tracked-checklist-lines",
+        "crates/codeflow-core/src/capability/bootstrap.rs",
+        "run",
+    ),
+    (
+        "bootstrap-checklist-lines",
+        "crates/codeflow-core/src/capability/bootstrap.rs",
+        "checklist",
+    ),
+    (
+        "bootstrap-template-sections",
+        "crates/codeflow-core/src/capability/bootstrap.rs",
+        "with_body",
+    ),
+    (
         "acceptance-input-lines",
         "crates/codeflow-core/src/workgraph/record_text.rs",
         "parse_acceptance",
@@ -7060,6 +7136,7 @@ const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"]
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/capability/evidence.rs", "existing_file", "ErrorKind::NotFound", 1, "The confined Tree opens every ancestor without following links; a missing file refuses the evidence entry, so absence never passes."),
     ("crates/codeflow-core/src/capability/evidence.rs", "existing_file", "is_file", 1, "Type check on confined metadata; anything but a regular file refuses the evidence entry."),
+    ("crates/codeflow-core/src/capability/bootstrap.rs", "read_optional", "ErrorKind::NotFound", 1, "Tree::read uses held no-follow directory handles and refuses linked or non-directory ancestors and leaves. NotFound proves a missing optional name; other IO and UTF-8 errors propagate rather than selecting a fallback. The installed-body regression also refuses a dangling link."),
     ("crates/codeflow-core/src/capability.rs", "collect_catalog_paths", "ErrorKind::NotFound", 1, "The confined Tree opens every ancestor without following links; only a missing component is optional, while linked, unreadable and non-directory parents refuse."),
     ("crates/codeflow-core/src/capability.rs", "collect_catalog_paths", "is_dir", 1, "Type check on confined metadata whose errors propagate; real subdirectories are examined to refuse nested CAP files, never followed through symlinks."),
     ("crates/codeflow-core/src/capability.rs", "inspect_capability_catalog", "ErrorKind::NotFound", 1, "The confined regular-file reader rejects symlinks and unsafe ancestors before absence is accepted; missing optional legacy/config inputs are omitted, and modern records still require project areas."),
