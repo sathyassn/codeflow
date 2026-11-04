@@ -8,14 +8,14 @@
 //!
 //! So a gate that holds fences starts a watcher for each target, outside
 //! the target's job, before the target runs. The watcher is this binary run
-//! with [`WATCH_ARG`]. It takes every fence the gate holds shared for
-//! itself, keeps a handle to the target's job, and links the job to a
-//! completion port. When the gate ends, however it ends, or closes the
-//! watcher's input, the watcher ends the job and waits until the job
-//! reports no active process (`JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO`, with
-//! the job's `ActiveProcesses` count as a backstop). Only then does it
-//! exit, and its fences free. A watcher that cannot start, or cannot hold
-//! the fences, stops the target before it runs.
+//! with [`WATCH_ARG`]. It copies the target's job handle out of the gate,
+//! takes every fence the gate holds shared for itself, and links the job to
+//! a completion port. When the gate ends, however it ends, or signals the
+//! release event, the watcher ends the job and waits until the job reports
+//! no active process (`JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO`, with the job's
+//! `ActiveProcesses` count as a backstop). Only then does it exit, and its
+//! fences free. A watcher that cannot start, or cannot hold the fences,
+//! stops the target before it runs.
 //!
 //! Only a binary that names itself with [`designate`] and serves
 //! [`WATCH_ARG`] through [`serve`] starts watchers; the `codeflow` binary
@@ -23,14 +23,15 @@
 //! gate's kill-on-close handle still ends the tree when the gate dies, and
 //! the fence then frees with the gate as it did before TSK-1318.
 
-use std::ffi::c_void;
-use std::io::{BufRead, BufReader, Write};
+use std::ffi::{c_void, OsString};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, ExitCode, Stdio};
+use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::OnceLock;
 
-use windows_sys::Win32::Foundation::{DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
+};
 use windows_sys::Win32::System::JobObjects::{
     JobObjectAssociateCompletionPortInformation, JobObjectBasicAccountingInformation,
     QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
@@ -41,7 +42,9 @@ use windows_sys::Win32::System::SystemServices::{
     JOB_OBJECT_TERMINATE,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE,
+    CreateEventW, GetCurrentProcess, OpenProcess, SetEvent, WaitForMultipleObjects,
+    EVENT_MODIFY_STATE, INFINITE, PROCESS_DUP_HANDLE, PROCESS_SYNCHRONIZE,
+    SYNCHRONIZATION_SYNCHRONIZE,
 };
 use windows_sys::Win32::System::IO::{
     CreateIoCompletionPort, GetQueuedCompletionStatus, PostQueuedCompletionStatus, OVERLAPPED,
@@ -82,17 +85,17 @@ fn watcher() -> Option<PathBuf> {
 
 /// The completion key of the job's own messages.
 const JOB_KEY: usize = 1;
-/// The completion key posted when the gate ends or closes the input.
+/// The completion key posted when the gate ends or signals the release.
 const END_KEY: usize = 2;
 /// How often the job's active count is read while the watcher waits for
 /// the job's last process, in milliseconds, should a message be missed.
 const BACKSTOP_MS: u32 = 1000;
 
-/// A running fence watcher for one target's job. Dropping it closes the
-/// watcher's input, so the watcher ends the job, and waits for the watcher
-/// to exit, which it does once the job is empty.
+/// A running fence watcher for one target's job. Dropping it signals the
+/// release, so the watcher ends the job, and waits for the watcher to exit,
+/// which it does once the job is empty.
 pub(super) struct JobWatch {
-    input: Option<ChildStdin>,
+    release: OwnedHandle,
     child: Child,
 }
 
@@ -103,8 +106,8 @@ impl JobWatch {
     ///
     /// # Errors
     ///
-    /// When the watcher cannot be started, cannot be given the job, or
-    /// cannot hold a fence; the watcher is then ended.
+    /// When the watcher cannot be started, or ends before it holds the
+    /// fences; the watcher is then ended.
     pub(super) fn start(job: HANDLE) -> std::io::Result<Option<Self>> {
         let fences = crate::testing::gate_guard::watched_fence_paths();
         if fences.is_empty() {
@@ -113,95 +116,76 @@ impl JobWatch {
         let Some(binary) = watcher() else {
             return Ok(None);
         };
-        let mut paths = String::new();
-        for fence in &fences {
-            let text = fence.to_str().ok_or_else(|| {
-                std::io::Error::other(format!(
-                    "the fence path {} is not valid Unicode",
-                    fence.display()
-                ))
-            })?;
-            paths.push_str(text);
-            paths.push('\n');
-        }
+        let release = new_event()?;
+        let ready = new_event()?;
         let mut child = Command::new(&binary)
             .arg(WATCH_ARG)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .arg(std::process::id().to_string())
+            .arg((job as usize).to_string())
+            .arg((release.as_raw_handle() as usize).to_string())
+            .arg((ready.as_raw_handle() as usize).to_string())
+            .args(&fences)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
             .spawn()
             .map_err(|error| {
                 std::io::Error::other(format!("{} could not start: {error}", binary.display()))
             })?;
-        match hand_over(&mut child, job, &paths) {
-            Ok(input) => Ok(Some(Self {
-                input: Some(input),
-                child,
-            })),
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                Err(error)
-            }
+        // The watcher copies the handles out of this process, which stays
+        // alive here, so its process ID cannot be reused meanwhile.
+        let handles = [
+            ready.as_raw_handle() as HANDLE,
+            child.as_raw_handle() as HANDLE,
+        ];
+        // SAFETY: both handles are open for the call.
+        let woke = unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, INFINITE) };
+        if woke == WAIT_OBJECT_0 {
+            return Ok(Some(Self { release, child }));
         }
+        let failed = (woke != WAIT_OBJECT_0 + 1).then(std::io::Error::last_os_error);
+        let _ = child.kill();
+        let status = child.wait();
+        Err(std::io::Error::other(match (failed, status) {
+            (Some(error), _) => format!("the wait for it failed: {error}"),
+            (None, Ok(status)) => format!(
+                "it ended before it held the fence ({status}); its message, if any, is above"
+            ),
+            (None, Err(error)) => format!("it ended before it held the fence: {error}"),
+        }))
     }
 }
 
 impl Drop for JobWatch {
     fn drop(&mut self) {
-        drop(self.input.take());
+        // SAFETY: the event is open; a failure leaves the gate's own exit
+        // as the watcher's signal.
+        unsafe { SetEvent(self.release.as_raw_handle() as HANDLE) };
         let _ = self.child.wait();
     }
 }
 
-/// Give the watcher `child` the job and this process, then the fence
-/// paths, and wait until it holds the fences.
-fn hand_over(child: &mut Child, job: HANDLE, paths: &str) -> std::io::Result<ChildStdin> {
-    let process = child.as_raw_handle() as HANDLE;
-    let job_copy = duplicate(
-        job,
-        process,
-        JOB_OBJECT_QUERY | JOB_OBJECT_SET_ATTRIBUTES | JOB_OBJECT_TERMINATE,
-    )?;
-    // SAFETY: GetCurrentProcess returns a pseudo handle that needs no close;
-    // its duplicate in the watcher is a real handle to this process.
-    let gate_copy = duplicate(unsafe { GetCurrentProcess() }, process, PROCESS_SYNCHRONIZE)?;
-    let mut input = child
-        .stdin
-        .take()
-        .ok_or_else(|| std::io::Error::other("the watcher has no input"))?;
-    write!(
-        input,
-        "{} {}\n{paths}\n",
-        job_copy as usize, gate_copy as usize
-    )?;
-    input.flush()?;
-    let output = child
-        .stdout
-        .take()
-        .ok_or_else(|| std::io::Error::other("the watcher has no output"))?;
-    let mut line = String::new();
-    BufReader::new(output).read_line(&mut line)?;
-    match line.trim_end() {
-        "ready" => Ok(input),
-        "" => Err(std::io::Error::other(
-            "the watcher ended before it held the fence",
-        )),
-        message => Err(std::io::Error::other(message.to_string())),
+/// A new unnamed, manual-reset event, not signaled and not inheritable.
+fn new_event() -> std::io::Result<OwnedHandle> {
+    // SAFETY: null attributes and name give a private, non-inheritable event.
+    let raw = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+    if raw.is_null() {
+        return Err(std::io::Error::last_os_error());
     }
+    // SAFETY: `raw` is a valid handle that nothing else owns.
+    Ok(unsafe { OwnedHandle::from_raw_handle(raw as RawHandle) })
 }
 
-/// A copy of `handle`, owned by `process`, with `access` only. The copy is
-/// not inheritable, so nothing the watcher starts receives it.
-fn duplicate(handle: HANDLE, process: HANDLE, access: u32) -> std::io::Result<HANDLE> {
+/// A copy of the handle `value` of the process `source`, owned by this
+/// process, with `access` only and not inheritable.
+fn copy_from(source: HANDLE, value: usize, access: u32) -> Result<OwnedHandle, String> {
     let mut copy: HANDLE = std::ptr::null_mut();
-    // SAFETY: both process handles and `handle` are valid for the call,
-    // and `copy` is written only on success.
+    // SAFETY: `source` is open with PROCESS_DUP_HANDLE; `copy` is written
+    // only on success.
     let done = unsafe {
         DuplicateHandle(
+            source,
+            value as HANDLE,
             GetCurrentProcess(),
-            handle,
-            process,
             &raw mut copy,
             access,
             0,
@@ -209,9 +193,13 @@ fn duplicate(handle: HANDLE, process: HANDLE, access: u32) -> std::io::Result<HA
         )
     };
     if done == 0 {
-        return Err(std::io::Error::last_os_error());
+        return Err(format!(
+            "a handle could not be copied from the gate: {}",
+            std::io::Error::last_os_error()
+        ));
     }
-    Ok(copy)
+    // SAFETY: the copy is a valid handle owned here exactly once.
+    Ok(unsafe { OwnedHandle::from_raw_handle(copy as RawHandle) })
 }
 
 /// Run as the fence watcher when this process was started with
@@ -219,54 +207,53 @@ fn duplicate(handle: HANDLE, process: HANDLE, access: u32) -> std::io::Result<HA
 /// [`designate`]s itself calls this first thing in `main`.
 #[must_use]
 pub fn serve() -> Option<ExitCode> {
-    if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new(WATCH_ARG)) {
+    let mut args = std::env::args_os().skip(1);
+    if args.next().as_deref() != Some(std::ffi::OsStr::new(WATCH_ARG)) {
         return None;
     }
-    Some(match watch() {
+    Some(match watch(&args.collect::<Vec<_>>()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
-            // Before `ready`, the gate reads this line as the cause.
-            println!("fence watcher: {message}");
+            eprintln!("codeflow fence watcher: {message}");
             ExitCode::FAILURE
         }
     })
 }
 
-/// The watcher's whole life: read the handles and fences, hold the
-/// fences, report `ready`, then wait for the gate's end and the job's.
-fn watch() -> Result<(), String> {
-    let mut input = std::io::stdin().lock();
-    let mut line = String::new();
-    input
-        .read_line(&mut line)
-        .map_err(|error| format!("its input could not be read: {error}"))?;
-    let mut values = line.split_whitespace().map(str::parse::<usize>);
-    let (Some(Ok(job)), Some(Ok(gate)), None) = (values.next(), values.next(), values.next())
-    else {
-        return Err(format!("its input named no job and gate: {line:?}"));
+/// The watcher's whole life: copy the handles, hold the fences, signal
+/// ready, then wait for the gate's end and the job's.
+fn watch(args: &[OsString]) -> Result<(), String> {
+    let number = |index: usize| -> Result<usize, String> {
+        args.get(index)
+            .and_then(|arg| arg.to_str())
+            .and_then(|text| text.parse().ok())
+            .ok_or_else(|| format!("argument {} is not a number", index + 1))
     };
-    // SAFETY: the gate duplicated both handles into this process for it
-    // alone; each is owned here exactly once.
-    let job = unsafe { OwnedHandle::from_raw_handle(job as RawHandle) };
-    // SAFETY: as above.
-    let gate = unsafe { OwnedHandle::from_raw_handle(gate as RawHandle) };
-    let mut held = Vec::new();
-    loop {
-        line.clear();
-        input
-            .read_line(&mut line)
-            .map_err(|error| format!("its input could not be read: {error}"))?;
-        let path = line.trim_end_matches(['\r', '\n']);
-        if path.is_empty() {
-            break;
-        }
-        held.push(crate::testing::gate_guard::hold_fence_for_watcher(
-            std::path::Path::new(path),
-        )?);
+    let gate_id = u32::try_from(number(0)?).map_err(|_| "the gate ID is too large")?;
+    // SAFETY: opens the gate, which waits for this watcher and so still runs.
+    let raw = unsafe { OpenProcess(PROCESS_DUP_HANDLE | PROCESS_SYNCHRONIZE, 0, gate_id) };
+    if raw.is_null() {
+        return Err(format!(
+            "the gate could not be opened: {}",
+            std::io::Error::last_os_error()
+        ));
     }
-    drop(input);
+    // SAFETY: `raw` is a valid handle owned here exactly once.
+    let gate = unsafe { OwnedHandle::from_raw_handle(raw as RawHandle) };
+    let source = gate.as_raw_handle() as HANDLE;
+    let job = copy_from(
+        source,
+        number(1)?,
+        JOB_OBJECT_QUERY | JOB_OBJECT_SET_ATTRIBUTES | JOB_OBJECT_TERMINATE,
+    )?;
+    let release = copy_from(source, number(2)?, SYNCHRONIZATION_SYNCHRONIZE)?;
+    let ready = copy_from(source, number(3)?, EVENT_MODIFY_STATE)?;
+    let held = args[4..]
+        .iter()
+        .map(|path| crate::testing::gate_guard::hold_fence_for_watcher(std::path::Path::new(path)))
+        .collect::<Result<Vec<_>, _>>()?;
     // SAFETY: a new port with no file; the handle stays open until exit,
-    // so the threads below may post to it.
+    // so the thread below may post to it.
     let port = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 1) };
     if port.is_null() {
         return Err(format!(
@@ -296,21 +283,23 @@ fn watch() -> Result<(), String> {
             std::io::Error::last_os_error()
         ));
     }
-    let mut output = std::io::stdout().lock();
-    writeln!(output, "ready")
-        .and_then(|()| output.flush())
-        .map_err(|error| format!("it could not report ready: {error}"))?;
-    drop(output);
+    // SAFETY: the event is open with EVENT_MODIFY_STATE.
+    if unsafe { SetEvent(ready.as_raw_handle() as HANDLE) } == 0 {
+        return Err(format!(
+            "it could not signal ready: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
     let port_value = port as usize;
     std::thread::spawn(move || {
-        // SAFETY: the handle is open while this thread owns it.
-        unsafe { WaitForSingleObject(gate.as_raw_handle() as HANDLE, INFINITE) };
-        post_end(port_value);
-    });
-    std::thread::spawn(move || {
-        // The gate closes the input when its target ends, or as it exits.
-        let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
-        post_end(port_value);
+        let handles = [
+            gate.as_raw_handle() as HANDLE,
+            release.as_raw_handle() as HANDLE,
+        ];
+        // SAFETY: both handles are open while this thread owns them.
+        unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, INFINITE) };
+        // SAFETY: the port stays open for the life of the process.
+        unsafe { PostQueuedCompletionStatus(port_value as HANDLE, 0, END_KEY, std::ptr::null()) };
     });
     let job = job.as_raw_handle() as HANDLE;
     loop {
@@ -336,12 +325,6 @@ fn watch() -> Result<(), String> {
     // The tree is gone: the fences free as this process exits.
     drop(held);
     Ok(())
-}
-
-/// Post the end of the gate, or of its input, to the port `port`.
-fn post_end(port: usize) {
-    // SAFETY: the port stays open for the life of the process.
-    unsafe { PostQueuedCompletionStatus(port as HANDLE, 0, END_KEY, std::ptr::null()) };
 }
 
 /// The next message on `port` within `wait_ms`, as its key and message.
