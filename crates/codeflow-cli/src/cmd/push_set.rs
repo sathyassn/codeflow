@@ -158,6 +158,7 @@ fn run_checked_with_binary(
     let fetch_failed: OnceCell<String> = OnceCell::new();
     let destination = Destination {
         url,
+        limits: probe_limits(root, report),
         listing: &listing,
         advertised: &advertised,
         answer: &answer,
@@ -188,6 +189,23 @@ fn run_checked_with_binary(
         .status
         .push(format!("push set finished in {:.1}s", total.as_secs_f64()));
     Ok(())
+}
+
+/// The destination lookup's timeout and attempts (TSK-1301): read from the
+/// local policy authority, the remote default branch's committed policy as
+/// last fetched, never from the working copy or the pushed head, which the
+/// push itself can change. With no such branch to read, the shipped limits
+/// apply, noted; the lookup still refuses a destination that never answers.
+fn probe_limits(root: &Path, report: &mut StageReport) -> remote_query::QueryLimits {
+    remote_query::QueryLimits::from_authority(root).unwrap_or_else(|why| {
+        let limits = remote_query::QueryLimits::default();
+        report.status.push(format!(
+            "note: the destination lookup uses the shipped limits ({}s per attempt, {} attempts), since no default branch supplies them: {why}",
+            limits.timeout().as_secs(),
+            limits.attempts()
+        ));
+        limits
+    })
 }
 
 fn violation(
@@ -1074,6 +1092,9 @@ fn judged_by(
 struct Destination<'a> {
     /// Where the push goes: the hook's URL argument, else its remote name.
     url: Option<&'a str>,
+    /// How long the destination lookup may take, from the local policy
+    /// authority (see [`probe_limits`]).
+    limits: remote_query::QueryLimits,
     /// The destination's one advertisement (see
     /// [`release_line::advertisement`]), or why it could not be asked.
     /// Filled on first use.
@@ -1120,7 +1141,7 @@ impl Destination<'_> {
             .get_or_init(|| {
                 self.url.map_or_else(
                     || Err("no destination given".to_string()),
-                    |url| release_line::advertisement(root, url),
+                    |url| release_line::advertisement(root, url, self.limits),
                 )
             })
             .as_deref()
@@ -1144,9 +1165,10 @@ impl Destination<'_> {
                 .get_or_init(|| Ok(release_line::Destination::default())));
         };
         let listed = self.listing(root)?;
-        Ok(self
-            .answer
-            .get_or_init(|| release_line::from_advertisement(url, listed)))
+        Ok(self.answer.get_or_init(|| {
+            release_line::from_advertisement(url, listed)
+                .map(|destination| destination.with_limits(self.limits))
+        }))
     }
 
     /// The default branch's advertised tip, fetched when this clone lacks
