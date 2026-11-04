@@ -19,7 +19,7 @@
     "commit_types": ["feat", "fix", "docs", "refactor", "test", "chore", "ci", "perf", "build", "revert"],
     "commit_desc_max_len": 50,
     "commit_subject_max_len": 72,
-    "commit_body": "block",
+    "commit_body": "warn",
     "commit_body_max_bullets": 3,
     "commit_body_bullet_max_len": 72,
     "commit_footer_tokens": [],

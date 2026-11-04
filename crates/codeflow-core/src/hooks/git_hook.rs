@@ -398,11 +398,9 @@ fn push_format_violations(
             crate::remedy::COMMIT_TYPE.with(&[("types", &policy.commit_types.join(", "))]),
         ));
     }
-    if let Some(reason) = standards::check_subject_length(
-        subject,
-        policy.commit_desc_max_len,
-        policy.commit_subject_max_len,
-    ) {
+    if let Some(reason) =
+        standards::check_subject_length(subject, u32::MAX, policy.commit_subject_max_len)
+    {
         report.violations.push(Violation::new(
             "git.commit_format",
             policy.commit_format,
@@ -583,6 +581,22 @@ pub fn commit_msg_from(
         push_format_violations(policy, subject, &cleaned, &mut report);
     }
 
+    if policy.commit_description.is_active() {
+        if let Some(reason) =
+            standards::check_subject_length(subject, policy.commit_desc_max_len, u32::MAX)
+        {
+            report.violations.push(Violation::new(
+                "git.commit_description",
+                policy.commit_description,
+                reason,
+                crate::remedy::COMMIT_LENGTH.with(&[
+                    ("description", &policy.commit_desc_max_len.to_string()),
+                    ("subject", &policy.commit_subject_max_len.to_string()),
+                ]),
+            ));
+        }
+    }
+
     if policy.commit_body.is_active() {
         if let Some(reason) = standards::check_commit_body(
             subject,
@@ -601,12 +615,14 @@ pub fn commit_msg_from(
                 ]),
             ));
         }
+    }
+    if policy.commit_footer_required.is_active() {
         if let Some(reason) =
             standards::check_required_footers(subject, &cleaned, &policy.commit_required_footers)
         {
             report.violations.push(Violation::new(
-                "git.commit_body",
-                policy.commit_body,
+                "git.commit_footer_required",
+                policy.commit_footer_required,
                 reason,
                 crate::remedy::COMMIT_REQUIRED_FOOTERS
                     .with(&[("footers", &policy.commit_required_footers.join(", "))]),
@@ -2435,21 +2451,21 @@ mod tests {
     }
 
     #[test]
-    fn test_commit_msg_long_description_blocked() {
-        // ADR-0020: a description over the 50-char budget blocks at commit_format.
+    fn test_commit_msg_long_description_warns() {
+        // ADR-0020: a description over the 50-char budget warns at commit_description.
         let subject = format!("feat: {}", "x".repeat(60));
         let report = commit_msg(&GitPolicy::default(), &format!("{subject}\n"), false);
         let v = report
             .violations
             .iter()
-            .find(|v| v.rule == "git.commit_format")
+            .find(|v| v.rule == "git.commit_description")
             .expect("a commit_format violation");
         assert!(v.message.contains("description"), "{}", v.message);
     }
 
     #[test]
-    fn test_commit_msg_story_body_blocked() {
-        // ADR-0020: a prose body blocks at commit_body, naming the offending line.
+    fn test_commit_msg_story_body_warns() {
+        // ADR-0020: a prose body warns at commit_body, naming the offending line.
         let msg = "feat: add a thing\n\nThis is a story about why the thing was added.\n";
         let report = commit_msg(&GitPolicy::default(), msg, false);
         let v = report
@@ -2457,7 +2473,7 @@ mod tests {
             .iter()
             .find(|v| v.rule == "git.commit_body")
             .expect("a commit_body violation");
-        assert_eq!(v.level, PolicyLevel::Block);
+        assert_eq!(v.level, PolicyLevel::Warn);
         assert!(v.message.contains("not a `- ` bullet"), "{}", v.message);
     }
 
@@ -2573,7 +2589,7 @@ mod tests {
         let v = missing
             .violations
             .iter()
-            .find(|v| v.rule == "git.commit_body" && v.message.contains("Signed-off-by"))
+            .find(|v| v.rule == "git.commit_footer_required" && v.message.contains("Signed-off-by"))
             .expect("a missing-required-footer violation");
         assert_eq!(v.level, PolicyLevel::Block);
         // Present (the required token is implicitly allowed) → clean.

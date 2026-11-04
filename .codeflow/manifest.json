@@ -1721,13 +1721,13 @@
     ".codeflow/policy.json": {
       "src": "policy.json",
       "ownership": "user-owned",
-      "sha256": "bf4196793b359f05679e8089bcdcb067c88d5bdbe38ef306ac36a7dcc852a898",
+      "sha256": "4af4aea08b8d5322307daaaa3049f78d6de2a1c2340cf5a53dc2459abb0823ea",
       "exec": false
     },
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "616e33de72b67be4a35471d4523210cc16124c61fc6239e2907b071779e4cf46",
+      "sha256": "570dfeb70743c8dca7090bfcd419f2cb17c1f2ce411a852a94040613915eeff5",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
@@ -1811,7 +1811,7 @@
     ".github/workflows/codeflow-ci.yml": {
       "src": "ci/codeflow-ci.yml",
       "ownership": "managed",
-      "sha256": "d77f14212e9232eb0963c8e1ad353e67003d350917578889dc6a82276d421e8b",
+      "sha256": "e35ff3839305d0c1dd674fce637ca97e1115a8de99113ba2e233c738616e3391",
       "exec": false
     },
     ".github/workflows/codeflow-policy.yml": {
