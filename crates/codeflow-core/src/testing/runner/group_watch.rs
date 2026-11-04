@@ -6,6 +6,13 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
+#[cfg(test)]
+thread_local! {
+    /// Seconds a test's watcher waits before its descriptor loop, standing in
+    /// for the slow start seen with a large descriptor limit on a loaded host.
+    pub(super) static SLOW_WATCHER_START: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 pub(super) struct GroupWatch {
     controller: UnixStream,
     child_end: Option<UnixStream>,
@@ -35,6 +42,8 @@ impl GroupWatch {
         }
         let writer = controller.as_raw_fd();
         let reader = child_end.as_raw_fd();
+        #[cfg(test)]
+        let slow_start = SLOW_WATCHER_START.with(std::cell::Cell::get);
         // SAFETY: the closure uses only async-signal-safe libc operations and
         // constructs errors from errno. No allocation, locks or Rust I/O run after fork.
         unsafe {
@@ -57,6 +66,8 @@ impl GroupWatch {
                     if watcher > 0 {
                         libc::_exit(0);
                     }
+                    #[cfg(test)]
+                    libc::sleep(slow_start);
                     for fd in 0..limit {
                         if fd != reader && !lock_descriptors.contains(&fd) {
                             libc::close(fd);

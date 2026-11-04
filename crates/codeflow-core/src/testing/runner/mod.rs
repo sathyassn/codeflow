@@ -1745,6 +1745,25 @@ mod tests {
         assert!(result.stderr.contains("timeout_seconds"));
     }
 
+    /// The watcher closes every descriptor up to the limit before it waits. At
+    /// a limit of 1048576 on a loaded host that outlasted the cleanup grace,
+    /// so a heavy target that exited 0 reported incomplete cleanup.
+    #[cfg(unix)]
+    #[test]
+    fn a_slow_watcher_does_not_fail_a_target_that_exited_zero() {
+        let mut target = make_target("slow-watcher", "exit 0");
+        target.heavy = Some(true);
+        target.timeout_seconds = Some(60);
+        let dir = tempfile::tempdir().unwrap();
+        group_watch::SLOW_WATCHER_START.with(|delay| delay.set(60));
+        let result = run_target(&target, "full", dir.path());
+        group_watch::SLOW_WATCHER_START.with(|delay| delay.set(0));
+        let result = result.unwrap();
+        assert_eq!(result.status(), TargetStatus::Passed, "{result:?}");
+        assert_eq!(result.exit_code, 0, "{result:?}");
+        assert!(!result.termination_unconfirmed, "{result:?}");
+    }
+
     #[test]
     fn timeout_cause_survives_dependent_skips_and_saved_report() {
         let dir = tempfile::tempdir().unwrap();
