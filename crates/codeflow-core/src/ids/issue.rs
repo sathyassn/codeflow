@@ -1129,7 +1129,9 @@ mod tests {
         if std::env::var_os(CHILD).is_some() {
             let root = tempfile::tempdir().unwrap();
             let repo = git2::Repository::init(root.path()).unwrap();
-            repo.remote("origin", "https://example.invalid/repo")
+            // A local path that does not exist: the fetch fails without a
+            // lookup, so the test needs no network (TSK-1156).
+            repo.remote("origin", "file:///nonexistent/codeflow-repo")
                 .unwrap();
             assert!(super::sync(root.path()).is_err());
             return;
