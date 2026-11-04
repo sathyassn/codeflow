@@ -180,7 +180,7 @@ fn pin_tasks(values: &[String]) -> Result<BTreeSet<String>, String> {
         let (task, revision) = value.split_once('@').ok_or("malformed claim pin")?;
         if !super::is_valid_task_format_id(task)
             || revision.len() != 40
-            || Oid::from_str(revision).is_err()
+            || !revision.bytes().all(|byte| byte.is_ascii_hexdigit())
             || !tasks.insert(task.to_string())
         {
             return Err("malformed or repeated claim pin".into());
