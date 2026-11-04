@@ -62,7 +62,10 @@ pub struct BranchSlug {
 /// check and a mis-cased entry must not let its word through.
 #[must_use]
 pub fn branch_slug(title: &str, omit: &[String]) -> BranchSlug {
-    let omit: Vec<String> = omit.iter().map(|entry| entry.to_ascii_lowercase()).collect();
+    let omit: Vec<String> = omit
+        .iter()
+        .map(|entry| entry.to_ascii_lowercase())
+        .collect();
     let mut kept = Vec::new();
     let mut omitted: Vec<String> = Vec::new();
     for word in slug_words(title) {
