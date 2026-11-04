@@ -180,3 +180,28 @@ order, prompts, pass rule and evidence stay as registered on 2026-11-03.
 - Commits after this registration change evidence only. A change to the
   skills or the suite needs a new registration before any trial.
 - State: no trial in this cohort has launched.
+
+### Launch attempts and the requested model, 2026-11-04
+
+Two launches of the retry candidate arm were refused at readiness. No
+prompt was delivered and no model turn ran. Both are `not_run`; their
+evidence is kept on the host.
+
+- Attempt 1: the Claude Code 2.1.318 trust dialog opened with "No, exit"
+  selected, because the fixture pre-approves tool permissions. The runner
+  sent Down and re-read after 0.2 s, but the selection had not moved yet,
+  so it refused with "trust choice not visibly selected; no Enter sent". A
+  Down sent to the same pane one second later moved it.
+- Attempt 2: trust was accepted, and the seat showed Opus 5.5 with high
+  effort and auto mode. The runner refused with "seat did not become
+  ready". `claude_expectation` in `evals/qualification/runner.py` requires
+  the shipped status line to show the requested `--model` value, which was
+  the alias `opus`, while Claude Code shows the resolved id
+  `claude-opus-5-5`. A trial requested with an alias cannot become ready
+  while that status line is on screen.
+
+Amendment before any further launch: the requested model is the exact id,
+`--model claude-opus-5-5 --effort high --permission-mode auto`, in both
+arms. It names the same intended model, Opus 5.5, and lets the status line
+check compare the requested id with the one displayed. Everything else
+registered above is unchanged.
