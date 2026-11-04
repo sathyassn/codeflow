@@ -660,6 +660,64 @@ fn first_pr(dir: &Path) {
     git(dir, &["commit", "-m", "feat: add the widget endpoint"]);
 }
 
+/// Land the working copy's policy on `main`, as the adoption PR's merge
+/// does. `codeflow ci --base main` judges with the policy at the base, and
+/// an adoption range, whose base holds none, is judged by the shipped
+/// defaults (TSK-1077), so a fixture that checks the installed policy's
+/// verdict lands it first.
+fn land_policy(dir: &Path) {
+    let index = dir.join(".git").join("land-policy.index");
+    let run = |args: &[&str]| -> String {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_INDEX_FILE", &index)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim_end().to_owned()
+    };
+    run(&["read-tree", "main"]);
+    let blob = run(&["hash-object", "-w", ".codeflow/policy.json"]);
+    run(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("100644,{blob},.codeflow/policy.json"),
+    ]);
+    let tree = run(&["write-tree"]);
+    let commit = run(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        "commit-tree",
+        &tree,
+        "-p",
+        "main",
+        "-m",
+        "chore: land the adopted policy",
+    ]);
+    // The merge happens on the forge; the installed local hooks, which
+    // refuse a local update of `main`, are not part of that landing.
+    run(&[
+        "-c",
+        "core.hooksPath=/dev/null",
+        "update-ref",
+        "refs/heads/main",
+        &commit,
+    ]);
+    let _ = std::fs::remove_file(&index);
+}
+
 fn ci_pr(dir: &Path, body: &str) -> Output {
     codeflow(
         dir,
@@ -711,6 +769,17 @@ fn first_install_diagnoses_the_kept_template_and_warns_until_decided() {
     assert_eq!(policy["git"]["pr_section_mapping"]["decided"], "none");
 
     first_pr(dir.path());
+    // The adoption range itself writes the policy, so it cannot judge
+    // itself: its base holds none, and the shipped defaults decide.
+    let out = ci_pr(dir.path(), PROJECT_BODY);
+    let all = text(&out);
+    assert!(
+        all.contains(
+            "verifying against the shipped defaults, since .codeflow/policy.json is absent at base"
+        ),
+        "{all}"
+    );
+    land_policy(dir.path());
     let out = ci_pr(dir.path(), PROJECT_BODY);
     let all = text(&out);
     assert_eq!(out.status.code(), Some(0), "{all}");
@@ -967,6 +1036,7 @@ fn decided(answer: &str) -> tempfile::TempDir {
     let policy = policy_value(dir.path());
     assert_ne!(policy["git"]["pr_section_mapping"]["decided"], "none");
     first_pr(dir.path());
+    land_policy(dir.path());
     dir
 }
 
@@ -1023,6 +1093,7 @@ fn custom_mapping_checks_the_policy_list_the_project_sets() {
         "\"pr_code_sections\": [\"How has this been tested?\"]",
     );
     std::fs::write(&path, edited).unwrap();
+    land_policy(dir.path());
     let out = ci_pr(dir.path(), PROJECT_BODY);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
 }
@@ -1082,14 +1153,36 @@ fn update_installs_the_enforcing_workflow_for_an_existing_adopter() {
     assert!(codeflow(dir.path(), &["init", "--minimal", "--yes"])
         .status
         .success());
-    // An adopter from before the enforcing workflow existed.
+    // An adopter from before the enforcing workflow and the registry
+    // workflow existed.
     std::fs::remove_file(dir.path().join(".github/workflows/codeflow-policy.yml")).unwrap();
+    std::fs::remove_file(dir.path().join(".github/workflows/codeflow-registry.yml")).unwrap();
     let out = codeflow(dir.path(), &["update"]);
     let all = text(&out);
     assert_eq!(out.status.code(), Some(0), "{all}");
     let policy =
         std::fs::read_to_string(dir.path().join(".github/workflows/codeflow-policy.yml")).unwrap();
     assert!(policy.contains("pull_request_target:"));
+    // TSK-336: pushes, the schedule and manual runs check the registry in a
+    // workflow of their own, installed as shipped, whose one job is not a
+    // `trusted:` verdict.
+    let registry =
+        std::fs::read_to_string(dir.path().join(".github/workflows/codeflow-registry.yml"))
+            .unwrap();
+    assert_eq!(
+        registry,
+        include_str!("../../../assets/base/ci/codeflow-registry.yml")
+    );
+    let parsed: serde_yaml::Value = serde_yaml::from_str(&registry).unwrap();
+    assert!(parsed["on"].get("push").is_some());
+    assert!(parsed["on"].get("pull_request_target").is_none());
+    let names: Vec<&str> = parsed["jobs"]
+        .as_mapping()
+        .unwrap()
+        .values()
+        .filter_map(|job| job["name"].as_str())
+        .collect();
+    assert_eq!(names, ["registry check"]);
     let ci = std::fs::read_to_string(dir.path().join(".github/workflows/codeflow-ci.yml")).unwrap();
     assert!(!ci.contains("name: commit standards"));
 }

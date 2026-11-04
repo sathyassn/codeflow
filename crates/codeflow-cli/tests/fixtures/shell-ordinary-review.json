@@ -102,7 +102,7 @@
   [
     "source ~/.bashrc",
     0,
-    0
+    2
   ],
   [
     ". ./env.sh",
@@ -137,7 +137,7 @@
   [
     "bash -c \"rm -rf $PWD/build\"",
     0,
-    0
+    2
   ],
   [
     "bash <<< 'echo hi'",
@@ -152,7 +152,7 @@
   [
     "bash <<< \"rm -rf $PWD/build\"",
     0,
-    0
+    2
   ],
   [
     "bash -s <<< 'echo hi'",
@@ -237,7 +237,7 @@
   [
     "eval \"echo $PWD\"",
     0,
-    0
+    2
   ],
   [
     "eval \"$(direnv hook bash)\"",
@@ -472,12 +472,12 @@
   [
     "while read -r l; do echo \"$l\"; done < data/in.txt",
     0,
-    0
+    2
   ],
   [
     "while read -r l; do echo \"$l\"; done <<< \"$(ls)\"",
     0,
-    0
+    2
   ],
   [
     "mapfile -t arr < data/in.txt",
@@ -572,12 +572,12 @@
   [
     "ln -s $PWD/src link",
     0,
-    0
+    2
   ],
   [
     "ln -s \"$(pwd)/src\" link",
     0,
-    0
+    2
   ],
   [
     "ln src/app.py hard && cat hard",

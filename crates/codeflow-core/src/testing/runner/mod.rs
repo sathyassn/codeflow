@@ -347,6 +347,21 @@ fn run_parallel(
         .collect()
 }
 
+/// The worker budget of a heavy run that shares the host with `runs` heavy
+/// runs, itself included: always bounded by the host's job budget, even for
+/// the first run and when `worker_budget` is unset, which only caps it
+/// further (TSK-1145).
+fn run_budget(execution: &super::config::ExecutionConfig, runs: usize) -> usize {
+    let host = super::capacity::host_jobs(execution.host_jobs);
+    let jobs = super::capacity::run_jobs(host, execution.worker_budget, runs);
+    if super::capacity::lowered(host, execution.worker_budget, runs) {
+        progress!(
+            "[codeflow test] {runs} heavy runs share this host's {host} jobs; this run uses {jobs}"
+        );
+    }
+    jobs
+}
+
 /// Run a validated dependency graph with bounded concurrency and exclusive targets.
 /// Prerequisite failures remain named results, never fresh passes.
 #[must_use]
@@ -384,8 +399,14 @@ pub fn run_dependency_targets_with_admission(
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::mpsc::channel;
     let bound = parallel_bound(execution.parallel, execution.max_parallel);
-    let mut admission = None;
+    let mut admission: Option<super::gate_guard::GateLock> = None;
     let mut wait_started = None;
+    // The jobs heavy targets share: the run's own budget, lowered when more
+    // heavy runs share the host than its job budget holds (TSK-1145).
+    let mut budget = super::gate_guard::held_runs().map_or(execution.worker_budget, |runs| {
+        Some(run_budget(execution, runs))
+    });
+    let mut host_hold: Option<(usize, super::gate_guard::HostExclusive)> = None;
     let mut allocations = BTreeMap::<usize, usize>::new();
     let baseline = match super::delivery::tracked(project_dir) {
         Ok(snapshot) => snapshot,
@@ -432,31 +453,39 @@ pub fn run_dependency_targets_with_admission(
             {
                 continue;
             }
-            if target.exclusive && !running.is_empty() {
+            if (target.exclusive || target.host_exclusive) && !running.is_empty() {
                 break;
             }
-            let heavy = target.heavy == Some(true);
-            let free_workers = execution
-                .worker_budget
-                .map(|budget| budget.saturating_sub(allocations.values().sum()));
-            if heavy && free_workers.is_some_and(|free| free < target.workers.unwrap_or(1)) {
+            // A host-exclusive target needs the host, so it is admitted as heavy work.
+            let heavy = target.heavy == Some(true) || target.host_exclusive;
+            let free_workers =
+                budget.map(|budget| budget.saturating_sub(allocations.values().sum()));
+            // A declared width above the run's budget runs at the budget, so a
+            // lowered budget never leaves a target waiting forever (R483-04).
+            let need = budget.map_or(target.workers.unwrap_or(1), |budget| {
+                target.workers.unwrap_or(1).clamp(1, budget.max(1))
+            });
+            if heavy && free_workers.is_some_and(|free| free < need) {
                 continue;
             }
             if quick && heavy && admission.is_none() {
+                // Heavy runs never wait for each other (TSK-1145): admission
+                // refuses only while a host-exclusive target holds the host,
+                // and then waits up to the run's bound.
+                let bound = Duration::from_secs(execution.heavy_wait_seconds);
                 match super::gate_guard::acquire_project_gate_lock(project_dir, "quick") {
                     Ok(lock) => {
                         for note in &lock.notes {
                             progress!("[codeflow test] {note}");
                         }
+                        budget = Some(run_budget(execution, lock.runs));
                         admission = Some(lock);
                         wait_started = None;
                     }
                     Err(message) => {
                         let first_wait = wait_started.is_none();
                         let since = wait_started.get_or_insert_with(Instant::now);
-                        if !message.contains("gate lock unavailable")
-                            && since.elapsed() < Duration::from_secs(execution.heavy_wait_seconds)
-                        {
+                        if message.contains("host-exclusive") && since.elapsed() < bound {
                             if first_wait {
                                 progress!(
                                     "[codeflow test] waiting up to {}s for heavy work: {message}",
@@ -475,8 +504,40 @@ pub fn run_dependency_targets_with_admission(
                     }
                 }
             }
+            if target.host_exclusive {
+                let bound = Duration::from_secs(execution.heavy_wait_seconds);
+                match super::gate_guard::hold_host_exclusive(project_dir, bound) {
+                    Ok(hold) => {
+                        progress!(
+                            "[codeflow test] {} runs alone on this host (host_exclusive)",
+                            target.name
+                        );
+                        host_hold = Some((index, hold));
+                    }
+                    Err(message) => {
+                        let reason = format!("not run: host-exclusive target refused: {message}");
+                        progress!("[codeflow test] {}: {reason}", target.name);
+                        results.insert(index, Ok(not_run(target, &reason)));
+                        completed.insert(target.name.clone(), false);
+                        pending.remove(&index);
+                        continue;
+                    }
+                }
+            }
+            // Admission may have lowered the budget for this run.
+            let free_workers =
+                budget.map(|budget| budget.saturating_sub(allocations.values().sum()));
             let mut target = target.clone();
-            if heavy {
+            // Heavy targets always take a share of the host-bounded budget. A
+            // budget below what the run would otherwise use (its
+            // `worker_budget`, else every core) also sizes each target not
+            // declared light, so its tools do not take the whole host.
+            let unbounded = execution.worker_budget.unwrap_or_else(|| {
+                std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
+            });
+            let sized =
+                heavy || (target.heavy != Some(false) && budget.is_some_and(|b| b < unbounded));
+            if sized {
                 if let Some(free) = free_workers {
                     let ready = pending
                         .iter()
@@ -488,12 +549,16 @@ pub fn run_dependency_targets_with_admission(
                                     .all(|r| completed.get(r) == Some(&true))
                         })
                         .count();
-                    let shares = if target.exclusive {
+                    let shares = if target.exclusive || target.host_exclusive {
                         1
                     } else {
                         ready.min(bound - running.len()).max(1)
                     };
-                    let workers = target.workers.unwrap_or_else(|| (free / shares).max(1));
+                    // Never above what is free: admission may have lowered
+                    // the budget after the fit check (R483-04).
+                    let workers = target
+                        .workers
+                        .map_or_else(|| (free / shares).max(1), |width| width.min(free).max(1));
                     allocations.insert(index, workers);
                     for key in ["CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"] {
                         target.env.insert(key.into(), workers.to_string());
@@ -514,7 +579,7 @@ pub fn run_dependency_targets_with_admission(
             }
             pending.remove(&index);
             running.insert(index);
-            exclusive_running = target.exclusive;
+            exclusive_running = target.exclusive || target.host_exclusive;
             let declarations = declarations.to_vec();
             let mode = mode.to_string();
             let root = project_dir.to_path_buf();
@@ -564,11 +629,17 @@ pub fn run_dependency_targets_with_admission(
         };
         running.remove(&index);
         allocations.remove(&index);
-        if !running.iter().any(|&i| targets[i].heavy == Some(true)) {
+        if !running
+            .iter()
+            .any(|&i| targets[i].heavy == Some(true) || targets[i].host_exclusive)
+        {
             admission = None;
         }
-        if targets[index].exclusive {
+        if targets[index].exclusive || targets[index].host_exclusive {
             exclusive_running = false;
+        }
+        if host_hold.as_ref().is_some_and(|(held, _)| *held == index) {
+            host_hold = None;
         }
         let passed = result.as_ref().is_ok_and(|r| r.exit_code == 0);
         progress!(
@@ -631,6 +702,9 @@ fn run_owed_target(
     // following a link or junction at any component (TSK-1044).
     let (anchor, output) = super::delivery::target_anchor(root)?;
     let locate = |path: &Path| super::delivery::locate(root, &anchor, &output, path);
+    // Held until this function returns, so the target's output is written
+    // and collected before another run's same target can touch it.
+    let _leases = evidence_leases(target, root, &anchor, &output)?;
     if let Some(report) = &target.report {
         if target.modes[mode].command.contains("nextest") {
             let path = resolve_cwd(root, target.cwd.as_deref())?.join(&report.path);
@@ -741,7 +815,7 @@ fn run_owed_target(
             result.coverage_path = Some(destination.join("coverage"));
         }
     }
-    if target.heavy == Some(true) {
+    if target.heavy == Some(true) || target.host_exclusive {
         if let Some(workers) = target.env.get("CARGO_BUILD_JOBS") {
             let oracle = target
                 .env
@@ -761,6 +835,97 @@ fn run_owed_target(
             .map_err(|error| super::delivery::evidence_refused(tree.path(), &log, &error))?;
     }
     Ok(result)
+}
+
+/// The outputs of `target` that every run of it writes at one fixed path,
+/// each named with the tool that fixes it. Two runs that share a build
+/// output folder (two gates in one worktree, or worktrees that name one
+/// target folder) would otherwise remove, overwrite or collect each other's
+/// files between production and collection (R483-03).
+///
+/// None of these tools can be pointed at a per-run path without a rebuild:
+/// - `nextest` writes its `JUnit` report under its store folder, which the
+///   profile in `.config/nextest.toml` fixes;
+/// - cargo-llvm-cov sets its own `LLVM_PROFILE_FILE`, removes every profile
+///   in its target folder before the run and merges every one after it;
+/// - a configured report or coverage file is written wherever the target's
+///   own command writes it.
+///
+/// Everything else a run writes is already its own: the run folder, its
+/// `CODEFLOW_GATE_RESULTS` path and its saved reports carry the run id.
+fn shared_outputs(target: &TargetConfig, root: &Path) -> Result<Vec<PathBuf>, TestingError> {
+    let cwd = resolve_cwd(root, target.cwd.as_deref())?;
+    let mut shared = Vec::new();
+    if let Some(report) = &target.report {
+        shared.push(cwd.join(&report.path));
+    }
+    if let Some(coverage) = &target.coverage {
+        shared.push(cwd.join(&coverage.path));
+    }
+    if let Some(dir) = target.env.get("CARGO_LLVM_COV_TARGET_DIR") {
+        shared.push(PathBuf::from(dir));
+    }
+    shared.sort();
+    shared.dedup();
+    Ok(shared)
+}
+
+/// Exclusive leases on the [`shared_outputs`] of `target`, one lock file per
+/// output under `<build output>/codeflow-gate/leases/`, taken in a fixed
+/// order so two runs never wait on each other in a cycle. A run whose output
+/// another run is writing waits for that target to finish, at most the
+/// waiting target's own `timeout_seconds`, then the target is reported not
+/// run; runs with no output in common never wait.
+/// # Errors
+/// When a lease file cannot be opened, or a lease stays held past the bound.
+fn evidence_leases(
+    target: &TargetConfig,
+    root: &Path,
+    anchor: &Path,
+    output: &str,
+) -> Result<Vec<std::fs::File>, TestingError> {
+    use fs2::FileExt;
+    let shared = shared_outputs(target, root)?;
+    if shared.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tree = crate::contained::Tree::open(anchor)?;
+    let folder = format!("{output}/codeflow-gate/leases");
+    tree.create_dir_all(&folder)
+        .map_err(|error| super::delivery::evidence_refused(tree.path(), &folder, &error))?;
+    let mut leases = Vec::new();
+    for path in shared {
+        let key = super::delivery::digest(path.as_os_str().as_encoded_bytes());
+        let relative = format!("{folder}/{}.lock", &key[..32]);
+        // Opened or created with read access only, as the gate locks are:
+        // on Windows a creating handle with `DELETE` access makes every
+        // other run's open fail with a sharing violation instead of waiting.
+        let file = tree
+            .create_read_only(&relative)
+            .map_err(|error| super::delivery::evidence_refused(tree.path(), &relative, &error))?;
+        if file.try_lock_exclusive().is_err() {
+            let bound = target.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
+            eprintln!(
+                "[codeflow test] {}: another run is writing {}; waiting up to {bound}s for it",
+                target.name,
+                crate::git::display_path(&path)
+            );
+            let start = Instant::now();
+            while file.try_lock_exclusive().is_err() {
+                if start.elapsed() >= Duration::from_secs(bound) {
+                    return Err(TestingError::Io(std::io::Error::other(format!(
+                        "another run still wrote {} after {bound}s (the target's timeout_seconds); \
+                         lease: {}",
+                        crate::git::display_path(&path),
+                        crate::git::display_path(&tree.path().join(&relative))
+                    ))));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        leases.push(file);
+    }
+    Ok(leases)
 }
 
 /// The evidence anchor of the project at `root` and the run folder's path
@@ -898,7 +1063,8 @@ fn spawn_command(
         &target.name,
         timeout,
         super::evidence::redacted_values(target).is_empty(),
-        target.heavy == Some(true),
+        target.heavy == Some(true) || target.host_exclusive,
+        false,
     )
 }
 
@@ -917,7 +1083,16 @@ pub fn run_reserved_command(
             message: "a command is required".into(),
         });
     };
-    let mut command = crate::git::process(program);
+    // Only this very binary receives the lock descriptors (TSK-1128): it
+    // makes them close-on-exec at start, so no other tool, script or daemon
+    // can keep or unlock them. The command then runs that checked binary.
+    let same_binary = this_binary_if_same(program, cwd);
+    let hand_over = same_binary.is_some();
+    let mut command = crate::git::process(
+        same_binary
+            .as_deref()
+            .map_or(program.as_os_str(), Path::as_os_str),
+    );
     command.args(&args[1..]).current_dir(cwd);
     if let Some(workers) = workers {
         let oracle = if args.iter().any(|arg| arg == "nextest") {
@@ -933,7 +1108,7 @@ pub fn run_reserved_command(
         progress!("[codeflow reserve] workers: jobs={workers}, nextest={workers}, rust-tests=1, oracle={oracle}");
     }
     let start = Instant::now();
-    let result = spawn_prepared(command, "reserve", timeout, true, true)?;
+    let result = spawn_prepared(command, "reserve", timeout, true, true, hand_over)?;
     Ok(TargetRunResult {
         target_name: "reserve".into(),
         error: None,
@@ -953,15 +1128,135 @@ pub fn run_reserved_command(
     })
 }
 
+/// The running binary's path when `program`, resolved as exec would (a
+/// path against `cwd`, a bare name through `PATH`) and with links followed,
+/// is the same file as the running binary, compared by device and inode.
+/// A script or any other program with the same name is not.
+fn this_binary_if_same(program: &std::ffi::OsStr, cwd: &Path) -> Option<std::path::PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let identity = |path: &Path| std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()));
+        let current = std::env::current_exe().ok()?;
+        let named = Path::new(program);
+        let resolved = if named.components().count() > 1 || named.is_absolute() {
+            Some(cwd.join(named))
+        } else {
+            std::env::split_paths(&std::env::var_os("PATH")?)
+                .map(|dir| {
+                    if dir.is_absolute() {
+                        dir
+                    } else {
+                        cwd.join(dir)
+                    }
+                })
+                .map(|dir| dir.join(named))
+                .find(|path| {
+                    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0)
+                })
+        }?;
+        (identity(&resolved)? == identity(&current)?).then_some(current)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (program, cwd);
+        None
+    }
+}
+
 // The two merged gate changes (TSK-331 admission, TSK-411 failure detail)
 // meet here; one flow keeps each outcome next to the step that causes it.
 #[allow(clippy::too_many_lines)]
+/// Make `descriptors` survive the exec of `cmd`'s program, in the child
+/// only: this process's copies stay close-on-exec, so no other command
+/// inherits them. A descriptor whose flag cannot be cleared fails the spawn,
+/// and the program never runs.
+#[cfg(unix)]
+fn inherit_descriptors(cmd: &mut Command, descriptors: Vec<std::os::fd::RawFd>) {
+    use std::os::unix::process::CommandExt;
+    if descriptors.is_empty() {
+        return;
+    }
+    // SAFETY: the closure runs between fork and exec and calls only fcntl,
+    // which is async-signal-safe; it allocates nothing.
+    unsafe {
+        cmd.pre_exec(move || {
+            for &fd in &descriptors {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
+/// Give the target its own process tree: on Unix its own process group, so
+/// a timeout can kill the WHOLE tree. `sh -c` may fork the real command as a
+/// grandchild that inherits the pipe write-ends; killing only `sh` then
+/// leaves the reader threads blocked until the orphan exits (observed on
+/// Linux CI: a timed-out `sleep 30` held the gate for the full 30s). The
+/// trade: a terminal Ctrl-C no longer reaches the test child automatically,
+/// which is acceptable, since the deadline reaps the whole group either way.
+/// On Windows the target starts suspended so it joins its job object before
+/// it can start a child of its own (TSK-142 AC-3).
+fn isolate_tree(cmd: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(target_job::CREATE_SUSPENDED);
+    }
+}
+
+/// Spawn `cmd`. On Unix the target inherits the fences this process holds,
+/// so the fence lasts while any process of the target lives, a killed
+/// gate's grandchildren included, and older binaries' gates stay out
+/// (TSK-1256). This process's copies close after the spawn; a fence is
+/// never unlocked here, which would release it for the target too.
+///
+/// A `hand_over` command (this binary under `codeflow reserve`) gets no
+/// extra copy: it receives the fence among the named lock copies, which it
+/// keeps for its life and makes close-on-exec, and it takes a fence of its
+/// own for its targets. An unnamed copy would stay inheritable in it and
+/// reach every child it starts, helpers included.
+fn spawn_inheriting_fences(
+    cmd: &mut Command,
+    hand_over: bool,
+) -> std::io::Result<std::process::Child> {
+    #[cfg(unix)]
+    {
+        if hand_over {
+            return cmd.spawn();
+        }
+        let fences = crate::testing::gate_guard::fence_copies()?;
+        inherit_descriptors(
+            cmd,
+            fences.iter().map(std::os::fd::AsRawFd::as_raw_fd).collect(),
+        );
+        let child = cmd.spawn();
+        drop(fences);
+        child
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = hand_over;
+        cmd.spawn()
+    }
+}
+
 fn spawn_prepared(
     mut cmd: Command,
     target_name: &str,
     timeout: Duration,
     emit_progress: bool,
     supervised: bool,
+    hand_over: bool,
 ) -> Result<CommandOutcome, TestingError> {
     // Pipe output so it can be captured while we poll for the timeout. Reader
     // threads drain the pipes concurrently — without them a chatty command
@@ -973,33 +1268,15 @@ fn spawn_prepared(
         message: format!("{e}"),
     };
 
-    // Run the command in its own process group (Unix) so a timeout can kill
-    // the WHOLE tree. `sh -c` may fork the real command as a grandchild that
-    // inherits the pipe write-ends; killing only `sh` then leaves the reader
-    // threads blocked until the orphan exits (observed on Linux CI: a
-    // timed-out `sleep 30` held the gate for the full 30s). The trade: a
-    // terminal Ctrl-C no longer reaches the test child automatically —
-    // acceptable, since the deadline below reaps the whole group either way.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-    // On Windows the target starts suspended so it joins its job object
-    // before it can start a child of its own (TSK-142 AC-3).
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(target_job::CREATE_SUSPENDED);
-    }
+    isolate_tree(&mut cmd);
 
     #[cfg(unix)]
     let mut watcher = if supervised {
-        Some(group_watch::GroupWatch::prepare(&mut cmd).map_err(spawn_err)?)
+        Some(group_watch::GroupWatch::prepare(&mut cmd, hand_over).map_err(spawn_err)?)
     } else {
         None
     };
-    let mut child = cmd.spawn().map_err(spawn_err)?;
+    let mut child = spawn_inheriting_fences(&mut cmd, hand_over).map_err(spawn_err)?;
     #[cfg(unix)]
     if let Some(watcher) = &mut watcher {
         watcher.spawned();
@@ -1337,6 +1614,35 @@ mod tests {
         }
         assert_eq!(stopped, 2);
     }
+    /// A lease another run holds past the waiting target's timeout makes
+    /// the wait end with the target's bound named, never an unbounded wait.
+    #[test]
+    fn an_output_lease_wait_ends_at_the_targets_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut target = make_target("reporter", "true");
+        target.report = Some(crate::testing::config::ReportConfig {
+            format: crate::testing::config::ReportFormat::Junit,
+            path: "out/junit.xml".into(),
+            derive_from: None,
+        });
+        target.timeout_seconds = Some(1);
+        let held = evidence_leases(&target, dir.path(), dir.path(), "target").unwrap();
+        assert_eq!(held.len(), 1);
+        let start = Instant::now();
+        let refused = evidence_leases(&target, dir.path(), dir.path(), "target").unwrap_err();
+        // The refusal must be the bound, not an open that failed at once
+        // (on Windows a sharing violation did, before the read-only open).
+        assert!(refused.to_string().contains("after 1s"), "{refused}");
+        assert!(start.elapsed() >= Duration::from_secs(1));
+        drop(held);
+        assert_eq!(
+            evidence_leases(&target, dir.path(), dir.path(), "target")
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
     fn make_target(name: &str, command: &str) -> TargetConfig {
         TargetConfig {
             name: name.to_string(),
@@ -1350,6 +1656,7 @@ mod tests {
             input_class: None,
             evidence: None,
             exclusive: false,
+            host_exclusive: false,
             heavy: None,
             workers: None,
             runner: RunnerType::Custom,
@@ -2497,5 +2804,47 @@ mod report_open_tests {
         std::fs::hard_link(&near, other.join("junit.xml")).unwrap();
         let error = open_report(root.path(), &other.join("junit.xml")).unwrap_err();
         assert!(error.to_string().contains("hard link"), "{error}");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod fence_inheritance_tests {
+    use super::*;
+
+    /// TSK-1256 R5: a descriptor whose close-on-exec flag cannot be cleared
+    /// fails the spawn itself, so the program never runs without its fence.
+    #[test]
+    fn a_fence_that_cannot_be_inherited_refuses_the_spawn() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("ran");
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "touch ran"]).current_dir(dir.path());
+        // No process has this descriptor open.
+        inherit_descriptors(&mut cmd, vec![i32::MAX - 1]);
+        let error = cmd.spawn().expect_err("the spawn refuses");
+        assert_eq!(error.raw_os_error(), Some(libc::EBADF), "{error}");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!marker.exists(), "the program never ran");
+    }
+
+    /// The child inherits a cleared descriptor; this process's copy stays
+    /// close-on-exec.
+    #[test]
+    fn an_inherited_descriptor_reaches_the_child_only() {
+        use std::os::fd::AsRawFd;
+        let dir = tempfile::tempdir().unwrap();
+        let file = std::fs::File::open(dir.path()).unwrap();
+        let fd = file.as_raw_fd();
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", &format!("test -e /dev/fd/{fd}")]);
+        inherit_descriptors(&mut cmd, vec![fd]);
+        assert!(cmd.status().unwrap().success(), "the child has it");
+        // SAFETY: F_GETFD only reads this process's descriptor flags.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert_ne!(
+            flags & libc::FD_CLOEXEC,
+            0,
+            "the parent's copy is unchanged"
+        );
     }
 }

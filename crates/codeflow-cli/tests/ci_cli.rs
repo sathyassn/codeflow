@@ -22,6 +22,8 @@ mod change_class_probes;
 mod destination;
 #[path = "ci_cli/document_indexes.rs"]
 mod document_indexes;
+#[path = "ci_cli/line_tip.rs"]
+mod line_tip;
 #[path = "ci_cli/outcome_marker.rs"]
 mod outcome_marker;
 #[path = "ci_cli/pr_body_fixtures.rs"]
@@ -30,6 +32,8 @@ mod pr_body_fixtures;
 mod range_context;
 #[path = "ci_cli/secret_scan_exemption.rs"]
 mod secret_scan_exemption;
+#[path = "ci_cli/status_steps.rs"]
+mod status_steps;
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -117,6 +121,59 @@ fn git(dir: &Path, args: &[&str]) {
         out.status,
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// Record the working copy's `.codeflow/policy.json` on `branch` as a new
+/// commit, leaving the checkout and its index as they are. `codeflow ci
+/// --base <branch>` judges with the policy at that base, and a base that
+/// holds none is judged by the shipped defaults (TSK-1077), so a fixture
+/// that varies the policy lands each variant there.
+fn land_policy_on(dir: &Path, branch: &str) {
+    let index = dir.join(".git").join("land-policy.index");
+    let run = |args: &[&str]| -> String {
+        let out = git_command(dir)
+            .env("GIT_INDEX_FILE", &index)
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim_end().to_owned()
+    };
+    run(&["read-tree", branch]);
+    let blob = run(&["hash-object", "-w", ".codeflow/policy.json"]);
+    run(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("100644,{blob},.codeflow/policy.json"),
+    ]);
+    let tree = run(&["write-tree"]);
+    let commit = run(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        branch,
+        "-m",
+        "chore: land the fixture policy",
+    ]);
+    // The landing models a forge merge; installed local hooks, which may
+    // refuse a local update of a protected branch, are not part of it.
+    run(&[
+        "-c",
+        "core.hooksPath=/dev/null",
+        "update-ref",
+        &format!("refs/heads/{branch}"),
+        &commit,
+    ]);
+    let _ = std::fs::remove_file(&index);
+}
+
+fn land_policy(dir: &Path) {
+    land_policy_on(dir, "main");
 }
 
 /// A repo with a `main` base commit and a `feat/x` branch carrying one commit
@@ -420,6 +477,7 @@ fn ci_scales_the_pr_body_sections_to_the_change_class() {
             r#"{"schema_version":1,"git":{"pr_release_impact":"block","pr_required_sections":["Summary","Changes","Reviews","Release impact"]}}"#,
         )
         .unwrap();
+        land_policy(dir);
     };
     // Markdown under docs/ (a guide) or a plan under docs/plan/, on a
     // branch cut from the base commit.
@@ -515,6 +573,7 @@ fn ci_warn_level_structure_reports_and_proceeds() {
         r#"{"schema_version":1,"git":{"pr_sections":"warn"}}"#,
     )
     .unwrap();
+    land_policy(dir.path());
     let out = ci_with_body(dir.path(), "## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- one change\n");
     assert_eq!(
         out.status.code(),
@@ -603,6 +662,7 @@ fn ci_summary_shape_blocks_prose_only_and_follows_its_level() {
             format!(r#"{{"schema_version":1,"git":{{"pr_summary":"{level}"}}}}"#),
         )
         .unwrap();
+        land_policy(dir.path());
         let out = ci_with_body(dir.path(), &prose);
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(code), "{level}: {stderr}");
@@ -700,6 +760,7 @@ fn ci_long_body_warns_without_blocking() {
             format!(r#"{{"schema_version":1,"git":{{"pr_sections":"{level}"}}}}"#),
         )
         .unwrap();
+        land_policy(dir.path());
         let out = ci_with_body(dir.path(), &long);
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(0), "{level}: {stderr}");
@@ -830,6 +891,7 @@ fn ci_pr_body_policy_character_blocks() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
     block_policy_characters(dir.path());
+    land_policy(dir.path());
     let body = FULL_BODY.replace("adds a thing", "adds a thing \u{2014} and more");
     let out = ci_with_body(dir.path(), &body);
     assert_eq!(out.status.code(), Some(1));
@@ -1029,6 +1091,7 @@ fn scaffolded_standard(dir: &Path) {
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     policy["git"]["policy_characters"] = "block".into();
     std::fs::write(&path, serde_json::to_vec_pretty(&policy).unwrap()).unwrap();
+    land_policy_on(dir, "trunk");
 }
 
 fn ci_scaffold_range(dir: &Path) -> (Option<i32>, String) {
@@ -1069,9 +1132,19 @@ fn ci_scaffold_range_skips_unmodified_managed_files() {
     // and the user-owned starter docs carry no policy character, so the
     // scaffold range is clean even when the policy blocks.
     let (code, all) = ci_scaffold_range(dir.path());
+    // Exit 0, not 2: neither the commit nor the added-lines check was
+    // skipped, so added-lines ran over the scaffold and found nothing.
     assert_eq!(code, Some(0), "{all}");
     assert!(!all.contains("git.policy_characters"), "{all}");
-    assert!(all.contains("added-lines"), "{all}");
+    assert!(!all.contains("skipped:"), "{all}");
+    // The only findings are the warnings that the range adds the managed
+    // workflows, which change who judges pull requests (TSK-336 AC-11).
+    assert!(all.contains("3 warning(s) only"), "{all}");
+    assert_eq!(
+        all.matches("warning — ci.workflow_change").count(),
+        3,
+        "{all}"
+    );
 }
 
 #[test]
@@ -1583,6 +1656,7 @@ fn repo_touching_a_watched_path(dir: &Path) {
         r#"{"git": {"breaking_watch_paths": ["thing.rs"]}}"#,
     )
     .unwrap();
+    land_policy(dir);
 }
 
 #[test]
@@ -1777,6 +1851,7 @@ fn ci_refuses_conflict_markers_one_finding_per_case() {
             format!(r#"{{"schema_version":1,"git":{{"conflict_markers":"{level}"}}}}"#),
         )
         .unwrap();
+        land_policy(root);
         let out = ci_range(root);
         let all = output_text(&out);
         assert_eq!(out.status.code(), Some(code), "{level}: {all}");

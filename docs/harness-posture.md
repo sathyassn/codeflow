@@ -66,6 +66,16 @@ dated evidence.
 | Native Windows, Codex | its elevated Windows sandbox, selected by default | the scaffolded deterministic guard recognizes both Bash and PowerShell command events and Windows drive, system, profile, disk, recovery, and permission operations |
 | Native Windows, Claude Code | none; Git Bash or PowerShell work, but Claude's OS sandbox is not available | settings and hooks still apply, but they are not equivalent containment: move catastrophic or otherwise high-blast-radius work to WSL2 or a container, and if that boundary is unavailable, stop (ADR-0033) |
 
+### The exec guard's text rule
+
+The exec guard applies one of two text rules to each shell call (ADR-0088):
+
+- **Strict**, the default: judges every word after a program the guard cannot read through, with no program exempt by name.
+- **Relaxed:** the previous rule, chosen by landing `security.text_guard: relaxed` on the protected refs the hook reads; the guard verifies no sandbox and does not authenticate those refs ([`security.text_guard`](policy-reference.md)).
+- **Always strict:** a recognized marked retry (`dangerouslyDisableSandbox`), and every call on native Windows.
+
+Neither rule sees the environment a command inherits ([what the startup backstop leaves open](policy-reference.md#what-the-startup-backstop-leaves-open)). `codeflow doctor --check sandbox` prints the rule in force.
+
 The test runner's per-target `shell` is `auto` by default (`sh` on
 macOS/Linux/WSL2, `cmd.exe` on native Windows). This keeps generated `&&`
 command chains compatible with the shells built into each OS. Set it to `sh`,

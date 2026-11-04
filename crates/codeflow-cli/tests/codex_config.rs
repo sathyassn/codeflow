@@ -413,9 +413,13 @@ fn cf_builder_home_writes_are_only_the_lock_folder() {
         !fs.keys().any(|key| key.contains("gate-runs")),
         "cf-builder names the gate evidence folder"
     );
+    // `cf-guard` keeps `~/.codeflow/authority` read-only (TSK-397 H-5);
+    // it grants no write under the CodeFlow home.
     let guard = cf_guard(&cfg, "filesystem");
     assert!(
-        !guard.keys().any(|key| key.starts_with("~/.codeflow")),
+        !guard
+            .iter()
+            .any(|(key, value)| key.starts_with("~/.codeflow") && value.as_str() == Some("write")),
         "cf-guard grants a CodeFlow home folder"
     );
     let roots = fs[":workspace_roots"].as_table().unwrap();

@@ -82,20 +82,103 @@ const AUTHORITY_ROUTE: &str =
 
 /// What an argument reaches: authority metadata, which always refuses, or
 /// an enforcement path, which refuses at the integrity level.
+#[derive(PartialEq, Eq)]
 enum Reach {
     Authority(String),
     Enforcement(String),
 }
 
+impl Reach {
+    /// The baseline rule's finding: authority at its fixed level, an
+    /// enforcement path at `integrity` (none when it is `off`).
+    fn violation(&self, integrity: PolicyLevel) -> Option<Violation> {
+        match self {
+            Self::Authority(message) => Some(Violation::always_blocking(
+                "git.hook_integrity",
+                message.clone(),
+                AUTHORITY_ROUTE,
+            )),
+            Self::Enforcement(message) => integrity.is_active().then(|| {
+                Violation::new(
+                    "git.hook_integrity",
+                    integrity,
+                    message.clone(),
+                    crate::remedy::INTERPRETER_ARGUMENT.remedy(),
+                )
+            }),
+        }
+    }
+
+    /// A finding only the strict branch makes: it always blocks, under
+    /// `security.text_guard`, and says which trigger selected the rule.
+    fn strict_violation(&self, trigger: &str) -> Violation {
+        let message = match self {
+            Self::Authority(message) | Self::Enforcement(message) => format!(
+                "{message}; this is outside the guard's model, and the strict rule applies because {trigger}"
+            ),
+        };
+        let route = match self {
+            Self::Authority(_) => crate::remedy::Remedy::sanctioned(AUTHORITY_ROUTE),
+            Self::Enforcement(_) => crate::remedy::INTERPRETER_ARGUMENT.remedy(),
+        };
+        Violation {
+            level_fixed: true,
+            ..Violation::new(STRICT_RULE, PolicyLevel::Block, message, route)
+        }
+    }
+}
+
+/// The rule a strict-only finding names: the key that selected the strict
+/// rule, whose findings no other level lowers.
+pub(crate) const STRICT_RULE: &str = "security.text_guard";
+
+/// Judge the line's interpreter arguments. The baseline rule always runs.
+/// `strict` is `Some(trigger)` in the tightened outcome of TSK-397 design
+/// D: the strict branch then runs as well, and each refusal it adds says
+/// which trigger selected it. The tightened outcome keeps every baseline
+/// finding, so it never allows what the baseline refuses.
+///
+/// A baseline finding takes `git.hook_integrity`'s level. A finding only
+/// the strict branch makes is ruled by `security.text_guard`, the key that
+/// selected it: it always blocks, whatever `git.hook_integrity` says, so a
+/// legacy `warn` or `off` never turns the strict rule into advice (TSK-397
+/// security review SEC01-1).
 pub(crate) fn evaluate(
     line: &str,
     integrity: PolicyLevel,
     payload_cwd: &Path,
     root: &Path,
     home: Option<&Path>,
+    strict: Option<&str>,
 ) -> Vec<Violation> {
+    let baseline = evaluate_rule(line, payload_cwd, root, home, false);
+    let mut found: Vec<Violation> = baseline
+        .iter()
+        .filter_map(|reach| reach.violation(integrity))
+        .collect();
+    if let Some(trigger) = strict {
+        for reach in evaluate_rule(line, payload_cwd, root, home, true) {
+            if baseline.contains(&reach) {
+                continue;
+            }
+            found.push(reach.strict_violation(trigger));
+        }
+    }
+    found
+}
+
+/// One rule's judgement: the line's rule when `strict` is false, the strict
+/// branch when it is true.
+fn evaluate_rule(
+    line: &str,
+    payload_cwd: &Path,
+    root: &Path,
+    home: Option<&Path>,
+    strict: bool,
+) -> Vec<Reach> {
     let _scope = edit_guard::RepoFactsScope::enter();
     let calls = outward::interpreter_calls_with_home(line, payload_cwd, home);
+    let spelled = line;
     let visible = if line.contains("<<") {
         composed::paths::execution_text(line, payload_cwd, home)
     } else {
@@ -103,11 +186,30 @@ pub(crate) fn evaluate(
     };
     let line = visible.as_str();
     let (opaque, runs) = outward::code_sources(line);
-    if calls.is_empty() && !runs && !opaque && outward::interpreter_bodies(line).is_empty() {
+    // Strict branch: a current-shell substitution's body is code the
+    // splitter does not keep whole, so every word on the line may belong to
+    // a call the guard never saw (TSK-397 security review SR2-1), and the
+    // lexer's possible calls are read before any early return, so its
+    // findings are never skipped (TSK-397 Codex review round 11). The lexer
+    // reads the line as spelled, before the heredoc rewrite, so a heredoc
+    // delimiter it does not model (`<<$'E'`, `<<$(x)`) stays opaque.
+    let lexed = strict.then(|| super::shell_lex::lex(spelled));
+    let opaque = opaque
+        || lexed
+            .as_ref()
+            .is_some_and(|lexed| lexed.opaque || lexed.current_shell);
+    let reading = lexed.as_ref().map(outward::read_line).unwrap_or_default();
+    if calls.is_empty()
+        && !runs
+        && !opaque
+        && reading.operands.is_empty()
+        && outward::interpreter_bodies(line).is_empty()
+    {
         return Vec::new();
     }
-    let line_dirs = outward::line_directories(line, payload_cwd, home);
+    let line_dirs = outward::line_directories(line, payload_cwd, home, strict);
     let mut facts = Facts {
+        strict,
         line,
         payload_cwd,
         root,
@@ -118,6 +220,20 @@ pub(crate) fn evaluate(
         line_authority: HashMap::new(),
     };
     let mut reaches = Vec::new();
+    // Where the line may have moved the shell somewhere the guard cannot
+    // follow, a value filled in at run time can be derived from that
+    // directory (`$PWD/src/..`, `$( pwd)`, `~+`), whatever its spelling.
+    // So an operand holding any expansion, substitution or tilde refuses:
+    // no variable is trusted, `HOME` included, since a function the line
+    // runs may change it (TSK-397 Codex review rounds 8 to 10).
+    if line_dirs.unknown {
+        if let Some(word) = reading.derived.as_ref() {
+            reaches.push(Reach::Enforcement(format!(
+                "the strict text rule cannot verify the run-time argument `{}`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved",
+                word.text
+            )));
+        }
+    }
     for call in &calls {
         reaches.extend(call_reaches(call, &line_dirs, &mut facts));
     }
@@ -181,32 +297,15 @@ pub(crate) fn evaluate(
             }
         }
     }
-    let mut found = Vec::new();
-    for reach in reaches {
-        let violation = match reach {
-            Reach::Authority(message) => Some(Violation::always_blocking(
-                "git.hook_integrity",
-                message,
-                AUTHORITY_ROUTE,
-            )),
-            Reach::Enforcement(message) => integrity.is_active().then(|| {
-                Violation::new(
-                    "git.hook_integrity",
-                    integrity,
-                    message,
-                    crate::remedy::INTERPRETER_ARGUMENT.remedy(),
-                )
-            }),
-        };
-        found.extend(violation);
-    }
-    found
+    reaches
 }
 
 /// What one evaluation reads once and reuses for every call on the line
 /// (TSK-302 review F4): the protected names, and what the whole line names
 /// from each directory a call runs in.
 struct Facts<'a> {
+    /// The strict branch of TSK-397 design D is judging.
+    strict: bool,
     line: &'a str,
     payload_cwd: &'a Path,
     root: &'a Path,
@@ -408,7 +507,7 @@ fn call_dirs(
     for chdir in &call.chdir {
         match outward::directory_operand(chdir, facts.home) {
             outward::DirChange::Unknown => set.unknown = true,
-            outward::DirChange::To(target) => {
+            outward::DirChange::To(target) if !facts.strict => {
                 match set
                     .dirs
                     .iter()
@@ -418,6 +517,37 @@ fn call_dirs(
                     Some(dirs) => set.dirs = dirs,
                     None => set.unknown = true,
                 }
+            }
+            outward::DirChange::To(target) => {
+                // `ruby -C` changes directory physically, so `lnk/..` is the
+                // link target's parent; both readings are kept, and a `..`
+                // that cannot be resolved makes the directory unknown
+                // (TSK-397 Grok finding 2).
+                let parent = target
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir));
+                let mut next = Vec::new();
+                for dir in &set.dirs {
+                    let logical = outward::lexical_join(dir, &target);
+                    match std::fs::canonicalize(dir.join(&target)) {
+                        Ok(physical) if physical != logical => next.push(physical),
+                        Err(_) if parent => set.unknown = true,
+                        Ok(_) | Err(_) => {}
+                    }
+                    // The line's reading too: a join it cannot make (a
+                    // namespace operand, an absent or unreadable component
+                    // before a `..`) is unknown here as well.
+                    match outward::physical_join(dir, &target) {
+                        Some(joined) if joined != logical && !next.contains(&joined) => {
+                            next.push(joined);
+                        }
+                        Some(_) => {}
+                        None => set.unknown = true,
+                    }
+                    next.push(logical);
+                }
+                next.dedup();
+                set.dirs = next;
             }
         }
     }
@@ -1259,6 +1389,12 @@ fn unreadable_reach(
             git_guard::token_integrity_path(value, dir, facts.payload_cwd)
         }
         Some(_) => None,
+        // From a directory the guard cannot follow, `.`, `..` or `$PWD`
+        // names that directory or one above it, which may be the checkout
+        // or a protected directory itself (TSK-397 security review SR2-2).
+        None if facts.strict && names_the_directory_or_above(value, facts.home.is_some()) => {
+            Some("the directory it runs in or one above it".to_string())
+        }
         None => git_guard::word_could_name(value).map(str::to_string),
     };
     if let Some(reached) = reached {
@@ -1286,6 +1422,22 @@ fn unreadable_reach(
     Some(Reach::Enforcement(format!(
         "an interpreter argument `{shown}` is filled in at run time on a line that names the enforcement path `{named}`"
     )))
+}
+
+/// Whether an operand names the directory it is used from or an ancestor:
+/// `.`, `./`, `..`, `x/..`, `../..`, and `~` when the home is unknown.
+fn names_the_directory_or_above(value: &str, home_known: bool) -> bool {
+    let mut value = value.to_string();
+    if !home_known && (value == "~" || value.starts_with("~/")) {
+        value.replace_range(..1, ".");
+    }
+    if value.starts_with('/') || value.starts_with('~') {
+        return false;
+    }
+    value
+        .split('/')
+        .rfind(|part| !part.is_empty() && *part != ".")
+        .is_none_or(|last| last == "..")
 }
 
 /// Authority metadata as a trailing spelling a word can end in.

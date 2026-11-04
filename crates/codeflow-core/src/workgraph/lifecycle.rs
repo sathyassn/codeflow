@@ -53,6 +53,9 @@ pub struct RecordView {
     pub supersedes: Vec<String>,
     pub superseded_by: Option<String>,
     pub integration_target: Option<String>,
+    /// An epic's `parent_line`: the epic line its tasks land on when that
+    /// line is another epic's (TSK-1286).
+    pub parent_line: Option<String>,
     /// A task's `role` frontmatter value (SPC-013 R-120:
     /// `release-integration`), when set.
     pub role: Option<String>,
@@ -111,6 +114,7 @@ impl RecordView {
             supersedes: list("supersedes"),
             superseded_by: field("superseded_by"),
             integration_target: field("integration_target"),
+            parent_line: field(super::line_adoption::PARENT_LINE_FIELD),
             role: field("role"),
             // Spaces and tabs only (issue 79): another whitespace character
             // is part of the id, so a lookalike never names a task.
@@ -1133,7 +1137,7 @@ fn transition_problems(before: Option<&RecordView>, after: &RecordView) -> Vec<S
     problems
 }
 
-fn task_transition_allowed(from: &str, to: &str) -> Result<(), &'static str> {
+pub(super) fn task_transition_allowed(from: &str, to: &str) -> Result<(), &'static str> {
     // `in_progress` stays readable; it is the legacy spelling of `todo`.
     let from = if from == "in_progress" { "todo" } else { from };
     match (from, to) {
@@ -1150,7 +1154,7 @@ fn task_transition_allowed(from: &str, to: &str) -> Result<(), &'static str> {
     }
 }
 
-fn epic_transition_allowed(from: &str, to: &str) -> Result<(), &'static str> {
+pub(super) fn epic_transition_allowed(from: &str, to: &str) -> Result<(), &'static str> {
     let open = |status: &str| EPIC_OPEN.contains(&status);
     match (from, to) {
         (from, to) if open(from) && (open(to) || matches!(to, "complete" | "cancelled")) => Ok(()),
@@ -1161,7 +1165,7 @@ fn epic_transition_allowed(from: &str, to: &str) -> Result<(), &'static str> {
     }
 }
 
-fn spec_transition_allowed(from: &str, to: &str) -> Result<(), &'static str> {
+pub(super) fn spec_transition_allowed(from: &str, to: &str) -> Result<(), &'static str> {
     match (from, to) {
         ("draft", "approved") | ("approved" | "implemented", "superseded") => Ok(()),
         (_, "implemented") => Err("implemented is derived from the consumers and never written"),
@@ -2202,6 +2206,8 @@ fn judge_range_against(
     on_line: bool,
     brought: Option<&Brought>,
 ) -> Result<Verdict, String> {
+    // One history snapshot for every walk of this read-only judgment.
+    let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let target_commit = resolve_commit(&repo, target)?
         .ok_or_else(|| format!("cannot resolve {target} to a commit"))?;
@@ -2222,6 +2228,7 @@ fn judge_range_against(
         }
     }
     let paths = changed_paths(&repo, base, head)?;
+    let touched = touched_in_range(&repo, base, head)?;
     let reopened = reopened_in_range(&repo, base, head, &after)?;
     let (shipped, history_problems) = shipped_specs(&repo, base, &before, &after);
     let context = ChangeContext {
@@ -2255,7 +2262,14 @@ fn judge_range_against(
         }
         let olds: Vec<&RecordView> = match base_graph.records.get(&record.id) {
             Some(old) if old.content == record.content && !reopened.contains(&record.id) => {
-                continue
+                // Unchanged at the endpoints, but changed by a commit of the
+                // range: a status left and returned is judged step by step
+                // (`todo -> cancelled -> todo`, TSK-1036 AC-7).
+                if touched.contains(&record.path) {
+                    let steps = range_steps(&repo, base, head, record, Some(old), false);
+                    add_steps(&mut verdict, record, steps, None);
+                }
+                continue;
             }
             Some(old) => vec![old],
             None if baseline.is_legacy_blob(record) => continue,
@@ -2277,6 +2291,11 @@ fn judge_range_against(
             },
             None => context,
         };
+        let at_base = base_graph.records.get(&record.id);
+        let steps = range_steps(&repo, base, head, record, at_base, olds.is_empty());
+        // The endpoints' status refusal, lifted when every step of the range
+        // is read and legal (TSK-1036, issues #365, #400 and #424).
+        let lifted = lifted_refusal(steps.as_ref(), at_base, record);
         let judged: Vec<Verdict> = if olds.is_empty() {
             vec![judge_change(None, record, &after, &baseline, context)]
         } else {
@@ -2285,12 +2304,177 @@ fn judge_range_against(
                 .collect()
         };
         for one in judged {
-            verdict.errors.extend(one.errors);
+            verdict
+                .errors
+                .extend(one.errors.into_iter().filter(|error| {
+                    lifted
+                        .as_ref()
+                        .is_none_or(|lifted| !error.starts_with(lifted))
+                }));
             verdict.warnings.extend(one.warnings);
         }
+        add_steps(&mut verdict, record, steps, at_base);
     }
     verdict.sort();
     Ok(verdict)
+}
+
+/// The endpoints' status refusal of `record`, which a proven step judgment
+/// lifts (TSK-1036, issues #365, #400 and #424), as the text it starts with.
+fn lifted_refusal(
+    steps: Option<&super::status_steps::Steps>,
+    at_base: Option<&RecordView>,
+    record: &RecordView,
+) -> Option<String> {
+    match (steps, at_base) {
+        (Some(steps), Some(old)) if steps.proven && old.status != record.status => Some(format!(
+            "{}: status {} -> {} is refused: ",
+            record.path, old.status, record.status
+        )),
+        _ => None,
+    }
+}
+
+/// Add the step judgment's refusals of `record`, and the removed Blocker
+/// when the range unblocks it.
+fn add_steps(
+    verdict: &mut Verdict,
+    record: &RecordView,
+    steps: Option<super::status_steps::Steps>,
+    at_base: Option<&RecordView>,
+) {
+    if let Some(steps) = steps {
+        verdict.apply(Mode::Strict, &record.path, steps.problems);
+    }
+    if let Some(notice) = at_base.and_then(|old| unblock_notice(old, record)) {
+        verdict.notices.push(notice);
+    }
+}
+
+/// The record paths any commit of `base..head` changes against any of its
+/// parents (to `HEAD` when `head` is `None`), so a record whose endpoints
+/// match but whose history in the range moved is still judged.
+fn touched_in_range(
+    repo: &Repository,
+    base: &str,
+    head: Option<&str>,
+) -> Result<BTreeSet<String>, String> {
+    let resolve = |revision: &str| {
+        resolve_commit(repo, revision)?.ok_or_else(|| format!("cannot resolve {revision}"))
+    };
+    let base = resolve(base)?;
+    let tip = resolve(head.unwrap_or("HEAD"))?;
+    let mut walk = history::revwalk(repo).map_err(|error| error.to_string())?;
+    walk.push(tip)
+        .and_then(|()| walk.hide(base))
+        .map_err(|error| error.to_string())?;
+    let mut touched = BTreeSet::new();
+    for oid in walk {
+        let oid = oid.map_err(|error| error.to_string())?;
+        let commit = repo.find_commit(oid).map_err(|error| error.to_string())?;
+        let tree = commit.tree().map_err(|error| error.to_string())?;
+        for parent in history::parents(repo, &commit).map_err(|error| error.to_string())? {
+            let parent_tree = repo
+                .find_commit(parent)
+                .and_then(|parent| parent.tree())
+                .map_err(|error| error.to_string())?;
+            let diff = repo
+                .diff_tree_to_tree(Some(&parent_tree), Some(&tree), None)
+                .map_err(|error| error.to_string())?;
+            touched.extend(
+                crate::git::diff_paths(&diff)
+                    .iter()
+                    .map(GitName::storage_key)
+                    .filter(|path| path.starts_with("project-management/")),
+            );
+        }
+    }
+    Ok(touched)
+}
+
+/// The status steps of `record` over `base..head`, judged per commit (see
+/// [`super::status_steps`]); with no `head`, the working tree's change from
+/// `HEAD` is the last step. The walk follows the record by its id, so a
+/// move between record paths is judged too. `None` when the endpoints
+/// alone judge the record: a record whose older copy comes from a
+/// migration baseline, or a revision that does not resolve, whose refusal
+/// the range read reports.
+fn range_steps(
+    repo: &Repository,
+    base: &str,
+    head: Option<&str>,
+    record: &RecordView,
+    at_base: Option<&RecordView>,
+    created: bool,
+) -> Option<super::status_steps::Steps> {
+    use super::status_steps::{judge, starts_at, step_allowed, Steps};
+    if at_base.is_none() && !created {
+        return None;
+    }
+    let base = resolve_commit(repo, base).ok().flatten()?;
+    let Some(head) = head else {
+        // The working tree: the commits to `HEAD`, then the uncommitted
+        // change as one more step.
+        let tip = resolve_commit(repo, "HEAD").ok().flatten()?;
+        let mut steps = judge(repo, base, tip, record.kind, &record.id);
+        let at_tip = Graph::from_revision(repo, &tip.to_string())
+            .ok()
+            .and_then(|graph| graph.records.get(&record.id).cloned());
+        if at_tip.is_none_or(|old| old.path != record.path) {
+            steps.proven = false;
+        }
+        // The checkout's step starts from the status at `HEAD`, or, when
+        // `HEAD` holds no record, from the status it last held before.
+        match starts_at(repo, base, tip, record.kind, &record.id) {
+            Ok(starts) => {
+                for from in starts.into_iter().flatten() {
+                    if let Err(reason) = step_allowed(record.kind, Some(&from), &record.status) {
+                        steps.problems.push(format!(
+                            "status {from} -> {} is refused in the working tree: {reason}",
+                            record.status
+                        ));
+                        steps.proven = false;
+                    }
+                }
+            }
+            Err(unreadable) => {
+                steps.problems.push(unreadable);
+                steps.proven = false;
+            }
+        }
+        return Some(steps);
+    };
+    let head = resolve_commit(repo, head).ok().flatten()?;
+    let steps: Steps = judge(repo, base, head, record.kind, &record.id);
+    Some(steps)
+}
+
+/// The evidence a reviewer sees when a range unblocks a task: the Blocker
+/// the base recorded, which the range removes.
+fn unblock_notice(old: &RecordView, record: &RecordView) -> Option<Finding> {
+    if record.kind != RecordKind::Task || old.status != "blocked" || record.status == "blocked" {
+        return None;
+    }
+    let blocker = super::record_text::parse_blocker(&old.body).unwrap_or_default();
+    let field = |value: &str| {
+        if value.is_empty() {
+            "(none recorded)".to_string()
+        } else {
+            value.to_string()
+        }
+    };
+    Some(Finding::new(
+        format!(
+            "{} is unblocked in this range ({} -> {}); the Blocker it removes: reason: {}; owner: {}; revisit: {}",
+            record.id,
+            old.status,
+            record.status,
+            field(&blocker.reason),
+            field(&blocker.owner),
+            field(&blocker.revisit)
+        ),
+        remedy::RECORD_UNBLOCKED.remedy(),
+    ))
 }
 
 /// On a verified integration line, the paths of the landing that brought a

@@ -14,6 +14,7 @@ use std::process::{Command, Output};
 
 const CI: &str = include_str!("../../../assets/base/ci/codeflow-ci.yml");
 const POLICY: &str = include_str!("../../../assets/base/ci/codeflow-policy.yml");
+const REGISTRY: &str = include_str!("../../../assets/base/ci/codeflow-registry.yml");
 const ASSET: &str = "codeflow-cli-x86_64-unknown-linux-gnu";
 
 /// The `run:` script of every step whose name starts with `prefix`: the
@@ -284,14 +285,21 @@ fn every_install_step_is_the_same_verified_script() {
     let mut blocks = run_blocks(CI, "Install codeflow");
     blocks.extend(run_blocks(CI, "Install candidate codeflow"));
     blocks.extend(run_blocks(POLICY, "Install codeflow"));
-    assert_eq!(blocks.len(), 3, "gates, candidate and the enforcing job");
+    blocks.extend(run_blocks(REGISTRY, "Install codeflow"));
+    assert_eq!(
+        blocks.len(),
+        4,
+        "gates, candidate, the verdict job and the registry check"
+    );
     assert!(blocks.iter().all(|b| b == &blocks[0]));
     assert!(blocks[0].contains("sha256.sum"));
-    for workflow in [CI, POLICY] {
+    for workflow in [CI, POLICY, REGISTRY] {
         assert!(!workflow.contains("PLACEHOLDER"));
     }
-    // The enforcing job reads the pin from the target checkout.
+    // The enforcing job reads the pin from the authority checkout, and the
+    // registry check from the event's own commit.
     assert!(POLICY.contains("PIN_REF: HEAD"));
+    assert!(REGISTRY.contains("PIN_REF: HEAD"));
 }
 
 #[test]
@@ -1121,6 +1129,38 @@ fn audit_repo(
     base
 }
 
+/// The fake osv-scanner: it reports an advisory unless an `osv-scanner.toml`
+/// sits beside the lockfile and, as osv-scanner does, skips a lockfile the
+/// `.gitignore` names unless it runs with `--no-ignore`. `OSV_FAKE` is
+/// `empty` or `broken` (both exit 128) and `OSV_FAKE_SOURCE` is the path the
+/// advisory names. With `--format json` it prints a report on stdout, one
+/// vulnerability per id in `OSV_FAKE_IDS` (default `GHSA-test`), and its
+/// messages on stderr.
+const FAKE_OSV_SCANNER: &str = r#"#!/bin/sh
+case " $* " in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev/null; then echo 'No package sources found'; exit 128; fi ;; esac
+case ${OSV_FAKE:-} in
+  empty) echo 'No package sources found, --help for usage information.'; exit 128 ;;
+  broken) echo 'Error during extraction: Cargo.lock: could not extract'; echo 'No package sources found, --help for usage information.'; exit 128 ;;
+esac
+if [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi
+case " $* " in
+  *' --format json '*)
+    # as osv-scanner does with a JSON format: every log level goes to stderr
+    # unless --verbosity error keeps only the errors
+    case " $* " in *' --verbosity error '*) ;; *) echo 'Scanned 1 file' >&2 ;; esac
+    if [ -n "${OSV_FAKE_LOG:-}" ]; then echo "$OSV_FAKE_LOG" >&2; fi
+    printf '{"results":[{"source":{"path":"%s/%s","type":"lockfile"},"packages":[{"package":{"name":"demo","version":"1.0.0","ecosystem":"crates.io"},"vulnerabilities":[' "$PWD" "${OSV_FAKE_SOURCE:-Cargo.lock}"
+    sep=
+    for id in ${OSV_FAKE_IDS:-GHSA-test}; do
+      printf '%s{"id":"%s","aliases":["CVE-%s"]}' "$sep" "$id" "$id"
+      sep=,
+    done
+    printf ']}]}]}\n'
+    exit 1 ;;
+esac
+echo "GHSA-test advisory in ${OSV_FAKE_SOURCE:-Cargo.lock}"; exit 1
+"#;
+
 /// Run the security-review job's dependency audit step in `repo` with
 /// `TRUSTED_SHA` set, a fake `curl` and `sha256sum`, and a fake
 /// osv-scanner that reports an advisory unless an `osv-scanner.toml` sits
@@ -1136,7 +1176,7 @@ fn run_audit_step(repo: &Path, trusted: &str, fake: &[(&str, &str)]) -> Output {
     // it made there; the system temp directory stays untouched (TSK-386).
     let runner_temp = step_temp(&repo.parent().unwrap().join("runner-temp"));
     let system_temp = step_temp(&repo.parent().unwrap().join("tmp"));
-    let scanner = "#!/bin/sh\ncase \" $* \" in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev/null; then echo 'No package sources found'; exit 128; fi ;; esac\ncase ${OSV_FAKE:-} in\n  empty) echo 'No package sources found, --help for usage information.'; exit 128 ;;\n  broken) echo 'Error during extraction: Cargo.lock: could not extract'; echo 'No package sources found, --help for usage information.'; exit 128 ;;\nesac\nif [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi\necho \"GHSA-test advisory in ${OSV_FAKE_SOURCE:-Cargo.lock}\"; exit 1\n";
+    let scanner = FAKE_OSV_SCANNER;
     let curl = format!(
         "#!/bin/sh\nwhile [ $# -gt 0 ]; do case $1 in -o) shift; printf '%s' \"{}\" > \"$1\";; esac; shift; done\n",
         scanner.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$")
@@ -1301,6 +1341,274 @@ fn the_security_review_reads_its_levels_and_suppressions_from_the_trusted_commit
     assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep\n");
 }
 
+/// A repository with one lockfile whose base commit holds `policy` and
+/// `base_files` and whose head commit adds or changes `head_files`. A file
+/// whose text starts with `symlink:` is committed as a link to the rest.
+/// Returns the base SHA.
+fn exception_repo(
+    work: &Path,
+    policy: &str,
+    base_files: &[(&str, &str)],
+    head_files: &[(&str, &str)],
+) -> String {
+    git(work, &["init", "-q", "-b", "main"]);
+    git(work, &["config", "user.email", "t@example.com"]);
+    git(work, &["config", "user.name", "t"]);
+    let put = |files: &[(&str, &str)]| {
+        for (path, text) in files {
+            let target = work.join(path);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            let _ = std::fs::remove_file(&target);
+            match text.strip_prefix("symlink:") {
+                Some(to) => std::os::unix::fs::symlink(to, &target).unwrap(),
+                None => std::fs::write(&target, text).unwrap(),
+            }
+        }
+    };
+    std::fs::write(work.join("Cargo.lock"), "# lock\n").unwrap();
+    put(&[(".codeflow/policy.json", policy)]);
+    put(base_files);
+    git(work, &["add", "-A"]);
+    git(work, &["commit", "-qm", "base"]);
+    let base = git(work, &["rev-parse", "HEAD"]);
+    put(head_files);
+    git(work, &["add", "-A"]);
+    git(work, &["commit", "-q", "--allow-empty", "-m", "head"]);
+    base
+}
+
+const HOOK: &str = ".codeflow/audit-exceptions.sh";
+/// A hook that accepts each finding whose advisory id is a row of the
+/// register, which it reads from the exported trusted commit.
+const ACCEPTING_HOOK: &str = "awk -F'\\t' 'NR==FNR { ok[$1] = 1; next } ($1 in ok)' docs/register.txt \"$CODEFLOW_AUDIT_FINDINGS\"\n";
+
+const REGISTER: (&str, &str) = ("docs/register.txt", "GHSA-a\nGHSA-b\n");
+const ACCEPTING: (&str, &str) = (HOOK, ACCEPTING_HOOK);
+const ONE: [(&str, &str); 1] = [("OSV_FAKE_IDS", "GHSA-a")];
+const TWO: [(&str, &str); 1] = [("OSV_FAKE_IDS", "GHSA-a GHSA-c")];
+
+/// Run the audit step at the `block` level on a repository whose base
+/// holds `base` and whose head adds `head`; returns whether it passed and
+/// its output.
+fn run_exception_step(
+    base: &[(&str, &str)],
+    head: &[(&str, &str)],
+    fake: &[(&str, &str)],
+) -> (bool, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    let trusted = exception_repo(&work, &levels("warn", "block"), base, head);
+    let out = run_audit_step(&work, &trusted, fake);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.success(), text)
+}
+
+/// sathyassn/codeflow#149 AC-1: a project exception hook on the trusted
+/// commit accepts findings from a trusted register, and the step passes
+/// only when it accepts every finding.
+#[test]
+fn the_project_exception_hook_accepts_findings_from_the_trusted_commit() {
+    let run = run_exception_step;
+    let (register, accepting, one) = (REGISTER, ACCEPTING, ONE);
+
+    // AC-1: every finding is a register row, so the step passes and lists
+    // each accepted finding; the hook runs from the exported trusted commit.
+    let (ok, text) = run(&[accepting, register], &[], &one);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains(
+            "accepted by the project exception hook: GHSA-a\tdemo\t1.0.0\tcrates.io\tCargo.lock\tCVE-GHSA-a"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("Every dependency advisory is accepted"),
+        "{text}"
+    );
+    let (ok, text) = run(
+        &[accepting, register],
+        &[],
+        &[("OSV_FAKE_IDS", "GHSA-a GHSA-b")],
+    );
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("hook: GHSA-a\tdemo") && text.contains("hook: GHSA-b\tdemo"),
+        "{text}"
+    );
+}
+
+/// AC-1: findings the hook does not accept fail the step, and a hook that
+/// fails or prints what is no finding accepts nothing.
+#[test]
+fn the_project_exception_hook_fails_the_step_for_findings_it_does_not_accept() {
+    let run = run_exception_step;
+    let (register, accepting, one, two) = (REGISTER, ACCEPTING, ONE, TWO);
+
+    // AC-1: one finding the register lacks fails the step, which still
+    // lists the accepted one and the one that is not accepted.
+    let (ok, text) = run(&[accepting, register], &[], &two);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("accepted by the project exception hook: GHSA-a\t"),
+        "{text}"
+    );
+    assert!(text.contains("not accepted: GHSA-c\t"), "{text}");
+    assert!(!text.contains("Every dependency advisory"), "{text}");
+
+    // osv-scanner exits 1 for advisories even when it logged an error, such
+    // as a lockfile it could not read. The scan may be incomplete, so an
+    // accepting hook is not run and the step fails.
+    let (ok, text) = run(
+        &[accepting, register],
+        &[],
+        &[
+            ("OSV_FAKE_IDS", "GHSA-a"),
+            (
+                "OSV_FAKE_LOG",
+                "Error during extraction: other/Cargo.lock: could not extract",
+            ),
+        ],
+    );
+    assert!(!ok, "{text}");
+    assert!(text.contains("logged errors"), "{text}");
+    assert!(text.contains("could not extract"), "{text}");
+    assert!(
+        !text.contains("accepted by the project exception hook"),
+        "{text}"
+    );
+
+    // AC-1: a hook that accepts nothing, prints a line that is no finding,
+    // or fails (even after printing a real finding) accepts nothing.
+    for (hook, expect) in [
+        ("exit 0\n", ""),
+        ("echo 'GHSA-a'\n", ""),
+        (
+            "awk '{print}' \"$CODEFLOW_AUDIT_FINDINGS\"\nexit 3\n",
+            "failed (exit 3)",
+        ),
+    ] {
+        let (ok, text) = run(&[(HOOK, hook), register], &[], &one);
+        assert!(!ok, "{hook}: {text}");
+        assert!(text.contains("not accepted: GHSA-a\t"), "{hook}: {text}");
+        assert!(text.contains(expect), "{hook}: {text}");
+    }
+}
+
+/// AC-2: the hook and the register it reads come from the trusted commit,
+/// so a pull request cannot accept its own findings.
+#[test]
+fn a_pull_request_cannot_accept_its_own_audit_findings() {
+    let run = run_exception_step;
+    let (register, accepting, one, two) = (REGISTER, ACCEPTING, ONE, TWO);
+
+    // AC-2: a head that adds the hook and its register gets neither: the
+    // trusted commit has none, so the audit fails and says why.
+    let (ok, text) = run(&[], &[accepting, register], &one);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains(
+            "::notice::this change holds .codeflow/audit-exceptions.sh, but the trusted commit does not"
+        ),
+        "{text}"
+    );
+    assert!(
+        !text.contains("accepted by the project exception hook"),
+        "{text}"
+    );
+
+    // AC-2: a head that changes only the hook, or only the register, is
+    // judged by the trusted commit's copies.
+    let (ok, text) = run(&[(HOOK, "exit 0\n"), register], &[accepting], &one);
+    assert!(!ok, "{text}");
+    assert!(!text.contains("::notice::"), "{text}");
+    let (ok, text) = run(
+        &[accepting, register],
+        &[("docs/register.txt", "GHSA-a\nGHSA-b\nGHSA-c\n")],
+        &two,
+    );
+    assert!(!ok, "{text}");
+    assert!(text.contains("not accepted: GHSA-c\t"), "{text}");
+    // ... and a head that breaks the hook or empties the register cannot
+    // take away the trusted commit's acceptance either.
+    let (ok, text) = run(&[accepting, register], &[(HOOK, "exit 7\n")], &one);
+    assert!(ok, "{text}");
+    let (ok, text) = run(&[accepting, register], &[("docs/register.txt", "")], &one);
+    assert!(ok, "{text}");
+}
+
+/// AC-3: the failure advice names the hook when the trusted commit holds it
+/// and is the 3.1.0 text otherwise; the hook never judges a scan error.
+#[test]
+fn the_audit_failure_advice_names_the_hook_only_when_it_exists() {
+    let run = run_exception_step;
+    let (register, accepting, one) = (REGISTER, ACCEPTING, ONE);
+
+    // AC-3: the failure advice names the hook when the trusted commit holds
+    // it, and the v3.1.0 `osv-scanner.toml` route otherwise.
+    let (ok, text) = run(&[(HOOK, "exit 0\n")], &[], &one);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("Triage, or accept a justified finding through the project exception hook .codeflow/audit-exceptions.sh."),
+        "{text}"
+    );
+    assert!(
+        !text.contains("osv-scanner.toml beside the lockfile"),
+        "{text}"
+    );
+    let (ok, text) = run(&[], &[], &one);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("failing. Triage, or record a justified suppression in an osv-scanner.toml beside the lockfile.\n"),
+        "{text}"
+    );
+    assert!(text.contains("GHSA-test advisory in Cargo.lock"), "{text}");
+    assert!(!text.contains("exception hook"), "{text}");
+
+    // The hook judges advisories only: a scan error is never accepted, and
+    // a hook that is not a regular file on the trusted commit fails closed.
+    let (ok, text) = run(&[accepting, register], &[], &[("OSV_FAKE", "broken")]);
+    assert!(!ok, "{text}");
+    assert!(
+        !text.contains("accepted by the project exception hook"),
+        "{text}"
+    );
+    let (ok, text) = run(&[(HOOK, "symlink:/etc/hostname")], &[], &one);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("is not a regular file; failing closed"),
+        "{text}"
+    );
+}
+
+/// At the warn level the hook still lists what it accepts, and findings it
+/// does not accept are reported without failing the step.
+#[test]
+fn the_project_exception_hook_reports_at_the_warn_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    let trusted = exception_repo(
+        &work,
+        &levels("warn", "warn"),
+        &[(HOOK, ACCEPTING_HOOK), ("docs/register.txt", "GHSA-a\n")],
+        &[],
+    );
+    let out = run_audit_step(&work, &trusted, &[("OSV_FAKE_IDS", "GHSA-a GHSA-c")]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        text.contains("accepted by the project exception hook: GHSA-a\t"),
+        "{text}"
+    );
+    assert!(text.contains("not accepted: GHSA-c\t"), "{text}");
+    assert!(text.contains("::warning::dependency advisories"), "{text}");
+}
+
 /// TSK-449 AC-7: the shipped gate runs essential on pull requests and full
 /// on pushes, the schedule and manual runs, and an adopter config with no
 /// essential target (or none at all) keeps running full on pull requests.
@@ -1380,11 +1688,10 @@ fn job<'w>(workflow: &'w str, id: &str) -> &'w str {
 /// The expression that selects the pull request's base commit.
 const BASE_SHA_REF: &str = "${{ github.event.pull_request.base.sha }}";
 
-/// The checkout of the enforcing job: the pull request's base commit, and
-/// the event's own commit for the registry's push, schedule and dispatch
-/// runs.
-const TARGET_REF: &str =
-    "${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}";
+/// The checkout of the verdict job (TSK-336): the run's own commit, which
+/// on `pull_request_target` is the default branch's tip whatever the pull
+/// request targets.
+const AUTHORITY_REF: &str = "${{ github.sha }}";
 
 /// The `with:` block of the first checkout step in `job_text`.
 fn checkout_block(job_text: &str) -> &str {
@@ -1406,12 +1713,18 @@ fn checkout_ref(checkout: &str) -> Option<String> {
 /// What a workflow's checkout `ref:` resolves to for `event`: the commit a
 /// run checks out, or `None` for GitHub's default checkout. Only the forms
 /// the shipped workflows use are understood; anything else fails the test.
-fn resolve_ref(expr: Option<&str>, event: &str, base_sha: &str) -> Option<String> {
+fn resolve_ref(
+    expr: Option<&str>,
+    event: &str,
+    base_sha: &str,
+    authority_sha: &str,
+) -> Option<String> {
     match expr {
         None => None,
         Some(e) if e == BASE_SHA_REF => Some(base_sha.to_string()),
-        Some(e) if e == TARGET_REF => {
-            (event == "pull_request_target").then(|| base_sha.to_string())
+        Some(e) if e == AUTHORITY_REF => {
+            assert_eq!(event, "pull_request_target", "the verdict job's only event");
+            Some(authority_sha.to_string())
         }
         Some(other) => panic!("unrecognised checkout ref {other}"),
     }
@@ -1419,33 +1732,46 @@ fn resolve_ref(expr: Option<&str>, event: &str, base_sha: &str) -> Option<String
 
 #[test]
 fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
-    // pull_request_target, never pull_request: GitHub runs this file from
-    // the default branch, never from the pull request. Push, schedule and
-    // dispatch are the registry check's own events, on the event's commit.
-    let on = POLICY
-        .split("\non:\n")
-        .nth(1)
-        .and_then(|rest| rest.split("\n\n").next())
-        .unwrap();
+    // pull_request_target alone, never pull_request: GitHub runs this file
+    // from the default branch, never from the pull request. Push, schedule
+    // and dispatch start the registry workflow instead, so no such run
+    // creates a check under the verdict's name (TSK-336 R1-1).
+    let on_block = |workflow: &'static str| {
+        workflow
+            .split("\non:\n")
+            .nth(1)
+            .and_then(|rest| rest.split("\n\n").next())
+            .unwrap()
+    };
+    let on = on_block(POLICY);
     assert!(on.contains("pull_request_target:"), "{on}");
-    assert!(!on.contains("  pull_request:"), "{on}");
-    for event in ["push:", "schedule:", "workflow_dispatch:"] {
-        assert!(on.contains(event), "{on}");
+    for event in [
+        "  pull_request:",
+        "push:",
+        "schedule:",
+        "workflow_dispatch:",
+    ] {
+        assert!(!on.contains(event), "{on}");
     }
-    // TSK-254: one group per pull request cancels a superseded
-    // pull_request_target run; push, schedule and dispatch runs each get a
-    // group of their own run id and are never cancelled, so a registry run
-    // is never replaced by a queued event.
+    let registry_on = on_block(REGISTRY);
+    for event in ["push:", "schedule:", "workflow_dispatch:"] {
+        assert!(registry_on.contains(event), "{registry_on}");
+    }
+    assert!(!registry_on.contains("pull_request"), "{registry_on}");
+    // TSK-254: one group per pull request cancels a superseded run. The
+    // registry workflow has no group, so a registry run is never replaced
+    // by a queued event.
     assert_eq!(POLICY.matches("concurrency:").count(), 1, "one group");
     assert!(
         POLICY.contains(
-            "\nconcurrency:\n  group: ${{ github.event_name == 'pull_request_target' && \
-             format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || \
-             format('{0}-run-{1}', github.workflow, github.run_id) }}\n  \
-             cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}\n\njobs:\n"
+            "\nconcurrency:\n  group: ${{ format('{0}-pr-{1}', github.workflow, \
+             github.event.pull_request.number) }}\n  cancel-in-progress: true\n\njobs:\n"
         ),
-        "a registry run is never replaced by a queued event"
+        "one group per pull request"
     );
+    assert!(!REGISTRY.contains("concurrency:"));
+    assert!(REGISTRY.contains("\npermissions:\n  contents: read\n"));
+    assert!(!REGISTRY.contains("secrets.") && !REGISTRY.contains(": write"));
     assert!(POLICY.contains("\npermissions:\n  contents: read\n"));
     assert!(
         !POLICY.contains("secrets."),
@@ -1458,25 +1784,49 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     assert!(POLICY.contains("CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}"));
     assert!(POLICY.contains("/pulls/${PR_NUMBER}\" -o \"${RUNNER_TEMP}/pull.json\""));
 
+    // TSK-336: the verdict job, under its trusted name, is the policy
+    // workflow's only job and has no `if`, since a skipped job still
+    // reports its check; the registry check has its own workflow and name.
     let enforcing = job(POLICY, "commit-lint");
-    assert!(enforcing.contains("name: commit standards"));
-    // GitHub's default checkout for pull_request_target is the default
-    // branch, whatever the pull request targets, so the job names the pull
-    // request's base commit; nothing points the checkout at the head.
+    assert!(enforcing.contains("    name: \"trusted: commit standards\"\n"));
+    assert!(!enforcing.contains("\n    if: "));
+    assert!(!POLICY.contains("registry-check:"));
+    let registry = job(REGISTRY, "registry-check");
+    assert!(registry.contains("    name: registry check\n"));
+    assert!(!registry.contains("\n    if: "));
+    assert!(registry.contains("codeflow ids check"));
+    assert!(!POLICY.contains("name: commit standards"));
+    // Its one job is the registry check; no job name in it is a `trusted:`
+    // verdict (its comments may say why).
+    let parsed: serde_yaml::Value = serde_yaml::from_str(REGISTRY).unwrap();
+    let names: Vec<&str> = parsed["jobs"]
+        .as_mapping()
+        .unwrap()
+        .values()
+        .map(|job| job["name"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(names, ["registry check"]);
+    // The checkout is the run's own commit, the default branch's tip on
+    // pull_request_target, never the base or the head.
     let checkout = checkout_block(enforcing);
     assert_eq!(
         checkout_ref(checkout).as_deref(),
-        Some(TARGET_REF),
+        Some(AUTHORITY_REF),
         "{checkout}"
     );
     assert!(
         !checkout.contains("head") && !checkout.contains("repository:"),
         "{checkout}"
     );
-    // The pin is read from the target checkout.
+    // The pin is read from the authority checkout, and the policy and the
+    // work-record baseline are the authority's.
     assert!(enforcing.contains("PIN_REF: HEAD"));
-    // The head is fetched as a ref and only named by sha to codeflow ci.
+    assert!(
+        enforcing.contains("--policy-from \"$AUTHORITY_SHA\" --baseline-from \"$AUTHORITY_SHA\"")
+    );
+    // The base and the head are fetched as refs and only named by sha.
     assert!(enforcing.contains("refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"));
+    assert!(enforcing.contains("\"+${BASE_SHA}:refs/codeflow/pr-base\""));
     for forbidden in [
         "git checkout",
         "git switch",
@@ -1495,6 +1845,149 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     // No skipped twin: no other workflow defines the enforcing check name.
     assert!(!CI.contains("name: commit standards"));
     assert!(!CI.contains("  pull_request_target:"));
+}
+
+/// The step names of `job_text` in order, with `uses:` steps by action.
+fn step_names(job_text: &str) -> Vec<String> {
+    job_text
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            line.strip_prefix("- name: ")
+                .map(str::to_owned)
+                .or_else(|| {
+                    line.strip_prefix("- uses: ")
+                        .map(|action| action.split('@').next().unwrap_or("").to_owned())
+                })
+        })
+        .collect()
+}
+
+const ASSERT_STEP: &str = "Assert the authority checkout";
+
+/// TSK-336 AC-1: the verdict job resolves the default branch first, and
+/// after the checkout asserts after every step that the checkout is still
+/// that commit with no tracked file changed. Each assertion is the same
+/// script, and each refuses a moved or edited checkout.
+#[test]
+fn the_verdict_job_asserts_the_authority_after_every_step() {
+    let enforcing = job(POLICY, "commit-lint");
+    let names = step_names(enforcing);
+    assert_eq!(names[0], "Resolve the authority", "{names:?}");
+    assert_eq!(names[1], "actions/checkout", "{names:?}");
+    for pair in names[1..].chunks(2) {
+        assert_eq!(
+            pair.get(1).map(String::as_str),
+            Some(ASSERT_STEP),
+            "{names:?}"
+        );
+    }
+    let asserts = run_blocks(enforcing, ASSERT_STEP);
+    assert_eq!(asserts.len(), names.len() / 2, "{names:?}");
+    assert!(asserts.iter().all(|block| block == &asserts[0]));
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+    git(repo, &["add", "."]);
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@e",
+            "commit",
+            "-q",
+            "-m",
+            "a",
+        ],
+    );
+    let authority = git(repo, &["rev-parse", "HEAD"]);
+    let check = |sha: &str| {
+        Command::new("bash")
+            .args(["-c", &asserts[0]])
+            .current_dir(repo)
+            .env("AUTHORITY_SHA", sha)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap()
+    };
+    assert!(check(&authority).status.success());
+    // Another commit checked out, or a tracked file edited, fails closed.
+    std::fs::write(repo.join("a.txt"), "b\n").unwrap();
+    let edited = check(&authority);
+    assert_eq!(edited.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&edited.stdout).contains("nothing is judged"));
+    git(repo, &["checkout", "-q", "--", "a.txt"]);
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@e",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "b",
+        ],
+    );
+    assert_eq!(check(&authority).status.code(), Some(1));
+}
+
+/// TSK-336 AC-1: the verdict job refuses a run that is not for the default
+/// branch on `pull_request_target`, or whose commit is not a full id, before
+/// anything is checked out.
+#[test]
+fn the_verdict_job_refuses_a_run_not_for_the_default_branch() {
+    let script = run_blocks(job(POLICY, "commit-lint"), "Resolve the authority")
+        .into_iter()
+        .next()
+        .expect("the resolve step");
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    let dir = tempfile::tempdir().unwrap();
+    let summary = dir.path().join("summary");
+    let resolve = |event: &str, default: &str, gh_ref: &str, sha: &str| {
+        Command::new("bash")
+            .args(["-c", &script])
+            .env("EVENT", event)
+            .env("DEFAULT_BRANCH", default)
+            .env("GITHUB_REF", gh_ref)
+            .env("AUTHORITY_SHA", sha)
+            .env("GITHUB_STEP_SUMMARY", &summary)
+            .output()
+            .unwrap()
+    };
+    let ok = resolve("pull_request_target", "main", "refs/heads/main", sha);
+    assert!(
+        ok.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ok.stdout)
+    );
+    assert!(String::from_utf8_lossy(&ok.stdout).contains(&format!("judged by main@{sha}")));
+    for (event, default, gh_ref, commit) in [
+        // The pull request's target, a line, as the run's ref.
+        (
+            "pull_request_target",
+            "main",
+            "refs/heads/integration/x",
+            sha,
+        ),
+        // A lookalike nested branch.
+        ("pull_request_target", "main", "refs/heads/main/x", sha),
+        ("pull_request_target", "", "refs/heads/main", sha),
+        ("pull_request", "main", "refs/heads/main", sha),
+        ("workflow_dispatch", "main", "refs/heads/main", sha),
+        ("pull_request_target", "main", "refs/heads/main", "main"),
+    ] {
+        let out = resolve(event, default, gh_ref, commit);
+        assert_eq!(out.status.code(), Some(1), "{event} {gh_ref} {commit}");
+        assert!(String::from_utf8_lossy(&out.stdout).contains("nothing is judged"));
+    }
 }
 
 /// A pull request that edits the enforcing workflow to pass, raises the pin
@@ -1536,11 +2029,17 @@ fn judge_a_forged_head(head_pin: &str) {
     // The head: an always-green workflow, its own pin, a relaxed policy and
     // a commit that breaks the target's format rule.
     git(&origin, &["checkout", "-b", "feat/x"]);
-    let forged = POLICY.replace(
-        "run: codeflow ci --base \"$BASE_SHA\" --head \"$HEAD_SHA\" --branch \"$HEAD_REF\" --actor \"$ACTOR\"",
-        "run: exit 0",
-    );
+    // The forgery replaces the whole verdict block (the policy presence
+    // check and the `codeflow ci` call) with a step that always passes.
+    let start = POLICY
+        .find("        run: |\n          if ! git cat-file -e \"${AUTHORITY_SHA}:.codeflow/policy.json\"")
+        .expect("the verdict block");
+    let call = "--policy-from \"$AUTHORITY_SHA\" --baseline-from \"$AUTHORITY_SHA\"\n";
+    let end = start + POLICY[start..].find(call).expect("the verdict call") + call.len();
+    assert!(POLICY[start..end].contains("\n          codeflow ci --base \"$BASE_SHA\""));
+    let forged = [&POLICY[..start], "        run: exit 0\n", &POLICY[end..]].concat();
     assert_ne!(forged, POLICY);
+    assert!(!forged.contains("codeflow ci --base"), "never judges");
     std::fs::write(origin.join(".github/workflows/codeflow-policy.yml"), forged).unwrap();
     std::fs::write(
         origin.join(".codeflow/project.toml"),
@@ -1597,7 +2096,16 @@ fn judge_a_forged_head(head_pin: &str) {
             .output()
             .unwrap()
     };
-    let enforced = verdict(&target);
+    // The verdict step as the default branch's workflow writes it, with
+    // the default branch as the authority.
+    let enforced = run_verdict_step(
+        &target,
+        &dir.path().join("home"),
+        &base,
+        &base,
+        &head,
+        "feat/x",
+    );
     let text = String::from_utf8_lossy(&enforced.stderr);
     assert_eq!(enforced.status.code(), Some(1), "{text}");
     assert!(text.contains("git.commit_format"), "{text}");
@@ -1649,22 +2157,81 @@ fn default_and_integration_targets(origin: &Path) -> (String, String) {
     (base, head)
 }
 
-/// A pull request into a target that is not the default branch is judged by
-/// that target. GitHub runs the enforcing workflow from the default branch
-/// and its default checkout is the default branch too, so only the explicit
-/// base-commit checkout makes the pin and the policy the target's. The
-/// default branch allows a 50-character description, the integration target
-/// 10; the head's 24-character description must fail as the target says.
+/// The verdict step of the enforcing job exactly as the workflow writes
+/// it, run from `checkout` with the event's values.
+fn run_verdict_step(
+    checkout: &Path,
+    home: &Path,
+    authority: &str,
+    base: &str,
+    head: &str,
+    branch: &str,
+) -> Output {
+    let step = run_blocks(job(POLICY, "commit-lint"), "codeflow ci (")
+        .into_iter()
+        .next()
+        .expect("the verdict step");
+    let bin = Path::new(env!("CARGO_BIN_EXE_codeflow")).parent().unwrap();
+    Command::new("bash")
+        .args(["-c", &step])
+        .current_dir(checkout)
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .env("AUTHORITY_SHA", authority)
+        .env("BASE_SHA", base)
+        .env("HEAD_SHA", head)
+        .env("HEAD_REF", branch)
+        .env("ACTOR", "unknown")
+        .env("CODEFLOW_HOME", home)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_ACTIONS")
+        .env_remove("GITHUB_EVENT_NAME")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("GIT_DIR")
+        .output()
+        .unwrap()
+}
+
+/// TSK-336 AC-1: a pull request into a line is judged by the default
+/// branch, never by the line. GitHub runs the enforcing workflow from the
+/// default branch with `GITHUB_SHA` at its tip; the job checks out exactly
+/// that commit and passes it as the policy and baseline authority, so the
+/// line's stricter policy and its own pin judge nothing. The default branch
+/// allows a 50-character description and pins 1.2.3; the line allows 10
+/// and pins 1.2.4. Before TSK-336 the job checked out the line and failed
+/// the head's 24-character description; the default branch's verdict
+/// passes it.
 #[test]
-fn a_pull_request_into_a_non_default_target_is_judged_by_that_target() {
+fn a_pull_request_into_a_line_is_judged_by_the_default_branch() {
     let dir = tempfile::tempdir().unwrap();
     let releases = dir.path().join("releases");
     publish(&releases, "1.2.3");
     publish(&releases, "1.2.4");
     let origin = dir.path().join("origin");
     let (base, head) = default_and_integration_targets(&origin);
+    let authority = git(&origin, &["rev-parse", "main"]);
 
-    // The run's working tree: GitHub's default checkout, the default branch.
+    // The checkout the workflow names for every pull request is the run's
+    // own commit, the default branch's tip, whatever the target.
+    let policy_ref = checkout_ref(checkout_block(job(POLICY, "commit-lint")));
+    for target in [&base, &authority] {
+        assert_eq!(
+            resolve_ref(
+                policy_ref.as_deref(),
+                "pull_request_target",
+                target,
+                &authority
+            )
+            .as_deref(),
+            Some(authority.as_str()),
+            "the line's commit never selects the checkout"
+        );
+    }
+
     let target = dir.path().join("target");
     codeflow_fixture::clone(
         dir.path(),
@@ -1674,74 +2241,98 @@ fn a_pull_request_into_a_non_default_target_is_judged_by_that_target() {
     .env("GIT_CONFIG_GLOBAL", "/dev/null")
     .env("GIT_CONFIG_SYSTEM", "/dev/null")
     .run();
-    assert_eq!(git(&target, &["branch", "--show-current"]), "main");
+    git(&target, &["checkout", "-q", "--detach", &authority]);
     git(
         &target,
         &["fetch", "-q", "origin", "feat/longer:refs/codeflow/pr-head"],
     );
-    let verdict = |cwd: &Path| {
-        Command::new(env!("CARGO_BIN_EXE_codeflow"))
-            .args([
-                "ci",
-                "--base",
-                &base,
-                "--head",
-                &head,
-                "--branch",
-                "feat/longer",
-                "--actor",
-                "unknown",
-            ])
-            .current_dir(cwd)
-            .env("CODEFLOW_HOME", dir.path().join("home"))
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env_remove("CODEFLOW_PR_BODY")
-            .env_remove("GITHUB_ACTIONS")
-            .env_remove("GITHUB_EVENT_NAME")
-            .env_remove("GITHUB_EVENT_PATH")
-            .env_remove("GIT_DIR")
-            .output()
-            .unwrap()
-    };
-    // From the default checkout the policy is still the base's, read as
-    // git data (sathyassn/codeflow#22), so the verdict no longer depends on
-    // the checkout; the pin still does, which is why the workflow checks
-    // out the base: without it the default branch's pin would be installed.
-    let from_default = verdict(&target);
-    let from_default_text = String::from_utf8_lossy(&from_default.stderr);
-    assert_eq!(from_default.status.code(), Some(1), "{from_default_text}");
-    assert!(
-        from_default_text.contains("over the 10-char limit"),
-        "{from_default_text}"
-    );
-    let default_pin = run_install(&install_script(POLICY), &target, "HEAD", &releases);
-    assert_eq!(
-        default_pin.installed_version().as_deref(),
-        Some("codeflow 1.2.3")
-    );
-
-    // The enforcing workflow selects the base commit for a pull request;
-    // the registry's push, schedule and dispatch runs keep their own commit.
-    let policy_ref = checkout_ref(checkout_block(POLICY));
-    let selected = resolve_ref(policy_ref.as_deref(), "pull_request_target", &base);
-    assert_eq!(selected.as_deref(), Some(base.as_str()));
-    for event in ["push", "schedule", "workflow_dispatch"] {
-        assert_eq!(resolve_ref(policy_ref.as_deref(), event, &base), None);
-    }
-
-    // The run as the workflows specify it: the base commit checked out.
-    git(&target, &["checkout", "-q", "--detach", &base]);
     let install = run_install(&install_script(POLICY), &target, "HEAD", &releases);
     assert!(install.out.status.success(), "{}", install.stderr());
     assert_eq!(
         install.installed_version().as_deref(),
-        Some("codeflow 1.2.4"),
-        "the target's pin"
+        Some("codeflow 1.2.3"),
+        "the default branch's pin, never the line's"
     );
-    let enforced = verdict(&target);
-    let text = String::from_utf8_lossy(&enforced.stderr);
-    assert_eq!(enforced.status.code(), Some(1), "{text}");
-    assert!(text.contains("git.commit_format"), "{text}");
-    assert!(text.contains("over the 10-char limit"), "{text}");
+
+    let home = dir.path().join("home");
+    let judged = run_verdict_step(&target, &home, &authority, &base, &head, "feat/longer");
+    let text = String::from_utf8_lossy(&judged.stderr);
+    let said = String::from_utf8_lossy(&judged.stdout);
+    assert_eq!(judged.status.code(), Some(0), "{said}{text}");
+    assert!(!text.contains("over the 10-char limit"), "{text}");
+    assert!(
+        said.contains(&format!(
+            "verifying against .codeflow/policy.json at {}",
+            &authority[..8]
+        )),
+        "{said}"
+    );
+
+    // The same step given the line as its authority shows what the line's
+    // policy would have refused.
+    let by_line = run_verdict_step(&target, &home, &base, &base, &head, "feat/longer");
+    let line_text = String::from_utf8_lossy(&by_line.stderr);
+    assert_eq!(by_line.status.code(), Some(1), "{line_text}");
+    assert!(line_text.contains("over the 10-char limit"), "{line_text}");
+}
+
+/// TSK-336 AC-1 (review round 1, R1-2): a default branch with no
+/// `.codeflow/policy.json` has no policy to judge with, so the verdict step
+/// refuses before `codeflow ci` runs, never falling back to the shipped
+/// defaults the CLI selects for a local adoption range (TSK-1077).
+#[test]
+fn the_verdict_refuses_a_default_branch_without_a_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = dir.path().join("origin");
+    let (base, head) = default_and_integration_targets(&origin);
+    let target = dir.path().join("target");
+    codeflow_fixture::clone(
+        dir.path(),
+        origin.to_str().unwrap(),
+        target.to_str().unwrap(),
+    )
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
+    let main = git(&origin, &["rev-parse", "main"]);
+    git(&target, &["checkout", "-q", "--detach", &main]);
+    git(
+        &target,
+        &["fetch", "-q", "origin", "feat/longer:refs/codeflow/pr-head"],
+    );
+    git(&target, &["rm", "-q", ".codeflow/policy.json"]);
+    git(
+        &target,
+        &[
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@example.com",
+            "commit",
+            "-qm",
+            "chore: drop the policy",
+        ],
+    );
+    let authority = git(&target, &["rev-parse", "HEAD"]);
+
+    let home = dir.path().join("home");
+    let judged = run_verdict_step(&target, &home, &authority, &base, &head, "feat/longer");
+    let said = String::from_utf8_lossy(&judged.stdout);
+    let text = String::from_utf8_lossy(&judged.stderr);
+    assert_eq!(judged.status.code(), Some(1), "{said}{text}");
+    assert!(
+        said.contains(&format!(
+            "::error::the default branch at {authority} has no .codeflow/policy.json, so nothing is judged"
+        )),
+        "{said}"
+    );
+    assert!(!said.contains("shipped defaults"), "{said}");
+
+    // The same step with the policy present runs codeflow ci.
+    let present = run_verdict_step(&target, &home, &main, &base, &head, "feat/longer");
+    let present_said = String::from_utf8_lossy(&present.stdout);
+    assert!(
+        present_said.contains("verifying against .codeflow/policy.json at"),
+        "{present_said}"
+    );
 }

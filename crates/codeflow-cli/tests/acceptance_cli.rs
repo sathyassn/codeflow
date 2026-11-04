@@ -1874,7 +1874,7 @@ fn local_config_selects_no_receiving_source() {
         let (reviewed, side) = side_merge(root);
         git(
             root,
-            &["remote", "add", "review", "https://example.test/review.git"],
+            &["remote", "add", "review", "file:///nonexistent/review.git"],
         );
         if case == "configured upstream" {
             git(root, &["update-ref", "refs/remotes/review/main", &side]);
@@ -3917,7 +3917,7 @@ fn local_refs_and_overlays_never_make_a_merge_the_target() {
                         "remote",
                         "add",
                         "alternate",
-                        "https://example.test/alternate",
+                        "file:///nonexistent/alternate",
                     ],
                 );
                 git(
@@ -4702,7 +4702,14 @@ fn held_version_push(competing: bool) -> ((i32, String), String, String, String,
     let main = commit(root, "docs: change main after the fork");
     let main_blob = git_out(root, &["rev-parse", &format!("HEAD:{path}")]);
     git(root, &["switch", "-c", BRANCH, LINE]);
-    write(root, &path, &format!("{newer}\nA description note.\n"));
+    // TSK-350 AC-8: against a competing copy the branch changes one AC
+    // word, since a description-only edit is no criteria change (AC-10).
+    let edit = if competing {
+        newer.replace("work fast.", "work faster.")
+    } else {
+        format!("{newer}\nA description note.\n")
+    };
+    write(root, &path, &edit);
     commit(root, "docs: describe the task");
     let out = codeflow()
         .args([
@@ -4837,13 +4844,20 @@ fn an_earlier_task_cannot_clear_a_later_tasks_competing_versions() {
     write(root, "unrelated.txt", "unrelated\n");
     let main = commit(root, "chore: unrelated");
     git(root, &["switch", "-c", BRANCH, LINE]);
-    for id in ["TSK-001", "TSK-002"] {
-        let text = format!(
+    write(
+        root,
+        &record_path("TSK-001"),
+        &format!(
             "{}\nA description note.\n",
-            criterion(id, "the system shall work fast.")
-        );
-        write(root, &record_path(id), &text);
-    }
+            criterion("TSK-001", "the system shall work fast.")
+        ),
+    );
+    // TSK-350 AC-8: TSK-002, the competing record, changes one AC word.
+    write(
+        root,
+        &record_path("TSK-002"),
+        &criterion("TSK-002", "the system shall work faster."),
+    );
     commit(root, "docs: describe the tasks");
     let result = ci_on_line(root, &line, &main, BRANCH);
     assert_blocks(
@@ -5244,7 +5258,7 @@ fn a_configured_upstream_on_another_remote_holds_the_task() {
     git(root, &["switch", "-c", "task/TSK-001-fix"]);
     git(
         root,
-        &["remote", "add", "upstream", "https://example.test/repo"],
+        &["remote", "add", "upstream", "file:///nonexistent/repo"],
     );
     git(
         root,
@@ -5691,7 +5705,7 @@ fn only_the_judged_target_supplies_a_reopened_tasks_criteria() {
                         "remote",
                         "add",
                         "alternate",
-                        "https://example.test/alternate",
+                        "file:///nonexistent/alternate",
                     ],
                 );
                 git(root, &["update-ref", "refs/remotes/alternate/main", &tip]);
@@ -6963,3 +6977,12 @@ mod imports;
 
 #[path = "acceptance_cli/epic_line.rs"]
 mod epic_line;
+
+#[path = "acceptance_cli/sync_merges.rs"]
+mod sync_merges;
+
+#[path = "acceptance_cli/line_sync_push.rs"]
+mod line_sync_push;
+
+#[path = "acceptance_cli/own_line_criteria.rs"]
+mod own_line_criteria;
