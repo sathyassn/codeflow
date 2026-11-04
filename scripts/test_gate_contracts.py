@@ -16,6 +16,34 @@ _SPEC.loader.exec_module(PARITY)
 def read(path):
     return (ROOT / path).read_text()
 
+def partition_checks_run(job):
+    # The Windows journeys job runs the partition checks either as one
+    # `check --list` step, or as two steps, `coverage --list` and
+    # `time --list`. Coverage without time (or the reverse) is not accepted.
+    script = 'windows-partitions.py'
+    both = f'{script} check --list' in job
+    split = f'{script} coverage --list' in job and f'{script} time --list' in job
+    return both or split
+
+class PartitionChecksForms(unittest.TestCase):
+    def test_the_single_step_form_passes(self):
+        self.assertTrue(partition_checks_run('run: python -B scripts/windows-partitions.py check --list a --results b'))
+
+    def test_the_split_step_form_passes(self):
+        job = ('run: python -B scripts/windows-partitions.py coverage --list a --results b\n'
+               'run: python -B scripts/windows-partitions.py time --list a --results b\n')
+        self.assertTrue(partition_checks_run(job))
+
+    def test_coverage_without_time_fails(self):
+        self.assertFalse(partition_checks_run('run: python -B scripts/windows-partitions.py coverage --list a --results b'))
+
+    def test_time_without_coverage_fails(self):
+        self.assertFalse(partition_checks_run('run: python -B scripts/windows-partitions.py time --list a --results b'))
+
+    def test_neither_fails(self):
+        self.assertFalse(partition_checks_run('run: echo hi'))
+
+
 class GateContracts(unittest.TestCase):
     def test_publication_requires_the_five_existing_floors(self):
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
@@ -57,7 +85,7 @@ class GateContracts(unittest.TestCase):
         # journeys run in a job that starts with the run.
         journeys = windows['windows-journeys']
         self.assertIn('journey-gate.py --results target/nextest/partitions --skip-benchmark --part results', journeys)
-        self.assertIn('windows-partitions.py check --list', journeys)
+        self.assertTrue(partition_checks_run(journeys), 'neither check --list nor coverage and time --list')
         self.assertNotIn('test_release.py', journeys)
         self.assertIn('needs: windows-tests', journeys)
         self.assertIn('pattern: windows-junit-*', journeys)
