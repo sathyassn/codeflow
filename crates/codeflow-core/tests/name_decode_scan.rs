@@ -130,6 +130,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "from_utf8_lossy",
         1,
         "grammar:test-source-text",
+    ),
     // These name() receivers are the closed Stage enum, not git2 objects.
     // They return fixed ASCII labels for markers, checklist text and a template
     // name allowlist; no Git or OS bytes are decoded by any of these calls.
@@ -1622,6 +1623,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "is_whitespace",
         1,
         "schema-reject-only",
+    ),
     // The bootstrap reader owns LF/CRLF Markdown marker and checkbox records.
     // lines() removes only physical record delimiters, not Unicode separators
     // or bytes from paths, ids, marker contents or capability text.
