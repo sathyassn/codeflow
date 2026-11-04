@@ -283,7 +283,9 @@ fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
         .output()
         .map_err(|error| error.to_string())?;
     if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        // Strict: the output names commits and trees, compared exactly.
+        let text = String::from_utf8(out.stdout).map_err(|error| error.to_string())?;
+        Ok(text.strip_suffix('\n').unwrap_or(&text).to_string())
     } else {
         Err(crate::git::remote_query::display_urls(
             String::from_utf8_lossy(&out.stderr).trim(),
