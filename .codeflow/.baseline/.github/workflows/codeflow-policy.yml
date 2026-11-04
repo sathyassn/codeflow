@@ -228,7 +228,7 @@ jobs:
             "${RUNNER_TEMP}/pull.json" >/dev/null || {
               printf '::error::expected PR %s head %s target %s (%s); received ' "$PR_NUMBER" "$EXPECTED_HEAD" "$EXPECTED_BASE" "$EXPECTED_TARGET"
               jq -c '{number, head: .head.sha, target: .base.sha, branch: .base.ref, repository: .base.repo.full_name}' "${RUNNER_TEMP}/pull.json"
-              echo "Trigger a fresh PR event, for example by editing its body."; exit 1;
+              echo "Trigger a new PR event, for example by editing its body."; exit 1;
             }
           delimiter="codeflow_body_$(openssl rand -hex 16)"
           {
