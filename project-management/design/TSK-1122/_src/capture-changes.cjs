@@ -9,7 +9,8 @@ const [phase, given] = process.argv.slice(2);
 if (!['before', 'after'].includes(phase) || (phase === 'before') !== !!given) throw new Error('Usage: capture-changes.cjs before <page> | after');
 const root = path.resolve(__dirname, '..');
 const pagePath = given ? path.resolve(given) : path.join(root, 'prototype.html');
-const out = name => path.join(root, 'captures', `post-approval-${name}-${phase}.png`);
+const dir = process.env.CAPTURE_DIR || path.join(root, 'captures');
+const out = name => path.join(dir, `post-approval-${name}-${phase}.png`);
 (async () => {
   const browser = await chromium.launch();
   try {
@@ -37,7 +38,10 @@ const out = name => path.join(root, 'captures', `post-approval-${name}-${phase}.
     await go('k-TSK-1122');
     const task = page.locator('#k-TSK-1122');
     await task.locator('details.more').first().evaluate(d => { d.open = true; });
+    // A panel taller than the window scrolls under the sticky bar when shot as one element, which a reader's click does not do.
+    const barStyle = await page.addStyleTag({ content: '.bar{visibility:hidden}' });
     await task.locator('details.more').first().screenshot({ path: out('task-context') });
+    await barStyle.evaluate(n => n.remove());
     await go('o-EPC-022');
     await page.locator('#o-EPC-022 .chips').first().screenshot({ path: out('epic-chips') });
     await go('s-hand-off');
@@ -56,7 +60,7 @@ const out = name => path.join(root, 'captures', `post-approval-${name}-${phase}.
       await go(feature);
       await page.screenshot({ path: out('feature-view') });
     }
-    fs.writeFileSync(path.join(root, 'captures', `post-approval-${phase}.json`), JSON.stringify({ phase, page: path.basename(pagePath), sha256: crypto.createHash('sha256').update(fs.readFileSync(pagePath)).digest('hex'), viewport: '1440x900', theme: 'graphite', mode: 'light', colours, feature }, null, 2) + '\n');
+    fs.writeFileSync(path.join(dir, `post-approval-${phase}.json`), JSON.stringify({ phase, page: path.basename(pagePath), sha256: crypto.createHash('sha256').update(fs.readFileSync(pagePath)).digest('hex'), viewport: '1440x900', theme: 'graphite', mode: 'light', colours, feature }, null, 2) + '\n');
     console.log(phase, JSON.stringify(colours), feature || '');
     await context.close();
   } finally { await browser.close(); }
