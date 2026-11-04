@@ -1,0 +1,11 @@
+id = "TSK-1317"
+uid = "ad48817a-8e1e-4bea-b6d5-7d9d25fcba30"
+kind = "TSK"
+title = "A killed gate's fence outlasts its process tree on Windows"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-04T03:32:37Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
