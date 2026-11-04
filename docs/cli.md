@@ -33,6 +33,14 @@ CI workflow runs `ci`.
 `main.rs` parses every subcommand with clap and hands it to the code that
 owns the work.
 
+`work claim TSK-NNN --worktree .worktrees/<slug>` also creates the checkout
+and checks its planning anchor without rewriting shared Git config. Relative
+destinations resolve from the primary checkout and must match
+`git.worktree_locations`. Without the flag, claim creates only the branch.
+`work start` checks an existing checkout and creates none. A denied checkout
+preserves the branch and partial state for inspection without an unsandboxed
+retry; the command reports the path to inspect.
+
 ```text
 codeflow <command>
         |
@@ -612,14 +620,6 @@ other remotes appear as information in `work next` and `work claim`; they neithe
 make a task active nor create a conflict. `work next --json` keeps these in
 `informational_branches`, separate from the claim `branches`. Claim lists
 its remotes live, so a narrow fetch cannot hide work.
-
-`work claim TSK-NNN --worktree .worktrees/<slug>` also creates the checkout
-and checks its planning anchor without rewriting shared Git config. Relative
-destinations resolve from the primary checkout and must match
-`git.worktree_locations`. Without the flag, claim creates only the branch.
-`work start` checks an existing checkout and creates none. A denied checkout
-preserves the branch and partial state for inspection without an unsandboxed
-retry; the command reports the path to inspect.
 
 `codeflow follow` is described in the
 [coordination ledger reference](coordination-ledger.md#the-command).

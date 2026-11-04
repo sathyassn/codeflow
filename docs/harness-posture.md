@@ -57,8 +57,21 @@ credential rules are in Technical.
 
 ## Technical
 
-The platform matrix, then the permission profiles, then credentials, then the
+The worktree route, platform matrix, permission profiles, credentials and
 dated evidence.
+
+### Worktree creation
+
+Use the reported checkout state to choose the next step.
+
+| Situation | Behavior | Next step |
+|---|---|---|
+| Ready task and unused destination | `codeflow work claim TSK-NNN --worktree .worktrees/<slug>` creates the checkout without rewriting shared Git config. Relative paths resolve from the primary checkout; `git.worktree_locations` controls allowed destinations | Enter the printed checkout and run `work start`, which checks it and creates none |
+| Existing destination | Claim refuses before creating the branch | Keep existing work intact and choose an unused assigned destination |
+| Checkout fails | The command names the branch and path and preserves partial state. It does not retry unsandboxed | Inspect the retained state and report it to the coordinator; do not repeat the claim |
+| An enforcement-file write is denied | Creation needs a coordinator-supported route that preserves the denies | Keep the deny. Sparse checkout omits enforcement copies, and a broader write grant does not prove their protection |
+| Gate lock home is unavailable | The default Codex builder grant permits `~/.codeflow/locks`; a relocated `CODEFLOW_HOME` needs a matching project grant | Use the configured lock home and its scoped grant. A review seat has no lock-home grant and does not reserve work |
+| Holder is dead or stale | Reserve uses OS locks and signal-zero liveness checks without `ps`, and prints a stale-holder reclamation note | Read the reported holder state before acting |
 
 ### Platform assurance
 
