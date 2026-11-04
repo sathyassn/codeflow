@@ -1099,8 +1099,12 @@ pub struct TargetTask {
     pub claimed: bool,
     /// Complete with an acceptance block that passes the structural
     /// acceptance rules against the record's criteria, on this tip, and
-    /// bound to its reviewed commit as CI binds a completion.
+    /// bound to its reviewed commit as CI binds a completion. `false` when
+    /// the task was not judged.
     pub accepted: bool,
+    /// Whether `accepted` was judged; [`target_tasks_judging`] judges only
+    /// the tasks its caller names.
+    pub judged: bool,
 }
 
 /// Whether a bare branch name is a landing line: `main`, `master` or an
@@ -1455,8 +1459,26 @@ fn completion_bound(
 /// # Errors
 ///
 /// Returns the reason when the repository or a target tip cannot be read.
-#[allow(clippy::too_many_lines)]
 pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, String> {
+    target_tasks_judging(repo_root, None, &|_| true)
+}
+
+/// [`target_tasks`], with the claimed set a caller already read (`active`,
+/// the readiness core's active tasks; `None` reads it here) and the
+/// landing gate's binding judged only for the tasks `judge` names. That
+/// judgment re-runs the pull request rules over each completion's range,
+/// so a reader that shows a few tasks judges only those; every other task
+/// carries `accepted: false` and `judged: false`.
+///
+/// # Errors
+///
+/// As [`target_tasks`].
+#[allow(clippy::too_many_lines)]
+pub fn target_tasks_judging(
+    repo_root: &Path,
+    active: Option<BTreeSet<String>>,
+    judge: &dyn Fn(&str) -> bool,
+) -> Result<BTreeMap<String, TargetTask>, String> {
     let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let default = super::default_work_target(repo_root).map_err(|error| error.to_string())?;
@@ -1494,14 +1516,16 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
         .chain(default.iter())
         .filter_map(|declared| tracking(declared))
         .collect();
-    let active: BTreeSet<String> = backlog(repo_root)
-        .map(|backlog| {
-            backlog
-                .in_state(State::Active)
-                .map(|entry| entry.task_id.clone())
-                .collect()
-        })
-        .unwrap_or_default();
+    let active: BTreeSet<String> = active.unwrap_or_else(|| {
+        backlog(repo_root)
+            .map(|backlog| {
+                backlog
+                    .in_state(State::Active)
+                    .map(|entry| entry.task_id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
     let mut parsed: BTreeMap<git2::Oid, Rc<BTreeMap<String, Record>>> = BTreeMap::new();
     let mut out: BTreeMap<String, TargetTask> = BTreeMap::new();
     let mut ambiguous = BTreeSet::new();
@@ -1545,6 +1569,7 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
                     }
                     continue;
                 }
+                let judged = judge(&record.id);
                 out.insert(
                     record.id.clone(),
                     TargetTask {
@@ -1554,7 +1579,9 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
                         reference: shown(reference),
                         tip: tip.to_string(),
                         claimed: active.contains(&record.id),
-                        accepted: record.reviewed.is_some()
+                        judged,
+                        accepted: judged
+                            && record.reviewed.is_some()
                             && completion_bound(
                                 repo_root,
                                 &repo,

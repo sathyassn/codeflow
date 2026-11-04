@@ -112,10 +112,11 @@ pub fn collect(start: &Path, options: &Options) -> Result<Inputs, String> {
     // to the head its pull request reports.
     let forge = forge(&root, options, now, &ids);
     let history = landings(&repo, &read.tips, now);
+    let current_target = current_target(&repo, &options.scope, &read, &default_branch);
     let context = TaskContext {
         repo: &repo,
         backlog: backlog.as_ref(),
-        landed: readiness::target_tasks(&root),
+        landed: landed_view(&root, &read, backlog.as_ref(), options, &current_target),
         worktrees: worktree_branches(&repo),
         tips: &read.tips,
         history: history.as_ref().map(|walked| &walked.landed),
@@ -149,7 +150,6 @@ pub fn collect(start: &Path, options: &Options) -> Result<Inputs, String> {
         .filter(|target| **target != default_branch)
         .map(|target| (target.clone(), remote_ref(&repo, target)))
         .collect();
-    let current_target = current_target(&repo, &options.scope, &tasks, &ids, &default_branch);
     // The pace counts every home's landings, so a home or record that was
     // not read leaves the history unestablished.
     let history_note = history_note(history.as_ref(), &read.losses, &read.unreadable);
@@ -755,10 +755,13 @@ fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
     };
     let (acceptance, follow_from) = if closed {
         let binding = Binding::Landed(match &context.landed {
-            Ok(tasks) => tasks.get(&record.id).map_or_else(
-                || Err("the task is not on its home target's remote ref".into()),
-                |task| Ok(task.accepted),
-            ),
+            Ok(tasks) => match tasks.get(&record.id) {
+                None => Err("the task is not on its home target's remote ref".into()),
+                Some(task) if !task.judged => {
+                    Err("not judged: the task is outside the scope".into())
+                }
+                Some(task) => Ok(task.accepted),
+            },
             Err(reason) => Err(reason.clone()),
         });
         (
@@ -1164,20 +1167,62 @@ fn epic_in(root: &Path, record: &Record, text: &str) -> EpicIn {
     }
 }
 
+/// The landing gate's view of each home target's records. The gate's binding
+/// re-runs the pull request rules over each completion's range, so only the
+/// closed tasks in scope are judged: nothing else reads a closed task's
+/// binding. The claimed set is the backlog already read.
+fn landed_view(
+    root: &Path,
+    read: &Read,
+    backlog: Option<&readiness::Backlog>,
+    options: &Options,
+    current_target: &str,
+) -> Result<BTreeMap<String, readiness::TargetTask>, String> {
+    let judged = closed_in_scope(read, &options.scope, current_target);
+    let active = backlog.map(|backlog| {
+        backlog
+            .in_state(readiness::State::Active)
+            .map(|entry| entry.task_id.clone())
+            .collect()
+    });
+    readiness::target_tasks_judging(root, active, &|id| judged.contains(id))
+}
+
+/// The closed tasks in scope, by the one scope rule the facts use.
+fn closed_in_scope(read: &Read, scope: &ScopeSpec, current_target: &str) -> BTreeSet<String> {
+    let tasks: Vec<super::compute::Member<'_>> = read
+        .tasks
+        .values()
+        .map(|found| super::compute::Member {
+            id: &found.record.id,
+            target: &found.target,
+            epic: found.record.epic_id.as_deref(),
+        })
+        .collect();
+    let epics: Vec<(&str, &str)> = read
+        .epics
+        .values()
+        .map(|(record, _)| (record.id.as_str(), record.status.as_str()))
+        .collect();
+    let (ids, _) = super::compute::members(scope, current_target, &tasks, &epics);
+    ids.into_iter()
+        .filter(|id| {
+            read.tasks.get(id).is_some_and(|found| {
+                matches!(found.record.status.as_str(), "complete" | "cancelled")
+            })
+        })
+        .collect()
+}
+
 /// The line or branch the scope is read against.
-fn current_target(
-    repo: &Repository,
-    scope: &ScopeSpec,
-    tasks: &[TaskIn],
-    ids: &BTreeSet<String>,
-    default: &str,
-) -> String {
+fn current_target(repo: &Repository, scope: &ScopeSpec, read: &Read, default: &str) -> String {
+    let target = |id: &String| read.tasks.get(id).map(|found| found.target.clone());
     if let ScopeSpec::Line(line) = scope {
         return line.clone();
     }
     if let ScopeSpec::Task(id) = scope {
-        if let Some(task) = tasks.iter().find(|task| &task.id == id) {
-            return task.target.clone();
+        if let Some(target) = target(id) {
+            return target;
         }
     }
     let head = repo
@@ -1193,11 +1238,12 @@ fn current_target(
         return head;
     }
     let suffix = head.rsplit('/').next().unwrap_or("");
-    ids.iter()
+    read.tasks
+        .keys()
         .filter(|id| suffix == id.as_str() || suffix.starts_with(&format!("{id}-")))
         .max_by_key(|id| id.len())
-        .and_then(|id| tasks.iter().find(|task| &task.id == id))
-        .map_or_else(|| default.to_string(), |task| task.target.clone())
+        .and_then(target)
+        .unwrap_or_else(|| default.to_string())
 }
 
 fn sweep_seconds(root: &Path) -> i64 {

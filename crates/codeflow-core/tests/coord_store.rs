@@ -3,6 +3,7 @@
 //! tail repair, damage, discovery, privacy, streams and the permission
 //! matrix, and the due and fulfilment rules over a fake observer.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -17,6 +18,7 @@ use codeflow_core::coord::schema::{
 use codeflow_core::coord::store::{self, Draft, Paths, ReadOutcome, SubjectId};
 use codeflow_core::coord::transition::ItemState;
 use codeflow_core::coord::{self as coord, CoordError};
+use codeflow_core::workgraph::readiness::{target_tasks, target_tasks_judging};
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -718,6 +720,7 @@ fn task_view(status: &str, claimed: bool, tip: &str) -> TaskView {
         tip: tip.into(),
         claimed,
         accepted: status == "complete",
+        judged: true,
     }
 }
 
@@ -1600,6 +1603,44 @@ fn a_work_branch_named_as_target_is_never_a_target() {
     assert!(codeflow_core::workgraph::readiness::is_landing_target(
         "integration/EPC-025-x"
     ));
+}
+
+/// TSK-1095: a reader that shows a few tasks judges only those; every other
+/// task is read but marked not judged, never accepted, and the full read
+/// still judges every task as before.
+#[test]
+fn only_the_named_tasks_are_judged() {
+    let dir = repo();
+    let root = dir.path();
+    let record = |id: &str| {
+        format!("---\nid: {id}\nepic_id: null\nstandalone_reason: x\nintegration_target: main\ntitle: t\nstatus: complete\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-10-01\n---\n\n## Description\nx\n")
+    };
+    std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+    for id in ["TSK-001", "TSK-002"] {
+        std::fs::write(
+            root.join(format!("project-management/tasks/{id}.md")),
+            record(id),
+        )
+        .unwrap();
+    }
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: plan"]);
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+    git(
+        root,
+        &["remote", "add", "origin", origin.path().to_str().unwrap()],
+    );
+    git(root, &["push", "-q", "-u", "origin", "main"]);
+    let some =
+        target_tasks_judging(root, Some(BTreeSet::default()), &|id| id == "TSK-001").unwrap();
+    assert!(some["TSK-001"].judged);
+    assert!(!some["TSK-002"].judged);
+    assert!(!some["TSK-002"].accepted);
+    assert_eq!(some["TSK-002"].status, "complete");
+    let all = target_tasks(root).unwrap();
+    assert!(all.values().all(|task| task.judged));
+    assert_eq!(all["TSK-001"].accepted, some["TSK-001"].accepted);
 }
 
 // ---------------------------------------------------------------------------

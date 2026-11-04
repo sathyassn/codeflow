@@ -149,71 +149,104 @@ pub(super) fn count_stage(counts: &mut StageCounts, stage: &str) {
     }
 }
 
-/// The ids of the tasks in scope, sorted.
-pub(super) fn scope_ids(inputs: &Inputs) -> BTreeSet<String> {
-    let epics = scope_epics(inputs);
-    inputs
-        .tasks
+/// One task as the scope rules see it: its id, home target and epic.
+pub(super) struct Member<'a> {
+    pub id: &'a str,
+    pub target: &'a str,
+    pub epic: Option<&'a str>,
+}
+
+/// The task ids and epic ids `scope` takes from `tasks` and `epics` (id and
+/// status), with `current_target` for the default scope. One rule, used
+/// both before the costly reads (to choose what to judge) and for the
+/// facts.
+pub(super) fn members(
+    scope: &ScopeSpec,
+    current_target: &str,
+    tasks: &[Member<'_>],
+    epics: &[(&str, &str)],
+) -> (BTreeSet<String>, BTreeSet<String>) {
+    let epic_of = |pick: &dyn Fn(&Member<'_>) -> bool| -> BTreeSet<String> {
+        tasks
+            .iter()
+            .filter(|task| pick(task))
+            .filter_map(|task| task.epic.map(str::to_string))
+            .collect()
+    };
+    let scope_epics: BTreeSet<String> = match scope {
+        ScopeSpec::Epics(ids) => ids.iter().cloned().collect(),
+        ScopeSpec::Default => epics
+            .iter()
+            .filter(|(_, status)| !matches!(*status, "complete" | "cancelled"))
+            .filter(|(id, _)| {
+                tasks
+                    .iter()
+                    .any(|task| task.epic == Some(*id) && task.target == current_target)
+            })
+            .map(|(id, _)| (*id).to_string())
+            .collect(),
+        ScopeSpec::Task(id) => epic_of(&|task| task.id == id),
+        ScopeSpec::Line(line) => epic_of(&|task| task.target == line),
+        ScopeSpec::Stream {
+            epics,
+            tasks: linked,
+            ..
+        } => epics
+            .iter()
+            .cloned()
+            .chain(epic_of(&|task| linked.iter().any(|link| link == task.id)))
+            .collect(),
+    };
+    let ids = tasks
         .iter()
-        .filter(|task| match &inputs.scope {
-            ScopeSpec::Task(id) => &task.id == id,
-            ScopeSpec::Line(line) => &task.target == line,
+        .filter(|task| match scope {
+            ScopeSpec::Task(id) => task.id == id,
+            ScopeSpec::Line(line) => task.target == line,
             ScopeSpec::Stream {
                 epics: linked,
-                tasks,
+                tasks: named,
                 ..
             } => {
-                tasks.contains(&task.id)
-                    || task.epic.as_ref().is_some_and(|epic| linked.contains(epic))
+                named.iter().any(|link| link == task.id)
+                    || task
+                        .epic
+                        .is_some_and(|epic| linked.iter().any(|e| e == epic))
             }
             ScopeSpec::Epics(_) | ScopeSpec::Default => {
-                task.epic.as_ref().is_some_and(|epic| epics.contains(epic))
+                task.epic.is_some_and(|epic| scope_epics.contains(epic))
             }
         })
-        .map(|task| task.id.clone())
-        .collect()
+        .map(|task| task.id.to_string())
+        .collect();
+    (ids, scope_epics)
+}
+
+fn inputs_members(inputs: &Inputs) -> (BTreeSet<String>, BTreeSet<String>) {
+    let tasks: Vec<Member<'_>> = inputs
+        .tasks
+        .iter()
+        .map(|task| Member {
+            id: &task.id,
+            target: &task.target,
+            epic: task.epic.as_deref(),
+        })
+        .collect();
+    let epics: Vec<(&str, &str)> = inputs
+        .epics
+        .iter()
+        .map(|epic| (epic.id.as_str(), epic.status.as_str()))
+        .collect();
+    members(&inputs.scope, &inputs.current_target, &tasks, &epics)
+}
+
+/// The ids of the tasks in scope, sorted.
+pub(super) fn scope_ids(inputs: &Inputs) -> BTreeSet<String> {
+    inputs_members(inputs).0
 }
 
 /// The epics the scope names or reaches, sorted.
 pub(super) fn scope_epics(inputs: &Inputs) -> BTreeSet<String> {
-    match &inputs.scope {
-        ScopeSpec::Epics(ids) => ids.iter().cloned().collect(),
-        ScopeSpec::Default => inputs
-            .epics
-            .iter()
-            .filter(|epic| !matches!(epic.status.as_str(), "complete" | "cancelled"))
-            .filter(|epic| {
-                inputs.tasks.iter().any(|task| {
-                    task.epic.as_deref() == Some(epic.id.as_str())
-                        && task.target == inputs.current_target
-                })
-            })
-            .map(|epic| epic.id.clone())
-            .collect(),
-        ScopeSpec::Task(id) => inputs
-            .tasks
-            .iter()
-            .filter(|task| &task.id == id)
-            .filter_map(|task| task.epic.clone())
-            .collect(),
-        ScopeSpec::Line(line) => inputs
-            .tasks
-            .iter()
-            .filter(|task| &task.target == line)
-            .filter_map(|task| task.epic.clone())
-            .collect(),
-        ScopeSpec::Stream { epics, tasks, .. } => epics
-            .iter()
-            .cloned()
-            .chain(
-                inputs
-                    .tasks
-                    .iter()
-                    .filter(|task| tasks.contains(&task.id))
-                    .filter_map(|task| task.epic.clone()),
-            )
-            .collect(),
-    }
+    inputs_members(inputs).1
 }
 
 /// Why a stream's percent is unknown when a link names no record: a dropped
