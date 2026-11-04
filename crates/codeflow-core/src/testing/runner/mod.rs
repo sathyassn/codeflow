@@ -17,12 +17,18 @@ use crate::testing::error::TestingError;
 #[cfg(unix)]
 mod group_watch;
 #[cfg(windows)]
+mod job_watch;
+#[cfg(windows)]
 mod target_job;
+
+#[cfg(windows)]
+pub use job_watch::{designate as designate_fence_watcher, serve as serve_fence_watch};
 
 #[cfg(any(windows, test))]
 #[derive(Debug)]
 enum AdoptError {
     Job(std::io::Error),
+    Watch(std::io::Error),
     Resume(std::io::Error),
 }
 
@@ -36,6 +42,7 @@ fn adopt_or_stop<T>(
         end_child();
         let (step, source) = match error {
             AdoptError::Job(source) => ("join its kill-on-close job", source),
+            AdoptError::Watch(source) => ("start the fence watcher for", source),
             AdoptError::Resume(source) => ("resume", source),
         };
         TestingError::CommandSpawnError {
@@ -1288,10 +1295,10 @@ fn spawn_prepared(
         progress!("[codeflow test] warning: {error}");
     }
     // On Windows the target's tree ends with this process instead: the job
-    // is closed when the gate exits or is killed. The OS also releases the
-    // gate's locks as it exits, and nothing orders that release after the
-    // tree's end, so a killed gate's lock can free while its tree is still
-    // ending (TSK-1317).
+    // is closed when the gate exits or is killed. The OS gives no order
+    // between that and freeing the gate's own locks, so while this process
+    // holds a fence a watcher outside the job holds it too and frees it
+    // only once the job is empty (TSK-1318).
     #[cfg(windows)]
     let target_job = adopt_or_stop(target_job::TargetJob::adopt(&child), target_name, || {
         let _ = child.kill();
@@ -1606,6 +1613,7 @@ mod tests {
         assert_eq!(stopped, 0);
         for error in [
             AdoptError::Job(std::io::Error::from_raw_os_error(5)),
+            AdoptError::Watch(std::io::Error::from_raw_os_error(2)),
             AdoptError::Resume(std::io::Error::from_raw_os_error(6)),
         ] {
             let result: Result<u8, _> = Err(error);
@@ -1614,7 +1622,7 @@ mod tests {
             assert!(text.contains("sample"), "{text}");
             assert!(text.contains("os error"), "{text}");
         }
-        assert_eq!(stopped, 2);
+        assert_eq!(stopped, 3);
     }
     /// A lease another run holds past the waiting target's timeout makes
     /// the wait end with the target's bound named, never an unbounded wait.
@@ -2627,8 +2635,8 @@ mod tests {
     }
 
     /// TSK-142 AC-3: when a gate is killed on Windows, its running target's
-    /// whole tree ends with it. Nothing orders the gate lock's release after
-    /// that end (TSK-1317). The gate is this test binary run as
+    /// whole tree ends with it. This helper holds no fence, so it starts no
+    /// fence watcher (TSK-1318). The gate is this test binary run as
     /// [`windows_gate_helper`]; the recorded pid is the target's grandchild
     /// (`cmd.exe` runs `powershell`), so the check covers the tree.
     ///
@@ -2705,6 +2713,35 @@ mod tests {
             .spawn()
             .unwrap();
         GateGuard::new(gate)
+    }
+
+    /// TSK-1318: a gate that holds a fence and cannot start its target's
+    /// fence watcher refuses the target, naming the watcher, and the
+    /// target's command never runs.
+    #[cfg(windows)]
+    #[test]
+    fn a_watcher_that_cannot_start_stops_the_target_before_its_command_runs() {
+        let home = tempfile::tempdir().unwrap();
+        let locks = home.path().join("locks");
+        std::fs::create_dir_all(&locks).unwrap();
+        let _admitted = crate::testing::gate_guard::acquire_gate_lock(
+            std::slice::from_ref(&locks),
+            home.path(),
+            "full",
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        job_watch::watcher_for_test(Some(home.path().join("no-such-watcher.exe")));
+        let target = make_target("unwatched", "echo ran > marker.txt");
+        let result = run_target(&target, "full", dir.path());
+        job_watch::watcher_for_test(None);
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("unwatched"), "{message}");
+        assert!(message.contains("fence watcher"), "{message}");
+        assert!(
+            !dir.path().join("marker.txt").exists(),
+            "the command never ran"
+        );
     }
 
     #[cfg(windows)]

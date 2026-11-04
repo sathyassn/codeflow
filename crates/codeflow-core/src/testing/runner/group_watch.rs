@@ -1,5 +1,12 @@
 //! A lifetime pipe ends a heavy command's group when its controller exits.
-//! The watcher starts before exec and stays in the group, keeping its id reserved.
+//!
+//! The watcher starts before exec and keeps copies of the run's locks. A
+//! sentinel it forks stays in the group, keeping the group's id reserved,
+//! while the watcher moves to a group of its own, so its own signal does
+//! not end it. When the controller exits the watcher kills the group, then
+//! waits until no process of the group is left, zombies included, before
+//! it exits and its lock copies close. So the fence frees only after the
+//! command's whole group is gone (TSK-1318).
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -62,15 +69,33 @@ impl GroupWatch {
                             libc::close(fd);
                         }
                     }
+                    // The sentinel keeps this group id alive, so it cannot be
+                    // reused between command exit and the signal below. It holds
+                    // no descriptor and only waits to be killed.
+                    let sentinel = libc::fork();
+                    if sentinel == 0 {
+                        libc::close(reader);
+                        for &fd in &lock_descriptors {
+                            libc::close(fd);
+                        }
+                        loop {
+                            libc::pause();
+                        }
+                    }
+                    // Without a sentinel, or when the watcher cannot leave the
+                    // group, it stays in the group and its signal ends it too,
+                    // as before TSK-1318.
+                    let waits = sentinel > 0 && libc::setpgid(0, 0) == 0;
                     let mut byte = 0_u8;
                     loop {
                         if libc::read(reader, (&raw mut byte).cast(), 1) == 0 {
                             break;
                         }
                     }
-                    // The watcher itself keeps this group id alive, so it cannot
-                    // be reused between command exit and this signal. It ends too.
                     libc::kill(-group, libc::SIGKILL);
+                    if waits {
+                        wait_until_group_ends(group, sentinel);
+                    }
                     libc::_exit(0);
                 }
                 let mut status = 0;
@@ -117,6 +142,32 @@ impl GroupWatch {
     }
 }
 
+/// Reap `sentinel`, then wait until no process of `group` is left. A group
+/// whose only members are zombies still counts: `kill` then succeeds on
+/// Linux and is refused with `EPERM` on macOS, and only `ESRCH` means the
+/// group is empty. Unix has no notice of a group's end, so the group is
+/// checked every 5 ms.
+///
+/// # Safety
+///
+/// Runs in the watcher after `fork`: it calls only async-signal-safe libc
+/// operations and allocates nothing.
+unsafe fn wait_until_group_ends(group: libc::pid_t, sentinel: libc::pid_t) {
+    let mut status = 0;
+    while libc::waitpid(sentinel, &raw mut status, 0) < 0
+        && io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+    {}
+    let pause = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 5_000_000,
+    };
+    while libc::kill(-group, 0) == 0
+        || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    {
+        libc::nanosleep(&raw const pause, std::ptr::null_mut());
+    }
+}
+
 impl Drop for GroupWatch {
     fn drop(&mut self) {
         // Close our spare child endpoint even when spawn failed. Half-close the
@@ -130,5 +181,87 @@ impl Drop for GroupWatch {
                 _ => break,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GroupWatch;
+    use fs2::FileExt;
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+    use std::time::Duration;
+
+    /// Whether an older binary's exclusive take of the fence at `path`
+    /// would succeed now; a take that succeeds is released at once.
+    fn older_take(path: &std::path::Path) -> bool {
+        let file = std::fs::File::open(path).unwrap();
+        let taken = file.try_lock_exclusive().is_ok();
+        if taken {
+            file.unlock().unwrap();
+        }
+        taken
+    }
+
+    /// TSK-1318: when the controller ends, the watcher's copy of the fence
+    /// stays locked until no process of the command's group is left. A
+    /// member this test starts and does not reap stays in the group as a
+    /// zombie after the watcher kills the group, so the fence must stay
+    /// held until the test reaps it. Before TSK-1318 the watcher ended by
+    /// its own signal and the fence freed while that member was left.
+    #[test]
+    fn the_fence_frees_only_after_the_whole_group_has_ended() {
+        let home = tempfile::tempdir().unwrap();
+        let locks = home.path().join("locks");
+        std::fs::create_dir_all(&locks).unwrap();
+        let lock = crate::testing::gate_guard::acquire_gate_lock(
+            std::slice::from_ref(&locks),
+            home.path(),
+            "quick",
+        )
+        .unwrap();
+        let fence = locks.join(crate::testing::gate_guard::LOCK_FILE);
+        let mut command = Command::new("sleep");
+        command.arg("30").process_group(0);
+        let mut watch = GroupWatch::prepare(&mut command, false).unwrap();
+        let mut leader = command.spawn().unwrap();
+        watch.spawned();
+        let group = i32::try_from(leader.id()).unwrap();
+        let mut member = Command::new("sleep")
+            .arg("30")
+            .process_group(group)
+            .spawn()
+            .unwrap();
+        // The gate's own fence closes, as when the gate is killed: only the
+        // watcher's copy keeps older binaries out from here.
+        drop(lock);
+        assert!(!older_take(&fence), "the watcher keeps the fence");
+        // The controller ends; the watcher kills the group and then waits
+        // for it, so this drop returns only once the group is empty.
+        let controller = std::thread::spawn(move || drop(watch));
+        leader.wait().unwrap();
+        // Wait for the member's death without reaping it: it stays a zombie.
+        // SAFETY: siginfo_t is plain data; waitid fills it.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let member_pid = libc::id_t::from(member.id());
+        // SAFETY: waits for the member to exit without reaping it (WNOWAIT).
+        let waited = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                member_pid,
+                &raw mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        assert_eq!(waited, 0, "{}", std::io::Error::last_os_error());
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !older_take(&fence),
+            "the fence freed while a process of the killed group was left"
+        );
+        assert!(!controller.is_finished(), "the watcher ended early");
+        member.wait().unwrap();
+        controller.join().unwrap();
+        assert!(older_take(&fence), "the fence frees once the group is gone");
     }
 }
