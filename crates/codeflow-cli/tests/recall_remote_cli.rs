@@ -163,7 +163,7 @@ fn remote_protect_dry_run_prints_plan_from_policy() {
     assert!(
         text.contains(
             "require status checks to pass on a branch that is up to date with its base: \
-             codeflow gates, secret scan, security review, commit standards"
+             codeflow gates, secret scan, security review, trusted: commit standards"
         ),
         "{text}"
     );
