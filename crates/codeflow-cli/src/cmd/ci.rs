@@ -30,6 +30,7 @@ mod judging;
 mod line_tip;
 pub(crate) mod pr_body;
 mod work_records;
+mod workflow_change;
 
 use change_class::ChangeClass;
 use clap::Args;
@@ -152,7 +153,10 @@ pub struct CiArgs {
     /// or eligible epic line at the base commit, then the repository default).
     /// An ambiguous commit-ID base requires --into or --branch. A range whose head
     /// or target matches the release pattern is judged as a
-    /// release range (SPC-013 R-120).
+    /// release range (SPC-013 R-120). Deciding that asks the destination for
+    /// its default branch and that branch's policy, so on a private
+    /// repository the job running codeflow ci needs read access to it (for
+    /// actions/checkout, `persist-credentials: true`).
     #[arg(long, value_name = "BRANCH")]
     pub into: Option<String>,
 
@@ -548,6 +552,10 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut tagged,
         &mut ran,
     );
+    // What this change does to the workflows is base..head; the wider
+    // commit range `--commits-from` selects (pre-push) also holds commits
+    // the target already carries, whose workflow edits are not this one's.
+    workflow_change::dispatch(&root, base_sha.as_deref(), &head, &mut tagged, &mut ran);
 
     match codeflow_core::hooks::path_policy::PathPolicy::from_git(configured).and_then(|paths| {
         let size_and_ignore = judging::content_rules(&root, authority.as_ref())?;
@@ -2094,7 +2102,9 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
             Some(sha) => format!("ci commit {}", short(sha)),
             None => "ci".to_string(),
         };
-        if t.violation.rule.starts_with("work.") {
+        if t.violation.rule == workflow_change::RULE {
+            eprintln!("{}", workflow_change::render(&t.violation, &plane));
+        } else if t.violation.rule.starts_with("work.") {
             eprintln!(
                 "{}",
                 t.violation.render_invariant(
