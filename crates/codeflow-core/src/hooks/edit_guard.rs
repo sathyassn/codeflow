@@ -9,7 +9,9 @@ use serde_json::{Map, Value};
 
 use super::{PolicyLevel, Violation};
 use crate::security::actions;
-use crate::security::pattern::{match_extended_glob, GlobMatch};
+use crate::security::pattern::{
+    match_extended_glob, GlobMatch, MAX_GLOB_PATH_BYTES, PATH_PAST_BOUND,
+};
 
 /// An input which the edit guard cannot safely interpret.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,6 +264,8 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
     let startup = crate::security::startup::StartupEnv::with_home_at(ctx.home, cwd);
     for path in &request.paths {
         let absolute = absolute_target(path, cwd, ctx.home);
+        // First, so a path past the bound reads nothing on disk (TSK-1258).
+        let lexical = normalized(&absolute, false)?;
         // Shell startup files refuse whatever the integrity level (TSK-242).
         if let Some(file) = crate::security::startup::class_target(&absolute, &startup) {
             violations.push(Violation::always_blocking(
@@ -270,7 +274,6 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
                 crate::security::startup::SANCTIONED,
             ));
         }
-        let lexical = normalized(&absolute, false)?;
         let resolved = normalized(&absolute, true)?;
         for candidate in [&lexical, &resolved] {
             let text = path_text(candidate)?;
@@ -525,10 +528,21 @@ pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditErro
 }
 
 fn normalize_uncached(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
+    // Refused before any read, with the cause the glob matcher would give, so
+    // the host's path limit cannot change the verdict or its reason (TSK-1258).
+    if path.as_os_str().len() > MAX_GLOB_PATH_BYTES {
+        return Err(EditError(format!(
+            "cannot check the edit path against the protected paths: {PATH_PAST_BOUND}"
+        )));
+    }
     let path = crate::portable_path::without_verbatim(
         crate::portable_path::guard_path(path).map_err(EditError)?,
     );
     let mut result = PathBuf::new();
+    // The length of `result` at the first name proven to hold nothing. Nothing
+    // can exist below it, so the names under it are kept without a read, until
+    // a `..` climbs back out of it. One walk per name was quadratic (TSK-1258).
+    let mut absent_at = None;
     for component in path.components() {
         match component {
             Component::Prefix(prefix) => result.push(prefix.as_os_str()),
@@ -536,6 +550,9 @@ fn normalize_uncached(path: &Path, resolve: bool) -> Result<PathBuf, EditError> 
             Component::CurDir => {}
             Component::ParentDir => {
                 result.pop();
+                if absent_at.is_some_and(|length| result.as_os_str().len() < length) {
+                    absent_at = None;
+                }
             }
             Component::Normal(part) => {
                 let name = crate::git::GitName::from_os_str(part);
@@ -564,8 +581,12 @@ fn normalize_uncached(path: &Path, resolve: bool) -> Result<PathBuf, EditError> 
                 } else {
                     result.push(part);
                 }
-                if resolve {
-                    result = resolved_component(result)?;
+                if resolve && absent_at.is_none() {
+                    let (resolved, absent) = resolved_component(result)?;
+                    result = resolved;
+                    if absent {
+                        absent_at = Some(result.as_os_str().len());
+                    }
                 }
             }
         }
@@ -575,7 +596,9 @@ fn normalize_uncached(path: &Path, resolve: bool) -> Result<PathBuf, EditError> 
 
 /// Branch alternatives commonly share all but their last component. Resolve
 /// those prefixes once in the same invocation snapshot as complete operands.
-fn resolved_component(mut path: PathBuf) -> Result<PathBuf, EditError> {
+/// The flag says this read proved that nothing can exist at the path. A cached
+/// path gives `false`, which costs the caller one more read at most.
+fn resolved_component(mut path: PathBuf) -> Result<(PathBuf, bool), EditError> {
     let key = (path.clone(), true);
     if let Some(cached) = NORMALIZED.with(|cache| {
         cache
@@ -583,29 +606,30 @@ fn resolved_component(mut path: PathBuf) -> Result<PathBuf, EditError> {
             .as_ref()
             .and_then(|paths| paths.get(&key).cloned())
     }) {
-        return cached;
+        return cached.map(|path| (path, false));
     }
     let result = (|| {
         if crate::absence::cannot_exist(&path)
             .map_err(|e| EditError(format!("cannot inspect {}: {e}", path.display())))?
         {
-            return Ok(path);
+            return Ok((path, true));
         }
         match std::fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 crate::portable_path::canonicalize(&path)
+                    .map(|path| (path, false))
                     .map_err(|e| EditError(format!("cannot resolve {}: {e}", path.display())))
             }
             Ok(metadata) => {
                 normalize_case(&mut path, &metadata).map_err(EditError)?;
-                Ok(path)
+                Ok((path, false))
             }
             Err(e) => Err(EditError(format!("cannot inspect {}: {e}", path.display()))),
         }
     })();
     NORMALIZED.with(|cache| {
         if let Some(paths) = cache.borrow_mut().as_mut() {
-            paths.insert(key, result.clone());
+            paths.insert(key, result.clone().map(|(path, _)| path));
         }
     });
     result
@@ -1578,6 +1602,61 @@ mod tests {
             "{error}"
         );
         assert!(!fixture.refused("notes.md"), "a normal path is unchanged");
+    }
+
+    /// TSK-1258: the reads one judgment spends do not grow with how deep a
+    /// path runs below its first missing name. One read per ancestor for
+    /// each name is quadratic, and it held a Windows test past 1200 seconds:
+    /// Windows reads a path of 32 KiB where Unix refuses it near 1 or 4 KiB,
+    /// so this counts reads at a depth every host can reach.
+    #[test]
+    fn a_missing_path_costs_the_same_reads_at_any_depth() {
+        let reads_at = |depth: usize| {
+            let fixture = Fixture::new();
+            let path = format!("notes/{}", "a/".repeat(depth));
+            let before = crate::absence::reads();
+            let violations = evaluate(&synthetic("write", json!({"path": path})), &fixture.ctx())
+                .expect("an ordinary missing path is judged");
+            assert!(violations.is_empty());
+            crate::absence::reads() - before
+        };
+        let (shallow, deep) = (reads_at(100), reads_at(400));
+        assert!(deep < shallow * 2, "{shallow} reads at 100, {deep} at 400");
+    }
+
+    /// TSK-1258: a path as deep as the glob bound admits is judged, and a
+    /// protected path keeps its refusal at that depth. On Windows this path
+    /// reaches the filesystem, so a walk that is not linear stalls this test.
+    #[test]
+    fn a_path_at_the_glob_bound_is_judged() {
+        let fixture = Fixture::new();
+        let root = normalized(&fixture.root, true).unwrap();
+        let space = crate::security::pattern::MAX_GLOB_PATH_BYTES
+            - root.as_os_str().len()
+            - "/notes/".len();
+        let deep = "a/".repeat(space / 2);
+        assert!(!fixture.refused(&format!("notes/{deep}")));
+        assert!(fixture.refused(&format!(".git/hooks/{}", &deep[..deep.len() - 8])));
+    }
+
+    /// TSK-1258: a `..` that leaves a missing name returns to a path that
+    /// exists, so the links beyond it are still followed.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_past_a_missing_name_is_still_resolved() {
+        let fixture = Fixture::new();
+        let root = normalized(&fixture.root, true).unwrap();
+        let real = root.join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("alias")).unwrap();
+        assert_eq!(
+            normalized(&root.join("missing/deeper/../../alias/file"), true).unwrap(),
+            real.join("file")
+        );
+        assert_eq!(
+            normalized(&root.join("missing/deeper/../alias/file"), true).unwrap(),
+            root.join("missing/alias/file")
+        );
     }
 
     /// TSK-1258 AC-3, reach of the cache-full condition: a guard call is one

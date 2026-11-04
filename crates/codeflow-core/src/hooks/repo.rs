@@ -550,7 +550,15 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
     for resolve in [false, true] {
         let target =
             super::edit_guard::normalized(target, resolve).map_err(|error| error.to_string())?;
-        for ancestor in target.ancestors() {
+        // A name that holds nothing holds no marker, and probing one per
+        // missing ancestor made this walk quadratic in depth (TSK-1258).
+        let present = crate::absence::deepest_entry(&target).map_err(|error| {
+            format!(
+                "cannot inspect target repository {}: {error}",
+                target.display()
+            )
+        })?;
+        for ancestor in present.ancestors() {
             let marker = ancestor.join(".git");
             if (!crate::absence::cannot_exist(&marker).map_err(|error| {
                 format!(
