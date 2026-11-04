@@ -40,7 +40,7 @@ pub const DEFAULT_FETCH_TIMEOUT_SECONDS: u64 = limits::REMOTE_FETCH_TIMEOUT.defa
 enum Source {
     /// The policy keys, read from the trusted policy.
     Policy,
-    /// A session guard's own network budget, which no policy key changes.
+    /// A session guard's own lookup wait, which no policy key changes.
     Guard,
 }
 
@@ -51,7 +51,7 @@ enum Source {
 /// the policy the caller trusts: the default branch's committed policy,
 /// never a pushed head's. A session guard runs inside a harness hook
 /// timeout, so it uses [`QueryLimits::guard`] instead and fails closed
-/// when the remote does not answer within that budget.
+/// when the remote does not answer within that wait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueryLimits {
     timeout: Duration,
@@ -98,11 +98,11 @@ impl QueryLimits {
     /// answer in time refuses; it never waits for the harness to kill it.
     #[must_use]
     pub fn guard() -> Self {
-        let budget = Duration::from_secs(crate::hooks::guard_deadline::GUARD_REMOTE_QUERY_SECS);
+        let wait = Duration::from_secs(crate::hooks::guard_deadline::GUARD_REMOTE_QUERY_SECS);
         Self {
-            timeout: budget,
+            timeout: wait,
             attempts: 1,
-            fetch_timeout: budget,
+            fetch_timeout: wait,
             source: Source::Guard,
         }
     }
@@ -175,7 +175,7 @@ impl QueryLimits {
                 format!("{TIMEOUT_KEY} and {ATTEMPTS_KEY} on the default branch set these")
             }
             Source::Guard => format!(
-                "a session guard waits at most {}s for the network, inside its {}s deadline and the harness's {}s hook timeout, whatever {TIMEOUT_KEY} says",
+                "a session guard waits at most {}s for each such lookup, whatever {TIMEOUT_KEY} says, and its {}s deadline bounds the whole command inside the harness's {}s hook timeout",
                 crate::hooks::guard_deadline::GUARD_REMOTE_QUERY_SECS,
                 crate::hooks::guard_deadline::GUARD_DEADLINE_SECS,
                 crate::hooks::guard_deadline::GUARD_HOOK_TIMEOUT_SECS,
@@ -239,7 +239,8 @@ pub const AUTHENTICATION_FAILED: &str = "remote authentication failed";
 /// attempt and by [`MAX_ANSWER_BYTES`]. Only a timeout is retried, up to
 /// the attempts `limits` allows, with a 100 ms backoff; every other
 /// failure returns at once, and a destination that never answers still
-/// refuses.
+/// refuses once the waits run out. A wait too large for the clock never runs
+/// out.
 ///
 /// # Errors
 ///
@@ -533,7 +534,8 @@ fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<Str
         let _ = sender.send(read.map(|_| bytes));
     });
     // A deadline past the clock's range never expires instead of
-    // overflowing: the policy sets no ceiling on it (TSK-1301).
+    // overflowing: the policy sets no ceiling on it, so a very large value
+    // means effectively no limit, as the policy reference says (TSK-1301).
     let until = Instant::now().checked_add(deadline);
     let expired = || until.is_some_and(|until| Instant::now() >= until);
     let timed_out = || Failure::Timeout(deadline);
@@ -893,7 +895,7 @@ mod tests {
         );
         assert!(
             guard.contains(
-                "a session guard waits at most 10s for the network, inside its 20s deadline"
+                "a session guard waits at most 10s for each such lookup, whatever git.remote_query_timeout_seconds says, and its 20s deadline bounds the whole command"
             ),
             "{guard}"
         );

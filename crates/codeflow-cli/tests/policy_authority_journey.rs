@@ -479,19 +479,24 @@ fn pre_push_waits_as_long_as_the_default_branch_policy_says() {
     let head = a.git(&["rev-parse", "HEAD"]);
     let remote = a.remote_path();
     let push = |a: &Adopter| {
-        let out = a.codeflow_on(
+        a.codeflow_on(
             &path,
             &["git-hook", "pre-push", "origin", remote.to_str().unwrap()],
             &format!("refs/heads/task/TSK-007-cert {head} refs/heads/task/TSK-007-cert {ZERO}\n"),
-        );
-        said(&out)
+        )
     };
 
     a.land_main_policy(
         r#"{"git":{"force_push_unprotected":"allow","remote_query_timeout_seconds":1,"remote_query_attempts":1}}"#,
     );
-    let text = push(&a);
+    let refused = push(&a);
+    let text = said(&refused);
     println!("pre-push, 1 s wait:\n{text}");
+    assert!(
+        matches!(refused.status.code(), Some(code) if code != 0),
+        "{:?}: {text}",
+        refused.status
+    );
     assert!(text.contains("ci.destination_unavailable"), "{text}");
     assert!(
         text.contains("no answer within 1s per attempt (1 attempt, "),
@@ -511,10 +516,84 @@ fn pre_push_waits_as_long_as_the_default_branch_policy_says() {
     a.land_main_policy(
         r#"{"git":{"force_push_unprotected":"allow","remote_query_timeout_seconds":3,"remote_query_attempts":1}}"#,
     );
-    let text = push(&a);
+    let text = said(&push(&a));
     println!("pre-push, 3 s wait:\n{text}");
     assert!(!text.contains("ci.destination_unavailable"), "{text}");
     assert!(!text.contains("no answer within"), "{text}");
+}
+
+/// TSK-1301 AC-1 and AC-7, a direct `codeflow ci` and whose waits apply. The
+/// lookup answers after 1.5 s. The default branch waits 3 s and the task
+/// branch's head says 1 s. The hook reads the default branch, so the head
+/// cannot change its wait. `codeflow ci` reads the authority it is given, as
+/// it does every rule: naming the default branch passes the lookup, and
+/// naming the head uses the head's wait and refuses.
+#[cfg(unix)]
+#[test]
+fn a_head_sets_no_wait_for_the_hook_and_ci_reads_the_authority_it_names() {
+    let (a, _) = Adopter::with_line();
+    let path = slow_ls_remote(&a, Some("1.5"));
+    let remote = a.remote_path();
+    let url = remote.to_str().unwrap();
+    a.land_main_policy(
+        r#"{"git":{"force_push_unprotected":"allow","remote_query_timeout_seconds":3,"remote_query_attempts":1}}"#,
+    );
+    a.commit(
+        &[(
+            ".codeflow/policy.json",
+            r#"{"git":{"force_push_unprotected":"allow","remote_query_timeout_seconds":1,"remote_query_attempts":1}}"#,
+        )],
+        "chore: shorten the head's wait",
+    );
+    let head = a.git(&["rev-parse", "HEAD"]);
+    let main = a.git(&["rev-parse", "origin/main"]);
+
+    let hook = a.codeflow_on(
+        &path,
+        &["git-hook", "pre-push", "origin", url],
+        &format!("refs/heads/task/TSK-007-cert {head} refs/heads/task/TSK-007-cert {ZERO}\n"),
+    );
+    let text = said(&hook);
+    println!("pre-push, the head says 1 s:\n{text}");
+    assert!(!text.contains("no answer within"), "{text}");
+
+    let ci = |authority: &str| {
+        a.codeflow_on(
+            &path,
+            &[
+                "ci",
+                "--policy-from",
+                authority,
+                "--base",
+                "origin/integration/line",
+                "--head",
+                "HEAD",
+                "--branch",
+                "task/TSK-007-cert",
+                "--destination",
+                url,
+            ],
+            "",
+        )
+    };
+    let text = said(&ci(&main));
+    println!("ci, the default branch's authority:\n{text}");
+    assert!(!text.contains("ci.destination_unavailable"), "{text}");
+    assert!(!text.contains("no answer within"), "{text}");
+
+    let refused = ci(&head);
+    let text = said(&refused);
+    println!("ci, the head as its authority:\n{text}");
+    assert!(
+        matches!(refused.status.code(), Some(code) if code != 0),
+        "{:?}: {text}",
+        refused.status
+    );
+    assert!(text.contains("ci.destination_unavailable"), "{text}");
+    assert!(
+        text.contains("no answer within 1s per attempt (1 attempt, "),
+        "{text}"
+    );
 }
 
 /// TSK-1301 AC-8, the claim behind guard option (b): no configured wait
@@ -523,7 +602,7 @@ fn pre_push_waits_as_long_as_the_default_branch_policy_says() {
 /// the guard's deadline.
 ///
 /// Where a guard asks (no tracking refs), the only copy of the keys is the
-/// task branch's own, and the guard still spends exactly its budget, one
+/// task branch's own, and the guard still spends exactly its wait, one
 /// attempt, and refuses by name. Where the keys are the authority's (on the
 /// default branch, fetched), the guard asks nothing: a remote that never
 /// answers costs it no wait at all.
@@ -587,16 +666,110 @@ fn no_configured_wait_reaches_a_guard() {
     }
 }
 
+/// TSK-1301 AC-8: while the policy authority is unresolved, both guards let
+/// through one plain fetch of a configured remote and nothing else. A line
+/// that does anything more goes on to the normal refusal, because the
+/// allowance runs before the integrity checks. The guards judge these lines;
+/// nothing here runs them.
+#[cfg(unix)]
+#[test]
+fn only_a_plain_fetch_gets_the_recovery_allowance() {
+    let (a, _) = Adopter::with_line();
+    for branch in ["HEAD", "main", "integration/line"] {
+        a.git(&[
+            "update-ref",
+            "--no-deref",
+            "-d",
+            &format!("refs/remotes/origin/{branch}"),
+        ]);
+    }
+    let path = std::env::var_os("PATH").unwrap();
+    let exit = |guard: &str, line: &str| {
+        let payload =
+            json!({"tool_name":"Bash","cwd":a.work(),"tool_input":{"command":line}}).to_string();
+        a.codeflow_on(&path, &["hook", guard], &payload)
+            .status
+            .code()
+    };
+    for guard in ["git-guard", "exec-guard"] {
+        for line in ["git fetch", "git fetch origin", "  git  fetch  origin  "] {
+            assert_eq!(exit(guard, line), Some(0), "{guard}: {line}");
+        }
+    }
+    let mut let_through = Vec::new();
+    for guard in ["git-guard", "exec-guard"] {
+        for line in [
+            "git fetch origin > fetched.txt",
+            "git fetch origin >> fetched.txt",
+            "git fetch origin 2> fetched.txt",
+            "git fetch origin &> fetched.txt",
+            "git fetch origin < fetched.txt",
+            "git fetch origin <<< fetched",
+            "> fetched.txt git fetch origin",
+            "git fetch origin | cat",
+            "git fetch origin; true",
+            "git fetch origin && true",
+            "git fetch origin || true",
+            "git fetch origin &",
+            "git fetch origin\ntrue",
+            "NAME=value git fetch origin",
+            "env NAME=value git fetch origin",
+            "command git fetch origin",
+            "exec git fetch origin",
+            "time git fetch origin",
+            "! git fetch origin",
+            "(git fetch origin)",
+            "{ git fetch origin; }",
+            "git fetch $(echo origin)",
+            "git fetch `echo origin`",
+            "git fetch $NAME",
+            "git fetch \"origin\"",
+            "git fetch 'origin'",
+            "git fetch ori\\gin",
+            "git fetch origin # note",
+            "git fetch --all",
+            "git fetch origin main",
+            "git -C . fetch origin",
+            "git fetch elsewhere",
+            "bash -c 'git fetch origin'",
+            "eval git fetch origin",
+        ] {
+            if exit(guard, line) == Some(0) {
+                let_through.push(format!("{guard}: {line}"));
+            }
+        }
+    }
+    // The read-only allowance beside it runs at the same point and is a
+    // closed form too.
+    for guard in ["git-guard", "exec-guard"] {
+        assert_eq!(exit(guard, "git status"), Some(0), "{guard}");
+        for line in [
+            "git status > fetched.txt",
+            "git log | cat",
+            "git status &",
+            "NAME=value git status",
+            "command git status",
+            "(git status)",
+            "git status # note",
+        ] {
+            if exit(guard, line) == Some(0) {
+                let_through.push(format!("{guard}: {line}"));
+            }
+        }
+    }
+    assert!(let_through.is_empty(), "{let_through:#?}");
+}
+
 /// TSK-1301 AC-8, the guard path: with the remote's tracking refs missing
 /// the guard asks the remote whether it holds any. A remote that never
-/// answers gets the guard's own refusal inside its 10 s network budget,
-/// naming the budget and the fetch that removes the need to ask, well
+/// answers gets the guard's own refusal after its 10 s lookup wait,
+/// naming the wait and the fetch that removes the need to ask, well
 /// before the guard's 20 s deadline and the harness's 30 s hook timeout.
 /// After that fetch the same guarded command passes while the remote still
 /// never answers, because the guard reads local refs.
 #[cfg(unix)]
 #[test]
-fn the_guard_refuses_a_silent_remote_inside_its_budget_and_a_fetch_clears_it() {
+fn the_guard_refuses_a_silent_remote_after_its_wait_and_a_fetch_clears_it() {
     use codeflow_core::hooks::guard_deadline::{GUARD_DEADLINE_SECS, GUARD_REMOTE_QUERY_SECS};
     use std::time::{Duration, Instant};
     let (a, _) = Adopter::with_line();
@@ -626,7 +799,7 @@ fn the_guard_refuses_a_silent_remote_inside_its_budget_and_a_fetch_clears_it() {
     assert!(!text.contains("reached no decision"), "{text}");
     assert!(
         text.contains(&format!(
-            "a session guard waits at most {GUARD_REMOTE_QUERY_SECS}s for the network, inside its {GUARD_DEADLINE_SECS}s deadline"
+            "a session guard waits at most {GUARD_REMOTE_QUERY_SECS}s for each such lookup, whatever git.remote_query_timeout_seconds says, and its {GUARD_DEADLINE_SECS}s deadline bounds the whole command"
         )),
         "{text}"
     );

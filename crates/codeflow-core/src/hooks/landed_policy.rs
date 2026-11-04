@@ -152,7 +152,7 @@ fn load_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
 /// [`crate::git::remote_query::advertises_any_ref`]); a remote with no URL,
 /// several URLs, or one that is not UTF-8 is not asked. The session guards
 /// ask it while the tracking namespace is empty, inside the harness hook
-/// timeout, so it runs within the guard's network budget
+/// timeout, so each question runs within the guard's lookup wait
 /// ([`QueryLimits::guard`](crate::git::remote_query::QueryLimits::guard)),
 /// never a policy wait, and a remote that does not answer in time refuses
 /// with the fetch that removes the need to ask (TSK-1301).

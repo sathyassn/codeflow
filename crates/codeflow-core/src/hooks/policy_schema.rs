@@ -375,9 +375,11 @@ pub const SCHEMA: [KeySpec; 81] = [
         purpose: "How long one `git ls-remote` attempt may take when the pre-push hook, `codeflow ci`, `task status` or the id sync asks a destination what it holds.",
         notes: "Default 30: GitHub answered the default-branch lookup in 11.3 s and 11.6 s, over the earlier fixed 10 s (TSK-1301). \
                 A destination that does not answer in time still refuses the push or run (ci.destination_unavailable), naming the limits and the measured time. \
-                Read from the default branch's committed policy, never from a pushed head. \
-                The session guards never use it: they wait at most 10 s for the network inside their 20 s deadline, \
-                and refuse naming `git fetch <remote>`, after which they read local refs and need no network. \
+                The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; \
+                `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. \
+                A very large value means effectively no limit: a silent destination is then waited on until something stops the run. \
+                The session guards never use it: they wait at most 10 s for each such lookup, their 20 s deadline bounds the whole command, \
+                and they refuse naming `git fetch <remote>`, after which they read local refs and need no network. \
                 Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
                 The shipped policy file does not list it, so an older binary never meets the key.",
     },
@@ -387,7 +389,9 @@ pub const SCHEMA: [KeySpec; 81] = [
         valid: "a whole number of attempts, at least 1; no ceiling beyond what the number can hold",
         purpose: "How many attempts a timed-out `git ls-remote` gets, the first included; any other failure is final at once.",
         notes: "Default 3. The worst wait is this times git.remote_query_timeout_seconds. \
-                Read from the default branch's committed policy, never from a pushed head. \
+                The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; \
+                `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. \
+                A very large value means effectively no limit: a silent destination is then waited on until something stops the run. \
                 Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
                 The shipped policy file does not list it, so an older binary never meets the key.",
     },
@@ -397,7 +401,9 @@ pub const SCHEMA: [KeySpec; 81] = [
         valid: "a whole number of seconds, at least 1; no ceiling beyond what the number can hold",
         purpose: "How long a fetch of the objects a judge needs may take, such as the destination's default-branch tip this clone lacks, in the pre-push hook, `codeflow ci` and `task status`.",
         notes: "Default 120, the earlier fixed fetch wait. A fetch that does not finish in time refuses, naming this key. \
-                Read from the default branch's committed policy, never from a pushed head. \
+                The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; \
+                `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. \
+                A very large value means effectively no limit: a silent destination is then waited on until something stops the run. \
                 Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
                 The shipped policy file does not list it, so an older binary never meets the key.",
     },

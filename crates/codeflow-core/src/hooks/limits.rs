@@ -7,7 +7,7 @@
 //! take these entries as they are: the probe keys
 //! `git.remote_query_timeout_seconds`, `git.remote_query_attempts` and
 //! `git.remote_fetch_timeout_seconds`, and the guard hook timeout, deadline,
-//! network budget, pull request lookup wait and refusal write wait.
+//! remote lookup wait, pull request lookup wait and refusal write wait.
 
 /// Whether a limit is tuned for speed or holds a safety property.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,17 +102,18 @@ pub const GUARD_DEADLINE: Limit = Limit {
     reason: "a 10 s buffer under the 30 s guard hook timeout, so the guard's own refusal reaches the harness before the harness stops waiting and lets the call through in Codex and Grok (TSK-1082)",
 };
 
-/// Seconds a guard may wait for the network: one `ls-remote` while the
-/// remote's tracking refs are missing.
-pub const GUARD_REMOTE_QUERY_BUDGET: Limit = Limit {
+/// Seconds a guard waits for one `ls-remote` while a repository's remote
+/// tracking refs are missing. It is per lookup: a command naming several
+/// repositories can make several, and [`GUARD_DEADLINE`] bounds them all.
+pub const GUARD_REMOTE_QUERY_WAIT: Limit = Limit {
     key: None,
-    name: "guard network budget",
+    name: "guard remote lookup wait",
     unit: "seconds",
     default: 10,
     min: 10,
     max: Some(10),
     class: LimitClass::Security,
-    reason: "a 10 s buffer under the 20 s guard deadline for the guard's other work, so a slow remote gets a named fail-closed refusal, never the harness kill; git.remote_query_timeout_seconds does not apply inside a guard, and `git fetch` removes the need to ask",
+    reason: "a 10 s buffer under the 20 s guard deadline for the guard's other work, so one slow remote gets a named fail-closed refusal, never the harness kill; several lookups in one command stop at the deadline, which also refuses; git.remote_query_timeout_seconds does not apply inside a guard, and `git fetch` removes the need to ask",
 };
 
 /// Seconds the git guard waits for `gh pr view` to name a pull request's
@@ -125,7 +126,7 @@ pub const GUARD_PR_LOOKUP_WAIT: Limit = Limit {
     min: 5,
     max: Some(5),
     class: LimitClass::Security,
-    reason: "fits after the guard network budget with a 5 s buffer under the 20 s guard deadline; no answer in time is doubt, and the guard blocks on doubt",
+    reason: "fits after one guard remote lookup with a 5 s buffer under the 20 s guard deadline; no answer in time is doubt, and the guard blocks on doubt",
 };
 
 /// Seconds the deadline's refusal waits for its reason to reach stderr
@@ -148,7 +149,7 @@ pub const LIMITS: [Limit; 8] = [
     REMOTE_FETCH_TIMEOUT,
     GUARD_HOOK_TIMEOUT,
     GUARD_DEADLINE,
-    GUARD_REMOTE_QUERY_BUDGET,
+    GUARD_REMOTE_QUERY_WAIT,
     GUARD_PR_LOOKUP_WAIT,
     GUARD_REFUSAL_WRITE_WAIT,
 ];
@@ -191,7 +192,7 @@ mod tests {
         }
         const {
             assert!(
-                GUARD_REMOTE_QUERY_BUDGET.default + GUARD_PR_LOOKUP_WAIT.default + 5
+                GUARD_REMOTE_QUERY_WAIT.default + GUARD_PR_LOOKUP_WAIT.default + 5
                     <= GUARD_DEADLINE.default
             );
         };

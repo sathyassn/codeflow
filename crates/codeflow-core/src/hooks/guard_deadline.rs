@@ -31,10 +31,12 @@ pub const GUARD_HOOK_TIMEOUT_SECS: u64 = super::limits::GUARD_HOOK_TIMEOUT.defau
 /// the harness stops waiting.
 pub const GUARD_DEADLINE_SECS: u64 = super::limits::GUARD_DEADLINE.default;
 
-/// Seconds a guard may wait for the network, inside [`GUARD_DEADLINE_SECS`]
-/// with room for its other work (TSK-1301). A remote that does not answer
-/// in time gets a named refusal from the guard, never the harness kill.
-pub const GUARD_REMOTE_QUERY_SECS: u64 = super::limits::GUARD_REMOTE_QUERY_BUDGET.default;
+/// Seconds a guard waits for one remote lookup, inside
+/// [`GUARD_DEADLINE_SECS`] with room for its other work (TSK-1301). A remote
+/// that does not answer in time gets a named refusal from the guard, never
+/// the harness kill. A command naming several repositories can make several
+/// lookups, and the deadline bounds them all.
+pub const GUARD_REMOTE_QUERY_SECS: u64 = super::limits::GUARD_REMOTE_QUERY_WAIT.default;
 
 /// Seconds the git guard waits for `gh pr view` to name a pull request's
 /// base branch; no answer in time is doubt, and the guard blocks on doubt.
