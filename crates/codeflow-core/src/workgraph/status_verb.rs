@@ -636,9 +636,12 @@ fn qualify(
 /// Whether the records at `tip` name `line` as an epic's integration line,
 /// as `check_epic_line` binds a landing line: the epic the line's name
 /// carries exists there, neither cancelled nor archived, and a task of
-/// that epic there declares exactly this line. Epic records carry no line
-/// field, so their tasks at the trusted tip are the record of it.
+/// that epic, or of an epic whose record there declares this line as its
+/// `parent_line` (TSK-1286), declares exactly this line. Only the trusted
+/// tip's records are read, so its tasks and epics there are the record of
+/// it.
 fn epic_line_at(repo: &git2::Repository, tip: git2::Oid, line: &str) -> Result<bool, String> {
+    use super::work_start::{line_membership, EpicFacts, LineMembership};
     let Ok(epic_id) = super::line_adoption::epic_id(line) else {
         return Ok(false);
     };
@@ -647,14 +650,29 @@ fn epic_line_at(repo: &git2::Repository, tip: git2::Oid, line: &str) -> Result<b
         .records
         .get(epic_id)
         .is_some_and(|epic| !matches!(epic.status.as_str(), "cancelled" | "archived"));
+    let facts = |id: &str| {
+        graph
+            .records
+            .get(id)
+            .filter(|record| record.kind == RecordKind::Epic)
+            .map(|record| EpicFacts {
+                status: record.status.clone(),
+                parent_line: record.parent_line.clone(),
+            })
+    };
     Ok(open
         && graph.records.values().any(|task| {
             task.kind == RecordKind::Task
-                && task.epic_id.as_deref() == Some(epic_id)
                 && task
                     .integration_target
                     .as_deref()
                     .is_some_and(|target| super::work_start::logical_target(target) == line)
+                && task.epic_id.as_deref().is_some_and(|epic| {
+                    matches!(
+                        line_membership(line, epic, &facts, "the tip"),
+                        LineMembership::Own | LineMembership::Declared
+                    )
+                })
         }))
 }
 
