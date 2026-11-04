@@ -755,7 +755,7 @@ jobs:
         id: tier
         shell: bash
         env:
-          REDUCED_TIER: "off"
+          REDUCED_TIER: "on"
           BASE: ${{ github.event.pull_request.base.ref }}
         run: |
           tier=full
