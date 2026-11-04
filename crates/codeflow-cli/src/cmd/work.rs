@@ -361,6 +361,13 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
             return 2;
         }
     };
+    // Missing live base evidence blocks even at the project's warning level.
+    // Fetch before resolving pins, as `work claim` does, so a replacement pin
+    // is judged against the pushed predecessor head.
+    if let Err(error) = readiness::refresh_claim(&root, task_id) {
+        eprintln!("work start: error: {}", crate::cmd::shown(&error));
+        return 1;
+    }
     // Explicit review evidence is required even when planning findings warn.
     // Keep verification failures outside the policy-controlled findings.
     let pins = match resolve_pins(&root, on) {
@@ -374,11 +381,6 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
         }
     };
     let level = policy.git.work_planning_level();
-    // Missing live base evidence blocks even at the project's warning level.
-    if let Err(error) = readiness::refresh_claim(&root, task_id) {
-        eprintln!("work start: error: {}", crate::cmd::shown(&error));
-        return 1;
-    }
     let findings = match plan_check(&root, task_id, target, &pins) {
         Ok(verified) => {
             match codeflow_core::workgraph::claim_base::renew_reviewed(
@@ -417,13 +419,15 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
     }
 }
 
-/// The planning checks behind `work start`: the anchor report printed on
-/// success, or every finding.
+/// The branch and target that passed `plan_check`, which `work start` uses
+/// to renew a reviewed claim base.
 struct VerifiedClaim {
     branch: String,
     target: String,
 }
 
+/// The planning checks behind `work start`: the anchor report printed on
+/// success, or every finding.
 fn plan_check(
     root: &std::path::Path,
     task_id: &str,
