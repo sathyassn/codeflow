@@ -1311,16 +1311,17 @@ impl Drop for HostExclusive {
 /// The static owners are deliberately not dropped by reporting or scheduler
 /// return. The OS releases their locks when the gate process exits.
 pub(crate) fn retain_unconfirmed(root: &Path, exclusive: Option<HostExclusive>) {
-    retain_unconfirmed_in(project_lock_dirs(root), exclusive);
+    let dirs = project_lock_dirs(root);
+    retain_unconfirmed_in(dirs.as_deref().ok(), exclusive);
 }
 
 /// As `retain_unconfirmed`, for supplied lock domains. Unknown domains pin
 /// every admission this process holds.
-fn retain_unconfirmed_in(dirs: Result<Vec<PathBuf>, String>, exclusive: Option<HostExclusive>) {
+fn retain_unconfirmed_in(dirs: Option<&[PathBuf]>, exclusive: Option<HostExclusive>) {
     let ids: Vec<_> = held()
         .iter()
         .filter(|entry| {
-            dirs.as_ref().map_or(true, |dirs| {
+            dirs.is_none_or(|dirs| {
                 entry.paths.iter().any(|path| {
                     path.parent()
                         .is_some_and(|parent| dirs.iter().any(|dir| parent == dir))

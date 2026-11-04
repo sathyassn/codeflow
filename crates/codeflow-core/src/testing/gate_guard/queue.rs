@@ -624,6 +624,33 @@ mod tests {
         }
     }
 
+    /// Records this child's ticket name while publication still holds its
+    /// mutex. The records are closed before the callback returns.
+    fn record_ticket_order(root: &Path, label: &str) {
+        let root = root.to_path_buf();
+        let label = label.to_string();
+        interleave::set(move |at| {
+            if at != Point::Published {
+                return;
+            }
+            let domain = Domain::open(&domain(&root)[0]).unwrap();
+            let mine = format!("pid={}\n", std::process::id());
+            for name in domain.names("queue").unwrap() {
+                if name.starts_with(".tmp-") {
+                    continue;
+                }
+                let bytes = domain.tree.read(&domain.record(&name), 8192).unwrap();
+                if String::from_utf8(bytes).unwrap().starts_with(&mine) {
+                    // Renamed into place: the parent reads this file as soon
+                    // as it exists, and must never see it empty.
+                    let partial = root.join(format!(".sequence-{label}"));
+                    std::fs::write(&partial, name).unwrap();
+                    std::fs::rename(&partial, root.join(format!("sequence-{label}"))).unwrap();
+                }
+            }
+        });
+    }
+
     // A native test subprocess, not a shell mock: killing it releases the
     // actual OS ownership and queue-mutex locks on Windows as well as Unix.
     #[test]
@@ -644,34 +671,7 @@ mod tests {
             }
         });
         if let Some(label) = action.strip_prefix("host-") {
-            // Record the ticket order while publication still holds its
-            // mutex. The records are closed before the callback returns.
-            let published_root = root.clone();
-            let published_label = label.to_string();
-            interleave::set(move |at| {
-                if at == Point::Published {
-                    let domain = Domain::open(&domain(&published_root)[0]).unwrap();
-                    let mine = format!("pid={}\n", std::process::id());
-                    for name in domain.names("queue").unwrap() {
-                        if name.starts_with(".tmp-") {
-                            continue;
-                        }
-                        let bytes = domain.tree.read(&domain.record(&name), 8192).unwrap();
-                        if String::from_utf8(bytes).unwrap().starts_with(&mine) {
-                            // Renamed into place: the parent reads this file as
-                            // soon as it exists, and must never see it empty.
-                            let partial =
-                                published_root.join(format!(".sequence-{published_label}"));
-                            std::fs::write(&partial, name).unwrap();
-                            std::fs::rename(
-                                &partial,
-                                published_root.join(format!("sequence-{published_label}")),
-                            )
-                            .unwrap();
-                        }
-                    }
-                }
-            });
+            record_ticket_order(&root, label);
             let shared = super::super::acquire_gate_lock(&domain(&root), &root, "full").unwrap();
             std::fs::write(root.join(format!("shared-{label}")), "").unwrap();
             wait_file(&root.join("request-exclusive"));
@@ -729,7 +729,7 @@ mod tests {
             );
         } else if action == "unconfirmed-shared" {
             let lock = super::super::acquire_gate_lock(&domain(&root), &root, "full").unwrap();
-            super::super::retain_unconfirmed_in(Ok(domain(&root)), None);
+            super::super::retain_unconfirmed_in(Some(&domain(&root)), None);
             // The scheduler returns and drops its admission after retaining it.
             drop(lock);
             std::fs::write(root.join("ready"), b"retained").unwrap();
