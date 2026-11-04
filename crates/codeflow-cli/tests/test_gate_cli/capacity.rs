@@ -563,8 +563,11 @@ fn a_configured_wait_holds_for_the_host_and_the_flag_overrides_it() {
     assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
     assert!(!exclusive.join("ran").exists());
 
-    let (mut waiting, waiting_rx, _waiting_out) =
-        spawn(command(&exclusive, home.path(), &["test", "--mode", "full"]));
+    let (mut waiting, waiting_rx, _waiting_out) = spawn(command(
+        &exclusive,
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
     wait_for(&waiting_rx, "host-exclusive target waiting for");
     release(first.path());
     assert!(holder.wait().unwrap().success());

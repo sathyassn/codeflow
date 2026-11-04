@@ -70,9 +70,7 @@ pub fn run(args: &ReserveArgs) -> i32 {
                 }
                 if !announced {
                     announced = true;
-                    eprintln!(
-                        "codeflow reserve: waiting up to {wait_seconds}s: {message}"
-                    );
+                    eprintln!("codeflow reserve: waiting up to {wait_seconds}s: {message}");
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }

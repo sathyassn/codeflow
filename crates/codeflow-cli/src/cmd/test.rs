@@ -23,7 +23,7 @@ pub struct TestArgs {
     /// run at once; past the host's job budget a run uses fewer jobs.
     /// Undeclared quick targets use `execution.quick_default_class` (light by default).
     /// Only a `host_exclusive` target runs alone; while one holds or queues for the host, heavy
-    /// work waits up to `--wait-seconds` (default zero), then refuses. Under `codeflow reserve` quick uses its slot (Unix).
+    /// work waits up to `--wait-seconds` or `execution.heavy_wait_seconds` (default zero), then refuses. Under `codeflow reserve` quick uses its slot (Unix).
     /// With no quick targets, quick uses essential targets, heavy unless declared light.
     #[arg(long, default_value = "full", value_parser = ["full", "quick", "essential"])]
     pub mode: String,
