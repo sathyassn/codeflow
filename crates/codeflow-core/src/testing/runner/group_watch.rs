@@ -8,8 +8,9 @@ use std::process::Command;
 
 #[cfg(test)]
 thread_local! {
-    /// Seconds a test's watcher waits before its descriptor loop, standing in
-    /// for the slow start seen with a large descriptor limit on a loaded host.
+    /// Seconds a test's watcher waits before it reads the lifetime pipe,
+    /// standing in for the slow descriptor loop seen with a limit of 1048576
+    /// on a loaded host.
     pub(super) static SLOW_WATCHER_START: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -66,13 +67,15 @@ impl GroupWatch {
                     if watcher > 0 {
                         libc::_exit(0);
                     }
-                    #[cfg(test)]
-                    libc::sleep(slow_start);
                     for fd in 0..limit {
                         if fd != reader && !lock_descriptors.contains(&fd) {
                             libc::close(fd);
                         }
                     }
+                    // After the loop, so only the watcher's own exit is slow,
+                    // never the spawn that waits for exec.
+                    #[cfg(test)]
+                    libc::sleep(slow_start);
                     let mut byte = 0_u8;
                     loop {
                         if libc::read(reader, (&raw mut byte).cast(), 1) == 0 {
