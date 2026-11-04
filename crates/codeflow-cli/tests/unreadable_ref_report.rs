@@ -13,7 +13,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 const BRANCH: &str = "task/TSK-1-a-plain-store";
-const WORKTREE: &str = ".worktrees/unreadable";
+const WORKTREE: &str = ".worktrees/linked";
 
 fn run_git(root: &Path, args: &[&str]) -> Output {
     Command::new("git")
@@ -57,6 +57,8 @@ fn fixture() -> tempfile::TempDir {
     git(root, &["config", "user.name", "t"]);
     git(root, &["config", "user.email", "t@example.test"]);
     std::fs::write(root.join("plain.txt"), "x\n").unwrap();
+    // Ignored, so the layout is healthy and any warning is this finding's.
+    std::fs::write(root.join(".gitignore"), ".worktrees/\n").unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "chore: init"]);
     git(root, &["worktree", "add", "-q", WORKTREE, "-b", BRANCH]);
@@ -88,6 +90,7 @@ fn doctor_and_status_name_a_ref_git_calls_broken_and_never_call_it_damage() {
 
     let healthy = cli(root, &["doctor", "--check", "repo-integrity"]);
     assert!(!healthy.contains("unreadable"), "{healthy}");
+    assert!(!healthy.contains("warn  repo-integrity"), "{healthy}");
 
     if !refuse(&loose) {
         return;
@@ -153,6 +156,7 @@ fn a_refused_tracked_file_is_named_and_asks_nothing() {
     );
     assert!(doctor.contains("the file names can stay"), "{doctor}");
     assert!(!doctor.contains("unreadable ref:"), "{doctor}");
+    assert!(!doctor.contains("warn  repo-integrity"), "{doctor}");
     // `status` runs often, so it does not open every tracked file.
     assert!(!status.contains("unreadable"), "{status}");
 }
