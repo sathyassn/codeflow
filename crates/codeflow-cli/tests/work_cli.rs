@@ -3050,6 +3050,7 @@ fn a_standalone_claim_refuses_a_second_checkout_without_renaming() {
 #[cfg(unix)]
 #[test]
 fn claim_checks_out_a_tracked_harness_symlink_without_writing_its_target() {
+    use std::os::unix::fs::PermissionsExt as _;
     let dir = fixture();
     let root = dir.path();
     let shared = tempfile::tempdir().unwrap();
@@ -3057,11 +3058,17 @@ fn claim_checks_out_a_tracked_harness_symlink_without_writing_its_target() {
     std::os::unix::fs::symlink(shared.path(), root.join(".claude")).unwrap();
     git(root, &["add", ".claude"]);
     git(root, &["commit", "-qm", "chore: link harness instructions"]);
-    succeeds(&cli(
+    let permissions = std::fs::metadata(shared.path()).unwrap().permissions();
+    // The requested destination is under .worktrees, so validation must
+    // not read the unrelated .claude/worktrees location through this link.
+    std::fs::set_permissions(shared.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+    let out = cli(
         root,
         &["work", "claim", "TSK-001", "--worktree", ".worktrees/one"],
         None,
-    ));
+    );
+    std::fs::set_permissions(shared.path(), permissions).unwrap();
+    succeeds(&out);
     assert_eq!(
         std::fs::read_link(root.join(".worktrees/one/.claude")).unwrap(),
         shared.path()

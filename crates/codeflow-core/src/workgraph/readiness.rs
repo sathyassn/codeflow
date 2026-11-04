@@ -2153,7 +2153,10 @@ fn claim_destination(repo_root: &Path, destination: &Path) -> Result<PathBuf, St
             &crate::root_checkout::process_env,
         ) {
             let location = resolve(&location)?;
-            allowed |= path != location && path.starts_with(&location);
+            if path != location && path.starts_with(&location) {
+                allowed = true;
+                break;
+            }
         }
     }
     if !allowed {
