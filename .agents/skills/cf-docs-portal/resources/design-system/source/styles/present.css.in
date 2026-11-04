@@ -329,9 +329,17 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 .block--html iframe {
   display: block;
   inline-size: var(--cf-length-100);
-  block-size: var(--cf-length-28rem);
+  block-size: var(--cf-export-stage-height, var(--cf-length-28rem));
   border: 0;
   background: transparent;
+}
+[data-cf-stage-notice] {
+  margin: var(--cf-length-10px) 0 0;
+  padding-inline-start: var(--cf-space-3);
+  border-inline-start: var(--cf-length-2px) solid var(--cf-border-strong);
+  font-size: var(--cf-fs-caption);
+  line-height: 1.45;
+  color: var(--cf-text-muted);
 }
 #cf-present-document [data-cf-block-id] { position: relative; scroll-margin-block-start: var(--cf-length-6rem); }
 .block { margin-block: 0 var(--cf-space-7); }

@@ -219,7 +219,8 @@ class UnmeasuredTests(unittest.TestCase):
         plan = wp.Plan(wp.with_unmeasured(DATA, listed))
         self.assertEqual(len({plan.partition_of(*test) for test in new}), plan.count)
         self.assertGreater(sum(plan.seconds), sum(before.seconds))
-        self.assertAlmostEqual(sum(plan.seconds) - sum(before.seconds), 12 * DATA["default_seconds"])
+        # The binary's measured mean, 100 seconds: past NAMED_SECONDS, so each spreads.
+        self.assertAlmostEqual(sum(plan.seconds) - sum(before.seconds), 12 * 100.0)
         # The measured test stays with its binary's rest.
         self.assertEqual(plan.partition_of("cli::slow", "y"), before.partition_of("cli::slow", "y"))
         self.assert_each_test_runs_once_where_planned(plan, listed)
@@ -230,7 +231,8 @@ class UnmeasuredTests(unittest.TestCase):
         before = wp.Plan(DATA)
         plan = wp.Plan(wp.with_unmeasured(DATA, listed))
         self.assertEqual(len({plan.partition_of(*test) for test in new}), plan.count)
-        self.assertAlmostEqual(sum(plan.seconds) - sum(before.seconds), 12 * DATA["default_seconds"])
+        # The binary's measured mean: 220 seconds over its 4 measured tests.
+        self.assertAlmostEqual(sum(plan.seconds) - sum(before.seconds), 12 * 55.0)
         self.assertEqual(plan.partition_of("cli::remedy", "rest_test"), before.partition_of("cli::remedy", "rest_test"))
         self.assert_each_test_runs_once_where_planned(plan, listed)
 
@@ -352,7 +354,8 @@ class DriftTests(unittest.TestCase):
         count of unmeasured tests stays small."""
         measured = [f"s{i}" for i in range(60)]
         data = {**DATA, "default_seconds": 200.0, "names": {**DATA["names"], "cli::slow": ["y", *measured]}}
-        listed = self.listing() | {("cli::slow", name) for name in measured} | {("cli::slow", "brand_new")}
+        # A binary the data does not know, so the test counts at `default_seconds`.
+        listed = self.listing() | {("cli::slow", name) for name in measured} | {("cli::other", "brand_new")}
         problems, out = self.run_drift(data, listed)  # 1 of 69 listed, 100 seconds on 2 threads
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("holds 1.7 planned minutes of tests the data has not measured", problems[0])
@@ -386,6 +389,125 @@ class DriftTests(unittest.TestCase):
         self.assertLessEqual(max(plan.estimates) / 60, wp.PLAN_MINUTES)
         # Planned time plus setup, at the slowest runner factor read in TSK-1063's findings.
         self.assertLessEqual(max(plan.estimates) / 60 * 1.7 + wp.SETUP_MINUTES, wp.MARGIN_MINUTES)
+
+
+class FiltersetLengthTests(unittest.TestCase):
+    """TSK-1319: a pull request that adds tests must keep a plan that can run.
+    Each new test spread away from its binary's home partition costs the home
+    partition's filterset the test's whole name, so a fast test stays home."""
+
+    # A usual name for this crate: the long ones are what fill a filterset.
+    NAME = "security::interpreter::tests::a_new_test_with_a_name_of_the_usual_length_for_this_crate_{:03d}"
+
+    def real(self):
+        data = wp.load()
+        return data, {(binary, name) for binary, names in data["names"].items() for name in names}
+
+    def assert_each_runs_once(self, plan, tests):
+        expressions = {p: plan.filterset(p) for p in range(1, plan.count + 1)}
+        for binary, test in sorted(tests):
+            matched = [p for p, expression in expressions.items() if evaluate(expression, binary, test)]
+            self.assertEqual(matched, [plan.partition_of(binary, test)], (binary, test))
+
+    def test_a_new_test_is_sized_at_its_binarys_measured_mean(self):
+        self.assertEqual(wp.unmeasured_seconds(DATA, "cli::fast"), 10.0)
+        self.assertEqual(wp.unmeasured_seconds(DATA, "cli::remedy"), 55.0)
+        self.assertEqual(wp.unmeasured_seconds(DATA, "cli::brand_new"), DATA["default_seconds"])
+        unmeasured = {**DATA, "binaries": {**DATA["binaries"], "cli::fast": [0.0, 0.0]}}
+        self.assertEqual(wp.unmeasured_seconds(unmeasured, "cli::fast"), DATA["default_seconds"])
+
+    def test_a_fast_binarys_new_tests_stay_home_and_cost_no_characters(self):
+        new = {("cli::fast", f"added_{i}") for i in range(5)}
+        before = wp.Plan(DATA)
+        plan = wp.Plan(wp.with_unmeasured(DATA, new))
+        self.assertIn("cli::fast", plan.whole)
+        self.assertEqual(len({plan.partition_of(*test) for test in new}), 1)
+        self.assertAlmostEqual(sum(plan.seconds) - sum(before.seconds), 5 * 10.0)
+        for partition in range(1, plan.count + 1):
+            self.assertNotIn("added_", plan.filterset(partition))
+        self.assert_each_runs_once(plan, new | {("cli::fast", "x")})
+
+    def test_new_tests_past_the_allowance_spread_and_each_runs_once(self):
+        # 1.2 minutes on 2 threads at half is 72 seconds: 7 tests of 10 seconds stay.
+        new = {("cli::fast", f"added_{i:02d}") for i in range(12)}
+        before = wp.Plan(DATA)
+        data = wp.with_unmeasured(DATA, new)
+        self.assertEqual(sorted(data["split"]["cli::fast"]["tests"]), [f"added_{i:02d}" for i in range(7, 12)])
+        self.assertEqual(data["split"]["cli::fast"]["rest"], [80.0, 0.0])
+        plan = wp.Plan(data)
+        self.assertAlmostEqual(sum(plan.seconds) - sum(before.seconds), 12 * 10.0)
+        self.assert_each_runs_once(plan, new | {("cli::fast", "x")})
+
+    def test_a_serial_binarys_new_tests_add_to_its_serial_estimate(self):
+        names = {**DATA["names"], "cli::present_cli": [f"p{i}" for i in range(10)]}
+        data = wp.with_unmeasured({**DATA, "names": names}, {("cli::present_cli", "added")})
+        self.assertEqual(data["binaries"]["cli::present_cli"], [33.0, 33.0])
+
+    def test_the_committed_data_runs_a_plan_with_many_fast_new_tests(self):
+        """The overrun of PR 552 (run 41769024831): fails before this task, where
+        every new test of `codeflow-core` was spread and excluded by name."""
+        data, measured = self.real()
+        new = {("codeflow-core", self.NAME.format(i)) for i in range(300)}
+        with redirect_stdout(StringIO()):
+            self.assertEqual(wp.drift(data, measured | new), [])
+        plan = wp.Plan(wp.with_unmeasured(data, measured | new))
+        self.assert_each_runs_once(plan, sorted(new)[:20] + sorted(new)[-20:])
+
+    def test_adding_tests_step_by_step_never_reaches_the_limit(self):
+        data, measured = self.real()
+        for count in range(0, 201, 10):
+            new = {("codeflow-core", self.NAME.format(i)) for i in range(count)}
+            plan = wp.Plan(wp.with_unmeasured(data, measured | new))
+            longest = max(len(plan.filterset_text(p)) for p in range(1, plan.count + 1))
+            self.assertLess(longest, wp.FILTERSET_LIMIT, count)
+
+    def test_a_refusal_names_the_binary_its_exclusions_and_how_many_are_unmeasured(self):
+        new = {("cli::slow", f"added_{i}") for i in range(12)}
+        plan = wp.Plan(wp.with_unmeasured(DATA, new))
+        home = plan.home["cli::slow"] + 1
+        with patch.object(wp, "FILTERSET_LIMIT", 20), self.assertRaises(SystemExit) as refused:
+            plan.filterset(home)
+        message = str(refused.exception)
+        self.assertRegex(message, r"exclude \d+ tests of cli::slow that run in other partitions, \d+ of those outside")
+        self.assertNotIn("too many tests", message)
+        self.assertIn("scripts/windows-partitions.py measure", message)
+
+    def test_a_refusal_with_no_exclusion_list_says_what_the_filterset_names(self):
+        plan = wp.Plan(DATA)
+        with patch.object(wp, "FILTERSET_LIMIT", 5), self.assertRaises(SystemExit) as refused:
+            plan.filterset(plan.whole["cli::fast"] + 1)
+        self.assertRegex(str(refused.exception), r"it names \d+ tests and \d+ binaries directly")
+
+    def test_the_longest_filterset_line_counts_a_refused_filterset(self):
+        listed = {("cli::slow", "y")}
+        longest = max(len(wp.Plan(DATA).filterset_text(p)) for p in range(1, 4))
+        with patch.object(wp, "FILTERSET_LIMIT", 120), redirect_stdout(StringIO()) as out:
+            problems = wp.drift(DATA, listed, plan_minutes=60)
+        self.assertTrue(any("characters, past 120" in problem for problem in problems), problems)
+        self.assertGreater(longest, 120)
+        self.assertIn(f"longest filterset {longest} characters", out.getvalue())
+
+    def test_a_slow_binarys_mean_is_never_charged_as_guessed_time(self):
+        """One new test of a slow binary must not fail `drift` by its mean alone,
+        and the guessed time of a fast binary counts at that binary's own mean."""
+        data = {**DATA, "binaries": {**DATA["binaries"], "cli::slow": [400.0, 0.0]}}
+        with redirect_stdout(StringIO()) as out:
+            wp.drift(data, {("cli::slow", "brand_new")}, plan_minutes=60)
+        # The binary's mean is 400 seconds; it counts at `default_seconds` on 2 threads.
+        self.assertIn("guessed test minutes per partition, most 0.0", out.getvalue())
+        self.assertEqual(wp.unmeasured_seconds(data, "cli::slow"), 400.0)
+        names = {**DATA["names"], "cli::fast": [f"x{i}" for i in range(100)]}
+        data = {**DATA, "names": names, "default_seconds": 60.0}
+        with redirect_stdout(StringIO()) as out:
+            wp.drift(data, {("cli::fast", "brand_new")}, plan_minutes=60)
+        # The binary's mean is 0.1 seconds, against a default of 60.
+        self.assertIn("guessed test minutes per partition, most 0.0", out.getvalue())
+
+    def test_the_coverage_shards_still_count_guessed_time_at_the_default(self):
+        data = {**DATA, "default_seconds": 60.0}
+        with redirect_stdout(StringIO()) as out:
+            wp.drift(data, {("cli::fast", "brand_new")}, plan_minutes=60, spread=False)
+        self.assertIn("guessed test minutes per partition, most 0.5", out.getvalue())
 
 
 class MarginTests(unittest.TestCase):

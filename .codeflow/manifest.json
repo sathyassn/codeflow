@@ -203,7 +203,7 @@
     ".agents/skills/cf-docs-portal/resources/design-system/present.css": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/present.css",
       "ownership": "managed",
-      "sha256": "30c9f20666e7e5ee53dbb2f1724113f97dc521be908529a08f38c920c50bfaa8",
+      "sha256": "0d736b6b3429c533d9940383caecc4a4dbb453559bc00df2901397d6f56b5bde",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/present.reference.html": {
@@ -383,7 +383,7 @@
     ".agents/skills/cf-docs-portal/resources/design-system/source/styles/present.css.in": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/styles/present.css.in",
       "ownership": "managed",
-      "sha256": "99d9e987bcdc1f41586a3939e269da85264ff49a6b5c9c9635691c3fb91f15c0",
+      "sha256": "ad5aa8eaa9bef94d52f3e551201b772d6da57cd2ee5d0e765e886f91faffe355",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/source/styles/utility-tokens.css.in": {
@@ -695,7 +695,7 @@
     ".agents/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "cbae61f44ac5632ff5acbcafff18648a3ec0e29fc21a7827c997a8c05862a816",
+      "sha256": "8fde19d8aa84427d1e461fe852775a05790c57ef6ac685701260ebd78bc6fa0d",
       "exec": false
     },
     ".agents/skills/cf-method/references/skill-authoring.md": {
@@ -1031,7 +1031,7 @@
     ".agents/skills/cf-present/resources/design-system/present.css": {
       "src": "agents/skills/cf-present/resources/design-system/present.css",
       "ownership": "managed",
-      "sha256": "30c9f20666e7e5ee53dbb2f1724113f97dc521be908529a08f38c920c50bfaa8",
+      "sha256": "0d736b6b3429c533d9940383caecc4a4dbb453559bc00df2901397d6f56b5bde",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/present.reference.html": {
@@ -1211,7 +1211,7 @@
     ".agents/skills/cf-present/resources/design-system/source/styles/present.css.in": {
       "src": "agents/skills/cf-present/resources/design-system/source/styles/present.css.in",
       "ownership": "managed",
-      "sha256": "99d9e987bcdc1f41586a3939e269da85264ff49a6b5c9c9635691c3fb91f15c0",
+      "sha256": "ad5aa8eaa9bef94d52f3e551201b772d6da57cd2ee5d0e765e886f91faffe355",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/source/styles/utility-tokens.css.in": {
@@ -1565,7 +1565,7 @@
     ".claude/skills/cf-docs-portal/resources/design-system/present.css": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/present.css",
       "ownership": "managed",
-      "sha256": "30c9f20666e7e5ee53dbb2f1724113f97dc521be908529a08f38c920c50bfaa8",
+      "sha256": "0d736b6b3429c533d9940383caecc4a4dbb453559bc00df2901397d6f56b5bde",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/present.reference.html": {
@@ -1745,7 +1745,7 @@
     ".claude/skills/cf-docs-portal/resources/design-system/source/styles/present.css.in": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/source/styles/present.css.in",
       "ownership": "managed",
-      "sha256": "99d9e987bcdc1f41586a3939e269da85264ff49a6b5c9c9635691c3fb91f15c0",
+      "sha256": "ad5aa8eaa9bef94d52f3e551201b772d6da57cd2ee5d0e765e886f91faffe355",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/source/styles/utility-tokens.css.in": {
@@ -2057,7 +2057,7 @@
     ".claude/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "cbae61f44ac5632ff5acbcafff18648a3ec0e29fc21a7827c997a8c05862a816",
+      "sha256": "8fde19d8aa84427d1e461fe852775a05790c57ef6ac685701260ebd78bc6fa0d",
       "exec": false
     },
     ".claude/skills/cf-method/references/skill-authoring.md": {
@@ -2393,7 +2393,7 @@
     ".claude/skills/cf-present/resources/design-system/present.css": {
       "src": "agents/skills/cf-present/resources/design-system/present.css",
       "ownership": "managed",
-      "sha256": "30c9f20666e7e5ee53dbb2f1724113f97dc521be908529a08f38c920c50bfaa8",
+      "sha256": "0d736b6b3429c533d9940383caecc4a4dbb453559bc00df2901397d6f56b5bde",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/present.reference.html": {
@@ -2573,7 +2573,7 @@
     ".claude/skills/cf-present/resources/design-system/source/styles/present.css.in": {
       "src": "agents/skills/cf-present/resources/design-system/source/styles/present.css.in",
       "ownership": "managed",
-      "sha256": "99d9e987bcdc1f41586a3939e269da85264ff49a6b5c9c9635691c3fb91f15c0",
+      "sha256": "ad5aa8eaa9bef94d52f3e551201b772d6da57cd2ee5d0e765e886f91faffe355",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/source/styles/utility-tokens.css.in": {

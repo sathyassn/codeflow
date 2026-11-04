@@ -28,14 +28,23 @@ a binary the measurements do not know is placed by the rule below. A new test
 therefore runs without a data refresh, only less evenly.
 
 A test the data has not measured is placed from the build's test list
-(`--list`), which the partition jobs and `check` read, and sized at
-`default_seconds`. An unmeasured test of a binary the data knows is its own
-unit, so a binary that gained many tests spreads them (a whole binary becomes
-a split one for the run). A binary the data does not know is split into one
-unit per test, so even a small new binary spreads. Without a list, such
-tests run with their binary (or its home partition when split), or in the
-rest partition, the one with the least planned time. A filterset that would pass FILTERSET_LIMIT characters is
-refused, because Windows limits a command line to 32,767.
+(`--list`), which the partition jobs and `check` read. A test of a binary the
+data knows is sized at that binary's measured mean, the best predictor found
+(TSK-1063's flat `default_seconds` was right in total but nearly nine times too
+high for `codeflow-core` and twenty times too low for a journey binary). It
+stays with the binary's rest, which costs no filterset characters, while the
+guessed time gathered there fits GATHERED_SHARE of the guessed time a partition
+may hold. A test of a slow binary (NAMED_SECONDS or more) and the overflow are
+each their own unit and spread; a whole binary with overflow becomes a split
+one for the run. Spreading costs characters, because the binary's home
+partition must exclude each test by name: this is what took `codeflow-core`'s
+exclusion list to 26,000 characters. A binary the data does not know is split
+into one unit per test at `default_seconds`, so even a small new binary
+spreads, and its partitions list their own tests, which excludes nothing.
+Without a list, such tests run with their binary (or its home partition when
+split), or in the rest partition, the one with the least planned time. A
+filterset that would pass FILTERSET_LIMIT characters is refused, because
+Windows limits a command line to 32,767.
 
 Two checks keep the plan honest (TSK-1063):
 
@@ -127,6 +136,9 @@ PLAN_MINUTES = 12
 UNMEASURED_SHARE = 0.10
 # The most guessed time a partition may carry: 10 percent of PLAN_MINUTES.
 UNMEASURED_PARTITION_MINUTES = 1.2
+# The share of that guessed time one binary's new tests may gather in its rest.
+# Half leaves room for the spread tests the same partition also draws.
+GATHERED_SHARE = 0.5
 # A command line is limited to 32,767 characters on Windows. The rest of the
 # partition command (nextest, the archive and its options) takes under 600.
 COMMAND_LIMIT = 32767
@@ -166,15 +178,32 @@ def unmeasured_tests(data: dict, listed: set[tuple[str, str]]) -> set[tuple[str,
     return {(binary, name) for binary, name in listed if name not in names.get(binary, ())}
 
 
-def with_unmeasured(data: dict, listed: set[tuple[str, str]]) -> dict:
-    """The data plus a unit for each listed test it does not cover, sized by
-    `default_seconds`, so the planner places them like any other and they
-    spread over the partitions:
+def unmeasured_seconds(data: dict, binary: str) -> float:
+    """The seconds to expect from a test the data has not measured: the mean of
+    its binary's measured tests, or `default_seconds` for a binary the data does
+    not know or records no time for."""
+    if binary in data["binaries"]:
+        total = float(data["binaries"][binary][0])
+    elif binary in data["split"]:
+        entry = data["split"][binary]
+        total = float(entry["rest"][0]) + sum(float(value) for value in entry["tests"].values())
+    else:
+        total = 0.0
+    count = len(data.get("names", {}).get(binary, ()))
+    return total / count if total and count else float(data.get("default_seconds", 0))
 
-    - an unmeasured test of a known binary is its own named test (a whole
-      binary becomes a split one, its measured rest staying where it is);
-    - a binary the data does not know is one unit per listed test, however
-      small, so new tests cannot gather in one partition.
+
+def with_unmeasured(data: dict, listed: set[tuple[str, str]]) -> dict:
+    """The data plus each listed test it does not cover, so the planner places
+    them like any other:
+
+    - a test of a known binary is sized by `unmeasured_seconds` and joins the
+      binary's rest while the time gathered there fits the guessed time one
+      binary may gather; a slow one and the overflow are each a named test (a
+      whole binary becomes a split one, its measured rest staying where it is);
+    - a binary the data does not know is one unit per listed test at
+      `default_seconds`, however small, so new tests cannot gather in one
+      partition.
 
     Data without `default_seconds`, or a test list, is returned as it is."""
     default = float(data.get("default_seconds", 0))
@@ -190,16 +219,29 @@ def with_unmeasured(data: dict, listed: set[tuple[str, str]]) -> dict:
         if not BINARY_ID.match(binary):
             raise SystemExit(f"windows-partitions: listed binary id {binary!r} cannot be written in a filterset")
         by_binary.setdefault(binary, []).append(name)
+    allowance = UNMEASURED_PARTITION_MINUTES * 60 * int(data["threads"]) * GATHERED_SHARE
     for binary, tests in by_binary.items():
         known = binary in binaries or binary in split
         for name in tests:
             if not TEST_NAME.match(name):
                 raise SystemExit(f"windows-partitions: listed test {binary} {name!r} cannot be written in a filterset")
+        if not known:
+            split[binary] = {"rest": [0.0, 0.0], "tests": {name: default for name in tests}, "listed": True}
+            continue
+        size = unmeasured_seconds(data, binary)
+        gathered = 0 if size >= NAMED_SECONDS else int(allowance // size)
+        seconds, serial_seconds = binaries[binary] if binary in binaries else split[binary]["rest"]
+        seconds += size * len(tests[:gathered])
+        serial_seconds += size * sum(serial(binary, name) for name in tests[:gathered])
+        spread = tests[gathered:]
+        if binary in binaries and not spread:
+            binaries[binary] = [seconds, serial_seconds]
+            continue
         if binary in binaries:
-            split[binary] = {"rest": binaries.pop(binary), "tests": {}}
-        elif not known:
-            split[binary] = {"rest": [0.0, 0.0], "tests": {}, "listed": True}
-        split[binary]["tests"].update({name: default for name in tests})
+            del binaries[binary]
+            split[binary] = {"tests": {}}
+        split[binary]["rest"] = [seconds, serial_seconds]
+        split[binary]["tests"].update({name: size for name in spread})
     return {**data, "binaries": binaries, "split": split}
 
 
@@ -208,6 +250,7 @@ class Plan:
 
     def __init__(self, data: dict):
         self.count = int(data["partitions"])
+        self.names = data.get("names") or {}
         threads = int(data["threads"])
         # A unit is a whole binary, a split binary's rest (name None) or one
         # named test of a split binary.
@@ -255,7 +298,28 @@ class Plan:
         return self.rest + 1
 
     def filterset(self, partition: int) -> str:
-        """The nextest filterset of a partition (1-based)."""
+        """The filterset of a partition (1-based), refused past FILTERSET_LIMIT."""
+        text = self.filterset_text(partition)
+        if len(text) > FILTERSET_LIMIT:
+            raise SystemExit(f"windows-partitions: the filterset of partition {partition} is {len(text)} characters, "
+                             f"past {FILTERSET_LIMIT} (a Windows command line holds {COMMAND_LIMIT}); {self.longest_part(text)}: "
+                             "refresh the data with `scripts/windows-partitions.py measure` on a few recent green runs")
+        return text
+
+    def longest_part(self, text: str) -> str:
+        """What takes up most of a filterset, for the refusal to name."""
+        exclusions = re.findall(r"\(binary_id\(=([^)]+)\) & not \(((?:test\(=[^)]+\)(?: \| )?)+)\)\)", text)
+        if not exclusions:
+            return f"it names {text.count('test(=')} tests and {text.count('binary_id(=')} binaries directly"
+        binary, part = max(exclusions, key=lambda found: len(found[1]))
+        names = re.findall(r"test\(=([^)]+)\)", part)
+        measured = self.names.get(binary, ())
+        outside = sum(name not in measured for name in names)
+        return (f"{len(part)} of them exclude {len(names)} tests of {binary} that run in other partitions, "
+                f"{outside} of those outside the measurements")
+
+    def filterset_text(self, partition: int) -> str:
+        """The nextest filterset of a partition (1-based), at any length."""
         if not 1 <= partition <= self.count:
             raise SystemExit(f"windows-partitions: partition {partition} is not 1 to {self.count}")
         index = partition - 1
@@ -277,13 +341,7 @@ class Plan:
             terms.append(f"not ({known})")
         if not terms:
             raise SystemExit(f"windows-partitions: partition {partition} runs no test; lower the partition count")
-        text = " | ".join(terms)
-        if len(text) > FILTERSET_LIMIT:
-            raise SystemExit(f"windows-partitions: the filterset of partition {partition} is {len(text)} characters, "
-                             f"past {FILTERSET_LIMIT} (a Windows command line holds {COMMAND_LIMIT}); too many tests "
-                             "are outside the measurements: refresh the data with "
-                             "`scripts/windows-partitions.py measure` on a few recent green runs")
-        return text
+        return " | ".join(terms)
 
 
 def listed_tests(path: Path) -> set[tuple[str, str]]:
@@ -417,10 +475,14 @@ def drift(data: dict, listed: set[tuple[str, str]], refresh: str = REFRESH,
                             f"`{refresh}` on a few recent green runs (see the header of this script)")
     plan = Plan(with_unmeasured(data, listed) if spread else data)
     default, threads = float(data.get("default_seconds", 0)), int(data["threads"])
-    # The tests the data has not measured are guessed at `default` seconds each.
+    # A test the data has not measured counts as guessed at `default` seconds, or
+    # at its binary's mean where the plan placed it by a smaller one. A slow
+    # binary's larger mean is never charged here: a single new journey test
+    # would pass this limit, and the plan's estimate already carries its size.
     guessed = [0.0] * plan.count
-    for test in missing:
-        guessed[plan.partition_of(*test) - 1] += default / threads
+    for binary, name in missing:
+        size = min(default, unmeasured_seconds(data, binary)) if spread else default
+        guessed[plan.partition_of(binary, name) - 1] += size / threads
     estimates = list(plan.estimates) if spread else [e + g for e, g in zip(plan.estimates, guessed)]
     if missing:
         most = max(range(plan.count), key=guessed.__getitem__)
@@ -439,7 +501,9 @@ def drift(data: dict, listed: set[tuple[str, str]], refresh: str = REFRESH,
     longest_filterset = 0
     for partition in range(1, plan.count + 1):
         try:
-            longest_filterset = max(longest_filterset, len(plan.filterset(partition)))
+            # A refused filterset counts too: this line reports the longest.
+            longest_filterset = max(longest_filterset, len(plan.filterset_text(partition)))
+            plan.filterset(partition)
         except SystemExit as refused:
             problems.append(str(refused.code).removeprefix("windows-partitions: "))
     print(f"windows-partitions: longest filterset {longest_filterset} characters (at most {FILTERSET_LIMIT})")

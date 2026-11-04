@@ -14,8 +14,8 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-TULQWPVR.js",
-      "present.style": "/app/assets/app-USBKNT3E.css"
+      "present.app": "/app/assets/app-KACSZ2NG.js",
+      "present.style": "/app/assets/app-GBKP73KV.css"
     },
     "inline": {
       "present.prepaint": {
@@ -26,17 +26,53 @@
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-TULQWPVR.js",
-        "stored_path": "service/app-TULQWPVR.js.br",
+        "request_path": "/app/assets/app-GBKP73KV.css",
+        "stored_path": "service/app-GBKP73KV.css.br",
+        "media_type": "text/css; charset=utf-8",
+        "content_encoding": "br",
+        "raw_bytes": 72924,
+        "encoded_bytes": 11924,
+        "sha256": "13df288a6e1d29de0776ef2e9b6ade0cb19bb4c3bfecbced4bc58361217fa7de",
+        "etag": "\"sha256-E98oim4dKd4Hdu8um2reDLGbtMO/7LztS8WDYSF/p94=\"",
+        "imports": [
+          {
+            "request_path": "/app/assets/svg%3E",
+            "kind": "url-token"
+          }
+        ]
+      },
+      {
+        "request_path": "/app/assets/app-GBKP73KV.css",
+        "stored_path": "service/app-GBKP73KV.css.gz",
+        "media_type": "text/css; charset=utf-8",
+        "content_encoding": "gzip",
+        "raw_bytes": 72924,
+        "encoded_bytes": 13885,
+        "sha256": "73e9414694ac541efbfcdcaecc4ac08d0e05560243e84bc6013009c4053d302b",
+        "etag": "\"sha256-c+lBRpSsVB77/NyuzErAjQ4FVgJD6EvGATAJxAU9MCs=\"",
+        "imports": [
+          {
+            "request_path": "/app/assets/svg%3E",
+            "kind": "url-token"
+          }
+        ]
+      },
+      {
+        "request_path": "/app/assets/app-KACSZ2NG.js",
+        "stored_path": "service/app-KACSZ2NG.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 132732,
-        "encoded_bytes": 38370,
-        "sha256": "340806e8393d10c0a4426c2693c8cf5baccc96aec202db4c9bad693402e589c6",
-        "etag": "\"sha256-NAgG6Dk9EMCkQmwmk8jPW6zMlq7CAttMm61pNALlicY=\"",
+        "raw_bytes": 127794,
+        "encoded_bytes": 37362,
+        "sha256": "50309b4769f97b4dc36505525367179d2664de24a1f3fa5b72a812b79939d8d0",
+        "etag": "\"sha256-UDCbR2n5e03DZQVSU2cXnSZk3iSh8/pbcqgSt5k52NA=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
+            "kind": "import-statement"
+          },
+          {
+            "request_path": "/app/assets/chunk-chunk-OCQU5QXX.js",
             "kind": "import-statement"
           },
           {
@@ -48,7 +84,11 @@
             "kind": "dynamic-import"
           },
           {
-            "request_path": "/app/assets/chunk-fonts-BOMRSZKH.js",
+            "request_path": "/app/assets/chunk-fonts-LHZ6URKT.js",
+            "kind": "dynamic-import"
+          },
+          {
+            "request_path": "/app/assets/chunk-stage-measuring-5AQNJYGX.js",
             "kind": "dynamic-import"
           },
           {
@@ -58,17 +98,21 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-TULQWPVR.js",
-        "stored_path": "service/app-TULQWPVR.js.gz",
+        "request_path": "/app/assets/app-KACSZ2NG.js",
+        "stored_path": "service/app-KACSZ2NG.js.gz",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "gzip",
-        "raw_bytes": 132732,
-        "encoded_bytes": 43211,
-        "sha256": "c9e7b27dbc30d735c479bc42afedf2024523f9fd4a93d9ca15dfd33bb13d440c",
-        "etag": "\"sha256-yeeyfbww1zXEebxCr+3yAkUj+f1Kk9nKFd/TO7E9RAw=\"",
+        "raw_bytes": 127794,
+        "encoded_bytes": 41962,
+        "sha256": "0cbcb8f9101f4d5ea1050fcb4d1bdaa9c3f483a87ae002b2423c45c2f69c30ad",
+        "etag": "\"sha256-DLy4+RAfTV6hBQ/LTRvaqcP0g6h64AKyQjxFwvacMK0=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
+            "kind": "import-statement"
+          },
+          {
+            "request_path": "/app/assets/chunk-chunk-OCQU5QXX.js",
             "kind": "import-statement"
           },
           {
@@ -80,44 +124,16 @@
             "kind": "dynamic-import"
           },
           {
-            "request_path": "/app/assets/chunk-fonts-BOMRSZKH.js",
+            "request_path": "/app/assets/chunk-fonts-LHZ6URKT.js",
+            "kind": "dynamic-import"
+          },
+          {
+            "request_path": "/app/assets/chunk-stage-measuring-5AQNJYGX.js",
             "kind": "dynamic-import"
           },
           {
             "request_path": "/app/assets/chunk-syntax-64CEMTPY.js",
             "kind": "dynamic-import"
-          }
-        ]
-      },
-      {
-        "request_path": "/app/assets/app-USBKNT3E.css",
-        "stored_path": "service/app-USBKNT3E.css.br",
-        "media_type": "text/css; charset=utf-8",
-        "content_encoding": "br",
-        "raw_bytes": 72686,
-        "encoded_bytes": 11894,
-        "sha256": "0779d528d009bf7ee3f852e66f234156e84acec2a8a4e8677ef9c62068b7f99b",
-        "etag": "\"sha256-B3nVKNAJv37j+FLmbyNBVuhKzsKopOhnfvnGIGi3+Zs=\"",
-        "imports": [
-          {
-            "request_path": "/app/assets/svg%3E",
-            "kind": "url-token"
-          }
-        ]
-      },
-      {
-        "request_path": "/app/assets/app-USBKNT3E.css",
-        "stored_path": "service/app-USBKNT3E.css.gz",
-        "media_type": "text/css; charset=utf-8",
-        "content_encoding": "gzip",
-        "raw_bytes": 72686,
-        "encoded_bytes": 13840,
-        "sha256": "7a719d5ac8955140b6965404e0818b7f4e90ac639dd3f7328a93a79a7d42512f",
-        "etag": "\"sha256-enGdWsiVUUC2llQE4IGLf06QrGOd0/cyipOnmn1CUS8=\"",
-        "imports": [
-          {
-            "request_path": "/app/assets/svg%3E",
-            "kind": "url-token"
           }
         ]
       },
@@ -173,6 +189,50 @@
         "encoded_bytes": 120,
         "sha256": "f8aaf03e4fd4b5b5496cfbf453f27cdefa6ff3be2fb3c6def5db36d771fa7098",
         "etag": "\"sha256-+KrwPk/UtbVJbPv0U/J83vpv874vs8be9ds213H6cJg=\"",
+        "imports": []
+      },
+      {
+        "request_path": "/app/assets/chunk-chunk-L5C6Y2FG.js",
+        "stored_path": "service/chunk-chunk-L5C6Y2FG.js.br",
+        "media_type": "text/javascript; charset=utf-8",
+        "content_encoding": "br",
+        "raw_bytes": 171994,
+        "encoded_bytes": 129209,
+        "sha256": "9fad63a4e22941a8f79f358427e0b4db7a7aaaa24786e7e193be0e20d2084b0f",
+        "etag": "\"sha256-n61jpOIpQaj3nzWEJ+C023p6qqJHhufhk74OINIISw8=\"",
+        "imports": []
+      },
+      {
+        "request_path": "/app/assets/chunk-chunk-L5C6Y2FG.js",
+        "stored_path": "service/chunk-chunk-L5C6Y2FG.js.gz",
+        "media_type": "text/javascript; charset=utf-8",
+        "content_encoding": "gzip",
+        "raw_bytes": 171994,
+        "encoded_bytes": 129480,
+        "sha256": "5ffd9bea182b51032c89d1400c742ad4c87706483b7d470b11dd8e050e051bc1",
+        "etag": "\"sha256-X/2b6hgrUQMsidFADHQq1Mh3Bkg7fUcLEd2OBQ4FG8E=\"",
+        "imports": []
+      },
+      {
+        "request_path": "/app/assets/chunk-chunk-OCQU5QXX.js",
+        "stored_path": "service/chunk-chunk-OCQU5QXX.js.br",
+        "media_type": "text/javascript; charset=utf-8",
+        "content_encoding": "br",
+        "raw_bytes": 5277,
+        "encoded_bytes": 1635,
+        "sha256": "c6c1b69a167cdc9622889bdcbce391cc9ec5303e35c4e7ef5c2c03efe1764d4c",
+        "etag": "\"sha256-xsG2mhZ83JYiiJvcvOORzJ7FMD41xOfvXCwD7+F2TUw=\"",
+        "imports": []
+      },
+      {
+        "request_path": "/app/assets/chunk-chunk-OCQU5QXX.js",
+        "stored_path": "service/chunk-chunk-OCQU5QXX.js.gz",
+        "media_type": "text/javascript; charset=utf-8",
+        "content_encoding": "gzip",
+        "raw_bytes": 5277,
+        "encoded_bytes": 1899,
+        "sha256": "df24c4fc0bf7d175a9b50ff78a3c3d7c15093b817fb645b17cf4106c97452a54",
+        "etag": "\"sha256-3yTE/Av30XWptQ/3ijw9fBUJO4F/tkWxfPQQbJdFKlQ=\"",
         "imports": []
       },
       {
@@ -240,33 +300,41 @@
         ]
       },
       {
-        "request_path": "/app/assets/chunk-fonts-BOMRSZKH.js",
-        "stored_path": "service/chunk-fonts-BOMRSZKH.js.br",
+        "request_path": "/app/assets/chunk-fonts-LHZ6URKT.js",
+        "stored_path": "service/chunk-fonts-LHZ6URKT.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 186306,
-        "encoded_bytes": 131193,
-        "sha256": "4813f870de57ce3878bdfc1c158255c68ecd3af6feef0ad9bb70ca426aed4c23",
-        "etag": "\"sha256-SBP4cN5Xzjh4vfwcFYJVxo7NOvb+7wrZu3DKQmrtTCM=\"",
+        "raw_bytes": 14397,
+        "encoded_bytes": 1989,
+        "sha256": "5d25009dbe75a7debe0e3cea09200a673e7915f7659ce08ebc49ebfea8380bea",
+        "etag": "\"sha256-XSUAnb51p96+DjzqCSAKZz55FfdlnOCOvEnr/qg4C+o=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
+            "kind": "import-statement"
+          },
+          {
+            "request_path": "/app/assets/chunk-chunk-L5C6Y2FG.js",
             "kind": "import-statement"
           }
         ]
       },
       {
-        "request_path": "/app/assets/chunk-fonts-BOMRSZKH.js",
-        "stored_path": "service/chunk-fonts-BOMRSZKH.js.gz",
+        "request_path": "/app/assets/chunk-fonts-LHZ6URKT.js",
+        "stored_path": "service/chunk-fonts-LHZ6URKT.js.gz",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "gzip",
-        "raw_bytes": 186306,
-        "encoded_bytes": 132501,
-        "sha256": "c07f857f7fc0ef186383047f0732714e2284bae06d1fcdc649bf75ba0bcc7748",
-        "etag": "\"sha256-wH+Ff3/A7xhjgwR/BzJxTiKEuuBtH83GSb91ugvMd0g=\"",
+        "raw_bytes": 14397,
+        "encoded_bytes": 2736,
+        "sha256": "dec7097d1f124eb8161088cbf377363487639f84b81b7628b0cc49e7401ad607",
+        "etag": "\"sha256-3scJfR8STrgWEIjL83c2NIdjn4S4G3YosMxJ50Aa1gc=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
+            "kind": "import-statement"
+          },
+          {
+            "request_path": "/app/assets/chunk-chunk-L5C6Y2FG.js",
             "kind": "import-statement"
           }
         ]
@@ -395,6 +463,54 @@
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
+            "kind": "import-statement"
+          }
+        ]
+      },
+      {
+        "request_path": "/app/assets/chunk-stage-measuring-5AQNJYGX.js",
+        "stored_path": "service/chunk-stage-measuring-5AQNJYGX.js.br",
+        "media_type": "text/javascript; charset=utf-8",
+        "content_encoding": "br",
+        "raw_bytes": 2897,
+        "encoded_bytes": 1190,
+        "sha256": "7865f0b0bc48004051f41695b3c67a6b683505e4d18dbd6a3792439700f1209f",
+        "etag": "\"sha256-eGXwsLxIAEBR9BaVs8Z6a2g1BeTRjb1qN5JDlwDxIJ8=\"",
+        "imports": [
+          {
+            "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
+            "kind": "import-statement"
+          },
+          {
+            "request_path": "/app/assets/chunk-chunk-L5C6Y2FG.js",
+            "kind": "import-statement"
+          },
+          {
+            "request_path": "/app/assets/chunk-chunk-OCQU5QXX.js",
+            "kind": "import-statement"
+          }
+        ]
+      },
+      {
+        "request_path": "/app/assets/chunk-stage-measuring-5AQNJYGX.js",
+        "stored_path": "service/chunk-stage-measuring-5AQNJYGX.js.gz",
+        "media_type": "text/javascript; charset=utf-8",
+        "content_encoding": "gzip",
+        "raw_bytes": 2897,
+        "encoded_bytes": 1412,
+        "sha256": "b5378d085c213ee0429e68a466bcb66aa68679ffa8db66259f2343907d5bf49b",
+        "etag": "\"sha256-tTeNCFwhPuBCnmikZry2aqaGef+o22YlnyNDkH1b9Js=\"",
+        "imports": [
+          {
+            "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
+            "kind": "import-statement"
+          },
+          {
+            "request_path": "/app/assets/chunk-chunk-L5C6Y2FG.js",
+            "kind": "import-statement"
+          },
+          {
+            "request_path": "/app/assets/chunk-chunk-OCQU5QXX.js",
             "kind": "import-statement"
           }
         ]
@@ -601,24 +717,24 @@
       }
     ],
     "metrics": {
-      "asset_count": 15,
-      "representation_count": 30,
-      "raw_corpus_bytes": 1100372,
-      "brotli_corpus_bytes": 286082,
-      "gzip_corpus_bytes": 313177,
-      "largest_gzip_chunk_bytes": 132501,
-      "largest_raw_chunk_bytes": 186306,
-      "largest_brotli_chunk_bytes": 131193
+      "asset_count": 18,
+      "representation_count": 36,
+      "raw_corpus_bytes": 1103931,
+      "brotli_corpus_bytes": 287934,
+      "gzip_corpus_bytes": 314999,
+      "largest_gzip_chunk_bytes": 129480,
+      "largest_raw_chunk_bytes": 181112,
+      "largest_brotli_chunk_bytes": 129209
     }
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-ac12439802aa43ce.js.gz",
+      "stored_path": "export/renderer-6ec9ffeb95a15244.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 989445,
-      "encoded_bytes": 274045,
-      "sha256": "ac12439802aa43ce4865c0ce202c190f18514b005342138077ccd596b87910d5"
+      "raw_bytes": 991685,
+      "encoded_bytes": 274950,
+      "sha256": "6ec9ffeb95a15244d0e988a63f0173b667d8a913cbf877d5d62ec16f043e3545"
     }
   },
   "budgets": {
@@ -630,5 +746,5 @@
     "largest_gzip_chunk_bytes": 150000,
     "export_gzip_bytes": 295000
   },
-  "corpus_sha256": "877aebb12ec516b84f6d1f9012fd0bfd0ced2a2ece1f45cdf48c1cf8b5c341a4"
+  "corpus_sha256": "3de32eb1f30e9264cd44bb3689ebd0a39fe1d67cc71d01dcdee38cf05f6c998d"
 }
