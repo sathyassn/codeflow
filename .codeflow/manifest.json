@@ -1784,6 +1784,36 @@
       "sha256": "07ce3f87d460da5b834be48e72cfabb7c5a67139994755255fe02d34dad048ff",
       "exec": false
     },
+    ".codeflow/templates/capability-bootstrap/classification.md": {
+      "src": "pm/capability-bootstrap/classification.md",
+      "ownership": "managed",
+      "sha256": "399c61a106a0c0c6c2053968e8e0ae977bf66969d93c78d95a6aff1842ccde12",
+      "exec": false
+    },
+    ".codeflow/templates/capability-bootstrap/epic.md": {
+      "src": "pm/capability-bootstrap/epic.md",
+      "ownership": "managed",
+      "sha256": "d3ddd230a35aa2938912aa3e8a0132c880fc6dc6f72a4d887fc69f3c4742e87b",
+      "exec": false
+    },
+    ".codeflow/templates/capability-bootstrap/evidence.md": {
+      "src": "pm/capability-bootstrap/evidence.md",
+      "ownership": "managed",
+      "sha256": "6867e1e2fa9bc46a3520694b4fd34d09a67e64a2ffb6c90b1eb7cbd935f4c736",
+      "exec": false
+    },
+    ".codeflow/templates/capability-bootstrap/inventory.md": {
+      "src": "pm/capability-bootstrap/inventory.md",
+      "ownership": "managed",
+      "sha256": "67d7cc322e2eb8a954a260d5e4f848bcbee908636d33fe8835b33067947f9295",
+      "exec": false
+    },
+    ".codeflow/templates/capability-bootstrap/review.md": {
+      "src": "pm/capability-bootstrap/review.md",
+      "ownership": "managed",
+      "sha256": "575d8ffdae1444f595eef4e8f2178fc008ca9fffd119493f1d0b8ed54e46620e",
+      "exec": false
+    },
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",
@@ -1823,7 +1853,7 @@
     ".gitignore": {
       "src": "gitignore",
       "ownership": "managed-region",
-      "sha256": "e623b22f663c47c5aabf9d9faa4e965b70b2de7701de5c7c69772acd844d26c2",
+      "sha256": "fbe0e546e55555928ac114226347e07d5366f7e21dfb068f53814aaf2cace59f",
       "exec": false
     },
     ".grok/hooks/codeflow.json": {

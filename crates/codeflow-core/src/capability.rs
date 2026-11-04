@@ -6,6 +6,7 @@
 //! the `validate --docs` referential-integrity lint, which needs line
 //! numbers for `file:line`-style messages.
 
+pub mod bootstrap;
 pub mod coverage;
 pub mod create;
 
