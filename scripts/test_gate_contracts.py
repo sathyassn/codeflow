@@ -132,15 +132,15 @@ class GateContracts(unittest.TestCase):
         "  cancel-in-progress: false\n"
         "  queue: max\n\n"
     )
-    # The judging run reads the body when it runs, so the newest body is
-    # judged whichever event's run survives the group.
+    # The judging run reads the body when it runs, so a run that waited in
+    # the queue judges the newest body, whichever event started it.
     POLICY_BODY = (
         "          curl -fsSL --retry 3 --max-time 60 \\\n"
         "            -H \"Authorization: Bearer ${GH_TOKEN}\" -H \"Accept: application/vnd.github+json\" \\\n"
         "            \"${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}\" -o \"${RUNNER_TEMP}/pull.json\"\n"
     )
 
-    def assert_policy_cancels_only_superseded_pull_request_runs(self, workflow, admission=False):
+    def assert_policy_queues_every_pull_request_run(self, workflow, admission=False):
         self.assertEqual(workflow.count('concurrency:'), 1, 'one workflow-level group, no job-level one')
         self.assertIn(self.POLICY_CONCURRENCY, workflow)
         self.assertLess(workflow.index(self.POLICY_CONCURRENCY), workflow.index('\njobs:\n'))
@@ -148,10 +148,7 @@ class GateContracts(unittest.TestCase):
         self.assertIn('          GH_TOKEN: ${{ github.token }}\n', workflow)
         self.assertIn('          BODY_FILE: ${{ runner.temp }}/pr-body.md\n', workflow)
         self.assertIn('--pr-body-file "$BODY_FILE"', workflow)
-        # The commit standards job takes the body as a file. The release impact
-        # job TSK-336 added still takes it through `env:`.
-        commit_lint = workflow.split('\njobs:\n', 1)[1].split('\n  release-impact:\n', 1)[0]
-        self.assertNotIn('CODEFLOW_PR_BODY', commit_lint)
+        self.assertNotIn('CODEFLOW_PR_BODY', workflow)
         self.assertNotIn('github.event.pull_request.body', workflow)
         actions = '      actions: read\n' if admission else ''
         self.assertIn(f'    permissions:\n      contents: read\n      pull-requests: read\n{actions}    steps:\n', workflow)
@@ -168,7 +165,7 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(workflow.count('cargo build --release'), 2, 'trusted: commit standards and release impact')
         self.assertIn('codeflow ids check --base', workflow)
         self.assertIn('codeflow ci --base', workflow)
-        self.assert_policy_cancels_only_superseded_pull_request_runs(workflow, admission=True)
+        self.assert_policy_queues_every_pull_request_run(workflow, admission=True)
         self.assertIn('Swatinem/rust-cache@', workflow)
         self.assertNotIn('github.event.pull_request.head.sha }}\n          fetch-depth', workflow)
         for event in ('  push:', '  schedule:', '  workflow_dispatch:'):
@@ -246,7 +243,7 @@ class GateContracts(unittest.TestCase):
             self.assertIn(command, runs)
 
     def test_the_adopter_policy_template_cancels_only_pr_runs_the_same_way(self):
-        self.assert_policy_cancels_only_superseded_pull_request_runs(read('assets/base/ci/codeflow-policy.yml'))
+        self.assert_policy_queues_every_pull_request_run(read('assets/base/ci/codeflow-policy.yml'))
         # Marking a draft ready reruns the standards, so a check that reads
         # the pull request at ready (its Testing citation) judges it then.
         self.assertIn('    types: [opened, synchronize, reopened, edited, ready_for_review]\n',

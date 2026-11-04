@@ -263,9 +263,9 @@ jobs:
           fi
 
       # The body is read when the job runs, never taken from the event. An
-      # event carries the body as it was when the event fired, and the run
-      # that survives the concurrency group can belong to an older event (one
-      # delivered late, or a re-run), so only the current body is the newest.
+      # event carries the body as it was when the event fired, and a run can
+      # start long after that (one that waited in the queue, one delivered
+      # late, or a re-run), so only the current body is the newest.
       # The text is written to a file in the runner's temp directory, never to
       # a step output, an `env:` value or an argument, so it cannot reach the
       # log. The path is fixed (`pr-body.md` in the runner's temp directory)
@@ -283,7 +283,7 @@ jobs:
             "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull.json"
           jq -r '.body // ""' "${RUNNER_TEMP}/pull.json" > "${RUNNER_TEMP}/pr-body.md"
           # The body is logged as a digest of the file's bytes, never as
-          # text; the last step compares a new digest with this one.
+          # text; the last read compares a new digest with this one.
           if command -v sha256sum >/dev/null 2>&1; then
             digest=$(sha256sum "${RUNNER_TEMP}/pr-body.md" | cut -d ' ' -f 1)
           else

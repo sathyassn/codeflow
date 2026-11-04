@@ -733,7 +733,7 @@ fn shipped_ci_rechecks_an_edited_pr_body_through_a_file() {
         "the enforcing workflow must subscribe pull_request_target to edited"
     );
     // TSK-254: the body is read from the API when the job runs, so the
-    // newest body is judged whichever run survives the concurrency group,
+    // newest body is judged even by a run that waited in the queue,
     // and it reaches `codeflow ci` only as a file (TSK-1040): the runner
     // prints a step's `env:` values, so the text is never an env value.
     assert!(workflow.contains("BODY_FILE: ${{ runner.temp }}/pr-body.md"));
