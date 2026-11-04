@@ -296,9 +296,9 @@ class DiscoverJourneyTests(unittest.TestCase):
         self.git(origin, "add", "-A")
         self.git(origin, "commit", "-qm", "x", "--allow-empty")
 
-    def discover(self, clone, temp):
+    def discover(self, checkout, temp):
         out, summary = temp / "out", temp / "summary"
-        result = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/windows-daily.py"), "discover"], cwd=clone,
+        result = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/windows-daily.py"), "discover"], cwd=checkout,
                                 text=True, capture_output=True,
                                 env={**CLEAN_ENV, "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary)})
         return result, out.read_text() if out.exists() else "", summary.read_text() if summary.exists() else ""
@@ -318,12 +318,12 @@ class DiscoverJourneyTests(unittest.TestCase):
             folder = {key: text for key, text in whole.items() if key != "scripts/windows-test-times.json"}
             self.commit(origin, "integration/folder", {**folder, "scripts/windows-test-times.json/x": "{}"})
             self.git(origin, "checkout", "-q", "--orphan", "other")
-            clone = temp / "clone"
-            clone.mkdir()
-            self.git(clone, "init", "-q")
-            self.git(clone, "remote", "add", "origin", f"file://{origin.as_posix()}")
+            checkout = temp / "checkout"
+            checkout.mkdir()
+            self.git(checkout, "init", "-q")
+            self.git(checkout, "remote", "add", "origin", f"file://{origin.as_posix()}")
 
-            result, out, summary = self.discover(clone, temp)
+            result, out, summary = self.discover(checkout, temp)
             self.assertEqual(result.returncode, 0, result.stderr)
             matrix = json.loads(out.split("=", 1)[1])
             self.assertEqual([row["ref"] for row in matrix["include"]],
@@ -336,11 +336,11 @@ class DiscoverJourneyTests(unittest.TestCase):
     def test_an_unreadable_remote_fails_the_run_and_offers_no_lines(self):
         with tempfile.TemporaryDirectory() as name:
             temp = Path(name).resolve()
-            clone = temp / "clone"
-            clone.mkdir()
-            self.git(clone, "init", "-q")
-            self.git(clone, "remote", "add", "origin", f"file://{(temp / 'gone').as_posix()}")
-            result, out, _ = self.discover(clone, temp)
+            checkout = temp / "checkout"
+            checkout.mkdir()
+            self.git(checkout, "init", "-q")
+            self.git(checkout, "remote", "add", "origin", f"file://{(temp / 'gone').as_posix()}")
+            result, out, _ = self.discover(checkout, temp)
             self.assertEqual(result.returncode, 1)
             self.assertEqual(out, "")
 
