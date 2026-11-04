@@ -9,7 +9,7 @@ The operator's and the Director's requests of 2026-11-03 that the regroup planni
 | Only the Director runs the scheduled A to F sweep | TSK-1037 (AC-5 and AC-9) | EPC-025 |
 | Coordination design folds, gaps 1 to 8 | TSK-439 AC-10, AC-13, AC-14; TSK-423 AC-1, AC-4; TSK-440 AC-7; TSK-1037; TSK-1287; TSK-1288; TSK-1095 | EPC-025; TSK-1095 in EPC-035 |
 | A host browser fault is reported as not runnable | TSK-1289 | EPC-028 |
-| TSK-1241's hosted coverage measurement | TSK-1290 (gates TSK-1241 AC-2 to AC-5 by note) | EPC-028 |
+| TSK-1241's hosted coverage measurement | TSK-1290 (records the measurement behind the operator's decision to keep coverage on line pull requests; TSK-1241 AC-2 to AC-5 are withdrawn) | EPC-028 |
 | Issue 451, bypass permissions as a named preset | TSK-1303 | EPC-032 |
 | Issue 452, the sandbox as a floor with the retry off | TSK-1059 AC-5 | EPC-037 |
 | Issue 464, a clean main sync into an epic line | TSK-1124 AC-7 | EPC-031 |
