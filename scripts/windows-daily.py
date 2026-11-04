@@ -4,15 +4,21 @@
 The scheduler runs this script from its own revision. Test jobs check out
 each discovered SHA separately; no daily result supplies PR merge evidence.
 
-Which lines: main and every remote refs/heads/integration/* that exists when a
-run starts. The list is read from the remote on every run and nothing stores
-it, so a new line joins and a deleted one leaves on the next run. Active means
-the ref exists: an old line stays until its branch is deleted, and a line too
-old for the runner's commands fails visibly. Other branches are not covered.
+Which lines: main and each active integration line. The refs are listed from the
+remote on every run and nothing stores them, so a new line joins and a deleted
+one leaves on the next run. A line is active when its own tree at discovery has
+what the runner calls: every script named in windows-daily-run.yml, each with the
+subcommands and flags the runner passes it, and the partition measurements. The
+test reads those files and runs nothing from the line. A line that lacks any of
+them is not proven active: it stays out and the run's summary names it and the
+reason. main is always selected. A selected line that fails fails visibly. If
+the listing or a read fails, the run fails and offers no lines. Other branches
+are not covered.
 
-What a run skips: no Windows job, and no line for its age or an unchanged tip.
-It runs Windows only: Linux gates and coverage are not part of it. A commit that
-was never a line's tip at discovery is not tested, and a later tip gets no credit.
+What a run skips: no Windows job, and no selected line for its age or an unchanged
+tip. It runs Windows only: Linux gates and coverage are not part of it. A commit
+that was never a line's tip at discovery is not tested, and a later tip gets no
+credit.
 """
 
 from __future__ import annotations
@@ -33,6 +39,13 @@ WINDOWS_JOBS = frozenset({
 })
 SHA = re.compile(r"[0-9a-f]{40}")
 REF = re.compile(r"refs/heads/(?:main|integration/[A-Za-z0-9_./-]+)")
+MAIN = "refs/heads/main"
+RUNNER = Path(__file__).resolve().parents[1] / ".github/workflows/windows-daily-run.yml"
+# The runner's own reporting script comes from the scheduler's revision, not the line.
+RUNNER_OWN = "scripts/windows-daily.py"
+# What the partition script reads, which no command names.
+RUNNER_DATA = "scripts/windows-test-times.json"
+COMMAND = re.compile(r"\bpython3? (?:-\w+ )*(scripts/[\w.-]+\.py)([^&\n\"]*)")
 
 
 def identity(ref: str, sha: str) -> None:
@@ -45,7 +58,7 @@ def identity(ref: str, sha: str) -> None:
 
 
 def sources(remote_refs: str) -> dict:
-    """Keep main and every existing integration ref, including planning lines."""
+    """List main and every existing integration ref, before the active test."""
     found: dict[str, str] = {}
     for line in remote_refs.splitlines():
         fields = line.split()
@@ -68,6 +81,72 @@ def sources(remote_refs: str) -> dict:
          "key": hashlib.sha256(f"{ref}\n{sha}".encode()).hexdigest()}
         for ref, sha in sorted(found.items())
     ]}
+
+
+def runner_needs(workflow: str) -> dict[str, set[str]]:
+    """Each script the runner calls in the line's tree, with what it passes it."""
+    needs: dict[str, set[str]] = {RUNNER_DATA: set()}
+    for script, arguments in COMMAND.findall(workflow):
+        if script == RUNNER_OWN:
+            continue
+        words = arguments.split()
+        wanted = needs.setdefault(script, set())
+        if words and not words[0].startswith(("-", "$")):
+            wanted.add(words[0])
+        wanted.update(word for word in words if word.startswith("--"))
+    if len(needs) == 1:
+        raise ValueError("the runner workflow names no script, so no line can be proven active")
+    return needs
+
+
+def missing_from_line(needs: dict[str, set[str]], read) -> list[str]:
+    """What the runner needs and this line's tree lacks. `read` gives a file's text,
+    None when the tree has no such file, and raises when it cannot tell."""
+    missing = []
+    for path in sorted(needs):
+        text = read(path)
+        if text is None:
+            missing.append(f"no {path}")
+            continue
+        for word in sorted(needs[path]):
+            if word.startswith("--"):
+                found = re.search(rf"""["']{re.escape(word)}["']""", text)
+            else:
+                found = re.search(rf"""add_parser\(\s*["']{re.escape(word)}["']""", text)
+            if not found:
+                missing.append(f"{path} has no {word}")
+    return missing
+
+
+def select_active(listed: dict, needs: dict[str, set[str]], read_at) -> tuple[dict, list[dict]]:
+    """Keep main and every line whose tree has what the runner needs. A read that
+    raises stops discovery: an unread line is neither selected nor called inactive."""
+    selected, left_out = [], []
+    for row in listed["include"]:
+        missing = [] if row["ref"] == MAIN else missing_from_line(
+            needs, lambda path, sha=row["sha"]: read_at(sha, path))
+        if missing:
+            left_out.append({"ref": row["ref"], "sha": row["sha"], "missing": missing})
+        else:
+            selected.append(row)
+    return {"include": selected}, left_out
+
+
+def tree_reader():
+    """Read files of a commit fetched from origin; a failed git command raises."""
+    fetched: set[str] = set()
+
+    def read(sha: str, path: str) -> str | None:
+        if sha not in fetched:
+            subprocess.check_output(["git", "fetch", "-q", "--no-tags", "--depth=1", "origin", sha],
+                                    text=True, timeout=120)
+            fetched.add(sha)
+        entry = subprocess.check_output(["git", "ls-tree", sha, "--", path], text=True, timeout=60)
+        if not entry.startswith("100"):
+            return None
+        return subprocess.check_output(["git", "show", f"{sha}:{path}"], text=True, timeout=60)
+
+    return read
 
 
 def checked_out(ref: str, expected: str, actual: str) -> str:
@@ -129,11 +208,17 @@ def main() -> int:
                 ["git", "ls-remote", "--heads", "origin", "main", "integration/*"],
                 text=True, timeout=60,
             )
-            matrix = sources(refs)
-            output("matrix", json.dumps(matrix, separators=(",", ":")))
-            summary("## Daily Windows source commits\n\n" + "\n".join(
+            needs = runner_needs(RUNNER.read_text(encoding="utf-8"))
+            matrix, left_out = select_active(sources(refs), needs, tree_reader())
+            report = "## Daily Windows source commits\n\n" + "\n".join(
                 f"- `{row['ref']}` at `{row['sha']}`" for row in matrix["include"]
-            ))
+            )
+            if left_out:
+                report += "\n\n## Left out: not proven active\n\n" + "\n".join(
+                    f"- `{row['ref']}` at `{row['sha']}`: {'; '.join(row['missing'])}" for row in left_out
+                )
+            output("matrix", json.dumps(matrix, separators=(",", ":")))
+            summary(report)
         elif args.command == "identity":
             actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
             output("sha", checked_out(args.ref, args.sha, actual))

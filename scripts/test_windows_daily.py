@@ -194,14 +194,161 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("actions: write", runner)
 
 
+NEEDS = {"scripts/windows-partitions.py": {"drift", "reports", "--list"}, "scripts/journey-gate.py": {"--part"},
+         "scripts/windows-test-times.json": set()}
+PARTITIONS = 'add_parser("drift")\nadd_parser("reports")\nadd_argument("--list")\n'
+COMPLETE = {"scripts/windows-partitions.py": PARTITIONS, "scripts/journey-gate.py": 'add_argument("--part")',
+            "scripts/windows-test-times.json": "{}"}
+
+
+def line_tree(needs):
+    """A tree holding exactly what `needs` asks for."""
+    text = {}
+    for path, words in needs.items():
+        text[path] = "\n".join(f'add_argument("{word}")' if word.startswith("--") else f'add_parser("{word}")'
+                               for word in sorted(words)) + "\n"
+    return text
+
+
+class ActiveLineTests(unittest.TestCase):
+    """A line is active when its own tree has what the runner calls."""
+
+    def select(self, trees):
+        listed = {"include": [{"ref": ref, "sha": sha, "key": "k"} for ref, sha in trees]}
+        return daily.select_active(listed, NEEDS, lambda sha, path: trees[next(
+            ref for ref, known in trees if known == sha), sha].get(path))
+
+    def test_the_needs_are_read_from_the_runner_itself(self):
+        needs = daily.runner_needs(workflow("windows-daily-run"))
+        self.assertLessEqual({"drift", "reports", "check", "filter"}, needs["scripts/windows-partitions.py"])
+        self.assertLessEqual({"--part", "--skip-benchmark", "--results"}, needs["scripts/journey-gate.py"])
+        self.assertIn("scripts/test_gate_parity.py", needs)
+        self.assertIn("scripts/windows-test-times.json", needs)
+        self.assertNotIn(daily.RUNNER_OWN, needs)
+
+    def test_a_runner_naming_no_script_proves_no_line(self):
+        with self.assertRaisesRegex(ValueError, "names no script"):
+            daily.runner_needs("jobs:\n  build:\n    steps:\n      - run: cargo build\n")
+
+    def test_this_tree_has_everything_the_runner_needs(self):
+        needs = daily.runner_needs(workflow("windows-daily-run"))
+        read = lambda path: (ROOT / path).read_text(encoding="utf-8") if (ROOT / path).exists() else None
+        self.assertEqual(daily.missing_from_line(needs, read), [])
+
+    def test_a_complete_line_is_selected_and_nothing_is_left_out(self):
+        matrix, left_out = self.select({(LINE, SHA): COMPLETE})
+        self.assertEqual([row["ref"] for row in matrix["include"]], [LINE])
+        self.assertEqual(left_out, [])
+
+    def test_a_line_without_the_partition_script_is_left_out_and_named(self):
+        tree = {k: v for k, v in COMPLETE.items() if k != "scripts/windows-partitions.py"}
+        matrix, left_out = self.select({(LINE, SHA): tree})
+        self.assertEqual(matrix["include"], [])
+        self.assertEqual(left_out, [{"ref": LINE, "sha": SHA, "missing": ["no scripts/windows-partitions.py"]}])
+
+    def test_a_line_whose_script_lacks_a_runner_command_is_left_out_and_named(self):
+        tree = {**COMPLETE, "scripts/windows-partitions.py": 'add_parser("check")\nadd_argument("--list")\n'}
+        _, left_out = self.select({(LINE, SHA): tree})
+        self.assertEqual(left_out[0]["missing"], ["scripts/windows-partitions.py has no drift",
+                                                  "scripts/windows-partitions.py has no reports"])
+
+    def test_a_line_whose_script_lacks_a_runner_flag_is_left_out_and_named(self):
+        _, left_out = self.select({(LINE, SHA): {**COMPLETE, "scripts/journey-gate.py": "pass"}})
+        self.assertEqual(left_out[0]["missing"], ["scripts/journey-gate.py has no --part"])
+
+    def test_a_command_named_only_in_a_comment_does_not_count(self):
+        tree = {**COMPLETE, "scripts/windows-partitions.py": '# drift reports\nadd_argument("--list")\n'}
+        _, left_out = self.select({(LINE, SHA): tree})
+        self.assertIn("scripts/windows-partitions.py has no drift", left_out[0]["missing"])
+
+    def test_main_is_always_selected_and_never_read(self):
+        def read(sha, path):
+            self.fail("main's tree was read")
+        matrix, left_out = daily.select_active({"include": [{"ref": daily.MAIN, "sha": SHA, "key": "k"}]}, NEEDS, read)
+        self.assertEqual([row["ref"] for row in matrix["include"]], [daily.MAIN])
+        self.assertEqual(left_out, [])
+
+    def test_a_failed_read_stops_discovery_and_never_reads_as_inactive(self):
+        def read(sha, path):
+            raise subprocess.CalledProcessError(128, "git")
+        with self.assertRaises(subprocess.CalledProcessError):
+            daily.select_active({"include": [{"ref": LINE, "sha": SHA, "key": "k"}]}, NEEDS, read)
+
+
+# A hook or a gate may set these; each journey names its own repository.
+CLEAN_ENV = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
+
+
+class DiscoverJourneyTests(unittest.TestCase):
+    """The real command against a real remote: listing, shallow fetch and tree reads."""
+
+    def git(self, cwd, *args):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "core.hooksPath=/dev/null",
+                        *args], cwd=cwd, env=CLEAN_ENV, check=True, capture_output=True, text=True)
+
+    def commit(self, origin, branch, files):
+        self.git(origin, "checkout", "-q", "--orphan", branch)
+        self.git(origin, "rm", "-rfq", "--ignore-unmatch", ".")
+        for path, text in files.items():
+            target = origin / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        self.git(origin, "add", "-A")
+        self.git(origin, "commit", "-qm", "x", "--allow-empty")
+
+    def discover(self, clone, temp):
+        out, summary = temp / "out", temp / "summary"
+        result = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/windows-daily.py"), "discover"], cwd=clone,
+                                text=True, capture_output=True,
+                                env={**CLEAN_ENV, "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary)})
+        return result, out.read_text() if out.exists() else "", summary.read_text() if summary.exists() else ""
+
+    def test_active_lines_run_and_the_others_are_named(self):
+        with tempfile.TemporaryDirectory() as name:
+            temp = Path(name).resolve()
+            origin = temp / "origin"
+            origin.mkdir()
+            self.git(origin, "init", "-q", "-b", "start")
+            whole = line_tree(daily.runner_needs(workflow("windows-daily-run")))
+            behind = {**whole, "scripts/windows-partitions.py": 'add_parser("check")\n'}
+            self.commit(origin, "main", {"README": "x"})
+            self.commit(origin, "integration/whole", whole)
+            self.commit(origin, "integration/behind", behind)
+            self.commit(origin, "integration/old", {"README": "x"})
+            self.git(origin, "checkout", "-q", "--orphan", "other")
+            clone = temp / "clone"
+            self.git(temp, "clone", "-q", "--depth=1", "-b", "main", f"file://{origin.as_posix()}", str(clone))
+
+            result, out, summary = self.discover(clone, temp)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            matrix = json.loads(out.split("=", 1)[1])
+            self.assertEqual([row["ref"] for row in matrix["include"]],
+                             ["refs/heads/integration/whole", daily.MAIN])
+            self.assertIn("Left out: not proven active", summary)
+            self.assertRegex(summary, r"integration/behind` at `[0-9a-f]{40}`: .*windows-partitions.py has no drift")
+            self.assertRegex(summary, r"integration/old` at `[0-9a-f]{40}`: no scripts/")
+
+    def test_an_unreadable_remote_fails_the_run_and_offers_no_lines(self):
+        with tempfile.TemporaryDirectory() as name:
+            temp = Path(name).resolve()
+            clone = temp / "clone"
+            clone.mkdir()
+            self.git(clone, "init", "-q")
+            self.git(clone, "remote", "add", "origin", f"file://{(temp / 'gone').as_posix()}")
+            result, out, _ = self.discover(clone, temp)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(out, "")
+
+
 class DailyCoverageTests(unittest.TestCase):
-    """What the daily run covers and skips, and how its list stays current. A
-    line is active while its ref exists: the list is read from the remote on
-    every run and nothing stores it."""
+    """What the daily run covers and skips, and how its list stays current. The
+    refs are read from the remote on every run and nothing stores them."""
 
     def discover(self, **listing):
         with tempfile.TemporaryDirectory() as temp, mock.patch.object(
-                daily.subprocess, "check_output", **listing) as remote, mock.patch.dict(
+                daily.subprocess, "check_output", **listing) as remote, mock.patch.object(
+                daily, "tree_reader", lambda: lambda sha, path: line_tree(daily.runner_needs(
+                    workflow("windows-daily-run"))).get(path)), mock.patch.dict(
                 os.environ, {"GITHUB_OUTPUT": str(Path(temp) / "out"),
                              "GITHUB_STEP_SUMMARY": str(Path(temp) / "summary")}), mock.patch.object(
                 sys, "argv", ["windows-daily.py", "discover"]), mock.patch("builtins.print"):
@@ -230,18 +377,13 @@ class DailyCoverageTests(unittest.TestCase):
         self.assertEqual(rows(main + f"{SHA}\t{LINE}\n"), [LINE, "refs/heads/main"])
         self.assertEqual(rows(main + f"{SHA}\t{added}\n"), [added, "refs/heads/main"])
 
-    def test_an_old_or_planning_line_stays_while_its_ref_exists(self):
-        refs = ["refs/heads/integration/release-3-0-0-r3", "refs/heads/integration/planning-only"]
-        listing = f"{SHA}\trefs/heads/main\n" + "".join(f"{'b' * 40}\t{ref}\n" for ref in refs)
-        self.assertEqual({row["ref"] for row in daily.sources(listing)["include"]} - {"refs/heads/main"}, set(refs))
-
     def test_only_main_and_integration_refs_are_covered(self):
         others = ("refs/heads/task/TSK-1-x", "refs/heads/master", "refs/heads/integrationish",
                   "refs/heads/release/main", "refs/tags/integration/x", "refs/pull/1/head")
         listing = f"{SHA}\trefs/heads/main\n" + "".join(f"{SHA}\t{ref}\n" for ref in others)
         self.assertEqual([row["ref"] for row in daily.sources(listing)["include"]], ["refs/heads/main"])
 
-    def test_no_line_is_skipped_for_its_tip_age_or_name(self):
+    def test_no_selected_line_is_skipped_for_its_age_or_an_unchanged_tip(self):
         """An unchanged tip runs again: nothing compares it with an earlier run."""
         scheduler = jobs(workflow("windows-daily"))
         self.assertEqual(set(scheduler), {"sources", "lines"})
@@ -261,9 +403,8 @@ class DailyCoverageTests(unittest.TestCase):
             "verdict": ["${{ always() }}"],
         })
 
-    def test_a_line_too_old_for_the_runner_fails_and_never_passes(self):
-        """The commands come from the scheduler and the scripts from the line, so a
-        line without a command's script fails its build and skips what follows."""
+    def test_a_selected_line_that_fails_its_build_fails_visibly(self):
+        """The active test reads files; a selected line can still fail when it runs."""
         needs = successful()
         needs["windows-build"] = {"result": "failure", "outputs": {"sha": SHA}}
         for name in ("windows-tests", "windows-journeys"):
