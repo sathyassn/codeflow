@@ -47,7 +47,7 @@
 use std::path::{Path, PathBuf};
 
 use super::assets::Shipped;
-use super::init::{build_context, render_entry};
+use super::init::{build_context, render_entry, POLICY_READER_VERSION};
 use super::manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest};
 use super::prior_release;
 use super::region::{self, BlockOutcome};
@@ -297,14 +297,18 @@ fn update_context(
             || "project".to_string(),
             |n| crate::git::GitName::from_os_str(n).display().to_string(),
         );
-    build_context(
+    let mut ctx = build_context(
         &project,
         &state.product_one_liner,
         &state.areas,
         &state.stack,
         state.tier,
         binary_version,
-    )
+    );
+    // The pin the project has recorded so far, not the binary running this
+    // update, is what its CI and other checkouts read the result with.
+    ctx.set(POLICY_READER_VERSION, &state.scaffold_version);
+    ctx
 }
 
 #[allow(clippy::too_many_lines)] // linear phase orchestration, as in `init`
@@ -1232,6 +1236,7 @@ fn sync_user_owned_json(
         )];
         notes.extend(recommended);
         notes.extend(unsupported_policy_notes(&user));
+        notes.extend(capability_key_withheld(&entry.dest, &user, &new_default));
         if !prior.is_empty() {
             notes.push(prior_release_note());
         } else if old_default.is_none() {
@@ -1254,6 +1259,7 @@ fn sync_user_owned_json(
     notes.extend(migrated);
     notes.extend(recommended);
     notes.extend(unsupported_policy_notes(&user));
+    notes.extend(capability_key_withheld(&entry.dest, &user, &new_default));
     let mut schema_advanced = false;
     if let (Some(user_sv), Some(new_sv)) = (
         user.get("schema_version")
@@ -1292,6 +1298,25 @@ fn sync_user_owned_json(
     push_diff(diffs, &entry.dest, &current_text, &next, rendered, raw);
     report.file_with_notes(&entry.dest, Action::KeysAdded, notes);
     Ok(())
+}
+
+/// The report line for an update that left `git.pr_capability_impact` out
+/// because the project's recorded pin may reject the key.
+fn capability_key_withheld(
+    dest: &str,
+    user: &serde_json::Value,
+    new_default: &serde_json::Value,
+) -> Option<Shown> {
+    const POINTER: &str = "/git/pr_capability_impact";
+    (dest == ".codeflow/policy.json"
+        && user.pointer(POINTER).is_none()
+        && new_default.pointer(POINTER).is_none())
+    .then(|| {
+        Shown::fixed(
+            "git.pr_capability_impact was not added because this project's pinned codeflow may \
+             reject it; land this update, then run `codeflow update` again to add it",
+        )
+    })
 }
 
 /// The report line for an update that compared with an earlier release's

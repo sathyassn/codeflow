@@ -430,6 +430,7 @@ pub(crate) fn build_context(
     ctx.set("STACK", stack);
     ctx.set("TIER", tier.as_str());
     ctx.set("SCAFFOLD_VERSION", version);
+    ctx.set(POLICY_READER_VERSION, version);
     ctx.set("DATE", today_utc());
     // A starter record's hidden identity, written once as `new` writes one.
     ctx.set("RECORD_UID", crate::ids::new_uid());
@@ -472,15 +473,20 @@ pub(crate) fn render_entry(
         text
     };
     if entry.dest == POLICY_DEST {
-        return Ok(Some(with_stack_product_paths(
-            &rendered,
-            ctx.get("STACK").unwrap_or_default(),
+        return Ok(Some(with_tier_capability_level(
+            &with_stack_product_paths(&rendered, ctx.get("STACK").unwrap_or_default()),
+            ctx.get("TIER").and_then(|tier| tier.parse().ok()),
+            ctx.get(POLICY_READER_VERSION).unwrap_or_default(),
         )));
     }
     Ok(Some(rendered))
 }
 
 const POLICY_DEST: &str = ".codeflow/policy.json";
+
+/// The context key naming the release that will read the rendered policy: the
+/// running binary at `init`, the project's recorded pin at `update`.
+pub(crate) const POLICY_READER_VERSION: &str = "POLICY_READER_VERSION";
 
 /// Write the stack's default `git.product_paths` into the shipped policy, as
 /// the first key of `git`, unless the shipped policy already names it. The
@@ -503,6 +509,38 @@ fn with_stack_product_paths(policy: &str, stack: &str) -> String {
     format!(
         "{}    \"product_paths\": [{globs}],\n{}",
         &policy[..split],
+        &policy[split..]
+    )
+}
+
+/// Write the tier's default for `git.pr_capability_impact` into the rendered
+/// policy. `init` writes this text and `update` compares against it, so the
+/// project's live policy changes only through the existing merge, which adds
+/// a missing key and keeps a value the project chose.
+///
+/// The key is left out while `reader` may be a binary that rejects it: the
+/// shipped template stays free of it for the same reason ("Where a new key
+/// goes" in docs/policy-reference.md). A version or tier that cannot be read
+/// leaves it out too, which an older binary can always load.
+fn with_tier_capability_level(policy: &str, tier: Option<Tier>, reader: &str) -> String {
+    const AFTER: &str = "\"pr_release_impact\": \"warn\",\n";
+    let reads_key = matches!(
+        super::version::is_older(reader, crate::hooks::policy::CAPABILITY_IMPACT_SINCE),
+        Ok(false)
+    );
+    let (Some(tier), true, false, Some(at)) = (
+        tier,
+        reads_key,
+        policy.contains("\"pr_capability_impact\""),
+        policy.find(AFTER),
+    ) else {
+        return policy.to_string();
+    };
+    let split = at + AFTER.len();
+    format!(
+        "{}    \"pr_capability_impact\": \"{}\",\n{}",
+        &policy[..split],
+        crate::hooks::policy::capability_level_default(tier),
         &policy[split..]
     )
 }
@@ -769,6 +807,39 @@ mod tests {
             assert!(crate::hooks::policy_schema::validate_policy_str(&rendered).is_ok());
             assert_eq!(with_stack_product_paths(&rendered, "node"), rendered);
         }
+    }
+
+    #[test]
+    fn shipped_policy_gains_the_tier_capability_level() {
+        let shipped = include_str!("../../../../assets/base/policy.json");
+        assert!(!shipped.contains("pr_capability_impact"));
+        for (tier, level) in [
+            (Tier::Minimal, "off"),
+            (Tier::Standard, "warn"),
+            (Tier::Full, "warn"),
+        ] {
+            let rendered = with_tier_capability_level(shipped, Some(tier), "4.0.0");
+            let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+            assert_eq!(value["git"]["pr_capability_impact"], level);
+            assert!(crate::hooks::policy_schema::validate_policy_str(&rendered).is_ok());
+            assert_eq!(
+                with_tier_capability_level(&rendered, Some(tier), "4.0.0"),
+                rendered
+            );
+        }
+    }
+
+    #[test]
+    fn a_reader_that_may_reject_the_capability_key_never_meets_it() {
+        let shipped = include_str!("../../../../assets/base/policy.json");
+        for reader in ["3.1.1", "4.0.0-beta.1", "", "not a version"] {
+            assert_eq!(
+                with_tier_capability_level(shipped, Some(Tier::Full), reader),
+                shipped,
+                "{reader}"
+            );
+        }
+        assert_eq!(with_tier_capability_level(shipped, None, "4.0.0"), shipped);
     }
 
     #[test]

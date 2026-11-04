@@ -576,7 +576,7 @@ pub const SCHEMA: [KeySpec; 79] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Capability declarations agree with the catalog delta at exact commits.",
-        notes: "Opt-in. Hosted PR checks require a body. Local pushes defer this rule to hosted actual-target CI. Absent or off performs no catalog reads. Legacy conversions require shared registry bindings fetched before hosted codeflow ci.",
+        notes: "`init` and `update` write off at minimal and warn at standard and full; a project sets any level. A policy without the key is not checked. Hosted PR checks require a body. Local pushes defer this rule to hosted actual-target CI. Off performs no catalog reads. Legacy conversions require shared registry bindings fetched before hosted codeflow ci.",
     },
     KeySpec {
         path: "git.pr_summary",
