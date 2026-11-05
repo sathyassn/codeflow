@@ -1,0 +1,44 @@
+with-node: Node 26.4.0 from /Users/sathya/.asdf/installs/nodejs/26.4.0/bin
+✔ CIEDE2000 reproduces Sharma reference vectors, including hue wrap (0.721792ms)
+✔ contrast and D65 lightness endpoints reproduce reference values (0.80325ms)
+✔ simulation has identity endpoints and collapses identical pairs (0.511125ms)
+(node:97026) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ system export fallback matches every resolved theme and mode palette (46.6405ms)
+✔ planted hex literal fails lint (2.222709ms)
+✔ planted functional literal fails lint (0.099875ms)
+✔ planted named literal fails lint (0.060333ms)
+✔ planted named extended literal fails lint (0.055541ms)
+✔ planted absolute size literal fails lint (0.055166ms)
+✔ planted exponent size literal fails lint (0.055666ms)
+✔ planted size literal fails lint (2.621125ms)
+✔ planted radius literal fails lint (0.842459ms)
+✔ planted fallback literal fails lint (0.101292ms)
+✔ planted named fallback literal fails lint (0.114083ms)
+✔ clean token control permits intrinsic values and CSS variables (0.428708ms)
+✔ every authored style template is free of colour, size and radius literals (21.345125ms)
+✔ pseudo-highlight selectors are not named colour declarations (0.12925ms)
+✔ value-named colour properties cannot disguise palette literals (0.063583ms)
+✔ one of 300 is visible at wide and phone widths without changing labels (0.654459ms)
+✔ zero counts stay absent and a single positive count fills its chart (10.513292ms)
+✔ invalid or impossible geometry fails explicitly (0.190917ms)
+✔ planted cast is rejected (2.73725ms)
+✔ planted white is rejected (1.203625ms)
+✔ planted black is rejected (0.431292ms)
+✔ planted Neutral is rejected (0.4515ms)
+✔ planted one accent is rejected (0.538834ms)
+✔ planted contrast is rejected (0.485042ms)
+✔ planted status hue is rejected (0.391333ms)
+✔ clean Graphite theme control passes every theme check (0.556792ms)
+✔ every shipped theme and accent passes the colour floors (0.525375ms)
+✔ near-identical dark stage inks fail normal and all simulated floors (0.316958ms)
+✔ missed stage surface floor fails, with a clean palette control (0.117792ms)
+✔ all curated companions meet unchanged ordinary and simulated floors (3.13375ms)
+ℹ tests 33
+ℹ suites 0
+ℹ pass 33
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 177.265917
