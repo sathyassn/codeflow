@@ -87,9 +87,13 @@ created: {{DATE}}
      ## Estimate
      - spec_pin: <SPC-NNN or source>@<commit>
      - Expected mix (frozen): <n> tasks: <n> Easy, <n> Medium, <n> Hard
+       (default: about 5 to 10 tasks, mostly Medium or Hard; past about 10,
+       ask whether to split the epic; never a cap)
      - Milestone scenario: <date or window> from the scenario forecast;
        basis: <rate, seats, human gates, merge windows>
      - Actual tasks: <TSK-NNN band, as each is planned or lands>
+     - Checkpoints: the finished part reaches main within a few days
+       through checkpoint PRs, never parked on the line
      - At close: expected against actual mix, scenario rate against actual
        rate, hit rate, misses and wait causes; outcome record
        `<estimate root>/outcomes/<epic id>.md` -->

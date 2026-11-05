@@ -55,8 +55,15 @@ when a single outcome becomes one standalone task.
    keeping every criterion; a helper-only task folds into the task it helps;
    a misfiled task moves to the epic that owns its outcome. No number caps a
    task's size or a plan's task count, so each merge, fold or split is a
-   stated judgement. When a work item is planned, started, blocked,
-   completed or cancelled, follow
+   stated judgement. Planning defaults, which a project can override and which
+   are never caps or gates: an epic holds about 5 to 10 tasks, and a plan past
+   about 10 asks whether to split the epic; an epic's finished part reaches
+   main within a few days through checkpoint PRs, never parked on a line; a
+   task is typically Medium or Hard, so an Easy task merges into a sibling
+   that shares its cause, code path or proof, and a Very Hard task is split
+   before claim; every task is meaningful, with its own outcome and proof.
+   When a work item is planned, started, blocked, completed or cancelled,
+   follow
    [the work lifecycle](../cf-method/references/project-organization.md#the-work-lifecycle):
    its standalone test decides between an epic and a standalone task, and it
    names the allocation verbs and dependency forms.
@@ -85,11 +92,12 @@ when a single outcome becomes one standalone task.
      `.codeflow/estimate.json` exists, offer the `cf-estimate` time-box
      profile once: as the recommended choice when the project uses no other
      proper estimation method, and without that recommendation when it has
-     one. On a decline, write `estimate.json` with `status: declined`, the
-     reason and the re-offer event, add no block, and do not offer again
-     until that event. On acceptance, write the adopted record and
-     `profile-v1.md` in its root. Under an adopted profile, write the spec's
-     Delivery size block while the spec is brought to readiness, and at
+     one. On a decline, write `.codeflow/estimate.json` with status
+     `declined`, the reason and the re-offer event, add no block, and do not
+     offer again until that event. On acceptance, write the adopted record
+     and the version 1 profile file in its root (the `cf-estimate` records
+     reference). Under an adopted profile, write the spec's Delivery size
+     block while the spec is brought to readiness, and at
      breakdown the epic's Estimate section and each task's Estimate block
      from the shipped templates: the grade from the rubric, the band frozen
      with the profile revision, a move of one step at most with its reason.

@@ -84,10 +84,17 @@ the scenario forecast and never replaces it.
 - **Move and split.** The planner may move a band one step, never two, for a
   reason the drivers miss (proof volume, record volume, a key review set,
   such as a guard's security review), recorded in the block. The rubric
-  points stay as scored; a move never adds points. A two-step gap between grade and expected effort
-  means the scope is wrong: re-cut the task. A Very Hard task, graded or
+  points stay as scored; a move never adds points. A two-step gap between
+  grade and expected effort means the scope is wrong: re-cut the task. A Very Hard task, graded or
   moved there, is split before claim, so no claimed task's top is above
   Hard's.
+- **Planning defaults.** These are defaults a project can override, never caps
+  or gates: an epic holds about 5 to 10 tasks, and a plan past about 10 asks
+  whether to split the epic; an epic's finished part reaches main within a few
+  days through checkpoint PRs, never parked on a line; a task is typically
+  Medium or Hard, so an Easy task merges into a sibling that shares its cause,
+  code path or proof, and a Very Hard task is split before claim; every task
+  is meaningful, with its own outcome and proof.
 - **Checkpoints and the top.** A Hard task logs one line at half its top.
   At the top, new work stops and one of three is chosen: a finish allowance
   of at most 30 minutes (counted as a miss), a split, or a re-plan; a cause

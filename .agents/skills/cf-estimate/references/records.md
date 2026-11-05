@@ -53,7 +53,7 @@ A profile states what constitutes full delivery, actual resources/availability,
 qualified binding references, evidence comparability, any justified local grade
 ranges, and prospective evaluation rules. Do not seed invented calibration data.
 A project that adopts the time-box profile (operating-model.md) adds to
-`profile-v1.md` its profile version, its effective date, the started point and
+profile-v1.md its profile version, its effective date, the started point and
 the end point of the clock in one sentence each, and its band table. The
 shipped starting bands may be copied in as a starting profile; they are a
 stop rule the project chose, not calibration data:
@@ -67,9 +67,16 @@ Profile version: 1; effective <YYYY-MM-DD>
 | Very Hard | 9 or more | 6 to 8; split before claim |
 ```
 
-A later revision is `profile-v2.md` with its own effective date; tasks keep
+The planning defaults hold beside the table (`cf-plan`): a task is
+typically Medium or Hard, an Easy task merges into a sibling that shares its
+cause, code path or proof, a Very Hard task is split before claim, an epic
+holds about 5 to 10 tasks, and its finished part reaches main within a few
+days through checkpoint PRs. They are defaults a project can override,
+never caps or gates.
+
+A later revision is profile-v2.md with its own effective date; tasks keep
 the revision they were frozen with. At epic close, before the epic's line ref
-is deleted, `outcomes/<epic-id>.md` holds that epic's outcome record.
+is deleted, outcomes/<epic-id>.md holds that epic's outcome record.
 An outcome record names the forecast and package, observed scope/status and stage
 timings, waits, failures/reopens, sources and missing observations. Its timings
 may come from `codeflow estimate outcomes`, which derives them from git and

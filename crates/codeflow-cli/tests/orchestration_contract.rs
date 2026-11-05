@@ -2731,7 +2731,10 @@ fn planned_work_band_rule_has_one_home_and_pointers() {
             concat!("planned ", "throughput"),
             concat!("past an ", "hour"),
         ] {
-            assert!(!text.contains(retired), "{path} keeps the retired pace rule: {retired:?}");
+            assert!(
+                !text.contains(retired),
+                "{path} keeps the retired pace rule: {retired:?}"
+            );
         }
     }
 }

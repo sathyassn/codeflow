@@ -58,7 +58,9 @@ availability), not all estimates. Resolve discoverable facts yourself.
 
 1. Establish a pinned delivery package. When it holds tasks too small to
    carry their own outcome and proof, merge them by the `cf-plan` sizing
-   test before grading; never grade them one by one. Anchored grades are
+   test before grading; never grade them one by one. The `cf-plan`
+   planning defaults apply: a task is typically Medium or Hard, and a Very
+   Hard task is split before claim. Anchored grades are
    optional: where they help, read [rubric.md](references/rubric.md) to
    assign drivers. Materially missing scope/ownership/acceptance is
    UNSIZED; duration uncertainty alone is not. Show conditional alternatives

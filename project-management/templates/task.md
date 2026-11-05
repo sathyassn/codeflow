@@ -55,7 +55,10 @@ created: {{DATE}}
      - H: none; B: none
 
      A move names one step and its reason (proof volume, record volume or a
-     key review set). A Very Hard task is split before claim. During the
+     key review set). A task is typically Medium or Hard: an Easy task
+     merges into a sibling that shares its cause, code path or proof, and a
+     Very Hard task is split before claim. These are defaults, never caps.
+     During the
      work a Hard task adds `- Half-top: <time> <one line>`, and a task past
      its top adds `- Cause: <blocker | wrong estimate | scope | review wait
      | host>; <finish | split | re-plan>`. Class stays in frontmatter. -->
