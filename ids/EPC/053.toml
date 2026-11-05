@@ -1,0 +1,11 @@
+id = "EPC-053"
+uid = "7c18ecd6-5a96-46c7-b740-02bbc5f46b4e"
+kind = "EPC"
+title = "A repository holds only what it needs long term"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:21:01Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
