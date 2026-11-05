@@ -454,12 +454,11 @@ fn local_or_upstream(
     let remotes = repo
         .remotes()
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
-    let upstream_ref = match configured_upstream(repo, local, &remotes)? {
-        Some(upstream) => Some(upstream),
-        None => {
-            let remote = format!("refs/remotes/origin/{local}");
-            reference_commit(repo, &remote)?.map(|_| remote)
-        }
+    let upstream_ref = if let Some(upstream) = configured_upstream(repo, local, &remotes)? {
+        Some(upstream)
+    } else {
+        let remote = format!("refs/remotes/origin/{local}");
+        reference_commit(repo, &remote)?.map(|_| remote)
     };
     let Some(upstream_ref) = upstream_ref else {
         return keep();
