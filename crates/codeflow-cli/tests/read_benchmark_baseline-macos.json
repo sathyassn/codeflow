@@ -2,7 +2,8 @@
   "inventory": {
     "lines": 10,
     "task_records": 10000,
-    "stale_task_branches": 3000
+    "stale_task_branches": 3000,
+    "record_bytes": 41042447
   },
   "calibration_ms": 296,
   "commands": {
