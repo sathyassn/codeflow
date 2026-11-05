@@ -1,0 +1,11 @@
+id = "TSK-1352"
+uid = "13333208-5e98-43b7-8a38-d136edfad415"
+kind = "TSK"
+title = "The shipped CI places each suite by event as CodeFlow does, and a project can change it"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T21:19:10Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
