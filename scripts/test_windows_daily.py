@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Daily Windows source selection, exact-SHA verdict, workflow controls, and
+"""Daily Windows source selection, the reader's verdict, workflow controls, and
 the reduced Windows tier's switch and verdict, run from the workflow's own text.
 """
 
+import contextlib
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 import os
@@ -23,10 +25,6 @@ SHA = "a" * 40
 LINE = "refs/heads/integration/example"
 
 
-def successful(sha=SHA):
-    return {name: {"result": "success", "outputs": {"sha": sha}} for name in daily.WINDOWS_JOBS}
-
-
 class SourceTests(unittest.TestCase):
     def test_main_and_every_integration_ref_are_resolved_once(self):
         refs = f"{SHA}\trefs/heads/main\n{'b' * 40}\t{LINE}\n{SHA}\trefs/heads/task/example\n"
@@ -36,11 +34,6 @@ class SourceTests(unittest.TestCase):
     def test_new_lines_are_discovered_without_a_name_allowlist(self):
         refs = f"{SHA}\trefs/heads/main\n{SHA}\trefs/heads/integration/new-line\n"
         self.assertEqual(len(daily.sources(refs)["include"]), 2)
-
-    def test_same_sha_on_two_lines_has_separate_artifacts(self):
-        selected = daily.sources(f"{SHA}\trefs/heads/main\n{SHA}\t{LINE}\n")["include"]
-        self.assertNotEqual(selected[0]["key"], selected[1]["key"])
-        self.assertTrue(all(re.fullmatch(r"[0-9a-f]{64}", s["key"]) for s in selected))
 
     def test_empty_missing_main_and_duplicate_refs_are_refused(self):
         for refs in ("", f"{SHA}\t{LINE}\n", f"{SHA}\trefs/heads/main\n" * 2):
@@ -60,62 +53,16 @@ class SourceTests(unittest.TestCase):
             daily.sources(refs)
 
 
-class VerdictTests(unittest.TestCase):
-    def test_all_windows_jobs_at_the_requested_sha_pass(self):
-        result = daily.verdict(LINE, SHA, successful())
-        self.assertEqual(result["result"], "success")
-        self.assertEqual(result["tested_sha"], SHA)
-        self.assertEqual(result["ref"], LINE)
-
-    def test_every_skipped_failed_cancelled_or_missing_job_refuses(self):
-        for name in daily.WINDOWS_JOBS:
-            for state in ("skipped", "failure", "cancelled", None):
-                needs = successful()
-                needs[name]["result"] = state
-                with self.subTest(name=name, state=state):
-                    self.assertEqual(daily.verdict(LINE, SHA, needs)["result"], "failure")
-
-    def test_older_sha_cannot_pass_for_a_newer_requested_tip(self):
-        result = daily.verdict(LINE, "b" * 40, successful())
-        self.assertEqual(result["result"], "failure")
-        self.assertIsNone(result["tested_sha"])
-        self.assertEqual(result["requested_sha"], "b" * 40)
-
-    def test_missing_identity_and_changed_dependency_set_refuse(self):
-        for mutation in (lambda n: n.pop("windows"),
-                         lambda n: n.update(extra={"result": "success", "outputs": {"sha": SHA}}),
-                         lambda n: n["windows"]["outputs"].clear()):
-            needs = successful()
-            mutation(needs)
-            self.assertEqual(daily.verdict(LINE, SHA, needs)["result"], "failure")
-
+class IdentityTests(unittest.TestCase):
     def test_checkout_must_match_the_discovered_commit(self):
         self.assertEqual(daily.checked_out(LINE, SHA, SHA), SHA)
         with self.assertRaisesRegex(ValueError, "no tests were credited"):
             daily.checked_out(LINE, SHA, "b" * 40)
 
-    def test_malformed_job_records_refuse(self):
-        for needs in ([], {"windows": None}, {"windows": {"outputs": None}}):
-            with self.subTest(needs=needs), self.assertRaises(ValueError):
-                daily.verdict(LINE, SHA, needs)
-
-    def test_verdict_command_writes_the_exact_source_to_summary_and_artifact(self):
-        for sha, status in ((SHA, 0), ("b" * 40, 1)):
-            with tempfile.TemporaryDirectory() as temp, self.subTest(sha=sha):
-                summary = Path(temp) / "summary.md"
-                result = subprocess.run(
-                    [sys.executable, "-B", str(ROOT / "scripts/windows-daily.py"),
-                     "verdict", "--ref", LINE, "--sha", sha], cwd=temp, text=True,
-                    env={**os.environ, "DAILY_WINDOWS_NEEDS": json.dumps(successful()),
-                         "GITHUB_STEP_SUMMARY": str(summary)}, capture_output=True,
-                )
-                self.assertEqual(result.returncode, status, result.stderr)
-                report = json.loads((Path(temp) / "daily-windows-result.json").read_text())
-                self.assertEqual(report["requested_sha"], sha)
-                self.assertEqual(report["tested_sha"], SHA if status == 0 else None)
-                self.assertIn(LINE, summary.read_text())
-                self.assertIn(sha, summary.read_text())
-                self.assertIn("no evidence for a newer branch tip", summary.read_text())
+    def test_identity_refuses_a_ref_that_is_neither_main_nor_a_line(self):
+        for ref in ("refs/heads/task/x", "refs/tags/integration/x", "refs/pull/1/merge"):
+            with self.subTest(ref=ref), self.assertRaises(ValueError):
+                daily.identity(ref, SHA)
 
 
 def workflow(name):
@@ -140,65 +87,364 @@ def commands(job):
                     break
                 lines.append(line[10:])
             command = "\n".join(lines)
-        if "../runner/scripts/windows-daily.py identity" not in command:
-            found.append(command.replace("$GITHUB_WORKSPACE/source", "$GITHUB_WORKSPACE")
-                         .replace("${GITHUB_WORKSPACE}/source", "${GITHUB_WORKSPACE}"))
+        if "scripts/windows-daily.py identity" not in command:
+            found.append(command)
     return found
 
 
 class WorkflowTests(unittest.TestCase):
-    def test_schedule_discovers_lines_and_calls_the_runner_without_write_permissions(self):
+    def test_the_schedule_discovers_lines_and_dispatches_the_runner_at_their_refs(self):
         scheduler = workflow("windows-daily")
         self.assertIn('cron: "23 6 * * *"', scheduler)
         self.assertIn("run: python3 -I -B scripts/windows-daily.py discover", scheduler)
         self.assertIn("matrix: ${{ fromJSON(needs.sources.outputs.matrix) }}", scheduler)
-        self.assertIn("uses: ./.github/workflows/windows-daily-run.yml", scheduler)
-        self.assertIn("source-sha: ${{ matrix.sha }}", scheduler)
-        self.assertIn("source-ref: ${{ matrix.ref }}", scheduler)
-        self.assertNotIn("write", scheduler)
         self.assertIn("fail-fast: false", scheduler)
+        self.assertNotIn("uses: ./.github/workflows/windows-daily-run.yml", scheduler)
+
+    def test_the_runner_can_only_be_dispatched(self):
+        runner = workflow("windows-daily-run")
+        triggers = runner.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertEqual(re.findall(r"^  (\w+):", triggers, re.M), ["workflow_dispatch"])
+        self.assertEqual(re.findall(r"^      ([\w-]+):", triggers, re.M), ["source-sha"])
+        permissions = runner.split("\npermissions:\n", 1)[1].split("\n\n", 1)[0]
+        self.assertEqual(permissions.split(), ["contents:", "read"])
 
     def test_daily_jobs_execute_the_full_existing_windows_commands(self):
         existing = jobs((ROOT / ".github/workflows/codeflow-ci.yml").read_text())
         added = jobs(workflow("windows-daily-run"))
-        self.assertEqual(set(added), daily.WINDOWS_JOBS | {"verdict"})
+        self.assertEqual(set(added), daily.WINDOWS_JOBS)
         for name in daily.WINDOWS_JOBS:
             with self.subTest(job=name):
                 self.assertEqual(commands(added[name]), commands(existing[name]))
                 self.assertIn("runs-on: windows-latest", added[name])
-                self.assertIn("working-directory: source", added[name])
-                self.assertIn("ref: ${{ inputs.source-sha }}\n          path: source", added[name])
-                self.assertIn("id: identity", added[name])
-                self.assertIn("sha: ${{ steps.identity.outputs.sha }}", added[name])
-                self.assertEqual(added[name].count("persist-credentials: false"), 2)
+                self.assertEqual(added[name].count("persist-credentials: false"), 1)
+                self.assertEqual(added[name].count("uses: actions/checkout@"), 1)
         self.assertIn("partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]", added["windows-tests"])
         self.assertIn("fail-fast: false", added["windows-tests"])
 
-    def test_daily_verdict_runs_after_failures_and_reads_all_job_identities(self):
-        job = jobs(workflow("windows-daily-run"))["verdict"]
-        self.assertIn("if: ${{ always() }}", job)
-        self.assertIn("DAILY_WINDOWS_NEEDS: ${{ toJSON(needs) }}", job)
-        self.assertIn('verdict --ref "$TESTED_REF" --sha "$TESTED_SHA"', job)
-        self.assertIn("at ${{ inputs.source-sha }}", job)
-        dependencies = re.search(r"needs: \[([^\]]+)\]", job).group(1)
-        self.assertEqual(set(dependencies.split(", ")), daily.WINDOWS_JOBS)
+    def test_every_job_stops_when_its_commit_is_not_the_requested_one(self):
+        """The exact-SHA check: dispatching at a ref runs its tip, which can have moved."""
+        added = jobs(workflow("windows-daily-run"))
+        self.assertIn("TESTED_SHA: ${{ inputs.source-sha }}", workflow("windows-daily-run"))
+        for name in daily.WINDOWS_JOBS:
+            with self.subTest(job=name):
+                steps = re.findall(r"^      - name: (.*)$", added[name], re.M)
+                self.assertEqual(steps[:2], ["Check out this run's commit", "Report and verify the tested commit"])
+                self.assertIn('windows-daily.py identity --ref "$GITHUB_REF" --sha "$TESTED_SHA"', added[name])
 
-    def test_artifacts_are_namespaced_by_the_discovered_ref_and_sha(self):
-        runner = workflow("windows-daily-run")
-        for line in runner.splitlines():
-            if re.match(r"          (?:name|pattern):", line):
-                self.assertIn("daily-${{ inputs.artifact-key }}-", line)
-        self.assertIn("pattern: daily-${{ inputs.artifact-key }}-windows-junit-*", runner)
-        self.assertIn("path: source/target/nextest/partitions", runner)
-        self.assertIn("path: source/target/windows-tests.tar.zst", runner)
-        self.assertNotIn("actions: write", runner)
+    def test_the_identity_command_fails_on_another_commit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            subprocess.run(["git", "init", "-q", temp], check=True, env=CLEAN_ENV)
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "core.hooksPath=/dev/null",
+                            "commit", "-q", "--allow-empty", "-m", "x"], cwd=temp, check=True, env=CLEAN_ENV)
+            head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=temp, text=True, env=CLEAN_ENV).strip()
+            for sha, status in ((head, 0), ("b" * 40, 1)):
+                with self.subTest(sha=sha):
+                    done = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/windows-daily.py"), "identity",
+                                           "--ref", LINE, "--sha", sha], cwd=temp, text=True, capture_output=True,
+                                          env=CLEAN_ENV)
+                    self.assertEqual(done.returncode, status, done.stderr)
+
+    def test_the_job_names_the_reader_expects_are_the_runner_s(self):
+        names = set()
+        for job in jobs(workflow("windows-daily-run")).values():
+            name = re.search(r"^    name: (.*)$", job, re.M).group(1)
+            if "${{ matrix.partition }}" not in name:
+                names.add(name)
+                continue
+            partitions = re.search(r"^\s+partition: \[(.*)\]$", job, re.M).group(1).split(", ")
+            names.update(name.replace("${{ matrix.partition }}", partition) for partition in partitions)
+        self.assertEqual(names, daily.RUN_JOB_NAMES)
+
+
+class DispatcherTests(unittest.TestCase):
+    """Review test 1: only the dispatch job can start runs, and it runs no line code."""
+
+    def scheduler(self):
+        return jobs(workflow("windows-daily"))
+
+    def test_only_the_dispatch_job_holds_actions_write(self):
+        self.assertIn("permissions: {}", workflow("windows-daily").split("jobs:")[0])
+        for name, job in self.scheduler().items():
+            with self.subTest(job=name):
+                self.assertEqual("actions: write" in job, name == "dispatch")
+        for other in ("windows-daily-run", "windows-daily-verdict"):
+            self.assertNotIn("actions: write", workflow(other))
+
+    def test_the_dispatch_job_holds_nothing_else(self):
+        block = re.search(r"^    permissions:\n((?:      .*\n)+)", self.scheduler()["dispatch"], re.M).group(1)
+        self.assertEqual(block.split(), ["actions:", "write"])
+
+    def test_the_dispatch_job_checks_out_nothing_and_only_starts_a_run(self):
+        job = self.scheduler()["dispatch"]
+        self.assertNotIn("actions/checkout", job)
+        self.assertEqual(re.findall(r"^\s+- uses: |^\s+uses: ", job, re.M), [])
+        self.assertEqual(job.count("      - name: "), 1)
+        self.assertEqual(re.findall(r"^        run: (.*)$", job, re.M), [
+            'gh workflow run windows-daily-run.yml --repo "$GITHUB_REPOSITORY" '
+            '--ref "${SOURCE_REF#refs/heads/}" -f source-sha="$SOURCE_SHA"'])
+
+    def test_the_dispatch_job_passes_the_line_through_the_environment(self):
+        """Never interpolated into the command, though discovery validates both."""
+        command = re.search(r"^        run: (.*)$", self.scheduler()["dispatch"], re.M).group(1)
+        self.assertNotIn("${{", command)
+
+    def test_the_dispatch_step_starts_the_run_at_the_line_s_own_ref(self):
+        """The real command line, against a stand-in gh that records its arguments."""
+        command = re.search(r"^        run: (.*)$", self.scheduler()["dispatch"], re.M).group(1)
+        with tempfile.TemporaryDirectory() as temp:
+            gh = Path(temp) / "gh"
+            gh.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$GH_ARGUMENTS"\n', encoding="utf-8")
+            gh.chmod(0o755)
+            arguments = Path(temp) / "arguments"
+            done = subprocess.run(["bash", "-e", "-c", command], text=True, capture_output=True, env={
+                "PATH": f"{temp}{os.pathsep}{os.environ['PATH']}", "GH_ARGUMENTS": str(arguments),
+                "GITHUB_REPOSITORY": "o/n", "SOURCE_REF": "refs/heads/integration/EPC-1-x", "SOURCE_SHA": SHA})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(arguments.read_text().split(), [
+                "workflow", "run", "windows-daily-run.yml", "--repo", "o/n", "--ref", "integration/EPC-1-x",
+                "-f", f"source-sha={SHA}"])
+
+    def test_the_source_job_reads_lines_as_data_and_cannot_write(self):
+        job = self.scheduler()["sources"]
+        self.assertEqual(re.search(r"^    permissions:\n((?:      .*\n)+)", job, re.M).group(1).split(),
+                         ["actions:", "read", "contents:", "read"])
+        self.assertNotRegex(job, r"(?m)^\s+ref:")
+        self.assertEqual(re.findall(r"^        run: (.*)$", job, re.M),
+                         ["python3 -I -B scripts/windows-daily.py discover"])
+
+    def test_the_dispatcher_and_reader_act_only_under_main(self):
+        self.assertIn("if: ${{ github.ref == 'refs/heads/main' }}", self.scheduler()["sources"])
+        self.assertIn("if: ${{ github.ref == 'refs/heads/main' }}", jobs(workflow("windows-daily-verdict"))["verdict"])
+
+    def test_the_reader_can_read_and_write_nothing(self):
+        job = jobs(workflow("windows-daily-verdict"))["verdict"]
+        self.assertEqual(re.search(r"^    permissions:\n((?:      .*\n)+)", job, re.M).group(1).split(),
+                         ["actions:", "read", "contents:", "read"])
+        self.assertIn("run: python3 -I -B scripts/windows-daily.py read", job)
+        self.assertIn("permissions: {}", workflow("windows-daily-verdict").split("jobs:")[0])
+        self.assertNotRegex(job, r"(?m)^\s+ref:")
+
+
+REQUESTED_AT = datetime(2026, 11, 4, 6, 23, tzinfo=timezone.utc)
+STARTED = "2026-11-04T06:24:00Z"
+RUNNER_TEXT = "the runner file\n"
+RUNNER_HASH = daily.runner_hash(RUNNER_TEXT)
+
+
+def recorded_run(**changes):
+    return {"id": 7, "path": daily.RUNNER_PATH, "event": "workflow_dispatch", "head_branch": "integration/example",
+            "head_sha": SHA, "status": "completed", "conclusion": "success", "created_at": STARTED, **changes}
+
+
+def recorded_jobs():
+    return [{"name": name, "conclusion": "success"} for name in daily.RUN_JOB_NAMES]
+
+
+class ReaderTests(unittest.TestCase):
+    """Review test 2: a line's workflow can change what its run reports, so the reader
+    judges only from what GitHub records and fails closed on any mismatch."""
+
+    def judge(self, runs=None, job_rows=None, runner=RUNNER_TEXT, ref=LINE):
+        return daily.judge({"ref": ref, "sha": SHA}, REQUESTED_AT, [recorded_run()] if runs is None else runs,
+                           lambda run: recorded_jobs() if job_rows is None else job_rows,
+                           lambda sha: runner, RUNNER_HASH)
+
+    def test_a_run_matching_every_record_is_credited(self):
+        result = self.judge()
+        self.assertEqual(result["result"], "credited")
+        self.assertEqual(result["tested_sha"], SHA)
+        self.assertEqual(result["run_id"], 7)
+
+    def test_each_recorded_field_that_does_not_match_gets_no_credit(self):
+        for field, value in (("path", ".github/workflows/other.yml"), ("event", "push"), ("event", "pull_request"),
+                             ("head_branch", "integration/other"), ("head_sha", "b" * 40), ("path", None),
+                             ("event", None), ("head_branch", None), ("head_sha", None)):
+            with self.subTest(field=field, value=value):
+                result = self.judge([recorded_run(**{field: value})])
+                self.assertEqual(result["result"], "no-credit")
+                self.assertIsNone(result["tested_sha"])
+                self.assertIn(field, result["reasons"][0])
+
+    def test_any_conclusion_but_success_gets_no_credit(self):
+        for conclusion in ("failure", "cancelled", "skipped", "timed_out", "neutral", "action_required", None):
+            with self.subTest(conclusion=conclusion):
+                result = self.judge([recorded_run(conclusion=conclusion)])
+                self.assertEqual(result["result"], "failure")
+                self.assertIsNone(result["tested_sha"])
+
+    def test_a_line_s_changed_workflow_is_not_credited_even_with_all_green(self):
+        """What stops a line's own workflow being credited as full tier."""
+        for runner in ("a line removed the partitions\n", RUNNER_TEXT + "\n", "", None):
+            with self.subTest(runner=runner):
+                result = self.judge(runner=runner)
+                self.assertEqual(result["result"], "no-credit")
+                self.assertIsNone(result["tested_sha"])
+                self.assertIn("differs from main's", result["reasons"][0])
+
+    def test_a_missing_failed_skipped_or_extra_job_gets_no_credit(self):
+        names = sorted(daily.RUN_JOB_NAMES)
+        for name in names:
+            for state in ("failure", "skipped", "cancelled", None):
+                rows = [{"name": n, "conclusion": state if n == name else "success"} for n in names]
+                with self.subTest(name=name, state=state):
+                    self.assertEqual(self.judge(job_rows=rows)["result"], "no-credit")
+        without_partition = [row for row in recorded_jobs() if row["name"] != "windows tests (7 of 12)"]
+        self.assertEqual(self.judge(job_rows=without_partition)["result"], "no-credit")
+        self.assertEqual(self.judge(job_rows=recorded_jobs() + [{"name": "extra", "conclusion": "success"}])["result"],
+                         "no-credit")
+        self.assertEqual(self.judge(job_rows=[])["result"], "no-credit")
+
+    def test_the_newest_run_decides_and_an_older_green_one_cannot_cover_it(self):
+        newer = recorded_run(id=8, created_at="2026-11-04T06:30:00Z", conclusion="failure")
+        self.assertEqual(self.judge([recorded_run(), newer])["result"], "failure")
+
+    def test_main_s_row_is_judged_like_any_line(self):
+        run = recorded_run(head_branch="main")
+        self.assertEqual(self.judge([run], ref=daily.MAIN)["result"], "credited")
+        self.assertEqual(self.judge([recorded_run()], ref=daily.MAIN)["result"], "no-credit")
+
+
+class MissingRunTests(unittest.TestCase):
+    """Review test 3: results no longer come through `needs`, so a missing or late
+    run is no evidence, never green."""
+
+    NOW = REQUESTED_AT + timedelta(hours=6)
+
+    def judge(self, runs):
+        return daily.judge({"ref": LINE, "sha": SHA}, REQUESTED_AT, runs, lambda run: recorded_jobs(),
+                           lambda sha: RUNNER_TEXT, RUNNER_HASH)
+
+    def test_no_run_at_all_is_no_evidence(self):
+        result = self.judge([])
+        self.assertEqual(result["result"], "no-evidence")
+        self.assertIsNone(result["tested_sha"])
+
+    def test_a_green_run_from_before_the_request_is_no_evidence(self):
+        result = self.judge([recorded_run(created_at="2026-11-03T06:24:00Z")])
+        self.assertEqual(result["result"], "no-evidence")
+
+    def test_an_unfinished_run_is_no_evidence(self):
+        for status in ("queued", "in_progress", "waiting", "pending", "requested", None):
+            with self.subTest(status=status):
+                result = self.judge([recorded_run(status=status, conclusion=None)])
+                self.assertEqual(result["result"], "no-evidence")
+                self.assertIsNone(result["tested_sha"])
+
+    def evidence(self, request, runs_by_ref, requested_run=None):
+        run = {"id": 5, "path": daily.DISPATCHER_PATH, "head_branch": "main", "event": "schedule",
+               "status": "completed", "created_at": "2026-11-04T06:23:00Z", **(requested_run or {})}
+
+        def api(path):
+            if "windows-daily.yml/runs" in path:
+                return {"workflow_runs": [run]}
+            if "/jobs?" in path:
+                return {"jobs": recorded_jobs()}
+            return {"workflow_runs": next(runs for ref, runs in runs_by_ref.items()
+                                          if f"branch={daily.quote(ref, safe='')}&" in path)}
+
+        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "o/n"}):
+            return daily.read_evidence(api, lambda run_id: {"runner_sha256": RUNNER_HASH, **request},
+                                       lambda sha, path: RUNNER_TEXT, self.NOW)
+
+    REQUEST = {"include": [{"ref": daily.MAIN, "sha": SHA}, {"ref": LINE, "sha": SHA}], "skipped": [], "left_out": []}
+    MAIN_RUN = recorded_run(head_branch="main")
+
+    def test_every_requested_line_credited_passes(self):
+        result = self.evidence(self.REQUEST, {"main": [self.MAIN_RUN], "integration/example": [recorded_run()]})
+        self.assertEqual(result["result"], "success")
+
+    def test_one_missing_line_fails_the_whole_verdict(self):
+        result = self.evidence(self.REQUEST, {"main": [self.MAIN_RUN], "integration/example": []})
+        self.assertEqual(result["result"], "failure")
+        self.assertEqual([line["result"] for line in result["lines"]], ["credited", "no-evidence"])
+
+    def test_one_late_line_fails_the_whole_verdict(self):
+        late = recorded_run(status="in_progress", conclusion=None)
+        result = self.evidence(self.REQUEST, {"main": [self.MAIN_RUN], "integration/example": [late]})
+        self.assertEqual(result["result"], "failure")
+
+    def test_a_request_without_main_s_runner_hash_is_refused(self):
+        for recorded in (None, "", "abc", "A" * 64, 7):
+            request = {**self.REQUEST, "runner_sha256": recorded}
+            with self.subTest(recorded=recorded), self.assertRaisesRegex(ValueError, "does not record main's runner"):
+                self.evidence(request, {"main": [self.MAIN_RUN], "integration/example": [recorded_run()]})
+
+    def test_a_runner_that_main_changes_after_the_request_costs_no_red_day(self):
+        """The lines ran main's runner of 06:23, and the request recorded it; the
+        file main holds at 12:23 has no say."""
+        with mock.patch.object(daily, "RUNNER", Path("/nonexistent/runner.yml")):
+            result = self.evidence(self.REQUEST, {"main": [self.MAIN_RUN], "integration/example": [recorded_run()]})
+        self.assertEqual(result["result"], "success")
+
+    def test_a_line_s_runner_is_held_to_the_hash_the_request_recorded(self):
+        request = {**self.REQUEST, "runner_sha256": daily.runner_hash("main's runner at the request\n")}
+        result = self.evidence(request, {"main": [self.MAIN_RUN], "integration/example": [recorded_run()]})
+        self.assertEqual(result["result"], "failure")
+        self.assertEqual([line["result"] for line in result["lines"]], ["no-credit", "no-credit"])
+
+    def test_a_request_without_main_or_malformed_is_refused(self):
+        for request in ({"include": [{"ref": LINE, "sha": SHA}], "skipped": [], "left_out": []},
+                        {"include": [], "skipped": [], "left_out": []}, {},
+                        {"include": [{"ref": daily.MAIN, "sha": SHA}], "left_out": []},
+                        {"include": [{"ref": daily.MAIN, "sha": "bad"}], "skipped": [], "left_out": []}):
+            with self.subTest(request=request), self.assertRaises((ValueError, KeyError)):
+                self.evidence(request, {"main": [self.MAIN_RUN]})
+
+    def test_a_dispatcher_run_that_is_missing_stale_or_not_main_s_is_refused(self):
+        good = {"id": 5, "path": daily.DISPATCHER_PATH, "head_branch": "main", "event": "schedule",
+                "status": "completed", "created_at": "2026-11-04T06:23:00Z"}
+        self.assertEqual(daily.latest_request([good], self.NOW)["id"], 5)
+        for changes in ({"created_at": "2026-11-02T06:23:00Z"}, {"head_branch": "integration/example"},
+                        {"path": ".github/workflows/other.yml"}, {"event": "push"}, {"status": "in_progress"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                daily.latest_request([{**good, **changes}], self.NOW)
+        with self.assertRaises(ValueError):
+            daily.latest_request([], self.NOW)
+
+    def test_the_read_command_fails_and_keeps_a_result_when_github_cannot_be_read(self):
+        with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp), mock.patch.object(
+                daily, "gh_api", side_effect=subprocess.CalledProcessError(1, "gh")), mock.patch.dict(
+                os.environ, {"GITHUB_REPOSITORY": "o/n", "GITHUB_STEP_SUMMARY": str(Path(temp) / "summary")}), \
+                mock.patch.object(sys, "argv", ["windows-daily.py", "read"]), mock.patch("builtins.print"):
+            self.assertEqual(daily.main(), 1)
+            result = json.loads((Path(temp) / daily.RESULT_FILE).read_text())
+            self.assertEqual(result["result"], "failure")
+            self.assertIn("no line has evidence", (Path(temp) / "summary").read_text())
+
+    def test_the_read_command_writes_the_exact_source_and_the_limit(self):
+        request = {"include": [{"ref": daily.MAIN, "sha": SHA}], "skipped": [], "left_out": [
+            {"ref": LINE, "sha": "b" * 40, "missing": [f"{daily.RUNNER_PATH} differs from main's"]}],
+            "runner_sha256": daily.runner_hash(daily.RUNNER.read_text(encoding="utf-8"))}
+        run = {"id": 5, "path": daily.DISPATCHER_PATH, "head_branch": "main", "event": "schedule",
+               "status": "completed", "created_at": datetime.now(timezone.utc).isoformat()}
+        started = (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat()
+
+        def api(path):
+            if "windows-daily.yml/runs" in path:
+                return {"workflow_runs": [run]}
+            if "/jobs?" in path:
+                return {"jobs": recorded_jobs()}
+            return {"workflow_runs": [recorded_run(head_branch="main", created_at=started)]}
+
+        with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp), mock.patch.object(
+                daily, "gh_api", api), mock.patch.object(daily, "download_request", lambda run_id: request), \
+                mock.patch.object(daily, "tree_reader", lambda: lambda sha, path: daily.RUNNER.read_text(encoding="utf-8")), \
+                mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "o/n", "GITHUB_STEP_SUMMARY": str(Path(temp) / "summary")}), \
+                mock.patch.object(sys, "argv", ["windows-daily.py", "read"]), mock.patch("builtins.print"):
+            self.assertEqual(daily.main(), 0)
+            summary = (Path(temp) / "summary").read_text()
+            self.assertIn(SHA, summary)
+            self.assertIn("no evidence for a newer branch tip", summary)
+            self.assertIn(f"{LINE}` at `{'b' * 40}`: left out, no daily evidence", summary)
+            self.assertIn("differs from main's", summary)
 
 
 NEEDS = {"scripts/windows-partitions.py": {"drift", "reports", "--list"}, "scripts/journey-gate.py": {"--part"},
          "scripts/windows-test-times.json": set()}
 PARTITIONS = 'add_parser("drift")\nadd_parser("reports")\nadd_argument("--list")\n'
 COMPLETE = {"scripts/windows-partitions.py": PARTITIONS, "scripts/journey-gate.py": 'add_argument("--part")',
-            "scripts/windows-test-times.json": "{}"}
+            "scripts/windows-test-times.json": "{}", daily.RUNNER_PATH: RUNNER_TEXT}
 
 
 def line_tree(needs):
@@ -207,6 +453,7 @@ def line_tree(needs):
     for path, words in needs.items():
         text[path] = "\n".join(f'add_argument("{word}")' if word.startswith("--") else f'add_parser("{word}")'
                                for word in sorted(words)) + "\n"
+    text[daily.RUNNER_PATH] = workflow("windows-daily-run")
     return text
 
 
@@ -214,9 +461,9 @@ class ActiveLineTests(unittest.TestCase):
     """A line is active when its own tree has what the runner calls."""
 
     def select(self, trees):
-        listed = {"include": [{"ref": ref, "sha": sha, "key": "k"} for ref, sha in trees]}
+        listed = {"include": [{"ref": ref, "sha": sha} for ref, sha in trees]}
         return daily.select_active(listed, NEEDS, lambda sha, path: trees[next(
-            ref for ref, known in trees if known == sha), sha].get(path))
+            ref for ref, known in trees if known == sha), sha].get(path), RUNNER_TEXT)
 
     def test_the_needs_are_read_from_the_runner_itself(self):
         needs = daily.runner_needs(workflow("windows-daily-run"))
@@ -224,7 +471,7 @@ class ActiveLineTests(unittest.TestCase):
         self.assertLessEqual({"--part", "--skip-benchmark", "--results"}, needs["scripts/journey-gate.py"])
         self.assertIn("scripts/test_gate_parity.py", needs)
         self.assertIn("scripts/windows-test-times.json", needs)
-        self.assertNotIn(daily.RUNNER_OWN, needs)
+        self.assertLessEqual({"identity", "--ref"}, needs["scripts/windows-daily.py"])
 
     def test_a_runner_naming_no_script_proves_no_line(self):
         with self.assertRaisesRegex(ValueError, "names no script"):
@@ -246,6 +493,14 @@ class ActiveLineTests(unittest.TestCase):
         self.assertEqual(matrix["include"], [])
         self.assertEqual(left_out, [{"ref": LINE, "sha": SHA, "missing": ["no scripts/windows-partitions.py"]}])
 
+    def test_a_line_with_another_runner_file_is_left_out_and_named(self):
+        """Its run could not be credited, so it gets no run."""
+        for runner in ("something else\n", None):
+            with self.subTest(runner=runner):
+                matrix, left_out = self.select({(LINE, SHA): {**COMPLETE, daily.RUNNER_PATH: runner}})
+                self.assertEqual(matrix["include"], [])
+                self.assertEqual(left_out[0]["missing"], [f"{daily.RUNNER_PATH} differs from main's"])
+
     def test_a_line_whose_script_lacks_a_runner_command_is_left_out_and_named(self):
         tree = {**COMPLETE, "scripts/windows-partitions.py": 'add_parser("check")\nadd_argument("--list")\n'}
         _, left_out = self.select({(LINE, SHA): tree})
@@ -264,7 +519,7 @@ class ActiveLineTests(unittest.TestCase):
     def test_main_is_always_selected_and_never_read(self):
         def read(sha, path):
             self.fail("main's tree was read")
-        matrix, left_out = daily.select_active({"include": [{"ref": daily.MAIN, "sha": SHA, "key": "k"}]}, NEEDS, read)
+        matrix, left_out = daily.select_active({"include": [{"ref": daily.MAIN, "sha": SHA}]}, NEEDS, read, RUNNER_TEXT)
         self.assertEqual([row["ref"] for row in matrix["include"]], [daily.MAIN])
         self.assertEqual(left_out, [])
 
@@ -272,12 +527,12 @@ class ActiveLineTests(unittest.TestCase):
         def read(sha, path):
             raise subprocess.CalledProcessError(128, "git")
         with self.assertRaises(subprocess.CalledProcessError):
-            daily.select_active({"include": [{"ref": LINE, "sha": SHA, "key": "k"}]}, NEEDS, read)
+            daily.select_active({"include": [{"ref": LINE, "sha": SHA}]}, NEEDS, read, RUNNER_TEXT)
 
 
 class DailyCacheTests(unittest.TestCase):
-    """A daily job runs a line's code under github.ref = main, so whatever it saved
-    would land in main's cache scope, where main's own runs restore it."""
+    """A run's caches belong to its own ref. The daily run still saves none: the
+    line's push runs keep them current, and it adds nothing worth saving."""
 
     def steps_using(self, action):
         pattern = rf"^      - uses: {re.escape(action)}@[^\n]*\n((?:        .*\n)*)"
@@ -300,23 +555,13 @@ class DailyCacheTests(unittest.TestCase):
         """Actions with no cache, or whose cache the two tests above pin. Artifacts
         belong to their own run."""
         known = {"actions/checkout", "actions/upload-artifact", "actions/download-artifact", "actions/setup-node",
-                 "Swatinem/rust-cache", "taiki-e/install-action", "msys2/setup-msys2",
-                 "./.github/workflows/windows-daily-run.yml"}
-        for name in ("windows-daily", "windows-daily-run"):
+                 "Swatinem/rust-cache", "taiki-e/install-action", "msys2/setup-msys2"}
+        for name in ("windows-daily", "windows-daily-run", "windows-daily-verdict"):
             used = set(re.findall(r"uses: ([^@\s]+)", workflow(name)))
             self.assertLessEqual(used, known, name)
 
-    def test_msys2_saves_before_any_line_code_runs(self):
-        """setup-msys2 keeps its cache on, since it has no post step and so saves
-        inside its own step. Only the identity check, from the scheduler's code, runs first."""
-        job = jobs(workflow("windows-daily-run"))["windows-tests"]
-        before = job[:job.index("uses: msys2/setup-msys2@")]
-        commands = re.findall(r"^        run: (.*)$", before, re.M)
-        self.assertEqual(len(commands), 1, commands)
-        self.assertIn("../runner/scripts/windows-daily.py identity", commands[0])
-
     def test_the_reporting_script_runs_isolated(self):
-        for name in ("windows-daily", "windows-daily-run"):
+        for name in ("windows-daily", "windows-daily-run", "windows-daily-verdict"):
             for command in re.findall(r"^\s*run: (.*windows-daily\.py.*)$", workflow(name), re.M):
                 self.assertRegex(command, r"^python3? -I -B ", command)
 
@@ -371,12 +616,17 @@ class DiscoverJourneyTests(unittest.TestCase):
 
             result, out, summary = self.discover(checkout, temp)
             self.assertEqual(result.returncode, 0, result.stderr)
-            matrix = json.loads(out.split("=", 1)[1])
+            matrix = json.loads(out.splitlines()[0].split("=", 1)[1])
             self.assertEqual([row["ref"] for row in matrix["include"]],
                              ["refs/heads/integration/whole", daily.MAIN])
-            self.assertIn("Left out: not proven active", summary)
+            self.assertIn("Left out, no daily evidence: not proven active", summary)
             self.assertRegex(summary, r"integration/behind` at `[0-9a-f]{40}`: .*windows-partitions.py has no drift")
-            self.assertRegex(summary, r"integration/old` at `[0-9a-f]{40}`: no scripts/")
+            self.assertRegex(summary, r"integration/old` at `[0-9a-f]{40}`: .*differs from main's; no scripts/")
+            requested = json.loads((checkout / daily.REQUESTED_FILE).read_text())
+            self.assertEqual(requested["include"], matrix["include"])
+            self.assertEqual(requested["runner_sha256"], daily.runner_hash(workflow("windows-daily-run")))
+            self.assertEqual({row["ref"] for row in requested["left_out"]},
+                             {f"refs/heads/integration/{name}" for name in ("behind", "old", "folder")})
             self.assertRegex(summary, r"integration/folder` at `[0-9a-f]{40}`: no scripts/windows-test-times.json")
 
     def test_an_unreadable_remote_fails_the_run_and_offers_no_lines(self):
@@ -396,7 +646,8 @@ class DailyCoverageTests(unittest.TestCase):
     refs are read from the remote on every run and nothing stores them."""
 
     def discover(self, **listing):
-        with tempfile.TemporaryDirectory() as temp, mock.patch.object(
+        with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp), mock.patch.object(
+                daily, "gh_api", side_effect=OSError("no GitHub here")), mock.patch.object(
                 daily.subprocess, "check_output", **listing) as remote, mock.patch.object(
                 daily, "tree_reader", lambda: lambda sha, path: line_tree(daily.runner_needs(
                     workflow("windows-daily-run"))).get(path)), mock.patch.dict(
@@ -434,15 +685,14 @@ class DailyCoverageTests(unittest.TestCase):
         listing = f"{SHA}\trefs/heads/main\n" + "".join(f"{SHA}\t{ref}\n" for ref in others)
         self.assertEqual([row["ref"] for row in daily.sources(listing)["include"]], ["refs/heads/main"])
 
-    def test_no_selected_line_is_skipped_for_its_age_or_an_unchanged_tip(self):
-        """An unchanged tip runs again: nothing compares it with an earlier run."""
+    def test_the_dispatcher_has_these_jobs_and_conditions(self):
         scheduler = jobs(workflow("windows-daily"))
-        self.assertEqual(set(scheduler), {"sources", "lines"})
-        for name, job in scheduler.items():
-            self.assertNotIn("if:", job, name)
-        script = (ROOT / "scripts/windows-daily.py").read_text()
-        for memory in ("actions/runs", "api.github.com", '"gh"'):
-            self.assertNotIn(memory, script)
+        self.assertEqual(set(scheduler), {"sources", "dispatch"})
+        self.assertEqual(re.findall(r"^    if: (.*)$", scheduler["sources"], re.M),
+                         ["${{ github.ref == 'refs/heads/main' }}"])
+        self.assertEqual(re.findall(r"^    if: (.*)$", scheduler["dispatch"], re.M),
+                         ["${{ needs.sources.outputs.runs == 'true' }}"])
+        self.assertEqual(set(daily.sources(f"{SHA}\trefs/heads/main\n")["include"][0]), {"ref", "sha"})
 
     def test_a_run_skips_no_windows_job_and_has_no_tier(self):
         """Only the journey reader has a condition, and the verdict refuses its skip."""
@@ -451,16 +701,12 @@ class DailyCoverageTests(unittest.TestCase):
         self.assertEqual(conditions, {
             "windows-build": [], "windows-tests": [], "windows": [], "windows-release-journey": [],
             "windows-journeys": ["${{ always() && needs.windows-tests.result != 'skipped' }}"],
-            "verdict": ["${{ always() }}"],
         })
 
     def test_a_selected_line_that_fails_its_build_fails_visibly(self):
         """The active test reads files; a selected line can still fail when it runs."""
-        needs = successful()
-        needs["windows-build"] = {"result": "failure", "outputs": {"sha": SHA}}
-        for name in ("windows-tests", "windows-journeys"):
-            needs[name] = {"result": "skipped", "outputs": {}}
-        result = daily.verdict(LINE, SHA, needs)
+        result = daily.judge({"ref": LINE, "sha": SHA}, REQUESTED_AT, [recorded_run(conclusion="failure")],
+                             lambda run: recorded_jobs(), lambda sha: RUNNER_TEXT, RUNNER_HASH)
         self.assertEqual(result["result"], "failure")
         self.assertIsNone(result["tested_sha"])
 
@@ -468,7 +714,305 @@ class DailyCoverageTests(unittest.TestCase):
         runner = jobs(workflow("windows-daily-run"))
         for name in daily.WINDOWS_JOBS:
             self.assertIn("runs-on: windows-latest", runner[name])
-        self.assertEqual(set(runner) - daily.WINDOWS_JOBS, {"verdict"})
+        self.assertEqual(set(runner), daily.WINDOWS_JOBS)
+
+
+class LeftOutLineTests(unittest.TestCase):
+    """A line left out is not green. The overall verdict can pass without it, but
+    nothing may read that pass as a daily verdict for that line."""
+
+    SHA_OUT = "b" * 40
+    REQUEST = {"include": [{"ref": daily.MAIN, "sha": SHA}], "skipped": [],
+               "left_out": [{"ref": LINE, "sha": "b" * 40, "missing": ["no scripts/windows-partitions.py"]}]}
+    NOW = REQUESTED_AT + timedelta(hours=6)
+
+    def evidence(self, request=None):
+        dispatcher = {"id": 5, "path": daily.DISPATCHER_PATH, "head_branch": "main", "event": "schedule",
+                      "status": "completed", "created_at": "2026-11-04T06:23:00Z"}
+
+        def api(path):
+            if "windows-daily.yml/runs" in path:
+                return {"workflow_runs": [dispatcher]}
+            if "/jobs?" in path:
+                return {"jobs": recorded_jobs()}
+            return {"workflow_runs": [recorded_run(head_branch="main")]}
+
+        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "o/n"}):
+            return daily.read_evidence(api, lambda run_id: {"runner_sha256": RUNNER_HASH, **(request or self.REQUEST)},
+                                       lambda sha, path: RUNNER_TEXT, self.NOW)
+
+    def test_the_overall_run_can_pass_with_a_line_left_out(self):
+        self.assertEqual(self.evidence()["result"], "success")
+
+    def test_a_left_out_line_has_its_own_row_saying_no_evidence_while_the_run_passes(self):
+        result = self.evidence()
+        self.assertEqual(result["result"], "success")
+        self.assertEqual(result["lines"][1:], [{
+            "ref": LINE, "requested_sha": self.SHA_OUT, "tested_sha": None, "run_id": None,
+            "result": "no-evidence", "left_out": True, "reasons": ["no scripts/windows-partitions.py"]}])
+        self.assertEqual(result["lines"][0]["result"], "credited")
+        self.assertNotIn("left_out", result["lines"][0])
+
+    def test_a_left_out_line_cannot_rescue_a_line_that_failed(self):
+        no_run = {"include": [{"ref": daily.MAIN, "sha": "c" * 40}], "skipped": [], "left_out": self.REQUEST["left_out"]}
+        result = self.evidence(no_run)
+        self.assertEqual(result["result"], "failure")
+        self.assertEqual([line["result"] for line in result["lines"]], ["no-credit", "no-evidence"])
+
+    def test_nothing_reads_the_result_file_as_a_per_line_pass(self):
+        """Only the reader writes the result and only its workflow keeps it, as an artifact."""
+        found = set()
+        for folder in (ROOT / "scripts", ROOT / ".github/workflows"):
+            for path in folder.rglob("*"):
+                if path.is_file() and "__pycache__" not in path.parts and b"daily-windows-result" in path.read_bytes():
+                    found.add(path.relative_to(ROOT).as_posix())
+        self.assertEqual(found, {"scripts/windows-daily.py", "scripts/test_windows_daily.py",
+                                 ".github/workflows/windows-daily-verdict.yml"})
+        keeping = [line.strip() for line in workflow("windows-daily-verdict").splitlines() if "daily-windows-result" in line]
+        self.assertEqual(keeping, ["name: daily-windows-result", "path: daily-windows-result.json"])
+        self.assertIn("actions/upload-artifact", workflow("windows-daily-verdict"))
+        self.assertNotIn("actions/download-artifact", workflow("windows-daily-verdict"))
+
+    def test_the_report_says_no_daily_evidence_for_that_line_and_limits_the_pass(self):
+        report = daily.verdict_report(self.evidence())
+        self.assertIn(f"`{LINE}` at `{self.SHA_OUT}`: left out, no daily evidence\n  - no scripts/", report)
+        self.assertIn("It covers only the lines credited below.", report)
+        self.assertNotIn(f"`{LINE}` at `{self.SHA_OUT}`: credited", report)
+
+    def test_a_line_both_judged_and_left_out_is_refused(self):
+        request = {"include": [{"ref": daily.MAIN, "sha": SHA}, {"ref": LINE, "sha": SHA}], "skipped": [],
+                   "left_out": [{"ref": LINE, "sha": SHA, "missing": ["x"]}]}
+        with self.assertRaisesRegex(ValueError, "both judges a line and leaves it out"):
+            self.evidence(request)
+
+    def test_a_malformed_left_out_row_is_refused(self):
+        for row in ({"ref": LINE}, {"ref": "refs/heads/task/x", "sha": SHA}, {"ref": LINE, "sha": "bad"},
+                    {"ref": LINE, "sha": SHA}):
+            request = {"include": [{"ref": daily.MAIN, "sha": SHA}], "skipped": [], "left_out": [row]}
+            with self.subTest(row=row), self.assertRaises((ValueError, KeyError)):
+                self.evidence(request)
+
+    def test_a_left_out_line_can_earn_no_reduced_tier_credit(self):
+        """The tier and the proof that a run was full tier read nothing the daily run
+        produces, so a daily pass can credit no line with them. The tier verdict
+        still calls its own pass not full evidence, for any line."""
+        readers = {
+            "codeflow-ci.yml": workflow("codeflow-ci"),
+            "ci-reuse.py": (ROOT / "scripts/ci-reuse.py").read_text(encoding="utf-8"),
+            "gate-parity.py": (ROOT / "scripts/gate-parity.py").read_text(encoding="utf-8"),
+        }
+        for name, text in readers.items():
+            for daily_output in ("daily-windows-result", "daily-windows-requested", "windows-daily.py",
+                                 "windows-daily-verdict", "windows-daily-run", "workflows/windows-daily"):
+                with self.subTest(reader=name, output=daily_output):
+                    self.assertNotIn(daily_output, text)
+        tier = jobs(workflow("codeflow-ci"))["windows-tier"]
+        self.assertNotRegex(tier, r"(?i)\bdaily\b")
+        self.assertNotIn("needs:", tier)
+        self.assertNotIn("actions/", tier)
+        self.assertNotRegex(tier, r"\bgh\b")
+        verdict = jobs(workflow("codeflow-ci"))["windows-verdict"]
+        self.assertIn("not full Windows evidence", step_script(verdict, "Every Windows job passed"))
+
+
+class SkipTests(unittest.TestCase):
+    """A line's exact tip with a passing run within the age gets no new run. Anything
+    else runs it: a failed, missing, unfinished or unreadable run never skips."""
+
+    NOW = datetime(2026, 11, 4, 6, 23, tzinfo=timezone.utc)
+    MATRIX = {"include": [{"ref": LINE, "sha": SHA}]}
+
+    def api(self, runs=None, job_rows=None):
+        def call(path):
+            if "/jobs?" in path:
+                return {"jobs": recorded_jobs() if job_rows is None else job_rows}
+            return {"workflow_runs": [self.run_at(days=1)] if runs is None else runs}
+        return call
+
+    def run_at(self, days, **changes):
+        return recorded_run(created_at=(self.NOW - timedelta(days=days)).isoformat(), **changes)
+
+    def skip(self, api=None, age=7, read=lambda sha, path: RUNNER_TEXT, matrix=None):
+        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "o/n"}):
+            return daily.skip_proven(matrix or self.MATRIX, age, api or self.api(), read, RUNNER_HASH, self.NOW)
+
+    def assert_runs(self, result):
+        self.assertEqual(result, (self.MATRIX, []))
+
+    def test_a_recent_passing_run_at_the_exact_tip_skips(self):
+        self.assertEqual(self.skip(), ({"include": []}, [{"ref": LINE, "sha": SHA, "run_id": 7}]))
+
+    def test_a_run_inside_the_age_skips_and_one_past_it_reruns(self):
+        self.assertEqual(len(self.skip(self.api([self.run_at(days=6)]))[1]), 1)
+        self.assertEqual(len(self.skip(self.api([self.run_at(days=7)]))[1]), 1)
+        self.assert_runs(self.skip(self.api([self.run_at(days=7, id=9) | {
+            "created_at": (self.NOW - timedelta(days=7, seconds=1)).isoformat()}])))
+        self.assert_runs(self.skip(self.api([self.run_at(days=30)])))
+
+    def test_a_project_s_own_age_is_honoured(self):
+        api = self.api([self.run_at(days=4)])
+        self.assert_runs(self.skip(api, age=3))
+        self.assertEqual(len(self.skip(api, age=5)[1]), 1)
+
+    def test_a_failed_or_unfinished_run_never_skips(self):
+        for changes in ({"conclusion": "failure"}, {"conclusion": "cancelled"}, {"conclusion": "timed_out"},
+                        {"conclusion": None, "status": "in_progress"}, {"conclusion": None, "status": "queued"}):
+            with self.subTest(changes=changes):
+                self.assert_runs(self.skip(self.api([self.run_at(days=1, **changes)])))
+
+    def test_a_newer_failure_beats_an_older_pass_at_the_same_tip(self):
+        runs = [self.run_at(days=3), self.run_at(days=1, id=8, conclusion="failure")]
+        self.assert_runs(self.skip(self.api(runs)))
+
+    def test_no_run_at_all_never_skips(self):
+        self.assert_runs(self.skip(self.api([])))
+
+    def test_a_pass_at_another_commit_never_skips(self):
+        self.assert_runs(self.skip(self.api([self.run_at(days=1, head_sha="b" * 40)])))
+
+    def test_a_tampered_or_incomplete_record_never_skips(self):
+        for changes in ({"path": ".github/workflows/other.yml"}, {"event": "push"}, {"head_branch": "integration/x"}):
+            with self.subTest(changes=changes):
+                self.assert_runs(self.skip(self.api([self.run_at(days=1, **changes)])))
+        self.assert_runs(self.skip(self.api(job_rows=recorded_jobs()[1:])))
+        self.assert_runs(self.skip(read=lambda sha, path: "another runner\n"))
+
+    def test_an_unreadable_record_never_skips(self):
+        def fails(error):
+            def call(path):
+                raise error
+            return call
+
+        for error in (subprocess.CalledProcessError(1, "gh"), OSError("gone"), subprocess.TimeoutExpired("gh", 1),
+                      ValueError("not JSON")):
+            with self.subTest(error=error):
+                self.assert_runs(self.skip(fails(error)))
+        self.assert_runs(self.skip(lambda path: {"unexpected": "shape"}))
+        self.assert_runs(self.skip(self.api([{"id": 7}])))
+        self.assert_runs(self.skip(self.api([self.run_at(days=1) | {"created_at": "not a date"}])))
+
+        def jobs_fail(path):
+            if "/jobs?" in path:
+                raise OSError("gone")
+            return {"workflow_runs": [self.run_at(days=1)]}
+        self.assert_runs(self.skip(jobs_fail))
+
+        def read_fails(sha, path):
+            raise subprocess.CalledProcessError(128, "git")
+        self.assert_runs(self.skip(read=read_fails))
+
+    def test_a_missing_repository_name_never_skips(self):
+        with mock.patch.dict(os.environ, clear=True):
+            self.assert_runs(daily.skip_proven(self.MATRIX, 7, self.api(), lambda sha, path: RUNNER_TEXT,
+                                               RUNNER_HASH, self.NOW))
+
+    def test_an_age_that_is_absent_or_not_a_positive_whole_number_skips_nothing(self):
+        for value in (None, "", "0", "-1", "7.5", "seven", "07", " 7", "99999"):
+            with self.subTest(value=value):
+                self.assertEqual(daily.max_age_days(value), 0)
+                self.assert_runs(self.skip(age=daily.max_age_days(value)))
+        self.assertEqual(daily.max_age_days("7"), 7)
+
+    def test_each_line_is_decided_alone(self):
+        other = "refs/heads/integration/other"
+        matrix = {"include": [{"ref": LINE, "sha": SHA}, {"ref": other, "sha": SHA}]}
+
+        def api(path):
+            if "/jobs?" in path:
+                return {"jobs": recorded_jobs()}
+            if "integration%2Fexample" in path:
+                return {"workflow_runs": [self.run_at(days=1)]}
+            return {"workflow_runs": []}
+        to_run, skipped = self.skip(api, matrix=matrix)
+        self.assertEqual([row["ref"] for row in to_run["include"]], [other])
+        self.assertEqual([row["ref"] for row in skipped], [LINE])
+
+    def test_the_default_is_declared_once_and_the_script_holds_none(self):
+        found = {name: workflow(name).count("DAILY_PROOF_MAX_AGE_DAYS: ")
+                 for name in ("windows-daily", "windows-daily-run", "windows-daily-verdict")}
+        self.assertEqual(found, {"windows-daily": 1, "windows-daily-run": 0, "windows-daily-verdict": 0})
+        self.assertIn('DAILY_PROOF_MAX_AGE_DAYS: "7"', jobs(workflow("windows-daily"))["sources"])
+        self.assertEqual(daily.MAX_AGE_VARIABLE, "DAILY_PROOF_MAX_AGE_DAYS")
+        self.assertEqual(re.findall(r"timedelta\(days=\d+", (ROOT / "scripts/windows-daily.py").read_text()), [])
+
+    def test_every_line_skipped_starts_no_run_and_says_so(self):
+        job = jobs(workflow("windows-daily"))["dispatch"]
+        self.assertIn("if: ${{ needs.sources.outputs.runs == 'true' }}", job)
+
+    def discover(self, runs):
+        with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp), mock.patch.object(
+                daily.subprocess, "check_output", return_value=f"{SHA}\trefs/heads/main\n"), mock.patch.object(
+                daily, "tree_reader", lambda: lambda sha, path: daily.RUNNER.read_text(encoding="utf-8")), mock.patch.object(
+                daily, "gh_api", lambda path: {"jobs": recorded_jobs()} if "/jobs?" in path else {"workflow_runs": runs}), \
+                mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(Path(temp) / "out"), "GITHUB_REPOSITORY": "o/n",
+                                             "GITHUB_STEP_SUMMARY": str(Path(temp) / "summary"),
+                                             "DAILY_PROOF_MAX_AGE_DAYS": "7"}), \
+                mock.patch.object(sys, "argv", ["windows-daily.py", "discover"]), mock.patch("builtins.print"):
+            self.assertEqual(daily.main(), 0)
+            return ((Path(temp) / "out").read_text(), (Path(temp) / "summary").read_text(),
+                    json.loads((Path(temp) / daily.REQUESTED_FILE).read_text()))
+
+    def test_the_discover_command_records_and_names_a_skip(self):
+        stamp = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        out, summary, request = self.discover([recorded_run(head_branch="main", created_at=stamp)])
+        self.assertIn("runs=false", out)
+        self.assertIn('matrix={"include":[]}', out)
+        self.assertIn("Skipped: a passing run within 7 days", summary)
+        self.assertEqual(request["include"], [])
+        self.assertEqual(request["skipped"], [{"ref": daily.MAIN, "sha": SHA, "run_id": 7}])
+        self.assertEqual(request["max_age_days"], 7)
+
+    def test_the_discover_command_runs_a_line_with_no_record(self):
+        out, summary, request = self.discover([])
+        self.assertIn("runs=true", out)
+        self.assertNotIn("Skipped", summary)
+        self.assertEqual(request["include"], [{"ref": daily.MAIN, "sha": SHA}])
+
+
+class SkippedLineVerdictTests(unittest.TestCase):
+    """A skipped line stands on its recorded run, and the reader checks that run again."""
+
+    NOW = REQUESTED_AT + timedelta(hours=6)
+
+    def evidence(self, runs, request=None):
+        dispatcher = {"id": 5, "path": daily.DISPATCHER_PATH, "head_branch": "main", "event": "schedule",
+                      "status": "completed", "created_at": "2026-11-04T06:23:00Z"}
+
+        def api(path):
+            if "windows-daily.yml/runs" in path:
+                return {"workflow_runs": [dispatcher]}
+            if "/jobs?" in path:
+                return {"jobs": recorded_jobs()}
+            return {"workflow_runs": runs}
+
+        request = request or {"include": [], "skipped": [{"ref": daily.MAIN, "sha": SHA, "run_id": 7}],
+                              "left_out": [], "max_age_days": 7}
+        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "o/n"}):
+            return daily.read_evidence(api, lambda run_id: {"runner_sha256": RUNNER_HASH, **request},
+                                       lambda sha, path: RUNNER_TEXT, self.NOW)
+
+    def run_days_ago(self, days, **changes):
+        return recorded_run(head_branch="main", created_at=(REQUESTED_AT - timedelta(days=days)).isoformat(), **changes)
+
+    def test_a_skipped_line_with_its_run_inside_the_age_is_credited(self):
+        result = self.evidence([self.run_days_ago(3)])
+        self.assertEqual(result["result"], "success")
+        self.assertTrue(result["lines"][0]["skipped"])
+        self.assertIn("stands on run 7", daily.verdict_report(result))
+
+    def test_a_skipped_line_whose_run_is_gone_fails_the_verdict(self):
+        self.assertEqual(self.evidence([])["result"], "failure")
+
+    def test_a_skipped_line_whose_run_is_past_the_age_fails_the_verdict(self):
+        self.assertEqual(self.evidence([self.run_days_ago(8)])["result"], "failure")
+
+    def test_a_skipped_line_with_a_newer_failure_fails_the_verdict(self):
+        self.assertEqual(self.evidence([self.run_days_ago(3), self.run_days_ago(1, id=8, conclusion="failure")])["result"],
+                         "failure")
+
+    def test_a_skip_with_no_valid_age_recorded_is_not_credited(self):
+        request = {"include": [], "skipped": [{"ref": daily.MAIN, "sha": SHA, "run_id": 7}], "left_out": []}
+        self.assertEqual(self.evidence([self.run_days_ago(3)], request)["result"], "failure")
 
 
 def step_script(job, step):

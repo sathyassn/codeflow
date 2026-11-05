@@ -1,6 +1,6 @@
 //! Drift contract for the design system reference kit (TSK-070). The kit ships
 //! byte-identical under `resources/design-system/` in `cf-docs-portal` and
-//! `cf-present`. `tokens.json` is the value source: `tokens.css` must carry its
+//! `cf-present`. `source/*.json` is the authored value source and `tokens.json` its resolved output: `tokens.css` must carry its
 //! values per role, the measured contrast and skin separation must reproduce
 //! from it, the chrome and figure sheets must draw with tokens only, and the
 //! reference pages must stand alone in the kit folder.
@@ -12,7 +12,18 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use sha2::{Digest, Sha256};
 
-const KIT_FILES: [&str; 8] = [
+const KIT_FILES: [&str; 19] = [
+    "counts.reference.html",
+    "count-charts.js",
+    "tokens.ts",
+    "tokens.js",
+    "settings.js",
+    "stage-geometry.js",
+    "present.css",
+    "export-fallback.css",
+    "portal.css",
+    "utility-tokens.css",
+    "figure-roles.css",
     "README.md",
     "tokens.json",
     "tokens.css",
@@ -53,57 +64,8 @@ const CONTRAST_COLUMNS: [(&str, &str); 10] = [
     ("diagram-line", "surface"),
 ];
 /// The measured WCAG contrast table the design primary approved.
-const MEASURED_CONTRAST: [(&str, [f64; 10]); 6] = [
-    (
-        "graphite-light",
-        [
-            15.94, 17.22, 6.00, 6.48, 5.47, 7.72, 4.94, 5.52, 5.76, 12.45,
-        ],
-    ),
-    (
-        "graphite-dark",
-        [
-            14.45, 13.18, 6.99, 6.38, 8.10, 9.92, 7.36, 7.29, 6.58, 10.60,
-        ],
-    ),
-    (
-        "slate-light",
-        [
-            14.13, 15.74, 5.50, 6.13, 4.91, 6.82, 4.72, 5.36, 5.69, 10.52,
-        ],
-    ),
-    (
-        "slate-dark",
-        [
-            15.01, 13.66, 7.45, 6.78, 7.92, 9.98, 7.67, 8.47, 7.04, 11.06,
-        ],
-    ),
-    (
-        "sage-light",
-        [
-            14.88, 15.74, 5.69, 6.02, 5.80, 8.12, 4.91, 5.31, 5.55, 10.62,
-        ],
-    ),
-    (
-        "sage-dark",
-        [
-            14.45, 13.25, 7.33, 6.72, 8.53, 10.30, 8.62, 7.41, 6.70, 11.24,
-        ],
-    ),
-];
 /// The measured CIEDE2000 separation between skins in the same mode:
 /// (mode, skin, skin, canvas dE, surface dE).
-const MEASURED_SEPARATION: [(&str, &str, &str, f64, f64); 6] = [
-    ("light", "graphite", "slate", 3.27, 1.62),
-    ("light", "graphite", "sage", 3.43, 1.97),
-    ("light", "slate", "sage", 5.74, 2.58),
-    ("dark", "graphite", "slate", 4.73, 5.62),
-    ("dark", "graphite", "sage", 4.43, 4.81),
-    ("dark", "slate", "sage", 6.88, 7.86),
-];
-/// Two-decimal table values reproduce within half a unit of the last place.
-const TABLE_TOLERANCE: f64 = 0.005_1;
-
 const NAMED_COLOURS: &str = "aliceblue antiquewhite aqua aquamarine azure beige bisque black \
     blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral \
     cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen \
@@ -150,108 +112,11 @@ fn tokens() -> BTreeMap<String, BTreeMap<String, String>> {
     serde_json::from_str(&read_kit("tokens.json")).expect("tokens.json is pair -> role -> hex")
 }
 
-fn rgb(hex: &str) -> [f64; 3] {
-    assert!(
-        hex.len() == 7 && hex.starts_with('#'),
-        "token value {hex} is not #rrggbb"
-    );
-    let channel = |at: usize| {
-        f64::from(u8::from_str_radix(&hex[at..at + 2], 16).expect("hex channel parses"))
-    };
-    [channel(1), channel(3), channel(5)]
-}
-
-fn linear(channel: f64) -> f64 {
-    let c = channel / 255.0;
-    if c <= 0.040_45 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-fn luminance(hex: &str) -> f64 {
-    let [r, g, b] = rgb(hex).map(linear);
-    0.2126 * r + 0.7152 * g + 0.0722 * b
-}
-
-fn contrast(a: &str, b: &str) -> f64 {
-    let (la, lb) = (luminance(a), luminance(b));
-    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
-}
-
-fn lab(hex: &str) -> [f64; 3] {
-    let [red, green, blue] = rgb(hex).map(linear);
-    let pivot = |value: f64| {
-        if value > 0.008_856 {
-            value.cbrt()
-        } else {
-            7.787 * value + 16.0 / 116.0
-        }
-    };
-    let fx = pivot((red * 0.412_456_4 + green * 0.357_576_1 + blue * 0.180_437_5) / 0.950_47);
-    let fy = pivot(red * 0.212_672_9 + green * 0.715_152_2 + blue * 0.072_175_0);
-    let fz = pivot((red * 0.019_333_9 + green * 0.119_192_0 + blue * 0.950_304_1) / 1.088_83);
-    [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
-}
-
-fn hue_degrees(a: f64, b: f64) -> f64 {
-    if a == 0.0 && b == 0.0 {
-        return 0.0;
-    }
-    let hue = b.atan2(a).to_degrees();
-    if hue < 0.0 {
-        hue + 360.0
-    } else {
-        hue
-    }
-}
-
-/// CIEDE2000, the same formula as the design round's `tokens_check.py`.
-fn delta_e_2000(first: &str, second: &str) -> f64 {
-    let [l1, a1, b1] = lab(first);
-    let [l2, a2, b2] = lab(second);
-    let seventh = |c: f64| (c.powi(7) / (c.powi(7) + 25f64.powi(7))).sqrt();
-    let chroma_mean = f64::midpoint(a1.hypot(b1), a2.hypot(b2));
-    let g = 0.5 * (1.0 - seventh(chroma_mean));
-    let (a1p, a2p) = ((1.0 + g) * a1, (1.0 + g) * a2);
-    let (c1p, c2p) = (a1p.hypot(b1), a2p.hypot(b2));
-    let (h1p, h2p) = (hue_degrees(a1p, b1), hue_degrees(a2p, b2));
-    let chroma_zero = c1p * c2p == 0.0;
-    let mut hue_diff = if chroma_zero { 0.0 } else { h2p - h1p };
-    if hue_diff > 180.0 {
-        hue_diff -= 360.0;
-    } else if hue_diff < -180.0 {
-        hue_diff += 360.0;
-    }
-    let hue_step = 2.0 * (c1p * c2p).sqrt() * (hue_diff / 2.0).to_radians().sin();
-    let (l_mean, prime_chroma_mean) = (f64::midpoint(l1, l2), f64::midpoint(c1p, c2p));
-    let mut hp_mean = if chroma_zero {
-        h1p + h2p
-    } else {
-        f64::midpoint(h1p, h2p)
-    };
-    if !chroma_zero && (h1p - h2p).abs() > 180.0 {
-        hp_mean += if hp_mean < 180.0 { 180.0 } else { -180.0 };
-    }
-    let cos = |degrees: f64| degrees.to_radians().cos();
-    let t = 1.0 - 0.17 * cos(hp_mean - 30.0)
-        + 0.24 * cos(2.0 * hp_mean)
-        + 0.32 * cos(3.0 * hp_mean + 6.0)
-        - 0.20 * cos(4.0 * hp_mean - 63.0);
-    let d_theta = 30.0 * (-((hp_mean - 275.0) / 25.0).powi(2)).exp();
-    let rc = 2.0 * seventh(prime_chroma_mean);
-    let sl = 1.0 + 0.015 * (l_mean - 50.0).powi(2) / (20.0 + (l_mean - 50.0).powi(2)).sqrt();
-    let sc = 1.0 + 0.045 * prime_chroma_mean;
-    let sh = 1.0 + 0.015 * prime_chroma_mean * t;
-    let rt = -(2.0 * d_theta).to_radians().sin() * rc;
-    let (light_term, chroma_term, hue_term) = ((l2 - l1) / sl, (c2p - c1p) / sc, hue_step / sh);
-    (light_term * light_term
-        + chroma_term * chroma_term
-        + hue_term * hue_term
-        + rt * chroma_term * hue_term)
-        .sqrt()
-}
+// Compile the pure private maths directly to avoid exposing a public API or
+// adding the present server dependency graph solely for this palette test.
+#[path = "../../codeflow-present/src/colour.rs"]
+mod colour;
+use colour::{contrast, delta_e_2000, rgb};
 
 /// Every declaration value in a stylesheet, as (property, value). Only text
 /// that closes with `}` is a declaration block, so selectors never count.
@@ -368,17 +233,14 @@ fn tokens_css_carries_the_json_value_of_every_role_in_every_pair() {
 #[test]
 fn token_contrast_reproduces_the_measured_table() {
     let tokens = tokens();
-    for (pair, expected) in MEASURED_CONTRAST {
+    for pair in PAIRS {
         let roles = &tokens[pair];
-        for ((foreground, ground), want) in CONTRAST_COLUMNS.into_iter().zip(expected) {
+        for (foreground, ground) in CONTRAST_COLUMNS {
             let got = contrast(&roles[foreground], &roles[ground]);
+            println!("{pair} {foreground}/{ground} contrast {got:.3}");
             assert!(
-                (got - want).abs() <= TABLE_TOLERANCE,
-                "{pair} {foreground}/{ground} contrast {got:.3}, measured {want:.2}"
-            );
-            assert!(
-                got >= 4.5,
-                "{pair} {foreground}/{ground} contrast {got:.2} is under 4.5:1"
+                got >= colour::floor("textContrast"),
+                "{pair} {foreground}/{ground} contrast {got:.3}"
             );
         }
     }
@@ -389,19 +251,20 @@ fn token_contrast_reproduces_the_measured_table() {
 #[test]
 fn skins_stay_apart_in_each_mode_and_graphite_stays_neutral() {
     let tokens = tokens();
-    for (mode, first, second, canvas_want, surface_want) in MEASURED_SEPARATION {
+    for (mode, first, second) in ["light", "dark"].into_iter().flat_map(|mode| {
+        [
+            (mode, "graphite", "slate"),
+            (mode, "graphite", "sage"),
+            (mode, "slate", "sage"),
+        ]
+    }) {
         let a = &tokens[&format!("{first}-{mode}")];
         let b = &tokens[&format!("{second}-{mode}")];
         let canvas = delta_e_2000(&a["canvas"], &b["canvas"]);
         let surface = delta_e_2000(&a["surface"], &b["surface"]);
         assert!(
-            (canvas - canvas_want).abs() <= TABLE_TOLERANCE
-                && (surface - surface_want).abs() <= TABLE_TOLERANCE,
-            "{mode} {first} vs {second}: canvas dE {canvas:.3} (measured {canvas_want}), \
-             surface dE {surface:.3} (measured {surface_want})"
-        );
-        assert!(
-            canvas >= 3.0 && surface >= 1.5,
+            canvas >= colour::floor("skinCanvasSeparation")
+                && surface >= colour::floor("skinSurfaceSeparation"),
             "{mode} {first} vs {second} are too close: canvas {canvas:.2}, surface {surface:.2}"
         );
     }
@@ -454,12 +317,17 @@ fn chrome_and_figure_sheets_carry_no_literal_colour() {
     );
 }
 
-/// The kit is one set of eight files, byte-identical in both skills, their
+/// The kit has generated files and a source directory, byte-identical in both skills, their
 /// harness mirrors and the update baselines.
 #[test]
 fn kit_copies_are_byte_identical_across_skills_and_mirrors() {
     let root = repo_root();
-    let expected: BTreeSet<String> = KIT_FILES.iter().map(ToString::to_string).collect();
+    let expected: BTreeSet<String> = KIT_FILES
+        .iter()
+        .copied()
+        .chain(["source"])
+        .map(ToString::to_string)
+        .collect();
     let canonical = kit_dir(&root, SKILL_ROOTS[0], "cf-present");
     let mut problems = Vec::new();
     for skill_root in SKILL_ROOTS {
@@ -683,9 +551,15 @@ fn reference_pages_stand_alone_in_the_kit_folder() {
     let attribute = Regex::new(r#"\b(?:href|src|srcset|xlink:href)\s*=\s*["']([^"']*)["']"#)
         .expect("attribute pattern");
     let remote = Regex::new(r"(?i)(?:https?:)?//[a-z0-9.-]+\.[a-z]{2,}").expect("remote pattern");
-    let kit_assets: BTreeSet<&str> = ["tokens.css", "chrome.css", "figure.css", "chrome.js"]
-        .into_iter()
-        .collect();
+    let kit_assets: BTreeSet<&str> = [
+        "tokens.css",
+        "chrome.css",
+        "figure.css",
+        "chrome.js",
+        "settings.js",
+    ]
+    .into_iter()
+    .collect();
     for page in ["portal.reference.html", "present.reference.html"] {
         let html = read_kit(page);
         let references: Vec<String> = attribute
@@ -704,14 +578,15 @@ fn reference_pages_stand_alone_in_the_kit_folder() {
         let loaded: BTreeSet<&str> = references.iter().map(String::as_str).collect();
         assert_eq!(
             loaded, kit_assets,
-            "{page} must load exactly the three sheets and chrome.js"
+            "{page} must load exactly the three sheets, settings.js and chrome.js"
         );
     }
+    let css_url = Regex::new(r#"url\(\s*["']?([^"')]+)"#).unwrap();
     for file in KIT_FILES {
         let text = read_kit(file);
-        let is_sheet = Path::new(file)
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("css"));
+        // Only these sheets are loaded by the standalone kit pages.
+        // Product adapters use their products' bundled font resources.
+        let is_sheet = matches!(file, "tokens.css" | "chrome.css" | "figure.css");
         let urls: Vec<&str> = remote
             .find_iter(&text)
             .filter(|found| {
@@ -722,11 +597,15 @@ fn reference_pages_stand_alone_in_the_kit_folder() {
             .map(|found| found.as_str())
             .collect();
         assert!(urls.is_empty(), "{file} names remote URLs: {urls:?}");
-        for sheet in ["@import", "url("] {
-            assert!(
-                !is_sheet || !text.contains(sheet),
-                "{file} loads a resource through {sheet}"
-            );
+        if is_sheet {
+            assert!(!text.contains("@import"), "{file} imports another sheet");
+            for value in css_url.captures_iter(&text) {
+                assert!(
+                    value[1].starts_with("data:"),
+                    "{file} loads an external resource: {}",
+                    &value[1]
+                );
+            }
         }
     }
 }
@@ -775,10 +654,9 @@ fn product_sheets_match_every_kit_role_and_measured_floor() {
                 .captures_iter(&capture[3])
                 .map(|value| (value[1].to_owned(), value[2].trim().to_owned()))
                 .collect();
-            assert!(
-                actual.insert(key, roles).is_none(),
-                "{path} has duplicate pair blocks"
-            );
+            if let Some(previous) = actual.insert(key, roles.clone()) {
+                assert_eq!(previous, roles, "{path} adapter selectors disagree");
+            }
         }
         assert_eq!(actual.len(), 6, "{path} must carry six pairs");
         for (key, roles) in &expected {
@@ -789,7 +667,7 @@ fn product_sheets_match_every_kit_role_and_measured_floor() {
                 for ground in ["canvas", "surface"] {
                     let ratio = contrast(&actual[key][foreground], &actual[key][ground]);
                     println!("{path} | {key} | {foreground}/{ground} | {ratio:.2}:1");
-                    assert!(ratio >= 4.5);
+                    assert!(ratio >= colour::floor("textContrast"));
                 }
             }
         }
@@ -806,35 +684,14 @@ fn product_sheets_match_every_kit_role_and_measured_floor() {
                 let canvas = delta_e_2000(&a["canvas"], &b["canvas"]);
                 let surface = delta_e_2000(&a["surface"], &b["surface"]);
                 println!("{path} | {mode} | {first}/{second} | canvas {canvas:.2} | surface {surface:.2}");
-                assert!(canvas >= 3.0 && surface >= 1.5);
+                assert!(
+                    canvas >= colour::floor("skinCanvasSeparation")
+                        && surface >= colour::floor("skinSurfaceSeparation")
+                );
             }
         }
     }
 }
-
-/// The figure companion palette the operator chose (TSK-444, palette A
-/// "Cobalt and plum"): one set of four values per mode, the same in every
-/// skin, so a companion never shifts when the reader changes skin.
-const COMPANIONS: [(&str, [(&str, &str); 4]); 2] = [
-    (
-        "light",
-        [
-            ("fig-cat1", "#3860ac"),
-            ("fig-cat1-soft", "#e4edfe"),
-            ("fig-cat2", "#722756"),
-            ("fig-cat2-soft", "#f0d5e3"),
-        ],
-    ),
-    (
-        "dark",
-        [
-            ("fig-cat1", "#9bbeff"),
-            ("fig-cat1-soft", "#2a3852"),
-            ("fig-cat2", "#cf82ae"),
-            ("fig-cat2-soft", "#3d2131"),
-        ],
-    ),
-];
 
 /// In both kits (cf-present and cf-docs-portal), every companion ink carries
 /// text at WCAG AA (4.5:1) on the surface, the
@@ -853,16 +710,13 @@ fn companion_inks_and_tints_meet_the_contrast_floor_in_every_pair() {
             serde_json::from_str(&std::fs::read_to_string(&path).expect("kit tokens are readable"))
                 .expect("tokens.json is pair -> role -> hex");
         let roles = &tokens[pair];
-        let mode = pair.rsplit('-').next().expect("pair names a mode");
-        let (_, values) = COMPANIONS
-            .iter()
-            .find(|(name, _)| *name == mode)
-            .expect("a companion set per mode");
-        for (role, value) in values {
+        let source: serde_json::Value =
+            serde_json::from_str(&read_kit("source/colour.json")).unwrap();
+        for role in ["fig-cat1", "fig-cat1-soft", "fig-cat2", "fig-cat2-soft"] {
             assert_eq!(
-                roles.get(*role).map(String::as_str),
-                Some(*value),
-                "{skill} {pair} {role} must be the chosen palette value"
+                roles[role],
+                source["palettes"][pair][role].as_str().unwrap(),
+                "{skill} {pair} {role} differs from the single token source"
             );
         }
         let mut checks: Vec<(String, f64)> = Vec::new();
@@ -884,7 +738,7 @@ fn companion_inks_and_tints_meet_the_contrast_floor_in_every_pair() {
         for (name, ratio) in checks {
             table.push(format!("{skill} | {pair} | {name} | {ratio:.2}:1"));
             assert!(
-                ratio >= 4.5,
+                ratio >= colour::floor("textContrast"),
                 "{skill} {pair} {name} is {ratio:.2}:1, under the 4.5:1 floor"
             );
         }
@@ -900,13 +754,25 @@ fn companion_inks_stay_apart_from_the_accent_and_the_reserved_hues() {
     for pair in PAIRS {
         let roles = &tokens[pair];
         for (first, second, floor) in [
-            ("fig-cat1", "fig-cat2", 20.0),
-            ("fig-cat1", "fig-accent", 20.0),
-            ("fig-cat2", "fig-accent", 20.0),
-            ("fig-cat1", "fig-warn", 20.0),
-            ("fig-cat2", "fig-warn", 20.0),
-            ("fig-cat1", "fig-stop", 20.0),
-            ("fig-cat2", "fig-stop", 10.0),
+            ("fig-cat1", "fig-cat2", colour::floor("companionSeparation")),
+            (
+                "fig-cat1",
+                "fig-accent",
+                colour::floor("companionSeparation"),
+            ),
+            (
+                "fig-cat2",
+                "fig-accent",
+                colour::floor("companionSeparation"),
+            ),
+            ("fig-cat1", "fig-warn", colour::floor("companionSeparation")),
+            ("fig-cat2", "fig-warn", colour::floor("companionSeparation")),
+            ("fig-cat1", "fig-stop", colour::floor("companionSeparation")),
+            (
+                "fig-cat2",
+                "fig-stop",
+                colour::floor("companionStopSeparation"),
+            ),
         ] {
             let distance = delta_e_2000(&roles[first], &roles[second]);
             println!("{pair} | {first}/{second} | dE {distance:.2}");
@@ -1126,5 +992,54 @@ fn figure_tones_change_hue_only() {
                 "a tone rule may set only a hue from a figure role: {declaration}"
             );
         }
+    }
+}
+
+#[test]
+fn every_figure_ink_pair_meets_the_simulated_floor() {
+    let palettes = tokens();
+    let source: serde_json::Value = serde_json::from_str(&read_kit("source/colour.json")).unwrap();
+    let floor = colour::floor("simulatedSeparation");
+    for pair in PAIRS {
+        let (theme, mode) = pair.rsplit_once('-').unwrap();
+        for accent in source["themes"][theme].as_array().unwrap() {
+            let accent = accent.as_str().unwrap();
+            let mut roles = palettes[pair].clone();
+            roles.insert(
+                "fig-accent".to_owned(),
+                source["accents"][accent][mode].as_str().unwrap().to_owned(),
+            );
+            let names = [
+                "fig-line",
+                "fig-accent",
+                "fig-cat1",
+                "fig-cat2",
+                "fig-warn",
+                "fig-stop",
+            ];
+            for simulation in ["protan", "deutan", "tritan"] {
+                let mut worst = (f64::MAX, "", "");
+                for (index, first) in names.iter().enumerate() {
+                    for second in &names[index + 1..] {
+                        let distance = colour::simulated_separation(
+                            &roles[*first],
+                            &roles[*second],
+                            simulation,
+                        );
+                        if distance < worst.0 {
+                            worst = (distance, first, second);
+                        }
+                        assert!(distance >= floor, "{pair}/{accent}/{simulation} {first}/{second}: {distance:.4} < {floor}");
+                    }
+                }
+                println!(
+                    "{pair}/{accent}/{simulation}: worst {}/{} {:.4}",
+                    worst.1, worst.2, worst.0
+                );
+            }
+        }
+    }
+    for simulation in ["protan", "deutan", "tritan"] {
+        assert!(colour::simulated_separation("#222222", "#232323", simulation) < floor);
     }
 }

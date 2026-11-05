@@ -103,7 +103,10 @@ description: Land finished work (docs and capability updates, then a PR through 
    configures a release branch matching its release pattern, R-120, and a
    workflow integrating into it, follow
    [release integration](references/release-integration.md).
-   Otherwise skip that step.
+   Otherwise skip that step. Where the project adopted the `cf-estimate`
+   time-box profile, the epic's outcome record was written on the line
+   before its PR to `main` (`cf-method` "Managing a body of work", step 6);
+   confirm it landed before step 10 deletes the line.
 10. Clean up after every landing, with proof, in the same step: whoever
     landed it runs cleanup, the primary after an integration-line landing
     and the session confirming a human merge into `main`, from outside the

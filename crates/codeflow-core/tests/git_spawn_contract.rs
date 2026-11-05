@@ -1108,7 +1108,16 @@ fn non_rust_sources(dir: &Path, files: &mut Vec<PathBuf>) {
             ]
             .iter()
             .any(|name| ext == *name)
-        }) {
+        })
+            // Detects clone in workflow text; never runs git.
+            && path
+                != Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("scripts/test_workflow_refs.py")
+        {
             files.push(path);
         }
     }
