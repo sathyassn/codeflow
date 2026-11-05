@@ -1,0 +1,11 @@
+id = "TSK-1339"
+uid = "afa28dbe-3221-45be-8c11-2041e272de63"
+kind = "TSK"
+title = "The catalog line takes main's records and changelog entries"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:46:25Z"
+target = "integration/EPC-026-the-capabilities-catalog"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
