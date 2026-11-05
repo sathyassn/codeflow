@@ -3,6 +3,7 @@ import { enhanceDocument } from "./enhance";
 import styles from "./styles.css";
 import figureStyles from "./figure.css";
 import { installFonts } from "./fonts";
+import { frameLoad, sizeStage, stageSource, type StageMeasurement } from "./export-stages";
 
 installFonts();
 
@@ -23,39 +24,40 @@ if (!document.querySelector("style[data-cf-present-export-style]")) {
 // or duplicating the entire interface stylesheet in every exported stage.
 const stages = [...documentRoot.querySelectorAll<HTMLIFrameElement>("iframe[data-cf-export-stage]")]
   .map((frame): { frame: HTMLIFrameElement; source: string } => ({ frame, source: frame.srcdoc }));
-const styleStages = (): void => {
-  const computed = getComputedStyle(document.documentElement);
-  const carried = document.createElement("div").style;
-  for (const name of computed) {
-    if (name.startsWith("--cf-")) carried.setProperty(name, computed.getPropertyValue(name));
-  }
-  for (const name of ["color", "color-scheme", "font-family"]) {
-    carried.setProperty(name, computed.getPropertyValue(name));
-  }
-  // CSS serialization keeps values intact; a less-than sign must never close
-  // the generated style element, even in a project-provided font name.
-  const css = carried.cssText.replaceAll("<", "\\3c ");
-  // A loaded sandboxed frame is never navigated again: the browser reports
-  // blocked scripts for the second document. A fresh frame with the same
-  // sandbox takes the themed document as its first and only load.
-  for (const stage of stages) {
+const measurementsTemplate = document.querySelector<HTMLTemplateElement>("#cf-stage-measurements");
+const measurements = JSON.parse(measurementsTemplate?.content.textContent ?? "[]") as StageMeasurement[];
+let generation = 0;
+const styleStages = async (): Promise<void> => {
+  const current = ++generation;
+  delete document.documentElement.dataset.cfReady;
+  await Promise.all(stages.map(async (stage) => {
     const fresh = stage.frame.cloneNode(false) as HTMLIFrameElement;
-    fresh.srcdoc = `<!doctype html><meta charset="utf-8"><style>:root{${css}}</style>${stage.source}`;
+    fresh.setAttribute("scrolling", "no");
+    fresh.srcdoc = stageSource(stage.source, document.documentElement);
+    const loaded = frameLoad(fresh);
     stage.frame.replaceWith(fresh);
     stage.frame = fresh;
-  }
+    sizeStage(fresh, measurements);
+    await loaded;
+    sizeStage(fresh, measurements);
+  }));
+  await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  if (current === generation) document.documentElement.dataset.cfReady = "true";
 };
+new ResizeObserver(() => {
+  for (const stage of stages) sizeStage(stage.frame, measurements);
+}).observe(documentRoot);
 const requestedMode = document.documentElement.dataset.cfMode ?? "system";
 if (requestedMode === "system") {
   const preference = matchMedia("(prefers-color-scheme: dark)");
   const applyPreference = (): void => {
     document.documentElement.dataset.cfModeResolved = preference.matches ? "dark" : "light";
-    styleStages();
+    void styleStages();
   };
   applyPreference();
   preference.addEventListener("change", applyPreference);
 } else {
   document.documentElement.dataset.cfModeResolved = requestedMode === "dark" ? "dark" : "light";
-  styleStages();
+  void styleStages();
 }
 enhanceDocument(documentRoot, true);

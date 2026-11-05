@@ -238,12 +238,19 @@ pub struct TargetConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci_skip_reason: Option<String>,
 
-    /// Per-target wall-clock timeout in seconds. When the command runs longer
-    /// than this, the runner kills it and the target FAILS loudly. Omitted →
-    /// [`crate::testing::runner::DEFAULT_TIMEOUT_SECONDS`] (600s). Guards the
-    /// gate/pre-push against a single hanging target blocking forever.
+    /// Base deadline, default 600s. Heavy targets have a four-times ceiling;
+    /// light targets retain the fixed deadline. Cleanup has a bounded grace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<u64>,
+
+    /// Heavy-target inactivity window with complete scoped accounting; default 300s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall_timeout_seconds: Option<u64>,
+
+    /// Bound on termination, reaping and pipe draining after a target stops;
+    /// default 5s. A supervised group still running at half of it is killed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup_grace_seconds: Option<u64>,
 
     /// Optional structural integrity configuration. When present, the
     /// structural integrity check validates bidirectional
@@ -540,6 +547,8 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
         "ci_skip",
         "ci_skip_reason",
         "timeout_seconds",
+        "stall_timeout_seconds",
+        "cleanup_grace_seconds",
         "structural",
         "tags",
         "test_files",
@@ -590,6 +599,38 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
     Ok(())
 }
 
+fn validate_deadline(path: &Path, target: &TargetConfig) -> Result<(), TestingError> {
+    for (key, value) in [
+        ("timeout_seconds", target.timeout_seconds),
+        ("stall_timeout_seconds", target.stall_timeout_seconds),
+    ] {
+        if value.is_some_and(|v| v == 0 || v > super::runner::deadline::MAX_TIMEOUT_SECONDS) {
+            return Err(TestingError::ConfigInvalid {
+                path: path.to_path_buf(),
+                message: format!(
+                    "target '{}': {key} must be in 1..={}",
+                    target.name,
+                    super::runner::deadline::MAX_TIMEOUT_SECONDS
+                ),
+            });
+        }
+    }
+    let max = super::runner::deadline::MAX_CLEANUP_GRACE_SECONDS;
+    if target
+        .cleanup_grace_seconds
+        .is_some_and(|v| v == 0 || v > max)
+    {
+        return Err(TestingError::ConfigInvalid {
+            path: path.to_path_buf(),
+            message: format!(
+                "target '{}': cleanup_grace_seconds must be in 1..={max}",
+                target.name
+            ),
+        });
+    }
+    Ok(())
+}
+
 fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError> {
     let validate_globs = |patterns: &[String]| -> Result<(), TestingError> {
         for pattern in patterns {
@@ -631,6 +672,7 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
     }
     let mut seen_names = std::collections::HashSet::new();
     for target in &config.targets {
+        validate_deadline(path, target)?;
         validate_globs(&target.narrow)?;
         if let Some(workers) = target.workers {
             if workers == 0
@@ -892,6 +934,67 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn deadline_values_match_schema_bounds_and_reject_invalid_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test-config.json");
+        let schema: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../assets/base/testing/test-config.schema.json"
+        ))
+        .unwrap();
+        let max = super::super::runner::deadline::MAX_TIMEOUT_SECONDS;
+        for key in ["timeout_seconds", "stall_timeout_seconds"] {
+            let field = &schema["$defs"]["target"]["properties"][key];
+            assert_eq!(field["minimum"], 1);
+            assert_eq!(field["maximum"], max);
+            for (value, accepted) in [
+                (serde_json::json!(1), true),
+                (serde_json::json!(max), true),
+                (serde_json::json!(0), false),
+                (serde_json::json!(max + 1), false),
+                (serde_json::json!(-1), false),
+                (serde_json::json!(1.5), false),
+                (serde_json::json!("300"), false),
+                (serde_json::json!(u64::MAX), false),
+            ] {
+                let mut raw = serde_json::json!({"schema_version":"1.0", "targets":[
+                    {"name":"sample", "runner":"custom", "modes":{"full":{"command":"exit 0"}}}
+                ]});
+                raw["targets"][0][key] = value.clone();
+                std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+                assert_eq!(load_test_config(&path).is_ok(), accepted, "{key}: {value}");
+            }
+        }
+        let max = super::super::runner::deadline::MAX_CLEANUP_GRACE_SECONDS;
+        let field = &schema["$defs"]["target"]["properties"]["cleanup_grace_seconds"];
+        assert_eq!(field["minimum"], 1);
+        assert_eq!(field["maximum"], max);
+        assert_eq!(
+            field["default"],
+            super::super::runner::deadline::DEFAULT_CLEANUP_GRACE_SECONDS
+        );
+        for (value, accepted) in [
+            (serde_json::json!(1), true),
+            (serde_json::json!(max), true),
+            (serde_json::json!(0), false),
+            (serde_json::json!(max + 1), false),
+            (serde_json::json!(-1), false),
+            (serde_json::json!(1.5), false),
+            (serde_json::json!("5"), false),
+        ] {
+            let mut raw = serde_json::json!({"schema_version":"1.0", "targets":[
+                {"name":"sample", "runner":"custom", "modes":{"full":{"command":"exit 0"}}}
+            ]});
+            raw["targets"][0]["cleanup_grace_seconds"] = value.clone();
+            std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+            assert_eq!(
+                load_test_config(&path).is_ok(),
+                accepted,
+                "cleanup_grace_seconds: {value}"
+            );
+        }
+    }
 
     #[test]
     fn prerequisites_round_trip_and_reject_invalid_graphs() {
@@ -1185,6 +1288,8 @@ mod tests {
                 ci_skip: None,
                 ci_skip_reason: None,
                 timeout_seconds: None,
+                stall_timeout_seconds: None,
+                cleanup_grace_seconds: None,
                 structural: None,
                 tags: Vec::new(),
                 test_files: Vec::new(),
