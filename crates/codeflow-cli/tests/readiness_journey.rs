@@ -334,10 +334,10 @@ fn work_next_and_claim_pick_the_ready_task_and_status_agrees() {
 
     let next = ok(&codeflow(&root, &["work", "next"]), "work next");
     let lines: Vec<&str> = next.lines().collect();
-    // The line resolves as `work start` resolves it: the local branch,
-    // which has no configured upstream and holds every landing.
+    // The line is read on its fetched tip, which every landing reached; a
+    // local branch of the same name never decides (TSK-416).
     assert!(
-        lines[0].starts_with(&format!("snapshot: {LINE}@")),
+        lines[0].starts_with(&format!("snapshot: origin/{LINE}@")),
         "{next}"
     );
     assert!(!lines[0].contains("fetched never"), "{next}");
@@ -387,7 +387,7 @@ fn work_next_and_claim_pick_the_ready_task_and_status_agrees() {
 
     let claimed = ok(&codeflow(&root, &["work", "claim", "TSK-001"]), "claim");
     assert!(
-        claimed.contains(&format!("task/TSK-001-root from {LINE}@")),
+        claimed.contains(&format!("task/TSK-001-root from origin/{LINE}@")),
         "{claimed}"
     );
     assert!(!claimed.to_lowercase().contains("lock"), "{claimed}");
@@ -742,6 +742,22 @@ fn a_join_awaiting_selection_validates_and_cannot_start() {
     assert!(text.contains("awaiting selection"), "{text}");
 }
 
+/// Stand in for a reviewed landing: origin's line takes the local line's tip,
+/// as a merged pull request would leave it, and the clone fetches it.
+fn landed_on_origin(dir: &Path, root: &Path) {
+    let tip = git(root, &["rev-parse", "HEAD"]);
+    git(
+        &dir.join("origin.git"),
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            &format!("{}:refs/heads/{LINE}", tip.trim()),
+        ],
+    );
+    git(root, &["fetch", "-q", "origin"]);
+}
+
 /// TSK-249 AC-2: real init, policy, remote refs, readiness and claim output.
 #[test]
 fn archive_branches_are_information_until_policy_names_the_remote() {
@@ -775,8 +791,11 @@ fn archive_branches_are_information_until_policy_names_the_remote() {
         serde_json::from_str(&std::fs::read_to_string(&policy).unwrap()).unwrap();
     value["git"]["claim_remotes"] = serde_json::json!(["archive"]);
     std::fs::write(&policy, serde_json::to_string_pretty(&value).unwrap()).unwrap();
-    // Keep the policy change on the integration line, as an adopter would.
+    // Keep the policy change on the integration line, as an adopter would,
+    // and on origin's copy of it: a claim cuts from the fetched line
+    // (TSK-416).
     commit(&root, "feat: count archive claims");
+    landed_on_origin(dir.path(), &root);
     let json: serde_json::Value = serde_json::from_str(&ok(
         &codeflow(&root, &["work", "next", "--json"]),
         "named archive JSON",
@@ -797,6 +816,7 @@ fn archive_branches_are_information_until_policy_names_the_remote() {
     value["git"]["claim_remotes"] = serde_json::json!([]);
     std::fs::write(&policy, serde_json::to_string_pretty(&value).unwrap()).unwrap();
     commit(&root, "fix: exclude archive claims");
+    landed_on_origin(dir.path(), &root);
     let claimed = ok(
         &codeflow(&root, &["work", "claim", "TSK-001"]),
         "claim despite archive",

@@ -1491,8 +1491,8 @@ fn tsk381_a_differently_spelled_line_does_not_land_a_research_pin() {
 
 /// TSK-381 review round 1 (Grok F1 demonstration 1): the local `main`, ahead
 /// of `origin/main`, retargets TSK-003 to an unpushed branch `evil` that
-/// completes it, and TSK-004 pins that forged completion. `work next` waits
-/// and `work claim` refuses, naming `origin/main` and `evil`.
+/// completes it, and TSK-004 pins that forged completion. `work next` waits,
+/// naming `origin/main` and `evil`, and `work claim` refuses.
 #[test]
 fn tsk381_an_unpushed_branch_cannot_land_a_research_pin() {
     let dir = fixture();
@@ -1558,10 +1558,13 @@ fn tsk381_an_unpushed_branch_cannot_land_a_research_pin() {
     let next = String::from_utf8_lossy(&next.stdout).to_string();
     assert!(next.contains("waiting  TSK-004"), "{next}");
     assert!(next.contains(&reason), "{next}");
+    // The claim refuses before it reads the pin: it cuts from the fetched
+    // `origin/main`, and this local `main` holds commits it lacks (TSK-416).
     let claim = cli(root, &["work", "claim", "TSK-004"], None);
     let said = String::from_utf8_lossy(&claim.stderr).to_string();
     assert_eq!(claim.status.code(), Some(1), "{said}");
-    assert!(said.contains(&reason), "{said}");
+    assert!(said.contains("refs/heads/main at"), "{said}");
+    assert!(said.contains("refs/remotes/origin/main at"), "{said}");
     assert!(git(root, &["branch", "--list", "task/TSK-004-*"]).is_empty());
 }
 
