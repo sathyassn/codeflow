@@ -198,9 +198,16 @@ impl Fixture {
     /// Bind the completion at the head as `codeflow ci` judges a pull
     /// request into the line at `tip`.
     fn bind_at(&self, tip: Oid) -> BindingResult {
+        self.bind_with(tip, &[tip])
+    }
+
+    /// Bind the completion at the head against the base `tip` with every
+    /// tip in `tips` trusted, as readiness judges a landed task with its
+    /// own head among the tips.
+    fn bind_with(&self, tip: Oid, tips: &[Oid]) -> BindingResult {
         let repo = Repository::open(self.root()).unwrap();
         let task = RecordView::parse(RecordKind::Task, TASK, &self.read(TASK)).unwrap();
-        let run = RunBases::new([tip]);
+        let run = RunBases::new(tips.iter().copied());
         bind_completion_with_amendment(
             &repo,
             &task,
@@ -304,7 +311,7 @@ fn a_criteria_change_with_the_move_refuses_and_names_commit_and_part() {
         &bound,
         &[
             "the record changed outside its status and Closeout",
-            &format!("commit {merge} on the target's first-parent line changed the record"),
+            &format!("commit {merge} on the first-parent line of the target tip"),
             "Acceptance Criteria section",
         ],
     );
@@ -606,4 +613,87 @@ fn the_shape_reads_the_move_and_its_added_lines() {
     // A dropped front matter field is a change of the front matter.
     let dropped = after.replacen("status: todo             # todo | complete\n", "", 1);
     assert!(shape(&before, &dropped, Scope::Whole).is_err());
+}
+
+/// The head among the trusted tips (readiness passes `[tip, head]`): the
+/// task branch's own completion and its merge of the line are its own
+/// chain, never landed changes, so the landed move still keeps the
+/// completion. Before the fix it refused with "only one landed planning
+/// move is admitted", naming the task branch's own commits.
+#[test]
+fn the_head_as_a_trusted_tip_keeps_the_landed_move() {
+    let (f, _merge, _) = regrouped("EPC-002", |text| text);
+    let bound = f.bind_with(f.tip(LINE), &[f.tip(LINE), f.head()]);
+    assert!(bound.findings.is_empty(), "{}", messages(&bound));
+    assert!(bound.proof.is_some());
+}
+
+/// With the head among the trusted tips, a second real landed change still
+/// refuses, and the message names the two landed commits and their tip,
+/// never the task branch's own commits.
+#[test]
+fn a_second_landed_change_refuses_with_the_head_as_a_tip() {
+    let f = Fixture::new(PLAIN);
+    let first = f.land_planning(|text| moved(text, "EPC-002"));
+    git(f.root(), &["branch", "-qD", PLAIN.planning_branch]);
+    let second = f.land_planning(|text| {
+        text.replace("- Edges: none.\n", "- Edges: none.\n- A second note.\n")
+    });
+    f.merge_in(LINE);
+    let completion = f.complete();
+    let line = f.tip(LINE);
+    let bound = f.bind_with(line, &[line, f.head()]);
+    assert_refused(
+        &bound,
+        &[
+            &format!("{first} (target tip {line})"),
+            &format!("{second} (target tip {line})"),
+            "only one landed planning move",
+        ],
+    );
+    assert!(
+        !messages(&bound).contains(&completion.to_string()),
+        "{}",
+        messages(&bound)
+    );
+}
+
+/// A move to an epic the line's records mark cancelled or archived
+/// refuses, even when it declares the line.
+#[test]
+fn a_move_to_a_cancelled_or_archived_epic_refuses() {
+    for status in ["cancelled", "archived"] {
+        let f = Fixture::new(PLAIN);
+        git(f.root(), &["switch", "-q", LINE]);
+        f.write(
+            "project-management/epics/EPC-005.md",
+            &format!(
+                "---\nid: EPC-005\nstatus: {status}\nparent_line: {LINE}\n---\n\n# EPC-005\n"
+            ),
+        );
+        f.commit("docs(plan): an ended epic");
+        git(f.root(), &["switch", "-q", f.names.task_branch]);
+        let merge = f.land_planning(|text| moved(text, "EPC-005"));
+        f.merge_in(LINE);
+        f.complete();
+        assert_refused(
+            &f.bind(),
+            &[&merge.to_string(), &format!("EPC-005 is {status}")],
+        );
+    }
+}
+
+/// The landed move reached from two trusted tips (the line tip and a
+/// later tip on the same line) is one change, so it is admitted.
+#[test]
+fn the_same_landed_commit_from_two_tips_counts_once() {
+    let (f, _merge, _) = regrouped("EPC-002", |text| text);
+    let line = f.tip(LINE);
+    git(f.root(), &["switch", "-q", LINE]);
+    f.write("src/later.rs", "// later line work\n");
+    let later = f.commit("feat: later line work");
+    git(f.root(), &["switch", "-q", f.names.task_branch]);
+    let bound = f.bind_with(line, &[line, later]);
+    assert!(bound.findings.is_empty(), "{}", messages(&bound));
+    assert!(bound.proof.is_some());
 }

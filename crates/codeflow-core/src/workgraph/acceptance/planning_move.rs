@@ -11,8 +11,15 @@
 //! task's unchanged `integration_target` at that tip. Trust comes only from
 //! those commits and the parsed records they hold, never from a branch
 //! name, a title, a message or a date. Anything unreadable refuses.
+//!
+//! The head's own first-parent chain from the reviewed commit is never a
+//! landed change, even where a caller trusts the head as a tip. The check
+//! proves that the commit is on a trusted tip's first-parent line, not that
+//! a reviewed planning pull request made it: on a line pull request into
+//! `main` the trusted tip is the line head itself (`with_own_line`), so the
+//! operator's review of that pull request is the move's authority there.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use git2::{Oid, Repository};
 
@@ -96,25 +103,26 @@ pub(super) fn refusal(
         many => {
             let commits = many
                 .iter()
-                .map(|change| change.commit.to_string())
+                .map(|change| format!("{} (target tip {})", change.commit, change.tip))
                 .collect::<Vec<_>>()
                 .join(", ");
             return Some(format!(
-                "commits {commits} on the target's first-parent line changed the record; only one landed planning move is admitted"
+                "commits {commits} on the first-parent lines of the target tips this run is judged against changed the record; only one landed planning move is admitted"
             ));
         }
     };
     let commit = change.commit;
+    let on = format!("on the first-parent line of the target tip {}", change.tip);
     let (Some(before), Some(after)) = (&change.before, &change.after) else {
         return Some(format!(
-            "commit {commit} on the target's first-parent line adds or removes the record"
+            "commit {commit} {on} adds or removes the record"
         ));
     };
     let landed = match shape(before, after, Scope::Whole) {
         Ok(landed) => landed,
         Err(part) => {
             return Some(format!(
-                "commit {commit} on the target's first-parent line changed the record: {part}"
+                "commit {commit} {on} changed the record: {part}"
             ))
         }
     };
@@ -122,13 +130,13 @@ pub(super) fn refusal(
         Ok(edit) => edit,
         Err(part) => {
             return Some(format!(
-            "{part}, which commit {commit} on the target's first-parent line does not account for"
+            "{part}, which commit {commit} {on} does not account for"
         ))
         }
     };
     if (&edit.from, &edit.to) != (&landed.from, &landed.to) {
         return Some(format!(
-            "the head moves the task from {} to {}, but commit {commit} on the target's first-parent line moves it from {} to {}",
+            "the head moves the task from {} to {}, but commit {commit} {on} moves it from {} to {}",
             edit.from, edit.to, landed.from, landed.to
         ));
     }
@@ -140,7 +148,7 @@ pub(super) fn refusal(
             }
             None => {
                 return Some(format!(
-                    "the line `{line}` was added, and commit {commit} on the target's first-parent line did not add it"
+                    "the line `{line}` was added, and commit {commit} {on} did not add it"
                 ))
             }
         }
@@ -215,8 +223,11 @@ fn landing_line_problem(
 
 /// Every commit on the first-parent line of a run tip, after the last one
 /// the reviewed commit holds, that `at` holds and whose record at `path`
-/// differs from its first parent's. History that cannot be read, or a
-/// line that never reaches the reviewed commit's history, is an error.
+/// differs from its first parent's. The head's own first-parent chain from
+/// `reviewed` to `at`, which [`super::stacked`] has judged, is never a
+/// target change, even where a caller passes the head as a tip (readiness
+/// does). History that cannot be read, or a line that never reaches the
+/// reviewed commit's history, is an error.
 fn target_changes(
     repo: &Repository,
     path: &str,
@@ -226,6 +237,7 @@ fn target_changes(
 ) -> Result<Vec<Change>, String> {
     let _judgment = history::judgment();
     history::check(repo).map_err(|error| error.to_string())?;
+    let own = own_span(repo, reviewed, at)?;
     let mut changes: Vec<Change> = Vec::new();
     for &tip in tips.tips() {
         let mut cursor = tip;
@@ -235,7 +247,8 @@ fn target_changes(
                     "the first-parent line of the target tip {tip} never reaches the reviewed commit {reviewed}'s history"
                 ));
             };
-            if !changes.iter().any(|change| change.commit == cursor)
+            if !own.contains(&cursor)
+                && !changes.iter().any(|change| change.commit == cursor)
                 && is_ancestor_or_same(repo, cursor, at)?
             {
                 let before = blob_at(repo, parent, path)?;
@@ -253,6 +266,22 @@ fn target_changes(
         }
     }
     Ok(changes)
+}
+
+/// The commits on `at`'s first-parent chain after `reviewed`: the task
+/// branch's own completion and its merges of the target. The chain must
+/// reach `reviewed`, as [`super::stacked`] requires; otherwise it is an
+/// error.
+fn own_span(repo: &Repository, reviewed: Oid, at: Oid) -> Result<HashSet<Oid>, String> {
+    let mut own = HashSet::new();
+    let mut cursor = at;
+    while cursor != reviewed {
+        own.insert(cursor);
+        cursor = first_parent(repo, cursor)?.ok_or_else(|| {
+            format!("the first-parent chain of {at} never reaches the reviewed commit {reviewed}")
+        })?;
+    }
+    Ok(own)
 }
 
 /// The admitted edit from `before` to `after`, or which part of the record
