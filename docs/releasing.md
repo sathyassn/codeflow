@@ -251,6 +251,13 @@ an operator decision; agents and Coordinators never rule on it.
   daily run is not one of.
 - A required check passes when its suite is not selected for the event,
   and an event or base the workflow cannot read runs the full suites.
+- A batch lands on a line as one push (TSK-1351, ADR-0098), and that line
+  push is the batch's hosted proof. A line pull request's verdicts come
+  from the short checks only, so they are never the batch's proof.
+- Once TSK-1313 (PR 583) lands, a newer push to a line cancels the older
+  push run on that line, so the newest tip's run is the evidence. Pushes to
+  `main`, scheduled runs and dispatched runs are never cancelled. Until
+  then, every line push run finishes.
 - Local full gates keep coverage instrumentation whatever the event.
 
 Until TSK-1321 lands, the workflows differ from the table in four places:
