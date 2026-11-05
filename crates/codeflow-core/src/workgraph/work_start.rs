@@ -141,14 +141,18 @@ pub enum WorkStartError {
     #[error("target '{0}' is not a stable local or remote-tracking non-task branch")]
     UnstableTarget(String),
     #[error(
-        "local branch '{local}' and '{remote}' have diverged ({ahead} commit(s) only on \
-         '{local}', {behind} only on '{remote}'), so the work target is ambiguous; \
-         reconcile them (fetch, then rebase '{local}' onto '{remote}' or reset it), or \
-         name one with `--into`"
+        "local branch '{local}' and '{remote}' have diverged ('{local}' at {local_tip} \
+         with {ahead} commit(s) only there, '{remote}' at {remote_tip} with {behind} only \
+         there), so the work target is ambiguous; judge against the fetched line by naming \
+         it with `--into {remote}` where the command takes it, or work from a fresh \
+         worktree of it (`git worktree add --detach <path> {remote}`); a plain \
+         `git fetch origin` refreshes '{remote}' without moving '{local}'"
     )]
     DivergedTarget {
         local: String,
         remote: String,
+        local_tip: String,
+        remote_tip: String,
         ahead: usize,
         behind: usize,
     },
@@ -343,7 +347,9 @@ pub fn resolve_work_target(
 ) -> Result<Option<String>, WorkStartError> {
     match resolve_work_target_checked(repo_root, declared) {
         Ok(resolved) => Ok(resolved.map(|resolved| resolved.target)),
-        Err(WorkStartError::DivergedTarget { .. }) => Ok(declared.map(str::to_owned)),
+        // The local branch, by its exact ref: a bare name now reads the
+        // fetched ref first, so it would not name the branch kept here.
+        Err(WorkStartError::DivergedTarget { local, .. }) => Ok(Some(format!("refs/heads/{local}"))),
         Err(error) => Err(error),
     }
 }
@@ -382,7 +388,7 @@ pub fn resolve_work_target_checked(
     // A bare name with a local branch: that branch, unless it is strictly
     // behind the upstream Git has configured for it.
     let local_ref = format!("refs/heads/{target}");
-    if candidates.first() == Some(&local_ref) {
+    if candidates.contains(&local_ref) && !target.starts_with("refs/") {
         if let Some(local_id) = reference_commit(&repo, &local_ref)? {
             return local_or_upstream(&repo, target, &local_ref, local_id);
         }
@@ -413,10 +419,17 @@ fn local_or_upstream(
     local_ref: &str,
     local_id: git2::Oid,
 ) -> Result<Option<ResolvedWorkTarget>, WorkStartError> {
-    let keep = || {
-        Ok(Some(ResolvedWorkTarget {
-            target: local.to_string(),
-        }))
+    // The kept local branch, named so that reading the name gives this
+    // branch: the bare name when no other commit answers to it, else its
+    // exact ref, since a bare name reads `origin/<name>` first (TSK-416).
+    let keep = || -> Result<Option<ResolvedWorkTarget>, WorkStartError> {
+        let origin = reference_commit(repo, &format!("refs/remotes/origin/{local}"))?;
+        let target = if origin.is_none_or(|origin| origin == local_id) {
+            local.to_string()
+        } else {
+            local_ref.to_string()
+        };
+        Ok(Some(ResolvedWorkTarget { target }))
     };
     let upstream_ref = match repo.branch_upstream_name(local_ref) {
         Ok(name) => Some(
@@ -456,6 +469,8 @@ fn local_or_upstream(
         (ahead, behind) => Err(WorkStartError::DivergedTarget {
             local: local.to_string(),
             remote: upstream,
+            local_tip: local_id.to_string(),
+            remote_tip: upstream_id.to_string(),
             ahead,
             behind,
         }),
@@ -1741,9 +1756,17 @@ impl PinBranches {
 
     /// The one branch whose tip is the pin, the branch not advanced past it.
     ///
+    /// Each copy of that branch (the local branch and its remote-tracking
+    /// refs) is judged against the pin by ancestry alone (TSK-416): a copy
+    /// behind the pin, a strict ancestor of it, is a stale copy and does not
+    /// refuse; a copy ahead of the pin or diverged from it refuses, naming
+    /// the branch, the pin, the copy and its shape; ancestry that cannot be
+    /// read refuses with that cause.
+    ///
     /// # Errors
-    /// Refuses a pin that is not the unique predecessor branch tip.
-    pub(crate) fn pin_name(&self, pin: &ReviewedPin) -> Result<GitName, String> {
+    /// Refuses a pin that is not the unique predecessor branch tip, a copy
+    /// ahead of or diverged from it, and unreadable ancestry.
+    pub(crate) fn pin_name(&self, repo: &Repository, pin: &ReviewedPin) -> Result<GitName, String> {
         let matching: Vec<_> = self
             .of(&pin.task_id)?
             .filter(|(_, tips)| tips.contains(&pin.revision))
@@ -1751,10 +1774,29 @@ impl PinBranches {
         let [(name, tips)] = matching.as_slice() else {
             return Err(format!("{} pin is not the unique predecessor branch tip; rebase on its new reviewed head and recheck", pin.task_id));
         };
-        if tips.len() != 1 {
+        for other in tips.iter().filter(|tip| **tip != pin.revision) {
+            let unreadable = |error: git2::Error| {
+                format!(
+                    "{} predecessor branch {}: cannot read the ancestry of its copy at {other} against the pin {}: {}; fetch the branch again and recheck",
+                    pin.task_id,
+                    name.display(),
+                    pin.revision,
+                    error.message()
+                )
+            };
+            if history::descendant_of(repo, pin.revision, *other).map_err(unreadable)? {
+                continue;
+            }
+            let shape = if history::descendant_of(repo, *other, pin.revision).map_err(unreadable)? {
+                "is ahead of"
+            } else {
+                "has diverged from"
+            };
             return Err(format!(
-                "{} predecessor branch has advanced; rebase on its new reviewed head and recheck",
-                pin.task_id
+                "{} predecessor branch {} has a copy at {other} that {shape} the pin {}; rebase on its new reviewed head and recheck, or delete or reset the stray copy",
+                pin.task_id,
+                name.display(),
+                pin.revision
             ));
         }
         Ok((*name).clone())
@@ -1820,7 +1862,7 @@ impl PinBranches {
         repo: &Repository,
         pin: &ReviewedPin,
     ) -> Result<GitName, String> {
-        let name = self.pin_name(pin)?;
+        let name = self.pin_name(repo, pin)?;
         self.pin_holds_record(repo, pin)?;
         Ok(name)
     }
@@ -2003,7 +2045,7 @@ pub(crate) fn reviewed_pins_in(
             revision,
         };
         let branches = PinBranches::once(branches, repo)?;
-        let branch = branches.pin_name(&pin)?;
+        let branch = branches.pin_name(repo, &pin)?;
         if !review_first {
             branches.pin_holds_record(repo, &pin)?;
         }
@@ -2408,13 +2450,37 @@ pub fn stacked_pins(
                 format!("cannot read the ancestry of {ancestor} from {of}: {error}")
             })
         };
+        // Each branch of the predecessor with the tips the head contains
+        // and the target does not.
+        let mut by_branch: Vec<Vec<Oid>> = Vec::new();
+        for (_, tips) in PinBranches::once(&mut branches, &repo)?.of(&dependency.id)? {
+            let mut inside = Vec::new();
+            for tip in tips {
+                if (*tip == head_id || descends(head_id, *tip)?)
+                    && *tip != merge_base
+                    && !descends(merge_base, *tip)?
+                {
+                    inside.push(*tip);
+                }
+            }
+            by_branch.push(inside);
+        }
+        // A copy of one branch that another contained copy of the same
+        // branch descends from is a stale copy behind it, never a second
+        // stack (TSK-416); `pin_name` then judges every copy against the pin.
         let mut contained = std::collections::BTreeSet::new();
-        for tip in PinBranches::once(&mut branches, &repo)?.tips_of(&dependency.id)? {
-            if (tip == head_id || descends(head_id, tip)?)
-                && tip != merge_base
-                && !descends(merge_base, tip)?
-            {
-                contained.insert(tip);
+        for inside in &by_branch {
+            for tip in inside {
+                let mut behind = false;
+                for other in inside.iter().filter(|other| *other != tip) {
+                    if descends(*other, *tip)? {
+                        behind = true;
+                        break;
+                    }
+                }
+                if !behind {
+                    contained.insert(*tip);
+                }
             }
         }
         match contained.len() {
@@ -3346,7 +3412,11 @@ fn tracking_reference(
     let Some(candidates) = target_reference_names(name) else {
         return Ok(None);
     };
-    let exact = &candidates[0];
+    // A bare name is the branch of that name; any other spelling names one ref.
+    let exact = candidates
+        .iter()
+        .find(|candidate| candidate.starts_with("refs/heads/"))
+        .unwrap_or(&candidates[0]);
     // A landing ref counts only under the exact spelling git lists
     // (TSK-381 SF-4).
     let read = |reference: &str| {
@@ -3742,24 +3812,67 @@ fn accepted_block(content: &str) -> Option<String> {
     }
 }
 
+/// The commit a target names, read through [`target_reference_names`]: for
+/// a bare name the fetched `origin/<name>` when it exists, else the local
+/// branch.
 pub(crate) fn target_reference<'repo>(
     repo: &'repo Repository,
     target: &str,
 ) -> Result<Option<git2::Commit<'repo>>, WorkStartError> {
-    let Some(candidates) = target_reference_names(target) else {
+    Ok(target_reference_read(repo, target)?.map(|(_, commit)| commit))
+}
+
+/// The full ref [`target_reference`] reads for `target`, with its commit,
+/// so a caller can say which reference decided.
+pub(crate) fn target_reference_read<'repo>(
+    repo: &'repo Repository,
+    target: &str,
+) -> Result<Option<(String, git2::Commit<'repo>)>, WorkStartError> {
+    let Some(mut candidates) = target_reference_names(target) else {
         return Ok(None);
     };
+    // A bare name whose local branch tracks a remote-tracking ref of another
+    // remote reads that ref first: a fork's `origin/<name>` is not the line
+    // the branch follows.
+    if candidates.len() > 1 {
+        match repo.branch_upstream_name(&format!("refs/heads/{target}")) {
+            Ok(upstream) => {
+                let upstream = upstream.as_str().map_err(|error| {
+                    WorkStartError::Repository(format!(
+                        "the upstream configured for '{target}' is not valid UTF-8: {error}"
+                    ))
+                })?;
+                if upstream.starts_with("refs/remotes/") {
+                    candidates.insert(0, upstream.to_string());
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.code(),
+                    git2::ErrorCode::NotFound | git2::ErrorCode::UnbornBranch
+                ) => {}
+            Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+        }
+    }
     for name in candidates {
         if let Some(oid) = reference_commit(repo, &name)? {
             return repo
                 .find_commit(oid)
-                .map(Some)
+                .map(|commit| Some((name, commit)))
                 .map_err(|error| WorkStartError::Repository(error.to_string()));
         }
     }
     Ok(None)
 }
 
+/// The refs a target name may be read through, in the order they are tried.
+///
+/// A full ref (`refs/heads/...`, `refs/remotes/...`) and an `origin/<name>`
+/// spelling name one ref. A bare name tries the fetched
+/// `refs/remotes/origin/<name>` first and the local `refs/heads/<name>` only
+/// after it, so a stale local branch of the same name never decides where
+/// the fetched line exists (TSK-416). `None` for a name that is not a
+/// target.
 pub(crate) fn target_reference_names(target: &str) -> Option<Vec<String>> {
     if target.is_empty() || logical_target(target) == "HEAD" {
         return None;
@@ -3772,8 +3885,8 @@ pub(crate) fn target_reference_names(target: &str) -> Option<Vec<String>> {
         vec![format!("refs/remotes/origin/{remote_branch}")]
     } else {
         vec![
-            format!("refs/heads/{target}"),
             format!("refs/remotes/origin/{target}"),
+            format!("refs/heads/{target}"),
         ]
     };
     candidates
@@ -5322,7 +5435,18 @@ mod tests {
         let resolved = resolve_work_target_checked(dir.path(), Some("main"))
             .unwrap()
             .unwrap();
-        assert_eq!(resolved.target, "main");
+        // The local branch, by its exact ref: the bare name would read the
+        // fork's `origin/main` first (TSK-416).
+        assert_eq!(resolved.target, "refs/heads/main");
+        let repo = Repository::open(dir.path()).unwrap();
+        assert_eq!(
+            target_reference(&repo, &resolved.target).unwrap().unwrap().id(),
+            repo.find_reference("refs/remotes/upstream/main")
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id()
+        );
     }
 
     #[test]
@@ -5443,12 +5567,31 @@ mod tests {
             message.contains("'main' and 'refs/remotes/origin/main' have diverged"),
             "{message}"
         );
-        // The unchecked resolver keeps its old answer for non-anchoring callers.
+        // TSK-416 AC-9: both tips by commit, and a remedy that runs under the
+        // guard, never a rebase or reset of the local branch.
+        let repo = Repository::open(dir.path()).unwrap();
+        for reference in ["refs/heads/main", "refs/remotes/origin/main"] {
+            let tip = repo
+                .find_reference(reference)
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id()
+                .to_string();
+            assert!(message.contains(&tip), "{reference}: {message}");
+        }
+        assert!(
+            message.contains("git worktree add --detach <path> refs/remotes/origin/main"),
+            "{message}"
+        );
+        assert!(!message.contains("rebase") && !message.contains("reset"), "{message}");
+        // The unchecked resolver keeps its old answer, the local branch, by
+        // its exact ref, for non-anchoring callers.
         assert_eq!(
             resolve_work_target(dir.path(), Some("main"))
                 .unwrap()
                 .as_deref(),
-            Some("main")
+            Some("refs/heads/main")
         );
     }
 
@@ -5931,7 +6074,14 @@ permission_preset = "strict"
             "1111111111111111111111111111111111111111\n",
         )
         .unwrap();
-        assert!(target_reference(&repo, "main").is_err());
+        // A bare name reads the fetched ref first (TSK-416), so the broken
+        // local branch is never read there; anchoring work still compares
+        // the local branch with it and refuses.
+        assert_eq!(
+            target_reference(&repo, "main").unwrap().map(|commit| commit.id()),
+            Some(oid)
+        );
+        assert!(target_reference(&repo, "refs/heads/main").is_err());
         assert!(resolve_work_target_checked(dir.path(), Some("main")).is_err());
     }
 
@@ -6070,5 +6220,300 @@ permission_preset = "strict"
             let error = stack_base(dir.path(), &pins).unwrap_err();
             assert!(error.contains("cannot verify"), "{error}");
         }
+    }
+}
+
+/// TSK-416: a stale copy of a branch, local or remote-tracking, never
+/// decides a target read or a reviewed pin; ancestry alone judges a copy.
+#[cfg(test)]
+mod stale_copy_tests {
+    use super::*;
+    use std::fs;
+
+    fn git(root: &Path, args: &[&str]) -> String {
+        let out = crate::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn commit(root: &Path, message: &str) -> String {
+        git(root, &["commit", "-q", "--allow-empty", "-m", message]);
+        git(root, &["rev-parse", "HEAD"])
+    }
+
+    /// `main` holding TSK-001 (todo) and TSK-002, which depends on it, with
+    /// an `origin` remote configured but nothing fetched.
+    fn fixture() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        git(root, &["config", "user.name", "Test"]);
+        git(root, &["config", "remote.origin.url", "/nowhere"]);
+        git(
+            root,
+            &[
+                "config",
+                "remote.origin.fetch",
+                "+refs/heads/*:refs/remotes/origin/*",
+            ],
+        );
+        fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+        for (id, deps) in [("TSK-001", "[]"), ("TSK-002", "[TSK-001]")] {
+            fs::write(
+                root.join(format!("project-management/tasks/{id}.md")),
+                format!("---\nid: {id}\nepic_id: null\nstandalone_reason: bounded\nintegration_target: main\ntitle: work {id}\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: {deps}\ncreated: 2026-11-05\n---\n"),
+            )
+            .unwrap();
+        }
+        git(root, &["add", "."]);
+        git(root, &["commit", "-q", "-m", "plan"]);
+        dir
+    }
+
+    /// A commit object whose parent is missing, so its ancestry cannot be read.
+    fn unreadable_commit(root: &Path) -> String {
+        let tree = git(root, &["rev-parse", "HEAD^{tree}"]);
+        let body = format!(
+            "tree {tree}\nparent {}\nauthor T <t@example.test> 1700000000 +0000\ncommitter T <t@example.test> 1700000000 +0000\n\nbroken\n",
+            "1".repeat(40)
+        );
+        let path = root.join(".git/broken-commit");
+        fs::write(&path, body).unwrap();
+        let path = path.to_str().unwrap().to_string();
+        git(
+            root,
+            &["hash-object", "-t", "commit", "-w", "--literally", &path],
+        )
+    }
+
+    #[test]
+    fn a_bare_target_reads_the_fetched_ref_before_a_stale_local_branch() {
+        let dir = fixture();
+        let root = dir.path();
+        let stale = git(root, &["rev-parse", "HEAD"]);
+        let fetched = commit(root, "fetched");
+        git(root, &["update-ref", "refs/remotes/origin/main", &fetched]);
+        git(root, &["update-ref", "refs/heads/main", &stale]);
+        let repo = Repository::open(root).unwrap();
+        let (name, tip) = target_reference_read(&repo, "main").unwrap().unwrap();
+        assert_eq!(name, "refs/remotes/origin/main");
+        assert_eq!(tip.id().to_string(), fetched);
+        assert_eq!(
+            target_reference(&repo, "main").unwrap().unwrap().id().to_string(),
+            fetched
+        );
+        // Only when nothing of that name is fetched does the local branch decide.
+        git(root, &["update-ref", "-d", "refs/remotes/origin/main"]);
+        let (name, tip) = target_reference_read(&repo, "main").unwrap().unwrap();
+        assert_eq!(name, "refs/heads/main");
+        assert_eq!(tip.id().to_string(), stale);
+    }
+
+    /// A fork's `origin/main` never replaces the upstream `main` tracks.
+    #[test]
+    fn a_bare_target_reads_the_configured_upstream_before_a_fork_origin() {
+        let dir = fixture();
+        let root = dir.path();
+        let upstream = git(root, &["rev-parse", "HEAD"]);
+        let fork = commit(root, "fork");
+        git(root, &["update-ref", "refs/remotes/origin/main", &fork]);
+        git(root, &["update-ref", "refs/remotes/upstream/main", &upstream]);
+        git(root, &["update-ref", "refs/heads/main", &upstream]);
+        git(root, &["config", "remote.upstream.url", "/nowhere"]);
+        git(
+            root,
+            &[
+                "config",
+                "remote.upstream.fetch",
+                "+refs/heads/*:refs/remotes/upstream/*",
+            ],
+        );
+        git(root, &["config", "branch.main.remote", "upstream"]);
+        git(root, &["config", "branch.main.merge", "refs/heads/main"]);
+        let repo = Repository::open(root).unwrap();
+        let (name, tip) = target_reference_read(&repo, "main").unwrap().unwrap();
+        assert_eq!(name, "refs/remotes/upstream/main");
+        assert_eq!(tip.id().to_string(), upstream);
+    }
+
+    /// AC-11: the pre-push hook's default target (`git_hook.rs`
+    /// `epic_line_push`) is read through `default_work_target_ref`, which
+    /// names `refs/remotes/origin/main` before the local `main`, so a stale
+    /// local `main` never decides the push check.
+    #[test]
+    fn the_pre_push_default_target_is_the_fetched_main_beside_a_stale_local_one() {
+        let dir = fixture();
+        let root = dir.path();
+        let stale = git(root, &["rev-parse", "HEAD"]);
+        let fetched = commit(root, "fetched");
+        git(root, &["update-ref", "refs/remotes/origin/main", &fetched]);
+        git(root, &["update-ref", "refs/heads/main", &stale]);
+        assert_eq!(
+            default_work_target_ref(root).unwrap().as_deref(),
+            Some("refs/remotes/origin/main")
+        );
+    }
+
+    /// AC-4: every other spelling keeps its one ref, and a name that is not
+    /// a target stays refused.
+    #[test]
+    fn other_target_spellings_keep_their_one_ref() {
+        assert_eq!(
+            target_reference_names("main").unwrap(),
+            ["refs/remotes/origin/main", "refs/heads/main"]
+        );
+        for (name, read) in [
+            ("origin/main", "refs/remotes/origin/main"),
+            ("refs/heads/main", "refs/heads/main"),
+            ("refs/remotes/upstream/main", "refs/remotes/upstream/main"),
+        ] {
+            assert_eq!(target_reference_names(name).unwrap(), [read], "{name}");
+        }
+        for bad in ["", "HEAD", "refs/tags/v1", "bad..name"] {
+            assert!(target_reference_names(bad).is_none(), "{bad}");
+        }
+    }
+
+    /// The pin `P`, a commit `A` before it and one `C` after it, each on
+    /// `task/TSK-001-work` history, and a sibling `D` of `P`.
+    struct Shapes {
+        before: String,
+        pin: String,
+        after: String,
+        sibling: String,
+    }
+
+    fn shapes(root: &Path) -> Shapes {
+        git(root, &["switch", "-q", "-c", "task/TSK-001-work"]);
+        let before = commit(root, "before");
+        let pin = commit(root, "pin");
+        let after = commit(root, "after");
+        git(root, &["switch", "-q", "--detach", &before]);
+        let sibling = commit(root, "sibling");
+        git(root, &["switch", "-q", "main"]);
+        Shapes {
+            before,
+            pin,
+            after,
+            sibling,
+        }
+    }
+
+    fn copies(root: &Path, local: &str, remote: &str) {
+        git(root, &["update-ref", "refs/heads/task/TSK-001-work", local]);
+        git(
+            root,
+            &["update-ref", "refs/remotes/origin/task/TSK-001-work", remote],
+        );
+    }
+
+    fn pin_name_of(root: &Path, pin: &str) -> Result<GitName, String> {
+        let repo = Repository::open(root).unwrap();
+        let branches = PinBranches::read(&repo, root).unwrap();
+        branches.pin_name(
+            &repo,
+            &ReviewedPin {
+                task_id: "TSK-001".into(),
+                revision: Oid::from_str(pin).unwrap(),
+            },
+        )
+    }
+
+    /// AC-12: a copy behind the pin, local or remote-tracking, is accepted.
+    #[test]
+    fn pin_name_accepts_a_copy_behind_the_pin() {
+        let dir = fixture();
+        let root = dir.path();
+        let s = shapes(root);
+        for (local, remote) in [(&s.before, &s.pin), (&s.pin, &s.before)] {
+            copies(root, local, remote);
+            assert_eq!(
+                pin_name_of(root, &s.pin).unwrap(),
+                GitName::from_text("task/TSK-001-work")
+            );
+        }
+    }
+
+    /// AC-13: a copy ahead of the pin or diverged from it still refuses,
+    /// naming the branch, the pin, the copy and its shape.
+    #[test]
+    fn pin_name_refuses_a_copy_ahead_of_or_diverged_from_the_pin() {
+        let dir = fixture();
+        let root = dir.path();
+        let s = shapes(root);
+        for (other, shape) in [(&s.after, "is ahead of"), (&s.sibling, "has diverged from")] {
+            copies(root, &s.pin, other);
+            let error = pin_name_of(root, &s.pin).unwrap_err();
+            for part in [
+                "TSK-001 predecessor branch task/TSK-001-work",
+                other.as_str(),
+                shape,
+                s.pin.as_str(),
+                "rebase on its new reviewed head",
+                "delete or reset the stray copy",
+            ] {
+                assert!(error.contains(part), "{part}: {error}");
+            }
+        }
+    }
+
+    /// AC-14: a copy whose ancestry cannot be read refuses with that cause.
+    #[test]
+    fn pin_name_refuses_a_copy_whose_ancestry_cannot_be_read() {
+        let dir = fixture();
+        let root = dir.path();
+        let s = shapes(root);
+        let broken = unreadable_commit(root);
+        copies(root, &s.pin, &broken);
+        let error = pin_name_of(root, &s.pin).unwrap_err();
+        assert!(error.contains("cannot read the ancestry"), "{error}");
+        assert!(error.contains(&broken), "{error}");
+    }
+
+    /// The task branch of TSK-002 with one commit on the pin, and its head.
+    fn stacked_head(root: &Path, pin: &str) -> String {
+        git(root, &["switch", "-q", "-c", "task/TSK-002-work", pin]);
+        let head = commit(root, "successor");
+        git(root, &["switch", "-q", "main"]);
+        head
+    }
+
+    fn stacked(root: &Path, head: &str) -> Result<Vec<ReviewedPin>, String> {
+        stacked_pins(root, "TSK-002", "main", head, &|_, _, _| Ok(true))
+    }
+
+    /// AC-15: the push check honours the pin when a copy is behind it, and
+    /// still refuses a copy ahead of it or one whose ancestry cannot be read.
+    #[test]
+    fn stacked_pins_honour_a_copy_behind_the_pin_and_refuse_the_rest() {
+        let dir = fixture();
+        let root = dir.path();
+        let s = shapes(root);
+        let head = stacked_head(root, &s.pin);
+        for (local, remote) in [(&s.before, &s.pin), (&s.pin, &s.before)] {
+            copies(root, local, remote);
+            let pins = stacked(root, &head).unwrap();
+            assert_eq!(pins.len(), 1);
+            assert_eq!(pins[0].revision.to_string(), s.pin);
+        }
+        for (other, cause) in [(&s.after, "is ahead of"), (&s.sibling, "has diverged from")] {
+            copies(root, &s.pin, other);
+            let error = stacked(root, &head).unwrap_err();
+            assert!(error.contains(cause), "{error}");
+        }
+        let broken = unreadable_commit(root);
+        copies(root, &s.pin, &broken);
+        let error = stacked(root, &head).unwrap_err();
+        assert!(error.contains("cannot read the ancestry"), "{error}");
     }
 }

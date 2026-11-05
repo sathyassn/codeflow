@@ -2309,7 +2309,7 @@ fn judge_reopened(
     }
     let mut tips: Vec<(String, Oid)> = Vec::new();
     for name in &targets {
-        let mut found = match target_tips(repo, name) {
+        let mut found = match judged_target_tips(repo, name) {
             Ok(found) => found,
             Err(reason) => return TaskJudgement::unreadable(reason),
         };
@@ -2334,7 +2334,7 @@ fn judge_reopened(
     }
     match default_target_name(repo) {
         Ok(name) => {
-            let found = match target_tips(repo, &name.name) {
+            let found = match judged_target_tips(repo, &name.name) {
                 Ok(found) => found,
                 Err(reason) => return TaskJudgement::unreadable(reason),
             };
@@ -2582,6 +2582,52 @@ fn default_target_name(repo: &Repository) -> Result<DefaultName, String> {
         })
 }
 
+/// The tips of the target `name` a reopen is judged against: every
+/// fetched tip [`target_tips`] lists, and the local branch only when it is
+/// not behind them. Ancestry decides, never a name or a date (TSK-416):
+/// - a local tip equal to, or a strict ancestor of, a fetched tip is a
+///   stale copy and is dropped, since the fetched tip holds all it holds;
+/// - a local tip that strictly descends from every fetched tip (unpushed
+///   commits) is kept beside them;
+/// - a local tip diverged from a fetched tip, or whose ancestry cannot be
+///   read, refuses, naming both refs and commits and a remedy that runs
+///   under the guard.
+///
+/// # Errors
+/// Returns the reason when a ref or the ancestry cannot be read, or when
+/// the local branch and a fetched tip have diverged.
+pub(super) fn judged_target_tips(
+    repo: &Repository,
+    name: &str,
+) -> Result<Vec<(String, Oid)>, String> {
+    let tips = target_tips(repo, name)?;
+    let (local, fetched): (Vec<_>, Vec<_>) = tips
+        .into_iter()
+        .partition(|(reference, _)| reference.starts_with("refs/heads/"));
+    let [(local_ref, local_tip)] = local.as_slice() else {
+        return Ok(fetched.into_iter().chain(local).collect());
+    };
+    let descends = |of: Oid, ancestor: Oid| {
+        history::descendant_of(repo, of, ancestor).map_err(|error| {
+            format!(
+                "cannot read the ancestry of {local_ref} at {local_tip} against the fetched line: {}; judge from a fresh worktree of the fetched line (`git worktree add --detach <path> <fetched ref>`)",
+                error.message()
+            )
+        })
+    };
+    for (fetched_ref, fetched_tip) in &fetched {
+        if fetched_tip == local_tip || descends(*fetched_tip, *local_tip)? {
+            return Ok(fetched);
+        }
+        if !descends(*local_tip, *fetched_tip)? {
+            return Err(format!(
+                "the local branch {local_ref} at {local_tip} and {fetched_ref} at {fetched_tip} have diverged, so the line this reopen is judged against is ambiguous; judge from a fresh worktree of the fetched line (`git worktree add --detach <path> {fetched_ref}`), after a plain `git fetch origin`, which does not move the local branch"
+            ));
+        }
+    }
+    Ok(fetched.into_iter().chain(local).collect())
+}
+
 /// Every tip of the target `name` this clone knows, with the reference
 /// that names it: the configured upstream of its local branch (on any
 /// remote), its `origin` tracking ref, and the local branch, in that
@@ -2598,9 +2644,9 @@ pub(super) fn target_tips(repo: &Repository, name: &str) -> Result<Vec<(String, 
         Err(error) if error.code() == git2::ErrorCode::NotFound => {}
         Err(error) => return Err(error.to_string()),
     }
-    let mut candidates = super::work_start::target_reference_names(name).unwrap_or_default();
-    candidates.reverse();
-    names.extend(candidates);
+    // The fetched `origin` ref, then the local branch: the order
+    // `target_reference_names` gives a bare name.
+    names.extend(super::work_start::target_reference_names(name).unwrap_or_default());
     let mut tips = Vec::new();
     for reference in names {
         let found = match repo.find_reference(&reference) {
@@ -6305,5 +6351,157 @@ mod tests {
                 .unwrap_err()
                 .contains("cannot verify"));
         }
+    }
+}
+
+/// TSK-416 AC-8 and AC-9: the tips a reopen is judged against drop a stale
+/// local copy by ancestry alone, and refuse a diverged or unreadable one.
+#[cfg(test)]
+mod judged_tip_tests {
+    use super::*;
+
+    fn git(root: &std::path::Path, args: &[&str]) -> String {
+        let out = crate::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn commit(root: &std::path::Path, message: &str) -> String {
+        git(root, &["commit", "-q", "--allow-empty", "-m", message]);
+        git(root, &["rev-parse", "HEAD"])
+    }
+
+    /// `main` at a base commit with an `origin` remote configured.
+    fn fixture() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.test"]);
+        git(root, &["config", "user.name", "T"]);
+        git(root, &["config", "remote.origin.url", "/nowhere"]);
+        git(
+            root,
+            &[
+                "config",
+                "remote.origin.fetch",
+                "+refs/heads/*:refs/remotes/origin/*",
+            ],
+        );
+        let base = commit(root, "base");
+        (dir, base)
+    }
+
+    fn tips(root: &std::path::Path) -> Result<Vec<(String, String)>, String> {
+        let repo = Repository::open(root).unwrap();
+        judged_target_tips(&repo, "main").map(|tips| {
+            tips.into_iter()
+                .map(|(name, tip)| (name, tip.to_string()))
+                .collect()
+        })
+    }
+
+    #[test]
+    fn a_local_tip_behind_the_fetched_tip_is_dropped_whatever_its_date() {
+        let (dir, base) = fixture();
+        let root = dir.path();
+        // A forged committer date far in the future decides nothing.
+        let out = crate::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(["commit", "-q", "--allow-empty", "-m", "stale"])
+            .env("GIT_COMMITTER_DATE", "2099-01-01T00:00:00Z")
+            .status()
+            .unwrap();
+        assert!(out.success());
+        let stale = git(root, &["rev-parse", "HEAD"]);
+        let fetched = commit(root, "fetched");
+        git(root, &["update-ref", "refs/remotes/origin/main", &fetched]);
+        git(root, &["update-ref", "refs/heads/main", &stale]);
+        // A local branch named like the fetched ref is not the line.
+        git(root, &["update-ref", "refs/heads/origin/main", &base]);
+        assert_eq!(
+            tips(root).unwrap(),
+            [("refs/remotes/origin/main".to_string(), fetched)]
+        );
+    }
+
+    #[test]
+    fn a_local_tip_ahead_of_the_fetched_tip_is_kept() {
+        let (dir, base) = fixture();
+        let root = dir.path();
+        git(root, &["update-ref", "refs/remotes/origin/main", &base]);
+        let ahead = commit(root, "unpushed");
+        assert_eq!(
+            tips(root).unwrap(),
+            [
+                ("refs/remotes/origin/main".to_string(), base),
+                ("refs/heads/main".to_string(), ahead)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_diverged_local_tip_refuses_naming_both_refs_and_a_guarded_remedy() {
+        let (dir, base) = fixture();
+        let root = dir.path();
+        let local = commit(root, "local");
+        git(root, &["switch", "-q", "--detach", &base]);
+        let fetched = commit(root, "fetched");
+        git(root, &["update-ref", "refs/remotes/origin/main", &fetched]);
+        let error = tips(root).unwrap_err();
+        for part in [
+            "refs/heads/main",
+            local.as_str(),
+            "refs/remotes/origin/main",
+            fetched.as_str(),
+            "have diverged",
+            "git worktree add --detach <path> refs/remotes/origin/main",
+            "git fetch origin",
+        ] {
+            assert!(error.contains(part), "{part}: {error}");
+        }
+        assert!(!error.contains("update-ref"), "{error}");
+        assert!(!error.contains("stale"), "{error}");
+    }
+
+    #[test]
+    fn a_local_tip_whose_ancestry_cannot_be_read_refuses() {
+        let (dir, base) = fixture();
+        let root = dir.path();
+        git(root, &["update-ref", "refs/remotes/origin/main", &base]);
+        let tree = git(root, &["rev-parse", "HEAD^{tree}"]);
+        let path = root.join(".git/broken-commit");
+        std::fs::write(
+            &path,
+            format!(
+                "tree {tree}\nparent {}\nauthor T <t@example.test> 1700000000 +0000\ncommitter T <t@example.test> 1700000000 +0000\n\nbroken\n",
+                "1".repeat(40)
+            ),
+        )
+        .unwrap();
+        let broken = git(
+            root,
+            &[
+                "hash-object",
+                "-t",
+                "commit",
+                "-w",
+                "--literally",
+                path.to_str().unwrap(),
+            ],
+        );
+        git(root, &["update-ref", "refs/heads/main", &broken]);
+        let error = tips(root).unwrap_err();
+        assert!(error.contains("cannot read the ancestry of refs/heads/main"), "{error}");
+        assert!(error.contains(&broken), "{error}");
     }
 }

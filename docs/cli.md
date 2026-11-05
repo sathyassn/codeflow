@@ -246,7 +246,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--json` | Print the same facts as JSON, each task with its `state`; a landed task adds `landed_branches` and `suggested_command`. |
 | `codeflow work claim <TASK_ID>` | | Fetch, check the task is ready and unclaimed on its target tip, then create and push `task/<id>-<slug>` from that tip. The pushed branch is an advisory mark others can see |
 | | `<TASK_ID>` | Stable task id. |
-| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin, repeat once per code dependency. |
+| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin, repeat once per code dependency. A copy of the predecessor branch behind the pin is accepted; a copy ahead of it or diverged from it is refused. |
 | `codeflow work start <TASK_ID>` | | Verify that a durable task was planned and anchored before implementation |
 | | `<TASK_ID>` | Stable task id. |
 | | `--into <REF>` | Non-task branch/ref this task will merge into. |

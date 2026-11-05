@@ -3421,6 +3421,41 @@ mod tests {
         dir
     }
 
+    /// TSK-416 AC-10: the base `codeflow ci` reads for a bare branch is its
+    /// remote-tracking ref, so a stale local `main` beside a newer
+    /// `origin/main` never anchors the range; the local branch decides only
+    /// where nothing of that name is fetched.
+    #[test]
+    fn a_stale_local_base_never_anchors_the_range() {
+        let dir = r24_range(&[], &[]);
+        let root = dir.path();
+        let run = |args: &[&str]| {
+            let out = codeflow_core::git::command()
+                .args(args)
+                .current_dir(root)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        let stale = run(&["rev-parse", "main"]);
+        let fetched = run(&["rev-parse", "feat/x"]);
+        run(&["update-ref", "refs/remotes/origin/main", &fetched]);
+        assert_eq!(
+            super::resolve_base(root, &super::branch_anchors("main")).unwrap(),
+            Some(fetched.clone())
+        );
+        assert_eq!(
+            super::resolve_base(root, &super::base_refs("main")).unwrap(),
+            Some(fetched)
+        );
+        run(&["update-ref", "-d", "refs/remotes/origin/main"]);
+        assert_eq!(
+            super::resolve_base(root, &super::branch_anchors("main")).unwrap(),
+            Some(stale)
+        );
+    }
+
     /// Delete the loose object `spec` names, as a damaged clone lacks it.
     fn r24_remove(root: &std::path::Path, spec: &str) {
         let out = codeflow_core::git::command()

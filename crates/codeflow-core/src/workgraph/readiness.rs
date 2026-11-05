@@ -208,22 +208,26 @@ fn canonical_target(declared: &str) -> String {
 type Resolved = Result<Option<(String, git2::Oid)>, String>;
 
 /// Resolve a declared target exactly as `work start` does
-/// ([`super::resolve_work_target_checked`]): a bare name reads the local
-/// branch, or its configured upstream when the local branch is strictly
-/// behind it, and `origin/<name>` only where no local branch exists; an
+/// ([`super::resolve_work_target_checked`]): a bare name reads its fetched
+/// upstream when the local branch is behind it or absent, and the local
+/// branch only when it equals or is ahead of it or nothing is fetched; an
 /// explicit ref is read as written. One resolver, so `work next`,
-/// `work claim` and `work start` read one line. `Ok(None)` when the target
-/// resolves nowhere here; an error when the local branch and its upstream
-/// have diverged.
+/// `work claim` and `work start` read one line. The ref returned is the full
+/// ref read (`refs/remotes/origin/main`, `refs/heads/main`), never a bare
+/// name another reader could resolve differently (TSK-416). `Ok(None)` when
+/// the target resolves nowhere here; an error when the local branch and its
+/// upstream have diverged.
 fn resolve_target(repo_root: &Path, repo: &Repository, declared: &str) -> Resolved {
     let resolved = super::resolve_work_target_checked(repo_root, Some(declared))
         .map_err(|error| error.to_string())?;
     let Some(resolved) = resolved else {
         return Ok(None);
     };
-    Ok(super::work_start::target_reference(repo, &resolved.target)
-        .map_err(|error| error.to_string())?
-        .map(|commit| (resolved.target, commit.id())))
+    Ok(
+        super::work_start::target_reference_read(repo, &resolved.target)
+            .map_err(|error| error.to_string())?
+            .map(|(reference, commit)| (reference, commit.id())),
+    )
 }
 
 /// A resolved target as output shows it (`upstream/main`, not
@@ -234,6 +238,64 @@ fn shown(target: &str) -> String {
         .or_else(|| target.strip_prefix("refs/heads/"))
         .unwrap_or(target)
         .to_string()
+}
+
+/// A read ref as output names it: a remote-tracking ref shortened
+/// (`origin/main`), a local branch in full (`refs/heads/main`), so the
+/// reader sees when a local branch decided (TSK-416).
+fn shown_read(reference: &str) -> String {
+    if reference.starts_with("refs/heads/") {
+        reference.to_string()
+    } else {
+        shown(reference)
+    }
+}
+
+/// The ref a claim cuts from. A task branch is pushed for others to build
+/// on, so it is cut from the fetched tip of its target: when the resolver
+/// kept a local branch that a fetched ref of the same name also names,
+/// the claim reads the fetched ref when both are one commit, and refuses,
+/// naming both commits, when they differ (issue 550). A local branch
+/// decides alone only where nothing of that name is fetched.
+fn claim_reference(
+    repo: &Repository,
+    declared: &str,
+    has_origin: bool,
+    reference: String,
+    tip: git2::Oid,
+) -> Result<String, String> {
+    // An explicit spelling is read as written (AC-4).
+    if declared.starts_with("refs/") {
+        return Ok(reference);
+    }
+    let Some(branch) = reference.strip_prefix("refs/heads/") else {
+        return Ok(reference);
+    };
+    let remote = match target_fetch_remote(repo, declared)? {
+        // A branch configured to track a local branch has no fetched copy.
+        Some(remote) if remote == "." => return Ok(reference),
+        Some(remote) => remote,
+        None if has_origin => "origin".to_string(),
+        None => return Ok(reference),
+    };
+    let fetched = format!("refs/remotes/{remote}/{branch}");
+    let fetched_tip = match repo.find_reference(&fetched) {
+        Ok(found) => found
+            .peel_to_commit()
+            .map_err(|error| format!("cannot read {fetched}: {error}"))?
+            .id(),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(reference),
+        Err(error) => return Err(format!("cannot read {fetched}: {error}")),
+    };
+    if fetched_tip == tip {
+        return Ok(fetched);
+    }
+    Err(format!(
+        "work claim cuts a task branch from the fetched tip of '{}', and the local branch {} at {tip} differs from {} at {fetched_tip}; land the local commits through a pull request first, or claim from a checkout whose local branch matches the fetched line",
+        crate::git::display_text(declared),
+        crate::git::display_text(&reference),
+        crate::git::display_text(&fetched),
+    ))
 }
 
 /// The remote `work claim` fetches before it judges `declared`: the remote
@@ -1944,6 +2006,7 @@ pub fn claim_on(
     let remotes = claim_remotes(&repo, repo_root, Some(&declared))?;
     let (reference, target_tip) = resolve_target(repo_root, &repo, &declared)?
         .ok_or_else(|| format!("target '{declared}' does not resolve here"))?;
+    let reference = claim_reference(&repo, &declared, has_origin, reference, target_tip)?;
     let stack = super::work_start::stack_base(repo_root, pins)?;
     let mut tip = stack.unwrap_or(target_tip);
     let tree = repo
@@ -1963,7 +2026,7 @@ pub fn claim_on(
             renamed = Some(current);
         }
     }
-    let reference_shown = shown(&reference);
+    let reference_shown = shown_read(&reference);
     super::work_start::validate_anchored_task_on(&repo, &records, task_id, &reference, pins)
         .map_err(|error| format!("not ready on {reference_shown}: {error}"))?;
     let ids = BTreeSet::from([task_id.to_string()]);
@@ -3226,9 +3289,9 @@ mod tests {
         let claimed = claim(root, "TSK-002").unwrap();
         assert_eq!(claimed.branch, "task/TSK-002-work-tsk-002");
         assert!(claimed.pushed);
-        // `main` tracks `origin/main` and equals it: the local branch is read,
-        // as `work start` reads it.
-        assert!(claimed.from.starts_with("main@"), "{}", claimed.from);
+        // `main` tracks `origin/main` and equals it: the claim names the
+        // fetched ref it cuts from (TSK-416).
+        assert!(claimed.from.starts_with("origin/main@"), "{}", claimed.from);
         let remote = run(bare.path(), &["branch", "--list"]);
         assert!(remote.contains("task/TSK-002-work-tsk-002"), "{remote}");
 
@@ -3236,7 +3299,7 @@ mod tests {
         assert!(second.contains("already claimed"), "{second}");
         assert!(!second.to_lowercase().contains("lock"), "{second}");
         let waiting = claim(root, "TSK-003").unwrap_err();
-        assert!(waiting.contains("not ready on main"), "{waiting}");
+        assert!(waiting.contains("not ready on origin/main"), "{waiting}");
         assert!(backlog(root).unwrap().fetched_at.is_some(), "claim fetched");
         assert_eq!(
             other_branches(root, "TSK-002", "task/TSK-002-work-tsk-002").unwrap(),
@@ -3256,7 +3319,9 @@ mod tests {
         commit(root, "plan");
         let claimed = claim(root, "TSK-001").unwrap();
         assert!(!claimed.pushed);
-        assert!(claimed.from.starts_with("main@"));
+        // Nothing is fetched, so the local branch decides and is named in
+        // full (TSK-416 AC-3).
+        assert!(claimed.from.starts_with("refs/heads/main@"), "{}", claimed.from);
     }
 
     #[test]
@@ -3564,7 +3629,7 @@ mod tests {
             .is_empty());
         let claimed = claim(root, "TSK-194").unwrap();
         assert!(claimed.pushed);
-        assert_eq!(claimed.informational_branches, ["also on archive: task/TSK-194-old (not a claim: archive does not carry work to main)"]);
+        assert_eq!(claimed.informational_branches, ["also on archive: task/TSK-194-old (not a claim: archive does not carry work to origin/main)"]);
         let refused = claim(root, "TSK-194").unwrap_err();
         assert!(
             refused.contains("already claimed by a visible branch"),
@@ -3978,8 +4043,10 @@ mod tests {
             "{}",
             backlog.snapshot_line()
         );
+        // The claim reads the configured upstream's fetched tip, which the
+        // local `main` equals (TSK-416).
         let refused = claim(root, "TSK-001").unwrap_err();
-        assert!(refused.contains("not ready on main"), "{refused}");
+        assert!(refused.contains("not ready on upstream/main"), "{refused}");
         assert!(refused.contains("upstream hold"), "{refused}");
         let started = start_from(root, "main").unwrap_err();
         assert!(started.contains("upstream hold"), "{started}");
@@ -3995,7 +4062,7 @@ mod tests {
         let backlog = backlog(root).unwrap();
         assert_eq!(entry(&backlog, "TSK-001").state, State::Ready);
         let claimed = claim(root, "TSK-001").unwrap();
-        assert!(claimed.from.starts_with("main@"), "{}", claimed.from);
+        assert!(claimed.from.starts_with("upstream/main@"), "{}", claimed.from);
         let published = run(origin.path(), &["branch", "--list"]);
         assert!(published.contains(&claimed.branch), "{published}");
         start_from(root, &claimed.branch).unwrap();
