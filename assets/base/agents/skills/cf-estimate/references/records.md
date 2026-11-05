@@ -76,8 +76,9 @@ finished part reaches main within a few days through checkpoint PRs; about 5
 to 10 tasks is a reference point for that, not a rule.
 
 A later revision is profile-v2.md with its own effective date; tasks keep
-the revision they were frozen with. At epic close, before the epic's line ref
-is deleted, outcomes/<epic-id>.md holds that epic's outcome record.
+the revision they were frozen with. At epic close, on the line before its PR
+to main and so before the line ref is deleted, outcomes/<epic-id>.md holds
+that epic's outcome record.
 An outcome record names the forecast and package, observed scope/status and stage
 timings, waits, failures/reopens, sources and missing observations. Its timings
 may come from `codeflow estimate outcomes`, which derives them from git and

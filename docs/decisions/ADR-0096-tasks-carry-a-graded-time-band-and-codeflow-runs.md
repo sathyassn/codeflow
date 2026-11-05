@@ -80,8 +80,9 @@ forecast (`operating-model.md`, "Time-box profile"):
 
 - Every planned task in an adopted project has a budget and a stop rule,
   and a coordinator sees a stalled lane by the task's own clock.
-- The epic's outcome record, written by `cf-ship` before the line is
-  deleted, feeds the next feature's estimate.
+- The epic's outcome record, written on the line at the epic close
+  (`cf-method` "Finish once") so it reaches `main` in the line's PR before
+  the line is deleted, feeds the next feature's estimate.
 - A project that declines sees no block, no warning and no re-offer until
   its recorded event.
 - The rubric gains clarifications and a never-counts list, as version

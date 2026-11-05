@@ -209,7 +209,13 @@ waive the clarity, safety, review or protected-branch conditions.
 6. **Finish once.** After the last batch lands, prove the epic once on the
    integration branch (the full gate over everything, `validate --docs`, the
    capability, doc and epic-record updates), close the epic, and raise
-   **one** PR `integration -> main`. The human reviews and merges; cleanup
+   **one** PR `integration -> main`. Where the project adopted the
+   `cf-estimate` time-box profile, the epic close on the line also runs
+   `codeflow estimate outcomes --epic <id>` at the line tip, commits the
+   result as the epic's outcome record
+   (`<estimate root>/outcomes/<epic id>.md`) and closes the epic's Estimate
+   section with the comparison, so the record reaches `main` in that PR
+   before the line ref is deleted. The human reviews and merges; cleanup
    follows the worktree rules' "Cleanup" section, merge proof first. That
    PR's `codeflow ci` judges each task of the line, and of a verified epic
    line that joined it, at the task's landing on its line, so a task

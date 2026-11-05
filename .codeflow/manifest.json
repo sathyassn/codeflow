@@ -275,7 +275,7 @@
     ".agents/skills/cf-estimate/references/records.md": {
       "src": "agents/skills/cf-estimate/references/records.md",
       "ownership": "managed",
-      "sha256": "af7ec994b89f8f1925112ad8119acbe794479d83bddecb8da471aa7fdedf1d49",
+      "sha256": "14588e3f4c6863355ae6312f4d1485f29fae8a987bd9ce0d2e216cb6f1d0d2ef",
       "exec": false
     },
     ".agents/skills/cf-estimate/references/rubric.md": {
@@ -413,7 +413,7 @@
     ".agents/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "8fa755f39472d0612cf862cde9ad88c6b9ba275304d653a86d59c63b69376799",
+      "sha256": "3e8a400fe1ccccd25640285f997c21f7e926f47d8214a224ffa628d29c6c72b2",
       "exec": false
     },
     ".agents/skills/cf-method/references/autonomy.md": {
@@ -449,13 +449,13 @@
     ".agents/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "313d744767ea4b243d8846d3d2c5337feebaa52f26af4965df22d91a8d60f6db",
+      "sha256": "ca2dc8c975c901e2381794c5f8a74a95c43af6c67e80c76ac93a353e9559f05a",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "9deee5fe996ed062c1cf8dbe942e2f917517e25793603a0c574f2414e6a1390c",
+      "sha256": "17014bf48842f21e0846ca47e6f7dfd11334408ada8ae6973af1e5fb6aaae575",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -797,7 +797,7 @@
     ".agents/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "66b38af0b55683bb0f36ab9a265a5b7a6b991df95ff4cdeac8b3235b08c060e0",
+      "sha256": "869933bf7ff33f2180f7f46f465d205d6e3f9e8e49de5f35fbc0e60064fb24d7",
       "exec": false
     },
     ".agents/skills/cf-ship/references/pr-checks.md": {
@@ -1121,7 +1121,7 @@
     ".claude/skills/cf-estimate/references/records.md": {
       "src": "agents/skills/cf-estimate/references/records.md",
       "ownership": "managed",
-      "sha256": "af7ec994b89f8f1925112ad8119acbe794479d83bddecb8da471aa7fdedf1d49",
+      "sha256": "14588e3f4c6863355ae6312f4d1485f29fae8a987bd9ce0d2e216cb6f1d0d2ef",
       "exec": false
     },
     ".claude/skills/cf-estimate/references/rubric.md": {
@@ -1259,7 +1259,7 @@
     ".claude/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "8fa755f39472d0612cf862cde9ad88c6b9ba275304d653a86d59c63b69376799",
+      "sha256": "3e8a400fe1ccccd25640285f997c21f7e926f47d8214a224ffa628d29c6c72b2",
       "exec": false
     },
     ".claude/skills/cf-method/references/autonomy.md": {
@@ -1295,13 +1295,13 @@
     ".claude/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "313d744767ea4b243d8846d3d2c5337feebaa52f26af4965df22d91a8d60f6db",
+      "sha256": "ca2dc8c975c901e2381794c5f8a74a95c43af6c67e80c76ac93a353e9559f05a",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "9deee5fe996ed062c1cf8dbe942e2f917517e25793603a0c574f2414e6a1390c",
+      "sha256": "17014bf48842f21e0846ca47e6f7dfd11334408ada8ae6973af1e5fb6aaae575",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -1643,7 +1643,7 @@
     ".claude/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "66b38af0b55683bb0f36ab9a265a5b7a6b991df95ff4cdeac8b3235b08c060e0",
+      "sha256": "869933bf7ff33f2180f7f46f465d205d6e3f9e8e49de5f35fbc0e60064fb24d7",
       "exec": false
     },
     ".claude/skills/cf-ship/references/pr-checks.md": {
@@ -1847,7 +1847,7 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "59b00071fe0448ab9bae64e4d167dbc37da08b5755f4a16105a9228b94029d9d",
+      "sha256": "fb21dcabd18966b78044d0085422c0fc951f26d9a05a9bd6dbd64afb81eeb956",
       "exec": false
     },
     "CLAUDE.md": {
