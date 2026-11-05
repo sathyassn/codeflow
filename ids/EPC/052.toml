@@ -1,0 +1,11 @@
+id = "EPC-052"
+uid = "b3967ee1-737f-4c50-a330-f79d3476470e"
+kind = "EPC"
+title = "Test results and acceptance evidence are honest by default"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:20:42Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
