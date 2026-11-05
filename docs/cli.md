@@ -193,7 +193,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--pr-body <TEXT>` | PR/MR body text to scan for AI attribution, emoji, policy characters (ADR-0067), and the required section structure. |
 | | `--pr-body-file <FILE>` | Read the PR/MR body from a file (scanned like `--pr-body`). |
 | | `--actor <ACTOR>` | The actor or app id that opened or updated the pull request, as the CI workflow passes it for trusted automation profiles (SPC-013 R-82). It is trusted only in a GitHub Actions pull request event from the same repository whose actor it names; a local run, another CI or a fork is `unknown` whatever is given. Default `unknown`. |
-| | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, the branch's declared target, a named --base, a unique protected or eligible epic line at the base commit, then the repository default). An ambiguous commit-ID base requires --into or --branch. A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). |
+| | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, the branch's declared target, a named --base, a unique protected or eligible epic line at the base commit, then the repository default). An ambiguous commit-ID base requires --into or --branch. A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). Deciding that asks the destination for its default branch and that branch's policy, so on a private repository the job running codeflow ci needs read access to it (for actions/checkout, `persist-credentials: true`). |
 | | `--line-tip <LINE>` | Judge the head as the next tip of this integration line, as a landing candidate is: every commit on the head's first-parent chain from the line's fetched tip (`origin/<LINE>`) must be a merge or a direct commit a landed `line_adoptions` entry names, the rule the pre-push hook applies to a push to the line (`work.epic_line`). Without it, a run with no pull request and no push context whose base is the fetched tip of exactly one epic line cannot tell how the head reaches the line and refuses when the head would add a direct commit; pass `--into <LINE>` or the body for a pull request head that lands by merge. |
 | `codeflow policy explain` | | Print the complete policy.json key schema: every key's type, default, valid values, and purpose |
 | `codeflow policy show` | | Print the effective policy: each key's current value, its source (project file or built-in default), and any invalid values |
@@ -239,14 +239,15 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
 | | `--preflight` | Print the seat, sandbox and tool evidence the orchestrator preflight reads, each value marked configured, observed or unavailable; exit 1 when Codex refuses the builder launch or a builder write is refused; when the builder write probe gives no result, the line says builder readiness is not established and the exit stays 0. |
+| | `--builder-write-probe` | Print whether this process can write each folder a Codex builder seat writes outside its worktree, then whether it can open the shared git config file for writing (one line each, never changing it), and exit 1 when a folder is denied. The preflight runs it inside `codex sandbox` under the builder launch. |
 | | `--profile <PROFILE>` | With `--check remote-perimeter`: compare the rulesets `codeflow remote protect` owns with this profile (solo-administrator or independent-review). A non-empty bypass list on the authority or line checks fails with or without it. One of `solo-administrator`, `independent-review`. |
 | `codeflow work next` | | List ready tasks first, then landed (work merged), waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
 | | `--epic <EPC-NNN>` | Only tasks of this epic. |
 | | `--json` | Print the same facts as JSON, each task with its `state`; a landed task adds `landed_branches` and `suggested_command`. |
-| `codeflow work claim <TASK_ID>` | | Fetch, check the task is ready and unclaimed on its target tip, then create and push `task/<id>-<slug>` from that tip. The pushed branch is an advisory mark others can see |
+| `codeflow work claim <TASK_ID>` | | Fetch, choose the live target tip or the single line holding a completed predecessor the target has not received, then create and push `task/<id>-<slug>` from that base. The pushed branch is an advisory mark others can see |
 | | `<TASK_ID>` | Stable task id. |
 | | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin, repeat once per code dependency. |
-| `codeflow work start <TASK_ID>` | | Verify that a durable task was planned and anchored before implementation |
+| `codeflow work start <TASK_ID>` | | Fetch, verify planning, and require HEAD to contain its recorded claim base or the current selected base |
 | | `<TASK_ID>` | Stable task id. |
 | | `--into <REF>` | Non-task branch/ref this task will merge into. |
 | | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin already contained in HEAD. |
@@ -545,6 +546,8 @@ Heavy runs share the host by capacity and start with fewer jobs past its
 budget; only a `host_exclusive` target runs alone
 ([details](troubleshooting.md#heavy-work-shares-the-host)).
 
+Heavy-target deadlines: [test gate reference](test-gate.md#technical).
+
 - A gate that runs cargo warns about a `CARGO_TARGET_DIR` outside the
   worktree, and each target prints a start line on stderr as it begins.
 - A killed gate's slot stays busy while its target runs. On Windows the
@@ -585,6 +588,17 @@ primary handles the remote landing through the project's PR flow.
   blocked.
 - After landing, clean linked worktrees that have the target checked out are
   reset to the tested tip, and a dirty one is reported.
+
+| Claim or start case | Base and admission behavior |
+|---|---|
+| Predecessor complete on another line | `codeflow work claim TSK-NNN` selects that line's live tip without changing the target. Create a linked worktree on the reported branch, then run `codeflow work start TSK-NNN`. |
+| Two unmerged sources, or missing shared planning | Claim refuses and names the line-sync route. |
+| Fixed claim evidence | Local annotated Git object at `refs/codeflow/claims/<task branch>`, shared by linked worktrees; records the base, source and reviewed pins independently of the ledger and shared Git configuration. |
+| Source advances after claim | Start retains the recorded base and reports the new tip. |
+| Metadata absent or corrupt | Absent metadata uses the current selected base, including in a fresh clone; corrupt metadata refuses admission. |
+| Unlanded reviewed stack | Supply current reviewed `--on TSK@SHA` pins. After rebasing, explicit replacement pins renew only a reviewed claim once current review, ancestry and planning checks pass and Git records the new base. Once the predecessor lands, ordinary completion checks replace the pin requirement. |
+| Source fetch fails | Claim and start refuse, naming the remote and last fetch time, or unknown; missing live evidence blocks even at `git.work_planning: warn`. |
+| Head lacks the current target | Before review, merge the target into the task branch. CI's `work.target_tip` warns, or reports an unreadable tip as unverified; existing planning and record checks still apply. |
 
 A `work start --on` pin names the predecessor branch tip. Its Reviews section
 must approve that tip or an ancestor whose later commits touch only the

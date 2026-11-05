@@ -2076,6 +2076,33 @@ fn update_ignore_glob_keeps_deleted_managed_file_deleted() {
 }
 
 #[test]
+fn update_ignore_glob_past_the_matcher_bound_still_opts_out() {
+    // TSK-1258: an opt-out whose glob the matcher cannot finish inside its
+    // bound (here a 1,100-star tail) must keep the file unmanaged. Reading the
+    // bound hit as "no match" let update resurrect a file the user deleted.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let long_glob = format!(".claude/{}", "*".repeat(1100));
+    add_scaffold_ignore(&root, &[long_glob.as_str()]);
+
+    std::fs::remove_file(root.join(".claude/workflows/develop.md")).unwrap();
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::Skipped,
+        "a glob past the bound still opts the file out"
+    );
+    assert!(
+        !root.join(".claude/workflows/develop.md").exists(),
+        "an opted-out file must not be resurrected"
+    );
+}
+
+#[test]
 fn update_ignore_glob_leaves_non_matching_files_managed() {
     // A managed file OUTSIDE the ignore globs still upgrades normally — the
     // opt-out is scoped to matching paths only.
@@ -2683,6 +2710,38 @@ fn update_warns_about_a_kept_step_before_the_secret_scan() {
     for (steps, named) in layouts {
         kept_steps_are_warned_about(&steps.concat(), named);
     }
+}
+
+#[test]
+fn update_preserves_project_workflow_timeouts() {
+    const SHIPPED: &str = include_str!("../../../assets/base/ci/codeflow-ci.yml");
+    const WORKFLOW: &str = ".github/workflows/codeflow-ci.yml";
+    isolate_git();
+    let (_p, root) = project_dir();
+    let (a1, _) = fixture_assets(false);
+    let earlier = SHIPPED.replace("GITLEAKS_VERSION=8.30.1", "GITLEAKS_VERSION=8.30.0");
+    assert_ne!(earlier, SHIPPED);
+    std::fs::write(a1.path().join("base/ci/codeflow-ci.yml"), &earlier).unwrap();
+    scaffold::init(&DirSource::new(a1.path()), &root, &opts(None, "2.0.0")).unwrap();
+    let mine = read(&root, WORKFLOW).replace("timeout-minutes: 45", "timeout-minutes: 60");
+    assert_ne!(mine, read(&root, WORKFLOW));
+    std::fs::write(root.join(WORKFLOW), mine).unwrap();
+
+    let (a2, _) = fixture_assets(true);
+    std::fs::write(a2.path().join("base/ci/codeflow-ci.yml"), SHIPPED).unwrap();
+    let report =
+        scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&report, WORKFLOW), Action::Merged);
+    let merged = read(&root, WORKFLOW);
+    let workflow: serde_yaml::Value = serde_yaml::from_str(&merged).unwrap();
+    for job in ["gates", "candidate"] {
+        assert_eq!(workflow["jobs"][job]["timeout-minutes"].as_u64(), Some(60));
+    }
+    assert!(merged.contains("GITLEAKS_VERSION=8.30.1"));
+    assert!(!root.join(format!("{WORKFLOW}.new")).exists());
+    let again = scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&again, WORKFLOW), Action::KeptUserModified);
+    assert_eq!(read(&root, WORKFLOW), merged);
 }
 
 fn kept_steps_are_warned_about(steps: &str, named: &str) {

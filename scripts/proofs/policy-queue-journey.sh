@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# TSK-1040 AC-2 and AC-6 journey: on a scratch adopter repository, a push to
+# TSK-1040 queue journey, not AC-6 evidence (see the task record): on a
+# scratch adopter repository, a push to
 # an open pull request followed within seconds by two body edits ends with
 # every codeflow-policy run for that pull request completed, none cancelled,
-# and the required "commit standards" check passing on the final head for
-# the final body.
+# and the required "trusted: commit standards" check passing on the final head
+# for the final body.
 #
 # Usage:
 #   policy-queue-journey.sh OWNER/REPO TSK-NNN   run the journey (changes the repository)
@@ -13,7 +14,8 @@
 # Needs (nothing here creates a repository or a record):
 #   - a scratch repository that already runs codeflow with the 4.0.0 managed
 #     .github/workflows/codeflow-policy.yml (cancel-in-progress: false,
-#     queue: max) on its default branch, with "commit standards" required;
+#     queue: max) on its default branch, with "trusted: commit standards"
+#     required;
 #   - TSK-NNN: a task record on that default branch, status todo, whose
 #     integration_target is the default branch, so the journey's pull
 #     request names recorded work. Where the scratch repository does not
@@ -38,8 +40,8 @@
 # final read), with that step's whole diagnostic and the runner's exit-code
 # annotation and nothing else; AC-3 requires that failure when the head,
 # base branch or body changed while the run judged it. Any other failure
-# fails the journey. The newest run must succeed on the final
-# head, and the newest "commit standards" check on that head must pass.
+# fails the journey. The newest run must succeed on the final head, and the
+# newest "trusted: commit standards" check on that head must pass.
 set -euo pipefail
 
 workflow=codeflow-policy.yml
@@ -50,8 +52,9 @@ extra_events=3 # the push and the two body edits
 # plus the runner's exit-code annotation for that step. Anything else in a
 # failed run, another failed step or any other failure annotation, fails
 # the journey.
-fetch_step='Fetch the pull request head as data'
+fetch_step="Fetch the pull request's base and head as data"
 recheck_step='the pull request is unchanged since it was judged'
+check_name='trusted: commit standards'
 # shellcheck disable=SC2016 # jq source, expanded by jq, not the shell
 stale_jq='
   def sha: "[0-9a-f]{40}";
@@ -99,6 +102,18 @@ verdict() {
 }
 
 self_test() {
+  # The names the verdict matches must be the workflow's own: a fixture that
+  # reuses a wrong name would pass here and fail the real journey.
+  local root wf name
+  root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+  for wf in "$root/assets/base/ci/codeflow-policy.yml" "$root/.github/workflows/codeflow-policy.yml"; do
+    for name in "$fetch_step" "$recheck_step"; do
+      grep -Fxq "      - name: $name" "$wf" \
+        || { echo "self-test: $wf has no step named '$name'"; return 1; }
+    done
+    grep -Fxq "    name: \"$check_name\"" "$wf" \
+      || { echo "self-test: $wf has no job named '$check_name'"; return 1; }
+  done
   local h=abc
   h=$(printf 'a%.0s' {1..40})
   local o; o=$(printf 'b%.0s' {1..40})
@@ -289,6 +304,6 @@ wait_until 1800 "$want completed runs for pull request $pr" all_done
 runs=$(pr_runs "$pr")
 echo "$runs" | jq -r '.[] | "\(.html_url) \(.head_sha[:9]) \(.status) \(.conclusion) \(.errors | join("; "))"'
 checks=$(gh api --paginate "repos/$repo/commits/$head/check-runs?per_page=100" \
-  --jq '.check_runs[] | select(.name == "commit standards") | {status, conclusion, started_at}' | jq -s .)
-echo "commit standards on $head: $(jq -c 'map(.conclusion)' <<<"$checks")"
+  --jq ".check_runs[] | select(.name == \"$check_name\") | {status, conclusion, started_at}" | jq -s .)
+echo "$check_name on $head: $(jq -c 'map(.conclusion)' <<<"$checks")"
 verdict "$runs" "$checks" "$want" "$extra_events" "$head"

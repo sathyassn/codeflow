@@ -60,6 +60,12 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
         "tests re-running their own binary with an inherited CDPATH (TSK-397)",
     ),
     (
+        "codeflow-core/src/git/ci.rs",
+        "gh_program()",
+        2,
+        "the two `gh` spawns take their program from `gh_program()`, which is `gh`, or in a unit test a fake `gh` script, never git (TSK-1156)",
+    ),
+    (
         "codeflow-core/src/doctor/mod.rs",
         "std::env::current_exe().unwrap()",
         1,
@@ -1096,7 +1102,16 @@ fn non_rust_sources(dir: &Path, files: &mut Vec<PathBuf>) {
             ]
             .iter()
             .any(|name| ext == *name)
-        }) {
+        })
+            // Detects clone in workflow text; never runs git.
+            && path
+                != Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("scripts/test_workflow_refs.py")
+        {
             files.push(path);
         }
     }

@@ -279,9 +279,14 @@ With tracking on, `codeflow ci` classifies every pull request as one of:
   every epic it changes, with records, `docs/plan/`, other docs outside the
   adopter-facing set, and `AGENTS.md` with its managed block unchanged
   (ADR-0078)
-- an epic's integration line: `Task: EPC-NNN`. A task of the epic targets it,
-  it lands on the default target, and it holds merges or direct commits with
-  landed `line_adoptions` entries in its epic record (SPC-013 R-52)
+- an epic's integration line: `Task: EPC-NNN`. A task of the epic, or of an
+  epic whose record declares the line as its `parent_line`, targets it, it
+  lands on the default target, and it holds merges or direct commits with
+  landed `line_adoptions` entries in its epic record (SPC-013 R-52). One
+  level only: `parent_line` names the anchor epic's own line. When the
+  anchor epic itself declares a `parent_line`, a declaring epic's task is
+  refused, and once the anchor holds such a task the whole line refuses,
+  its own epic's tasks included (TSK-1286)
 - an automation profile
 
 Related rules:
@@ -346,6 +351,15 @@ A pin left out keeps the edge unmet.
   `ready` (TSK-1038).
 - `work claim` fetches, refuses a task a visible branch already carries, and
   pushes `task/TSK-NNN-<slug>` as an advisory claim.
+- Claim selects the live target tip or one line holding a completed code
+  predecessor and records its base in Git independently of the ledger.
+  Start fetches and checks containment while preserving the planning anchor.
+  Missing shared planning or two unmerged sources require line sync.
+  Source advancement keeps a recorded base valid. Explicit replacement pins
+  renew only reviewed claims after current review, ancestry and planning
+  checks and a successful Git write.
+  CI warns until the head contains its target's current tip and names the
+  verified commit to merge. See [the command details](../cli.md#verify-notes).
 - `work claim` and `work start` accept a code predecessor that is reviewed but
   not complete only through `--on TSK-NNN@<sha>`. The pin must equal the
   predecessor branch's tip. The Reviews section must approve that tip or an
@@ -456,6 +470,20 @@ and the landed task head; unrelated line work before the landing does not
 invalidate that source. Direct work and transported work use the same
 binding predicate. At a batch landing each completion binds at the commit
 that introduced its block, so reviewed heads land together on one candidate.
+When such a merge brings a landed planning move of the task's epic, the
+record may also differ by that edit alone: the `epic_id` line and plain
+added lines outside the criteria, acceptance blocks, Deliverables and
+Closeout, made by exactly one commit on the first-parent line of a target
+tip the run is judged against, with the new epic landing on the task's
+unchanged `integration_target`; any other difference, or anything it cannot
+read, refuses and names the commit and the part (TSK-1320). The task
+branch's own commits after the review never count as that commit. The
+check proves the commit is on a trusted tip's first-parent line, not that a
+reviewed planning pull request made it. On any amendable range (a line pull
+request into `main`, a push to the line, a root-branch range or a planning
+amendment) the range head is also a trusted tip, so that head is the move's
+authority there; at a line pull request into `main` the operator reviews
+and merges it.
 A task pull request that merges its moved target after the review keeps its
 binding when each merge brings a commit on the first-parent line of a target
 tip the run is judged against, and the merge's recorded result equals the

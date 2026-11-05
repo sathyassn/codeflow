@@ -16,11 +16,12 @@ drivers, duration assumptions and feasibility, then reconcile from evidence.
 Do not restart an already settled interview or choose model effort from a grade.
 An unavailable peer follows the existing evidenced-degradation contract.
 
-Base every estimate of planned work on planned throughput, the pace the
-`cf-method` workflow lifecycle reference sets in "Planned work moves at
-speed" (at least one task per build lane per hour, preferably two), and
-never extrapolate from a slow pace. A lane running slower than that is a
-coordinator finding to act on, not a new estimate basis.
+Where the project adopted the time-box profile, each planned task's budget
+is its frozen band (the `cf-method` workflow lifecycle reference, "Planned
+work keeps to its band"), and never extrapolate from a slow pace. A task
+past its band top is a coordinator finding to act on, not a new estimate
+basis. A band top is a stop rule for one task, not a forecast: dates still
+come from the scenarios below.
 
 ## Establish the project and the decision
 
@@ -55,15 +56,22 @@ availability), not all estimates. Resolve discoverable facts yourself.
 
 ## Apply the method
 
-1. Establish a pinned delivery package. Anchored grades are optional: where
-   they help, read [rubric.md](references/rubric.md) to assign
-   drivers. Materially missing scope/ownership/acceptance is
+1. Establish a pinned delivery package. When it holds tasks too small to
+   carry their own outcome and proof, merge them by the `cf-plan` sizing
+   test before grading; never grade them one by one. Grade by judgement, as
+   `cf-plan` does: most tasks are Medium or Hard, an Easy task usually
+   belongs with a sibling that shares its cause, code path or proof, and a
+   Very Hard task is split before claim. Anchored grades are
+   optional: where they help, read [rubric.md](references/rubric.md) to
+   assign drivers. Materially missing scope/ownership/acceptance is
    UNSIZED; duration uncertainty alone is not. Show conditional alternatives
    separately. Keep grade, consequence, permission and model effort distinct.
 2. Read [operating-model.md](references/operating-model.md) to estimate the full
    delivery boundary from comparable evidence, a safe authorized probe, or
    explicit judgment. Return favorable/planning/adverse scenarios with actual
    durations and reasons, not empty templates or universal grade-to-hour tables.
+   Its "Time-box profile" section gives the clock, the bands, the move and
+   split rules and how a feature mix becomes forecast activities.
 3. Allocate independent work against actual resources, dependencies, review and
    human/release availability. Check a feasible scenario, not just a capacity
    lower bound. Preserve sensitivity and unresolved disagreement.

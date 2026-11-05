@@ -34,8 +34,9 @@ never from a pull request's branch name or other text it controls:
    this runner image and the locked Playwright version, keyed exactly as the
    workflow keys it (a pull request restores from its base and from main).
    That key names the runner image and has no fallback; when it is missing
-   (a new runner image), this push runs every job so the present part saves
-   it;
+   (a new runner image), this push runs every job. The normal present part
+   prepares it on integration pushes; the release present part prepares it
+   on main. A successful job saves the cache;
 7. the newest codeflow-ci run with event pull_request, that head commit and
    this workflow file that names the merged pull request (by number) with
    the pushed line as its base, concluded success, and every job of its
@@ -57,7 +58,11 @@ never from a pull request's branch name or other text it controls:
    the top of each job's log before any step runs: for the run, each such
    job's own log; for the push, the logs of this run's push-only image jobs,
    one per runner label. A job with another image, an unknown label, or a
-   log without that block, is not reused.
+   log without that block, is not reused;
+10. that run is a full-tier run: every Windows test partition from 1 to the
+   count its names give ran, and the reduced tier's journey job did not. A
+   reduced-tier run proves less than this push's verdict claims, so the push
+   runs every job, the partitions included, and a Windows break shows there.
 
 Anything else, an API or git error included, runs every job.
 
@@ -123,6 +128,11 @@ CACHE_INPUTS = ("rust-toolchain", "rust-toolchain.toml", ".cargo/config.toml",
 # workflow); handling it here keeps `${{ }}` out of the workflow's shell
 # arguments, which Actions would evaluate before the script saw them.
 LINE_SKIPS = frozenset({"codeflow gates (release ${{ matrix.part }})"})
+# The Windows tier a run ran, read from GitHub's job records. A partition
+# that ran is recorded under its expanded name; a skipped matrix job only under
+# the unexpanded one, which this pattern does not match.
+PARTITION_JOB = re.compile(r"windows tests \((\d+) of (\d+)\)")
+TIER_JOURNEYS_JOB = "windows tier journeys"
 
 
 # The Playwright version the present part reads, and the lock it must equal
@@ -306,6 +316,24 @@ def check_job_images(api, jobs: list[dict], workflow_text: str, push: dict[str, 
         raise Skip("no job of the run is one the push would skip, so no image was compared")
 
 
+def check_not_reduced(jobs: list[dict], run_id: int) -> None:
+    """Raises Skip when the run ran the reduced Windows tier: a reduced-tier
+    result never counts as full-tier evidence."""
+    if any(job.get("name") == TIER_JOURNEYS_JOB and job.get("conclusion") != "skipped" for job in jobs):
+        raise Skip(f"run {run_id} ran the reduced Windows tier; every job runs so the partitions run on this push")
+
+
+def check_every_partition(jobs: list[dict], run_id: int) -> None:
+    """Raises Skip unless the run holds each Windows test partition exactly
+    once. The caller has already required each listed job to have succeeded."""
+    found = [match for job in jobs if (match := PARTITION_JOB.fullmatch(job.get("name") or ""))]
+    counts = {int(match.group(2)) for match in found}
+    numbers = sorted(int(match.group(1)) for match in found)
+    if len(counts) != 1 or numbers != list(range(1, max(counts) + 1)):
+        raise Skip(f"run {run_id} did not run every Windows test partition (found {numbers} of {sorted(counts)}); "
+                   "every job runs so the partitions run on this push")
+
+
 def check_provenance(record: object, *, pull: int, line: str, head: str, tree: str, workflow: str, blob: str,
                      image: tuple[str, str], git, first_parent: str | None = None) -> None:
     """Raises Skip unless the run's recorded provenance is the push's."""
@@ -392,7 +420,7 @@ def decide(event: str, sha: str, workflow_path: str, push_only: set[str], requir
         raise Skip(f"the apt cache lookup failed ({type(error).__name__}: {error})") from error
     if not any(cache.get("key") == apt_key and cache.get("ref") in (ref, MAIN) for cache in caches):
         raise Skip(f"neither {ref} nor {MAIN} holds apt cache {apt_key!r}; every job runs so the present part "
-                   "saves it")
+                   "can prepare it; saving the cache requires that job to succeed")
     runs = [run for run in api.runs(head)
             if run.get("event") == "pull_request" and run.get("head_sha") == head
             and run.get("path") == workflow_path and isinstance(run.get("id"), int)
@@ -406,10 +434,11 @@ def decide(event: str, sha: str, workflow_path: str, push_only: set[str], requir
     jobs = api.jobs(run["id"])
     if not jobs:
         raise Skip(f"run {run['id']} lists no jobs")
+    check_not_reduced(jobs, run["id"])
     skippable = line_skips if ref != MAIN else frozenset()
     for job in jobs:
         name, conclusion = job.get("name"), job.get("conclusion")
-        if name in push_only:
+        if name in push_only or name == TIER_JOURNEYS_JOB:
             allowed = {"skipped"}
         elif name in skippable:
             allowed = {"success", "skipped"}
@@ -434,6 +463,7 @@ def decide(event: str, sha: str, workflow_path: str, push_only: set[str], requir
     if workflow_text is None or not isinstance(run_id, int) or run_id <= 0:
         raise Skip("no pushed workflow or no id for this run, so the jobs' runner images cannot be compared")
     check_job_images(api, jobs, workflow_text, push_images(api, run_id))
+    check_every_partition(jobs, run["id"])
     return run["id"]
 
 

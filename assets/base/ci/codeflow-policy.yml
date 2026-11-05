@@ -1,31 +1,33 @@
 # codeflow policy: the enforcing CodeFlow check for pull requests. Written by
 # `codeflow init` and managed by `codeflow update`.
 #
-# It runs on `pull_request_target`, so GitHub runs this file from the
-# repository's default branch, never from the pull request: a pull request
-# that edits this workflow cannot change the job that judges it. GitHub's
-# default checkout for this event is also the default branch, whatever the
-# pull request targets, so the job checks out the pull request's base commit
-# explicitly. From that target checkout it installs the codeflow version the
-# target pins in .codeflow/project.toml (`scaffold_version`), verified against
-# the archive digests the target pins beside it ([scaffold_sha256]) and the
-# release's published sha256.sum (SPC-013 R-113), and reads the target's
-# policy. It fetches the pull request head only as git data and never runs
-# its code. The token is read-only and no secret is used. Builds and tests of
-# the head run in codeflow-ci.yml on `pull_request`.
+# The verdict job, `trusted: commit standards`, runs on `pull_request_target`
+# for every pull request, whatever it targets. GitHub runs this file from the
+# repository's default branch, never from the pull request or its target,
+# and sets GITHUB_REF to that branch and GITHUB_SHA to its tip. The job
+# checks that, checks out exactly GITHUB_SHA (the authority), installs the
+# codeflow version the authority pins in .codeflow/project.toml
+# (`scaffold_version`), verified against the archive digests pinned beside it
+# ([scaffold_sha256]) and the release's published sha256.sum (SPC-013
+# R-113), and judges with the authority's policy, never the target's. The
+# pull request's base and head are fetched only as git data and never run.
+# After every step the job asserts that the checkout is still the authority.
+# The token is read-only and no secret is used. Builds and tests of the head
+# run in codeflow-ci.yml on `pull_request`.
 #
 # `codeflow ci` runs the SAME commit-format, no-AI-attribution, no-emoji,
 # breaking-footer, branch-naming and PR-body checks as the git hooks and the
-# Claude git-guard, reading the target's .codeflow/policy.json (CodeFlow
-# ADR-0017). `edited` reruns it when the PR body changes. Trusted automation
-# profiles (git.automation_profiles) apply only for the actor passed here, and
-# never on a fork pull request.
+# Claude git-guard, reading the authority's .codeflow/policy.json (CodeFlow
+# ADR-0017, ADR-0091). `edited` reruns it when the PR body changes. Trusted
+# automation profiles (git.automation_profiles) apply only for the actor
+# passed here, and never on a fork pull request.
 #
-# The same job is the enforcing check of the shared id registry (SPC-013
-# R-14, R-20, R-109; ADR-0072), so one target build serves both. Push,
-# schedule and dispatch runs keep their own event's commit and run only the
-# registry check; with durable work tracking off, `codeflow ids check` passes
-# with a note.
+# The verdict job is also the enforcing check of the shared id registry for
+# the pull request (SPC-013 R-14, R-20, R-109; ADR-0072); with durable work
+# tracking off, `codeflow ids check` passes with a note. This workflow has
+# no other trigger: pushes, the schedule and manual runs check the registry
+# in codeflow-registry.yml, so they create no check under a `trusted:` name,
+# not even a skipped one, which GitHub would count as passing.
 #
 # Pull request runs share one concurrency group per pull request, and no
 # event cancels or replaces a run: `cancel-in-progress` is false and
@@ -39,58 +41,79 @@
 # (actionlint releases up to 1.7.12), so ignore that message in the linter's
 # configuration rather than removing the key.
 #
-# The event pins the head and the base commit: the job checks out the
-# event's base commit and refuses a head that is not the event's. Only the
-# body comes from the API, read when the job runs, so a queued run can judge
-# a newer body than its event. The last step reads the pull request again
-# and fails the run, with its own message, when the head, the base branch or
-# the body differs from what the run judged; the run queued by that change
-# decides. It fails closed when that read fails. A change made after that
-# last read, before the run ends, is judged by the run that change queued.
+# The event pins the head and the base commit: the job fetches both as data
+# and refuses a head that is not the event's. Only the body comes from the
+# API, read when the job runs, so a queued run can judge a newer body than
+# its event. The job's last read of the pull request, after the checks, fails
+# the run, with its own message, when the head, the base branch or the body
+# differs from what the run judged; the run queued by that change decides. It
+# fails closed when that read fails. A change made after that last read,
+# before the run ends, is judged by the run that change queued.
 # The body is logged as a sha256 digest, never as text: it is written to a
 # file in the runner's temp directory and handed to `codeflow ci` as a file,
 # never through `env:` or an argument, because the runner prints a step's
 # `env:` values in its log. Each run makes two API reads on the job's token.
-# Push, schedule and dispatch runs each get a group of their own run, so a
-# registry run is never replaced by a newer queued event.
 name: codeflow-policy
 
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited, ready_for_review]
-  push:
-    branches: [main, master, "integration/**"]
-  schedule:
-    - cron: "23 4 * * *"
-  workflow_dispatch:
 
 permissions: {}
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request_target' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-run-{1}', github.workflow, github.run_id) }}
+  group: ${{ format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) }}
   cancel-in-progress: false
   queue: max
 
 jobs:
   commit-lint:
-    name: commit standards
+    name: "trusted: commit standards"
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    # Read access to pull requests serves the body step below and nothing
-    # else; the token stays read-only.
+    # Read access to pull requests serves the body step and nothing else;
+    # the token stays read-only.
     permissions:
       contents: read
       pull-requests: read
     steps:
-      # The target, never the pull request head: for a pull request its base
-      # commit, otherwise the event's own commit. The binary, the pin and the
-      # policy all come from this checkout.
+      # The authority is the default branch at the one commit this run was
+      # started for. A run whose ref is not the default branch (an older
+      # host's pull_request_target semantics, or any other event) fails
+      # closed rather than judge with another branch's code.
+      - name: Resolve the authority
+        env:
+          EVENT: ${{ github.event_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != pull_request_target ] || [ -z "$DEFAULT_BRANCH" ] || [ "$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+            echo "::error::this run is for ${GITHUB_REF} on ${EVENT}, not the default branch ${DEFAULT_BRANCH:-(unknown)} on pull_request_target; nothing is judged"; exit 1
+          fi
+          if ! printf '%s\n' "$AUTHORITY_SHA" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error::the run's commit '${AUTHORITY_SHA}' is not a full commit id; nothing is judged"; exit 1
+          fi
+          echo "judged by ${DEFAULT_BRANCH}@${AUTHORITY_SHA}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The authority, never the pull request's head or its target. The
+      # binary, the pin and the policy all come from this checkout.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Install codeflow (target-pinned, checksum-verified)
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      - name: Install codeflow (authority-pinned, checksum-verified)
         env:
           PIN_REF: HEAD
         run: |
@@ -199,22 +222,49 @@ jobs:
           if [ -n "$digest" ]; then verified="the digest pinned in .codeflow/project.toml and sha256.sum"; fi
           echo "codeflow ${version} installed and verified against ${verified}"
 
-      - name: Fetch the pull request head as data
-        if: github.event_name == 'pull_request_target'
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      # The base and the head are git data: fetched to refs, never checked
+      # out or run. Each must be the commit the event names.
+      - name: Fetch the pull request's base and head as data
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          set -euo pipefail
           git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"
           fetched=$(git rev-parse refs/codeflow/pr-head)
           if [ "$fetched" != "$HEAD_SHA" ]; then
             echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); this run belongs to an older event, so it fails; re-run the check for the current head"; exit 1
           fi
+          git fetch --no-tags origin "+${BASE_SHA}:refs/codeflow/pr-base"
+          if [ "$(git rev-parse refs/codeflow/pr-base)" != "$BASE_SHA" ]; then
+            echo "::error::cannot fetch the pull request's base ${BASE_SHA}; nothing is judged"; exit 1
+          fi
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
 
       # The body is read when the job runs, never taken from the event. An
-      # event carries the body as it was when the event fired, and the run
-      # that survives the concurrency group can belong to an older event (one
-      # delivered late, or a re-run), so only the current body is the newest.
+      # event carries the body as it was when the event fired, and a run can
+      # start long after that (one that waited in the queue, one delivered
+      # late, or a re-run), so only the current body is the newest.
       # The text is written to a file in the runner's temp directory, never to
       # a step output, an `env:` value or an argument, so it cannot reach the
       # log. The path is fixed (`pr-body.md` in the runner's temp directory)
@@ -232,7 +282,7 @@ jobs:
             "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull.json"
           jq -r '.body // ""' "${RUNNER_TEMP}/pull.json" > "${RUNNER_TEMP}/pr-body.md"
           # The body is logged as a digest of the file's bytes, never as
-          # text; the last step compares a new digest with this one.
+          # text; the last read compares a new digest with this one.
           if command -v sha256sum >/dev/null 2>&1; then
             digest=$(sha256sum "${RUNNER_TEMP}/pr-body.md" | cut -d ' ' -f 1)
           else
@@ -241,21 +291,50 @@ jobs:
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
           echo "pull request body judged: sha256 ${digest}"
 
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
       # The PR body reaches `codeflow ci` as a file, never interpolated into
       # the script and never through `env:` (the runner logs those values), so
-      # an untrusted body can neither inject shell nor reach the log.
+      # an untrusted body can neither inject shell nor reach the log. The
+      # policy and the work-record baseline are the authority's
+      # (--policy-from, --baseline-from), never the target's.
       - name: codeflow ci (commit + branch + PR-body standards)
-        if: github.event_name == 'pull_request_target'
         env:
+          AUTHORITY_SHA: ${{ github.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           BODY_FILE: ${{ runner.temp }}/pr-body.md
           ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
-        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR" --pr-body-file "$BODY_FILE"
+        # The authority must carry its policy: judging with defaults where it
+        # has none would pass what the project never chose (TSK-336).
+        run: |
+          if ! git cat-file -e "${AUTHORITY_SHA}:.codeflow/policy.json" 2>/dev/null; then
+            echo "::error::the default branch at ${AUTHORITY_SHA} has no .codeflow/policy.json, so nothing is judged; land the policy on the default branch first (the adoption pull request that adds it fails this check by design)"
+            exit 1
+          fi
+          codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR" --policy-from "$AUTHORITY_SHA" --baseline-from "$AUTHORITY_SHA" --pr-body-file "$BODY_FILE"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
 
       # The registry is fetched explicitly with full history, never forced
-      # (R-20); the pull request head above was fetched as data only.
+      # (R-20).
       - name: Fetch the shared registry
         run: |
           if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
@@ -264,15 +343,29 @@ jobs:
             echo "codeflow/registry is not on origin; the check reports it when records are tracked"
           fi
 
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
       - name: codeflow ids check
         env:
-          EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: codeflow ids check --base "$BASE_SHA" --head refs/codeflow/pr-head
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
         run: |
-          if [ "$EVENT" = pull_request_target ]; then
-            codeflow ids check --base "$BASE_SHA" --head refs/codeflow/pr-head
-          else
-            codeflow ids check
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
       # The last read. The run judged the head, base branch and body it read
@@ -313,3 +406,13 @@ jobs:
             echo "::error::the pull request body changed while this run judged it (judged sha256 ${JUDGED_DIGEST}, now ${body}); the run queued by that edit decides"; exit 1
           fi
           echo "the pull request head, base branch and body are unchanged since this run judged them"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi

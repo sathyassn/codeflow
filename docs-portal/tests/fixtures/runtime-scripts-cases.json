@@ -1,0 +1,136 @@
+{
+  "about": "Malformed runtime script lists and the reason each reader gives. Each case edits the committed scripts/runtime-scripts.json by JSON pointer (set, then remove). scripts/runtime-scripts.mjs (runtimeScriptsFailure) and the Rust validator (runtime_inline_scripts) must both accept a case whose error is null and refuse every other case with exactly its error.",
+  "cases": [
+    {
+      "name": "the committed list for the configured theme",
+      "theme": "signal",
+      "error": null
+    },
+    {
+      "name": "the committed list for a canonical theme",
+      "theme": "slate",
+      "error": null
+    },
+    {
+      "name": "version 1, which held only the template",
+      "theme": "signal",
+      "set": {
+        "/schema_version": 1
+      },
+      "remove": [
+        "/pre_paint_sha256"
+      ],
+      "error": "it has schema_version 1, and this codeflow reads version 2; adopt the version 2 generator first (`codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\""
+    },
+    {
+      "name": "no version",
+      "theme": "signal",
+      "remove": [
+        "/schema_version"
+      ],
+      "error": "it has schema_version none, and this codeflow reads version 2; adopt the version 2 generator first (`codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\""
+    },
+    {
+      "name": "a version that is not a number",
+      "theme": "signal",
+      "set": {
+        "/schema_version": "2"
+      },
+      "error": "it has schema_version none, and this codeflow reads version 2; adopt the version 2 generator first (`codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\""
+    },
+    {
+      "name": "a later version",
+      "theme": "signal",
+      "set": {
+        "/schema_version": 3
+      },
+      "error": "it has schema_version 3, and this codeflow reads version 2; adopt the version 2 generator first (`codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\""
+    },
+    {
+      "name": "no pre-paint hashes",
+      "theme": "signal",
+      "remove": [
+        "/pre_paint_sha256"
+      ],
+      "error": "it records no pre-paint script hashes; regenerate it: npm run build && node scripts/runtime-scripts.mjs dist"
+    },
+    {
+      "name": "pre-paint hashes that are not a map",
+      "theme": "signal",
+      "set": {
+        "/pre_paint_sha256": []
+      },
+      "error": "it records no pre-paint script hashes; regenerate it: npm run build && node scripts/runtime-scripts.mjs dist"
+    },
+    {
+      "name": "another theme's hash missing, the configured one valid",
+      "theme": "signal",
+      "remove": [
+        "/pre_paint_sha256/folio"
+      ],
+      "error": "its pre-paint script hashes name the themes graphite, sage, signal, slate, not folio, graphite, sage, signal, slate; regenerate it: npm run build && node scripts/runtime-scripts.mjs dist"
+    },
+    {
+      "name": "an extra theme, the configured one valid",
+      "theme": "signal",
+      "set": {
+        "/pre_paint_sha256/ink": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "error": "its pre-paint script hashes name the themes folio, graphite, ink, sage, signal, slate, not folio, graphite, sage, signal, slate; regenerate it: npm run build && node scripts/runtime-scripts.mjs dist"
+    },
+    {
+      "name": "two theme names joined into one key, the configured one valid",
+      "theme": "signal",
+      "set": {
+        "/pre_paint_sha256/folio\ngraphite": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "remove": [
+        "/pre_paint_sha256/folio",
+        "/pre_paint_sha256/graphite"
+      ],
+      "error": "its pre-paint script hashes name the themes folio\ngraphite, sage, signal, slate, not folio, graphite, sage, signal, slate; regenerate it: npm run build && node scripts/runtime-scripts.mjs dist"
+    },
+    {
+      "name": "an unknown configured theme",
+      "theme": "ink",
+      "error": "it records no pre-paint script hash for the theme \"ink\"; regenerate it: npm run build && node scripts/runtime-scripts.mjs dist"
+    },
+    {
+      "name": "an inherited property name as the theme",
+      "theme": "__proto__",
+      "error": "it records no pre-paint script hash for the theme \"__proto__\"; regenerate it: npm run build && node scripts/runtime-scripts.mjs dist"
+    },
+    {
+      "name": "a malformed hash for the configured theme",
+      "theme": "signal",
+      "set": {
+        "/pre_paint_sha256/signal": "92209de7214f"
+      },
+      "error": "it records no pre-paint script hash for the theme \"signal\"; regenerate it: npm run build && node scripts/runtime-scripts.mjs dist"
+    },
+    {
+      "name": "a hash that is not a string",
+      "theme": "signal",
+      "set": {
+        "/pre_paint_sha256/signal": 7
+      },
+      "error": "it records no pre-paint script hash for the theme \"signal\"; regenerate it: npm run build && node scripts/runtime-scripts.mjs dist"
+    },
+    {
+      "name": "no fixed scripts",
+      "theme": "signal",
+      "remove": [
+        "/scripts"
+      ],
+      "error": "it lists no scripts"
+    },
+    {
+      "name": "a fixed script with a malformed hash",
+      "theme": "signal",
+      "set": {
+        "/scripts/0/sha256": "abc"
+      },
+      "error": "a script entry has no sha256"
+    }
+  ]
+}

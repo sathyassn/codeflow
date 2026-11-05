@@ -226,3 +226,19 @@ Residuals, stated here and in every report:
 ## Architecture impact
 
 None.
+
+## Note, 2026-11-03: the release-impact removal moves to the last change before main
+
+TSK-336's Findings showed that the enablement order above cannot hold for
+`release impact`. `codeflow-release.yml` runs on `pull_request`, so a pull
+request into a line runs the merge commit's copy of that file. Removing the
+head-built `release impact` job in TSK-336 would therefore leave every pull
+request into a line, TSK-336's own included, without the verdict that
+ruleset 25435656 requires, until `main` carries the `pull_request_target`
+job. The Director chose to keep the head-built job beside `trusted: release
+impact` and remove it in the last change before `main` (TSK-336 AC-9,
+amended). At that step the operator also edits ruleset 24379074, because
+the pull request into `main` that removes the job cannot satisfy a
+`release impact` requirement either. Until then the head-built job's weaker
+trust stays on that name. The rest of the enablement order is unchanged.
+The accepted text above is unchanged.

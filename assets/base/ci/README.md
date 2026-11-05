@@ -155,10 +155,18 @@ when the checkout changes the table. Requiring the
 table there would leave a fresh `codeflow init`, and the first upgrade that
 adds it, unable to pass, since the target they are judged by has no table
 yet. A missing checksum file, a missing entry or a mismatch fails the job;
-nothing unverified is installed. The enforcing jobs run on
-`pull_request_target`, which takes the workflow from the default branch; they
-check out the pull request's base commit, so the target's pin and policy
-apply, and read the pull request head only as git data.
+nothing unverified is installed. The verdict job, `trusted: commit
+standards`, runs on `pull_request_target`, which takes the workflow from the
+default branch for every pull request whatever it targets. It checks that
+the run is for the default branch, checks out exactly that commit
+(`github.sha`), so the default branch's pin and policy apply to a pull
+request into a line too (ADR-0091), fetches the pull request's base and head
+only as git data, and asserts after every step that the checkout has not
+moved, and it refuses when that commit has no `.codeflow/policy.json`.
+Push, schedule and dispatch runs only check the id registry, in their own
+workflow, `codeflow-registry.yml`, under the name `registry check`: a
+workflow those events start creates no check under a `trusted:` name, not
+even a skipped one, which GitHub would count as passing.
 
 The GitLab, Bitbucket and generic wrappers run one shared script (the text
 between the `codeflow pinned run` markers is the same in all three). It reads
@@ -237,18 +245,18 @@ pending run in the pull request's concurrency group waits its turn and
 finishes, and the push's required "commit standards" check ends completed,
 never cancelled. `cancel-in-progress: false` alone does not do this: the
 default queue holds one pending run and cancels it when a newer run arrives.
-Push, schedule and dispatch runs each get a group of their own and are never
-replaced, so a registry check is never replaced by a newer event.
+`codeflow-registry.yml` has no concurrency group, so a registry check is
+never replaced by a newer event.
 
-The event pins the head and the base commit: the job checks out the event's
-base commit and refuses a head that is not the event's. Only the body comes
-from the API, read when the run executes (the job's token gains
-`pull-requests: read` and stays read-only), so a queued run can judge a
-newer body than its event. The body is written to a file in the runner's
-temp directory and given to `codeflow ci` with `--pr-body-file`, never
-through `env:` or an argument, because the runner prints a step's `env:`
-values; the log carries only the body's sha256 digest. The run ends with a
-second read. That last step fails the run, with its own message, when the
+The event pins the head and the base commit: the job fetches both as data
+and refuses a head that is not the event's. Only the body comes from the API,
+read when the run executes (the job's token gains `pull-requests: read` and
+stays read-only), so a queued run can judge a newer body than its event. The
+body is written to a file in the runner's temp directory and given to
+`codeflow ci` with `--pr-body-file`, never through `env:` or an argument,
+because the runner prints a step's `env:` values; the log carries only the
+body's sha256 digest. After the checks the run reads the pull request a
+second time. That last read fails the run, with its own message, when the
 head, the base branch or the body differs from what the run judged, and
 fails closed when the read fails. The run queued by the change decides. The
 base commit is not compared, since a push to the base branch fires no pull
@@ -268,8 +276,11 @@ Limits:
   key. Check your linter's release notes before upgrading it.
 - Concurrency groups are shared across the repository, so any workflow that
   names the same group can cancel a run of this check by using
-  `cancel-in-progress: true`; that fails closed, since a cancelled check
-  never passes, and requiring approval to run workflows from outside
+  `cancel-in-progress: true`. Cancelling a running job, or the run for a new
+  head, fails closed, since a cancelled check never passes. A pending run
+  cancelled before its job starts may leave no check at all, so an earlier
+  pass on the same head can stand for a body that run never judged. Requiring
+  approval to run workflows from outside
   collaborators (the repository's Actions settings) limits who can start such
   a workflow.
 

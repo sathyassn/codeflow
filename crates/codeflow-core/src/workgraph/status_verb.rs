@@ -491,13 +491,15 @@ fn binding(
         .integration_target
         .as_deref()
         .filter(|target| !target.is_empty());
-    match super::release_line::checkout_scope(repo_root, into) {
+    let limits = crate::git::remote_query::QueryLimits::from_authority_or_default(repo_root);
+    match super::release_line::checkout_scope(repo_root, into, limits) {
         Ok(scope) if scope.release() => shown(at_head),
         Ok(_) => {
-            // In the task's own pull request, a waiver may name a record-only
+            // In the task's own pull request, a waiver may name a planning
             // amendment commit of its range (TSK-184). The binder withholds
             // it from a range that reopens a landed completion, as it does
-            // for CI (TSK-340).
+            // for CI (TSK-340); commits on an unqualified declared line are
+            // outside the task's own range (`own_range`).
             shown(
                 super::acceptance::bind_completion_with_amendment(
                     &repo,
@@ -507,7 +509,7 @@ fn binding(
                     default_target,
                     super::acceptance::Transport::TaskLanding,
                     qualified.base,
-                    qualified.base,
+                    qualified.own_range,
                     &qualified.run.stacking(),
                     &qualified.run.criteria(),
                 )
@@ -551,6 +553,12 @@ struct Qualified {
     /// The range anchor: the merge-base of `HEAD` with the qualified
     /// target, or `None` on the target branch itself.
     base: Option<git2::Oid>,
+    /// The anchor of the task's own range, for its own-range waivers: `base`
+    /// when the task's declared target qualifies or none is declared, and
+    /// `None` when a declared target does not qualify. There `base` is the
+    /// default target's, where commits made on that unrecorded line would
+    /// count as the task's own (issue 465).
+    own_range: Option<git2::Oid>,
 }
 
 /// Settle the verb's receiving lines (TSK-340, operator decision of
@@ -599,8 +607,10 @@ fn qualify(
     };
     let mut target = default.map(|(_, tip)| tip);
     let mut target_name = default.map(|(name, _)| name.to_string());
+    let mut own_target = declared.is_none();
     if let Some(name) = declared {
         if default.is_some_and(|(default, _)| default == name) || protected(name)? {
+            own_target = true;
             let Some(tip) = receiving_tip(repo, name)? else {
                 return Err(format!(
                     "the target `{name}` does not resolve here; fetch it (`git fetch origin {name}`)"
@@ -623,38 +633,36 @@ fn qualify(
         ),
         _ => None,
     };
+    // An unqualified declared line earns no authority, and nothing here
+    // can say which of its commits are the task's own: any ref naming it
+    // can be moved, rewound or left unfetched. So it leaves no own range
+    // (issue 465); pinning the line with `--base` and `--into` makes it the
+    // target, whose merge-base is the boundary.
+    let own_range = if declared.is_some() && !own_target {
+        None
+    } else {
+        base
+    };
     Ok(Qualified {
         run: super::acceptance::RunBases::new(
             default.map(|(_, tip)| tip).into_iter().chain(target),
         ),
         default: default.map(|(_, tip)| tip),
         base,
+        own_range,
     })
 }
 
 /// Whether the records at `tip` name `line` as an epic's integration line,
-/// as `check_epic_line` binds a landing line: the epic the line's name
-/// carries exists there, neither cancelled nor archived, and a task of
-/// that epic there declares exactly this line. Epic records carry no line
-/// field, so their tasks at the trusted tip are the record of it.
+/// judged as every other reader binds a line (TSK-1286): the epic the
+/// line's name carries exists there, neither cancelled nor archived, a task
+/// of that epic, or of an epic whose record there declares this line as
+/// its `parent_line`, declares exactly this line, and no refusal there
+/// applies, such as a line epic that itself declares a `parent_line`. Only
+/// the trusted tip's records are read.
 fn epic_line_at(repo: &git2::Repository, tip: git2::Oid, line: &str) -> Result<bool, String> {
-    let Ok(epic_id) = super::line_adoption::epic_id(line) else {
-        return Ok(false);
-    };
-    let graph = Graph::from_revision(repo, &tip.to_string())?;
-    let open = graph
-        .records
-        .get(epic_id)
-        .is_some_and(|epic| !matches!(epic.status.as_str(), "cancelled" | "archived"));
-    Ok(open
-        && graph.records.values().any(|task| {
-            task.kind == RecordKind::Task
-                && task.epic_id.as_deref() == Some(epic_id)
-                && task
-                    .integration_target
-                    .as_deref()
-                    .is_some_and(|target| super::work_start::logical_target(target) == line)
-        }))
+    Ok(super::work_start::line_bound_at_tip(repo, tip, line)?
+        == super::work_start::EpicLineBinding::Bound)
 }
 
 /// The default target's name and tip for a pinned or remoteless run
@@ -1029,6 +1037,69 @@ fn supersede_active_block(content: &str, reason: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TSK-1286 review F3: `task status` picks a receiving line as
+    /// `codeflow ci` binds it. A tip whose line epic itself declares a
+    /// `parent_line` while a declaring epic's task targets the line is not
+    /// a receiving line, though the line's own task is there too. Before
+    /// the fix `epic_line_at` read only task membership and said yes.
+    #[test]
+    fn epic_line_at_refuses_a_chained_line_as_the_other_readers_do() {
+        const LINE: &str = "integration/EPC-001-outcome";
+        let tip_with = |owner_parent: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = git2::Repository::init(dir.path()).unwrap();
+            let epic = |id: &str, parent: &str| {
+                format!("---\nid: {id}\ntitle: {id}\nstatus: planning\nwork_type: feat\nspecs: []\n{parent}created: 2026-11-04\n---\n")
+            };
+            let task = |id: &str, epic: &str| {
+                format!("---\nid: {id}\nepic_id: {epic}\nstandalone_reason: null\nintegration_target: {LINE}\nstatus: todo\n---\n")
+            };
+            let files = [
+                (
+                    "project-management/epics/EPC-001.md",
+                    epic("EPC-001", owner_parent),
+                ),
+                (
+                    "project-management/epics/EPC-002.md",
+                    epic("EPC-002", &format!("parent_line: {LINE}\n")),
+                ),
+                ("project-management/epics/EPC-009.md", epic("EPC-009", "")),
+                (
+                    "project-management/tasks/TSK-001.md",
+                    task("TSK-001", "EPC-001"),
+                ),
+                (
+                    "project-management/tasks/TSK-002.md",
+                    task("TSK-002", "EPC-002"),
+                ),
+            ];
+            for (path, text) in &files {
+                let path = dir.path().join(path);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, text).unwrap();
+            }
+            let mut index = repo.index().unwrap();
+            index
+                .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+                .unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let signature = git2::Signature::now("Test", "test@example.test").unwrap();
+            let tip = repo
+                .commit(None, &signature, &signature, "records", &tree, &[])
+                .unwrap();
+            drop(tree);
+            (dir, repo, tip)
+        };
+        let (_plain_dir, plain, plain_tip) = tip_with("");
+        assert!(epic_line_at(&plain, plain_tip, LINE).unwrap(), "plain");
+        let (_chained_dir, chained, chained_tip) =
+            tip_with("parent_line: integration/EPC-009-elsewhere\n");
+        assert!(
+            !epic_line_at(&chained, chained_tip, LINE).unwrap(),
+            "chained"
+        );
+    }
 
     #[test]
     fn r22_target_anchor_refuses_an_unpeelable_object() {

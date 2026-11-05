@@ -24,7 +24,7 @@ export function installFonts(): void {
   // Keep its complete notices reachable there, outside authored/annotatable UI.
   const footer = document.createElement("footer");
   footer.dataset.cfFontLicenses = "true";
-  footer.style.cssText = "max-inline-size:68rem;margin:1rem auto;padding:1rem;color:var(--cf-text-muted);font-size:var(--cf-fs-caption,0.8125rem)";
+  footer.style.cssText = "max-inline-size:var(--cf-column-max);margin:var(--cf-space-4) auto;padding:var(--cf-space-4);color:var(--cf-text-muted);font-size:var(--cf-fs-caption)";
   const details = document.createElement("details");
   const summary = document.createElement("summary");
   summary.textContent = "Font licenses";

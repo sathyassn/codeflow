@@ -30,6 +30,7 @@ mod judging;
 mod line_tip;
 pub(crate) mod pr_body;
 mod work_records;
+mod workflow_change;
 
 use change_class::ChangeClass;
 use clap::Args;
@@ -152,7 +153,10 @@ pub struct CiArgs {
     /// or eligible epic line at the base commit, then the repository default).
     /// An ambiguous commit-ID base requires --into or --branch. A range whose head
     /// or target matches the release pattern is judged as a
-    /// release range (SPC-013 R-120).
+    /// release range (SPC-013 R-120). Deciding that asks the destination for
+    /// its default branch and that branch's policy, so on a private
+    /// repository the job running codeflow ci needs read access to it (for
+    /// actions/checkout, `persist-credentials: true`).
     #[arg(long, value_name = "BRANCH")]
     pub into: Option<String>,
 
@@ -549,6 +553,10 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut tagged,
         &mut ran,
     );
+    // What this change does to the workflows is base..head; the wider
+    // commit range `--commits-from` selects (pre-push) also holds commits
+    // the target already carries, whose workflow edits are not this one's.
+    workflow_change::dispatch(&root, base_sha.as_deref(), &head, &mut tagged, &mut ran);
 
     match codeflow_core::hooks::path_policy::PathPolicy::from_git(configured).and_then(|paths| {
         let size_and_ignore = judging::content_rules(&root, authority.as_ref())?;
@@ -625,6 +633,15 @@ pub fn run(args: &CiArgs) -> i32 {
             _ => None,
         },
         release: std::cell::OnceCell::new(),
+        // The destination lookup's limits come from the policy that judges
+        // the range, read at its authority; with no authority, from the
+        // local policy authority or the shipped defaults, never the working
+        // copy the range can write (TSK-1301).
+        limits: if authority.is_some() {
+            codeflow_core::git::remote_query::QueryLimits::from_git(configured)
+        } else {
+            codeflow_core::git::remote_query::QueryLimits::from_authority_or_default(&root)
+        },
     };
     // Resolve the shared scope before either dependent check. An unreadable
     // destination refuses once; records and acceptance cannot judge it.
@@ -645,14 +662,15 @@ pub fn run(args: &CiArgs) -> i32 {
     };
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
+    let target_tip = target_tip(
+        &root,
+        &line_target,
+        args.into.as_deref(),
+        &names,
+        &environment,
+    );
+    target_containment_warning(&root, &line_target, &head, &target_tip, &names, &mut tagged);
     if scope_ready {
-        let target_tip = target_tip(
-            &root,
-            &line_target,
-            args.into.as_deref(),
-            &names,
-            &environment,
-        );
         record_checks(
             &root,
             &base_candidates,
@@ -1310,7 +1328,8 @@ fn target_tip(
 ) -> Result<String, NoTarget> {
     if let (Some(url), Some(listed)) = (names.destination, names.advertisement) {
         let destination = codeflow_core::workgraph::release_line::from_advertisement(url, listed)
-            .map_err(NoTarget::read)?;
+            .map_err(NoTarget::read)?
+            .with_limits(names.limits);
         let branch = match handed {
             Some(handed) => named_branch(handed).unwrap_or_else(|| handed.to_string()),
             None => match &destination.default {
@@ -1391,6 +1410,62 @@ fn target_tip(
 pub(super) struct NoTarget {
     pub(super) message: String,
     pub(super) remedy: String,
+}
+
+/// Review-time drift is advisory, independently of planning admission.
+fn target_containment_warning(
+    root: &Path,
+    target: &str,
+    head: &str,
+    tip: &Result<String, NoTarget>,
+    names: &Names<'_>,
+    tagged: &mut Vec<TaggedViolation>,
+) {
+    let result = (|| -> Result<Option<(String, String)>, String> {
+        // Reuse the live destination answer already obtained for the range.
+        // A failed remote read never makes an older tracking ref current.
+        let live = match names.release.get() {
+            Some(Err(_)) => return Err("the target's remote scope could not be verified".into()),
+            Some(Ok(Some((destination, _)))) if destination.url.is_some() => {
+                let branch = named_branch(target).unwrap_or_else(|| target.to_string());
+                Some(
+                    codeflow_core::workgraph::release_line::advertised_tip_here(
+                        root,
+                        destination,
+                        &branch,
+                    )?
+                    .to_string(),
+                )
+            }
+            _ => None,
+        };
+        let tip = match live.as_ref() {
+            Some(tip) => tip,
+            None => tip.as_ref().map_err(|e| e.message.clone())?,
+        };
+        if codeflow_core::workgraph::claim_base::head_contains(root, head, tip)? {
+            return Ok(None);
+        }
+        Ok(Some((
+            format!("head does not contain target '{target}' at {tip}"),
+            tip.clone(),
+        )))
+    })();
+    let (message, remedy) = match result {
+        Ok(None) => return,
+        Ok(Some((message, tip))) => (
+            message,
+            codeflow_core::remedy::WORK_TARGET_TIP.with(&[("tip", &tip)]),
+        ),
+        Err(error) => (
+            format!("target '{target}' tip is unverified: {error}"),
+            codeflow_core::remedy::WORK_TARGET_UNVERIFIED.remedy(),
+        ),
+    };
+    tagged.push(TaggedViolation {
+        sha: None,
+        violation: Violation::new("work.target_tip", PolicyLevel::Warn, message, remedy),
+    });
 }
 
 impl NoTarget {
@@ -2095,7 +2170,9 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
             Some(sha) => format!("ci commit {}", short(sha)),
             None => "ci".to_string(),
         };
-        if t.violation.rule.starts_with("work.") {
+        if t.violation.rule == workflow_change::RULE {
+            eprintln!("{}", workflow_change::render(&t.violation, &plane));
+        } else if t.violation.rule.starts_with("work.") {
             eprintln!(
                 "{}",
                 t.violation.render_invariant(
@@ -2136,7 +2213,10 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
     } else if blocking {
         eprintln!("codeflow ci: FAILED — {blocks} blocking, {warnings} warning(s)");
     } else if skipped.is_empty() {
-        eprintln!("codeflow ci: {warnings} warning(s) only — proceeding");
+        eprintln!(
+            "codeflow ci: {warnings} warning(s) only; proceeding (checks run: {})",
+            ran.join(", ")
+        );
     } else {
         eprintln!(
             "codeflow ci: {warnings} warning(s); skipped: {}",
@@ -2657,6 +2737,8 @@ pub(super) struct Names<'a> {
     /// a tip whose first-parent line a clean merge after a review may come
     /// from (TSK-220).
     pub candidate: Option<&'a str>,
+    /// The timeout and attempts for asking the destination (TSK-1301).
+    pub limits: codeflow_core::git::remote_query::QueryLimits,
     /// The release scope, asked once per run and shared by the checks.
     release: std::cell::OnceCell<
         Result<

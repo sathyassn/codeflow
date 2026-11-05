@@ -733,7 +733,7 @@ fn shipped_ci_rechecks_an_edited_pr_body_through_a_file() {
         "the enforcing workflow must subscribe pull_request_target to edited"
     );
     // TSK-254: the body is read from the API when the job runs, so the
-    // newest body is judged whichever run survives the concurrency group,
+    // newest body is judged even by a run that waited in the queue,
     // and it reaches `codeflow ci` only as a file (TSK-1040): the runner
     // prints a step's `env:` values, so the text is never an env value.
     assert!(workflow.contains("BODY_FILE: ${{ runner.temp }}/pr-body.md"));
@@ -795,15 +795,16 @@ const UNSHIPPED_FILES: [&str; 6] = [
 /// The present review example stays: the visual guide line (EPC-016) made
 /// it the figure-block example that document-authoring and the present tests
 /// read, so the release line keeps it.
-const RETIRED_FILES: [&str; 7] = [
+const RETIRED_FILES: [&str; 6] = [
     "agents/skills/cf-model-orchestrator/references/other-hosts.md",
     "agents/skills/cf-model-orchestrator/resources/routing/assignment.md",
     "agents/skills/cf-model-orchestrator/resources/routing/effort.md",
     "agents/skills/cf-model-orchestrator/resources/routing/hosts.md",
     "agents/skills/cf-model-orchestrator/resources/routing/review.md",
     "agents/skills/cf-model-orchestrator/resources/routing/roles.md",
-    // Its registry check is a step of ci/codeflow-policy.yml now.
-    "ci/codeflow-registry.yml",
+    // ci/codeflow-registry.yml was retired by TSK-184 and is shipped again
+    // by TSK-336: push, schedule and dispatch check the registry there, so
+    // they create no check under a `trusted:` name.
 ];
 
 /// Directory prefixes under `assets/base` whose files are embedded and
@@ -2682,7 +2683,11 @@ fn portal_utility_tokens_match_present_skins() {
         for mode in ["light", "dark"] {
             let pair = format!("{skin}-{mode}");
             let roles = kit[&pair].as_object().expect("kit pair");
-            assert_eq!(roles.len(), 31, "complete kit role set");
+            assert_eq!(
+                roles.len(),
+                40,
+                "complete kit role set, including stage and accent-family roles"
+            );
             for (sheet, css, marker) in [
                 (
                     "portal",

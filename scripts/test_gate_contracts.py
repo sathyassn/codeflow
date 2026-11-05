@@ -36,8 +36,13 @@ class GateContracts(unittest.TestCase):
         jobs = dict(zip(parts[1::2], parts[2::2]))
         windows = {key: text for key, text in jobs.items() if key.startswith('windows')}
         gated = ('windows', 'windows-build', 'windows-tests', 'windows-journeys', 'windows-release-journey')
-        self.assertEqual(set(windows), {*gated, 'windows-verdict', 'windows-image'})
+        self.assertEqual(set(windows), {*gated, 'windows-verdict', 'windows-image', 'windows-tier', 'windows-tier-journeys'})
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
+        # TSK-1242: the tier only applies to pull requests. Neither job is a
+        # publication check; `scripts/gate-parity.py` pins their text.
+        for key in ('windows-tier', 'windows-tier-journeys'):
+            self.assertNotIn(windows[key].split('name: ', 1)[1].split('\n', 1)[0], checks)
+        self.assertIn("    if: github.event_name == 'pull_request'\n", windows['windows-tier'])
         # TSK-359: `windows-image` only reads the push's Windows runner image
         # for the reuse decision. It runs on pushes alone and is no gate.
         image = windows['windows-image']
@@ -77,7 +82,8 @@ class GateContracts(unittest.TestCase):
         # `codeflow gates` is: one accepted body, so no edit can add another
         # way for it to pass.
         self.assertEqual(PARITY.windows_verdict_problems(workflow), [])
-        self.assertEqual(windows['windows-verdict'].count('exit 0'), 1)
+        # Two ways to pass: the reduced tier (TSK-1242) and a reused or full run.
+        self.assertEqual(windows['windows-verdict'].count('exit 0'), 2)
         self.assertEqual([check for check in checks if 'windows' in check], ['windows'])
 
     def test_an_extra_way_for_the_windows_verdict_to_pass_is_refused(self):
@@ -113,34 +119,37 @@ class GateContracts(unittest.TestCase):
         self.assertIn('    permissions:\n      contents: read\n      actions: read\n      pull-requests: read\n', reuse)
         self.assertNotIn(': write', workflow)
         self.assertIn('python3 -I scripts/ci-reuse.py', reuse)
-        for key in ('gates', 'windows', 'windows-build', 'windows-release-journey'):
+        for key in ('gates', 'windows', 'windows-release-journey'):
             with self.subTest(job=key):
                 self.assertIn("    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (", jobs[key])
                 self.assertIn('    needs: [reuse, gates-build]\n' if key == 'gates' else '    needs: reuse\n', jobs[key])
+        # TSK-1242: the build also follows the tier, and still follows the reuse decision.
+        self.assertIn("    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (", jobs['windows-build'])
+        self.assertIn('    needs: [reuse, windows-tier]\n', jobs['windows-build'])
         self.assertIn("needs.windows-build.result == 'success'", jobs['windows-tests'])
         self.assertIn("needs.windows-tests.result != 'skipped'", jobs['windows-journeys'])
 
     # TSK-1040: pull request runs share one group per pull request and queue
-    # (`queue: max`, no cancellation), so no event cancels or replaces a run;
-    # push, schedule and dispatch runs each get a group of their own run id.
+    # (`queue: max`, no cancellation), so no event cancels or replaces a run.
+    # The policy workflow runs only on pull_request_target (TSK-336); push,
+    # schedule and dispatch start codeflow-registry.yml, which has no group.
     # The exact text is pinned: a group keyed on the ref, or any cancellation,
     # would cancel the run that judges a pushed head.
     POLICY_CONCURRENCY = (
         "\nconcurrency:\n"
-        "  group: ${{ github.event_name == 'pull_request_target' && format('{0}-pr-{1}', github.workflow, "
-        "github.event.pull_request.number) || format('{0}-run-{1}', github.workflow, github.run_id) }}\n"
+        "  group: ${{ format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) }}\n"
         "  cancel-in-progress: false\n"
         "  queue: max\n\n"
     )
-    # The judging run reads the body when it runs, so the newest body is
-    # judged whichever event's run survives the group.
+    # The judging run reads the body when it runs, so a run that waited in
+    # the queue judges the newest body, whichever event started it.
     POLICY_BODY = (
         "          curl -fsSL --retry 3 --max-time 60 \\\n"
         "            -H \"Authorization: Bearer ${GH_TOKEN}\" -H \"Accept: application/vnd.github+json\" \\\n"
         "            \"${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}\" -o \"${RUNNER_TEMP}/pull.json\"\n"
     )
 
-    def assert_policy_cancels_only_superseded_pull_request_runs(self, workflow, admission=False):
+    def assert_policy_queues_every_pull_request_run(self, workflow, admission=False):
         self.assertEqual(workflow.count('concurrency:'), 1, 'one workflow-level group, no job-level one')
         self.assertIn(self.POLICY_CONCURRENCY, workflow)
         self.assertLess(workflow.index(self.POLICY_CONCURRENCY), workflow.index('\njobs:\n'))
@@ -155,29 +164,28 @@ class GateContracts(unittest.TestCase):
         self.assertNotIn(': write', workflow)
         self.assertIn('    timeout-minutes: 45\n' if admission else '    timeout-minutes: 20\n', workflow)
 
-    def test_policy_build_and_validation_have_no_write_token(self):
+    def test_each_verdict_job_builds_the_authority_and_the_registry_runs_apart(self):
+        # TSK-336: each trusted verdict job builds the default branch's own
+        # source once; push, schedule and dispatch check the registry in their
+        # own workflow, which builds the event commit once and has no group.
         workflow = read('.github/workflows/codeflow-policy.yml')
-        self.assertIn('permissions: {}', workflow)
-        jobs = workflow.split('\njobs:\n', 1)[1]
-        validation = jobs.split('  validate:\n', 1)[1].split('\n  publish:', 1)[0]
-        publisher = jobs.split('  publish:\n', 1)[1].split('\n  registry:', 1)[0]
-        registry = jobs.split('  registry:\n', 1)[1]
-        self.assertIn('      contents: read\n      pull-requests: read\n      actions: read', validation)
-        self.assertNotIn(': write', validation)
-        self.assertNotIn(': write', registry)
-        self.assertIn('      contents: read\n      checks: write', publisher)
-        self.assertNotIn('actions: read', publisher)
-        self.assertNotIn('pull-requests: read', publisher)
-        self.assertNotIn('cargo ', publisher)
-        self.assertNotIn('rust-cache', publisher)
-        self.assertIn('ref: ${{ github.workflow_sha }}', publisher)
-        self.assertIn('persist-credentials: false', publisher)
-        self.assertIn('ref: ${{ steps.prepare.outputs.base_sha }}', validation)
-        self.assertIn('refs/codeflow/pr-head', validation)
-        self.assertIn('--pr-body-file "$RUNNER_TEMP/pr-body.md"', validation)
-        self.assertNotIn('CODEFLOW_PR_BODY', workflow)
-        self.assertNotIn('github.event.pull_request.body', workflow)
-        self.assertFalse((ROOT / '.github/workflows/codeflow-registry.yml').exists())
+        self.assertIn('pull_request_target:', workflow)
+        self.assertIn('github.event.pull_request.base.sha', workflow)
+        self.assertEqual(workflow.count('cargo build --release'), 2, 'trusted: commit standards and release impact')
+        self.assertIn('codeflow ids check --base', workflow)
+        self.assertIn('codeflow ci --base', workflow)
+        self.assert_policy_queues_every_pull_request_run(workflow, admission=True)
+        self.assertIn('Swatinem/rust-cache@', workflow)
+        self.assertNotIn('github.event.pull_request.head.sha }}\n          fetch-depth', workflow)
+        for event in ('  push:', '  schedule:', '  workflow_dispatch:'):
+            self.assertNotIn(event, workflow.split('\njobs:\n', 1)[0])
+        registry = read('.github/workflows/codeflow-registry.yml')
+        self.assertEqual(registry.count('cargo build --release'), 1)
+        self.assertNotIn('concurrency:', registry)
+        # Its one job is the registry check, never a `trusted:` verdict; its
+        # comments may name the prefix to say why.
+        self.assertEqual(re.findall(r'^    name: (.+)$', registry, re.M), ['registry check'])
+        self.assertIn('run: codeflow ids check\n', registry)
 
     def test_commit_standards_starts_on_ci_completion_without_polling(self):
         workflow = read('.github/workflows/codeflow-policy.yml')
@@ -239,7 +247,7 @@ class GateContracts(unittest.TestCase):
             self.assertIn(command, runs)
 
     def test_the_adopter_policy_template_cancels_only_pr_runs_the_same_way(self):
-        self.assert_policy_cancels_only_superseded_pull_request_runs(read('assets/base/ci/codeflow-policy.yml'))
+        self.assert_policy_queues_every_pull_request_run(read('assets/base/ci/codeflow-policy.yml'))
         # Marking a draft ready reruns the standards, so a check that reads
         # the pull request at ready (its Testing citation) judges it then.
         self.assertIn('    types: [opened, synchronize, reopened, edited, ready_for_review]\n',

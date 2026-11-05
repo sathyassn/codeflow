@@ -40,7 +40,7 @@ fn published(root: &Path, published: &str) {
     git(root, &["commit", "-m", "chore: policy"]);
     git(
         root,
-        &["remote", "add", "origin", "https://example.invalid/r.git"],
+        &["remote", "add", "origin", "file:///nonexistent/r.git"],
     );
     git(root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
     git(

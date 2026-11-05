@@ -1,0 +1,67 @@
+# codeflow registry: the shared id registry check for pushes, the daily
+# schedule and manual runs. Written by `codeflow init` and managed by
+# `codeflow update`.
+#
+# Each run checks the event's own commit against the shared registry
+# (SPC-013 R-14, R-20; ADR-0072) under the name `registry check`. The
+# pull request check of the registry is a step of the verdict job in
+# codeflow-policy.yml, which runs only on `pull_request_target`. This file
+# is separate so that a push, schedule or dispatch run creates no check
+# under a `trusted:` name, not even a skipped one: GitHub counts a skipped
+# required check as passing (TSK-336).
+#
+# This repository's copy builds the event commit's own source in place of
+# the pinned release, since CodeFlow is its own first consumer.
+#
+# Runs are never cancelled, so a registry run is never replaced by a newer
+# queued event. The token is read-only and no secret is used.
+name: codeflow-registry
+
+on:
+  push:
+    branches: [main, master, "integration/**"]
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The registry check of the event's own commit. It is never a pull
+  # request verdict, and no job here carries a `trusted:` name.
+  registry-check:
+    name: registry check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      # This repository IS codeflow, so it builds the event commit's own
+      # source instead of installing a pinned release.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build codeflow from the event commit's source
+        run: |
+          cargo build --release --locked -p codeflow-cli
+          echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
+
+      # The registry is fetched explicitly with full history, never forced
+      # (R-20).
+      - name: Fetch the shared registry
+        run: |
+          if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
+            git fetch --no-tags origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+          else
+            echo "codeflow/registry is not on origin; the check reports it when records are tracked"
+          fi
+
+      - name: codeflow ids check
+        run: codeflow ids check

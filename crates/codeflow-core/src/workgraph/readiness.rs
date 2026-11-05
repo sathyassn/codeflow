@@ -1581,6 +1581,8 @@ pub struct Claim {
     pub pushed: bool,
     /// Unrelated remote branches visible in the last-fetched refs.
     pub informational_branches: Vec<String>,
+    /// Title words left out of the name (`git.branch_name_omit_words`).
+    pub omitted_words: Vec<String>,
 }
 
 /// `git <args>` with its output as exact bytes.
@@ -1848,7 +1850,8 @@ fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
 /// Refresh the refs used to resolve a claim before looking up review pins.
 ///
 /// # Errors
-/// Reports target or fetch errors without creating a claim.
+/// Reports target or fetch errors without creating a claim. A task with no
+/// visible record is not an error here: its caller reports that finding.
 pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
     // OS text rule (issue 79): a remote is fetched by name, and a name that is
     // not valid UTF-8 cannot be given to git as text, so claim refresh refuses
@@ -1873,11 +1876,15 @@ pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
         .is_none()
     {
         for remote in &remotes {
-            git(repo_root, &["fetch", "--prune", "--quiet", remote])?;
+            fetch_for_admission(repo_root, remote)?;
         }
     }
-    let declared = claim_target(repo_root, task_id)?
-        .ok_or_else(|| format!("{task_id} has no visible record with an integration_target"))?;
+    // No visible record: every remote was fetched above. The missing record
+    // is a planning finding the caller reports at its policy level; `claim`
+    // refuses it and `start` follows `git.work_planning` (AC-2).
+    let Some(declared) = claim_target(repo_root, task_id)? else {
+        return Ok(());
+    };
     let has_origin = remotes.iter().any(|remote| remote == "origin");
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     // Fetch the remote the target resolves through (never substituting
@@ -1888,10 +1895,41 @@ pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
     if has_origin && !fetch.contains(&"origin") {
         fetch.push("origin");
     }
+    let mut refreshed: BTreeSet<_> = fetch.iter().map(|r| (*r).to_string()).collect();
     for remote in fetch {
-        git(repo_root, &["fetch", "--prune", "--quiet", remote])
-            .map_err(|error| format!("fetch {remote} failed: {error}"))?;
+        fetch_for_admission(repo_root, remote)?;
     }
+    // Discover code sources from the freshly fetched target, never the ledger.
+    let (_, tip) = super::claim_base::source(&repo, &declared)?;
+    let tree = repo
+        .find_commit(tip)
+        .and_then(|c| c.tree())
+        .map_err(|e| e.to_string())?;
+    let records = records_from_tree(&repo, &tree).map_err(|e| e.to_string())?;
+    for dep in records.get(task_id).into_iter().flat_map(|r| &r.depends_on) {
+        if dep.kind != super::deps::DependencyKind::Code {
+            continue;
+        }
+        if let Some(line) = records
+            .get(&dep.id)
+            .and_then(|r| r.integration_target.as_deref())
+        {
+            if let Some(remote) = target_fetch_remote(&repo, line)? {
+                if remotes.contains(&remote) && refreshed.insert(remote.clone()) {
+                    fetch_for_admission(repo_root, &remote)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn fetch_for_admission(root: &Path, remote: &str) -> Result<(), String> {
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let last = fetched_at(&repo).unwrap_or_else(|| "unknown".into());
+    git(root, &["fetch", "--prune", "--quiet", "--", remote]).map_err(|error| {
+        format!("fetch {remote} failed (last fetch before this attempt: {last}): {error}")
+    })?;
     Ok(())
 }
 
@@ -1945,9 +1983,10 @@ pub fn claim_on(
     let (reference, target_tip) = resolve_target(repo_root, &repo, &declared)?
         .ok_or_else(|| format!("target '{declared}' does not resolve here"))?;
     let stack = super::work_start::stack_base(repo_root, pins)?;
-    let mut tip = stack.unwrap_or(target_tip);
+    let selected = super::claim_base::select(repo_root, task_id, &declared, pins)?;
+    let mut tip = git2::Oid::from_str(&selected.revision).map_err(|e| e.to_string())?;
     let tree = repo
-        .find_commit(tip)
+        .find_commit(if stack.is_some() { tip } else { target_tip })
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
     let mut records = records_from_tree(&repo, &tree).map_err(|error| error.to_string())?;
@@ -1964,6 +2003,7 @@ pub fn claim_on(
         }
     }
     let reference_shown = shown(&reference);
+    super::claim_base::project_dependencies(&repo, &mut records, task_id, target_tip, tip, pins)?;
     super::work_start::validate_anchored_task_on(&repo, &records, task_id, &reference, pins)
         .map_err(|error| format!("not ready on {reference_shown}: {error}"))?;
     let ids = BTreeSet::from([task_id.to_string()]);
@@ -2009,12 +2049,16 @@ pub fn claim_on(
     let title = records
         .get(task_id)
         .map_or("", |record| record.title.as_str());
-    let branch = format!("task/{task_id}-{}", super::light_paths::slug(title));
-    if renamed.is_some() {
-        git(repo_root, &["branch", "-m", &branch])?;
+    let policy = crate::hooks::policy::Policy::load(repo_root)?;
+    let named = super::light_paths::branch_slug(title, &policy.git.branch_name_omit_words);
+    let branch = format!("task/{task_id}-{}", named.slug);
+    if let Some(current) = &renamed {
+        rename_standalone_branch(repo_root, current, &branch, tip)?;
     } else {
         git(repo_root, &["branch", &branch, &tip.to_string()])?;
     }
+    super::claim_base::record(repo_root, task_id, &branch, &declared, &selected)
+        .map_err(|error| format!("created {branch} locally; recording its base failed: {error}"))?;
     if has_origin {
         // Create only: an existing remote branch of that name is never moved.
         let destination = format!("refs/heads/{branch}");
@@ -2023,7 +2067,6 @@ pub fn claim_on(
             &[
                 "push",
                 "--quiet",
-                "-u",
                 &format!("--force-with-lease={destination}:"),
                 "origin",
                 &format!("{branch}:{destination}"),
@@ -2033,10 +2076,67 @@ pub fn claim_on(
     }
     Ok(Claim {
         branch,
-        from: format!("{reference_shown}@{}", &tip.to_string()[..9]),
+        from: format!("{}@{}", shown(&selected.source), &tip.to_string()[..9]),
         pushed: has_origin,
         informational_branches: information,
+        omitted_words: named.omitted,
     })
+}
+
+/// Whether the local branch `old` has `branch.<old>.*` settings in the
+/// repository's git config (its remote and merge keys).
+fn branch_has_tracking_config(repo_root: &Path, old: &str) -> Result<bool, String> {
+    // NUL-separated, so a key is read whole whatever characters it holds.
+    let keys = git_bytes(
+        repo_root,
+        &["config", "--local", "--name-only", "--list", "-z"],
+    )?;
+    let prefix = format!("branch.{old}.");
+    Ok(keys
+        .split(|byte| *byte == 0)
+        .any(|key| key.starts_with(prefix.as_bytes())))
+}
+
+/// Rename the checked-out standalone branch `current` to `branch` at `head`.
+///
+/// `git branch -m` rewrites the shared git config file to move the old
+/// branch's settings, which a builder seat's sandbox cannot do (TSK-1156).
+/// A branch with no such settings needs no config write, so it is moved by
+/// ref operations only: create the new ref, point this worktree's `HEAD` at
+/// it, delete the old ref. A branch with settings keeps `git branch -m` so
+/// its tracking moves with it; before it runs, the config file is probed so
+/// a seat that cannot write it is refused with nothing moved, never left
+/// half renamed.
+fn rename_standalone_branch(
+    repo_root: &Path,
+    current: &crate::git::GitName,
+    branch: &str,
+    head: git2::Oid,
+) -> Result<(), String> {
+    let Ok(old) = current.rule_text() else {
+        return git(repo_root, &["branch", "-m", branch]).map(drop);
+    };
+    if branch_has_tracking_config(repo_root, old)? {
+        let (config, probe) = crate::testing::gate_guard::probe_git_config_write(repo_root);
+        probe.map_err(|error| {
+            format!(
+                "branch {old} has tracking settings, so renaming it rewrites {}, which this process cannot write ({error}); nothing was renamed",
+                crate::git::display_path(&config)
+            )
+        })?;
+        return git(repo_root, &["branch", "-m", branch]).map(drop);
+    }
+    git(repo_root, &["branch", branch, &head.to_string()])?;
+    let new_ref = format!("refs/heads/{branch}");
+    if let Err(error) = git(repo_root, &["symbolic-ref", "HEAD", &new_ref]) {
+        let _ = git(repo_root, &["update-ref", "-d", &new_ref]);
+        return Err(error);
+    }
+    git(
+        repo_root,
+        &["update-ref", "-d", &format!("refs/heads/{old}")],
+    )
+    .map(drop)
 }
 
 /// Branches on `remote` carrying `task_id`, read from the remote itself so
@@ -3171,9 +3271,8 @@ mod tests {
         let claimed = claim(root, "TSK-002").unwrap();
         assert_eq!(claimed.branch, "task/TSK-002-work-tsk-002");
         assert!(claimed.pushed);
-        // `main` tracks `origin/main` and equals it: the local branch is read,
-        // as `work start` reads it.
-        assert!(claimed.from.starts_with("main@"), "{}", claimed.from);
+        // The claim names the fetched remote tip it was cut from (TSK-1047).
+        assert!(claimed.from.starts_with("origin/main@"), "{}", claimed.from);
         let remote = run(bare.path(), &["branch", "--list"]);
         assert!(remote.contains("task/TSK-002-work-tsk-002"), "{remote}");
 
@@ -3931,7 +4030,8 @@ mod tests {
     }
 
     /// R2-1, the other direction: upstream is ready and the fork adds a
-    /// Blocker. All three accept, and the claim is cut from `main`.
+    /// Blocker. All three accept, and the claim is cut from the configured
+    /// upstream's fetched `main`, which it names.
     #[test]
     fn a_ready_upstream_is_ready_whatever_the_fork_says() {
         let dir = repo();
@@ -3940,7 +4040,11 @@ mod tests {
         let backlog = backlog(root).unwrap();
         assert_eq!(entry(&backlog, "TSK-001").state, State::Ready);
         let claimed = claim(root, "TSK-001").unwrap();
-        assert!(claimed.from.starts_with("main@"), "{}", claimed.from);
+        assert!(
+            claimed.from.starts_with("upstream/main@"),
+            "{}",
+            claimed.from
+        );
         let published = run(origin.path(), &["branch", "--list"]);
         assert!(published.contains(&claimed.branch), "{published}");
         start_from(root, &claimed.branch).unwrap();

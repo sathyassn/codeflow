@@ -10,10 +10,13 @@ use std::path::Path;
 
 /// The commit whose policy judges the range.
 pub(super) enum Authority {
-    /// `--policy-from`: the target tip the pre-push hook established.
+    /// `--policy-from`: the target tip the pre-push hook established, or
+    /// the default branch's commit the hosted policy workflow passes
+    /// (TSK-336, ADR-0091).
     Named(String),
-    /// The resolved base, which the caller chose: the hosted templates pass
-    /// the pull request's target tip, but a local caller can name any commit.
+    /// The resolved base, which the caller chose. The hosted policy workflow
+    /// never judges this way: it names the default branch's commit with
+    /// `--policy-from`. A local caller can name any commit.
     Base(String),
     /// The resolved base, with the commit checks run from another commit
     /// (`--commits-from`): never the hosted verdict, whose commit checks
@@ -32,7 +35,7 @@ impl Authority {
         match self {
             Self::Named(sha) => format!("{}, the commit --policy-from names", short(sha)),
             Self::Base(sha) => format!(
-                "base {}, the commit this run was given; it is the hosted verdict only when that is the pull request's target tip, which the hosted jobs pass",
+                "base {}, the commit this run was given; the hosted verdict names the default branch's commit with --policy-from instead, so this is a local judgment",
                 short(sha)
             ),
             Self::SplitBase(sha) => format!(
@@ -91,11 +94,13 @@ pub(super) struct Judging {
 
 /// The policy a range is judged with (sathyassn/codeflow#22): the one
 /// recorded at `authority`, read as git data, so a head that loosens its own
-/// policy cannot judge itself. The hosted templates run from a checkout of
-/// the target tip they pass as the base, so there the two are the same.
+/// policy cannot judge itself. The hosted policy workflow runs from a
+/// checkout of the default branch's commit and names that commit with
+/// `--policy-from` (TSK-336, ADR-0091), so there the two are the same.
 /// Without an authority, the working copy's. When the authority's tree
 /// proves the policy file absent (the adoption change itself), the shipped
-/// defaults (TSK-1077). `None` (after naming each error) when the
+/// defaults (TSK-1077); the hosted workflow refuses that case before it
+/// runs this, since it has no policy to judge with. `None` (after naming each error) when the
 /// authority's policy is unreadable or invalid, which verifies nothing.
 ///
 /// The policy judges the commit, branch, PR-body and work checks and their
