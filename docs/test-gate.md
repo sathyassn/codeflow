@@ -36,7 +36,14 @@ since, is read by nothing.
 
 A run writes its record and each target's logs and report copies into
 `<target>/codeflow-gate/<run id>/`, and a full run with a revision copies
-that folder to `~/.codeflow/gate-runs/<repo>/<run id>/`. Every one of these
+that folder to `~/.codeflow/gate-runs/<repo>/<run id>/`. The record,
+`run.json`, lists in `outcomes` every target the run was given with its
+`name`, `state` (`passed`, `failed`, `stalled`, `timed_out`,
+`cleanup_incomplete`, `not_run`, `skipped_in_ci` or `skipped`) and
+`duration_ms`; its `results` hold each run target's exit code and captured
+output. Targets outside an `--only` selection are not listed. The managed
+GitHub workflow uploads the record as an artifact after every gate, pass
+or fail, so a hosted run's results can be read through the GitHub API. Every one of these
 writes, and the gate's lock files, walks from a held handle of a trusted
 root and never follows a symbolic link or a Windows junction or other
 reparse point at any component below it. The trusted roots are the
