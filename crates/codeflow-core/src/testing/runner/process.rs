@@ -124,22 +124,17 @@ pub(super) fn run_observed(
     // that and freeing the gate's own locks, so while this process holds a
     // fence a watcher outside the job holds it too and frees it only once
     // the job is empty (TSK-1318).
+    // A job failure ends the still-suspended child before its command runs
+    // and fails the spawn (TSK-142 AC-3), as it did before supervision.
     #[cfg(windows)]
-    let mut adoption_error = None;
-    #[cfg(windows)]
-    let job = match super::adopt_or_stop(
+    let job = Some(super::adopt_or_stop(
         super::target_job::TargetJob::adopt(&child),
         target_name,
         || {
             let _ = child.kill();
+            let _ = child.wait();
         },
-    ) {
-        Ok(job) => Some(job),
-        Err(error) => {
-            adoption_error = Some(error.to_string());
-            None
-        }
-    };
+    )?);
     #[cfg(windows)]
     if deadline.info.heavy {
         deadline.info.cpu_source = Some("Windows job user plus kernel CPU".into());
@@ -271,10 +266,6 @@ pub(super) fn run_observed(
             ) {
                 deadline.info.status = cause;
             }
-            stop.get_or_insert(now);
-        }
-        #[cfg(windows)]
-        if adoption_error.is_some() {
             stop.get_or_insert(now);
         }
         if status.is_some() {
@@ -476,10 +467,6 @@ pub(super) fn run_observed(
     let signal = None;
     if deadline.info.status == TargetStatus::Passed && ordinary_exit != 0 {
         deadline.info.status = TargetStatus::Failed;
-    }
-    #[cfg(windows)]
-    if let Some(error) = adoption_error {
-        cleanup_errors.push(error);
     }
     if deadline.info.status == TargetStatus::Passed
         && (!cleanup_errors.is_empty() || !deadline.info.cleanup_details.is_empty())
