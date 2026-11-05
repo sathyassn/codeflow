@@ -786,6 +786,7 @@ fn the_enforcing_registry_workflow_cannot_be_changed_by_the_pull_request_it_judg
                 == Some("codeflow ids check")),
         "the registry check is a step of the enforcing job"
     );
+    let raw = std::fs::read_to_string(&asset).unwrap();
     // The workflow's one secret, the authority App's key, belongs to the
     // authority job (TSK-1177); the enforcing job holds none.
     assert!(
