@@ -129,9 +129,10 @@ Local-artifact authority job:
     every job that is not green. A pull request into an integration line
     takes the reduced tier, which skips the build, the partitions and their
     journey job, only when every file it changes is on the tier step's short
-    list of Markdown paths that no Rust code compiles in; everything else
-    takes the full tier, as do pushes, runs on a schedule or by hand and pull
-    requests into main (TSK-1321).
+    list of Markdown paths that no Rust code compiles in, and is a regular
+    file added or changed in place; everything else takes the full tier, as
+    do pushes, runs on a schedule or by hand and pull requests into main
+    (TSK-1321).
   - On a push to main or to an integration line whose merge commit has
     exactly the tree of a pull request head whose `codeflow-ci` run passed
     every job, both verdicts pass by naming that run and the gate and
