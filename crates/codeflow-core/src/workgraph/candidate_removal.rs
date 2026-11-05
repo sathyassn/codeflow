@@ -63,6 +63,11 @@ pub fn remove(
     open_pull_requests: OpenPullRequests<'_>,
 ) -> Result<Removed, String> {
     let proof = prove(repo_root, branch, line, open_pull_requests)?;
+    // The proof fetched the line and asked the host after its own checkout
+    // check, so a worktree may have checked the branch out since; `update-ref
+    // -d` would not refuse that, so the check runs again right before it.
+    let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+    refuse_checked_out(&repo, branch)?;
     // Compare and delete: the ref is removed only while it is still at the
     // tip the proof was made for, and never through a symbolic link.
     git(
@@ -102,10 +107,18 @@ pub fn prove(
     let git_policy = &landed.policy.git;
     let prefix = git_policy.candidate_prefix.as_str();
     let depth = git_policy.candidate_search_depth;
+    // The landed policy is read without the schema check, so the prefix is
+    // judged here too: one that overlaps a work, line or protected branch
+    // would let this route delete that branch on tree equality alone.
+    if let Some(problem) = git_policy.candidate_prefix_problem() {
+        return Err(format!(
+            "`{branch}` is not removed: {problem} (fix the policy on the default branch)"
+        ));
+    }
     let named = branch
         .strip_prefix(prefix)
         .is_some_and(|rest| !rest.is_empty());
-    if prefix.is_empty() || !named {
+    if !named {
         return Err(format!(
             "`{branch}` is not a landing candidate branch: its name does not start with `{prefix}` (git.candidate_prefix); a task branch keeps its merge proof (.codeflow/rules/worktrees.md \"Cleanup\")"
         ));
@@ -210,6 +223,14 @@ fn unused_branch_tip<'r>(repo: &'r Repository, branch: &str) -> Result<git2::Com
     let tip = reference
         .peel_to_commit()
         .map_err(|error| format!("the branch `{branch}` cannot be read: {error}"))?;
+    refuse_checked_out(repo, branch)?;
+    Ok(tip)
+}
+
+/// Refused when a worktree has `branch` checked out, or when that cannot be
+/// read.
+fn refuse_checked_out(repo: &Repository, branch: &str) -> Result<(), String> {
+    let local = format!("refs/heads/{branch}");
     let checked_out = super::local_branches::checked_out(repo)
         .map_err(|error| format!("cannot tell whether a worktree uses `{branch}`: {error}"))?;
     // Compared without case: on a case-insensitive filesystem a worktree on
@@ -222,7 +243,7 @@ fn unused_branch_tip<'r>(repo: &'r Repository, branch: &str) -> Result<git2::Com
             "a worktree has `{branch}` checked out; remove that worktree first (git worktree remove, never --force on a dirty one)"
         ));
     }
-    Ok(tip)
+    Ok(())
 }
 
 /// The first `depth` commits of `tip`'s first-parent history, newest first,

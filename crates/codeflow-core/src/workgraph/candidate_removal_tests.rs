@@ -449,3 +449,85 @@ fn a_checkout_in_another_case_holds_the_candidate() {
         "a worktree has `candidate/c1` checked out",
     );
 }
+
+/// Security review finding 1 (PR 600): `git.candidate_prefix` must keep
+/// candidates apart from every other branch the policy names. The landed
+/// policy is read without the schema check, so a prefix that equals,
+/// contains or is contained by a sanctioned branch prefix, the
+/// `integration/` prefix or a protected branch name or pattern is refused
+/// at run time, and the branch it would have named is kept.
+#[test]
+fn a_candidate_prefix_that_overlaps_other_branches_is_refused() {
+    // (policy git section, a branch the prefix would name, or `None` when
+    // git cannot hold such a branch beside `main`)
+    let cases: [(&str, Option<&str>); 7] = [
+        (r#""candidate_prefix": "task/""#, Some("task/TSK-009-x")),
+        (
+            r#""candidate_prefix": "integration/""#,
+            Some("integration/y"),
+        ),
+        (r#""candidate_prefix": "main/""#, None),
+        (
+            r#""candidate_prefix": "release/", "protected_branches": ["main", "release/*"]"#,
+            Some("release/c1"),
+        ),
+        (r#""candidate_prefix": "t""#, Some("task/TSK-010-x")),
+        (
+            r#""candidate_prefix": "story/", "branch_prefixes": ["story/", "plan/", "integration/"]"#,
+            Some("story/c1"),
+        ),
+        (
+            r#""candidate_prefix": "story/cand/", "branch_prefixes": ["story/", "plan/", "integration/"]"#,
+            Some("story/cand/c1"),
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (git_section, branch) in cases {
+        let policy = format!(r#"{{"schema_version": 1, "git": {{{git_section}}}}}"#);
+        let fixture = fixture(Some(&policy));
+        let root = fixture.root();
+        candidate(root, false);
+        land(root, 0);
+        let name = branch.unwrap_or("main/c1");
+        if let Some(branch) = branch {
+            git(root, &["branch", branch, CANDIDATE]);
+        }
+        match remove(root, name, LINE, &no_pull_request) {
+            Ok(_) => wrong.push(format!("{git_section}: `{name}` was removed")),
+            Err(error) if !error.contains("overlaps") => {
+                wrong.push(format!("{git_section}: refused for another cause: {error}"));
+            }
+            Err(_) => {}
+        }
+        if branch.is_some_and(|branch| !exists(root, branch)) {
+            wrong.push(format!("{git_section}: `{name}` is gone"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Security review nit 1 (PR 600): a worktree that checks the candidate
+/// out after the first check, here while the open pull requests are
+/// asked, still holds it: the check runs again right before the delete.
+#[test]
+fn a_checkout_made_during_the_proof_holds_the_candidate() {
+    let fixture = fixture(None);
+    let root = fixture.root();
+    candidate(root, false);
+    land(root, 0);
+    let trees = tempfile::tempdir().unwrap();
+    let at = trees.path().join("late");
+    let late_checkout = |branch: &str| -> Result<Vec<u64>, String> {
+        git(
+            root,
+            &["worktree", "add", "-q", at.to_str().unwrap(), branch],
+        );
+        Ok(Vec::new())
+    };
+    let error = remove(root, CANDIDATE, LINE, &late_checkout).unwrap_err();
+    assert!(
+        error.contains("a worktree has `candidate/c1` checked out"),
+        "{error}"
+    );
+    assert!(exists(root, CANDIDATE));
+}
