@@ -28,16 +28,17 @@ filter = 'package(codeflow-present) | binary(present_cli) | binary(init_e2e) | t
 test-group = "serial"
 
 # The hosted Windows test partitions run under this profile (TSK-1321). A test
-# still running after 5 periods of 120 s (10 minutes) is ended and reported as
+# still running after 6 periods of 120 s (12 minutes) is ended and reported as
 # a timeout, so one hung test cannot use up its partition's job time and lose
-# the partition's other results. The bound stays out of profile.codeflow, which
+# the partition's other results. The bound is at least twice the longest
+# measured hosted Windows test (323 s). The bound stays out of profile.codeflow, which
 # the local full gate uses: a slow test on a loaded host must keep running
 # there while it is active (TSK-1278). Keep the overrides equal to
 # profile.codeflow, written out because nextest 0.9.129's `inherits` does not
 # carry them over.
 [profile.windows-hosted]
 fail-fast = false
-slow-timeout = { period = "120s", terminate-after = 5 }
+slow-timeout = { period = "120s", terminate-after = 6 }
 
 [profile.windows-hosted.junit]
 path = "junit.xml"

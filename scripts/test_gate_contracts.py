@@ -361,7 +361,7 @@ class GateContracts(unittest.TestCase):
         # TSK-1321 AC-6: the per-test bound is for the hosted Windows partitions
         # only; the local gates' slow tests keep running while active (TSK-1278).
         hosted = profiles['windows-hosted']
-        self.assertEqual(hosted['slow-timeout'], {'period': '120s', 'terminate-after': 5})
+        self.assertEqual(hosted['slow-timeout'], {'period': '120s', 'terminate-after': 6})
         self.assertNotIn('slow-timeout', profiles['codeflow'])
         self.assertNotIn('slow-timeout', profiles['essential'])
         self.assertEqual(hosted['overrides'], profiles['codeflow']['overrides'])
