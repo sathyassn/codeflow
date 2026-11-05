@@ -1,0 +1,11 @@
+id = "TSK-1333"
+uid = "fdd0fe13-d15f-4ff3-b8dc-85d0035d6b69"
+kind = "TSK"
+title = "A coordinator's work survives takeover, restart and a switch of harness"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:06:15Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
