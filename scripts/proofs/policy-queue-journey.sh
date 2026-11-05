@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# TSK-1040 AC-2 and AC-6 journey: on a scratch adopter repository, a push to
+# TSK-1040 queue journey, not AC-6 evidence (see the task record): on a
+# scratch adopter repository, a push to
 # an open pull request followed within seconds by two body edits ends with
 # every codeflow-policy run for that pull request completed, none cancelled,
 # and the required "trusted: commit standards" check passing on the final head
