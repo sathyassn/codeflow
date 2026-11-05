@@ -1,6 +1,6 @@
 # CodeFlow time-box profile, version 1
 
-Profile version: 1; effective 2026-11-04. Method `codeflow-agentic-2`
+Profile version: 1; effective 2026-11-05. Method `codeflow-agentic-2`
 (`cf-estimate` rubric), with the time-box profile of
 `operating-model.md`, "Time-box profile" (ADR-0096). The bands are issue
 334's, chosen by the operator as CodeFlow's starting model on 2026-11-01.
@@ -21,7 +21,9 @@ reads:
 ```
 
 with "Very hard is always split before claim". The operator ruled on
-2026-11-04 that the issue is the confirmation this adoption needs.
+2026-11-04, relayed by the Director at 20:5x: "issue 334 is the operator's
+own record of the bands, so cite it as the confirmation; nothing goes back
+to the operator".
 
 ## The clock
 
