@@ -104,3 +104,15 @@ calibration table. Consumers gain a usable starting method and explicit limits,
 not a delivery guarantee. Stable JSON and CLI surfaces add compatibility duties;
 closed schemas, bounded input, cross-platform tests, golden reports and
 independent review carry those duties. Source/task authority remains singular.
+
+## Note of 2026-11-04: a profile template ships, and the claim gains one write
+
+ADR-0096 amends two passages; the text above is unchanged.
+
+- Consequences, "no install-time profile or calibration table": the
+  scaffold now ships a time-box profile template with starting bands inside
+  `cf-estimate`. No profile is installed, and nothing is written without
+  the project's confirmation.
+- "Future verbs need a new justified decision": `work claim` gains one
+  write, the task's `claimed:` line, and worktree creation. No new verb is
+  added.

@@ -1,0 +1,44 @@
+✔ planted hex literal fails lint (2.157917ms)
+✔ planted functional literal fails lint (0.089375ms)
+✔ planted named literal fails lint (0.063459ms)
+✔ planted named extended literal fails lint (0.051833ms)
+✔ planted absolute size literal fails lint (0.071333ms)
+✔ planted exponent size literal fails lint (0.057375ms)
+✔ planted size literal fails lint (0.496959ms)
+✔ planted radius literal fails lint (0.076125ms)
+✔ planted fallback literal fails lint (0.073541ms)
+✖ planted named fallback literal fails lint (4.15275ms)
+✔ clean token control permits intrinsic values and CSS variables (0.435625ms)
+✔ every authored style template is free of colour, size and radius literals (13.5425ms)
+✔ pseudo-highlight selectors are not named colour declarations (0.110125ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 12
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 142.132334
+
+✖ failing tests:
+
+test at assets/base/agents/skills/cf-present/resources/design-system/source/lint.test.ts:6:3
+✖ planted named fallback literal fails lint (4.15275ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(styleLiterals(`a{${value}}`).length)
+
+      at TestContext.<anonymous> (file:///Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1162/assets/base/agents/skills/cf-present/resources/design-system/source/lint.test.ts:6:59)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
