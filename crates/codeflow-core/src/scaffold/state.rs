@@ -2674,8 +2674,8 @@ mod tests {
     #[test]
     fn an_update_recovers_from_a_crash_around_the_payload_on_each_drive_layout() {
         // TSK-356: the representative cut points of the two matrices above,
-        // which run only in the full gate: before the update, around the
-        // payload's own write, and after it, on one drive and on two.
+        // which run only in the full gate: just before and just after the
+        // payload's own write, on one drive and on two.
         for second_drive in [false, true] {
             assert_update_recovers_from_any_crash(second_drive, false);
         }
@@ -2685,8 +2685,8 @@ mod tests {
     /// Crashes an upgrade just before and after each write that concerns
     /// `zzz/payload.txt`, and each device flush, and checks that the next
     /// update installs the new version. With `second_drive`, `zzz/` is on a
-    /// device of its own. Without `exhaustive`, only the points before the
-    /// update, just around the payload's own write and after it.
+    /// device of its own. Without `exhaustive`, only the points just before
+    /// and just after the payload's own write.
     fn assert_update_recovers_from_any_crash(second_drive: bool, exhaustive: bool) {
         let dir = crate::fixture_tests::project_dir();
         let old = assets_with_payload(&dir.path().join("old"), "old shipped data\n");
@@ -2754,7 +2754,7 @@ mod tests {
                     matches!(event, interruption::Event::Renamed(path, _) if path == payload)
                 })
                 .expect("the update writes the payload");
-            points = std::collections::BTreeSet::from([0, at, at + 1, events.len()]);
+            points = std::collections::BTreeSet::from([at, at + 1]);
         }
         for point in points {
             let root = dir.path().join(format!("crash-{point}"));
