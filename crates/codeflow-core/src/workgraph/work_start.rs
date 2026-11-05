@@ -1138,6 +1138,24 @@ fn epic_record_at_revision(
         .map(|(_, record)| record))
 }
 
+/// The status and `parent_line` of the epic record `epic` at `revision`,
+/// `None` when that revision has no such record (TSK-1320). A record that
+/// cannot be read is an error, never absent.
+pub(crate) fn epic_facts_at(
+    repo_root: &Path,
+    epic: &str,
+    revision: &str,
+) -> Result<Option<EpicFacts>, String> {
+    epic_record_at_revision(repo_root, epic, revision)
+        .map(|record| {
+            record.map(|record| EpicFacts {
+                status: record.status,
+                parent_line: record.parent_line,
+            })
+        })
+        .map_err(|error| error.to_string())
+}
+
 /// Whether the trusted `records` (named `place`) let a task of `own`, an
 /// epic other than the line's, target `line`: `own`'s record there must
 /// declare `parent_line` as exactly this line, and the head's copy of that
