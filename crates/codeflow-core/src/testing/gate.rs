@@ -492,8 +492,10 @@ fn run_configured(
             ci_skipped.join(", ")
         );
     }
+    let outcomes = target_outcomes(&results, &selection, &ci_skipped, &declarations);
     let artifact = serde_json::json!({
         "schema_version": 2, "run_id": run_id, "revision": revision,
+        "outcomes": outcomes,
         "git_tree": super::evidence::git_tree(project_dir), "target_evidence": target_evidence,
         "tree": tree, "config_digest": config_digest, "mode": effective_mode,
         "selection": selection, "passed": passed, "complete": complete, "clean": clean,
@@ -540,6 +542,47 @@ fn run_configured(
         failure_reasons,
         coverage,
     })
+}
+
+/// One entry per target this run was given, whatever became of it: the
+/// targets that ran (passed, failed, timed out, not run behind a failed
+/// prerequisite), then those skipped in CI and those the selection skipped.
+/// Each names the target, its state and its duration in milliseconds, so a
+/// reader of a published run record lists every target from one field and
+/// never sees only the passing ones (TSK-1305). Targets outside an `--only`
+/// selection are not this run's and are left out.
+fn target_outcomes(
+    results: &[GateTargetResult],
+    selection: &delivery::Selection,
+    ci_skipped: &[String],
+    declarations: &[TargetConfig],
+) -> Vec<serde_json::Value> {
+    let ran = results.iter().map(|result| {
+        serde_json::json!({
+            "name": result.name, "state": result.status,
+            "exit_code": result.exit_code, "duration_ms": result.duration_ms,
+        })
+    });
+    let in_ci = ci_skipped.iter().map(|name| {
+        let reason = declarations
+            .iter()
+            .find(|target| &target.name == name)
+            .and_then(|target| target.ci_skip_reason.clone());
+        serde_json::json!({
+            "name": name, "state": "skipped_in_ci", "duration_ms": 0, "reason": reason,
+        })
+    });
+    let skipped = selection.skipped.iter().map(|name| {
+        let reason = selection
+            .reasons
+            .get(name)
+            .unwrap_or(&selection.reason)
+            .clone();
+        serde_json::json!({
+            "name": name, "state": "skipped", "duration_ms": 0, "reason": reason,
+        })
+    });
+    ran.chain(in_ci).chain(skipped).collect()
 }
 
 // Each run owns its folder exclusively before any producer writes there.
