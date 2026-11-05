@@ -1862,6 +1862,7 @@ pub(super) fn work_target_at(
         .map_err(|error| format!("{task}'s record at {head} cannot be read: {error}"))
 }
 
+#[allow(clippy::too_many_arguments)] // The run context and its validated exemption class.
 fn evaluate_work_start(
     root: &Path,
     git: &GitPolicy,
