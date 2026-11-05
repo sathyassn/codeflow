@@ -103,7 +103,12 @@ description: Land finished work (docs and capability updates, then a PR through 
    configures a release branch matching its release pattern, R-120, and a
    workflow integrating into it, follow
    [release integration](references/release-integration.md).
-   Otherwise skip that step.
+   Otherwise skip that step. Where the project adopted the `cf-estimate`
+   time-box profile, close the epic's estimate before step 10 deletes its
+   line: run `codeflow estimate outcomes --epic <id>` at the line tip,
+   commit the result as the epic's outcome record
+   (`<estimate root>/outcomes/<epic id>.md`), and close the epic's Estimate
+   section with the comparison. Only then may the line ref go.
 10. Clean up after every landing, with proof, in the same step: whoever
     landed it runs cleanup, the primary after an integration-line landing
     and the session confirming a human merge into `main`, from outside the

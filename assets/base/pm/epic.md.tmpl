@@ -79,6 +79,21 @@ created: {{DATE}}
      it otherwise. Task frontmatter owns membership (`epic_id`) and direct
      predecessors (`depends_on`); this is not a second task roster. -->
 
+<!-- Optional, only where the project adopted the estimation time-box
+     profile (`cf-estimate`); otherwise leave it out. `cf-plan` writes it at
+     breakdown; the expected mix is frozen then. Copy it out of this comment
+     as a `## Estimate` section here:
+
+     ## Estimate
+     - spec_pin: <SPC-NNN or source>@<commit>
+     - Expected mix (frozen): <n> tasks: <n> Easy, <n> Medium, <n> Hard
+     - Milestone scenario: <date or window> from the scenario forecast;
+       basis: <rate, seats, human gates, merge windows>
+     - Actual tasks: <TSK-NNN band, as each is planned or lands>
+     - At close: expected against actual mix, scenario rate against actual
+       rate, hit rate, misses and wait causes; outcome record
+       `<estimate root>/outcomes/<epic id>.md` -->
+
 ## Planning notes
 
 <!-- Tracked nits, one line each with the event that revisits it, and hotspot
