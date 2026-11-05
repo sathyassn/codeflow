@@ -1777,13 +1777,12 @@ mod tests {
                 .contains(&format!("{CPU_SPIN_DONE} {millis} ms")),
             "the stand-in did not spin: {result:?}"
         );
+        // Not the per-test `... ok` line: with one test thread and
+        // `--nocapture`, the spin line prints inside it.
         assert!(
-            result
-                .stdout
-                .contains("test testing::runner::tests::cpu_spin_stand_in ... ok"),
+            result.stdout.contains("test result: ok. 1 passed"),
             "{result:?}"
         );
-        assert!(result.stdout.contains("1 passed"), "{result:?}");
         assert!(result.duration_ms >= millis, "{result:?}");
     }
 
