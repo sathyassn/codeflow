@@ -498,12 +498,10 @@ With no remote, `codeflow integrate` replaces the pull request.
    naming neither. The Release impact section is required only into a
    protected branch or with a breaking commit.
 5. **One review, then land.** A seat of the other model lineage reviews the
-   whole change once, and a material finding is fixed in the same PR. A task
-   PR targets `main` when a human can merge it as it becomes ready, and the
-   human merges it once the required checks are evidenced green. Otherwise
-   the reviewed head lands with the next batch on its epic's integration
-   line, and at every green line tip a checkpoint PR from the line to `main`
-   is opened or refreshed for a human to merge when available. An infrastructure-killed duplicate CI job is not a failed
+   whole change once, and a material finding is fixed in the same PR. The
+   head goes to `main`, where a human merges it once the required checks are
+   evidenced green, or, when no human merges as work becomes ready, to its
+   epic line. An infrastructure-killed duplicate CI job is not a failed
    check. An agent's `gh pr merge` into a protected base is blocked.
 6. **With no remote**, land with `codeflow integrate <branch> --into <target>`.
    A human can override the git layer for a local merge or a protected
