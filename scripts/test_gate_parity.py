@@ -695,7 +695,7 @@ class VerdictOutcomeControls(unittest.TestCase):
     def test_both_verdicts_fail_clearly_when_the_gates_did_not_run(self):
         env = {"PATH": os.environ.get("PATH", ""), "REUSE": "skipped", "REUSED": ""}
         env.update({key: "skipped" for key in (
-            "PARTS", "SHARDS", "REPORT", "CHECKS", "BUILD", "TESTS", "JOURNEYS", "RELEASE")})
+            "PARTS", "SHARDS", "REPORT", "CHECKS", "BUILD", "TESTS", "JOURNEYS", "RELEASE", "TIER_JOURNEYS")})
         for name in ("gates-verdict", "windows-verdict"):
             with self.subTest(verdict=name):
                 result = subprocess.run(["bash", "-c", verdict_script(name=name)], env=env,
@@ -775,6 +775,57 @@ class HostedEventParityControls(unittest.TestCase):
         self.assertNotEqual(job, narrowed)
         problems = parity.windows_verdict_problems(workflow.replace(job, narrowed))
         self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)
+
+
+class WindowsTierControls(unittest.TestCase):
+    """TSK-1242: the tier jobs are pinned, off or on, and only the build job
+    leaves the full tier."""
+
+    SWITCH_OFF = '          REDUCED_TIER: "off"\n'
+    SWITCH_ON = '          REDUCED_TIER: "on"\n'
+
+    def problems(self, workflow):
+        return parity.windows_tier_problems(workflow)
+
+    def turned_on(self):
+        current = self.SWITCH_ON if self.SWITCH_ON in WORKFLOW else self.SWITCH_OFF
+        return WORKFLOW.replace(current, self.SWITCH_ON)
+
+    def test_either_switch_state_is_the_pinned_form(self):
+        self.assertEqual(self.problems(WORKFLOW), [])
+        self.assertEqual(self.problems(self.turned_on()), [])
+        self.assertEqual(self.problems(self.turned_on().replace(self.SWITCH_ON, self.SWITCH_OFF)), [])
+
+    def test_another_switch_value_is_refused(self):
+        changed = self.turned_on().replace(self.SWITCH_ON, '          REDUCED_TIER: "yes"\n')
+        self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)))
+
+    def test_widening_the_tier_to_another_base_is_refused(self):
+        self.assertIn("integration/*) tier=reduced ;;", WORKFLOW)
+        changed = WORKFLOW.replace("integration/*) tier=reduced ;;", "*) tier=reduced ;;")
+        self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)))
+
+    def test_a_tier_journey_job_with_another_test_run_is_refused(self):
+        self.assertIn(parity.TIER_RUN, WORKFLOW)
+        changed = WORKFLOW.replace("--nextest-filter --skip-benchmark", "--skip-benchmark")
+        self.assertTrue(any("`windows-tier-journeys` must be exactly" in p for p in self.problems(changed)))
+
+    def test_a_build_job_that_ignores_the_tier_is_refused(self):
+        self.assertIn(parity.BUILD_TIER_CLAUSE, WORKFLOW)
+        changed = WORKFLOW.replace(parity.BUILD_TIER_CLAUSE, "!cancelled() && needs.reuse.outputs.run == ''", 1)
+        self.assertTrue(any("`windows-build` must need" in p for p in self.problems(changed)))
+
+    def test_another_job_reading_the_tier_is_refused(self):
+        job = parity.workflow_jobs(WORKFLOW)["windows"]
+        changed = WORKFLOW.replace(job, job.replace("!cancelled() &&", "needs.windows-tier.outputs.tier != 'reduced' && !cancelled() &&", 1))
+        self.assertNotEqual(changed, WORKFLOW)
+        self.assertTrue(any("only windows-build may leave" in p for p in self.problems(changed)))
+
+    def test_the_tier_run_is_the_only_subset_the_local_parity_forgives(self):
+        self.assertNotIn(parity.TIER_RUN, parity.ci_rust_job_commands(WORKFLOW))
+        job = parity.workflow_jobs(WORKFLOW)["windows"]
+        extra = job.rstrip("\n") + f"\n      - name: subset\n        run: {parity.TIER_RUN}\n"
+        self.assertIn(parity.TIER_RUN, parity.ci_rust_job_commands(WORKFLOW.replace(job, extra)))
 
 
 class CoverageShardControls(unittest.TestCase):
@@ -1107,6 +1158,7 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
         ".github/workflows/portal-pages.yml", ".github/workflows/release.yml",
         ".github/workflows/release-main-recheck.yml", ".github/workflows/release-plan-authority.yml",
         ".github/workflows/release-post-announce.yml",
+        ".github/workflows/windows-daily.yml", ".github/workflows/windows-daily-run.yml",
     }
     SHIPPED = {"assets/base/ci/codeflow-ci.yml", "assets/base/ci/codeflow-policy.yml",
                "assets/base/ci/codeflow-registry.yml"}

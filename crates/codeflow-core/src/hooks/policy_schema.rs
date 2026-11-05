@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 78] = [
+pub const SCHEMA: [KeySpec; 81] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -366,6 +366,45 @@ pub const SCHEMA: [KeySpec; 78] = [
         valid: "days; 0 disables reminders",
         purpose: "Orient flags integration lines past this interval since their last sync or evidenced creation.",
         notes: "Unknown creation without a sync and lines with no own commits are never flagged. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.remote_query_timeout_seconds",
+        kind: KeyKind::UInt,
+        valid: "a whole number of seconds, at least 1; no ceiling beyond what the number can hold",
+        purpose: "How long one `git ls-remote` attempt may take when the pre-push hook, `codeflow ci`, `task status` or the id sync asks a destination what it holds.",
+        notes: "Default 30: GitHub answered the default-branch lookup in 11.3 s and 11.6 s, over the earlier fixed 10 s (TSK-1301). \
+                A destination that does not answer in time still refuses the push or run (ci.destination_unavailable), naming the limits and the measured time. \
+                The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; \
+                `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. \
+                A very large value means effectively no limit: a silent destination is then waited on until something stops the run. \
+                The session guards never use it: they wait at most 10 s for each such lookup, their 20 s deadline bounds the whole command, \
+                and they refuse naming `git fetch <remote>`, after which they read local refs and need no network. \
+                Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.remote_query_attempts",
+        kind: KeyKind::UInt,
+        valid: "a whole number of attempts, at least 1; no ceiling beyond what the number can hold",
+        purpose: "How many attempts a timed-out `git ls-remote` gets, the first included; any other failure is final at once.",
+        notes: "Default 3. The worst wait is this times git.remote_query_timeout_seconds. \
+                The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; \
+                `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. \
+                A very large value means effectively no limit: a silent destination is then waited on until something stops the run. \
+                Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.remote_fetch_timeout_seconds",
+        kind: KeyKind::UInt,
+        valid: "a whole number of seconds, at least 1; no ceiling beyond what the number can hold",
+        purpose: "How long a fetch of the objects a judge needs may take, such as the destination's default-branch tip this clone lacks, in the pre-push hook, `codeflow ci` and `task status`.",
+        notes: "Default 120, the earlier fixed fetch wait. A fetch that does not finish in time refuses, naming this key. \
+                The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; \
+                `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. \
+                A very large value means effectively no limit: a silent destination is then waited on until something stops the run. \
+                Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
                 The shipped policy file does not list it, so an older binary never meets the key.",
     },
     // ---- git: root checkout ----------------------------------------------
@@ -1399,7 +1438,19 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
             }
         }
         KeyKind::UInt => {
-            if value.as_u64().is_none_or(|n| u32::try_from(n).is_err()) {
+            if let Some(limit) = super::limits::for_key(path) {
+                // A declared limit (TSK-1301): its own bounds, up to u64.
+                if value
+                    .as_u64()
+                    .is_none_or(|n| n < limit.min || limit.max.is_some_and(|max| n > max))
+                {
+                    errors.push(PolicyError::invalid_value(
+                        path,
+                        value,
+                        &super::limits::bounds_text(limit),
+                    ));
+                }
+            } else if value.as_u64().is_none_or(|n| u32::try_from(n).is_err()) {
                 errors.push(PolicyError::invalid_value(
                     path,
                     value,
@@ -1875,6 +1926,54 @@ mod tests {
                 errors.iter().all(|error| error.key == "git.claim_remotes"),
                 "{errors:?}"
             );
+        }
+    }
+
+    /// TSK-1301: the remote query keys default to their declared values,
+    /// accept any whole number from 1 up to what a u64 holds, and refuse
+    /// every other value in the validator and in the loader, naming the key.
+    #[test]
+    fn remote_query_keys_accept_whole_numbers_from_one_and_refuse_the_rest() {
+        let defaults = default_policy_value();
+        assert_eq!(defaults["git"]["remote_query_timeout_seconds"], 30);
+        assert_eq!(defaults["git"]["remote_query_attempts"], 3);
+        assert_eq!(defaults["git"]["remote_fetch_timeout_seconds"], 120);
+        for key in [
+            "remote_query_timeout_seconds",
+            "remote_query_attempts",
+            "remote_fetch_timeout_seconds",
+        ] {
+            for value in ["1", "2", "600", "4294967296", "18446744073709551615"] {
+                let text = format!(r#"{{"git":{{"{key}":{value}}}}}"#);
+                assert!(validate_policy_str(&text).is_ok(), "{text}");
+                let policy: Policy = serde_json::from_str(&text).unwrap();
+                let read = serde_json::to_value(&policy.git).unwrap()[key].clone();
+                assert_eq!(read.to_string(), value, "{text}");
+            }
+            for value in [
+                "0",
+                "-1",
+                "1.5",
+                "30.0",
+                "1e3",
+                "18446744073709551616",
+                "\"30\"",
+                "null",
+                "true",
+            ] {
+                let text = format!(r#"{{"git":{{"{key}":{value}}}}}"#);
+                let errors = validate_policy_str(&text).unwrap_err();
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.message.contains(&format!("git.{key}"))),
+                    "{text}: {errors:?}"
+                );
+                let loaded = serde_json::from_str::<Policy>(&text)
+                    .unwrap_err()
+                    .to_string();
+                assert!(loaded.contains(&format!("git.{key}")), "{text}: {loaded}");
+            }
         }
     }
 
