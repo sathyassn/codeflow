@@ -1,0 +1,11 @@
+id = "TSK-1334"
+uid = "338ce23a-858b-43f7-89ed-9e399bc695f2"
+kind = "TSK"
+title = "Present and portal checks enforce the immediately obvious bar"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:06:33Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
