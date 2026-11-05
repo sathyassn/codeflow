@@ -514,9 +514,9 @@ class GatePartControls(unittest.TestCase):
         self.assertIn(self.VERDICT_IF, WORKFLOW)
         self.assert_problem(WORKFLOW.replace("    name: codeflow gates\n", "    name: gates verdict\n"),
                             "exactly one job must be named")
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: windows\n"), self.EXACT)
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates]\n"), self.EXACT)
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: windows\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates]\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n"), self.EXACT)
         self.assert_problem(WORKFLOW.replace(self.VERDICT_IF,
                                              "    if: github.event_name == 'push'\n    name: codeflow gates\n"),
                             self.EXACT)
@@ -533,7 +533,7 @@ class GatePartControls(unittest.TestCase):
                 "            exit 1\n          fi\n          echo \"every part",
                 "            exit 0\n          fi\n          echo \"every part"),
             "continue-on-error on the verdict": WORKFLOW.replace(
-                "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n    continue-on-error: true\n"),
+                "    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n    continue-on-error: true\n"),
             "a reuse that needs no skipped part": WORKFLOW.replace(
                 '[ "$REUSE" = success ] && [ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ]',
                 '[ "$REUSE" = success ]'),
@@ -643,7 +643,7 @@ class GatePartControls(unittest.TestCase):
         })
 
     def test_comments_and_blank_lines_in_the_verdict_are_allowed(self):
-        workflow = WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n\n    # the parts\n")
+        workflow = WORKFLOW.replace("    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n\n    # the parts\n")
         self.assertNotEqual(workflow, WORKFLOW)
         self.assertEqual(self.problems(workflow), [])
 
@@ -779,8 +779,8 @@ class HostedEventParityControls(unittest.TestCase):
 
 
 class WindowsTierControls(unittest.TestCase):
-    """TSK-1242: the tier jobs are pinned, off or on, and only the build job
-    leaves the full tier."""
+    """TSK-1242, TSK-1321: the tier job is pinned, off or on, and only the jobs a
+    pull request into an integration line drops leave it through the tier."""
 
     SWITCH_OFF = '          REDUCED_TIER: "off"\n'
     SWITCH_ON = '          REDUCED_TIER: "on"\n'
@@ -823,27 +823,29 @@ class WindowsTierControls(unittest.TestCase):
                 changed = on.replace(old, new)
                 self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)), name)
 
-    def test_a_tier_journey_job_with_another_test_run_is_refused(self):
-        self.assertIn(parity.TIER_RUN, WORKFLOW)
-        changed = WORKFLOW.replace("--nextest-filter --skip-benchmark", "--skip-benchmark")
-        self.assertTrue(any("`windows-tier-journeys` must be exactly" in p for p in self.problems(changed)))
+    def test_a_journey_job_of_the_reduced_tier_is_refused(self):
+        job = parity.workflow_jobs(WORKFLOW)["windows-journeys"]
+        extra = WORKFLOW.replace(job, job + "\n  windows-tier-journeys:\n    name: x\n    runs-on: windows-latest\n"
+                                       "    timeout-minutes: 5\n    steps:\n      - run: true\n", 1)
+        self.assertNotEqual(extra, WORKFLOW)
+        self.assertTrue(any("runs no journey job of its own" in p for p in self.problems(extra)))
 
-    def test_a_build_job_that_ignores_the_tier_is_refused(self):
-        self.assertIn(parity.BUILD_TIER_CLAUSE, WORKFLOW)
-        changed = WORKFLOW.replace(parity.BUILD_TIER_CLAUSE, "!cancelled() && needs.reuse.outputs.run == ''", 1)
-        self.assertTrue(any("`windows-build` must need" in p for p in self.problems(changed)))
+    def test_a_moved_job_that_ignores_the_tier_is_refused(self):
+        for name in parity.TIER_JOBS:
+            with self.subTest(job=name):
+                job = parity.workflow_jobs(WORKFLOW)[name]
+                self.assertIn(parity.TIER_CLAUSE, job)
+                for changed_job in (job.replace("needs.windows-tier.outputs.tier != 'reduced' && ", "", 1),
+                                    job.replace("    needs: [reuse, windows-tier]\n", "    needs: reuse\n", 1)):
+                    changed = WORKFLOW.replace(job, changed_job, 1)
+                    self.assertNotEqual(changed, WORKFLOW)
+                    self.assertTrue(any(f"`{name}` must need" in p for p in self.problems(changed)))
 
     def test_another_job_reading_the_tier_is_refused(self):
-        job = parity.workflow_jobs(WORKFLOW)["windows"]
+        job = parity.workflow_jobs(WORKFLOW)["gates"]
         changed = WORKFLOW.replace(job, job.replace("!cancelled() &&", "needs.windows-tier.outputs.tier != 'reduced' && !cancelled() &&", 1))
         self.assertNotEqual(changed, WORKFLOW)
-        self.assertTrue(any("only windows-build may leave" in p for p in self.problems(changed)))
-
-    def test_the_tier_run_is_the_only_subset_the_local_parity_forgives(self):
-        self.assertNotIn(parity.TIER_RUN, parity.ci_rust_job_commands(WORKFLOW))
-        job = parity.workflow_jobs(WORKFLOW)["windows"]
-        extra = job.rstrip("\n") + f"\n      - name: subset\n        run: {parity.TIER_RUN}\n"
-        self.assertIn(parity.TIER_RUN, parity.ci_rust_job_commands(WORKFLOW.replace(job, extra)))
+        self.assertTrue(any("may read the tier" in p for p in self.problems(changed)))
 
 
 class CoverageShardControls(unittest.TestCase):

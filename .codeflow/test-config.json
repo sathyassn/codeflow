@@ -52,6 +52,7 @@
       "scripts/windows-daily.py",
       "scripts/test_windows_daily.py",
       "scripts/test_workflow_refs.py",
+      "scripts/test_ci_placement.py",
       "scripts/coverage-merge.py",
       "scripts/test_coverage_merge.py",
       "scripts/fixtures/coverage-merge/**",
@@ -297,13 +298,13 @@
       "runner": "custom",
       "modes": {
         "quick": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_partition_check.py && python3 -B scripts/test_windows_tier.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py && python3 -B scripts/test_windows_daily.py && python3 -B scripts/test_workflow_refs.py && python3 -B scripts/test_contract_scans.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_partition_check.py && python3 -B scripts/test_windows_tier.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py && python3 -B scripts/test_windows_daily.py && python3 -B scripts/test_workflow_refs.py && python3 -B scripts/test_ci_placement.py && python3 -B scripts/test_contract_scans.py"
         },
         "essential": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_partition_check.py && python3 -B scripts/test_windows_tier.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py && python3 -B scripts/test_windows_daily.py && python3 -B scripts/test_workflow_refs.py && python3 -B scripts/test_contract_scans.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_partition_check.py && python3 -B scripts/test_windows_tier.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py && python3 -B scripts/test_windows_daily.py && python3 -B scripts/test_workflow_refs.py && python3 -B scripts/test_ci_placement.py && python3 -B scripts/test_contract_scans.py"
         },
         "full": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_partition_check.py && python3 -B scripts/test_windows_tier.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py && python3 -B scripts/test_windows_daily.py && python3 -B scripts/test_workflow_refs.py && python3 -B scripts/test_contract_scans.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_partition_check.py && python3 -B scripts/test_windows_tier.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py && python3 -B scripts/test_windows_daily.py && python3 -B scripts/test_workflow_refs.py && python3 -B scripts/test_ci_placement.py && python3 -B scripts/test_contract_scans.py"
         }
       }
     },

@@ -36,12 +36,11 @@ class GateContracts(unittest.TestCase):
         jobs = dict(zip(parts[1::2], parts[2::2]))
         windows = {key: text for key, text in jobs.items() if key.startswith('windows')}
         gated = ('windows', 'windows-build', 'windows-tests', 'windows-journeys', 'windows-release-journey')
-        self.assertEqual(set(windows), {*gated, 'windows-verdict', 'windows-image', 'windows-tier', 'windows-tier-journeys'})
+        self.assertEqual(set(windows), {*gated, 'windows-verdict', 'windows-image', 'windows-tier'})
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
-        # TSK-1242: the tier only applies to pull requests. Neither job is a
-        # publication check; `scripts/gate-parity.py` pins their text.
-        for key in ('windows-tier', 'windows-tier-journeys'):
-            self.assertNotIn(windows[key].split('name: ', 1)[1].split('\n', 1)[0], checks)
+        # TSK-1242, TSK-1321: the tier only applies to pull requests and is no
+        # publication check; `scripts/gate-parity.py` pins its text.
+        self.assertNotIn(windows['windows-tier'].split('name: ', 1)[1].split('\n', 1)[0], checks)
         self.assertIn("    if: github.event_name == 'pull_request'\n", windows['windows-tier'])
         # TSK-359: `windows-image` only reads the push's Windows runner image
         # for the reuse decision. It runs on pushes alone and is no gate.
@@ -69,7 +68,7 @@ class GateContracts(unittest.TestCase):
         self.assertIn('pattern: windows-junit-*', journeys)
         release = windows['windows-release-journey']
         self.assertIn('journey-gate.py --part python --skip-benchmark', release)
-        self.assertIn('    needs: reuse\n', release)
+        self.assertIn('    needs: [reuse, windows-tier]\n', release)
         # AC-2: one build, and partitions that run the archive without compiling.
         self.assertIn('cargo nextest archive --workspace --profile codeflow', windows['windows-build'])
         tests = windows['windows-tests']
@@ -103,8 +102,8 @@ class GateContracts(unittest.TestCase):
                 'jobs = sorted(job for job in needs if job != "reuse")',
                 'jobs = sorted(job for job in needs if job not in ("reuse", "windows-release-journey"))'),
             'a wider reduced-tier skip': workflow.replace(
-                'mode, skips = "reduced", {"windows-build", "windows-tests", "windows-journeys"}',
-                'mode, skips = "reduced", {"windows", "windows-build", "windows-tests", "windows-journeys"}'),
+                'mode, skips = "reduced", {"windows", ',
+                'mode, skips = "reduced", {"windows-verdict", "windows", '),
             'continue-on-error': workflow.replace('    name: windows\n', '    name: windows\n    continue-on-error: true\n'),
         }
         for label, changed in controls.items():
@@ -127,13 +126,15 @@ class GateContracts(unittest.TestCase):
         self.assertIn('    permissions:\n      contents: read\n      actions: read\n      pull-requests: read\n', reuse)
         self.assertNotIn(': write', workflow)
         self.assertIn('python3 -I scripts/ci-reuse.py', reuse)
-        for key in ('gates', 'windows', 'windows-release-journey'):
+        self.assertIn("    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (", jobs['gates'])
+        self.assertIn('    needs: [reuse, gates-build]\n', jobs['gates'])
+        # TSK-1242, TSK-1321: the jobs a line pull request drops also follow
+        # the tier, and still follow the reuse decision.
+        for key in ('gates-coverage', 'windows-build', 'windows', 'windows-release-journey'):
             with self.subTest(job=key):
-                self.assertIn("    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (", jobs[key])
-                self.assertIn('    needs: [reuse, gates-build]\n' if key == 'gates' else '    needs: reuse\n', jobs[key])
-        # TSK-1242: the build also follows the tier, and still follows the reuse decision.
-        self.assertIn("    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (", jobs['windows-build'])
-        self.assertIn('    needs: [reuse, windows-tier]\n', jobs['windows-build'])
+                self.assertIn("    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && "
+                              "needs.reuse.outputs.run == '' && (", jobs[key])
+                self.assertIn('    needs: [reuse, windows-tier]\n', jobs[key])
         self.assertIn("needs.windows-build.result == 'success'", jobs['windows-tests'])
         self.assertIn("needs.windows-tests.result != 'skipped'", jobs['windows-journeys'])
 
@@ -229,7 +230,7 @@ class GateContracts(unittest.TestCase):
         self.assertIn("contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref)", condition)
         for event in ("github.event_name == 'schedule'", "github.event_name == 'workflow_dispatch'"):
             self.assertIn(event, condition)
-        self.assertIn('    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n',
+        self.assertIn('    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n',
                       jobs['gates-verdict'])
         # The local full gate keeps them: the test config still gives them a
         # full mode, since a schedule tier would change the adopter schema.

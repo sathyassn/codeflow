@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Controls for the Windows tier and verdict steps (TSK-1321 AC-3 to AC-5).
+"""Controls for the tier and both verdict steps (TSK-1321 AC-3 to AC-5, AC-8).
 
-Both steps live in .github/workflows/codeflow-ci.yml, and these tests run
-them as the runner does: the tier step in bash with the event and base GitHub
-gives it, the verdict step in Python on the `needs` results GitHub would give
-it.
+The steps live in .github/workflows/codeflow-ci.yml, and these tests run them
+as the runner does: the tier step and the `codeflow gates` verdict in bash
+with the values GitHub gives them, the `windows` verdict in Python on the
+`needs` results GitHub would give it.
 scripts/gate-parity.py pins both jobs, so the text tested here is the text
 that runs.
 """
@@ -52,6 +52,7 @@ def step(job: str, name: str) -> tuple[dict[str, str], str]:
 
 TIER_ENV, TIER_SCRIPT = step("windows-tier", "Choose the Windows tier")
 VERDICT_ENV, VERDICT_SCRIPT = step("windows-verdict", "Every Windows job the tier runs passed")
+GATES_ENV, GATES_SCRIPT = step("gates-verdict", "Every part of the full gate passed")
 BASH = shutil.which("bash")
 
 
@@ -132,10 +133,11 @@ def needs(**results):
 
 FULL_PUSH = dict(reuse=("success", {"run": ""}), windows_tier="skipped", windows="success",
                  windows_build="success", windows_tests="success", windows_journeys=("success", {"missing": ""}),
-                 windows_release_journey="success", windows_tier_journeys="skipped")
-REDUCED_PR = dict(reuse="skipped", windows_tier=("success", {"tier": "reduced"}), windows="success",
+                 windows_release_journey="success")
+# The operator's decision of 2026-11-05: a pull request into a line runs no Windows job.
+REDUCED_PR = dict(reuse="skipped", windows_tier=("success", {"tier": "reduced"}), windows="skipped",
                   windows_build="skipped", windows_tests="skipped", windows_journeys="skipped",
-                  windows_release_journey="success", windows_tier_journeys="success")
+                  windows_release_journey="skipped")
 
 
 class VerdictTests(unittest.TestCase):
@@ -162,49 +164,47 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("every Windows job passed", out)
 
-    def test_the_reduced_tier_passes_on_a_pull_request_into_a_line(self):
+    def test_the_reduced_tier_passes_on_a_pull_request_into_a_line_with_windows_not_selected(self):
         code, out = self.verdict(REDUCED_PR, event="pull_request", base="integration/EPC-022-fixes")
         self.assertEqual(code, 0, out)
-        self.assertIn("This is not full Windows evidence", out)
+        self.assertIn("Windows was not selected", out)
+        self.assertIn("This is not Windows evidence", out)
 
-    def test_any_other_outcome_of_a_job_the_reduced_tier_keeps_is_refused(self):
-        for job in ("windows", "windows_release_journey", "windows_tier_journeys"):
-            for state in ("skipped", "failure", "cancelled"):
+    def test_any_windows_job_that_runs_under_the_reduced_tier_is_refused(self):
+        for job in ("windows", "windows_build", "windows_tests", "windows_journeys", "windows_release_journey"):
+            for state in ("success", "failure", "cancelled"):
                 with self.subTest(job=job, state=state):
                     code, out = self.verdict({**REDUCED_PR, job: state}, "pull_request", "integration/x")
                     self.assertEqual(code, 1)
-                    self.assertNotIn("not full Windows evidence", out)
+                    self.assertIn("the tier declares it skipped", out)
+                    self.assertNotIn("not selected", out)
 
-    def test_a_missing_tier_on_a_skipped_build_is_refused(self):
-        code, out = self.verdict({**REDUCED_PR, "windows_tier": ("success", {"tier": ""}),
-                                  "windows_tier_journeys": "skipped"}, "pull_request", "integration/x")
+    def test_a_missing_tier_on_skipped_jobs_is_refused(self):
+        code, out = self.verdict({**REDUCED_PR, "windows_tier": ("success", {"tier": ""})}, "pull_request",
+                                 "integration/x")
         self.assertEqual(code, 1)
-        self.assertIn("windows test build concluded skipped; the full tier runs it", out)
+        self.assertIn("the Windows gates did not run", out)
 
     def test_a_red_checks_job_is_named_as_the_checks(self):
-        for results, event, base in ((FULL_PUSH, "push", ""), (REDUCED_PR, "pull_request", "integration/x")):
-            with self.subTest(event=event):
-                code, out = self.verdict({**results, "windows": "failure"}, event, base)
-                self.assertEqual(code, 1)
-                self.assertIn("::error::windows checks concluded failure", out)
-                self.assertNotIn("reduced tier is only", out)
+        code, out = self.verdict({**FULL_PUSH, "windows": "failure"})
+        self.assertEqual(code, 1)
+        self.assertIn("::error::windows checks concluded failure", out)
+        self.assertNotIn("reduced tier is only", out)
 
     def test_an_undeclared_skip_fails_and_is_named(self):
         code, out = self.verdict({**FULL_PUSH, "windows_tests": "skipped"})
         self.assertEqual(code, 1)
         self.assertIn("windows tests concluded skipped; the full tier runs it", out)
-        code, out = self.verdict({**REDUCED_PR, "windows_release_journey": "skipped"}, "pull_request",
-                                 "integration/x")
+        pull = {**FULL_PUSH, "reuse": "skipped", "windows_tier": ("success", {"tier": "full"}),
+                "windows_release_journey": "skipped"}
+        code, out = self.verdict(pull, "pull_request", "main")
         self.assertEqual(code, 1)
-        self.assertIn("windows release journey concluded skipped; the reduced tier runs it", out)
+        self.assertIn("windows release journey concluded skipped; the full tier runs it", out)
 
     def test_a_job_the_tier_skips_that_ran_fails(self):
         code, out = self.verdict({**REDUCED_PR, "windows_build": "success"}, "pull_request", "integration/x")
         self.assertEqual(code, 1)
         self.assertIn("windows test build concluded success; the tier declares it skipped", out)
-        code, out = self.verdict({**FULL_PUSH, "windows_tier_journeys": "success"})
-        self.assertEqual(code, 1)
-        self.assertIn("windows tier journeys concluded success; the tier declares it skipped", out)
 
     def test_a_cancelled_partition_is_named_with_its_missing_report(self):
         code, out = self.verdict({**FULL_PUSH, "windows_tests": "cancelled",
@@ -256,6 +256,68 @@ class VerdictTests(unittest.TestCase):
                                  "feature/x")
         self.assertEqual(code, 1)
         self.assertIn("the Windows gates did not run", out)
+
+
+@unittest.skipIf(BASH is None or os.name == "nt", "the verdict step runs in Linux bash")
+class GatesVerdictTests(unittest.TestCase):
+    """AC-8: `codeflow gates` passes a pull request into a line on its short
+    checks with Linux coverage not selected, and only there."""
+
+    FULL = {"PARTS": "success", "RELEASE": "skipped", "SHARDS": "success", "REPORT": "success",
+            "REUSE": "skipped", "REUSED": "", "TIER": "full", "EVENT": "pull_request", "BASE": "main"}
+    LINE = {**FULL, "SHARDS": "skipped", "REPORT": "skipped", "TIER": "reduced", "BASE": "integration/x"}
+
+    def verdict(self, values: dict):
+        with tempfile.TemporaryDirectory() as folder:
+            summary = Path(folder) / "summary"
+            env = {"PATH": os.environ["PATH"], "HOME": folder, "GITHUB_SHA": "a" * 40,
+                   "GITHUB_STEP_SUMMARY": str(summary), "GITHUB_SERVER_URL": "https://github.com",
+                   "GITHUB_REPOSITORY": "sathyassn/codeflow", **values}
+            done = subprocess.run([BASH, "--noprofile", "--norc", "-eo", "pipefail", "-c", GATES_SCRIPT], cwd=folder,
+                                  env=env, capture_output=True, text=True)
+            return done.returncode, done.stdout + done.stderr
+
+    def test_the_step_reads_the_tier_event_and_base_from_github(self):
+        self.assertEqual(GATES_ENV["TIER"], "${{ needs.windows-tier.outputs.tier }}")
+        self.assertEqual(GATES_ENV["EVENT"], "${{ github.event_name }}")
+        self.assertEqual(GATES_ENV["BASE"], "${{ github.event.pull_request.base.ref }}")
+
+    def test_a_line_pull_request_passes_on_its_short_checks_with_coverage_not_selected(self):
+        code, out = self.verdict(self.LINE)
+        self.assertEqual(code, 0, out)
+        self.assertIn("Linux coverage was not selected", out)
+        self.assertIn("This is not full gate evidence", out)
+
+    def test_the_full_tier_still_needs_every_part(self):
+        self.assertEqual(self.verdict(self.FULL)[0], 0)
+        for key in ("PARTS", "SHARDS", "REPORT"):
+            for state in ("skipped", "failure", "cancelled"):
+                with self.subTest(key=key, state=state):
+                    code, out = self.verdict({**self.FULL, key: state})
+                    self.assertEqual(code, 1, out)
+
+    def test_the_reduced_tier_is_refused_outside_a_pull_request_into_a_line(self):
+        for event, base in (("push", ""), ("pull_request", "main"), ("pull_request", "feature/x"),
+                            ("schedule", ""), ("pull_request", "integration/"), ("", "")):
+            with self.subTest(event=event, base=base):
+                code, out = self.verdict({**self.LINE, "EVENT": event, "BASE": base})
+                self.assertEqual(code, 1, out)
+                self.assertIn("the reduced tier is only for a pull request into an integration line", out)
+
+    def test_a_reduced_run_with_a_red_part_or_a_coverage_job_that_ran_is_refused(self):
+        for key, state in (("PARTS", "failure"), ("PARTS", "skipped"), ("SHARDS", "success"),
+                           ("REPORT", "failure"), ("RELEASE", "success")):
+            with self.subTest(key=key, state=state):
+                code, out = self.verdict({**self.LINE, key: state})
+                self.assertEqual(code, 1, out)
+                self.assertNotIn("not selected", out)
+
+    def test_an_unreadable_tier_takes_the_full_rule(self):
+        for tier in ("", "full", "REDUCED", "reduced "):
+            with self.subTest(tier=tier):
+                code, out = self.verdict({**self.LINE, "TIER": tier})
+                self.assertEqual(code, 1, out)
+                self.assertNotIn("not selected", out)
 
 
 if __name__ == "__main__":
