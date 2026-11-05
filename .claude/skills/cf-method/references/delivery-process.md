@@ -72,9 +72,10 @@ Where a task lands follows one rule (CodeFlow ADR-0098). A task PR targets `main
 when a human can merge it as it becomes ready. Otherwise it targets its
 epic's line, agents merge it there in a batch, and a checkpoint PR from the
 line to `main` is opened, or refreshed, at every green line tip for a human
-to merge when available. Each task or epic record changes only on its own
-epic's line or on `main`, and a line takes `main` only through the sync
-route `codeflow ci` admits (TSK-1312).
+to merge when available. Each task or epic record changes only in its one
+home: its own epic's line, or `main` for a record homed there. A line takes
+`main` only through the sync route `codeflow ci` admits (TSK-1312), which
+never changes a record homed on the line.
 
 ## 2. From a spec to an epic and tasks
 

@@ -35,9 +35,12 @@ merge reviewed tasks in batches without waiting for a human, and the line
 reaches `main` through a checkpoint pull request that a human merges when
 available. A checkpoint pull request from the line to `main` is opened, or
 refreshed, at every green line tip; the last one carries the epic close.
-Each task or epic record changes only on its own epic's line or on `main`.
-A line takes `main` only through the admitted sync route that `codeflow ci`
-judges (TSK-1312), never through a merge that needs a task of its own. The
+Each task or epic record has one home, its own epic's line or, for a
+record homed there, `main`, and changes only there. A line takes `main`
+only through the admitted sync route that `codeflow ci` judges (TSK-1312),
+never through a merge that needs a task of its own. That sync takes
+`main`'s version only of records homed on `main` and never changes a record
+homed on the line. The
 other landing rules stand: one pull request per task, batched candidates
 with one full gate, and only a human merges into `main`.
 

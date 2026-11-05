@@ -155,7 +155,8 @@ land on a shared, non-protected **integration branch** (the epic line), where
 agents merge reviewed tasks in batches, and the line reaches `main` through a
 **checkpoint PR** that a human merges when available. A checkpoint PR is
 opened, or refreshed, at every green line tip. Each task or epic record
-changes only on its own epic's line or on `main`. Every other gate (commit
+changes only in its one home: its own epic's line, or `main` for a record
+homed there. Every other gate (commit
 standards, secret scan, destructive-op rules, the test gate) still applies on
 every branch. Each task's `integration_target` records that choice. The
 branch holds one coherent
@@ -208,7 +209,8 @@ waive the clarity, safety, review or protected-branch conditions.
    environment defect is fixed at its owner and the same candidate regated.
 5. **Drift control:** a line takes `main` only by **merging** `origin/main`
    *into* the integration branch, through the sync route `codeflow ci`
-   admits (TSK-1312). Merge only: never rebase a shared branch; rebase only
+   admits (TSK-1312); that sync never changes a record homed on the line.
+   Merge only: never rebase a shared branch; rebase only
    task branches.
 6. **Finish once.** After the last batch lands, prove the epic once on the
    integration branch (the full gate over everything, `validate --docs`, the

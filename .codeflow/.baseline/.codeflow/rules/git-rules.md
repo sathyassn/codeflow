@@ -121,9 +121,10 @@ and integration"). A red candidate is
 diagnosed first, and a member and its dependents leave it only when
 evidence attributes the failure to it. At every green line tip a
 checkpoint PR from the line to `main` is opened or refreshed, and a human
-merges it when available. Each task or epic record changes only on its
-own epic's line or on `main`, and a line takes `main` only by merging it
-in through the sync route `codeflow ci` admits. See cf-method, "Managing a
+merges it when available. Each task or epic record changes only in its
+one home: its own epic's line, or `main` for a record homed there. A line
+takes `main` only by merging it in through the sync route `codeflow ci`
+admits, which never changes a record homed on the line. See cf-method, "Managing a
 body of work" (standard and full tiers), and CodeFlow ADR-0098.
 
 Direct commits on an epic line are refused at push. `codeflow ci` refuses

@@ -671,7 +671,7 @@
     ".agents/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "1ff0caacf28f594d04773d526177321059080f071c78cb9eea25392a382c04d0",
+      "sha256": "c4b0454330d2624019cf98f4688d683ceb733689885e8130b5b5a6cda9452ce3",
       "exec": false
     },
     ".agents/skills/cf-method/references/autonomy.md": {
@@ -683,7 +683,7 @@
     ".agents/skills/cf-method/references/delivery-process.md": {
       "src": "claude/skills/cf-method/references/delivery-process.md",
       "ownership": "managed",
-      "sha256": "9e405290f53840f43ae13b66adf96f6a33c9e108790a9062f55a7e390180074d",
+      "sha256": "b4be3fd97921d7b15f02e40e635a51a7698e7e776aa5e0b5d41475bf3d5ea074",
       "exec": false
     },
     ".agents/skills/cf-method/references/issue-handling.md": {
@@ -695,7 +695,7 @@
     ".agents/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "d2ef2b92c40e45673ba31af615b41d0948e1cc4f4c44e5ac55c3dbd0ac905181",
+      "sha256": "7b3d6fb5c092b393c010674374feb50b5d544c2f0744beb4d31aad659d6d265b",
       "exec": false
     },
     ".agents/skills/cf-method/references/skill-authoring.md": {
@@ -1313,7 +1313,7 @@
     ".agents/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "869933bf7ff33f2180f7f46f465d205d6e3f9e8e49de5f35fbc0e60064fb24d7",
+      "sha256": "9c32078ceddec3623373d8a6268cbe1f69450c444638de0061e28a6f32ce0a69",
       "exec": false
     },
     ".agents/skills/cf-ship/references/pr-checks.md": {
@@ -2033,7 +2033,7 @@
     ".claude/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "1ff0caacf28f594d04773d526177321059080f071c78cb9eea25392a382c04d0",
+      "sha256": "c4b0454330d2624019cf98f4688d683ceb733689885e8130b5b5a6cda9452ce3",
       "exec": false
     },
     ".claude/skills/cf-method/references/autonomy.md": {
@@ -2045,7 +2045,7 @@
     ".claude/skills/cf-method/references/delivery-process.md": {
       "src": "claude/skills/cf-method/references/delivery-process.md",
       "ownership": "managed",
-      "sha256": "9e405290f53840f43ae13b66adf96f6a33c9e108790a9062f55a7e390180074d",
+      "sha256": "b4be3fd97921d7b15f02e40e635a51a7698e7e776aa5e0b5d41475bf3d5ea074",
       "exec": false
     },
     ".claude/skills/cf-method/references/issue-handling.md": {
@@ -2057,7 +2057,7 @@
     ".claude/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "d2ef2b92c40e45673ba31af615b41d0948e1cc4f4c44e5ac55c3dbd0ac905181",
+      "sha256": "7b3d6fb5c092b393c010674374feb50b5d544c2f0744beb4d31aad659d6d265b",
       "exec": false
     },
     ".claude/skills/cf-method/references/skill-authoring.md": {
@@ -2675,7 +2675,7 @@
     ".claude/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "869933bf7ff33f2180f7f46f465d205d6e3f9e8e49de5f35fbc0e60064fb24d7",
+      "sha256": "9c32078ceddec3623373d8a6268cbe1f69450c444638de0061e28a6f32ce0a69",
       "exec": false
     },
     ".claude/skills/cf-ship/references/pr-checks.md": {
@@ -2759,7 +2759,7 @@
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "4a6fcf5434aafa0441910b58755da17a0fec8d7e98f540d2455d4930e6ee576b",
+      "sha256": "d24a6ef41ee5fd65ce4634bcac97b2ee841a23aa24b6a8f4544413eb29ecfc52",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
@@ -2879,7 +2879,7 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "0ee7a8fa00107c901a8245769bfcc9b946d66122fab24d29afcee59160784b21",
+      "sha256": "c7738b7fec16d261535ff1fd25095a827cb4377425e49b4e12cbde32dd4b61c9",
       "exec": false
     },
     "CLAUDE.md": {

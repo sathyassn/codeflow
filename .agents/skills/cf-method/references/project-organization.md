@@ -422,7 +422,8 @@ task targets the protected branch when a human can merge it as it becomes
 ready; any other epic task lands in gated batch candidates on its integration branch, and
 the line reaches the protected branch through a checkpoint pull request at
 every green tip (CodeFlow ADR-0098; cf-method "Managing a body of work"). A record
-changes only on its own epic's line or on the protected branch.
+changes only in its one home: its own epic's line, or the protected branch
+for a record homed there.
 
 ### Acceptance waivers and redactions
 
