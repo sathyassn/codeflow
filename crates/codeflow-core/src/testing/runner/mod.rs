@@ -1735,17 +1735,56 @@ mod tests {
         assert!(!result.termination_unconfirmed, "{result:?}");
     }
 
+    /// The environment variable that makes [`cpu_spin_stand_in`] spin, in
+    /// milliseconds. Without it the stand-in returns at once.
+    #[cfg(windows)]
+    const CPU_SPIN_MS_VAR: &str = "CODEFLOW_TEST_CPU_SPIN_MS";
+
+    /// Not a test on its own: the CPU-busy target that
+    /// [`cpu_work_without_output_can_outlast_the_stall_window`] starts on
+    /// Windows. It spins without output for the time [`CPU_SPIN_MS_VAR`]
+    /// names, and returns at once when that variable is unset, as in a
+    /// normal test run.
+    #[cfg(windows)]
+    #[test]
+    fn cpu_spin_stand_in() {
+        let Some(millis) = std::env::var(CPU_SPIN_MS_VAR)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+        else {
+            return;
+        };
+        let end = std::time::Instant::now() + Duration::from_millis(millis);
+        let mut x = 0_u64;
+        while std::time::Instant::now() < end {
+            x = std::hint::black_box(x.wrapping_mul(13).wrapping_add(17));
+        }
+    }
+
+    /// CPU use refreshes the stall window. On Windows the CPU work runs in
+    /// this test binary through `cmd.exe` (TSK-1318 AC-8): Windows
+    /// `PowerShell` can sit for a second or more with no CPU while it starts
+    /// or exits on a busy runner, which a one-second window rightly reports
+    /// as a stall.
     #[test]
     fn cpu_work_without_output_can_outlast_the_stall_window() {
-        let command = if cfg!(windows) {
-            "$end = [DateTime]::UtcNow.AddSeconds(2); while ([DateTime]::UtcNow -lt $end) { $x = 13 * 17 }"
-        } else {
-            "python3 -c 'import time; end=time.monotonic()+2; exec(\"while time.monotonic()<end: pass\")'"
+        #[cfg(windows)]
+        let mut target = {
+            let command = format!(
+                "\"{}\" --exact testing::runner::tests::cpu_spin_stand_in --nocapture",
+                std::env::current_exe().unwrap().display()
+            );
+            let mut target = make_target("computing", &command);
+            target.shell = CommandShell::Cmd;
+            // Three windows of silent CPU work, inside the 8 s ceiling.
+            target.env.insert(CPU_SPIN_MS_VAR.into(), "3000".into());
+            target
         };
-        let mut target = make_target("computing", command);
-        if cfg!(windows) {
-            target.shell = CommandShell::Powershell;
-        }
+        #[cfg(not(windows))]
+        let mut target = make_target(
+            "computing",
+            "python3 -c 'import time; end=time.monotonic()+2; exec(\"while time.monotonic()<end: pass\")'",
+        );
         target.heavy = Some(true);
         target.timeout_seconds = Some(2);
         target.stall_timeout_seconds = Some(1);
