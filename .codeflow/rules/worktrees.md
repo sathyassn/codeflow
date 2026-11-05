@@ -57,11 +57,18 @@ delete mutation, make three ordered work-start assertions:
    worktree after the currency check; do no task edits there, then rerun all
    three assertions inside the new worktree. Absence alone never authorizes
    repair.
-3. **CURRENCY:** fetch, then check the base against the repository's
-   configured target branch (normally `origin/main` or `origin/master`, or
-   the task's integration target). New work starts in a fresh worktree off
-   its current tip; build on an older base only when the task explicitly pins
-   it.
+3. **CURRENCY:** `codeflow work claim <id>` fetches and selects the live
+   tip holding the needed work: the task's target, or a predecessor's line
+   when its completed work has not reached the target. Two unmerged source
+   lines require line sync first. An unlanded predecessor uses its exact
+   reviewed head with `--on TSK-NNN@<sha>`. The claim records its base and
+   source in Git. `work start` fetches and refuses a HEAD missing that base;
+   a source advancing after the claim does not revoke it. An explicit new
+   reviewed pin renews only a reviewed claim after current review, ancestry
+   and planning checks pass and Git records the new base. Without claim
+   metadata, start requires the base selected from the current fetched refs.
+   A failed fetch refuses admission. Before review, merge the target's current
+   tip into the task branch; `codeflow ci` warns until it is contained.
 
 Work claims count local branches, branches on `origin` when configured, and
 branches on the target's fetch remote. Other remote branches are reported as

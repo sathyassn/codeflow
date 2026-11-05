@@ -1,6 +1,6 @@
 //! Durable-work commands: `work next`, `work claim` and `work start`. All three
-//! read the one readiness core (SPC-013 R-40, R-110); only `work claim`
-//! writes, and what it writes is a branch. `work status` is the recovery
+//! read the one readiness core (SPC-013 R-40, R-110). Claim and start fetch;
+//! claim also writes a branch and its fixed base evidence. `work status` is the recovery
 //! inventory: per task, the worktrees holding work found nowhere else.
 
 use std::fmt::Write as _;
@@ -35,9 +35,10 @@ pub enum WorkCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Fetch, check the task is ready and unclaimed on its target tip, then
-    /// create and push `task/<id>-<slug>` from that tip. The pushed branch is
-    /// an advisory mark others can see.
+    /// Fetch, choose the live target tip or the single line holding a completed
+    /// predecessor the target has not received, then create and push
+    /// `task/<id>-<slug>` from that base. The pushed branch is an advisory mark
+    /// others can see.
     Claim {
         /// Stable task id.
         task_id: String,
@@ -45,7 +46,7 @@ pub enum WorkCommand {
         #[arg(long, value_name = "TSK-NNN@SHA")]
         on: Vec<String>,
     },
-    /// Verify that a durable task was planned and anchored before implementation.
+    /// Fetch, verify planning, and require HEAD to contain its recorded claim base or the current selected base.
     Start {
         /// Stable task id.
         task_id: String,
@@ -397,6 +398,12 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
                 "work claim: {task_id} -> {} from {}",
                 claim.branch, claim.from
             );
+            if !claim.omitted_words.is_empty() {
+                println!(
+                    "  {}",
+                    codeflow_core::workgraph::light_paths::omitted_words_note(&claim.omitted_words)
+                );
+            }
             for information in &claim.informational_branches {
                 println!("  {}", codeflow_core::git::display_output(information));
             }
@@ -455,6 +462,13 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
             return 2;
         }
     };
+    // Missing live base evidence blocks even at the project's warning level.
+    // Fetch before resolving pins, as `work claim` does, so a replacement pin
+    // is judged against the pushed predecessor head.
+    if let Err(error) = readiness::refresh_claim(&root, task_id) {
+        eprintln!("work start: error: {}", crate::cmd::shown(&error));
+        return 1;
+    }
     // Explicit review evidence is required even when planning findings warn.
     // Keep verification failures outside the policy-controlled findings.
     let pins = match resolve_pins(&root, on) {
@@ -468,13 +482,33 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
         }
     };
     let level = policy.git.work_planning_level();
-    let Err(findings) = plan_check(&root, task_id, target, &pins) else {
-        return 0;
+    let findings = match plan_check(&root, task_id, target, &pins) {
+        Ok(verified) => {
+            match codeflow_core::workgraph::claim_base::renew_reviewed(
+                &root,
+                task_id,
+                &verified.branch,
+                &verified.target,
+                &pins,
+            ) {
+                Ok(Some(note)) => println!("  {}", crate::cmd::shown(&note)),
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!(
+                        "work start: error: recording reviewed claim base failed: {}",
+                        crate::cmd::shown(&error)
+                    );
+                    return 1;
+                }
+            }
+            return 0;
+        }
+        Err(findings) => findings,
     };
     let warn = level == PolicyLevel::Warn;
     let label = if warn { "warning" } else { "error" };
     for finding in &findings {
-        eprintln!("work start: {label}: {finding}");
+        eprintln!("work start: {label}: {}", crate::cmd::shown(finding));
     }
     if warn {
         eprintln!(
@@ -486,6 +520,13 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
     }
 }
 
+/// The branch and target that passed `plan_check`, which `work start` uses
+/// to renew a reviewed claim base.
+struct VerifiedClaim {
+    branch: String,
+    target: String,
+}
+
 /// The planning checks behind `work start`: the anchor report printed on
 /// success, or every finding.
 fn plan_check(
@@ -493,7 +534,7 @@ fn plan_check(
     task_id: &str,
     target: Option<&str>,
     pins: &[ReviewedPin],
-) -> Result<(), Vec<String>> {
+) -> Result<VerifiedClaim, Vec<String>> {
     let workgraph = validate_workgraph(root);
     if !workgraph.is_clean() {
         let mut findings = workgraph.issues;
@@ -516,6 +557,9 @@ fn plan_check(
         "work start: {} anchored at {} for {} -> {}",
         report.task_id, report.merge_base, report.branch, report.target
     );
+    if let Some(note) = report.base_note {
+        println!("  {}", crate::cmd::shown(&note));
+    }
     if let Some(epic) = report.epic_id {
         println!("  epic: {epic}");
     } else {
@@ -538,7 +582,10 @@ fn plan_check(
             error = crate::cmd::shown(&error)
         ),
     }
-    Ok(())
+    Ok(VerifiedClaim {
+        branch: report.branch,
+        target: report.target,
+    })
 }
 
 fn resolve_pins(

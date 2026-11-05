@@ -1159,6 +1159,7 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
         ".github/workflows/release-main-recheck.yml", ".github/workflows/release-plan-authority.yml",
         ".github/workflows/release-post-announce.yml",
         ".github/workflows/windows-daily.yml", ".github/workflows/windows-daily-run.yml",
+        ".github/workflows/windows-daily-verdict.yml",
     }
     SHIPPED = {"assets/base/ci/codeflow-ci.yml", "assets/base/ci/codeflow-policy.yml",
                "assets/base/ci/codeflow-registry.yml"}

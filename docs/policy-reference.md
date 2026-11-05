@@ -37,6 +37,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.claim_remotes` | string list | `[]` | an array of configured remote names, none starting with a dash | Additional remotes whose branches count as advisory work claims. | Origin and the target's fetch remote always count. Empty by default; other remote branches are reported as information. Named remotes must be configured when work claim lists their branches. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.candidate_prefix` | string | `candidate/` | a branch name prefix ending in /, such as candidate/ | The name prefix of landing candidate branches that `codeflow work remove-candidate` may remove. | Default candidate/. A protected branch is never removed, whatever its name. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.candidate_search_depth` | uint | `200` | a positive number of commits | How many commits of the line's first-parent history `codeflow work remove-candidate` searches for the candidate's tree. | Default 200. A tree older than the depth is not found, so the removal is refused. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.branch_name_omit_words` | string list | `["secret","credentials"]` | an array of words of lower-case letters and digits | Words that work claim and epic new --integration leave out of a generated branch name. | A loose ref is a file named after its branch, and a sandbox can refuse to read a file by its name; git then reports that ref as broken. An entry matches anywhere inside a title word. The default holds the words the Claude Code sandbox was probed to refuse; set the list your harness needs, or an empty list to keep every word. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.required_checks` | string list | `["codeflow gates","secret scan","security review","trusted: commit standards"]` | a non-empty array of status check names, none blank | Status checks a protected branch requires before merging, on a branch that is up to date with its base. | Defaults to the shipped CI job names: codeflow gates, secret scan, security review and trusted: commit standards. `codeflow remote protect` requires them, on an up-to-date branch, on each protected branch other than the default branch, whose own rulesets require the names its policy workflow declares; `codeflow doctor --check remote-perimeter` warns when the default branch's live rules do not require them. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.commit_format` | Level | `block` | off \| warn \| allow \| block | Conventional-commit subject shape: `type(scope): description`. | Governs three checks: commit_types, commit_desc_max_len, and commit_subject_max_len; off/allow disables all of them. |
 | `git.commit_types` | string list | `["feat","fix","docs","refactor","test","chore","ci","perf","build","revert"]` | an array of lower-case conventional commit types | The whitelist of commit types. | Enforced under commit_format. |
@@ -892,6 +893,42 @@ task PR.
 
 The hosted `codeflow-policy.yml` job passes no `--policy-from`, so it
 judges against the pull request's target only.
+
+## An epic's parent line
+
+`codeflow ci` and the pre-push hook bind an epic line
+`integration/EPC-NNN-<slug>` to a task of its own epic, or to a task of an
+epic whose record declares `parent_line: integration/EPC-NNN-<slug>`, the
+line's exact name (TSK-1286, `work.epic_line`):
+
+- The declaration is read only from the trusted records: the protected
+  branch's tip and the line's fetched `origin/<line>` tip. A `parent_line`
+  added in the pushed head binds nothing, and a head that changes or
+  removes a trusted declaration is refused.
+- One level only: `parent_line` names the anchor epic's own line, and the
+  anchor epic declares no `parent_line` of its own. When it does:
+  - A task of a declaring epic is refused at every trusted anchor.
+  - Once that anchor also holds a declaring epic's task targeting the
+    line, the whole line refuses: its own epic's tasks, standalone tasks,
+    the line-tip check, the line's proof to `main` and the receiving line
+    `codeflow task status` picks. It stays refused until a planning pull
+    request removes the chain or the declaring tasks.
+
+  Each refusal names the cause:
+
+  ```text
+  EPC-001, the epic of 'integration/EPC-001-anchor', itself declares parent_line 'integration/EPC-009-elsewhere' on <place>; one level only, so no other epic's parent_line binds this line
+  ```
+- A declaring epic that is cancelled or archived at any anchor refuses, as
+  does a `parent_line` on a task record.
+
+When no task on the line belongs to a bound epic, the run refuses the
+head as the line's next tip, and its message ends with the cause, for
+example:
+
+```text
+'integration/EPC-001-anchor' is not the target of any task of EPC-001 on 'origin/integration/EPC-001-anchor', nor of a task of an epic declaring parent_line 'integration/EPC-001-anchor' there, so it is not a bound epic line
+```
 
 ## Destination lookup failures
 

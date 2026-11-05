@@ -20,6 +20,7 @@ macro_rules! eprintln {
     };
 }
 
+mod colour;
 pub mod output;
 
 #[cfg(test)]

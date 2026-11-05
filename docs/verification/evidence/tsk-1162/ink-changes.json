@@ -1,0 +1,1272 @@
+{
+  "changes": [
+    {
+      "pair": "graphite-light",
+      "role": "fig-cat2",
+      "old": "#722756",
+      "new": "#5e052c",
+      "delta": 10.233954716448554,
+      "worst": {
+        "beforeNormal": {
+          "other": "fig-accent",
+          "accent": "plum",
+          "simulation": "normal",
+          "distance": 10.416543359696334
+        },
+        "afterNormal": {
+          "other": "fig-accent",
+          "accent": "plum",
+          "simulation": "normal",
+          "distance": 20.28493482125276
+        },
+        "beforeSimulated": {
+          "other": "fig-accent",
+          "accent": "plum",
+          "simulation": "tritan",
+          "distance": 8.69268470486404
+        },
+        "afterSimulated": {
+          "other": "fig-line",
+          "accent": "green",
+          "simulation": "deutan",
+          "distance": 5.660240119527574
+        }
+      }
+    },
+    {
+      "pair": "graphite-dark",
+      "role": "fig-line",
+      "old": "#d4d4d4",
+      "new": "#d6d6d6",
+      "delta": 0.46806012638452466,
+      "worst": {
+        "beforeNormal": {
+          "other": "fig-cat1",
+          "accent": "green",
+          "simulation": "normal",
+          "distance": 20.726848042405642
+        },
+        "afterNormal": {
+          "other": "fig-cat1",
+          "accent": "green",
+          "simulation": "normal",
+          "distance": 20.858919757348186
+        },
+        "beforeSimulated": {
+          "other": "fig-accent",
+          "accent": "green",
+          "simulation": "protan",
+          "distance": 4.797269743603221
+        },
+        "afterSimulated": {
+          "other": "fig-accent",
+          "accent": "green",
+          "simulation": "protan",
+          "distance": 5.244760057185997
+        }
+      }
+    },
+    {
+      "pair": "graphite-dark",
+      "role": "fig-cat2",
+      "old": "#cf82ae",
+      "new": "#b58e87",
+      "delta": 17.39897856866707,
+      "worst": {
+        "beforeNormal": {
+          "other": "fig-accent",
+          "accent": "plum",
+          "simulation": "normal",
+          "distance": 6.229107331105785
+        },
+        "afterNormal": {
+          "other": "fig-stop",
+          "accent": "green",
+          "simulation": "normal",
+          "distance": 12.987274440871623
+        },
+        "beforeSimulated": {
+          "other": "fig-accent",
+          "accent": "plum",
+          "simulation": "protan",
+          "distance": 4.610019077215423
+        },
+        "afterSimulated": {
+          "other": "fig-accent",
+          "accent": "plum",
+          "simulation": "tritan",
+          "distance": 5.099664700788947
+        }
+      }
+    },
+    {
+      "pair": "slate-light",
+      "role": "fig-line",
+      "old": "#333d4a",
+      "new": "#313b48",
+      "delta": 0.6516955131928416,
+      "worst": {
+        "beforeNormal": {
+          "other": "fig-cat1",
+          "accent": "green",
+          "simulation": "normal",
+          "distance": 18.443264576079816
+        },
+        "afterNormal": {
+          "other": "fig-cat1",
+          "accent": "green",
+          "simulation": "normal",
+          "distance": 17.910494620387798
+        },
+        "beforeSimulated": {
+          "other": "fig-cat2",
+          "accent": "green",
+          "simulation": "deutan",
+          "distance": 4.581235443646836
+        },
+        "afterSimulated": {
+          "other": "fig-cat2",
+          "accent": "green",
+          "simulation": "deutan",
+          "distance": 5.20906016151049
+        }
+      }
+    },
+    {
+      "pair": "slate-light",
+      "role": "fig-cat1",
+      "old": "#3860ac",
+      "new": "#23629a",
+      "delta": 5.045406377983068,
+      "worst": {
+        "beforeNormal": {
+          "other": "fig-accent",
+          "accent": "violet",
+          "simulation": "normal",
+          "distance": 15.59702718235152
+        },
+        "afterNormal": {
+          "other": "fig-line",
+          "accent": "green",
+          "simulation": "normal",
+          "distance": 17.910494620387798
+        },
+        "beforeSimulated": {
+          "other": "fig-accent",
+          "accent": "violet",
+          "simulation": "protan",
+          "distance": 4.043064240706948
+        },
+        "afterSimulated": {
+          "other": "fig-accent",
+          "accent": "green",
+          "simulation": "tritan",
+          "distance": 6.509536647584219
+        }
+      }
+    },
+    {
+      "pair": "slate-dark",
+      "role": "fig-cat1",
+      "old": "#9bbeff",
+      "new": "#8dc6fe",
+      "delta": 5.356549475539578,
+      "worst": {
+        "beforeNormal": {
+          "other": "fig-accent",
+          "accent": "violet",
+          "simulation": "normal",
+          "distance": 15.100224572672037
+        },
+        "afterNormal": {
+          "other": "fig-line",
+          "accent": "green",
+          "simulation": "normal",
+          "distance": 15.521466569210853
+        },
+        "beforeSimulated": {
+          "other": "fig-accent",
+          "accent": "violet",
+          "simulation": "deutan",
+          "distance": 5.152623345286316
+        },
+        "afterSimulated": {
+          "other": "fig-accent",
+          "accent": "violet",
+          "simulation": "deutan",
+          "distance": 5.957656960392182
+        }
+      }
+    },
+    {
+      "pair": "slate-dark",
+      "role": "fig-cat2",
+      "old": "#cf82ae",
+      "new": "#d677a3",
+      "delta": 3.6698553289254545,
+      "worst": {
+        "beforeNormal": {
+          "other": "fig-stop",
+          "accent": "green",
+          "simulation": "normal",
+          "distance": 14.806939307482756
+        },
+        "afterNormal": {
+          "other": "fig-stop",
+          "accent": "green",
+          "simulation": "normal",
+          "distance": 13.10824835553278
+        },
+        "beforeSimulated": {
+          "other": "fig-accent",
+          "accent": "green",
+          "simulation": "deutan",
+          "distance": 6.498164609911543
+        },
+        "afterSimulated": {
+          "other": "fig-stop",
+          "accent": "green",
+          "simulation": "tritan",
+          "distance": 5.157767953501645
+        }
+      }
+    },
+    {
+      "pair": "sage-light",
+      "role": "fig-cat2",
+      "old": "#722756",
+      "new": "#5b0d2a",
+      "delta": 10.84152113189624,
+      "worst": {
+        "beforeNormal": {
+          "other": "fig-accent",
+          "accent": "plum",
+          "simulation": "normal",
+          "distance": 10.416543359696334
+        },
+        "afterNormal": {
+          "other": "fig-accent",
+          "accent": "plum",
+          "simulation": "normal",
+          "distance": 20.91806688755715
+        },
+        "beforeSimulated": {
+          "other": "fig-accent",
+          "accent": "plum",
+          "simulation": "tritan",
+          "distance": 8.69268470486404
+        },
+        "afterSimulated": {
+          "other": "fig-line",
+          "accent": "green",
+          "simulation": "deutan",
+          "distance": 5.138021660241015
+        }
+      }
+    },
+    {
+      "pair": "sage-dark",
+      "role": "fig-cat2",
+      "old": "#cf82ae",
+      "new": "#bb8d86",
+      "delta": 16.836672776414428,
+      "worst": {
+        "beforeNormal": {
+          "other": "fig-accent",
+          "accent": "plum",
+          "simulation": "normal",
+          "distance": 6.229107331105785
+        },
+        "afterNormal": {
+          "other": "fig-stop",
+          "accent": "green",
+          "simulation": "normal",
+          "distance": 11.340498541756968
+        },
+        "beforeSimulated": {
+          "other": "fig-accent",
+          "accent": "plum",
+          "simulation": "protan",
+          "distance": 4.610019077215423
+        },
+        "afterSimulated": {
+          "other": "fig-stop",
+          "accent": "green",
+          "simulation": "protan",
+          "distance": 5.177958423781124
+        }
+      }
+    }
+  ],
+  "before": {
+    "worst": [
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-cat2",
+        "simulation": "normal",
+        "distance": 24.248047059449917
+      },
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-warn",
+        "second": "fig-stop",
+        "simulation": "protan",
+        "distance": 12.590126399842935
+      },
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-warn",
+        "second": "fig-stop",
+        "simulation": "deutan",
+        "distance": 5.296127887092992
+      },
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "tritan",
+        "distance": 8.135011330615693
+      },
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "normal",
+        "distance": 10.416543359696334
+      },
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "protan",
+        "distance": 8.306691801196164
+      },
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-warn",
+        "second": "fig-stop",
+        "simulation": "deutan",
+        "distance": 5.296127887092992
+      },
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "tritan",
+        "distance": 8.69268470486404
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "normal",
+        "distance": 18.76844679334916
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-accent",
+        "simulation": "protan",
+        "distance": 4.797269743603221
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "deutan",
+        "distance": 6.498164609911543
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "tritan",
+        "distance": 7.759413542162152
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "normal",
+        "distance": 6.229107331105785
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "protan",
+        "distance": 4.610019077215423
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "deutan",
+        "distance": 6.893392723825545
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "tritan",
+        "distance": 6.165799280965075
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-cat1",
+        "simulation": "normal",
+        "distance": 18.443264576079816
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-cat2",
+        "simulation": "protan",
+        "distance": 6.182297635626776
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-cat2",
+        "simulation": "deutan",
+        "distance": 4.581235443646836
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "tritan",
+        "distance": 8.135011330615693
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "violet",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "normal",
+        "distance": 15.59702718235152
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "violet",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "protan",
+        "distance": 4.043064240706948
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "violet",
+        "first": "fig-line",
+        "second": "fig-cat2",
+        "simulation": "deutan",
+        "distance": 4.581235443646836
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "violet",
+        "first": "fig-cat2",
+        "second": "fig-warn",
+        "simulation": "tritan",
+        "distance": 14.728811585225259
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "normal",
+        "distance": 14.806939307482756
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-accent",
+        "simulation": "protan",
+        "distance": 7.801971980692525
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "deutan",
+        "distance": 6.498164609911543
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "tritan",
+        "distance": 7.389005432457143
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "violet",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "normal",
+        "distance": 14.806939307482756
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "violet",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "protan",
+        "distance": 7.54307891186352
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "violet",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "deutan",
+        "distance": 5.152623345286316
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "violet",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "tritan",
+        "distance": 7.389005432457143
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-accent",
+        "simulation": "normal",
+        "distance": 23.030685223652036
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-warn",
+        "second": "fig-stop",
+        "simulation": "protan",
+        "distance": 12.590126399842935
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-warn",
+        "second": "fig-stop",
+        "simulation": "deutan",
+        "distance": 5.296127887092992
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "tritan",
+        "distance": 8.135011330615693
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "normal",
+        "distance": 10.416543359696334
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "protan",
+        "distance": 8.306691801196164
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-warn",
+        "second": "fig-stop",
+        "simulation": "deutan",
+        "distance": 5.296127887092992
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "tritan",
+        "distance": 8.69268470486404
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "normal",
+        "distance": 18.76844679334916
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-accent",
+        "simulation": "protan",
+        "distance": 5.696752835993413
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "deutan",
+        "distance": 6.498164609911543
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "tritan",
+        "distance": 7.759413542162152
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "normal",
+        "distance": 6.229107331105785
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "protan",
+        "distance": 4.610019077215423
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "deutan",
+        "distance": 6.893392723825545
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "tritan",
+        "distance": 6.165799280965075
+      }
+    ],
+    "findings": [
+      {
+        "context": "graphite/light/plum/fig-cat2/fig-accent",
+        "rule": "companion separation",
+        "measured": 10.416543359696334,
+        "floor": 20
+      },
+      {
+        "context": "graphite/dark/green/fig-line/fig-accent/protan",
+        "rule": "simulated separation",
+        "measured": 4.797269743603221,
+        "floor": 5
+      },
+      {
+        "context": "graphite/dark/plum/fig-cat2/fig-accent",
+        "rule": "companion separation",
+        "measured": 6.229107331105785,
+        "floor": 20
+      },
+      {
+        "context": "graphite/dark/plum/fig-accent/fig-cat2/protan",
+        "rule": "simulated separation",
+        "measured": 4.610019077215423,
+        "floor": 5
+      },
+      {
+        "context": "slate/light/green/fig-line/fig-cat2/deutan",
+        "rule": "simulated separation",
+        "measured": 4.581235443646836,
+        "floor": 5
+      },
+      {
+        "context": "slate/light/violet/fig-cat1/fig-accent",
+        "rule": "companion separation",
+        "measured": 15.59702718235152,
+        "floor": 20
+      },
+      {
+        "context": "slate/light/violet/fig-line/fig-cat2/deutan",
+        "rule": "simulated separation",
+        "measured": 4.581235443646836,
+        "floor": 5
+      },
+      {
+        "context": "slate/light/violet/fig-accent/fig-cat1/protan",
+        "rule": "simulated separation",
+        "measured": 4.043064240706948,
+        "floor": 5
+      },
+      {
+        "context": "slate/light/violet/fig-accent/fig-cat1/deutan",
+        "rule": "simulated separation",
+        "measured": 4.600467801011043,
+        "floor": 5
+      },
+      {
+        "context": "slate/dark/violet/fig-cat1/fig-accent",
+        "rule": "companion separation",
+        "measured": 15.100224572672037,
+        "floor": 20
+      },
+      {
+        "context": "slate/dark/violet/fig-cat2/fig-accent",
+        "rule": "companion separation",
+        "measured": 17.62521500787561,
+        "floor": 20
+      },
+      {
+        "context": "sage/light/plum/fig-cat2/fig-accent",
+        "rule": "companion separation",
+        "measured": 10.416543359696334,
+        "floor": 20
+      },
+      {
+        "context": "sage/dark/plum/fig-cat2/fig-accent",
+        "rule": "companion separation",
+        "measured": 6.229107331105785,
+        "floor": 20
+      },
+      {
+        "context": "sage/dark/plum/fig-accent/fig-cat2/protan",
+        "rule": "simulated separation",
+        "measured": 4.610019077215423,
+        "floor": 5
+      }
+    ]
+  },
+  "after": {
+    "worst": [
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-cat2",
+        "simulation": "normal",
+        "distance": 23.904143583347672
+      },
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-cat2",
+        "simulation": "protan",
+        "distance": 8.448788883160235
+      },
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-warn",
+        "second": "fig-stop",
+        "simulation": "deutan",
+        "distance": 5.296127887092992
+      },
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "tritan",
+        "distance": 8.135011330615693
+      },
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "normal",
+        "distance": 20.28493482125276
+      },
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "protan",
+        "distance": 8.306691801196164
+      },
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-warn",
+        "second": "fig-stop",
+        "simulation": "deutan",
+        "distance": 5.296127887092992
+      },
+      {
+        "theme": "graphite",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-warn",
+        "second": "fig-accent",
+        "simulation": "tritan",
+        "distance": 10.567478853504815
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "normal",
+        "distance": 12.987274440871623
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-accent",
+        "simulation": "protan",
+        "distance": 5.244760057185997
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-warn",
+        "second": "fig-stop",
+        "simulation": "deutan",
+        "distance": 9.964138209126737
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-warn",
+        "second": "fig-stop",
+        "simulation": "tritan",
+        "distance": 8.664557623658688
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "normal",
+        "distance": 12.987274440871623
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "protan",
+        "distance": 5.607815882319543
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-warn",
+        "second": "fig-stop",
+        "simulation": "deutan",
+        "distance": 9.964138209126737
+      },
+      {
+        "theme": "graphite",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "tritan",
+        "distance": 5.099664700788947
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-cat1",
+        "simulation": "normal",
+        "distance": 17.910494620387798
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-cat2",
+        "simulation": "protan",
+        "distance": 6.12425002541668
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-cat2",
+        "simulation": "deutan",
+        "distance": 5.20906016151049
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "tritan",
+        "distance": 6.509536647584219
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "violet",
+        "first": "fig-line",
+        "second": "fig-cat1",
+        "simulation": "normal",
+        "distance": 17.910494620387798
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "violet",
+        "first": "fig-line",
+        "second": "fig-cat2",
+        "simulation": "protan",
+        "distance": 6.12425002541668
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "violet",
+        "first": "fig-line",
+        "second": "fig-cat2",
+        "simulation": "deutan",
+        "distance": 5.20906016151049
+      },
+      {
+        "theme": "slate",
+        "mode": "light",
+        "accent": "violet",
+        "first": "fig-cat2",
+        "second": "fig-warn",
+        "simulation": "tritan",
+        "distance": 14.728811585225259
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "normal",
+        "distance": 13.10824835553278
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-accent",
+        "simulation": "protan",
+        "distance": 7.801971980692525
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-accent",
+        "simulation": "deutan",
+        "distance": 7.703981456285952
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "tritan",
+        "distance": 5.157767953501645
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "violet",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "normal",
+        "distance": 13.10824835553278
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "violet",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "protan",
+        "distance": 9.198245477881803
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "violet",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "deutan",
+        "distance": 5.957656960392182
+      },
+      {
+        "theme": "slate",
+        "mode": "dark",
+        "accent": "violet",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "tritan",
+        "distance": 5.157767953501645
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-accent",
+        "simulation": "normal",
+        "distance": 23.030685223652036
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-cat2",
+        "simulation": "protan",
+        "distance": 11.083586816879107
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-line",
+        "second": "fig-cat2",
+        "simulation": "deutan",
+        "distance": 5.138021660241015
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "green",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "tritan",
+        "distance": 8.135011330615693
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "normal",
+        "distance": 20.91806688755715
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-cat1",
+        "second": "fig-accent",
+        "simulation": "protan",
+        "distance": 8.306691801196164
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-line",
+        "second": "fig-cat2",
+        "simulation": "deutan",
+        "distance": 5.138021660241015
+      },
+      {
+        "theme": "sage",
+        "mode": "light",
+        "accent": "plum",
+        "first": "fig-warn",
+        "second": "fig-accent",
+        "simulation": "tritan",
+        "distance": 10.567478853504815
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "normal",
+        "distance": 11.340498541756968
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "protan",
+        "distance": 5.177958423781124
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "deutan",
+        "distance": 9.331127542924644
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "green",
+        "first": "fig-cat2",
+        "second": "fig-warn",
+        "simulation": "tritan",
+        "distance": 8.607749508503941
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "normal",
+        "distance": 11.340498541756968
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "protan",
+        "distance": 5.177958423781124
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-stop",
+        "simulation": "deutan",
+        "distance": 9.331127542924644
+      },
+      {
+        "theme": "sage",
+        "mode": "dark",
+        "accent": "plum",
+        "first": "fig-cat2",
+        "second": "fig-accent",
+        "simulation": "tritan",
+        "distance": 5.1905267427650195
+      }
+    ],
+    "findings": []
+  },
+  "surfaceChanges": [
+    {
+      "pair": "slate-light",
+      "role": "canvas",
+      "old": "#eef1f5",
+      "new": "#eaeef3",
+      "delta": 0.8734153828861516,
+      "beforeGraphiteSeparation": 2.302296159897814,
+      "afterGraphiteSeparation": 3.0734734089778053,
+      "floor": 3
+    }
+  ]
+}

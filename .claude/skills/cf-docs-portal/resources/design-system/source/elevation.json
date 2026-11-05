@@ -1,0 +1,29 @@
+[
+  {
+    "selector": ":root",
+    "values": {
+      "hairline": "var(--cf-border)",
+      "header-bg": "color-mix(in srgb, var(--cf-canvas) 72%, transparent)",
+      "backdrop": "color-mix(in srgb, var(--cf-canvas) 55%, transparent)",
+      "mark": "var(--cf-accent-soft)",
+      "fig-ground": "var(--cf-surface)",
+      "fig-rule": "var(--cf-border)",
+      "fig-font": "var(--cf-font-sans)",
+      "fig-mono": "var(--cf-font-mono)"
+    }
+  },
+  {
+    "selector": ":root",
+    "values": {
+      "shadow": "0 12px 32px -16px rgb(0 0 0 / .28), 0 0 0 1px var(--cf-border)",
+      "fig-na-alpha": "0.5"
+    }
+  },
+  {
+    "selector": "[data-cf-theme=\"dark\"], [data-cf-mode-resolved=\"dark\"], [data-theme=\"dark\"]",
+    "values": {
+      "shadow": "0 16px 40px -16px rgb(0 0 0 / .7), 0 0 0 1px var(--cf-border)",
+      "fig-na-alpha": "0.65"
+    }
+  }
+]
