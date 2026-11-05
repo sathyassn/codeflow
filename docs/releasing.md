@@ -126,13 +126,12 @@ Local-artifact authority job:
     coverage shards and their report, which applies the line floor.
   - `windows` is the one verdict over the Windows build, checks, test
     partitions and journeys. It is computed from each job's result and names
-    every job that is not green. A pull request into an integration line
-    takes the reduced tier, which skips the build, the partitions and their
-    journey job, only when every file it changes is on the tier step's short
-    list of Markdown paths that no Rust code compiles in, and is a regular
-    file added or changed in place; everything else takes the full tier, as
-    do pushes, runs on a schedule or by hand and pull requests into main
-    (TSK-1321).
+    every job that is not green. Every pull request into an integration
+    line takes the reduced tier, which skips the build, the partitions and
+    their journey job, whatever it changes; pull requests into main, pushes
+    and runs on a schedule or by hand take the full tier, as does any event
+    or base the tier step does not expect (TSK-1321, the operator's decision
+    of 2026-11-02).
   - On a push to main or to an integration line whose merge commit has
     exactly the tree of a pull request head whose `codeflow-ci` run passed
     every job, both verdicts pass by naming that run and the gate and
