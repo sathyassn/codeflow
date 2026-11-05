@@ -14,6 +14,14 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
+#[cfg(test)]
+thread_local! {
+    /// Seconds a test's watcher waits before it reads the lifetime pipe,
+    /// standing in for the slow descriptor loop seen with a limit of 1048576
+    /// on a loaded host.
+    pub(super) static SLOW_WATCHER_START: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 pub(super) struct GroupWatch {
     controller: UnixStream,
     child_end: Option<UnixStream>,
@@ -43,6 +51,8 @@ impl GroupWatch {
         }
         let writer = controller.as_raw_fd();
         let reader = child_end.as_raw_fd();
+        #[cfg(test)]
+        let slow_start = SLOW_WATCHER_START.with(std::cell::Cell::get);
         // SAFETY: the closure uses only async-signal-safe libc operations and
         // constructs errors from errno. No allocation, locks or Rust I/O run after fork.
         unsafe {
@@ -70,6 +80,10 @@ impl GroupWatch {
                             libc::close(fd);
                         }
                     }
+                    // After the loop, so only the watcher's own exit is slow,
+                    // never the spawn that waits for exec.
+                    #[cfg(test)]
+                    libc::sleep(slow_start);
                     // The sentinel keeps this group id alive, so it cannot be
                     // reused between command exit and the signal below. It holds
                     // no descriptor and only waits to be killed.
@@ -140,6 +154,29 @@ impl GroupWatch {
         // controller death before the runner can record the target's group.
         self.locks.clear();
         drop(self.child_end.take());
+    }
+
+    pub(super) fn signal(&mut self) -> io::Result<()> {
+        drop(self.child_end.take());
+        self.controller.set_nonblocking(true)?;
+        self.controller.shutdown(std::net::Shutdown::Write)
+    }
+
+    pub(super) fn finished(&mut self) -> io::Result<bool> {
+        let mut byte = [0];
+        match self.controller.read(&mut byte) {
+            Ok(0) => Ok(true),
+            Ok(_) => Ok(false),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -475,17 +512,10 @@ unsafe fn read_members(_group: libc::pid_t) -> Members {
 
 impl Drop for GroupWatch {
     fn drop(&mut self) {
-        // Close our spare child endpoint even when spawn failed. Half-close the
-        // lifetime pipe, then wait for the watcher to close its end as it exits.
+        // A Drop must never block the controller on a surviving descendant.
+        // Explicit cleanup polls finished() under the shared cleanup deadline.
         drop(self.child_end.take());
         let _ = self.controller.shutdown(std::net::Shutdown::Write);
-        let mut byte = [0];
-        loop {
-            match self.controller.read(&mut byte) {
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                _ => break,
-            }
-        }
     }
 }
 
@@ -542,8 +572,8 @@ mod tests {
         drop(lock);
         assert!(!older_take(&fence), "the watcher keeps the fence");
         // The controller ends; the watcher kills the group and then waits
-        // for it, so this drop returns only once the group is empty.
-        let controller = std::thread::spawn(move || drop(watch));
+        // for it, and its pipe reports the end only once it exits.
+        watch.signal().unwrap();
         leader.wait().unwrap();
         // Wait for the member's death without reaping it: it stays a zombie.
         // SAFETY: siginfo_t is plain data; waitid fills it.
@@ -560,18 +590,24 @@ mod tests {
         };
         assert_eq!(waited, 0, "{}", std::io::Error::last_os_error());
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !controller.is_finished() && std::time::Instant::now() < deadline {
+        let mut finished = watch.finished().unwrap();
+        while !finished && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
+            finished = watch.finished().unwrap();
         }
         assert!(
-            controller.is_finished(),
+            finished,
             "a group left with only a zombie still holds the fence"
         );
-        controller.join().unwrap();
-        assert!(
-            older_take(&fence),
-            "the fence frees once only a zombie is left"
-        );
+        drop(watch);
+        // The watcher's exit closes its pipe end and its lock copies
+        // together, in no set order, so the take may need a moment.
+        let mut taken = older_take(&fence);
+        while !taken && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            taken = older_take(&fence);
+        }
+        assert!(taken, "the fence frees once only a zombie is left");
         member.wait().unwrap();
     }
 

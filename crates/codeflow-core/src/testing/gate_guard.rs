@@ -1869,6 +1869,81 @@ pub fn target_group_finished(pgid: u32) -> Result<(), String> {
     })
 }
 
+/// Remove a confirmed target group using one deadline for the registry and
+/// every record lock. Callers defer this function: filesystem I/O itself is
+/// not interruptible. A missed write leaves the on-disk record conservative.
+#[cfg(unix)]
+pub(crate) fn target_group_finished_before(
+    pgid: u32,
+    finish_by: std::time::Instant,
+) -> Result<(), String> {
+    update_groups_before(pgid, false, finish_by)
+}
+
+/// Bound initial target records as well as final cleanup records. Filesystem
+/// I/O is deferred by the caller, under the same absolute wait budget.
+#[cfg(unix)]
+pub(crate) fn target_group_started_before(
+    pgid: u32,
+    finish_by: std::time::Instant,
+) -> Result<(), String> {
+    update_groups_before(pgid, true, finish_by)
+}
+
+#[cfg(unix)]
+fn update_groups_before(
+    pgid: u32,
+    running: bool,
+    finish_by: std::time::Instant,
+) -> Result<(), String> {
+    let mut locks = loop {
+        if std::time::Instant::now() >= finish_by {
+            return Err(
+                "target group bookkeeping reached the shared deadline waiting for held records"
+                    .into(),
+            );
+        }
+        match HELD.try_lock() {
+            Ok(locks) => break locks,
+            Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                std::thread::sleep(
+                    std::time::Duration::from_millis(2)
+                        .min(finish_by.saturating_duration_since(std::time::Instant::now())),
+                );
+            }
+        }
+    };
+    let mut failures = Vec::new();
+    for lock in locks.iter_mut() {
+        if running {
+            lock.groups.insert(pgid);
+        } else {
+            lock.groups.remove(&pgid);
+        }
+        lock.recorded.extend(lock.groups.iter().copied());
+        for path in &lock.paths {
+            if std::time::Instant::now() >= finish_by {
+                failures.push("target group bookkeeping reached the shared deadline; remaining records retained".into());
+                return Err(failures.join("; "));
+            }
+            match with_record_lock_before(path, finish_by, || rewrite_record(lock, path)) {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => failures.push(error),
+                Err(error) => failures.push(format!(
+                    "target group record beside {} was retained: {error}",
+                    crate::git::display_path(path),
+                )),
+            }
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
+}
+
 fn update_groups(change: impl Fn(&mut BTreeSet<u32>)) -> Result<(), String> {
     let mut failures = Vec::new();
     let mut held = held();
@@ -1951,23 +2026,50 @@ fn rewrite_serialized(lock: &Held, path: &Path) -> Vec<String> {
 /// to finish. A holder keeps it only for one read, merge and rename, and
 /// the OS releases it if that process dies.
 fn with_record_lock<T>(lock: &Path, rewrite: impl FnOnce() -> T) -> std::io::Result<T> {
+    with_record_lock_before(
+        lock,
+        std::time::Instant::now() + std::time::Duration::from_secs(5),
+        rewrite,
+    )
+}
+
+fn with_record_lock_before<T>(
+    lock: &Path,
+    finish_by: std::time::Instant,
+    rewrite: impl FnOnce() -> T,
+) -> std::io::Result<T> {
+    let expired = || {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "shared record bookkeeping deadline reached",
+        )
+    };
+    if std::time::Instant::now() >= finish_by {
+        return Err(expired());
+    }
     let mut record_lock = record_path(lock).into_os_string();
     record_lock.push(".lock");
     let record_lock = PathBuf::from(record_lock);
     let (anchor, relative) = lock_anchor(&record_lock)?;
     let guard = crate::contained::Tree::open(anchor)?.create_read_only(&relative)?;
-    let start = std::time::Instant::now();
     loop {
+        if std::time::Instant::now() >= finish_by {
+            return Err(expired());
+        }
         match os_lock::try_lock(&guard) {
             Ok(()) => break,
-            Err(error)
-                if os_lock::is_contended(&error)
-                    && start.elapsed() < std::time::Duration::from_secs(5) =>
-            {
-                std::thread::sleep(std::time::Duration::from_millis(2));
+            Err(error) if os_lock::is_contended(&error) => {
+                std::thread::sleep(
+                    std::time::Duration::from_millis(2)
+                        .min(finish_by.saturating_duration_since(std::time::Instant::now())),
+                );
             }
             Err(error) => return Err(error),
         }
+    }
+    if std::time::Instant::now() >= finish_by {
+        os_lock::unlock(&guard);
+        return Err(expired());
     }
     let result = rewrite();
     os_lock::unlock(&guard);
@@ -3016,6 +3118,89 @@ mod tests {
             .contains(&format!("pid={}", std::process::id())));
         // The lock file itself is never written (TSK-1003).
         assert_eq!(std::fs::read_to_string(dir.join(LOCK_FILE)).unwrap(), "");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn target_cleanup_shares_one_deadline_across_several_held_records() {
+        use std::time::{Duration, Instant};
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = (0..3)
+            .map(|n| tmp.path().join(format!("locks-{n}")))
+            .collect::<Vec<_>>();
+        let lock = acquire_full_gate_lock(&dirs, Path::new("/w")).unwrap();
+        let group = 4_000_013;
+        target_group_started(group).unwrap();
+        let blockers = lock
+            .paths
+            .iter()
+            .map(|path| {
+                let mut name = record_path(path).into_os_string();
+                name.push(".lock");
+                let file = File::open(PathBuf::from(name)).unwrap();
+                os_lock::try_lock(&file).unwrap();
+                file
+            })
+            .collect::<Vec<_>>();
+        let started = Instant::now();
+        let finish_by = started + Duration::from_millis(250);
+        let result = crate::testing::runner::finish_cleanup_before(finish_by, move |until| {
+            target_group_finished_before(group, until)
+        });
+        let elapsed = started.elapsed();
+        // Release every fixture lock before assertions or GateLock::drop.
+        for blocker in blockers {
+            os_lock::unlock(&blocker);
+        }
+        let records = lock
+            .paths
+            .iter()
+            .map(|path| std::fs::read_to_string(record_path(path)).unwrap())
+            .collect::<Vec<_>>();
+        drop(lock);
+        assert!(
+            result.is_err(),
+            "contended bookkeeping must not be called complete"
+        );
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "one budget, not five seconds per record: {elapsed:?}"
+        );
+        assert!(
+            records
+                .iter()
+                .all(|record| record.contains("group=4000013")),
+            "unwritten records remain conservative"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn target_cleanup_does_not_wait_out_the_held_record_mutex() {
+        use std::time::{Duration, Instant};
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _held = held();
+            ready_tx.send(()).unwrap();
+            // A finite release also lets the old implementation finish and
+            // fail the regression rather than deadlocking the test process.
+            let _ = release_rx.recv_timeout(Duration::from_secs(2));
+        });
+        ready_rx.recv().unwrap();
+        let started = Instant::now();
+        let result = crate::testing::runner::finish_cleanup_before(
+            started + Duration::from_millis(250),
+            move |until| target_group_finished_before(4_000_015, until),
+        );
+        let elapsed = started.elapsed();
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        assert!(result.is_err());
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "registry mutex is inside the cleanup budget: {elapsed:?}"
+        );
     }
 
     #[test]
