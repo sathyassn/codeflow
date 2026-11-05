@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "about": "Committed answers for every new case of the explanation-method pack (TSK-062). Each entry records the signals a grader reads off the answer and the decision the kit must compute from them. test_eval_kit.py checks the decision and ties every form signal (fence, language, image, alt text, markers, block order, asks, bindings, families) to the committed files. A directory answer is laid over the case's fixture: its docs/ files replace or add files and its config.json adds figure bindings and page classes; visual_controls.test.mjs runs the portal adapter on it and applies the explanatory page class rules to the adapted page, and visual_controls_browser.test.mjs renders every declaration it carries. A .json answer is a present document; crates/codeflow-present/tests/method_controls.rs validates it with the present validator. Family, placement, altitude and caption judgments stay the grader's and are recorded, not re-derived. The existing present case in the pack keeps its own controls.",
+  "about": "Committed answers for every new case of the explanation-method pack (TSK-062). Each entry records the signals a grader reads off the answer and the decision the kit must compute from them. test_eval_kit.py checks the decision and ties every form signal (fence, language, image, alt text, markers, block order, asks, bindings, families) to the committed files. A directory answer is laid over the case's fixture: its docs/ files replace or add files and its config.json adds figure bindings and page classes; visual_controls.test.mjs runs the portal adapter on it and applies the explanatory page class rules to the adapted page, and visual_controls_browser.test.mjs renders every declaration it carries. A .json answer is a present document; crates/codeflow-present/tests/method_controls.rs validates it with the present validator. Family, placement, altitude and caption judgments stay the grader's and are recorded, not re-derived. The existing present case in the pack keeps its own controls. A retry entry also lists `judged`, the signals the fixture's judged rubric gives that answer (the evaluator's part of the grade, applied by the builder to these controls), and a faulty entry `caught_by`, the part that fails it: `exact` (anchored/check.py) or `judged` (the rubric). Its `signals` are the checker's output plus `judged`.",
   "cases": {
     "enforcement-planes-answered-in-chat": [
       {
@@ -180,7 +180,7 @@
         "role": "passing",
         "answer": "migration/passing.json",
         "signals": [
-          "governing_comparison_is_first_block",
+          "anchor_then_governing_comparison",
           "comparison_carries_downtime_cost_and_evidence",
           "one_ask",
           "unverified_peak_load_stated"
@@ -195,6 +195,305 @@
           "more_than_one_ask"
         ],
         "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "migration/faulty-no-anchor.json",
+        "signals": [
+          "comparison_carries_downtime_cost_and_evidence",
+          "one_ask",
+          "unverified_peak_load_stated"
+        ],
+        "decision": "fail"
+      }
+    ],
+    "retry-review-opens-with-the-whole": [
+      {
+        "role": "passing",
+        "answer": "retry/passing.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated"
+        ],
+        "judged": [
+          "unmeasured_outage_stated"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "passing",
+        "answer": "retry/passing-compact-durations.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated"
+        ],
+        "judged": [
+          "unmeasured_outage_stated"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "passing",
+        "answer": "retry/passing-30-sec.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated"
+        ],
+        "judged": [
+          "unmeasured_outage_stated"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "passing",
+        "answer": "retry/passing-half-minute.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated"
+        ],
+        "judged": [
+          "unmeasured_outage_stated"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "passing",
+        "answer": "retry/passing-one-minute.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated"
+        ],
+        "judged": [
+          "unmeasured_outage_stated"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "passing",
+        "answer": "retry/passing-per-failure-backoffs.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated"
+        ],
+        "judged": [
+          "unmeasured_outage_stated"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty.json",
+        "signals": [
+          "one_ask",
+          "retry_mechanism_carried_by_a_figure",
+          "definitions_paragraph_before_any_figure"
+        ],
+        "judged": [],
+        "decision": "fail",
+        "caught_by": "exact"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-no-figure.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "sections_titled_in_plain_words",
+          "table_as_main_carrier",
+          "unmeasured_outage_stated"
+        ],
+        "judged": [
+          "unmeasured_outage_stated"
+        ],
+        "decision": "fail",
+        "caught_by": "exact"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-no-requeue.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated"
+        ],
+        "judged": [
+          "unmeasured_outage_stated"
+        ],
+        "decision": "fail",
+        "caught_by": "exact"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-no-timeout.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "sections_titled_in_plain_words",
+          "unmeasured_outage_stated"
+        ],
+        "judged": [
+          "unmeasured_outage_stated"
+        ],
+        "decision": "fail",
+        "caught_by": "exact"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-backoff-90s.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated",
+          "fact_invented"
+        ],
+        "judged": [
+          "unmeasured_outage_stated",
+          "fact_invented"
+        ],
+        "decision": "fail",
+        "caught_by": "judged"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-second-failure.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated",
+          "fact_invented"
+        ],
+        "judged": [
+          "unmeasured_outage_stated",
+          "fact_invented"
+        ],
+        "decision": "fail",
+        "caught_by": "judged"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-outage-measured.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use"
+        ],
+        "judged": [],
+        "decision": "fail",
+        "caught_by": "judged"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-no-operator-requeue.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated",
+          "fact_invented"
+        ],
+        "judged": [
+          "unmeasured_outage_stated",
+          "fact_invented"
+        ],
+        "decision": "fail",
+        "caught_by": "judged"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-not-unmeasured.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use"
+        ],
+        "judged": [],
+        "decision": "fail",
+        "caught_by": "judged"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-cache-unmeasured.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use"
+        ],
+        "judged": [],
+        "decision": "fail",
+        "caught_by": "judged"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-max-attempts.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated",
+          "fact_invented"
+        ],
+        "judged": [
+          "unmeasured_outage_stated",
+          "fact_invented"
+        ],
+        "decision": "fail",
+        "caught_by": "judged"
       }
     ]
   }

@@ -37,6 +37,29 @@ The families are not templates. A family names the relationship; the drawing is
 composed for the subject each time. When no family fits, the point is not a
 relationship, and a table or a sentence carries it.
 
+### Composing a figure
+
+These lessons come from Anthropic's artifact-design and artifact-diagramming
+guidance, as they apply to this grammar. The twelve rules below decide
+whether a figure is sound; these decide whether it says anything.
+
+| Lesson | What it means here |
+|---|---|
+| Draw the mechanism, not its name | A box labelled "cache" says less than the path a request takes through it. Draw the parts the argument turns on (the boundary crossed, the hop added, the thing that moves) and leave out the rest. |
+| Draw the difference when comparing | Two options drawn side by side show the edge, step or boundary each one adds or removes; the parts they share are drawn once, or in grey. Text cards that restate each option are not a comparison. |
+| Match the drawing to the stakes | A one-hop question is three marks. A change that reroutes work draws every part the decision turns on, and no inventory beyond that. |
+| Label arrows with verbs | An edge says what happens along it (`reads`, `adopts`, `closes with proof`), never a bare line the reader must interpret. |
+| One figure, one claim | The `idea` is one sentence, the caption states that claim in the reader's terms ("It closes only through proof, and a revert reopens it"), and the title names what is drawn ("How one follow-up lives"). |
+| Ground it in the subject | Use the subject's real names, numbers and units (the 30 minute expiry, the 22 review findings, the issue it answers), never invented sample data. |
+| A title is a name | A figure or document title names its subject in plain words, never a question; the purpose goes in the caption, and a document's purpose in its `summary`. |
+
+The governing path, the route or actors the claim is about, is drawn in the
+accent-bearing marks (`agent`, `done`, `human`, `merge`, `return`, `stop`),
+as `design-system/present.reference.html` draws it, and everything else
+stays in grey context marks. Named peers off that path take the companion
+tones of section 4. A figure of grey boxes with text has not found its
+governing path.
+
 ## 2. Twelve rules
 
 Every figure obeys all twelve. Each rule names the test that decides it and
@@ -114,7 +137,11 @@ id that a text item labels, and the grammar module refuses anything else, so
 hue never carries meaning alone and two states still differ on two non-hue
 channels. The legend key takes the tone when every drawn mark of its state
 shares it. The governing path keeps the accent-bearing marks; warn and stop
-stay reserved.
+stay reserved. Accent and the companion tones never trade places: accent
+means "this is the route the claim is about", `cat1` and `cat2` mean "these
+are two named peers", and a figure with one governing path and two peers
+uses all three, each mark keeping its two non-hue channels (ADR-0068, "Update
+2026-10-23: tones for named peers").
 
 The mark vocabulary. Every drawn state resolves to one row here, and every row
 carries at least two channels that are not hue. The name is the `data-state`
@@ -300,6 +327,10 @@ rule is `explanation-method.md` stage 3.
 ## 8. Self-check before publishing a figure
 
 - Which family, and which relationship does the reader see first?
+- Does it draw the mechanism, with its governing path in accent-bearing
+  marks, every arrow a verb, and the subject's real names and numbers?
+- Does the caption state the one claim, and is the title a name, not a
+  question?
 - Masked test passed: idea named, every keyed pair decoded, no confusable pair.
 - Every drawn state is in `data-state`, the legend, the description and the
   declaration; each pair differs on two non-hue channels.

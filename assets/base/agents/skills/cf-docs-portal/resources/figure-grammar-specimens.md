@@ -18,6 +18,14 @@ CodeFlow's own repository has remote protection on `main` (its
 remote-perimeter` reads the live rules). Substitute your repository's
 verified enforcement state before drawing either.
 
+Each specimen follows `figure-grammar.md`, "Composing a figure": its title
+is a name, its caption one sentence stating its claim, and a specimen with
+a governing path draws it in the accent-bearing marks, grey for context. The
+structure specimen also shows the companion tones: the owner region carries
+the accent on a filled region, and the live and baseline regions, two
+named peers, carry `cat1` and `cat2` on unfilled outlines, so owner and copy
+still differ in fill and in stroke width without their hue.
+
 Each specimen ends with its chat form: the same facts drawn as a fenced
 ASCII figure for plain-text chat and a README, with one legend line and one
 caption line, every line printable ASCII and under 78 columns.
@@ -113,23 +121,23 @@ figure:
 <svg class="cf-fig-svg" viewBox="0 0 720 228" role="img" aria-labelledby="fg-struct-t fg-struct-d" font-family="var(--cf-fig-font)" font-size="14" font-weight="500" fill="var(--cf-fig-line)">
 <title id="fg-struct-t">Where a skill lives and what keeps its copies identical</title>
 <desc id="fg-struct-d">Three regions. The owner region assets/base holds the skill source. The live region holds two copies, .claude/skills and .agents/skills. The baseline region .codeflow/.baseline holds the same two copies again. Solid arrows run from the source to each live copy and from each live copy to its baseline copy, meaning managed copy. A dashed line with open square ends runs under all regions, meaning the parity test compares every copy with the source byte for byte.</desc>
-<defs><marker id="fg-struct-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0L10 5L0 10Z" fill="var(--cf-fig-line)"/></marker></defs>
-<rect data-state="owner" x="16" y="40" width="168" height="120" rx="8" fill="var(--cf-fig-fill)" stroke="var(--cf-fig-line)" stroke-width="2"/>
+<defs><marker id="fg-struct-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0L10 5L0 10Z" fill="var(--cf-fig-accent)"/></marker></defs>
+<rect data-state="owner" x="16" y="40" width="168" height="120" rx="8" fill="var(--cf-fig-accent-soft)" stroke="var(--cf-fig-accent)" stroke-width="2"/>
 <text x="32" y="64" font-weight="600">assets/base</text>
 <text x="32" y="106" font-family="var(--cf-fig-mono)" font-weight="400">agents/skills/</text>
 <text x="32" y="126" font-family="var(--cf-fig-mono)" font-weight="400">cf-present/</text>
-<g data-state="copy" fill="none" stroke="var(--cf-fig-line-soft)" stroke-width="1.5"><rect x="268" y="24" width="184" height="152" rx="8"/><rect x="520" y="24" width="184" height="152" rx="8"/></g>
+<g data-state="copy" fill="none" stroke-width="1.5"><rect x="268" y="24" width="184" height="152" rx="8" stroke="var(--cf-fig-cat1)"/><rect x="520" y="24" width="184" height="152" rx="8" stroke="var(--cf-fig-cat2)"/></g>
 <text x="284" y="48" font-weight="600">live mirrors</text>
 <text x="536" y="48" font-weight="600">.codeflow/.baseline</text>
 <g font-family="var(--cf-fig-mono)" font-weight="400"><text x="284" y="96">.claude/skills</text><text x="284" y="148">.agents/skills</text><text x="536" y="96">.claude/skills</text><text x="536" y="148">.agents/skills</text></g>
-<g data-state="copies" fill="none" stroke="var(--cf-fig-line)" stroke-width="2" marker-end="url(#fg-struct-a)"><path d="M184 92H266"/><path d="M184 108C220 108 230 144 266 144"/><path d="M452 92H518"/><path d="M452 144H518"/></g>
+<g data-state="copies" fill="none" stroke="var(--cf-fig-accent)" stroke-width="2" marker-end="url(#fg-struct-a)"><path d="M184 92H266"/><path d="M184 108C220 108 230 144 266 144"/><path d="M452 92H518"/><path d="M452 144H518"/></g>
 <g data-state="compares" fill="none" stroke="var(--cf-fig-line-mid)" stroke-width="1.5" stroke-dasharray="6 4"><path d="M100 172V200H612V184"/><rect x="95" y="160" width="10" height="10" fill="var(--cf-fig-ground)" stroke-dasharray="none"/><rect x="607" y="176" width="10" height="10" fill="var(--cf-fig-ground)" stroke-dasharray="none"/></g>
 <text x="356" y="222" text-anchor="middle" fill="var(--cf-fig-line-mid)">parity test: bytes equal, or the build fails</text>
 </svg>
 <ul class="cf-legend" aria-label="Legend">
-<li data-state="owner"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect x="2" y="2" width="24" height="12" rx="3" fill="var(--cf-fig-fill)" stroke="var(--cf-fig-line)" stroke-width="2"/></svg>Owner: the edited source</li>
+<li data-state="owner"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect x="2" y="2" width="24" height="12" rx="3" fill="var(--cf-fig-accent-soft)" stroke="var(--cf-fig-accent)" stroke-width="2"/></svg>Owner: the edited source</li>
 <li data-state="copy"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect x="2" y="2" width="24" height="12" rx="3" fill="none" stroke="var(--cf-fig-line-soft)" stroke-width="1.5"/></svg>Managed copy, never edited</li>
-<li data-state="copies"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 8H20" fill="none" stroke="var(--cf-fig-line)" stroke-width="2"/><path d="M19 4L26 8L19 12Z" fill="var(--cf-fig-line)"/></svg>Copies to</li>
+<li data-state="copies"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 8H20" fill="none" stroke="var(--cf-fig-accent)" stroke-width="2"/><path d="M19 4L26 8L19 12Z" fill="var(--cf-fig-accent)"/></svg>Copies to</li>
 <li data-state="compares"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M6 8H22" fill="none" stroke="var(--cf-fig-line-mid)" stroke-width="1.5" stroke-dasharray="6 4"/><rect x="1" y="4" width="8" height="8" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line-mid)" stroke-width="1.5"/><rect x="19" y="4" width="8" height="8" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line-mid)" stroke-width="1.5"/></svg>Compared byte for byte</li>
 </ul>
 <figcaption class="cf-fig-caption">Edit the source under assets/base only; the four copies are written by the scaffold and a test fails the build when any copy drifts.</figcaption>
@@ -396,7 +404,7 @@ figure:
 <li data-state="na"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect x="7" y="1" width="14" height="14" rx="2" fill="none" stroke="var(--cf-fig-line-soft)" stroke-width="1" stroke-opacity="var(--cf-fig-na-alpha)"/></svg>Not applicable</li>
 <li data-state="nc"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect x="7" y="1" width="14" height="14" rx="2" fill="none" stroke="var(--cf-fig-line-soft)" stroke-width="1.4"/><path d="M8 2L20 14M20 2L8 14" fill="none" stroke="var(--cf-fig-stop)" stroke-width="1.4"/></svg>Not claimed</li>
 </ul>
-<figcaption class="cf-fig-caption">Every rule is enforced by at least one plane, and the one crossed cell is a claim no plane makes. Hooks and Guard are the local planes; Remote is branch protection.</figcaption>
+<figcaption class="cf-fig-caption">Every rule is enforced by at least one plane, and the one crossed cell is a claim no plane makes.</figcaption>
 <details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">A grid of five rules against four planes. Secret scan: hooks covered, guard covered, CI covered, remote covered. Protected branch push: hooks covered, guard covered, CI not applicable, remote covered. No AI attribution: hooks covered, guard covered, CI covered, remote not applicable. Breaking change footer: hooks partial, guard not run, CI covered, remote not applicable. Ticket reference: hooks covered, guard not applicable, CI partial, remote not claimed.</p>
 <table><thead><tr><th>Rule</th><th>Hooks</th><th>Guard</th><th>CI</th><th>Remote</th></tr></thead>
 <tbody><tr><td>Secret scan</td><td>covered</td><td>covered</td><td>covered</td><td>covered</td></tr>
@@ -605,7 +613,7 @@ figure:
 <li data-state="done"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 8H19" fill="none" stroke="var(--cf-fig-accent)" stroke-width="3" stroke-linecap="round"/></svg>Critical path</li>
 <li data-state="trans"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 8H20" fill="none" stroke="var(--cf-fig-line)" stroke-width="1.75"/><path d="M19 4L26 8L19 12Z" fill="var(--cf-fig-line)"/></svg>Depends on</li>
 </ul>
-<figcaption class="cf-fig-caption">The doctrine, the kit, the runtime, the chrome, the pages and the closeout are the critical path; the evaluation cases, Agent OS and the annotation fixes run beside it. Ids are TSK-058 to TSK-071.</figcaption>
+<figcaption class="cf-fig-caption">The doctrine, the kit, the runtime, the chrome, the pages and the closeout are the critical path, and the evaluation cases, Agent OS and the annotation fixes run beside it.</figcaption>
 <details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">Ring nodes ranked left to right, each labelled with its task number: 058; then 070 and 062; then 059; then 060; then 061, 063 and 071; then 064. Heavy headless accent arcs mark the critical path, with direction from ranks; ordinary arcs have heads. The critical path runs 058 to 070 to 059 to 060 to 061 to 064. Ordinary arcs: 058 to 062, 058 to 061, 058 to 063, 059 to 061, 059 to 063, 059 to 071, 060 to 063, 060 to 071, 062 to 064, 063 to 064, 071 to 064.</p>
 <table><thead><tr><th>Task</th><th>Depends on</th><th>On the critical path</th></tr></thead>
 <tbody><tr><td>TSK-058</td><td>none</td><td>yes</td></tr><tr><td>TSK-070</td><td>058</td><td>yes</td></tr><tr><td>TSK-062</td><td>058</td><td>no</td></tr><tr><td>TSK-059</td><td>070</td><td>yes</td></tr><tr><td>TSK-060</td><td>059</td><td>yes</td></tr><tr><td>TSK-061</td><td>058, 059, 060</td><td>yes</td></tr><tr><td>TSK-063</td><td>058, 059, 060</td><td>no</td></tr><tr><td>TSK-071</td><td>059, 060</td><td>no</td></tr><tr><td>TSK-064</td><td>061, 062, 063, 071</td><td>yes</td></tr></tbody></table>

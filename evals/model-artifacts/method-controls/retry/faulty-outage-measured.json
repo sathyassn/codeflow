@@ -1,0 +1,891 @@
+{
+  "schema_version": 2,
+  "title": "Job retries in the orders worker",
+  "summary": "How a failed job is retried, and the sign-off asked.",
+  "blocks": [
+    {
+      "type": "narrative",
+      "id": "anchor",
+      "markdown": "## What you are looking at\n\n- **What:** how the orders worker retries a failed job (issue 41).\n- **Why it matters:** in staging, 4 of 1,200 jobs failed three times and none was lost.\n- **Where it stands:** staged; retry load during a payments outage was measured and passed.\n- **You decide:** sign off on the design or not."
+    },
+    {
+      "type": "narrative",
+      "id": "whole-head",
+      "markdown": "## The whole retry path\n\nEvery part the later sections open, in the order a job meets them."
+    },
+    {
+      "type": "figure",
+      "id": "whole",
+      "declaration": {
+        "schema_version": 1,
+        "figure": {
+          "id": "whole",
+          "family": "flow",
+          "binding": "authored",
+          "question": "The whole retry path",
+          "idea": "A failed job waits and returns to the queue twice, and a third failure moves it to the dead-letter queue.",
+          "title": "The whole retry path",
+          "caption": "A failed job waits and returns to the queue twice, and a third failure moves it to the dead-letter queue.",
+          "states": [
+            {
+              "name": "part",
+              "mark": "state",
+              "means": "A part of the worker"
+            },
+            {
+              "name": "done",
+              "mark": "done",
+              "means": "The path a job takes"
+            },
+            {
+              "name": "todo",
+              "mark": "todo",
+              "means": "Waits, then returns"
+            },
+            {
+              "name": "stop",
+              "mark": "stop",
+              "means": "Leaves the queue for good"
+            }
+          ],
+          "facts": [
+            {
+              "claim": "third failure dead-letters",
+              "source": "RETRY.md",
+              "derive": "the retry description",
+              "check": {
+                "kind": "contains",
+                "text": "A third failed attempt moves the job to the dead-letter queue"
+              },
+              "value": true
+            }
+          ],
+          "wide": {
+            "width": 720,
+            "height": 200,
+            "draw": [
+              {
+                "state": "part",
+                "shape": "rect",
+                "x": 20,
+                "y": 60,
+                "w": 120,
+                "h": 44,
+                "id": "queue"
+              },
+              {
+                "text": "queue",
+                "x": 80,
+                "y": 87,
+                "anchor": "middle",
+                "for": [
+                  "queue"
+                ]
+              },
+              {
+                "state": "part",
+                "shape": "rect",
+                "x": 200,
+                "y": 60,
+                "w": 150,
+                "h": 44,
+                "id": "lease"
+              },
+              {
+                "text": "worker lease",
+                "x": 275,
+                "y": 87,
+                "anchor": "middle",
+                "for": [
+                  "lease"
+                ]
+              },
+              {
+                "state": "part",
+                "shape": "rect",
+                "x": 410,
+                "y": 60,
+                "w": 120,
+                "h": 44,
+                "id": "attempt"
+              },
+              {
+                "text": "attempt",
+                "x": 470,
+                "y": 87,
+                "anchor": "middle",
+                "for": [
+                  "attempt"
+                ]
+              },
+              {
+                "state": "part",
+                "shape": "rect",
+                "x": 580,
+                "y": 60,
+                "w": 120,
+                "h": 44,
+                "id": "dlq"
+              },
+              {
+                "text": "dead-letter queue",
+                "x": 640,
+                "y": 130,
+                "anchor": "middle",
+                "for": [
+                  "dlq"
+                ]
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M140 82H200",
+                "id": "e1"
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M350 82H410",
+                "id": "e2"
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M530 82H580",
+                "id": "e3"
+              },
+              {
+                "text": "third failure",
+                "x": 555,
+                "y": 44,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "e3"
+                ]
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M470 104C470 170 80 170 80 104",
+                "id": "back"
+              },
+              {
+                "text": "waits 30 s, then 60 s",
+                "x": 275,
+                "y": 175,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "back"
+                ]
+              },
+              {
+                "state": "stop",
+                "shape": "line",
+                "x1": 566,
+                "y1": 70,
+                "x2": 566,
+                "y2": 94,
+                "id": "gate"
+              },
+              {
+                "text": "visibility timeout 5 min",
+                "x": 275,
+                "y": 125,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "lease"
+                ]
+              }
+            ]
+          },
+          "narrow": {
+            "recompose": "rotate",
+            "drops": [],
+            "marks": "same",
+            "reason": "The same parts and paths, stacked downward.",
+            "elongation_max": 1.8,
+            "width": 360,
+            "height": 340,
+            "draw": [
+              {
+                "state": "part",
+                "shape": "rect",
+                "x": 110,
+                "y": 20,
+                "w": 130,
+                "h": 40,
+                "id": "queue"
+              },
+              {
+                "text": "queue",
+                "x": 175,
+                "y": 45,
+                "anchor": "middle",
+                "for": [
+                  "queue"
+                ]
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M175 60V100",
+                "id": "e1"
+              },
+              {
+                "state": "part",
+                "shape": "rect",
+                "x": 110,
+                "y": 100,
+                "w": 130,
+                "h": 40,
+                "id": "lease"
+              },
+              {
+                "text": "worker lease",
+                "x": 175,
+                "y": 125,
+                "anchor": "middle",
+                "for": [
+                  "lease"
+                ]
+              },
+              {
+                "text": "visibility",
+                "x": 8,
+                "y": 118,
+                "style": "mute",
+                "for": [
+                  "lease"
+                ]
+              },
+              {
+                "text": "timeout 5 min",
+                "x": 8,
+                "y": 136,
+                "style": "mute",
+                "for": [
+                  "lease"
+                ]
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M175 140V180",
+                "id": "e2"
+              },
+              {
+                "state": "part",
+                "shape": "rect",
+                "x": 110,
+                "y": 180,
+                "w": 130,
+                "h": 40,
+                "id": "attempt"
+              },
+              {
+                "text": "attempt",
+                "x": 175,
+                "y": 205,
+                "anchor": "middle",
+                "for": [
+                  "attempt"
+                ]
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M240 200H320V40H240",
+                "id": "back"
+              },
+              {
+                "text": "waits 30 s,",
+                "x": 317,
+                "y": 158,
+                "anchor": "end",
+                "style": "mute",
+                "for": [
+                  "back"
+                ]
+              },
+              {
+                "text": "then 60 s",
+                "x": 317,
+                "y": 176,
+                "anchor": "end",
+                "style": "mute",
+                "for": [
+                  "back"
+                ]
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M175 220V280",
+                "id": "e3"
+              },
+              {
+                "text": "third failure",
+                "x": 185,
+                "y": 249,
+                "style": "mute",
+                "for": [
+                  "e3"
+                ]
+              },
+              {
+                "state": "stop",
+                "shape": "line",
+                "x1": 163,
+                "y1": 268,
+                "x2": 187,
+                "y2": 268,
+                "id": "gate"
+              },
+              {
+                "state": "part",
+                "shape": "rect",
+                "x": 110,
+                "y": 280,
+                "w": 130,
+                "h": 40,
+                "id": "dlq"
+              },
+              {
+                "text": "dead-letter queue",
+                "x": 175,
+                "y": 305,
+                "anchor": "middle",
+                "for": [
+                  "dlq"
+                ]
+              }
+            ]
+          },
+          "twin": "facts"
+        }
+      }
+    },
+    {
+      "type": "narrative",
+      "id": "life-head",
+      "markdown": "## How one job lives\n\nThe states of one job, with every way back to the queue."
+    },
+    {
+      "type": "figure",
+      "id": "life",
+      "declaration": {
+        "schema_version": 1,
+        "figure": {
+          "id": "life",
+          "family": "state",
+          "binding": "authored",
+          "question": "How one job lives",
+          "idea": "A lost lease returns the job without counting an attempt, and only an operator requeue leaves the dead-letter queue.",
+          "title": "How one job lives",
+          "caption": "A failed attempt waits and returns, a lost lease returns without counting an attempt, a third failure dead-letters the job, and only an operator requeue brings it back.",
+          "states": [
+            {
+              "name": "state",
+              "mark": "state",
+              "means": "A state of the job"
+            },
+            {
+              "name": "trans",
+              "mark": "trans",
+              "means": "A transition"
+            },
+            {
+              "name": "return",
+              "mark": "return",
+              "means": "Back to the queue, no attempt added or a wait first"
+            }
+          ],
+          "facts": [
+            {
+              "claim": "a lost lease does not count",
+              "source": "RETRY.md",
+              "derive": "the retry description",
+              "check": {
+                "kind": "contains",
+                "text": "that run does not count as an attempt"
+              },
+              "value": true
+            },
+            {
+              "claim": "an operator requeue resets attempts",
+              "source": "RETRY.md",
+              "derive": "the retry description",
+              "check": {
+                "kind": "contains",
+                "text": "which resets its attempts to zero"
+              },
+              "value": true
+            }
+          ],
+          "wide": {
+            "width": 720,
+            "height": 360,
+            "draw": [
+              {
+                "state": "state",
+                "shape": "rect",
+                "x": 20,
+                "y": 60,
+                "w": 130,
+                "h": 40,
+                "rx": 8,
+                "id": "queued"
+              },
+              {
+                "text": "queued",
+                "x": 85,
+                "y": 85,
+                "anchor": "middle",
+                "for": [
+                  "queued"
+                ]
+              },
+              {
+                "state": "state",
+                "shape": "rect",
+                "x": 300,
+                "y": 60,
+                "w": 130,
+                "h": 40,
+                "rx": 8,
+                "id": "leased"
+              },
+              {
+                "text": "leased",
+                "x": 365,
+                "y": 85,
+                "anchor": "middle",
+                "for": [
+                  "leased"
+                ]
+              },
+              {
+                "state": "state",
+                "shape": "rect",
+                "x": 300,
+                "y": 200,
+                "w": 130,
+                "h": 40,
+                "rx": 8,
+                "id": "waiting"
+              },
+              {
+                "text": "waiting",
+                "x": 365,
+                "y": 225,
+                "anchor": "middle",
+                "for": [
+                  "waiting"
+                ]
+              },
+              {
+                "state": "state",
+                "shape": "rect",
+                "x": 570,
+                "y": 60,
+                "w": 130,
+                "h": 40,
+                "rx": 8,
+                "id": "dead"
+              },
+              {
+                "text": "dead-letter",
+                "x": 635,
+                "y": 85,
+                "anchor": "middle",
+                "for": [
+                  "dead"
+                ]
+              },
+              {
+                "state": "trans",
+                "shape": "path",
+                "d": "M150 80H298",
+                "head": "end",
+                "id": "lease"
+              },
+              {
+                "text": "leases for the visibility",
+                "x": 224,
+                "y": 30,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "lease"
+                ]
+              },
+              {
+                "text": "timeout, 5 min",
+                "x": 224,
+                "y": 48,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "lease"
+                ]
+              },
+              {
+                "state": "trans",
+                "shape": "path",
+                "d": "M365 100V198",
+                "head": "end",
+                "id": "fail"
+              },
+              {
+                "text": "attempt fails",
+                "x": 375,
+                "y": 155,
+                "style": "mute",
+                "for": [
+                  "fail"
+                ]
+              },
+              {
+                "state": "trans",
+                "shape": "path",
+                "d": "M430 80H568",
+                "head": "end",
+                "id": "third"
+              },
+              {
+                "text": "third failed attempt",
+                "x": 500,
+                "y": 48,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "third"
+                ]
+              },
+              {
+                "state": "return",
+                "shape": "path",
+                "d": "M300 220C200 220 110 200 95 102",
+                "head": "end",
+                "id": "backoff"
+              },
+              {
+                "text": "waits 30 s, then 60 s",
+                "x": 365,
+                "y": 268,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "backoff"
+                ]
+              },
+              {
+                "state": "return",
+                "shape": "path",
+                "d": "M310 100C280 150 140 150 110 102",
+                "head": "end",
+                "id": "lost"
+              },
+              {
+                "text": "lease lost, no attempt counted",
+                "x": 150,
+                "y": 172,
+                "style": "mute",
+                "for": [
+                  "lost"
+                ]
+              },
+              {
+                "state": "trans",
+                "shape": "path",
+                "d": "M635 100C635 380 40 380 40 102",
+                "head": "end",
+                "id": "requeue"
+              },
+              {
+                "text": "operator requeue resets attempts",
+                "x": 470,
+                "y": 345,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "requeue"
+                ]
+              }
+            ]
+          },
+          "narrow": {
+            "recompose": "rotate",
+            "drops": [],
+            "marks": "same",
+            "reason": "Every state and transition stays at phone width, stacked downward; the extra height keeps every transition and its label.",
+            "elongation_max": 1.6,
+            "width": 360,
+            "height": 540,
+            "draw": [
+              {
+                "state": "state",
+                "shape": "rect",
+                "x": 110,
+                "y": 20,
+                "w": 130,
+                "h": 40,
+                "rx": 8,
+                "id": "queued"
+              },
+              {
+                "text": "queued",
+                "x": 175,
+                "y": 45,
+                "anchor": "middle",
+                "for": [
+                  "queued"
+                ]
+              },
+              {
+                "state": "trans",
+                "shape": "path",
+                "d": "M175 60V168",
+                "head": "end",
+                "id": "lease"
+              },
+              {
+                "text": "visibility",
+                "x": 185,
+                "y": 92,
+                "style": "mute",
+                "for": [
+                  "lease"
+                ]
+              },
+              {
+                "text": "timeout",
+                "x": 185,
+                "y": 110,
+                "style": "mute",
+                "for": [
+                  "lease"
+                ]
+              },
+              {
+                "text": "5 min",
+                "x": 185,
+                "y": 128,
+                "style": "mute",
+                "for": [
+                  "lease"
+                ]
+              },
+              {
+                "state": "state",
+                "shape": "rect",
+                "x": 110,
+                "y": 170,
+                "w": 130,
+                "h": 40,
+                "rx": 8,
+                "id": "leased"
+              },
+              {
+                "text": "leased",
+                "x": 175,
+                "y": 195,
+                "anchor": "middle",
+                "for": [
+                  "leased"
+                ]
+              },
+              {
+                "state": "return",
+                "shape": "path",
+                "d": "M110 190C80 160 80 80 108 50",
+                "head": "end",
+                "id": "lost"
+              },
+              {
+                "text": "lease lost,",
+                "x": 4,
+                "y": 100,
+                "style": "mute",
+                "for": [
+                  "lost"
+                ]
+              },
+              {
+                "text": "no attempt",
+                "x": 4,
+                "y": 118,
+                "style": "mute",
+                "for": [
+                  "lost"
+                ]
+              },
+              {
+                "text": "counted",
+                "x": 4,
+                "y": 136,
+                "style": "mute",
+                "for": [
+                  "lost"
+                ]
+              },
+              {
+                "state": "trans",
+                "shape": "path",
+                "d": "M175 210V318",
+                "head": "end",
+                "id": "fail"
+              },
+              {
+                "text": "attempt fails",
+                "x": 185,
+                "y": 265,
+                "style": "mute",
+                "for": [
+                  "fail"
+                ]
+              },
+              {
+                "state": "state",
+                "shape": "rect",
+                "x": 110,
+                "y": 320,
+                "w": 130,
+                "h": 40,
+                "rx": 8,
+                "id": "waiting"
+              },
+              {
+                "text": "waiting",
+                "x": 175,
+                "y": 345,
+                "anchor": "middle",
+                "for": [
+                  "waiting"
+                ]
+              },
+              {
+                "state": "return",
+                "shape": "path",
+                "d": "M240 340C350 330 350 60 242 40",
+                "head": "end",
+                "id": "backoff"
+              },
+              {
+                "text": "waits 30 s,",
+                "x": 284,
+                "y": 284,
+                "anchor": "end",
+                "style": "mute",
+                "for": [
+                  "backoff"
+                ]
+              },
+              {
+                "text": "then 60 s",
+                "x": 284,
+                "y": 302,
+                "anchor": "end",
+                "style": "mute",
+                "for": [
+                  "backoff"
+                ]
+              },
+              {
+                "state": "trans",
+                "shape": "path",
+                "d": "M110 200H60V488H108",
+                "head": "end",
+                "id": "third"
+              },
+              {
+                "text": "third",
+                "x": 4,
+                "y": 330,
+                "style": "mute",
+                "for": [
+                  "third"
+                ]
+              },
+              {
+                "text": "failure",
+                "x": 4,
+                "y": 348,
+                "style": "mute",
+                "for": [
+                  "third"
+                ]
+              },
+              {
+                "state": "state",
+                "shape": "rect",
+                "x": 110,
+                "y": 470,
+                "w": 130,
+                "h": 40,
+                "rx": 8,
+                "id": "dead"
+              },
+              {
+                "text": "dead-letter",
+                "x": 175,
+                "y": 495,
+                "anchor": "middle",
+                "for": [
+                  "dead"
+                ]
+              },
+              {
+                "state": "trans",
+                "shape": "path",
+                "d": "M240 490H350V30H242",
+                "head": "end",
+                "id": "requeue"
+              },
+              {
+                "text": "operator requeue",
+                "x": 343,
+                "y": 440,
+                "anchor": "end",
+                "style": "mute",
+                "for": [
+                  "requeue"
+                ]
+              },
+              {
+                "text": "resets attempts",
+                "x": 343,
+                "y": 458,
+                "anchor": "end",
+                "style": "mute",
+                "for": [
+                  "requeue"
+                ]
+              }
+            ]
+          },
+          "twin": "facts"
+        }
+      }
+    },
+    {
+      "type": "decision",
+      "id": "ask",
+      "title": "Sign off on the retry design?",
+      "markdown": "Choose one.",
+      "options": [
+        {
+          "value": "yes",
+          "label": "Sign off"
+        },
+        {
+          "value": "no",
+          "label": "Not yet"
+        }
+      ]
+    }
+  ]
+}

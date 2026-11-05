@@ -3979,7 +3979,7 @@ type VisualEntry = (
     &'static [&'static str],
 );
 
-const VISUAL_INVENTORY: [VisualEntry; 20] = [
+const VISUAL_INVENTORY: [VisualEntry; 21] = [
     (
         "visual-doctrine",
         "checks-page-figure-matches-its-question",
@@ -4140,6 +4140,30 @@ const VISUAL_INVENTORY: [VisualEntry; 20] = [
             "narrative",
             "decide",
             "decision",
+        ],
+    ),
+    // TSK-445: a mechanism review opens with an anchor and a figure of the
+    // whole, and draws the terms instead of defining them in a paragraph.
+    (
+        "explanation-method",
+        "retry-review-opens-with-the-whole",
+        "CF-METH-004",
+        "definitions_paragraph_before_any_figure",
+        true,
+        &[
+            "anchor",
+            "figure",
+            "diagram",
+            "draw",
+            "drawn",
+            "picture",
+            "section",
+            "heading",
+            "title",
+            "paragraph",
+            "term",
+            "terms",
+            "state",
         ],
     ),
     (

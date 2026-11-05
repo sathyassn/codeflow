@@ -200,6 +200,7 @@ def footer_rows(footer: list[str], branch: str | None, status: dict | None) -> s
       [mode]                         any frame
       [context, mode]                any frame
       [branch + hint, mode]          only with input in the editor
+      [status line + hint, mode]     only with input in the editor
       [status line, mode, hint]      only with input in the editor
 
     `mode` is a `FOOTER` row (manual, auto or bypass mode). `context` is
@@ -220,6 +221,10 @@ def footer_rows(footer: list[str], branch: str | None, status: dict | None) -> s
         if footer[0] == "  codeflow-qualify" or branch_row or status_row(footer[0], branch, status):
             return "any"
         if branch is not None and re.fullmatch(r"  " + re.escape(branch) + r" +" + EDITOR_HINT, footer[0]):
+            return "input"
+        # Claude Code 2.1.318 draws the hint on the status line row itself.
+        hinted = re.fullmatch(r"(.*\S) +" + EDITOR_HINT, footer[0])
+        if hinted and status_row(hinted.group(1), branch, status):
             return "input"
     if (len(footer) == 3 and status_row(footer[0], branch, status) and FOOTER.fullmatch(footer[1])
             and re.fullmatch(r" +" + EDITOR_HINT, footer[2])):
@@ -371,10 +376,18 @@ def accept_workspace_trust(pane: str, harness: str, repository: Path, screen: st
         if before_key:
             before_key()
         herdr("pane", "send-keys", pane, "Down" if harness == "claude" else "Up")
-        time.sleep(0.2)
-        current = herdr("pane", "read", pane, "--source", "visible", text=True)
-        if trust_choice(current, harness, repository) != "yes":
-            raise Refused("trust choice not visibly selected; no Enter sent")
+        # The dialog can take more than one repaint to show the moved cursor
+        # (Claude Code 2.1.318 took longer than 0.2 s). Poll the visible pane,
+        # one key only, until "yes" shows or the bound passes; any other
+        # screen still refuses through trust_choice.
+        deadline = time.monotonic() + 3.0
+        while True:
+            time.sleep(0.2)
+            current = herdr("pane", "read", pane, "--source", "visible", text=True)
+            if trust_choice(current, harness, repository) == "yes":
+                break
+            if time.monotonic() >= deadline:
+                raise Refused("trust choice not visibly selected within 3 s of one key; no Enter sent")
     if before_key:
         before_key()
     herdr("pane", "send-keys", pane, "y" if harness == "grok" else "Enter")

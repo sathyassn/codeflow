@@ -164,9 +164,9 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
     TSK-358 updates this sentence when it lands.
 - **Direct heavy Cargo work uses `codeflow reserve -- <command>` while another worktree may be gating; keep its target directory inside this worktree.**
 - **Hook and policy tasks run the worktree's own binary.** For a task that
-  changes the policy schema or a hook check, point `CODEFLOW_HOOK_BINARY`
-  (or `PATH`) at the worktree's `target/debug/codeflow`; never build inside
-  a hook. Rebuild it whenever `crates/codeflow-core/src/hooks/**`, the
+  changes the policy schema or a hook check, put the worktree's
+  `target/debug` first on `PATH`; never export `CODEFLOW_HOOK_BINARY` or build
+  inside a hook. Rebuild it whenever `crates/codeflow-core/src/hooks/**`, the
   policy parsing or the guard sources change: the binary embeds its source
   revision, a dirty flag and a digest of its hook, guard and policy source
   inputs, and the hook report prints path, version, source revision, input
