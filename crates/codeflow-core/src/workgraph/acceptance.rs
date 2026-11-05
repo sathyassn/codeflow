@@ -462,6 +462,7 @@ mod authority {
 pub use authority::{CriteriaBases, RunBases, StackingTips};
 
 mod imports;
+mod planning_move;
 mod receiving_merges;
 pub(crate) use imports::clear_cache as clear_import_cache;
 pub use imports::{imported_record_paths, imported_records, ImportedRecord};
@@ -1378,7 +1379,9 @@ enum Stacking<'a> {
 /// With `stacking`, a task pull request's own chain may also re-merge its
 /// integration target cleanly after the review (TSK-184), a reopening one
 /// included (TSK-340); direct work and a completion bound at a head
-/// (SPC-013 R-120) never stack.
+/// (SPC-013 R-120) never stack. A stacked chain's clean merges may also
+/// bring one landed planning move of the task's epic
+/// ([`planning_move`], TSK-1320).
 fn reviewed_span_problem(
     repo: &Repository,
     task: &RecordView,
@@ -1424,9 +1427,10 @@ fn reviewed_span_problem(
     // this record's status and Closeout. Anything else is judged as the
     // whole change from the reviewed commit to C, naming the commit that
     // stopped the stack.
-    let stack = match stacking {
-        Stacking::OnTarget(tips) => stacked(repo, task, reviewed, at, tips),
-        Stacking::Never => Stacked::No(None),
+    let no_tips = StackingTips::default();
+    let (stack, tips) = match stacking {
+        Stacking::OnTarget(tips) => (stacked(repo, task, reviewed, at, tips), tips),
+        Stacking::Never => (Stacked::No(None), &no_tips),
     };
     match stack {
         Stacked::Clean => {
@@ -1436,8 +1440,14 @@ fn reviewed_span_problem(
                     task.path
                 ));
             };
-            (reviewed_part(&then) != reviewed_part(&completed))
-                .then(|| "the record changed outside its status and Closeout after the reviewed commit; review the result again".into())
+            // A landed planning move of the task's epic, brought by the
+            // clean merges, is the one admitted difference (TSK-1320).
+            if reviewed_part(&then) == reviewed_part(&completed) {
+                return None;
+            }
+            planning_move::refusal(repo, &task.path, reviewed, at, &then, &completed, tips).map(
+                |why| format!("the record changed outside its status and Closeout after the reviewed commit {reviewed} ({why}); review the result again"),
+            )
         }
         Stacked::Unclean(merge) => Some(format!(
             "merge {merge} is not a clean re-merge from the task's integration target; review the result again"
@@ -1447,7 +1457,9 @@ fn reviewed_span_problem(
         // (SPC-013 R-60: the task's own later commits change only this
         // record's status and Closeout), leading with the net change when
         // there is one and naming the commit that stopped it.
-        Stacked::No(None) => later_change_finding(repo, &task.path, &completed, reviewed, at, None),
+        Stacked::No(None) => {
+            later_change_finding(repo, &task.path, &completed, reviewed, at, None)
+        }
         Stacked::No(Some(stop)) => {
             let detail = match stop {
                 Stop::Commit { commit, changed } => format!("commit {commit}: {changed}"),

@@ -661,14 +661,15 @@ pub fn run(args: &CiArgs) -> i32 {
     };
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
+    let target_tip = target_tip(
+        &root,
+        &line_target,
+        args.into.as_deref(),
+        &names,
+        &environment,
+    );
+    target_containment_warning(&root, &line_target, &head, &target_tip, &names, &mut tagged);
     if scope_ready {
-        let target_tip = target_tip(
-            &root,
-            &line_target,
-            args.into.as_deref(),
-            &names,
-            &environment,
-        );
         record_checks(
             &root,
             &base_candidates,
@@ -1409,6 +1410,62 @@ fn target_tip(
 pub(super) struct NoTarget {
     pub(super) message: String,
     pub(super) remedy: String,
+}
+
+/// Review-time drift is advisory, independently of planning admission.
+fn target_containment_warning(
+    root: &Path,
+    target: &str,
+    head: &str,
+    tip: &Result<String, NoTarget>,
+    names: &Names<'_>,
+    tagged: &mut Vec<TaggedViolation>,
+) {
+    let result = (|| -> Result<Option<(String, String)>, String> {
+        // Reuse the live destination answer already obtained for the range.
+        // A failed remote read never makes an older tracking ref current.
+        let live = match names.release.get() {
+            Some(Err(_)) => return Err("the target's remote scope could not be verified".into()),
+            Some(Ok(Some((destination, _)))) if destination.url.is_some() => {
+                let branch = named_branch(target).unwrap_or_else(|| target.to_string());
+                Some(
+                    codeflow_core::workgraph::release_line::advertised_tip_here(
+                        root,
+                        destination,
+                        &branch,
+                    )?
+                    .to_string(),
+                )
+            }
+            _ => None,
+        };
+        let tip = match live.as_ref() {
+            Some(tip) => tip,
+            None => tip.as_ref().map_err(|e| e.message.clone())?,
+        };
+        if codeflow_core::workgraph::claim_base::head_contains(root, head, tip)? {
+            return Ok(None);
+        }
+        Ok(Some((
+            format!("head does not contain target '{target}' at {tip}"),
+            tip.clone(),
+        )))
+    })();
+    let (message, remedy) = match result {
+        Ok(None) => return,
+        Ok(Some((message, tip))) => (
+            message,
+            codeflow_core::remedy::WORK_TARGET_TIP.with(&[("tip", &tip)]),
+        ),
+        Err(error) => (
+            format!("target '{target}' tip is unverified: {error}"),
+            codeflow_core::remedy::WORK_TARGET_UNVERIFIED.remedy(),
+        ),
+    };
+    tagged.push(TaggedViolation {
+        sha: None,
+        violation: Violation::new("work.target_tip", PolicyLevel::Warn, message, remedy),
+    });
 }
 
 impl NoTarget {
@@ -2156,7 +2213,10 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
     } else if blocking {
         eprintln!("codeflow ci: FAILED — {blocks} blocking, {warnings} warning(s)");
     } else if skipped.is_empty() {
-        eprintln!("codeflow ci: {warnings} warning(s) only — proceeding");
+        eprintln!(
+            "codeflow ci: {warnings} warning(s) only; proceeding (checks run: {})",
+            ran.join(", ")
+        );
     } else {
         eprintln!(
             "codeflow ci: {warnings} warning(s); skipped: {}",

@@ -1,13 +1,16 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "regenerate": "npm run build && node scripts/runtime-scripts.mjs dist",
   "lock_sha256": "0c6150b21da548d06df8c54802384799750dddbed9f16a6141eac6948edd056e",
-  "pre_paint_template": "(function () {\n  var d = document.documentElement, configured = __THEME__; d.dataset.portalTheme = configured;\n  function get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }\n  function pick(v, list, def) { return list.indexOf(v) >= 0 ? v : def; }\n  var skin = pick(({instrument:'graphite',technical:'graphite',editorial:'slate',ink:'sage'}[get('cf-portal-skin')]||get('cf-portal-skin')), ['graphite', 'slate', 'sage'], ({folio:'sage',signal:'graphite'}[configured] || configured));\n  var pref = pick(get('starlight-theme'), ['light', 'dark', 'system'], 'system');\n  var dark = pref === 'dark' || (pref === 'system' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);\n  d.setAttribute('data-cfp-skin', skin);\n  d.setAttribute('data-theme', dark ? 'dark' : 'light');\n  d.setAttribute('data-cfp-typeface', pick(({instrument:'archivo',editorial:'inter'}[get('cf-portal-typeface')]||get('cf-portal-typeface')), ['archivo', 'inter', 'plex'], 'inter'));\n  d.setAttribute('data-cfp-scale', pick(get('cf-portal-scale'), ['compact', 'default', 'large'], 'default'));\n  var w = parseInt(get('cf.nav.width'), 10);\n  if (w >= 220 && w <= 360) d.style.setProperty('--cf-nav-w', w + 'px');\n  if (get('cf.nav.open') === 'false') d.setAttribute('data-cf-nav', 'collapsed');\n  if (get('cf.toc.open') === 'false') d.setAttribute('data-cf-toc', 'collapsed');\n  d.setAttribute('data-cf-preload', '');\n})();",
+  "pre_paint_template": "(function () {\n  var choices = __DISPLAY__; globalThis.CF_DISPLAY_SETTINGS = choices; globalThis.CF_RUNTIME_LAYOUT = __LAYOUT__;\n  var d = document.documentElement, configured = __THEME__; d.dataset.portalTheme = configured;\n  function get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }\n  function pick(v, list, def) { return list.indexOf(v) >= 0 ? v : def; }\n  var skin = pick(({instrument:'graphite',technical:'graphite',editorial:'slate',ink:'sage'}[get('cf-portal-skin')]||get('cf-portal-skin')), Object.keys(choices.themes), ({folio:'sage',signal:'graphite'}[configured] || configured));\n  var pref = pick(({auto:'system'}[get('starlight-theme')] || get('starlight-theme')), choices.modes, 'system');\n  var dark = pref === 'dark' || (pref === 'system' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);\n  d.setAttribute('data-cfp-skin', skin);\n  d.setAttribute('data-cf-accent', pick(get('cf-portal-accent'), choices.themes[skin], choices.defaultAccent));\n  d.setAttribute('data-theme', dark ? 'dark' : 'light');\n  d.setAttribute('data-cfp-typeface', pick(({instrument:'archivo',editorial:'inter'}[get('cf-portal-typeface')]||get('cf-portal-typeface')), ['archivo', 'inter', 'plex'], 'inter'));\n  d.setAttribute('data-cfp-scale', pick(get('cf-portal-scale'), choices.sizes, 'default'));\n  var w = parseInt(get('cf.nav.width'), 10);\n  if (w >= 220 && w <= 360) d.style.setProperty('--cf-nav-w', w + 'px');\n  if (get('cf.nav.open') === 'false') d.setAttribute('data-cf-nav', 'collapsed');\n  if (get('cf.toc.open') === 'false') d.setAttribute('data-cf-toc', 'collapsed');\n  d.setAttribute('data-cf-preload', '');\n})();",
+  "pre_paint_sha256": {
+    "graphite": "5fa103445c7a14b61a6a4d4846c56b4ae91ff32a1c135c9814a4dc7dbf23efed",
+    "slate": "6e2bb93a8b951a62a504ae9e368d509ee8378c5cb794e199fb05de1782b2b766",
+    "sage": "f7d9d525e43a7fbd495f5a724a417ca92dffb646e8254c2042b8610b085bb1e1",
+    "signal": "92209de7214f362c5a03675c7204a56c1889b10d18190e713aca2c734418e4a4",
+    "folio": "25172aa776cb5e0b6a4cc584881d16ea89f5812caba543816f2b9c5af923cdbd"
+  },
   "scripts": [
-    {
-      "sha256": "556a395a9e1aa928fa9d280ca5e029f5c2a279aa087f015402e9c056e808e600",
-      "starts": "window.StarlightThemeProvider = (() => {\n\t\tconst"
-    },
     {
       "sha256": "560ae070a06f20cdd7a622c9e9f12fd55cba60707094a2e462d15d7c1328b93a",
       "starts": "var e=document.getElementById(`starlight__sideba"

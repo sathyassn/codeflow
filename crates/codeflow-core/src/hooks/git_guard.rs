@@ -2664,6 +2664,13 @@ pub(crate) fn word_readings(word: &str) -> Option<Vec<String>> {
 /// The most words one brace expansion yields before the guard stops
 /// reading it and refuses instead.
 const BRACE_WORD_LIMIT: usize = 64;
+/// Most brace groups one word may nest or chain before expansion gives up
+/// (`None`, a refusal): bounds the recursion depth of `brace_expand`.
+const BRACE_DEPTH_LIMIT: usize = 256;
+/// Longest word `brace_expand` reads (`None`, a refusal, past it). It is the
+/// longest path the supported systems open, and small enough that the
+/// nested-group scan (the square of the length) stays cheap.
+const BRACE_WORD_BYTES: usize = 4096;
 
 /// The most `{`, `}` and `,` characters a word may hold for the guard to
 /// read its braces; each may have been quoted or escaped (see
@@ -2739,7 +2746,12 @@ fn plain_brace_char(c: char) -> char {
 /// reads them: the first group from the left expands, then each result in
 /// turn. `None` past [`BRACE_WORD_LIMIT`] words.
 pub(crate) fn brace_expand(word: &str) -> Option<Vec<String>> {
-    fn into(word: &str, out: &mut Vec<String>) -> Option<()> {
+    fn into(word: &str, out: &mut Vec<String>, depth: usize) -> Option<()> {
+        // Each level removes one group, so a word of many groups would
+        // recurse as deep as it has groups; past the cap it cannot be read.
+        if depth > BRACE_DEPTH_LIMIT {
+            return None;
+        }
         let Some((open, close, alternatives)) = brace_group(word) else {
             if out.len() >= BRACE_WORD_LIMIT {
                 return None;
@@ -2751,12 +2763,18 @@ pub(crate) fn brace_expand(word: &str) -> Option<Vec<String>> {
             into(
                 &[&word[..open], alternative.as_str(), &word[close + 1..]].concat(),
                 out,
+                depth + 1,
             )?;
         }
         Some(())
     }
+    // Each group's interior is scanned again for every nested group, so the
+    // work grows with the square of the word; a longer word cannot be read.
+    if word.len() > BRACE_WORD_BYTES {
+        return None;
+    }
     let mut out = Vec::new();
-    into(word, &mut out)?;
+    into(word, &mut out, 0)?;
     Some(out)
 }
 
@@ -2765,22 +2783,23 @@ pub(crate) fn brace_expand(word: &str) -> Option<Vec<String>> {
 /// top-level comma nor a sequence is text, and so is `${...}`.
 fn brace_group(word: &str) -> Option<(usize, usize, Vec<String>)> {
     let bytes = word.as_bytes();
-    let matching = |open: usize| {
-        let mut depth = 0_usize;
-        for (at, b) in bytes.iter().enumerate().skip(open) {
-            match b {
-                b'{' => depth += 1,
-                b'}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Some(at);
-                    }
+    // One pass pairs every `{` with its closing `}` (the first place the
+    // depth from that `{` returns to zero). Scanning on from each `{` was
+    // quadratic on a long word of unmatched `{` (TSK-1258 sibling sweep).
+    let mut pairs = vec![None; bytes.len()];
+    let mut open = Vec::new();
+    for (at, b) in bytes.iter().enumerate() {
+        match b {
+            b'{' => open.push(at),
+            b'}' => {
+                if let Some(start) = open.pop() {
+                    pairs[start] = Some(at);
                 }
-                _ => {}
             }
+            _ => {}
         }
-        None
-    };
+    }
+    let matching = |open: usize| pairs[open];
     let mut at = 0;
     while at < bytes.len() {
         if bytes[at] != b'{' {
@@ -5578,9 +5597,22 @@ fn find_action_violation(
         }
     }
     // The shell expands a glob starting point before `find` runs.
-    let start_paths: Vec<PathBuf> = starts
-        .iter()
-        .flat_map(|start| word_readings(start).unwrap_or_else(|| vec![(*start).to_string()]))
+    // A starting point whose braces cannot all be read refuses, never reads
+    // as the unexpanded word (TSK-1258).
+    let mut readings = Vec::new();
+    for start in &starts {
+        match word_readings(start) {
+            Some(words) => readings.extend(words),
+            None => {
+                return Some(hook_integrity_violation(
+                    level,
+                    "cannot read find targets: a brace expansion in a starting point is too large to read".to_string(),
+                ))
+            }
+        }
+    }
+    let start_paths: Vec<PathBuf> = readings
+        .into_iter()
         .flat_map(|start| {
             let glob = WordGlob::new(&start, cwd);
             if has_glob(&start) {
@@ -14923,6 +14955,51 @@ mod tests {
             String::from_utf8_lossy(&output.stdout)
         );
     }
+    /// TSK-1258 sweep: a `find` starting point whose braces cannot all be
+    /// read refuses with its cause, never reads as the unexpanded word.
+    #[test]
+    fn find_start_with_unreadable_braces_refuses_with_its_cause() {
+        let dir = std::env::temp_dir();
+        let word = format!("{}x{}", "{".repeat(100_000), "}".repeat(100_000));
+        let args = vec![word, "-name".to_string(), "a".to_string()];
+        let violation = find_action_violation(&args, PolicyLevel::Block, &dir, &dir, "find x")
+            .expect("an unreadable starting point refuses");
+        assert!(
+            violation
+                .message
+                .contains("a brace expansion in a starting point is too large"),
+            "{}",
+            violation.message
+        );
+    }
+
+    /// TSK-1258 sibling sweep: brace expansion stays bounded on a long word.
+    /// Unmatched `{` once cost a scan to the end of the word each, and a
+    /// chain of single-word groups recursed once per group.
+    #[test]
+    fn brace_expansion_stays_bounded_on_long_words() {
+        let started = std::time::Instant::now();
+        // Unmatched `{` inside the length bound read as text, in one pass.
+        let unmatched = "{".repeat(BRACE_WORD_BYTES);
+        assert_eq!(brace_expand(&unmatched), Some(vec![unmatched.clone()]));
+        // Past the length bound a word cannot be read: a refusal, at once,
+        // for unmatched braces and for nested balanced ones (each group's
+        // interior was scanned again for every group inside it).
+        assert_eq!(brace_expand(&"{".repeat(200_000)), None);
+        let nested = format!("{}x{}", "{".repeat(100_000), "}".repeat(100_000));
+        assert_eq!(brace_expand(&nested), None);
+        assert_eq!(brace_expand(&"{1..1}".repeat(BRACE_DEPTH_LIMIT + 1)), None);
+        assert_eq!(
+            brace_expand("a{b,c}d"),
+            Some(vec!["abd".into(), "acd".into()])
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "brace expansion took {:?}",
+            started.elapsed()
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn r22_missing_working_directory_refuses() {

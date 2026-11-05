@@ -2679,7 +2679,11 @@ fn portal_utility_tokens_match_present_skins() {
         for mode in ["light", "dark"] {
             let pair = format!("{skin}-{mode}");
             let roles = kit[&pair].as_object().expect("kit pair");
-            assert_eq!(roles.len(), 31, "complete kit role set");
+            assert_eq!(
+                roles.len(),
+                40,
+                "complete kit role set, including stage and accent-family roles"
+            );
             for (sheet, css, marker) in [
                 (
                     "portal",
