@@ -3563,6 +3563,29 @@ fn a_task_branch_that_is_not_utf8_is_active_work() {
     assert!(has_active_branch(&repo, &record, &["task/".to_string()]));
 }
 
+/// TSK-416 AC-3: a task branch that landed on `origin/main` is finished
+/// work, even when the local `main` is behind the landing.
+#[test]
+fn a_task_branch_landed_on_the_fetched_line_is_not_active_beside_a_stale_local_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, stale) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+    let landed = crate::git::add_commit(&repo, &[(b"a", b"y")]);
+    repo.set_head_detached(landed).unwrap();
+    repo.reference("refs/heads/main", stale, true, "test")
+        .unwrap();
+    repo.reference("refs/remotes/origin/main", landed, true, "test")
+        .unwrap();
+    repo.reference("refs/heads/task/TSK-001-work", landed, true, "test")
+        .unwrap();
+    let record = RecordView::parse(
+        RecordKind::Task,
+        TASK_PATH,
+        &task("TSK-001", "todo", CRITERIA, ""),
+    )
+    .unwrap();
+    assert!(!has_active_branch(&repo, &record, &["task/".to_string()]));
+}
+
 /// Issue 79: the graph of a revision is read through a tree that holds a
 /// directory whose name is not valid UTF-8. git2's own walk stopped there
 /// with an error; the record beside it is read and the odd name is no record.
