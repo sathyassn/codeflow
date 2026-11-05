@@ -20,6 +20,9 @@ pub(super) struct LineSyncTip(pub(super) Oid);
 pub(super) struct ReviewedTaskHead {
     pub(super) head: Oid,
     pub(super) branch_base: Option<Oid>,
+    /// For an archived completion, the commit that made it. It credits only
+    /// where it lies on the task's own chain (see [`made_on_own_chain`]).
+    pub(super) made_at: Option<Oid>,
 }
 
 pub(super) fn findings(
@@ -130,6 +133,17 @@ fn reviewed_own_commits(
 ) -> Result<BTreeSet<Oid>, String> {
     let mut own = BTreeSet::new();
     for task in reviewed {
+        if let Some(at) = task.made_at {
+            if !made_on_own_chain(
+                repo,
+                base,
+                at,
+                task.branch_base.is_some(),
+                receiving_commits,
+            )? {
+                continue;
+            }
+        }
         let reviewed = task.head;
         if !is_ancestor_or_same(repo, reviewed, head)? {
             return Err(format!(
@@ -160,6 +174,46 @@ fn reviewed_own_commits(
         }
     }
     Ok(own)
+}
+
+/// Whether an archived completion made at `at` was made on a task's own
+/// chain: on the judged first-parent chain itself, or, when the judged
+/// branch is a receiving line (`on_task_branch` false), on the first-parent
+/// chain a receiving merge landed. A completion that only arrived through
+/// a task branch's own merge, such as one made on another task's tip and
+/// merged in, is not on its chain and credits nothing.
+fn made_on_own_chain(
+    repo: &Repository,
+    base: Oid,
+    at: Oid,
+    on_task_branch: bool,
+    receiving_commits: &BTreeSet<Oid>,
+) -> Result<bool, String> {
+    if receiving_commits.contains(&at) {
+        return Ok(true);
+    }
+    if on_task_branch {
+        return Ok(false);
+    }
+    let unreadable = |error: git2::Error| format!("cannot read the chain of {at}: {error}");
+    for merge in receiving_commits {
+        let commit = repo.find_commit(*merge).map_err(unreadable)?;
+        let parents = history::parents(repo, &commit).map_err(unreadable)?;
+        for side in parents.iter().skip(1) {
+            let mut step = *side;
+            while !receiving_commits.contains(&step) && !is_ancestor_or_same(repo, step, base)? {
+                if step == at {
+                    return Ok(true);
+                }
+                let commit = repo.find_commit(step).map_err(unreadable)?;
+                match history::parents(repo, &commit).map_err(unreadable)?.first() {
+                    Some(parent) => step = *parent,
+                    None => break,
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Whether a merge only brings in its own target line: every parent other
@@ -315,6 +369,7 @@ mod tests {
             .map(|head| ReviewedTaskHead {
                 head: *head,
                 branch_base: None,
+                made_at: None,
             })
             .collect();
         findings(
@@ -530,6 +585,7 @@ mod tests {
         let reviewed = [ReviewedTaskHead {
             head: reviewed,
             branch_base: Some(line),
+            made_at: None,
         }];
         let found = findings(
             &repo,
@@ -683,6 +739,131 @@ mod tests {
         assert!(
             !found.iter().any(|finding| !finding.note),
             "both tasks now have their own valid completion: {found:?}"
+        );
+    }
+
+    fn block(key: &str, reviewed: Oid, reason: bool) -> String {
+        let reason = if reason {
+            "  reason: regression found\n"
+        } else {
+            ""
+        };
+        format!("```yaml\n{key}:\n{reason}  reviewed: {reviewed}\n  review: https://example.test/review\n  criteria:\n    AC-1: verified | fixture passed\n  journey: verified | fixture ran\n  not_verified: none\n  follow_ups: none\n  verdict: approved\n```\n")
+    }
+
+    /// How the forged in-range completion of TSK-002 reaches its branch.
+    #[derive(Clone, Copy)]
+    enum Forge {
+        /// On TSK-002's own chain, after it merged TSK-001's unlanded tip,
+        /// naming that tip.
+        NamesOther,
+        /// The same, naming TSK-002's own commit (the control).
+        NamesOwn,
+        /// Committed on a side branch built on TSK-001's tip, naming that
+        /// tip, and merged into TSK-002's branch.
+        SideBranch,
+    }
+
+    /// A forged completion of TSK-002 that a reopen archives, then a
+    /// genuine completion. TSK-001's unlanded work comes in through
+    /// TSK-002's branch and must stay refused.
+    fn forged_archive(forge: Forge) -> Vec<Finding> {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, base) = crate::git::repo_with_tree(
+            dir.path(),
+            &[
+                (b"project-management/tasks/TSK-001.md", task(1).as_bytes()),
+                (b"project-management/tasks/TSK-002.md", task(2).as_bytes()),
+            ],
+        );
+        let earlier = commit(&repo, base, b"src/earlier.rs", b"unreviewed other work\n");
+        let later = commit(&repo, base, b"src/later.rs", b"later work\n");
+        let done = task(2).replace("status: todo", "status: complete");
+        let (named, first) = match forge {
+            Forge::NamesOther | Forge::NamesOwn => {
+                let imported = merge(&repo, later, earlier);
+                let named = if matches!(forge, Forge::NamesOther) {
+                    earlier
+                } else {
+                    later
+                };
+                let first = commit(
+                    &repo,
+                    imported,
+                    b"project-management/tasks/TSK-002.md",
+                    format!("{done}{}", block("acceptance", named, false)).as_bytes(),
+                );
+                (named, first)
+            }
+            Forge::SideBranch => {
+                let forged = commit(
+                    &repo,
+                    earlier,
+                    b"project-management/tasks/TSK-002.md",
+                    format!("{done}{}", block("acceptance", earlier, false)).as_bytes(),
+                );
+                (earlier, merge(&repo, later, forged))
+            }
+        };
+        let archived = block("acceptance_superseded", named, true);
+        let reopened = commit(
+            &repo,
+            first,
+            b"project-management/tasks/TSK-002.md",
+            format!("{}{archived}", task(2)).as_bytes(),
+        );
+        let reviewed = commit(&repo, reopened, b"src/later.rs", b"reviewed later work\n");
+        let completion = commit(
+            &repo,
+            reviewed,
+            b"project-management/tasks/TSK-002.md",
+            format!("{done}{archived}{}", block("acceptance", reviewed, false)).as_bytes(),
+        );
+        let head = merge(&repo, base, completion);
+        repo.reference("refs/heads/main", base, true, "published default")
+            .unwrap();
+        repo.reference(
+            "refs/heads/integration/EPC-001-line",
+            head,
+            true,
+            "fixture line",
+        )
+        .unwrap();
+        let found = range(&repo, base, head);
+        drop(dir);
+        found
+    }
+
+    fn refuses_earlier(found: &[Finding]) -> bool {
+        found
+            .iter()
+            .any(|finding| !finding.note && finding.message.contains("src/earlier.rs"))
+    }
+
+    #[test]
+    fn a_forged_archive_cannot_credit_another_tasks_work() {
+        let found = forged_archive(Forge::NamesOther);
+        assert!(
+            refuses_earlier(&found),
+            "another task's unreviewed work must stay refused: {found:?}"
+        );
+    }
+
+    #[test]
+    fn an_archive_naming_its_own_commit_does_not_cover_an_import() {
+        let found = forged_archive(Forge::NamesOwn);
+        assert!(
+            refuses_earlier(&found),
+            "imported work stays refused: {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_forged_archive_on_a_merged_side_branch_cannot_credit_another_tasks_work() {
+        let found = forged_archive(Forge::SideBranch);
+        assert!(
+            refuses_earlier(&found),
+            "a completion made on another task's tip stays refused: {found:?}"
         );
     }
 }

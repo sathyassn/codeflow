@@ -4232,28 +4232,17 @@ fn completions_received(
                 reviewed.push(receiving_merges::ReviewedTaskHead {
                     head: proof.reviewed,
                     branch_base,
+                    made_at: None,
                 });
-                // A reopened task's earlier completions, which the binding
-                // above proved this history made (`archive_problem`), keep
-                // the credit for the task's own work they reviewed. Only
-                // this task's own commits are walked, so no other task's
-                // landing is covered; an archived review outside the head
-                // credits nothing.
-                for archived in task.superseded_blocks() {
-                    let Some(earlier) = archived
-                        .parsed
-                        .ok()
-                        .and_then(|block| commit_of(repo, &block.reviewed))
-                    else {
-                        continue;
-                    };
-                    if is_ancestor_or_same(repo, earlier, head_oid)? {
-                        reviewed.push(receiving_merges::ReviewedTaskHead {
-                            head: earlier,
-                            branch_base,
-                        });
-                    }
-                }
+                reviewed.extend(archived_reviews(
+                    repo,
+                    task,
+                    anchor,
+                    head_oid,
+                    default_target,
+                    &with_own_line(run.stacking(), line, task, amendable.then_some(head_oid)),
+                    branch_base,
+                )?);
             }
             // A completion made before the range head but bound at it (a
             // frozen range) did not make the head's change: name the head.
@@ -4274,6 +4263,71 @@ fn completions_received(
         repo, base_oid, head_oid, receiving, &after, &reviewed, sync_tip,
     )?);
     Ok(findings)
+}
+
+/// The earlier completions of a reopened `task` whose reviews still credit
+/// its own work. An archived block counts only as strictly as an active
+/// one: this range's history made it at a commit (`at`) where it binds
+/// again through the same reviewed-span check ([`binding_source`]) to the
+/// same reviewed commit, and that commit is inside the judged head. Where
+/// `at` lies is judged by [`receiving_merges`]. A block the range did not
+/// make, that does not parse, or that no longer binds, credits nothing; an
+/// unreadable history is an error.
+fn archived_reviews(
+    repo: &Repository,
+    task: &RecordView,
+    anchor: Oid,
+    head: Oid,
+    default_target: Option<Oid>,
+    stacking: &StackingTips,
+    branch_base: Option<Oid>,
+) -> Result<Vec<receiving_merges::ReviewedTaskHead>, String> {
+    let archive = task.superseded_blocks();
+    if archive.is_empty() {
+        return Ok(Vec::new());
+    }
+    let made = completions_made(repo, task, Some(anchor), Landing::Commit(head))?;
+    let mut credited = Vec::new();
+    for archived in archive {
+        let Ok(mut block) = archived.parsed else {
+            continue;
+        };
+        block.superseded = false;
+        block.reason = None;
+        let Some(reviewed) = commit_of(repo, &block.reviewed) else {
+            continue;
+        };
+        if !is_ancestor_or_same(repo, reviewed, head)? {
+            continue;
+        }
+        for at in made
+            .iter()
+            .filter(|made| made.block == block)
+            .map(|made| made.at)
+        {
+            let Some(then) = record_at(repo, at, task)? else {
+                continue;
+            };
+            let bound = binding_source(
+                repo,
+                &then,
+                Landing::Commit(at),
+                reviewed,
+                Carried::Transport(Transport::TaskLanding),
+                stacking,
+                default_target,
+                Some(anchor),
+            );
+            if bound.is_ok_and(|proof| proof.reviewed == reviewed) {
+                credited.push(receiving_merges::ReviewedTaskHead {
+                    head: reviewed,
+                    branch_base,
+                    made_at: Some(at),
+                });
+            }
+        }
+    }
+    Ok(credited)
 }
 
 /// The target tips a completion in a range may stack merges from: the run's
