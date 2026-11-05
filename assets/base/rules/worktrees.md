@@ -103,7 +103,7 @@ on its first-parent history with the candidate's tree,
 refuses when a worktree uses the branch or a pull request is open from it,
 then removes it and records the proof in the ledger; `--dry-run` shows the
 proof first. A task branch never uses it. A candidate that never landed
-stays: in a clone with an `origin` remote, a local branch no remote holds and no
+stays: in a clone with a remote, a local branch no remote holds and no
 worktree uses counts neither as a completion nor as a claim. Never force-remove a
 dirty worktree; preserve or harvest dirty or untracked work first. Unproven
 work is retained, never guessed safe.
