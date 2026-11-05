@@ -1,0 +1,11 @@
+id = "TSK-1353"
+uid = "a499a7b6-3ff9-42f8-8ac8-726b0db914df"
+kind = "TSK"
+title = "A declared base check reaches every CI template and survives update"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T21:19:44Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
