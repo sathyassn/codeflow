@@ -51,10 +51,10 @@ approved node remains execution evidence.
   unavailable; use that harness's native task composition.
 - **Standalone task** for one outcome: its record and code land together in
   one reviewed PR, which is its own candidate.
-- **Integration-branch flow** for a multi-task body of work: an epic of serial
-  and/or parallel tasks lands in gated batch candidates on a shared
-  `integration/<epic>` branch, not on `main`, and the human reviews one final
-  PR. See "Managing a body of work" below.
+- **Integration-branch flow** for a multi-task body of work whose task PRs
+  no human merges as they become ready: the epic's tasks land in gated batch
+  candidates on a shared `integration/<epic>` branch, and a human merges the
+  line's checkpoint PR to `main`. See "Managing a body of work" below.
 
 ## Planning an epic
 
@@ -149,12 +149,16 @@ standalone tasks, or both; it is not itself a reason to share a branch. Apply
 the flow below independently to each coherent multi-task epic; the delivery
 process reference draws it.
 
-A multi-task epic lands on a shared, non-protected **integration branch**, not
-on `main`, and the human reviews **one** final PR. Every other gate (commit
+One landing rule holds in every project (CodeFlow ADR-0098). A task PR targets `main`
+when a human can merge it as it becomes ready. Otherwise its epic's tasks
+land on a shared, non-protected **integration branch** (the epic line), where
+agents merge reviewed tasks in batches, and the line reaches `main` through a
+**checkpoint PR** that a human merges when available. A checkpoint PR is
+opened, or refreshed, at every green line tip. Each task or epic record
+changes only on its own epic's line or on `main`. Every other gate (commit
 standards, secret scan, destructive-op rules, the test gate) still applies on
-every branch; only the merge into `main` is deferred. This is the default
-landing shape for a multi-task epic; an exception needs a recorded rationale
-in the approved plan before tasks are allocated. The branch holds one coherent
+every branch. Each task's `integration_target` records that choice. The
+branch holds one coherent
 epic outcome, never unrelated standalone tasks. The orchestrating agent
 chooses this routine mechanism without an operator question once the outcome,
 acceptance boundaries, and dependency graph are clear. An explicit operator
@@ -202,13 +206,15 @@ waive the clarity, safety, review or protected-branch conditions.
    attributes the failure to it; it and its dependents leave the batch, the
    fix goes in that task's PR, and the rest is regated. A shared runner or
    environment defect is fixed at its owner and the same candidate regated.
-5. **Drift control** (long-running epics): periodically **merge** `origin/main`
-   *into* the integration branch. Merge only: never rebase a shared branch;
-   rebase only task branches.
+5. **Drift control:** a line takes `main` only by **merging** `origin/main`
+   *into* the integration branch, through the sync route `codeflow ci`
+   admits (TSK-1312). Merge only: never rebase a shared branch; rebase only
+   task branches.
 6. **Finish once.** After the last batch lands, prove the epic once on the
    integration branch (the full gate over everything, `validate --docs`, the
-   capability, doc and epic-record updates), close the epic, and raise
-   **one** PR `integration -> main`. Where the project adopted the
+   capability, doc and epic-record updates), close the epic, and refresh
+   the checkpoint PR `integration -> main`, which then carries the close.
+   Where the project adopted the
    `cf-estimate` time-box profile, the epic close on the line also runs
    `codeflow estimate outcomes --epic <id>` at the line tip, commits the
    result as the epic's outcome record
@@ -218,12 +224,12 @@ waive the clarity, safety, review or protected-branch conditions.
    follows the worktree rules' "Cleanup" section, merge proof first. That
    PR's `codeflow ci` judges each task of the line, and of a verified epic
    line that joined it, at the task's landing on its line, so a task
-   reopened and re-completed in its own PR passes as it did there. An
-   early checkpoint PR from the line gets the same judgment.
+   reopened and re-completed in its own PR passes as it did there. Every
+   checkpoint PR from the line gets the same judgment.
 
 Boundaries are unchanged: `main` and every protected branch stay
 human-merge-only. The integration branch is not a backdoor: its content
-reaches `main` only through that final reviewed PR.
+reaches `main` only through a human-merged checkpoint PR.
 
 ## Why the git boundary is remote
 

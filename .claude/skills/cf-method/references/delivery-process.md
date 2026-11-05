@@ -57,8 +57,8 @@ Four rules hold everywhere:
                                                    |
                                                    v
                                +---------------------------------------------+
-                               | per epic: close once, one PR to main,       |
-                               | the operator merges                         |
+                               | per green line tip: checkpoint PR to main,  |
+                               | a human merges it when available            |
                                +---------------------------------------------+
 ```
 
@@ -67,6 +67,14 @@ allocated on its own branch with `codeflow task new --standalone-reason`, and
 its record and code land in the same reviewed PR. That PR is its own
 candidate: it lands on the integration line it targets, or, when it targets
 `main`, it is the PR the operator merges.
+
+Where a task lands follows one rule (CodeFlow ADR-0098). A task PR targets `main`
+when a human can merge it as it becomes ready. Otherwise it targets its
+epic's line, agents merge it there in a batch, and a checkpoint PR from the
+line to `main` is opened, or refreshed, at every green line tip for a human
+to merge when available. Each task or epic record changes only on its own
+epic's line or on `main`, and a line takes `main` only through the sync
+route `codeflow ci` admits (TSK-1312).
 
 ## 2. From a spec to an epic and tasks
 
@@ -221,6 +229,9 @@ reviewer; another task's criteria are never changed from this PR.
        | green                          | red
        v                                v
  integration line advances        diagnose first
+ green tip: checkpoint PR to main       |
+ opened or refreshed; a human           |
+ merges it when available               |
        |                                |
        |                 +--------------+---------------+
        |                 v                              v
@@ -235,7 +246,7 @@ reviewer; another task's criteria are never changed from this PR.
  <epic done?> --no--> next tasks
        | yes
        v
- epic close: prove once, one PR to main; the operator merges
+ epic close: prove once on the line; the next checkpoint PR carries it
 ```
 
 - Builders run targeted tests and the quick gate (`codeflow test --mode
@@ -336,7 +347,8 @@ no epic, with the event that revisits it), or drop with the reason.
                                                              unit review; a path two
                                                              tasks changed is the
                                                              primary's look
- close          epic acceptance block, one PR to main,      operator merges main
+ close          epic acceptance block, carried by the       operator merges main
+                checkpoint PR to main,
                 cleanup with merge proof
 ```
 

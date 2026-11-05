@@ -112,15 +112,19 @@ is refused; a human at their own terminal is warned. See `worktrees.md`.
 
 ## Bodies of work
 
-**Bodies of work:** a multi-task epic lands on a non-protected
+**Bodies of work:** a task PR targets `main` when a human can merge it as
+it becomes ready. Otherwise the epic's tasks land on a non-protected
 `integration/<epic>` branch (agents merge there) in batches: every
 reviewed task head ready when the line lands goes on one candidate, gated
 once, one candidate per line at a time (see `worktrees.md`, "Parallel work
 and integration"). A red candidate is
 diagnosed first, and a member and its dependents leave it only when
-evidence attributes the failure to it. Only the finished body
-reaches `main`, via one human-reviewed PR that the operator merges. See
-cf-method, "Managing a body of work" (standard and full tiers).
+evidence attributes the failure to it. At every green line tip a
+checkpoint PR from the line to `main` is opened or refreshed, and a human
+merges it when available. Each task or epic record changes only on its
+own epic's line or on `main`, and a line takes `main` only by merging it
+in through the sync route `codeflow ci` admits. See cf-method, "Managing a
+body of work" (standard and full tiers), and CodeFlow ADR-0098.
 
 Direct commits on an epic line are refused at push. `codeflow ci` refuses
 them on a landing candidate before its gate when run with `--line-tip

@@ -418,9 +418,11 @@ have it reviewed: an open epic reruns `codeflow epic status EPC-NNN complete
 the corrected block in its Closeout in that pull request, since an epic is
 never reopened. `cancelled` and `archived` are its other
 terminal acts. A
-multi-task epic lands in gated batch candidates on its integration branch and
-reaches the protected branch as one reviewed body (cf-method, "Managing a body
-of work").
+task targets the protected branch when a human can merge it as it becomes
+ready; any other epic task lands in gated batch candidates on its integration branch, and
+the line reaches the protected branch through a checkpoint pull request at
+every green tip (CodeFlow ADR-0098; cf-method "Managing a body of work"). A record
+changes only on its own epic's line or on the protected branch.
 
 ### Acceptance waivers and redactions
 
