@@ -1,4 +1,6 @@
 //! Real CLI coverage of reviewed stacks and standalone claims.
+#[path = "work_cli/live_base.rs"]
+mod live_base;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -49,7 +51,11 @@ fn fixture() -> tempfile::TempDir {
     dir
 }
 fn cli(root: &Path, args: &[&str], bin: Option<&Path>) -> Output {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+    // Run the same regression fixtures against a released baseline when
+    // collecting fail-before evidence. Production code never reads this.
+    let binary = std::env::var_os("CODEFLOW_TEST_BINARY")
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_codeflow").into());
+    let mut cmd = Command::new(binary);
     cmd.current_dir(root)
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")

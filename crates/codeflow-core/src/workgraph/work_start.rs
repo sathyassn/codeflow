@@ -59,6 +59,8 @@ pub enum DurableTrackingError {
 
 #[derive(Debug, Error)]
 pub enum WorkStartError {
+    #[error("{0}")]
+    Base(String),
     #[error("git repository unavailable: {0}")]
     Repository(String),
     #[error("target ref '{0}' does not resolve to a commit")]
@@ -215,6 +217,7 @@ impl WorkStartError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkStartReport {
+    pub base_note: Option<String>,
     pub task_id: String,
     pub branch: String,
     pub target: String,
@@ -1744,16 +1747,25 @@ impl PinBranches {
     /// # Errors
     /// Refuses a pin that is not the unique predecessor branch tip.
     pub(crate) fn pin_name(&self, pin: &ReviewedPin) -> Result<GitName, String> {
-        let matching: Vec<_> = self
-            .of(&pin.task_id)?
+        let visible: Vec<_> = self.of(&pin.task_id)?.collect();
+        let heads = visible
+            .iter()
+            .flat_map(|(name, tips)| {
+                tips.iter()
+                    .map(move |tip| format!("{}@{tip}", name.display()))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let matching: Vec<_> = visible
+            .into_iter()
             .filter(|(_, tips)| tips.contains(&pin.revision))
             .collect();
         let [(name, tips)] = matching.as_slice() else {
-            return Err(format!("{} pin is not the unique predecessor branch tip; rebase on its new reviewed head and recheck", pin.task_id));
+            return Err(format!("{} pin is not the unique predecessor branch tip; visible heads: {heads}; rebase on its new reviewed head and recheck", pin.task_id));
         };
         if tips.len() != 1 {
             return Err(format!(
-                "{} predecessor branch has advanced; rebase on its new reviewed head and recheck",
+                "{} predecessor branch has advanced; visible heads: {heads}; rebase on its new reviewed head and recheck",
                 pin.task_id
             ));
         }
@@ -2186,8 +2198,11 @@ pub fn check_work_start_on(
     }
     // The report names the branch whose identity was checked, as the plain
     // start does, so the caller can tell it from other carriers.
+    let base_note = super::claim_base::check(root, task_id, &branch, target, pins)
+        .map_err(WorkStartError::Base)?;
     let mut report =
         check_task_anchor(root, task_id, target, &branch, Admission::Start, pins, None)?;
+    report.base_note = base_note;
     report.branch = branch;
     Ok(report)
 }
@@ -2549,6 +2564,15 @@ fn check_task_anchor(
             task.blocker_reason = None;
         }
     }
+    super::claim_base::project_dependencies(
+        &repo,
+        &mut records,
+        task_id,
+        Oid::from_str(&merge_base).map_err(|e| WorkStartError::Repository(e.to_string()))?,
+        head_id,
+        pins,
+    )
+    .map_err(WorkStartError::Repository)?;
     let anchored = validate_task_structure(
         &repo,
         &records,
@@ -2567,6 +2591,7 @@ fn check_task_anchor(
     }
 
     Ok(WorkStartReport {
+        base_note: None,
         task_id: task_id.to_string(),
         branch: String::new(),
         target: target.to_string(),
@@ -3339,7 +3364,7 @@ fn pinned_dependency(
 ///
 /// The local branch is a landing ref only in a repository with no remote at
 /// all. `None` when the target is not fetched here.
-fn tracking_reference(
+pub(crate) fn tracking_reference(
     repo: &Repository,
     name: &str,
 ) -> Result<Option<(String, Oid)>, WorkStartError> {
