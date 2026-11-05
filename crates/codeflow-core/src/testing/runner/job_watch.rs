@@ -22,9 +22,17 @@
 //! does both. A watcher that is itself killed closes its job handle, so the
 //! gate's kill-on-close handle still ends the tree when the gate dies, and
 //! the fence then frees with the gate as it did before TSK-1318.
+//!
+//! The watcher starts in a new process group with no console window, and
+//! ignores console control events, so a Ctrl+C, Ctrl+Break or console
+//! close that ends the gate does not end the watcher. A kill that reaches
+//! the watcher itself, such as `taskkill /T` on the gate or the end of a job
+//! that holds the gate (a CI runner's job, a test harness timeout), still
+//! ends the watcher with the gate, and the fence then frees with the gate.
 
 use std::ffi::{c_void, OsString};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::OnceLock;
@@ -32,6 +40,7 @@ use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::{
     DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
 };
+use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
 use windows_sys::Win32::System::JobObjects::{
     JobObjectAssociateCompletionPortInformation, JobObjectBasicAccountingInformation,
     QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
@@ -43,8 +52,8 @@ use windows_sys::Win32::System::SystemServices::{
 };
 use windows_sys::Win32::System::Threading::{
     CreateEventW, GetCurrentProcess, OpenProcess, SetEvent, WaitForMultipleObjects,
-    EVENT_MODIFY_STATE, INFINITE, PROCESS_DUP_HANDLE, PROCESS_SYNCHRONIZE,
-    SYNCHRONIZATION_SYNCHRONIZE,
+    CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, EVENT_MODIFY_STATE, INFINITE, PROCESS_DUP_HANDLE,
+    PROCESS_SYNCHRONIZE, SYNCHRONIZATION_SYNCHRONIZE,
 };
 use windows_sys::Win32::System::IO::{
     CreateIoCompletionPort, GetQueuedCompletionStatus, PostQueuedCompletionStatus, OVERLAPPED,
@@ -102,19 +111,22 @@ pub(super) struct JobWatch {
 impl JobWatch {
     /// Start a watcher for `job` that holds every fence this process
     /// holds, and return once it holds them. `None` when this process
-    /// holds no fence, or no watcher binary is designated.
+    /// holds no fence.
     ///
     /// # Errors
     ///
-    /// When the watcher cannot be started, or ends before it holds the
-    /// fences; the watcher is then ended.
+    /// When this process holds a fence but no watcher binary is designated,
+    /// when the watcher cannot be started, or when it ends before it holds
+    /// the fences; the watcher is then ended.
     pub(super) fn start(job: HANDLE) -> std::io::Result<Option<Self>> {
         let fences = crate::testing::gate_guard::watched_fence_paths();
         if fences.is_empty() {
             return Ok(None);
         }
         let Some(binary) = watcher() else {
-            return Ok(None);
+            return Err(std::io::Error::other(
+                "this process holds a fence but no fence watcher binary is designated",
+            ));
         };
         let release = new_event()?;
         let ready = new_event()?;
@@ -127,6 +139,9 @@ impl JobWatch {
             .args(&fences)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
+            // Outside the gate's console group and console, so the gate's
+            // Ctrl+C, Ctrl+Break or console close does not reach it.
+            .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
             .spawn()
             .map_err(|error| {
                 std::io::Error::other(format!("{} could not start: {error}", binary.display()))
@@ -203,7 +218,7 @@ fn copy_from(source: HANDLE, value: usize, access: u32) -> Result<OwnedHandle, S
 }
 
 /// Run as the fence watcher when this process was started with
-/// [`WATCH_ARG`], returning its exit code; `None` otherwise. A binary that
+/// `WATCH_ARG`, returning its exit code; `None` otherwise. A binary that
 /// [`designate`]s itself calls this first thing in `main`.
 #[must_use]
 pub fn serve() -> Option<ExitCode> {
@@ -211,6 +226,12 @@ pub fn serve() -> Option<ExitCode> {
     if args.next().as_deref() != Some(std::ffi::OsStr::new(WATCH_ARG)) {
         return None;
     }
+    // Ignore console control events, so only the gate's end or its release
+    // ends the watcher. A failure leaves the new process group and the
+    // missing console window as the guard.
+    // SAFETY: a null handler with TRUE only sets this process to ignore
+    // Ctrl+C; no callback is registered.
+    unsafe { SetConsoleCtrlHandler(None, 1) };
     Some(match watch(&args.collect::<Vec<_>>()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
