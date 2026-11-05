@@ -26,7 +26,10 @@ pub const JOBS: [(&str, &[&str]); 6] = [
             "init", "update", "epic", "spec", "task", "adr", "ids", "estimate", "feedback",
         ],
     ),
-    ("Enforce", &["hook", "git-hook", "ci", "policy", "remote"]),
+    (
+        "Enforce",
+        &["hook", "git-hook", "ci", "scan", "policy", "remote"],
+    ),
     (
         "Verify",
         &["test", "reserve", "validate", "integrate", "doctor", "work"],

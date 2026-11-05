@@ -309,6 +309,7 @@ const CHECK_NAMES: &[&str] = &[
     "permissions",
     "policy-source",
     "secret-engine",
+    "scan-tools",
     "network",
     "delegates",
     "model-bindings",
@@ -340,6 +341,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("hooks", check_hooks);
     m.insert("policy-source", check_policy_source);
     m.insert("secret-engine", check_secret_engine);
+    m.insert("scan-tools", check_scan_tools);
     m.insert("claude", check_claude);
     m.insert("codex", check_codex);
     m.insert("grok", check_grok);
@@ -4393,6 +4395,80 @@ fn check_secret_engine(opts: &Options) -> CheckResult {
     }
 }
 
+/// The binaries `codeflow scan` runs (TSK-1176): for gitleaks and
+/// osv-scanner, the folders searched, the binary found with its checksum and
+/// the pin expected. Each runs, to read its version, only when its checksum
+/// is the pinned one. An unusable binary fails the check when
+/// `git.scan_on_push` is on and the scan that needs it is at `block`, and
+/// warns otherwise, since `codeflow scan` then fails closed only when run.
+fn check_scan_tools(opts: &Options) -> CheckResult {
+    use crate::hooks::gitleaks::Engine;
+    use crate::hooks::osv::Scanner;
+    use crate::hooks::policy::{Policy, ScanOnPush};
+    use crate::hooks::PolicyLevel;
+    let start = Instant::now();
+    let result = |status, message| CheckResult {
+        name: "scan-tools".into(),
+        status,
+        message,
+        duration: start.elapsed(),
+    };
+    let policy = match Policy::load_effective(Path::new(&opts.project_dir)) {
+        Ok((policy, _)) => policy.git,
+        Err(error) => return result(Status::Fail, format!("cannot read policy: {error}")),
+    };
+    let path = opts.env("PATH");
+    let engine = Engine::with_path(path.as_deref());
+    let scanner = Scanner::with_path(path.as_deref());
+    let gitleaks = match engine.verify() {
+        Ok(verified) => Ok(format!(
+            "gitleaks {} at {} with sha256 {}",
+            engine.expected.version,
+            crate::git::display_path(&verified.path),
+            verified.sha256
+        )),
+        Err(unusable) => Err(format!(
+            "{}; the pin is {}",
+            unusable.describe(),
+            engine.expected.describe()
+        )),
+    };
+    let osv = match scanner.verify() {
+        Ok(verified) => Ok(format!(
+            "osv-scanner {} at {} with sha256 {}",
+            crate::hooks::osv::VERSION,
+            crate::git::display_path(&verified.path),
+            verified.sha256
+        )),
+        Err(why) => Err(format!("{why}; the pin is {}", scanner.describe())),
+    };
+    let on_push = policy.scan_on_push == ScanOnPush::On;
+    let needed = [
+        (gitleaks.is_err(), policy.secret_scan == PolicyLevel::Block),
+        (
+            osv.is_err(),
+            policy.security_review == PolicyLevel::Block || policy.dep_audit == PolicyLevel::Block,
+        ),
+    ];
+    let message = format!(
+        "{}; {}; {}; git.scan_on_push is {}",
+        gitleaks.as_ref().unwrap_or_else(|why| why),
+        osv.as_ref().unwrap_or_else(|why| why),
+        scanner.searched(),
+        if on_push { "on" } else { "off" }
+    );
+    if gitleaks.is_ok() && osv.is_ok() {
+        result(Status::Pass, message)
+    } else if on_push && needed.iter().any(|(unusable, block)| *unusable && *block) {
+        result(Status::Fail, message)
+    } else {
+        result(
+            Status::Warn(crate::remedy::SCAN_TOOLS_UNAVAILABLE.remedy()),
+            message,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// The step a warning names, or "" for any other status.
@@ -4454,7 +4530,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 26);
+        assert_eq!(check_names().len(), 27);
     }
 
     #[test]

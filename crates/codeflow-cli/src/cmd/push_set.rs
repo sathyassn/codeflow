@@ -42,7 +42,7 @@ use std::time::Instant;
 
 use codeflow_core::git::{display_output, display_text, remote_query};
 use codeflow_core::hooks::git_hook::{self, PushRef, PushStep, StageReport};
-use codeflow_core::hooks::policy::{GitPolicy, INTEGRATION_BRANCH_PREFIX};
+use codeflow_core::hooks::policy::{GitPolicy, ScanOnPush, INTEGRATION_BRANCH_PREFIX};
 use codeflow_core::hooks::Violation;
 use codeflow_core::remedy::{self, Finding};
 use codeflow_core::workgraph::release_line;
@@ -373,9 +373,41 @@ fn run_ci_ranges(
                 }
             }
             run_check_with(exe, root, &args, input, policy, report, steps);
+            if policy.scan_on_push == ScanOnPush::On {
+                run_scan(exe, root, &base, &r.local_sha, policy, report, steps);
+            }
         }
     }
     Ok(())
+}
+
+/// With `git.scan_on_push: on` (TSK-1176 AC-8), run `codeflow scan` over
+/// the pushed range, the same range `codeflow ci` judges. The scan applies
+/// its own levels, from the range's base, so a failure it reports is a
+/// block: the push stops whatever `git.test_gate_on_push` is.
+fn run_scan(
+    exe: &Path,
+    root: &Path,
+    base: &str,
+    head: &str,
+    policy: &GitPolicy,
+    report: &mut StageReport,
+    steps: &mut Vec<PushStep>,
+) {
+    let before = report.violations.len();
+    run_check_with(
+        exe,
+        root,
+        &["scan", "--base", base, "--head", head],
+        None,
+        policy,
+        report,
+        steps,
+    );
+    for failed in &mut report.violations[before..] {
+        "git.scan_on_push".clone_into(&mut failed.rule);
+        failed.level = codeflow_core::hooks::PolicyLevel::Block;
+    }
 }
 
 /// The target the hook hands `codeflow ci`: the branch's declared target

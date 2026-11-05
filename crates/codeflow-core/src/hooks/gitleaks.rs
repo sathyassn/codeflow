@@ -27,6 +27,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+pub mod range;
+
 /// The gitleaks version the managed CI scan pins (`GITLEAKS_VERSION` in
 /// `assets/base/ci/codeflow-ci.yml`; a test holds the two equal).
 pub const VERSION: &str = "8.30.1";
@@ -480,6 +482,40 @@ impl ScanFolder {
 
     fn path(&self, name: &str) -> std::path::PathBuf {
         self.folder.path().join(name)
+    }
+
+    /// Create the new file `name` in this folder: exclusive, and on Unix
+    /// inside the held folder without resolving its path again.
+    fn create(&self, name: &str) -> Result<std::fs::File, String> {
+        let unmade = |error: std::io::Error| {
+            format!("cannot write {name} in the scan's private folder: {error}")
+        };
+        #[cfg(unix)]
+        {
+            private::create_in(&self.held, name).map_err(unmade)
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(self.path(name))
+                .map_err(unmade)
+        }
+    }
+
+    /// Whether the folder's path still names the folder this scan made.
+    fn intact(&self) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            let same = private::names(&self.held, self.folder.path())
+                .map_err(|error| format!("cannot check the scan's private folder: {error}"))?;
+            if !same {
+                return Err("the scan's private folder was replaced while it ran".to_string());
+            }
+        }
+        Ok(())
     }
 
     /// The pinned `core.attributesFile`: this folder's attributes file.

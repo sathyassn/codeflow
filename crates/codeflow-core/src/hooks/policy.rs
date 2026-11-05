@@ -103,6 +103,18 @@ pub enum SecretScanEngine {
     Gitleaks,
 }
 
+/// Whether the pre-push hook runs `codeflow scan` on the push set
+/// (TSK-1176 AC-8, moved from TSK-430). Default `off`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScanOnPush {
+    /// The hosted jobs alone judge the scan (the default).
+    #[default]
+    Off,
+    /// The hook runs the pinned scans over each pushed range first.
+    On,
+}
+
 /// Whether the managed CI secret scan accepts inline allows on held commits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -533,6 +545,13 @@ pub struct GitPolicy {
     /// for its path in `.gitattributes`. Suspended by bootstrap grace.
     pub conflict_markers: PolicyLevel,
     pub test_gate_on_push: PolicyLevel,
+    /// Run `codeflow scan` over each pushed range in the pre-push hook
+    /// (TSK-1176 AC-8): `off` (default) or `on`. Read from the push's
+    /// candidate authority, as `test_gate_on_push` is. The scans keep their
+    /// own levels (`secret_scan`, `security_review`, `dep_audit`). The
+    /// shipped policy file does not list it, so an older binary never meets
+    /// the key.
+    pub scan_on_push: ScanOnPush,
     pub security_review: PolicyLevel,
     pub dep_audit: PolicyLevel,
     /// Discarding locally unique uncommitted work (`checkout -- .`, `reset
@@ -697,6 +716,7 @@ impl Default for GitPolicy {
             secret_scan_inline_allow: SecretScanInlineAllow::Trusted,
             conflict_markers: PolicyLevel::Block,
             test_gate_on_push: PolicyLevel::Block,
+            scan_on_push: ScanOnPush::Off,
             security_review: PolicyLevel::Warn,
             dep_audit: PolicyLevel::Warn,
             discard_uncommitted: PolicyLevel::Block,
