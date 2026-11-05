@@ -801,21 +801,27 @@ class WindowsTierControls(unittest.TestCase):
         changed = self.turned_on().replace(self.SWITCH_ON, '          REDUCED_TIER: "yes"\n')
         self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)))
 
-    def test_widening_the_tier_to_another_base_is_refused(self):
-        arm = '            case "$BASE" in\n              integration/*)\n'
-        self.assertIn(arm, WORKFLOW)
-        changed = WORKFLOW.replace(arm, '            case "$BASE" in\n              */*)\n')
-        self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)))
-
-    def test_a_wider_reduced_tier_list_or_a_narrower_compiled_in_list_is_refused(self):
-        for old, new in (("REDUCED_TIER_PATHS: '^(project-management/",
-                          "REDUCED_TIER_PATHS: '^(crates/|project-management/"),
-                         ("COMPILED_IN: '^(docs/coordination-ledger\\.md|", "COMPILED_IN: '^("),
-                         ("REGULAR: '^:(000000 100644|", "REGULAR: '^:(100644 120000|000000 100644|")):
-            with self.subTest(old=old):
-                self.assertIn(old, WORKFLOW)
-                changed = WORKFLOW.replace(old, new)
-                self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)))
+    def test_the_event_and_base_rule_is_pinned_both_ways(self):
+        # TSK-1321, operator decision 2026-11-02 card 3: every pull request
+        # into an integration line, and nothing else, takes the reduced tier.
+        arm = "              integration/?*)\n"
+        event = '          elif [ "$EVENT" != pull_request ]; then\n'
+        job_if = "    if: github.event_name == 'pull_request'\n    name: windows tier\n"
+        on = self.turned_on()
+        for name, old, new in (
+                ("a wider base", arm, "              */*)\n"),
+                ("any base", arm, "              *)\n"),
+                ("an empty line name", arm, "              integration/*)\n"),
+                ("a narrower base", arm, "              integration/EPC-*)\n"),
+                ("no event check", event, '          elif false; then\n'),
+                ("another event", event, '          elif [ "$EVENT" != push ]; then\n'),
+                ("the job on every event", job_if, "    name: windows tier\n"),
+                ("a path condition", '          BASE: ${{ github.event.pull_request.base.ref }}\n',
+                 '          BASE: ${{ github.event.pull_request.base.ref }}\n          PATHS: docs/\n')):
+            with self.subTest(change=name):
+                self.assertIn(old, on)
+                changed = on.replace(old, new)
+                self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)), name)
 
     def test_a_tier_journey_job_with_another_test_run_is_refused(self):
         self.assertIn(parity.TIER_RUN, WORKFLOW)

@@ -524,12 +524,10 @@ WINDOWS_VERDICT_JOB = """\
 
 
 # TSK-1242: the switch is the one value of this job that may differ, off or on.
-# A pull request into an integration line takes the reduced tier only when it
-# is on and every changed file is on the REDUCED_TIER_PATHS list, none is
-# COMPILED_IN, and each is a regular file added or changed in place (TSK-1321).
-# Everything else takes the full tier: any other value, base or event, an
-# empty, quoted or unreadable change list, a link, submodule, mode change or
-# deletion, and a grep error.
+# The tier follows the event and the base only (TSK-1321, the operator's
+# decision of 2026-11-02, card 3): with the switch on, every pull request into
+# an integration line takes the reduced tier, whatever it changes. Any other
+# switch value, event or base, or one that is empty, takes the full tier.
 TIER_SWITCH = re.compile(r'^( {10}REDUCED_TIER: )"(?:on|off)"$', re.M)
 WINDOWS_TIER_JOB = """\
     if: github.event_name == 'pull_request'
@@ -539,75 +537,26 @@ WINDOWS_TIER_JOB = """\
     outputs:
       tier: ${{ steps.tier.outputs.tier }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          fetch-depth: 2
-          persist-credentials: false
       - name: Choose the Windows tier
         id: tier
         shell: bash
-        # Only the REDUCED_TIER_PATHS take the reduced tier, and only as
-        # regular files added or changed in place (REGULAR); everything else
-        # takes the full tier. The partitions read this Markdown only as text
-        # with line endings, separators or whitespace normalised:
-        # cli/tests/doc_fact_pins.rs:100-123 (README.md, docs/),
-        # cli/tests/release_contract.rs:455-473 (every tracked .md, records
-        # and changelog.d/ included), cli/src/command_reference.rs:309-315
-        # (docs/cli.md), cli/tests/orchestration_contract.rs:943-944 (README.md,
-        # docs/) and core/tests/delegate_doctrine_contract.rs:33-41
-        # (project-management/specs/SPC-002.md); checkout keeps regular files
-        # LF (.gitattributes eol=lf). Rust compiles in the COMPILED_IN files,
-        # so they take the full tier: core/tests/coord_store.rs:1140,
-        # core/tests/path_policy.rs:508-510 and
-        # core/src/security/launchers.rs:95-98 (include_str!(concat!(env!(...)))).
         env:
           REDUCED_TIER: "off"
+          EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          REDUCED_TIER_PATHS: '^(project-management/.+\\.md|docs/.+\\.md|changelog\\.d/[^/]+\\.md|README\\.md)$'
-          COMPILED_IN: '^(docs/coordination-ledger\\.md|docs/policy-reference\\.md|changelog\\.d/TSK-(322|1079)\\.md)$'
-          REGULAR: '^:(000000 100644|000000 100755|100644 100644|100755 100755) [0-9a-f]+ [0-9a-f]+ [AM][[:space:]]'
         run: |
           tier=full
           if [ "$REDUCED_TIER" != on ]; then
             reason="the reduced tier switch is $REDUCED_TIER"
+          elif [ "$EVENT" != pull_request ]; then
+            reason="the event '$EVENT' is not a pull request"
           else
             case "$BASE" in
-              integration/*)
-                if ! parents=$(git rev-list --parents -n 1 HEAD); then
-                  reason="the tested commit's parents cannot be read"
-                elif [ "$parents" != "$(git rev-parse HEAD) $BASE_SHA $HEAD_SHA" ]; then
-                  reason="the tested commit's parents ($parents) are not the pull request's base $BASE_SHA and head $HEAD_SHA"
-                elif ! raw=$(git -c core.quotePath=true diff --no-renames --raw --no-abbrev "$BASE_SHA" HEAD); then
-                  reason="the changed files cannot be listed"
-                elif [ -z "$raw" ]; then
-                  reason="the diff lists no changed file"
-                elif ! files=$(printf '%s\\n' "$raw" | cut -f 2-) || [ -z "$files" ]; then
-                  reason="the changed paths cannot be read from the diff"
-                elif printf '%s\\n' "$files" | grep '^"' > /dev/null; then
-                  reason="a changed path holds characters git quotes, so it cannot be matched by name"
-                else
-                  if odd=$(printf '%s\\n' "$raw" | grep -vE "$REGULAR"); then kind=0; else kind=$?; fi
-                  if outside=$(printf '%s\\n' "$files" | grep -vE "$REDUCED_TIER_PATHS"); then off=0; else off=$?; fi
-                  if compiled=$(printf '%s\\n' "$files" | grep -E "$COMPILED_IN"); then built=0; else built=$?; fi
-                  count=$(printf '%s\\n' "$files" | wc -l | tr -d ' ')
-                  if [ "$kind" -gt 1 ] || [ "$off" -gt 1 ] || [ "$built" -gt 1 ]; then
-                    reason="the path patterns could not be matched (grep exit $kind, $off and $built)"
-                  elif [ "$kind" -eq 0 ]; then
-                    odd=${odd%%$'\\n'*}
-                    reason="${odd#*$'\\t'} is not a regular file added or changed in place (a link, submodule, mode change or deletion: ${odd%%$'\\t'*})"
-                  elif [ "$off" -eq 0 ]; then
-                    reason="it changes ${outside%%$'\\n'*} and $(($(printf '%s\\n' "$outside" | wc -l) - 1)) other path(s) outside the reduced-tier list"
-                  elif [ "$built" -eq 0 ]; then
-                    reason="it changes ${compiled%%$'\\n'*}, which Rust compiles in"
-                  else
-                    tier=reduced
-                    reason="all of its $count changed files are on the reduced-tier list"
-                  fi
-                fi
+              integration/?*)
+                tier=reduced
+                reason="it is a pull request into the integration line $BASE"
                 ;;
-              *) reason="the base $BASE is not an integration line" ;;
+              *) reason="the base '$BASE' is not an integration line" ;;
             esac
           fi
           echo "tier=$tier" >> "$GITHUB_OUTPUT"

@@ -2,8 +2,9 @@
 """Controls for the Windows tier and verdict steps (TSK-1321 AC-3 to AC-5).
 
 Both steps live in .github/workflows/codeflow-ci.yml, and these tests run
-them as the runner does: the tier step in bash in a real merge commit, the
-verdict step in Python on the `needs` results GitHub would give it.
+them as the runner does: the tier step in bash with the event and base GitHub
+gives it, the verdict step in Python on the `needs` results GitHub would give
+it.
 scripts/gate-parity.py pins both jobs, so the text tested here is the text
 that runs.
 """
@@ -11,7 +12,6 @@ that runs.
 import importlib.util
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -52,334 +52,73 @@ def step(job: str, name: str) -> tuple[dict[str, str], str]:
 
 TIER_ENV, TIER_SCRIPT = step("windows-tier", "Choose the Windows tier")
 VERDICT_ENV, VERDICT_SCRIPT = step("windows-verdict", "Every Windows job the tier runs passed")
-REDUCED_TIER_PATHS = re.compile(TIER_ENV["REDUCED_TIER_PATHS"])
-COMPILED_IN = re.compile(TIER_ENV["COMPILED_IN"])
-
-
-def takes_reduced(path: str) -> bool:
-    """Whether a pull request changing only this path may take the reduced tier."""
-    return bool(REDUCED_TIER_PATHS.search(path)) and not COMPILED_IN.search(path)
 BASH = shutil.which("bash")
-
-
-INCLUDE = re.compile(r"\b(include_str|include_bytes|include)!\s*\(")
-LITERAL = re.compile(r'"([^"\\]*)"')
-MANIFEST = re.compile(r'concat!\(\s*env!\(\s*"CARGO_MANIFEST_DIR"\s*\)\s*,\s*"([^"\\]*)"\s*,?\s*\)')
-
-
-def rust_includes(root: Path) -> tuple[set[str], list[str]]:
-    """(repository paths the Rust code compiles in, include calls whose path
-    form this scanner cannot resolve). Two forms are resolved: a string
-    literal, relative to the source file, and concat!(env!("CARGO_MANIFEST_DIR"),
-    "<path>"), relative to the crate. Any other form is returned as unknown,
-    so a new form fails the test until the scanner learns it."""
-    found, unknown = set(), []
-    for source in sorted((root / "crates").rglob("*.rs")):
-        if "target" in source.parts:
-            continue
-        try:
-            text = source.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        crate = next(parent for parent in source.parents if (parent / "Cargo.toml").exists())
-        for match in INCLUDE.finditer(text):
-            depth, at = 1, match.end()
-            while depth and at < len(text):
-                depth += {"(": 1, ")": -1}.get(text[at], 0)
-                at += 1
-            argument = text[match.end():at - 1].strip()
-            if (literal := LITERAL.fullmatch(argument)) is not None:
-                base, relative = source.parent, literal.group(1)
-            elif (manifest := MANIFEST.fullmatch(argument)) is not None:
-                base, relative = crate, manifest.group(1).lstrip("/")
-            else:
-                line = text.count("\n", 0, match.start()) + 1
-                unknown.append(f"{source.relative_to(root).as_posix()}:{line}: {match.group(1)}!({argument})")
-                continue
-            found.add(Path(os.path.normpath(base / relative)).relative_to(root).as_posix())
-    return found, unknown
-
-
-def git(cwd: Path, *args: str) -> str:
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com", "GIT_CONFIG_NOSYSTEM": "1"}
-    return subprocess.run(["git", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false", *args], cwd=cwd,
-                          env=env, check=True, capture_output=True, text=True).stdout.strip()
 
 
 @unittest.skipIf(BASH is None or os.name == "nt", "the tier step runs in Linux bash")
 class TierTests(unittest.TestCase):
-    """AC-4 and AC-5: the tier comes from the merge commit's changes, read
-    against the base and head commits GitHub gives, and fails closed."""
+    """AC-4 and AC-5: the tier follows the event and the base only (operator
+    decision 2026-11-02, card 3), and anything unexpected takes the full tier."""
 
     def setUp(self):
-        self.dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.dir.cleanup)
-        self.repo = Path(self.dir.name) / "repo"
-        self.repo.mkdir()
-        git(self.repo, "init", "-q")
-        self.write({"crates/core/src/lib.rs": "fn a() {}\n", "project-management/tasks/TSK-1.md": "one\n",
-                    "docs/guide.md": "guide\n"})
-        git(self.repo, "add", "-A")
-        git(self.repo, "commit", "-q", "-m", "base")
-        self.base = git(self.repo, "rev-parse", "HEAD")
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
 
-    def write(self, files: dict[str, str | None]) -> None:
-        for path, text in files.items():
-            target = self.repo / path
-            if text is None:
-                target.unlink()
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text, encoding="utf-8")
-
-    def merge(self, files: dict[str, str | None], renames: dict[str, str] | None = None,
-              prepare=None) -> tuple[str, str]:
-        """A head branch with these changes, merged into the base as GitHub's
-        refs/pull/<n>/merge is: (head sha, merge sha), merge checked out.
-        `prepare` runs in the head checkout after staging and stages its own
-        change, which `git add -A` would otherwise undo."""
-        git(self.repo, "checkout", "-q", "-b", "head", self.base)
-        self.write(files)
-        for old, new in (renames or {}).items():
-            (self.repo / new).parent.mkdir(parents=True, exist_ok=True)
-            git(self.repo, "mv", old, new)
-        git(self.repo, "add", "-A")
-        if prepare:
-            prepare()
-        git(self.repo, "commit", "-q", "--allow-empty", "-m", "head")
-        head = git(self.repo, "rev-parse", "HEAD")
-        git(self.repo, "checkout", "-q", "--detach", self.base)
-        git(self.repo, "merge", "-q", "--no-ff", "-m", "merge", head)
-        return head, git(self.repo, "rev-parse", "HEAD")
-
-    def tier(self, head: str, base_ref="integration/EPC-022-fixes", base_sha=None, switch="on", cwd=None,
-             patterns=None):
-        out = Path(self.dir.name) / "output"
-        summary = Path(self.dir.name) / "summary"
+    def tier(self, base="integration/EPC-022-fixes", event="pull_request", switch="on"):
+        folder = self.folder
+        out, summary = folder / "output", folder / "summary"
         for path in (out, summary):
             path.write_text("", encoding="utf-8")
-        env = {"PATH": os.environ["PATH"], "HOME": self.dir.name, "GIT_CONFIG_NOSYSTEM": "1",
-               "REDUCED_TIER": switch, "BASE": base_ref, "BASE_SHA": base_sha or self.base, "HEAD_SHA": head,
-               "REDUCED_TIER_PATHS": TIER_ENV["REDUCED_TIER_PATHS"], "COMPILED_IN": TIER_ENV["COMPILED_IN"],
-               "REGULAR": TIER_ENV["REGULAR"],
-               "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary), **(patterns or {})}
-        result = subprocess.run([BASH, "--noprofile", "--norc", "-eo", "pipefail", "-c", TIER_SCRIPT],
-                                cwd=cwd or self.repo, env=env, capture_output=True, text=True)
+        env = {"PATH": os.environ["PATH"], "HOME": str(folder), "REDUCED_TIER": switch, "EVENT": event,
+               "BASE": base, "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary)}
+        result = subprocess.run([BASH, "--noprofile", "--norc", "-eo", "pipefail", "-c", TIER_SCRIPT], cwd=folder,
+                                env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(out.read_text(encoding="utf-8").count("tier="), 1)
+        self.assertIn(result.stdout.strip(), summary.read_text(encoding="utf-8"))
         return out.read_text(encoding="utf-8").strip().removeprefix("tier="), result.stdout
 
-    def test_a_records_only_pull_request_takes_the_reduced_tier(self):
-        head, _ = self.merge({"project-management/tasks/TSK-1.md": "two\n", "docs/guide.md": "more\n",
-                              "changelog.d/TSK-9.md": "entry\n", "README.md": "read me\n"})
-        tier, out = self.tier(head)
-        self.assertEqual(tier, "reduced")
-        self.assertIn("all of its 4 changed files are on the reduced-tier list", out)
-
-    def test_every_path_off_the_list_takes_the_full_tier(self):
-        # The list is short on purpose: a path nobody thought about, a new
-        # top-level file or a workflow, takes the full tier like any code.
-        for path in ("crates/core/src/new.rs", "Cargo.toml", "Cargo.lock", ".config/nextest.toml",
-                     ".github/workflows/codeflow-ci.yml", ".github/workflows/release.yml", ".gitattributes",
-                     "dist-workspace.toml", ".codex/config.toml", ".claude/settings.json", ".grok/hooks/x",
-                     ".agents/skills/x/SKILL.md", "AGENTS.md", "CHANGELOG.md", "docs-portal/figures/x.json",
-                     "docs/verification/evidence/x.json", "docs/guide.txt", "scripts/partition-check.py",
-                     "scripts/release-notes.py", "assets/base/policy.json", "rust-toolchain.toml",
-                     "crates/core/README.md", "changelog.d/sub/x.md", "brand-new-file"):
-            with self.subTest(path=path):
-                self.setUp()
-                head, _ = self.merge({path: "changed\n", "project-management/tasks/TSK-1.md": "two\n"})
-                tier, out = self.tier(head)
-                self.assertEqual(tier, "full")
-                self.assertIn(f"it changes {path} and 0 other path(s) outside the reduced-tier list", out)
-
-    def test_a_listed_file_rust_compiles_in_takes_the_full_tier(self):
-        for path in ("docs/coordination-ledger.md", "docs/policy-reference.md", "changelog.d/TSK-322.md",
-                     "changelog.d/TSK-1079.md"):
-            with self.subTest(path=path):
-                self.setUp()
-                head, _ = self.merge({path: "changed\n", "docs/guide.md": "more\n"})
-                tier, out = self.tier(head)
-                self.assertEqual(tier, "full")
-                self.assertIn(f"it changes {path}, which Rust compiles in", out)
-
-    def test_a_grep_error_takes_the_full_tier(self):
-        head, _ = self.merge({"docs/guide.md": "more\n"})
-        for name in ("REDUCED_TIER_PATHS", "COMPILED_IN", "REGULAR"):
-            with self.subTest(pattern=name):
-                tier, out = self.tier(head, patterns={name: "(["})
-                self.assertEqual(tier, "full")
-                self.assertIn("the path patterns could not be matched", out)
-
-    def test_a_listed_path_that_is_not_a_regular_file_changed_in_place_takes_the_full_tier(self):
-        # A Windows checkout writes a link's target as text and a submodule as
-        # a folder, so only regular files added or changed in place qualify.
-        def link():
-            os.symlink("../crates/core/src/lib.rs", self.repo / "docs/link.md")
-            git(self.repo, "add", "docs/link.md")
-
-        def gitlink():
-            git(self.repo, "update-index", "--add", "--cacheinfo", f"160000,{self.base},docs/sub.md")
-
-        def executable():
-            os.chmod(self.repo / "docs/guide.md", 0o755)
-            git(self.repo, "update-index", "--chmod=+x", "docs/guide.md")
-
-        cases = {"a symbolic link": ({}, link, "docs/link.md"),
-                 "a submodule": ({}, gitlink, "docs/sub.md"),
-                 "a mode change": ({}, executable, "docs/guide.md"),
-                 "a deletion": ({"docs/guide.md": None}, None, "docs/guide.md")}
-        for name, (files, prepare, path) in cases.items():
-            with self.subTest(case=name):
-                self.setUp()
-                head, _ = self.merge({"project-management/tasks/TSK-1.md": "two\n", **files}, prepare=prepare)
-                tier, out = self.tier(head)
-                self.assertEqual(tier, "full")
-                self.assertRegex(out, rf"{re.escape(path)} is not a regular file added or changed in place")
-
-    def test_a_new_regular_file_on_the_list_takes_the_reduced_tier(self):
-        head, _ = self.merge({"changelog.d/TSK-9.md": "entry\n", "project-management/tasks/TSK-2.md": "new\n"})
-        tier, out = self.tier(head)
-        self.assertEqual(tier, "reduced", out)
-
-    def test_a_deleted_or_renamed_crate_file_takes_the_full_tier(self):
-        head, _ = self.merge({"crates/core/src/lib.rs": None})
-        self.assertEqual(self.tier(head)[0], "full")
-        self.setUp()
-        head, _ = self.merge({}, renames={"crates/core/src/lib.rs": "docs/lib.rs"})
-        tier, out = self.tier(head)
-        self.assertEqual(tier, "full")
-        self.assertIn("crates/core/src/lib.rs", out)
-
-    def test_other_bases_and_the_switch_off_keep_the_full_tier(self):
-        head, _ = self.merge({"docs/guide.md": "more\n"})
-        for base in ("main", "master", "feature/x"):
+    def test_every_pull_request_into_an_integration_line_takes_the_reduced_tier(self):
+        for base in ("integration/EPC-022-the-3-2-0-milestone-fixes", "integration/workspace", "integration/x/y"):
             with self.subTest(base=base):
-                tier, out = self.tier(head, base_ref=base)
-                self.assertEqual(tier, "full")
-                self.assertIn(f"the base {base} is not an integration line", out)
-        for base in ("task/integration/x", "integration", ""):
+                tier, out = self.tier(base)
+                self.assertEqual(tier, "reduced")
+                self.assertIn(f"it is a pull request into the integration line {base}", out)
+
+    def test_a_pull_request_into_any_other_base_takes_the_full_tier(self):
+        for base in ("main", "master", "feature/x", "task/integration/x", "integration", "integration/", "",
+                     "Integration/x", " integration/x"):
             with self.subTest(base=base):
-                self.assertEqual(self.tier(head, base_ref=base)[0], "full")
-        tier, out = self.tier(head, switch="off")
-        self.assertEqual((tier, "the reduced tier switch is off" in out), ("full", True))
-        for switch in ("", "ON", "true", "yes"):
+                tier, out = self.tier(base)
+                self.assertEqual(tier, "full")
+                self.assertIn(f"the base '{base}' is not an integration line", out)
+
+    def test_every_other_event_takes_the_full_tier(self):
+        for event in ("push", "workflow_dispatch", "schedule", "pull_request_target", ""):
+            with self.subTest(event=event):
+                tier, out = self.tier(event=event)
+                self.assertEqual(tier, "full")
+                self.assertIn(f"the event '{event}' is not a pull request", out)
+
+    def test_the_switch_off_or_any_other_value_keeps_the_full_tier(self):
+        for switch in ("off", "", "ON", "true", "yes"):
             with self.subTest(switch=switch):
-                self.assertEqual(self.tier(head, switch=switch)[0], "full")
-
-    def test_parents_other_than_the_events_base_and_head_take_the_full_tier(self):
-        head, _ = self.merge({"docs/guide.md": "more\n"})
-        other = "0" * 40
-        for kwargs in ({"base_sha": other}, {"head": other}):
-            with self.subTest(**kwargs):
-                tier, out = self.tier(kwargs.get("head", head), base_sha=kwargs.get("base_sha"))
+                tier, out = self.tier(switch=switch)
                 self.assertEqual(tier, "full")
-                self.assertIn("are not the pull request's base", out)
+                self.assertIn(f"the reduced tier switch is {switch}", out)
 
-    def test_a_tested_commit_that_is_not_the_merge_takes_the_full_tier(self):
-        git(self.repo, "checkout", "-q", "-b", "head", self.base)
-        self.write({"docs/guide.md": "more\n"})
-        git(self.repo, "commit", "-q", "-am", "head")
-        head = git(self.repo, "rev-parse", "HEAD")
-        tier, out = self.tier(head)
-        self.assertEqual(tier, "full")
-        self.assertIn("are not the pull request's base", out)
-
-    def test_an_unreadable_history_takes_the_full_tier(self):
-        head, _ = self.merge({"docs/guide.md": "more\n"})
-        outside = Path(self.dir.name) / "not-a-repo"
-        outside.mkdir()
-        tier, out = self.tier(head, cwd=outside)
-        self.assertEqual(tier, "full")
-        self.assertIn("the tested commit's parents cannot be read", out)
-
-    def test_a_path_git_quotes_takes_the_full_tier(self):
-        head, _ = self.merge({"docs/naïve.md": "x\n"})
-        tier, out = self.tier(head)
-        self.assertEqual(tier, "full")
-        self.assertIn("a changed path holds characters git quotes", out)
-
-    def test_an_empty_change_list_takes_the_full_tier(self):
-        head, _ = self.merge({})
-        tier, out = self.tier(head)
-        self.assertEqual(tier, "full")
-        self.assertIn("the diff lists no changed file", out)
-
-    def test_a_head_side_file_cannot_select_the_reduced_tier(self):
-        # The step reads only git objects and the event's base and head; a
-        # file the head adds, whatever it says, is just one more changed path.
-        files = {"crates/core/src/lib.rs": "fn b() {}\n", ".windows-tier": "reduced\n",
-                 ".github/windows-tier.json": '{"tier": "reduced"}\n', "TIER": "tier=reduced\n"}
-        head, _ = self.merge(files)
-        self.assertEqual(self.tier(head)[0], "full")
-
-    def test_the_step_reads_no_author_controlled_event_field(self):
+    def test_the_step_reads_only_the_event_and_base(self):
+        # No checkout, no git and no file: nothing the head changes, and no
+        # label, title or body, can reach the choice.
         job = JOBS["windows-tier"]
-        self.assertEqual(set(TIER_ENV), {"REDUCED_TIER", "BASE", "BASE_SHA", "HEAD_SHA", "REDUCED_TIER_PATHS",
-                                         "COMPILED_IN", "REGULAR"})
-        for field in ("title", "body", "label", "head.ref", "head_ref", "user", "inputs"):
-            self.assertNotIn(field, job.replace("head.sha", ""))
-        self.assertIn("BASE_SHA: ${{ github.event.pull_request.base.sha }}", job)
-        self.assertIn("HEAD_SHA: ${{ github.event.pull_request.head.sha }}", job)
-        self.assertNotRegex(TIER_SCRIPT, r"\bcat\b|\bsource\b|python|\./")
-
-
-class ReducedTierPathTests(unittest.TestCase):
-    """AC-4: only the listed paths take the reduced tier, and nothing the
-    skipped jobs run or the partitions compile is on the list."""
-
-    def test_no_script_the_skipped_jobs_run_takes_the_reduced_tier(self):
-        for job in ("windows-build", "windows-tests", "windows-journeys"):
-            for script in set(re.findall(r"\bscripts/[\w.-]+", JOBS[job])):
-                with self.subTest(job=job, script=script):
-                    self.assertFalse(takes_reduced(script))
-
-    def test_no_repository_file_the_rust_code_includes_takes_the_reduced_tier(self):
-        found, unknown = rust_includes(ROOT)
-        self.assertEqual(unknown, [], "teach rust_includes this include form")
-        self.assertTrue({"docs/coordination-ledger.md", "docs/policy-reference.md", "changelog.d/TSK-322.md"}
-                        <= found, found)
-        for path in sorted(found):
-            with self.subTest(path=path):
-                self.assertFalse(takes_reduced(path))
-
-    def test_the_scanner_resolves_both_include_forms_and_reports_any_other(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            source = root / "crates" / "core" / "src" / "lib.rs"
-            source.parent.mkdir(parents=True)
-            (root / "crates" / "core" / "Cargo.toml").write_text("", encoding="utf-8")
-            source.write_text('const A: &str = include_str!("../../../docs/a.md");\n'
-                              'const B: &str = include_str!(concat!(\n    env!("CARGO_MANIFEST_DIR"),\n'
-                              '    "/../../docs/b.md"\n));\n'
-                              'const C: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/c.bin"));\n',
-                              encoding="utf-8")
-            found, unknown = rust_includes(root)
-        self.assertEqual(found, {"docs/a.md", "docs/b.md"})
-        self.assertEqual(len(unknown), 1)
-        self.assertIn("crates/core/src/lib.rs:6: include_bytes!", unknown[0])
-
-    def test_no_folder_the_binaries_embed_holds_a_reduced_tier_path(self):
-        folders = set()
-        for source in (ROOT / "crates").rglob("*.rs"):
-            try:
-                text = source.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            for folder in re.findall(r'#\[folder\s*=\s*"([^"]+)"\]', text):
-                crate = next(parent for parent in source.parents if (parent / "Cargo.toml").exists())
-                folders.add(Path(os.path.normpath(crate / folder)).relative_to(ROOT).as_posix())
-        self.assertIn("assets", folders)
-        for folder in sorted(folders):
-            with self.subTest(folder=folder):
-                self.assertFalse(takes_reduced(f"{folder}/x.md"))
-
-    def test_records_changelog_entries_and_docs_markdown_take_the_reduced_tier(self):
-        for path in ("project-management/tasks/TSK-1321.md", "docs/architecture.md", "docs/decisions/0001-x.md",
-                     "changelog.d/TSK-1321.md", "README.md"):
-            with self.subTest(path=path):
-                self.assertTrue(takes_reduced(path))
+        self.assertEqual(set(TIER_ENV), {"REDUCED_TIER", "EVENT", "BASE"})
+        self.assertIn("EVENT: ${{ github.event_name }}", job)
+        self.assertIn("BASE: ${{ github.event.pull_request.base.ref }}", job)
+        self.assertNotIn("actions/checkout", job)
+        for field in ("title", "body", "label", "head", "user", "inputs"):
+            self.assertNotIn(field, job)
+        self.assertNotRegex(TIER_SCRIPT, r"\bgit\b|\bcat\b|\bsource\b|python|\./|<")
 
 
 def needs(**results):
