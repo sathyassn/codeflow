@@ -31,23 +31,16 @@ fn moved(text: &str, to: &str) -> String {
 }
 
 fn git(dir: &std::path::Path, args: &[&str]) {
-    git_env(dir, args, &[]);
-}
-
-fn git_env(dir: &std::path::Path, args: &[&str], env: &[(&str, &str)]) {
-    let mut command = crate::git::command();
-    command
+    let out = crate::git::command()
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE");
-    for (key, value) in env {
-        command.env(key, value);
-    }
-    let out = command.output().expect("git runs");
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("git runs");
     assert!(
         out.status.success(),
         "git {args:?}: {}",
@@ -148,11 +141,11 @@ impl Fixture {
             .id()
     }
 
+    /// Commit everything with `message` and the fixture's author date.
     fn commit(&self, message: &str) -> Oid {
-        let date = self.names.date;
-        let env = [("GIT_AUTHOR_DATE", date), ("GIT_COMMITTER_DATE", date)];
-        git_env(self.root(), &["add", "-A"], &env);
-        git_env(self.root(), &["commit", "-qm", message], &env);
+        let date = format!("--date={}", self.names.date);
+        git(self.root(), &["add", "-A"]);
+        git(self.root(), &["commit", "-qm", message, &date]);
         self.head()
     }
 
