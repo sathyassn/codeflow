@@ -667,9 +667,7 @@ fn a_move_to_a_cancelled_or_archived_epic_refuses() {
         git(f.root(), &["switch", "-q", LINE]);
         f.write(
             "project-management/epics/EPC-005.md",
-            &format!(
-                "---\nid: EPC-005\nstatus: {status}\nparent_line: {LINE}\n---\n\n# EPC-005\n"
-            ),
+            &format!("---\nid: EPC-005\nstatus: {status}\nparent_line: {LINE}\n---\n\n# EPC-005\n"),
         );
         f.commit("docs(plan): an ended epic");
         git(f.root(), &["switch", "-q", f.names.task_branch]);

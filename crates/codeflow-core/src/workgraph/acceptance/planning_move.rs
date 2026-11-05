@@ -114,24 +114,18 @@ pub(super) fn refusal(
     let commit = change.commit;
     let on = format!("on the first-parent line of the target tip {}", change.tip);
     let (Some(before), Some(after)) = (&change.before, &change.after) else {
-        return Some(format!(
-            "commit {commit} {on} adds or removes the record"
-        ));
+        return Some(format!("commit {commit} {on} adds or removes the record"));
     };
     let landed = match shape(before, after, Scope::Whole) {
         Ok(landed) => landed,
-        Err(part) => {
-            return Some(format!(
-                "commit {commit} {on} changed the record: {part}"
-            ))
-        }
+        Err(part) => return Some(format!("commit {commit} {on} changed the record: {part}")),
     };
     let edit = match edit {
         Ok(edit) => edit,
         Err(part) => {
             return Some(format!(
-            "{part}, which commit {commit} {on} does not account for"
-        ))
+                "{part}, which commit {commit} {on} does not account for"
+            ))
         }
     };
     if (&edit.from, &edit.to) != (&landed.from, &landed.to) {
