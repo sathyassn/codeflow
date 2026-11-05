@@ -171,7 +171,7 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn("id: identity", added[name])
                 self.assertIn("sha: ${{ steps.identity.outputs.sha }}", added[name])
                 self.assertEqual(added[name].count("persist-credentials: false"), 2)
-        self.assertIn("partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]", added["windows-tests"])
+        self.assertIn("partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]", added["windows-tests"])
         self.assertIn("fail-fast: false", added["windows-tests"])
 
     def test_daily_verdict_runs_after_failures_and_reads_all_job_identities(self):
@@ -194,11 +194,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("actions: write", runner)
 
 
-NEEDS = {"scripts/windows-partitions.py": {"drift", "reports", "--list"}, "scripts/journey-gate.py": {"--part"},
-         "scripts/windows-test-times.json": set()}
-PARTITIONS = 'add_parser("drift")\nadd_parser("reports")\nadd_argument("--list")\n'
-COMPLETE = {"scripts/windows-partitions.py": PARTITIONS, "scripts/journey-gate.py": 'add_argument("--part")',
-            "scripts/windows-test-times.json": "{}"}
+NEEDS = {"scripts/partition-check.py": {"check", "reports", "--count"}, "scripts/journey-gate.py": {"--part"}}
+PARTITIONS = 'add_parser("check")\nadd_parser("reports")\nadd_argument("--count")\n'
+COMPLETE = {"scripts/partition-check.py": PARTITIONS, "scripts/journey-gate.py": 'add_argument("--part")'}
 
 
 def line_tree(needs):
@@ -220,10 +218,11 @@ class ActiveLineTests(unittest.TestCase):
 
     def test_the_needs_are_read_from_the_runner_itself(self):
         needs = daily.runner_needs(workflow("windows-daily-run"))
-        self.assertLessEqual({"drift", "reports", "check", "filter"}, needs["scripts/windows-partitions.py"])
+        self.assertLessEqual({"reports", "check", "--count", "--prefix", "--results", "--list"},
+                             needs["scripts/partition-check.py"])
         self.assertLessEqual({"--part", "--skip-benchmark", "--results"}, needs["scripts/journey-gate.py"])
         self.assertIn("scripts/test_gate_parity.py", needs)
-        self.assertIn("scripts/windows-test-times.json", needs)
+        self.assertNotIn("scripts/windows-test-times.json", needs)
         self.assertNotIn(daily.RUNNER_OWN, needs)
 
     def test_a_runner_naming_no_script_proves_no_line(self):
@@ -241,25 +240,25 @@ class ActiveLineTests(unittest.TestCase):
         self.assertEqual(left_out, [])
 
     def test_a_line_without_the_partition_script_is_left_out_and_named(self):
-        tree = {k: v for k, v in COMPLETE.items() if k != "scripts/windows-partitions.py"}
+        tree = {k: v for k, v in COMPLETE.items() if k != "scripts/partition-check.py"}
         matrix, left_out = self.select({(LINE, SHA): tree})
         self.assertEqual(matrix["include"], [])
-        self.assertEqual(left_out, [{"ref": LINE, "sha": SHA, "missing": ["no scripts/windows-partitions.py"]}])
+        self.assertEqual(left_out, [{"ref": LINE, "sha": SHA, "missing": ["no scripts/partition-check.py"]}])
 
     def test_a_line_whose_script_lacks_a_runner_command_is_left_out_and_named(self):
-        tree = {**COMPLETE, "scripts/windows-partitions.py": 'add_parser("check")\nadd_argument("--list")\n'}
+        tree = {**COMPLETE, "scripts/partition-check.py": 'add_parser("check")\nadd_argument("--list")\n'}
         _, left_out = self.select({(LINE, SHA): tree})
-        self.assertEqual(left_out[0]["missing"], ["scripts/windows-partitions.py has no drift",
-                                                  "scripts/windows-partitions.py has no reports"])
+        self.assertEqual(left_out[0]["missing"], ["scripts/partition-check.py has no --count",
+                                                  "scripts/partition-check.py has no reports"])
 
     def test_a_line_whose_script_lacks_a_runner_flag_is_left_out_and_named(self):
         _, left_out = self.select({(LINE, SHA): {**COMPLETE, "scripts/journey-gate.py": "pass"}})
         self.assertEqual(left_out[0]["missing"], ["scripts/journey-gate.py has no --part"])
 
     def test_a_command_named_only_in_a_comment_does_not_count(self):
-        tree = {**COMPLETE, "scripts/windows-partitions.py": '# drift reports\nadd_argument("--list")\n'}
+        tree = {**COMPLETE, "scripts/partition-check.py": '# check reports\nadd_argument("--count")\n'}
         _, left_out = self.select({(LINE, SHA): tree})
-        self.assertIn("scripts/windows-partitions.py has no drift", left_out[0]["missing"])
+        self.assertIn("scripts/partition-check.py has no reports", left_out[0]["missing"])
 
     def test_main_is_always_selected_and_never_read(self):
         def read(sha, path):
@@ -356,13 +355,13 @@ class DiscoverJourneyTests(unittest.TestCase):
             origin.mkdir()
             self.git(origin, "init", "-q", "-b", "start")
             whole = line_tree(daily.runner_needs(workflow("windows-daily-run")))
-            behind = {**whole, "scripts/windows-partitions.py": 'add_parser("check")\n'}
+            behind = {**whole, "scripts/partition-check.py": 'add_parser("check")\n'}
             self.commit(origin, "main", {"README": "x"})
             self.commit(origin, "integration/whole", whole)
             self.commit(origin, "integration/behind", behind)
             self.commit(origin, "integration/old", {"README": "x"})
-            folder = {key: text for key, text in whole.items() if key != "scripts/windows-test-times.json"}
-            self.commit(origin, "integration/folder", {**folder, "scripts/windows-test-times.json/x": "{}"})
+            folder = {key: text for key, text in whole.items() if key != "scripts/partition-check.py"}
+            self.commit(origin, "integration/folder", {**folder, "scripts/partition-check.py/x": "{}"})
             self.git(origin, "checkout", "-q", "--orphan", "other")
             checkout = temp / "checkout"
             checkout.mkdir()
@@ -375,9 +374,9 @@ class DiscoverJourneyTests(unittest.TestCase):
             self.assertEqual([row["ref"] for row in matrix["include"]],
                              ["refs/heads/integration/whole", daily.MAIN])
             self.assertIn("Left out: not proven active", summary)
-            self.assertRegex(summary, r"integration/behind` at `[0-9a-f]{40}`: .*windows-partitions.py has no drift")
+            self.assertRegex(summary, r"integration/behind` at `[0-9a-f]{40}`: .*partition-check.py has no reports")
             self.assertRegex(summary, r"integration/old` at `[0-9a-f]{40}`: no scripts/")
-            self.assertRegex(summary, r"integration/folder` at `[0-9a-f]{40}`: no scripts/windows-test-times.json")
+            self.assertRegex(summary, r"integration/folder` at `[0-9a-f]{40}`: no scripts/partition-check.py")
 
     def test_an_unreadable_remote_fails_the_run_and_offers_no_lines(self):
         with tempfile.TemporaryDirectory() as name:
@@ -471,52 +470,9 @@ class DailyCoverageTests(unittest.TestCase):
         self.assertEqual(set(runner) - daily.WINDOWS_JOBS, {"verdict"})
 
 
-def step_script(job, step):
-    """The bash script of one named `run: |` step, as the runner sees it."""
-    lines = job.splitlines()
-    at = lines.index(f"      - name: {step}")
-    start = lines.index("        run: |", at) + 1
-    script = []
-    for line in lines[start:]:
-        if line.strip() and not line.startswith(" " * 10):
-            break
-        script.append(line[10:])
-    return "\n".join(script)
-
-
-SWITCH = re.compile(r'REDUCED_TIER: "(on|off)"')
-
-
-class TierSwitchTests(unittest.TestCase):
-    """AC-5: with the switch on a pull request into a line takes the reduced
-    tier; with it off, and for any other base, every partition stays."""
-
-    def tier(self, switch, base):
-        job = jobs(workflow("codeflow-ci"))["windows-tier"]
-        self.assertRegex(job, SWITCH)
-        script = step_script(job, "Choose the Windows tier")
-        with tempfile.TemporaryDirectory() as temp:
-            output = Path(temp) / "output"
-            done = subprocess.run(["bash", "-e", "-c", script], text=True, capture_output=True, env={
-                "PATH": os.environ["PATH"], "REDUCED_TIER": switch, "BASE": base, "GITHUB_OUTPUT": str(output)})
-            self.assertEqual(done.returncode, 0, done.stderr)
-            return output.read_text().strip()
-
-    def test_switch_on_reduces_only_a_pull_request_into_an_integration_line(self):
-        self.assertEqual(self.tier("on", "integration/EPC-022-x"), "tier=reduced")
-        for base in ("main", "master", "task/integration/x", "integration", ""):
-            with self.subTest(base=base):
-                self.assertEqual(self.tier("on", base), "tier=full")
-
-    def test_switch_off_keeps_every_partition_on_every_base(self):
-        for base in ("integration/EPC-022-x", "main", "master"):
-            with self.subTest(base=base):
-                self.assertEqual(self.tier("off", base), "tier=full")
-
-    def test_any_other_switch_value_keeps_every_partition(self):
-        for switch in ("", "ON", "true", "yes"):
-            with self.subTest(switch=switch):
-                self.assertEqual(self.tier(switch, "integration/EPC-022-x"), "tier=full")
+class TierWiringTests(unittest.TestCase):
+    """Which jobs read the tier. scripts/test_windows_tier.py runs the tier and
+    verdict steps themselves."""
 
     def test_only_a_pull_request_chooses_a_tier(self):
         job = jobs(workflow("codeflow-ci"))["windows-tier"]
@@ -535,80 +491,6 @@ class TierSwitchTests(unittest.TestCase):
 
     def test_the_daily_runner_has_no_tier(self):
         self.assertNotIn("tier", workflow("windows-daily-run").lower())
-
-
-class TierVerdictTests(unittest.TestCase):
-    """AC-4 and AC-5: the `windows` verdict accepts exactly the reduced tier's
-    declared skips, refuses any other skip, and its summary says so."""
-
-    SHA = "c" * 40
-
-    def verdict(self, **changes):
-        job = jobs(workflow("codeflow-ci"))["windows-verdict"]
-        script = step_script(job, "Every Windows job passed")
-        env = {"REUSE": "skipped", "REUSED": "", "TIER": "reduced", "EVENT": "pull_request",
-               "BASE": "integration/EPC-022-x", "CHECKS": "success", "BUILD": "skipped", "TESTS": "skipped",
-               "JOURNEYS": "skipped", "RELEASE": "success", "TIER_JOURNEYS": "success", "MISSING": ""}
-        env.update(changes)
-        with tempfile.TemporaryDirectory() as temp:
-            summary = Path(temp) / "summary.md"
-            summary.touch()
-            done = subprocess.run(["bash", "-e", "-c", script], text=True, capture_output=True, env={
-                **env, "PATH": os.environ["PATH"], "GITHUB_SHA": self.SHA, "GITHUB_STEP_SUMMARY": str(summary),
-                "GITHUB_SERVER_URL": "https://example.invalid", "GITHUB_REPOSITORY": "o/n"})
-            return done.returncode, done.stdout, summary.read_text()
-
-    def test_the_declared_skips_pass_and_the_summary_names_the_commit_and_the_limit(self):
-        code, _, summary = self.verdict()
-        self.assertEqual(code, 0)
-        self.assertIn(self.SHA, summary)
-        self.assertIn("twelve test partitions were skipped by tier", summary)
-        self.assertIn("not full Windows evidence", summary)
-
-    def test_any_other_skip_or_outcome_is_refused(self):
-        for name in ("CHECKS", "RELEASE", "TIER_JOURNEYS"):
-            for state in ("skipped", "failure", "cancelled", ""):
-                with self.subTest(name=name, state=state):
-                    code, out, summary = self.verdict(**{name: state})
-                    self.assertEqual(code, 1)
-                    self.assertIn("reduced Windows tier accepts only", out)
-                    self.assertEqual(summary, "")
-
-    def test_a_partition_path_job_that_ran_is_not_a_declared_skip(self):
-        for name in ("BUILD", "TESTS", "JOURNEYS"):
-            for state in ("success", "failure", "cancelled"):
-                with self.subTest(name=name, state=state):
-                    self.assertEqual(self.verdict(**{name: state})[0], 1)
-
-    def test_the_reduced_tier_is_refused_on_main_and_on_a_push(self):
-        for changes in ({"BASE": "main"}, {"BASE": "master"}, {"BASE": ""}, {"EVENT": "push"},
-                        {"EVENT": "schedule"}, {"EVENT": "workflow_dispatch"}):
-            with self.subTest(changes=changes):
-                self.assertEqual(self.verdict(**changes)[0], 1)
-
-    def test_the_full_tier_still_needs_every_job(self):
-        full = {"TIER": "full", "BUILD": "success", "TESTS": "success", "JOURNEYS": "success",
-                "TIER_JOURNEYS": "skipped"}
-        self.assertEqual(self.verdict(**full)[0], 0)
-        for name in ("CHECKS", "BUILD", "TESTS", "JOURNEYS", "RELEASE"):
-            for state in ("skipped", "failure", "cancelled"):
-                with self.subTest(name=name, state=state):
-                    self.assertEqual(self.verdict(**{**full, name: state})[0], 1)
-
-    def test_the_tier_journey_job_is_refused_outside_the_reduced_tier(self):
-        full = {"TIER": "full", "BUILD": "success", "TESTS": "success", "JOURNEYS": "success"}
-        for state in ("success", "failure", "cancelled", ""):
-            with self.subTest(state=state):
-                self.assertEqual(self.verdict(**{**full, "TIER_JOURNEYS": state})[0], 1)
-
-    def test_a_missing_tier_on_a_skipped_build_is_refused(self):
-        self.assertEqual(self.verdict(TIER="", TIER_JOURNEYS="skipped")[0], 1)
-
-    def test_reuse_still_needs_every_windows_job_skipped(self):
-        reused = {"TIER": "", "REUSE": "success", "REUSED": "123", "CHECKS": "skipped", "RELEASE": "skipped",
-                  "TIER_JOURNEYS": "skipped", "EVENT": "push", "BASE": ""}
-        self.assertEqual(self.verdict(**reused)[0], 0)
-        self.assertEqual(self.verdict(**{**reused, "TIER_JOURNEYS": "success"})[0], 1)
 
 
 if __name__ == "__main__":

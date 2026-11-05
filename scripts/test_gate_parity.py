@@ -376,9 +376,7 @@ class GateBinaryControls(unittest.TestCase):
 
 
 ARCHIVED_RUN = ('cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . '
-                '--extract-overwrite --no-fail-fast --profile codeflow '
-                '-E "$(python -B scripts/windows-partitions.py filter ${{ matrix.partition }} '
-                '--list "$RUNNER_TEMP/windows-test-list/windows-tests.json")"')
+                '--extract-overwrite --no-fail-fast --profile codeflow --partition hash:${{ matrix.partition }}/16')
 ARCHIVE = "cargo nextest archive --workspace --profile codeflow --archive-file target/windows-tests.tar.zst"
 
 
@@ -403,24 +401,29 @@ class WindowsRefereeControls(unittest.TestCase):
 class WindowsPartitionControls(unittest.TestCase):
     """TSK-203 AC-2, TSK-265 AC-2 and AC-3: the archived Windows partitions
     stand for the whole suite only when the archive holds the whole
-    workspace and the matrix runs every planned partition from 1 to N once."""
+    workspace and the matrix runs every partition from 1 to the run's hash
+    count once (TSK-1321)."""
 
-    PARTITIONS = "partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]"
+    PARTITIONS = "partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]"
 
     def test_the_committed_partitions_run_the_whole_suite(self):
         self.assertIn(self.PARTITIONS, WORKFLOW)
         self.assertIn("run: " + ARCHIVED_RUN, WORKFLOW)
-        self.assertEqual(parity.planned_partitions(), 12)
         self.assertIn(parity.SUITE, CI)
 
-    def test_a_partition_set_that_misses_or_exceeds_the_plan_is_drift(self):
-        for matrix in ("partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]",
-                       "partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]",
-                       "partition: [1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]"):
+    def test_a_partition_set_that_misses_or_exceeds_the_hash_count_is_drift(self):
+        for matrix in ("partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]",
+                       "partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]",
+                       "partition: [1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]"):
             with self.subTest(matrix=matrix):
                 workflow = WORKFLOW.replace(self.PARTITIONS, matrix)
                 self.assertNotIn(parity.SUITE, parity.ci_rust_job_commands(workflow))
-        self.assertNotIn(parity.SUITE, parity.ci_rust_job_commands(WORKFLOW, planned=13))
+        for count in ("15", "17", "0"):
+            with self.subTest(count=count):
+                workflow = WORKFLOW.replace("--partition hash:${{ matrix.partition }}/16",
+                                            f"--partition hash:${{{{ matrix.partition }}}}/{count}")
+                self.assertNotEqual(workflow, WORKFLOW)
+                self.assertNotIn(parity.SUITE, parity.ci_rust_job_commands(workflow))
 
     def test_a_partial_archive_another_file_or_a_count_split_is_drift(self):
         for old, new in ((ARCHIVE, ARCHIVE.replace("--workspace", "-p codeflow-core")),
@@ -428,10 +431,9 @@ class WindowsPartitionControls(unittest.TestCase):
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--archive-file target/windows-tests.tar.zst",
                                                              "--archive-file target/other.tar.zst")),
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--no-fail-fast ", "")),
-                         (ARCHIVED_RUN, ARCHIVED_RUN.replace('-E "$(python -B scripts/windows-partitions.py filter '
-                                                             '${{ matrix.partition }} '
-                                                             '--list "$RUNNER_TEMP/windows-test-list/windows-tests.json")"',
-                                                             "--partition count:${{ matrix.partition }}/12"))):
+                         (ARCHIVED_RUN, ARCHIVED_RUN.replace("--partition hash:", "--partition count:")),
+                         (ARCHIVED_RUN, ARCHIVED_RUN.replace("--partition hash:${{ matrix.partition }}/16",
+                                                             "--partition hash:1/16"))):
             with self.subTest(new=new):
                 workflow = WORKFLOW.replace("run: " + old, "run: " + new)
                 self.assertNotEqual(workflow, WORKFLOW)
@@ -692,16 +694,13 @@ class VerdictOutcomeControls(unittest.TestCase):
                 with self.subTest(outcome=outcome, job=("parts", "shards", "report")[which]):
                     self.assertEqual(self.verdict(*results), 1)
 
-    def test_both_verdicts_fail_clearly_when_the_gates_did_not_run(self):
+    def test_the_gates_verdict_fails_clearly_when_the_gates_did_not_run(self):
+        # The `windows` verdict's own case is in scripts/test_windows_tier.py.
         env = {"PATH": os.environ.get("PATH", ""), "REUSE": "skipped", "REUSED": ""}
-        env.update({key: "skipped" for key in (
-            "PARTS", "SHARDS", "REPORT", "CHECKS", "BUILD", "TESTS", "JOURNEYS", "RELEASE", "TIER_JOURNEYS")})
-        for name in ("gates-verdict", "windows-verdict"):
-            with self.subTest(verdict=name):
-                result = subprocess.run(["bash", "-c", verdict_script(name=name)], env=env,
-                                        capture_output=True, text=True)
-                self.assertEqual(result.returncode, 1)
-                self.assertIn("gates did not run", result.stdout)
+        env.update({key: "skipped" for key in ("PARTS", "SHARDS", "REPORT", "RELEASE")})
+        result = subprocess.run(["bash", "-c", verdict_script()], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("gates did not run", result.stdout)
 
     def test_reuse_passes_only_when_every_job_was_skipped(self):
         self.assertEqual(self.verdict("skipped", "skipped", "skipped", "success", "123"), 0)
@@ -801,8 +800,14 @@ class WindowsTierControls(unittest.TestCase):
         self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)))
 
     def test_widening_the_tier_to_another_base_is_refused(self):
-        self.assertIn("integration/*) tier=reduced ;;", WORKFLOW)
-        changed = WORKFLOW.replace("integration/*) tier=reduced ;;", "*) tier=reduced ;;")
+        arm = '            case "$BASE" in\n              integration/*)\n'
+        self.assertIn(arm, WORKFLOW)
+        changed = WORKFLOW.replace(arm, '            case "$BASE" in\n              */*)\n')
+        self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)))
+
+    def test_a_narrower_full_tier_path_list_is_refused(self):
+        self.assertIn("FULL_TIER_PATHS: '^(crates/|", WORKFLOW)
+        changed = WORKFLOW.replace("FULL_TIER_PATHS: '^(crates/|", "FULL_TIER_PATHS: '^(")
         self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)))
 
     def test_a_tier_journey_job_with_another_test_run_is_refused(self):
@@ -835,30 +840,33 @@ class CoverageShardControls(unittest.TestCase):
 
     EXACT = "must be exactly this, built from .codeflow/test-config.json"
 
-    def problems(self, workflow: str = WORKFLOW, cfg: dict = CONFIG, data: Path | None = None) -> list[str]:
+    def problems(self, workflow: str = WORKFLOW, cfg: dict = CONFIG, count: int = parity.COVERAGE_SHARDS) -> list[str]:
         jobs = parity.workflow_jobs(workflow)
         guarded = parity.GATES_IF.match(re.search(r"^ {4}if:\s*(.+?)\s*$", jobs["gates"], re.M).group(1))
-        return parity.coverage_job_problems(cfg, jobs, guarded.group(1), data)
+        return parity.coverage_job_problems(cfg, jobs, guarded.group(1), count)
 
-    def assert_problem(self, needle: str, workflow: str = WORKFLOW, cfg: dict = CONFIG, data=None) -> None:
-        problems = self.problems(workflow, cfg, data)
+    def assert_problem(self, needle: str, workflow: str = WORKFLOW, cfg: dict = CONFIG,
+                       count: int = parity.COVERAGE_SHARDS) -> None:
+        problems = self.problems(workflow, cfg, count)
         self.assertTrue(any(needle in p for p in problems), f"{needle} not in {problems}")
 
-    def test_the_committed_jobs_match_the_config_and_plan(self):
+    def test_the_committed_jobs_match_the_config_and_shard_count(self):
         self.assertEqual(self.problems(), [])
-        self.assertEqual(parity.planned_partitions(parity.SHARD_DATA), 2)
+        self.assertEqual(parity.COVERAGE_SHARDS, 2)
         self.assertIn("        shard: [1, 2]\n", WORKFLOW)
 
     def test_a_shard_that_runs_less_or_another_command_is_refused(self):
-        run = 'cargo llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow -E'
+        run = 'cargo llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow --partition'
         self.assertIn(run, WORKFLOW)
         for changed in (run.replace("--workspace", "-p codeflow-core"), run.replace("--no-fail-fast ", ""),
                         run.replace("--profile codeflow", "--profile default"),
-                        run.replace(" -E", " --lib -E")):
+                        run.replace(" --partition", " --lib --partition")):
             with self.subTest(changed=changed):
                 self.assert_problem(self.EXACT, WORKFLOW.replace(run, changed))
-        self.assert_problem(self.EXACT, WORKFLOW.replace("coverage-shards.py filter ${{ matrix.shard }}",
-                                                         "coverage-shards.py filter 1"))
+        self.assert_problem(self.EXACT, WORKFLOW.replace("--partition hash:${{ matrix.shard }}/2",
+                                                         "--partition hash:1/2"))
+        self.assert_problem(self.EXACT, WORKFLOW.replace("--partition hash:${{ matrix.shard }}/2",
+                                                         "--partition count:${{ matrix.shard }}/2"))
         self.assert_problem(self.EXACT, WORKFLOW.replace("        run: cargo llvm-cov clean --workspace\n",
                                                          "        run: true\n"))
         self.assert_problem(self.EXACT, WORKFLOW.replace("          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw\n"
@@ -870,10 +878,7 @@ class CoverageShardControls(unittest.TestCase):
         for matrix in ("        shard: [1]\n", "        shard: [1, 2, 3]\n", "        shard: [1, 1]\n"):
             with self.subTest(matrix=matrix):
                 self.assert_problem(self.EXACT, WORKFLOW.replace("        shard: [1, 2]\n", matrix))
-        with tempfile.TemporaryDirectory() as directory:
-            data = Path(directory) / "times.json"
-            data.write_text(json.dumps({"partitions": 3}))
-            self.assert_problem(self.EXACT, data=data)
+        self.assert_problem(self.EXACT, count=3)
 
     def test_the_config_commands_drive_the_jobs(self):
         def narrowed(c):

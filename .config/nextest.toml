@@ -6,6 +6,12 @@ max-threads = 1
 
 [profile.codeflow]
 fail-fast = false
+# A test still running after 5 periods of 120 s (10 minutes) is ended and
+# reported as a timeout, so one hung test cannot use up its partition's job
+# time and lose the partition's other results (TSK-1321). The bound is at
+# least twice the slowest test measured on a hosted Windows runner (about
+# 290 s), with room for a runner 1.7 times slower.
+slow-timeout = { period = "120s", terminate-after = 5 }
 
 [profile.codeflow.junit]
 path = "junit.xml"

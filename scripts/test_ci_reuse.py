@@ -63,7 +63,7 @@ jobs:
     needs: reuse
   windows-tests:
     if: ${{ !cancelled() && needs.windows-build.result == 'success' }}
-    name: windows tests (${{ matrix.partition }} of 12)
+    name: windows tests (${{ matrix.partition }} of 16)
     needs: windows-build
 """
 PUSH_RUN = 500
@@ -121,7 +121,7 @@ PUSH_JOBS = [job("reuse a pull request verdict", label="ubuntu-24.04"),
 
 
 GREEN_JOBS = [job("codeflow gates (coverage)"), job("codeflow gates"),
-              *(job(f"windows tests ({n} of 12)") for n in range(1, 13)),
+              *(job(f"windows tests ({n} of 16)") for n in range(1, 17)),
               job("windows tier", label="ubuntu-24.04"), job("windows tier journeys", "skipped"),
               job("windows"), job("secret scan"), job("reuse a pull request verdict", "skipped")]
 
@@ -450,7 +450,7 @@ class ImageBindingTests(unittest.TestCase):
         self.assertIn("20261025.353.1", message)
 
     def test_a_drifted_windows_job_image_or_version_is_refused(self):
-        name = "windows tests (1 of 12)"
+        name = "windows tests (1 of 16)"
         for image, version in (("windows-2022", "20261021.278.1"), ("windows-2025-vs2026", "20261030.294.1")):
             with self.subTest(image=image, version=version):
                 self.assertIn(f"{name!r} ran on image", self.skipped(FakeApi(logs={self.job_id(name): log(image, version)})))
@@ -513,7 +513,7 @@ class ImageBindingTests(unittest.TestCase):
         def reused(name):
             return any(p.fullmatch(name) for p in patterns)
         for name in ("codeflow build", "codeflow gates (checks)", "codeflow gates (coverage 1 of 2)",
-                     "codeflow gates (coverage report)", "windows test build", "windows tests (3 of 12)",
+                     "codeflow gates (coverage report)", "windows test build", "windows tests (3 of 16)",
                      "windows checks (doc, clippy, Node)", "windows journeys", "windows release journey"):
             self.assertTrue(reused(name), name)
         for name in ("codeflow gates", "windows", "secret scan", "security review", "gitleaks allowlist canary",
@@ -573,7 +573,7 @@ class RefusalTests(unittest.TestCase):
                               self.skipped(api=FakeApi(runs=[other])))
 
     def test_a_skipped_failed_or_missing_job_runs_everything(self):
-        for jobs in ([*GREEN_JOBS[:2], job("windows tests (1 of 12)", "skipped"), *GREEN_JOBS[3:]],
+        for jobs in ([*GREEN_JOBS[:2], job("windows tests (1 of 16)", "skipped"), *GREEN_JOBS[3:]],
                      [*GREEN_JOBS[:3], job("windows", "failure"), *GREEN_JOBS[4:]],
                      [*GREEN_JOBS[:5], job("reuse a pull request verdict", "success")],
                      [job for job in GREEN_JOBS if job["name"] != "windows"],
@@ -778,7 +778,7 @@ class WindowsTierTests(unittest.TestCase):
 
     REDUCED = [item for item in GREEN_JOBS if not item["name"].startswith("windows tests (")
                and item["name"] != "windows tier journeys"] + [
-        job("windows tests (${{ matrix.partition }} of 12)", "skipped"),
+        job("windows tests (${{ matrix.partition }} of 16)", "skipped"),
         job("windows test build", "skipped"), job("windows journeys", "skipped"),
         job("windows tier journeys")]
 
@@ -796,19 +796,19 @@ class WindowsTierTests(unittest.TestCase):
         self.assertIn("partitions run on this push", self.reason(self.REDUCED))
 
     def test_a_missing_or_repeated_partition_is_not_a_full_tier(self):
-        full = [item for item in GREEN_JOBS if item["name"] != "windows tests (12 of 12)"]
+        full = [item for item in GREEN_JOBS if item["name"] != "windows tests (16 of 16)"]
         self.assertIn("did not run every Windows test partition", self.reason(full))
         self.assertIn("did not run every Windows test partition",
-                      self.reason(GREEN_JOBS + [job("windows tests (1 of 12)")]))
+                      self.reason(GREEN_JOBS + [job("windows tests (1 of 16)")]))
 
     def test_mixed_partition_counts_are_not_a_full_tier(self):
-        mixed = [item for item in GREEN_JOBS if item["name"] != "windows tests (12 of 12)"]
+        mixed = [item for item in GREEN_JOBS if item["name"] != "windows tests (16 of 16)"]
         self.assertIn("did not run every Windows test partition",
                       self.reason(mixed + [job("windows tests (12 of 13)")]))
 
     def test_a_skipped_partition_job_is_refused_by_its_conclusion(self):
         skipped = [item for item in GREEN_JOBS if not item["name"].startswith("windows tests (")] + [
-            job("windows tests (${{ matrix.partition }} of 12)", "skipped")]
+            job("windows tests (${{ matrix.partition }} of 16)", "skipped")]
         self.assertIn("concluded skipped", self.reason(skipped))
 
     def test_a_run_with_no_partition_job_at_all_is_not_a_full_tier(self):

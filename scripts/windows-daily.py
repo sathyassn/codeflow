@@ -8,8 +8,8 @@ Which lines: main and each active integration line. The refs are listed from the
 remote on every run and nothing stores them, so a new line joins and a deleted
 one leaves on the next run. A line is active when its own tree at discovery has
 what the runner calls: every script named in windows-daily-run.yml, each with the
-subcommands and flags the runner passes it, and the partition measurements. The
-test reads those files and runs nothing from the line. A line that lacks any of
+subcommands and flags the runner passes it. The test reads those files and runs
+nothing from the line. A line that lacks any of
 them is not proven active: it stays out and the run's summary names it and the
 reason. main is always selected. A selected line that fails fails visibly. If
 the listing or a read fails, the run fails and offers no lines. Other branches
@@ -43,8 +43,6 @@ MAIN = "refs/heads/main"
 RUNNER = Path(__file__).resolve().parents[1] / ".github/workflows/windows-daily-run.yml"
 # The runner's own reporting script comes from the scheduler's revision, not the line.
 RUNNER_OWN = "scripts/windows-daily.py"
-# What the partition script reads, which no command names.
-RUNNER_DATA = "scripts/windows-test-times.json"
 COMMAND = re.compile(r"\bpython3? (?:-\w+ )*(scripts/[\w.-]+\.py)([^&\n\"]*)")
 
 
@@ -85,7 +83,7 @@ def sources(remote_refs: str) -> dict:
 
 def runner_needs(workflow: str) -> dict[str, set[str]]:
     """Each script the runner calls in the line's tree, with what it passes it."""
-    needs: dict[str, set[str]] = {RUNNER_DATA: set()}
+    needs: dict[str, set[str]] = {}
     for script, arguments in COMMAND.findall(workflow):
         if script == RUNNER_OWN:
             continue
@@ -94,7 +92,7 @@ def runner_needs(workflow: str) -> dict[str, set[str]]:
         if words and not words[0].startswith(("-", "$")):
             wanted.add(words[0])
         wanted.update(word for word in words if word.startswith("--"))
-    if len(needs) == 1:
+    if not needs:
         raise ValueError("the runner workflow names no script, so no line can be proven active")
     return needs
 

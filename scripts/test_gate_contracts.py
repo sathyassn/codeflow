@@ -62,7 +62,7 @@ class GateContracts(unittest.TestCase):
         # journeys run in a job that starts with the run.
         journeys = windows['windows-journeys']
         self.assertIn('journey-gate.py --results target/nextest/partitions --skip-benchmark --part results', journeys)
-        self.assertIn('windows-partitions.py check --list', journeys)
+        self.assertIn('partition-check.py check --count 16 --prefix windows-junit --list', journeys)
         self.assertNotIn('test_release.py', journeys)
         self.assertIn('needs: windows-tests', journeys)
         self.assertIn('pattern: windows-junit-*', journeys)
@@ -82,21 +82,28 @@ class GateContracts(unittest.TestCase):
         # `codeflow gates` is: one accepted body, so no edit can add another
         # way for it to pass.
         self.assertEqual(PARITY.windows_verdict_problems(workflow), [])
-        # Two ways to pass: the reduced tier (TSK-1242) and a reused or full run.
-        self.assertEqual(windows['windows-verdict'].count('exit 0'), 2)
+        # One way to fail and none to leave early with a pass: it passes only
+        # when the computed list of errors is empty (TSK-1321).
+        self.assertEqual(windows['windows-verdict'].count('sys.exit('), 1)
+        self.assertEqual(windows['windows-verdict'].count('sys.exit(1)'), 1)
         self.assertEqual([check for check in checks if 'windows' in check], ['windows'])
 
     def test_an_extra_way_for_the_windows_verdict_to_pass_is_refused(self):
         workflow = read('.github/workflows/codeflow-ci.yml')
-        guard = '          if [ "$CHECKS" != success ] || [ "$BUILD" != success ]'
+        guard = '          if errors:\n'
         self.assertEqual(workflow.count(guard), 1)
         controls = {
-            'an inserted exit 0': workflow.replace(guard, '          if [ "$TESTS" = failure ]; then\n'
-                                                          '            exit 0\n          fi\n' + guard),
-            'reuse without skipped jobs': workflow.replace(
-                '[ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = '
-                '"skipped skipped skipped skipped skipped" ]', '[ "$REUSE" = success ]'),
-            'a dropped job result': workflow.replace(' || [ "$RELEASE" != success ]', ''),
+            'an inserted exit 0': workflow.replace(guard, '          if result("windows-tests") == "failure":\n'
+                                                          '              sys.exit(0)\n' + guard),
+            'reuse without a named run': workflow.replace(
+                'if result("reuse") == "success" and re.fullmatch(r"[0-9]+", reused):',
+                'if result("reuse") == "success":'),
+            'a dropped job result': workflow.replace(
+                'jobs = sorted(job for job in needs if job != "reuse")',
+                'jobs = sorted(job for job in needs if job not in ("reuse", "windows-release-journey"))'),
+            'a wider reduced-tier skip': workflow.replace(
+                'mode, skips = "reduced", {"windows-build", "windows-tests", "windows-journeys"}',
+                'mode, skips = "reduced", {"windows", "windows-build", "windows-tests", "windows-journeys"}'),
             'continue-on-error': workflow.replace('    name: windows\n', '    name: windows\n    continue-on-error: true\n'),
         }
         for label, changed in controls.items():
