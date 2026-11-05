@@ -362,7 +362,7 @@ key = "build"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "build"
-action = "each task keeps to its band; the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; merge the current line in before review; cite targeted tests and `codeflow test --mode quick` once before ready; the full gate belongs to the landing candidate"
+action = "where the time-box profile is adopted, each task keeps to its band; the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; merge the current line in before review; cite targeted tests and `codeflow test --mode quick` once before ready; the full gate belongs to the landing candidate"
 see = [
   { target = "cf-develop", must_open = true, reason = "the build and verify loop; its naming step for every string a reader sees" },
   { target = "cf-method/references/workflow-lifecycle.md", section = "Planned work keeps to its band" },

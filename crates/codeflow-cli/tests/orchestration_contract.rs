@@ -2661,8 +2661,8 @@ fn planned_work_band_rule_has_one_home_and_pointers() {
         "A claim means work begins now.",
         "An abandoned claim is handed over on its branch, never deleted.",
         "push once, at ready, and never rerun a check on an unchanged tree;",
-        "reads each lane's time on its task against its band at every sweep and acts on any task past its band top.",
-        "Estimates come from the task's band and the `cf-estimate` scenarios, never extrapolated from a slow pace.",
+        "Where the profile is adopted, it reads each lane's time on its task against its band at every sweep and acts on any task past its band top.",
+        "Estimates come from the `cf-estimate` scenarios and, where adopted, the task's band, never extrapolated from a slow pace.",
     ];
     let home = normalize_whitespace(&read(HOME));
     for sentence in CANONICAL {
@@ -2680,7 +2680,7 @@ fn planned_work_band_rule_has_one_home_and_pointers() {
         (
             "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
             &[
-                "\"Planned work keeps to its band\": the coordinator starts every task whose edges allow, up to host capacity, reads each lane's time on its task against its band at every sweep and acts on any task past its band top.",
+                "\"Planned work keeps to its band\": the coordinator starts every task whose edges allow, up to host capacity, and, where the time-box profile is adopted, reads each lane's time on its task against its band at every sweep and acts on any task past its band top.",
             ],
         ),
         (
@@ -2692,10 +2692,10 @@ fn planned_work_band_rule_has_one_home_and_pointers() {
         ),
         (
             "assets/base/rule-map.toml",
-            &["each task keeps to its band;", "section = \"Planned work keeps to its band\""],
+            &["where the time-box profile is adopted, each task keeps to its band;", "section = \"Planned work keeps to its band\""],
         ),
-        ("assets/base/AGENTS.md.tmpl", &["each task keeps to its band;"]),
-        ("assets/base/AGENTS.full.md.tmpl", &["each task keeps to its band;"]),
+        ("assets/base/AGENTS.md.tmpl", &["where the time-box profile is adopted, each task keeps to its band;"]),
+        ("assets/base/AGENTS.full.md.tmpl", &["where the time-box profile is adopted, each task keeps to its band;"]),
     ];
     for (path, required) in pointers {
         let text = normalize_whitespace(&read(path));

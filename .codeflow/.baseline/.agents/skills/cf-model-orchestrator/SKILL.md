@@ -377,8 +377,9 @@ to the quality contract's design and implementation, verification and coverage
 sections; `cf-develop` carries the build, review and verify loop. Planned
 work moves at the pace the `cf-method` workflow lifecycle reference sets in
 "Planned work keeps to its band": the coordinator starts every task whose
-edges allow, up to host capacity, reads each lane's time on its task against
-its band at every sweep and acts on any task past its band top. The
+edges allow, up to host capacity, and, where the time-box profile is
+adopted, reads each lane's time on its task against its band at every sweep
+and acts on any task past its band top. The
 responsible primary delegates, inspects,
 integrates and accepts eligible work under the assignment rules; actual
 authorship determines independent review. Task branches are not final

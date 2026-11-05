@@ -86,8 +86,8 @@ into an epic and tasks with criteria, builders execute it without
 re-planning, re-litigating settled decisions or confirmation work for its
 own sake. Where the project adopted the `cf-estimate` time-box profile, each
 task's budget is its band, frozen at breakdown: the clock runs from the
-claim to the bound approval or the end of verification, less recorded
-blocked spans. The band replaces the operator's throughput decision of
+claim to the later of the bound approval and the end of verification, less
+recorded blocked spans. The band replaces the operator's throughput decision of
 2026-10-23. Quality is not traded for speed: the criteria, the tests that
 prove them and real security stay.
 
@@ -104,14 +104,15 @@ A builder keeps to these practices:
 - keep the PR body lean: the criteria with file:line and the test evidence;
 - report any stop longer than 15 minutes at once;
 - decide reversible choices and disclose them;
-- on a Hard task, log one line at half the band top; at the top, stop new
-  work and choose a finish of at most 30 minutes, a split or a re-plan, with
-  a cause line.
+- where the profile is adopted, on a Hard task, log one line at half the
+  band top; at the top, stop new work and choose a finish of at most 30
+  minutes, a split or a re-plan, with a cause line.
 
-The coordinator starts every task whose edges allow, up to host capacity,
-reads each lane's time on its task against its band at every sweep and
-acts on any task past its band top. Estimates come from the task's band and
-the `cf-estimate` scenarios, never extrapolated from a slow pace.
+The coordinator starts every task whose edges allow, up to host capacity.
+Where the profile is adopted, it reads each lane's time on its task against
+its band at every sweep and acts on any task past its band top. Estimates
+come from the `cf-estimate` scenarios and, where adopted, the task's band,
+never extrapolated from a slow pace.
 
 ## Execute and integrate
 
