@@ -246,8 +246,9 @@ an operator decision; agents and Coordinators never rule on it.
   needs its own operator decision.
 - The Linux tests run inside the coverage shards, so the Linux tests and
   Linux coverage columns move together.
-- The release gates keep their current events, which the daily run is not
-  one of.
+- The decision does not mention the release gates. ADR-0097 reads them as
+  outside the full suites, so they keep their current events, which the
+  daily run is not one of.
 - A required check passes when its suite is not selected for the event,
   and an event or base the workflow cannot read runs the full suites.
 - Local full gates keep coverage instrumentation whatever the event.

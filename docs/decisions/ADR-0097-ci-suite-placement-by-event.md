@@ -71,10 +71,11 @@ How to read the table:
   removing a security check needs its own operator decision.
 - On this repository the Linux tests run inside the coverage shards, so the
   Linux tests and Linux coverage columns move together.
-- The release gates (the benchmark, the exhaustive prose checks and the
-  present browser parts) are not part of "the full Linux and Windows
-  suites" in the decision; they keep their current events, which the daily
-  run is not one of.
+- The decision does not mention the release gates (the benchmark, the
+  exhaustive prose checks and the present browser parts). This record reads
+  them as outside "the full Linux and Windows suites", so they keep their
+  current events, which the daily run is not one of; moving them is an
+  operator decision.
 
 Until TSK-1321 lands, the line at `1107c5974` differs from this table:
 
