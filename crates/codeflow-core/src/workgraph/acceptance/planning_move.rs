@@ -15,9 +15,11 @@
 //! The head's own first-parent chain from the reviewed commit is never a
 //! landed change, even where a caller trusts the head as a tip. The check
 //! proves that the commit is on a trusted tip's first-parent line, not that
-//! a reviewed planning pull request made it: on a line pull request into
-//! `main` the trusted tip is the line head itself (`with_own_line`), so the
-//! operator's review of that pull request is the move's authority there.
+//! a reviewed planning pull request made it. On any amendable range (a line
+//! pull request into `main`, a push to the line, a root-branch range or a
+//! planning amendment) the range head itself is also a trusted tip
+//! (`with_own_line`), so that head is the move's authority there; at a line
+//! pull request into `main` the operator reviews and merges it.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
