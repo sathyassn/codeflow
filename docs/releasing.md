@@ -126,12 +126,10 @@ Local-artifact authority job:
     coverage shards and their report, which applies the line floor.
   - `windows` is the one verdict over the Windows build, checks, test
     partitions and journeys. It is computed from each job's result and names
-    every job that is not green. Every pull request into an integration
-    line takes the reduced tier, which skips the build, the partitions and
-    their journey job, whatever it changes; pull requests into main, pushes
-    and runs on a schedule or by hand take the full tier, as does any event
-    or base the tier step does not expect (TSK-1321, the operator's decision
-    of 2026-11-02).
+    every job that is not green. A pull request into an integration line
+    runs no Windows job and no Linux coverage shard, and both verdicts pass
+    there with those suites not selected; see
+    [Where CI suites run](#where-ci-suites-run).
   - On a push to main or to an integration line whose merge commit has
     exactly the tree of a pull request head whose `codeflow-ci` run passed
     every job, both verdicts pass by naming that run and the gate and
@@ -224,9 +222,51 @@ Release impact rules for each PR:
   the `fix:`, `feat:` or breaking marker that describes the resulting release,
   with matching PR impact and curated pending notes.
 
+### Where CI suites run
+
+Which suite runs on which event is an operator decision (2026-11-05, "A plus
+Linux off line PRs"), recorded in ADR-0097, "CI suite placement by event".
+Changing it takes a new operator decision.
+
+```
+                          line PR   PR to main   line or main push   weekly, manual   daily
+short checks (1)          yes       yes          yes                 yes              -
+Linux coverage (2)        -         yes          yes                 yes              yes
+every Windows job (3)     -         yes          yes                 yes              yes
+`codeflow gates`, `windows` verdicts
+                          yes       yes          yes                 yes              -
+```
+
+1. The Linux build and the `codeflow gates` parts, the policy check, commit
+   standards, the secret scan, the security review and release impact.
+   Commit standards and release impact run on pull requests only.
+2. The instrumented coverage shards and their report, which applies the line
+   floor and checks that each test ran in exactly one shard.
+3. The Windows test build, the 16 test partitions, the Windows checks, the
+   journeys and the Windows release journey.
+
+- The `windows-tier` job of `codeflow-ci.yml` decides from two GitHub event
+  fields: the event name and the pull request's base branch. A pull request
+  into `integration/**` gets the reduced tier. Anything else, including an
+  empty or unexpected value or a tier job that failed, gets every suite.
+- On the reduced tier both required verdicts still run and pass, saying that
+  the suite was not selected and that the result is not full evidence. The
+  push to the line runs every suite.
+- The daily run (`windows-daily.yml`) runs Linux coverage and every Windows
+  job on `main` and each active integration line, at the exact commit the
+  dispatcher resolved and under that line's own ref. Its verdict reports
+  each line's coverage total and the commit measured, and fails a total
+  under the floor in main's test configuration. A daily result is never
+  merge evidence. A line the daily run leaves out is named as having no
+  daily coverage.
+- `scripts/test_ci_placement.py` holds this placement as one table with a
+  row per job and fails when a workflow condition differs from it.
+
 ### Linux coverage measurement
 
-The Linux CI tier split planned by TSK-1241 takes effect only when the
+The operator's decision of 2026-11-05 in
+[Where CI suites run](#where-ci-suites-run) replaces this plan: integration
+pull requests run no Linux Rust suite. The Linux CI tier split planned by TSK-1241 takes effect only when the
 operator applies the tier-switch workflow change, after a same-commit hosted
 comparison. Integration pull requests will run the full Linux Rust suite
 without instrumentation, with Rust journey evidence and a check that every
