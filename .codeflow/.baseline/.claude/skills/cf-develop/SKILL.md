@@ -51,7 +51,7 @@ records the required interactive seat unavailable and the reduced assurance.
       commits and push once, at ready, as the git rules' "One push at ready"
       says. Planned work moves at the pace
       [the workflow lifecycle](../cf-method/references/workflow-lifecycle.md)
-      sets in "Planned work moves at speed". At a multi-task node transition,
+      sets in "Planned work keeps to its band". At a multi-task node transition,
       verify predecessor and decision evidence against the approved graph;
       stop for Plan vN+1 on a material graph mutation, and log only a
       material dependency or decision change in the task.

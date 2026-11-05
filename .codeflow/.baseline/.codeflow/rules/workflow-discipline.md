@@ -407,8 +407,9 @@ disposition.
 ## Durations
 
 Durations, dates and effort for agent-delivered work are agentic estimates
-with stated bases, taken from planned throughput (at the standard and full
-tiers, `cf-estimate` owns the method). Never give human-team weeks, sprints
+with stated bases, taken from the task's band where the project adopted
+the time-box profile (at the standard and full tiers, `cf-estimate` owns the
+method). Never give human-team weeks, sprints
 or person-days, never scale a human estimate by an AI speed multiplier, and
 never extrapolate from a slow pace. Estimation is optional: offer it only
 when asked or when a capacity or deadline decision needs it.

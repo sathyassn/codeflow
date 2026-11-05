@@ -120,7 +120,7 @@ const C1_HEADINGS: &[(&str, &str)] = &[
     ),
     (
         "claude/skills/cf-method/references/workflow-lifecycle.md",
-        "Planned work moves at speed",
+        "Planned work keeps to its band",
     ),
 ];
 
