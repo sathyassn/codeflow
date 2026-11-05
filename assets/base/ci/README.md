@@ -252,6 +252,36 @@ a cancelled check never passes, and requiring approval to run workflows
 from outside collaborators (the repository's Actions settings) limits who
 can start such a workflow.
 
+## Checkout credentials and private repositories
+
+Every shipped checkout sets `persist-credentials: false`, so no token stays
+in the checkout's git config for a later step or for repository code to
+read. A step that still needs the repository over the network gets the
+run's token for itself:
+
+- The fetch steps in `codeflow-policy.yml` and `codeflow-registry.yml` read
+  `${{ github.token }}` into their own environment and hand it to git as a
+  header scoped to this repository's URL, through git's configuration
+  environment, masked in the log. Nothing is written to git config or a
+  file, and the header ends with the step.
+- The `codeflow ci` step in `codeflow-policy.yml` gets the token as
+  `CODEFLOW_CI_TOKEN`. `codeflow ci` asks the destination for its default
+  branch and that branch's policy, which decide release scope, and on a
+  private repository that lookup needs read access. It sends the token
+  only when the destination is this run's own repository
+  (`GITHUB_SERVER_URL`/`GITHUB_REPOSITORY`, which no earlier step can
+  change) over HTTPS, follows no redirect with it, never writes it, and
+  removes it from its own environment before starting any process.
+- The job keeps `permissions: contents: read` (plus `pull-requests: read`
+  for the body step). No personal access token, App key or repository
+  secret is used; GitHub issues the token for the run and it expires when
+  the job ends.
+
+When the token is missing, rejected or lacks read access, the lookup fails
+closed: `codeflow ci` names the missing input and never takes the default
+branch from the event, an environment value or a flag. A fork pull request
+on a private repository that gets no token fails the same way.
+
 ## Project setup hook
 
 The gate runs on the runner's default toolchain unless the project sets up

@@ -50,9 +50,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      # The checkout leaves no token in its git config for later steps or
+      # repository code to read (TSK-1175).
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install codeflow (target-pinned, checksum-verified)
         env:
@@ -208,9 +211,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      # The checkout leaves no token in its git config for later steps or
+      # repository code to read (TSK-1175).
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Compare the target and head pins
         id: pins
@@ -347,9 +353,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      # The checkout leaves no token in its git config for later steps or
+      # repository code to read (TSK-1175).
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # Run the gitleaks binary directly (pinned) rather than the
       # gitleaks-action wrapper, which requires a GitHub token/license. The
@@ -948,9 +957,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      # The checkout leaves no token in its git config for later steps or
+      # repository code to read (TSK-1175).
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # Dependency / supply-chain audit — the deterministic floor the
       # cf-security-reviewer red-team layers on (CodeFlow ADR-0016; OWASP
