@@ -492,7 +492,8 @@ fn run_configured(
             ci_skipped.join(", ")
         );
     }
-    let outcomes = target_outcomes(&results, &selection, &ci_skipped, &declarations);
+    let scheduled: Vec<String> = targets.iter().map(|t| t.name.clone()).collect();
+    let outcomes = target_outcomes(&results, &scheduled, &selection, &ci_skipped, &declarations);
     let artifact = serde_json::json!({
         "schema_version": 2, "run_id": run_id, "revision": revision,
         "outcomes": outcomes,
@@ -549,10 +550,13 @@ fn run_configured(
 /// prerequisite), then those skipped in CI and those the selection skipped.
 /// Each names the target, its state and its duration in milliseconds, so a
 /// reader of a published run record lists every target from one field and
-/// never sees only the passing ones (TSK-1305). Targets outside an `--only`
-/// selection are not this run's and are left out.
+/// never sees only the passing ones (TSK-1305). A scheduled target with no
+/// result of its own, because the gate failed before it ran (the `(gate)`
+/// entry), is listed as `not_run` with that error. Targets outside an
+/// `--only` selection are not this run's and are left out.
 fn target_outcomes(
     results: &[GateTargetResult],
+    scheduled: &[String],
     selection: &delivery::Selection,
     ci_skipped: &[String],
     declarations: &[TargetConfig],
@@ -582,7 +586,20 @@ fn target_outcomes(
             "name": name, "state": "skipped", "duration_ms": 0, "reason": reason,
         })
     });
-    ran.chain(in_ci).chain(skipped).collect()
+    let gate_error = results
+        .iter()
+        .find(|result| result.name == "(gate)")
+        .and_then(|result| result.error.clone())
+        .unwrap_or_else(|| "the gate ended before this target ran".to_string());
+    let unreached = scheduled
+        .iter()
+        .filter(|name| !results.iter().any(|result| &result.name == *name))
+        .map(|name| {
+            serde_json::json!({
+                "name": name, "state": "not_run", "duration_ms": 0, "reason": gate_error,
+            })
+        });
+    ran.chain(unreached).chain(in_ci).chain(skipped).collect()
 }
 
 // Each run owns its folder exclusively before any producer writes there.
@@ -990,6 +1007,57 @@ fn resolve_mode(requested: &str, targets: &[TargetConfig]) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// TSK-1305 review nit 1: when the gate fails before any target runs,
+    /// its one `(gate)` result names no target, and each scheduled target
+    /// is still listed as not run, with the gate's error.
+    #[test]
+    fn an_early_gate_failure_lists_every_scheduled_target_as_not_run() {
+        let gate = super::GateTargetResult {
+            status: super::super::runner::deadline::TargetStatus::Failed,
+            supervision: None,
+            termination_unconfirmed: false,
+            name: "(gate)".to_string(),
+            exit_code: -1,
+            duration_ms: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            error: Some("cannot read the baseline".to_string()),
+            report: None,
+        };
+        let selection = super::delivery::Selection {
+            selected: ["build".to_string(), "check".to_string()].into(),
+            skipped: std::collections::BTreeSet::new(),
+            excluded: std::collections::BTreeSet::new(),
+            reason: String::new(),
+            reasons: std::collections::BTreeMap::new(),
+        };
+        let outcomes = super::target_outcomes(
+            &[gate],
+            &["build".to_string(), "check".to_string()],
+            &selection,
+            &[],
+            &[],
+        );
+        let named: Vec<_> = outcomes
+            .iter()
+            .map(|entry| {
+                (
+                    entry["name"].as_str().unwrap(),
+                    entry["state"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("(gate)", "failed"),
+                ("build", "not_run"),
+                ("check", "not_run")
+            ]
+        );
+        assert_eq!(outcomes[1]["reason"], "cannot read the baseline");
+    }
+
     #[cfg(unix)]
     #[test]
     fn r19_test_config_leaf_refuses_gate() {
