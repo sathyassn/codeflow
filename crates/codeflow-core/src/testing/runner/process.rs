@@ -127,7 +127,7 @@ pub(super) fn run_observed(
     // A job failure ends the still-suspended child before its command runs
     // and fails the spawn (TSK-142 AC-3), as it did before supervision.
     #[cfg(windows)]
-    let job = Some(super::adopt_or_stop(
+    let mut job = Some(super::adopt_or_stop(
         super::target_job::TargetJob::adopt(&child),
         target_name,
         || {
@@ -359,12 +359,13 @@ pub(super) fn run_observed(
             {
                 termination_confirmed = status.is_some() && watcher_finished;
             }
+            // The watcher's exit counts too, so the clean path leaves no fence
+            // behind. A watcher still running at the grace keeps its fences and
+            // the target is reported unconfirmed (TSK-1318).
             #[cfg(windows)]
             {
                 termination_confirmed = status.is_some()
-                    && job
-                        .as_ref()
-                        .is_none_or(|job| job.accounting().is_ok_and(|(_, active)| active == 0));
+                    && job.as_mut().is_none_or(super::target_job::TargetJob::ended);
             }
             #[cfg(target_os = "linux")]
             if let Some(group) = &cgroup {

@@ -17,6 +17,12 @@
 //! fences free. A watcher that cannot start, or cannot hold the fences,
 //! stops the target before it runs.
 //!
+//! The gate waits for the watcher only within the target's cleanup grace, as
+//! it does for the tree. A process that cannot end keeps the watcher running
+//! past that: the gate reports the target's termination as unconfirmed and
+//! goes on, and the watcher keeps the fences, even after the gate exits,
+//! until the job is empty.
+//!
 //! Only a binary that names itself with [`designate`] and serves
 //! [`WATCH_ARG`] through [`serve`] starts watchers; the `codeflow` binary
 //! does both. A watcher that is itself killed closes its job handle, so the
@@ -72,10 +78,61 @@ thread_local! {
     };
 }
 
+/// The test binary and the arguments that select its stand-in watcher, for
+/// every thread: the runner starts dependency targets on their own threads.
+#[cfg(test)]
+static STAND_IN_FOR_TEST: std::sync::Mutex<Option<(PathBuf, Vec<String>)>> =
+    std::sync::Mutex::new(None);
+
 /// Start `binary` as the fence watcher in this thread only, for a test.
 #[cfg(test)]
 pub(super) fn watcher_for_test(binary: Option<PathBuf>) {
     WATCHER_FOR_TEST.with(|slot| *slot.borrow_mut() = binary);
+}
+
+/// Start `binary` with `leading_args` before the watcher's own arguments as
+/// the fence watcher in this whole process, for a test.
+#[cfg(test)]
+pub(super) fn stand_in_for_test(stand_in: Option<(PathBuf, Vec<String>)>) {
+    *STAND_IN_FOR_TEST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = stand_in;
+}
+
+/// A fence watcher that holds the fences and signals ready like the real
+/// one and then never exits while the gate runs. Run by a test as this test
+/// binary with the watcher's arguments; without them it returns at once.
+#[cfg(test)]
+pub(super) fn run_stand_in_for_test() {
+    let args: Vec<String> = std::env::args().collect();
+    let Some(at) = args.iter().position(|arg| arg == WATCH_ARG) else {
+        return;
+    };
+    let gate_id: u32 = args[at + 1].parse().unwrap();
+    let ready_value: usize = args[at + 4].parse().unwrap();
+    // SAFETY: opens the gate, which waits for this watcher and so still runs.
+    let raw = unsafe { OpenProcess(PROCESS_DUP_HANDLE | PROCESS_SYNCHRONIZE, 0, gate_id) };
+    assert!(!raw.is_null(), "the stand-in could not open the gate");
+    // SAFETY: `raw` is a valid handle owned here exactly once.
+    let gate = unsafe { OwnedHandle::from_raw_handle(raw as RawHandle) };
+    let ready = copy_from(
+        gate.as_raw_handle() as HANDLE,
+        ready_value,
+        EVENT_MODIFY_STATE,
+    )
+    .unwrap();
+    let _held = args[at + 5..]
+        .iter()
+        .map(|path| crate::testing::gate_guard::hold_fence_for_watcher(std::path::Path::new(path)))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    // SAFETY: the event is open with EVENT_MODIFY_STATE.
+    assert_ne!(unsafe { SetEvent(ready.as_raw_handle() as HANDLE) }, 0);
+    let handles = [gate.as_raw_handle() as HANDLE];
+    // SAFETY: the handle is open for the call. Ending with the gate leaves
+    // no process behind the test.
+    unsafe { WaitForMultipleObjects(1, handles.as_ptr(), 0, INFINITE) };
+    std::process::exit(0);
 }
 
 /// Name the binary to start as the fence watcher: one that calls
@@ -89,6 +146,14 @@ fn watcher() -> Option<PathBuf> {
     if let Some(binary) = WATCHER_FOR_TEST.with(|slot| slot.borrow().clone()) {
         return Some(binary);
     }
+    #[cfg(test)]
+    if let Some((binary, _)) = STAND_IN_FOR_TEST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+    {
+        return Some(binary.clone());
+    }
     WATCHER.get().cloned()
 }
 
@@ -100,9 +165,11 @@ const END_KEY: usize = 2;
 /// the job's last process, in milliseconds, should a message be missed.
 const BACKSTOP_MS: u32 = 1000;
 
-/// A running fence watcher for one target's job. Dropping it signals the
-/// release, so the watcher ends the job, and waits for the watcher to exit,
-/// which it does once the job is empty.
+/// A running fence watcher for one target's job. Releasing or dropping it
+/// signals the release, so the watcher ends the job and exits once the job
+/// is empty. Neither waits: the runner polls [`Self::finished`] under the
+/// target's cleanup grace, and a watcher still running past that keeps its
+/// fences.
 pub(super) struct JobWatch {
     release: OwnedHandle,
     child: Child,
@@ -130,7 +197,16 @@ impl JobWatch {
         };
         let release = new_event()?;
         let ready = new_event()?;
-        let mut child = Command::new(&binary)
+        let mut command = Command::new(&binary);
+        #[cfg(test)]
+        if let Some((_, leading)) = STAND_IN_FOR_TEST
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            command.args(leading);
+        }
+        let mut child = command
             .arg(WATCH_ARG)
             .arg(std::process::id().to_string())
             .arg((job as usize).to_string())
@@ -168,14 +244,27 @@ impl JobWatch {
             (None, Err(error)) => format!("it ended before it held the fence: {error}"),
         }))
     }
+
+    /// Signal the release, so the watcher ends the job and exits once the
+    /// job is empty. Signaling again changes nothing.
+    pub(super) fn release(&self) {
+        // SAFETY: the event is open; a failure leaves the gate's own exit
+        // as the watcher's signal.
+        unsafe { SetEvent(self.release.as_raw_handle() as HANDLE) };
+    }
+
+    /// Whether the watcher has exited, so it holds no fence. A status that
+    /// cannot be read counts as still running.
+    pub(super) fn finished(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
+    }
 }
 
 impl Drop for JobWatch {
     fn drop(&mut self) {
-        // SAFETY: the event is open; a failure leaves the gate's own exit
-        // as the watcher's signal.
-        unsafe { SetEvent(self.release.as_raw_handle() as HANDLE) };
-        let _ = self.child.wait();
+        // A Drop must never block the gate on a process that cannot end. The
+        // watcher stays alive after this handle closes and keeps the fences.
+        self.release();
     }
 }
 

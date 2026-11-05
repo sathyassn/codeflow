@@ -1787,6 +1787,13 @@ pub(crate) fn watched_fence_paths() -> Vec<PathBuf> {
     paths
 }
 
+/// Whether an exclusive take of the fence at `path` would succeed now, as
+/// an older binary's would. A take that succeeds is released at once.
+#[cfg(all(windows, test))]
+pub(crate) fn fence_is_free_for_test(path: &Path) -> bool {
+    matches!(try_open_and_lock(path, false), Ok(Slot::Taken(_)))
+}
+
 /// Hold the fence at `path` shared for a fence watcher, which keeps the
 /// returned handle open, never unlocked, until it exits (TSK-1318). The
 /// gate that started the watcher holds the fence shared already, so the

@@ -649,10 +649,10 @@ fn a_3_1_orphan_behind_a_completed_runs_record_refuses_a_reserve() {
     assert!(root.path().join("reserved-ran").exists());
 }
 
-/// TSK-1256, Windows: a killed gate's target and its grandchild end with
-/// the gate (the kill-on-close job), and an older binary's exclusive take
-/// of `full-gate.lock` succeeds only once both are gone, never while one
-/// still runs.
+/// TSK-1256, TSK-1318, Windows: when a gate is killed, its fence watcher ends
+/// the job that holds the target and its grandchild, and an older binary's
+/// exclusive take of `full-gate.lock` succeeds only once both are gone, never
+/// while one still runs.
 #[cfg(windows)]
 #[test]
 fn a_killed_gates_target_tree_ends_before_older_binaries_get_in() {

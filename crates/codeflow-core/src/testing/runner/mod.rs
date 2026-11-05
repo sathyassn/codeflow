@@ -3042,6 +3042,102 @@ os._exit(0)
         );
     }
 
+    /// Not a test on its own: the fence watcher that
+    /// [`a_watcher_that_never_exits_cannot_hang_the_gate_or_pass_the_target`]
+    /// starts. Without the watcher's arguments it returns at once.
+    #[cfg(windows)]
+    #[test]
+    fn fence_watcher_stand_in() {
+        job_watch::run_stand_in_for_test();
+    }
+
+    /// TSK-1318: a watcher still running past the target's cleanup grace, as
+    /// when a process in the job cannot end, leaves the gate bounded. The
+    /// target is unconfirmed, a target that requires it does not run, and
+    /// the watcher keeps the fence after the gate's own hold ends.
+    #[cfg(windows)]
+    #[test]
+    fn a_watcher_that_never_exits_cannot_hang_the_gate_or_pass_the_target() {
+        let home = tempfile::tempdir().unwrap();
+        let locks = home.path().join("locks");
+        std::fs::create_dir_all(&locks).unwrap();
+        let admitted = crate::testing::gate_guard::acquire_gate_lock(
+            std::slice::from_ref(&locks),
+            home.path(),
+            "full",
+        )
+        .unwrap();
+        let fences = crate::testing::gate_guard::watched_fence_paths();
+        assert!(!fences.is_empty(), "the full gate holds a fence");
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let run = dir.path().join("target/codeflow-gate/run");
+        std::fs::create_dir_all(&run).unwrap();
+        let mut first = make_target("first", "echo ran> first.txt");
+        first.cleanup_grace_seconds = Some(1);
+        let mut second = make_target("second", "echo ran> second.txt");
+        second.requires = vec!["first".into()];
+        let targets = vec![first, second];
+        let execution = super::super::config::ExecutionConfig {
+            parallel: false,
+            fail_fast: false,
+            worker_budget: Some(4),
+            host_jobs: Some(1),
+            ..Default::default()
+        };
+        job_watch::stand_in_for_test(Some((
+            std::env::current_exe().unwrap(),
+            vec![
+                "--exact".into(),
+                "testing::runner::tests::fence_watcher_stand_in".into(),
+                "--nocapture".into(),
+            ],
+        )));
+        let (sent, received) = std::sync::mpsc::channel();
+        let project = dir.path().to_path_buf();
+        // On its own thread, so an unbounded wait fails here and does not
+        // hang the test.
+        std::thread::spawn(move || {
+            let _ = sent.send(run_dependency_targets(
+                &targets, "full", &project, &execution, &run, &targets,
+            ));
+        });
+        let results = received
+            .recv_timeout(Duration::from_secs(120))
+            .expect("the gate returned though its watcher never exits");
+        job_watch::stand_in_for_test(None);
+        let first = results[0].as_ref().unwrap();
+        assert!(dir.path().join("first.txt").exists(), "{first:?}");
+        assert!(first.termination_unconfirmed, "{first:?}");
+        assert_ne!(first.exit_code, 0, "{first:?}");
+        assert_eq!(first.status(), TargetStatus::CleanupIncomplete, "{first:?}");
+        assert!(
+            first
+                .supervision
+                .as_ref()
+                .unwrap()
+                .cleanup_details
+                .iter()
+                .any(|detail| detail == "process-tree termination unconfirmed"),
+            "{first:?}"
+        );
+        let second = results[1].as_ref().unwrap();
+        assert_eq!(second.status(), TargetStatus::NotRun, "{second:?}");
+        assert_eq!(
+            second.error.as_deref(),
+            Some("not run: prerequisite cleanup incomplete")
+        );
+        assert!(!dir.path().join("second.txt").exists());
+        drop(admitted);
+        for fence in &fences {
+            assert!(
+                !crate::testing::gate_guard::fence_is_free_for_test(fence),
+                "the watcher left running keeps {}",
+                fence.display()
+            );
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn a_job_failure_ends_the_suspended_target_before_its_command_runs() {
