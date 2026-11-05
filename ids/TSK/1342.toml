@@ -1,0 +1,11 @@
+id = "TSK-1342"
+uid = "c336733f-d2af-45bc-8a8c-8143acb2500a"
+kind = "TSK"
+title = "Every ref deletion in CodeFlow refuses or does not follow a symbolic ref"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T09:04:22Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
