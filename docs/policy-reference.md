@@ -1262,6 +1262,21 @@ one session. Step 7 has no ordering dependency.
 On GitHub Free, environment secrets exist only in public repositories; a
 private repository on Free uses Mode B.
 
+### The Actions event policy on public repositories
+
+The `trusted:` and `authority:` checks come from `codeflow-policy.yml`,
+which runs only on `pull_request_target`. From 2026-12-02 GitHub blocks
+that event in public repositories unless an Actions event policy allows it,
+so a public repository needs one policy that targets that workflow alone and
+allows the events it runs on (TSK-1347). The command and the reasons for its
+shape are in `assets/base/ci/README.md` "Public GitHub repositories". This
+repository's policy is 11322, applied by the operator on 2026-11-05.
+
+The policy keeps the existing trust design: the event still runs the
+default branch's workflow, which reads the head only as git data
+(ADR-0091). `remote protect` does not write the policy; it is a
+one-time administrator step.
+
 ### Recovery window
 
 When the required checks fail on every pull request, the repair included,
@@ -1305,9 +1320,16 @@ to its required-checks answer:
   environment admits more than the default branch; a job other than the
   authority job in the policy workflow references that environment; a
   ruleset other than A, B and C requires a name no workflow on the default
-  branch declares.
+  branch declares; on a public repository, a workflow on the default branch
+  runs on `pull_request_target` and no active Actions event policy allows
+  that event for it (the warning carries the policy to create), a policy
+  that targets it leaves out an event it runs on, or an allowing policy
+  also covers other workflows (no workflow targets, `~ALL` or a wildcard).
 - **Note, never a pass:** a bypass list, ruleset, environment or workflow
-  that cannot be read.
+  that cannot be read; the repository's visibility, or on a public
+  repository an Actions event policy list or policy that cannot be read
+  (reading needs administration rights), or an organization policy that
+  selects repositories by property.
 
 The line pattern is C's when C exists, else `integration/**`.
 

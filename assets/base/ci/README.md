@@ -210,6 +210,47 @@ itself, as a GitHub `pull_request` workflow does, so a change can edit its
 own install step. The pin does not defend that edit: require review of the
 CI file and `.codeflow/` in the host's rules.
 
+## Public GitHub repositories: allow `pull_request_target`
+
+From 2026-12-02 GitHub blocks `pull_request_target` in every public
+repository unless an Actions event policy allows it
+([changelog](https://github.blog/changelog/2026-11-02-pull_request_target-blocked-by-default-december-2)).
+`codeflow-policy.yml` runs only on that event, so without such a policy its
+`trusted:` checks never start, and every pull request waits on a required
+check that never runs. Nothing merges until an administrator acts. Private
+and internal repositories are not affected.
+
+The fix is one repository policy that targets `codeflow-policy.yml` alone
+and allows the events it runs on. Create it once, as a repository
+administrator, in Settings, Actions, Policies, or with:
+
+```sh
+echo '{"name":"codeflow policy check","enforcement":"active",
+  "conditions":{"workflow_path":{"include":[".github/workflows/codeflow-policy.yml"],"exclude":[]}},
+  "rules":[{"type":"restrict_action_events","parameters":{"allowed_events":["pull_request_target"]}}]}' |
+  gh api --method POST repos/<owner>/<repo>/actions/policies --input -
+```
+
+- **Allow it for this workflow alone.** A policy with no workflow targets,
+  `~ALL` or a wildcard also allows the event for any workflow added later.
+  GitHub's default exists to stop such a workflow from running head code
+  with the default branch's token and secrets. `codeflow-policy.yml` runs
+  the default branch's own workflow and reads the head only as git data
+  (ADR-0091), so allowing it reopens nothing.
+- **List every event the file runs on.** Event rules are allowlists. If a
+  later version of the file adds an event, add it to the policy too.
+- **Personal and organization repositories** use the same repository
+  endpoint above. An organization owner can instead set the policy once at
+  `orgs/<org>/actions/policies`, selecting repositories by name.
+- **Same-repository pull requests:** GitHub does not say they are exempt,
+  so a pull request from a branch of the same repository needs the policy
+  too.
+- **Check it:** `codeflow doctor --check remote-perimeter` warns when no
+  policy allows the event for the workflow, when a policy that targets it
+  leaves an event out, and when an allowing policy also covers other
+  workflows. Reading policies needs a token with administration rights.
+  Under any other token doctor reports them unreadable, never as passing.
+
 ## Temporary folders
 
 Every template keeps what it downloads and checks out in temporary folders it

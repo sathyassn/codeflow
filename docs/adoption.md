@@ -375,6 +375,12 @@ unverified.
   every pull request (ADR-0091); it fails without `.codeflow/policy.json`.
 - Other events check the id registry in `codeflow-registry.yml`, never under
   a `trusted:` name.
+- On a public repository, GitHub blocks `pull_request_target` from
+  2026-12-02 unless an Actions event policy allows it, and then no pull
+  request can merge. An administrator creates one policy that allows the
+  event for `codeflow-policy.yml` alone; the command is in
+  `assets/base/ci/README.md` "Public GitHub repositories", and `codeflow
+  doctor --check remote-perimeter` reports a missing or too-wide policy.
 
 An upgrade therefore takes two pull requests, in order:
 
