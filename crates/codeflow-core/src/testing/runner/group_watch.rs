@@ -20,6 +20,25 @@ thread_local! {
     /// standing in for the slow descriptor loop seen with a limit of 1048576
     /// on a loaded host.
     pub(super) static SLOW_WATCHER_START: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// When set, a test's watcher reads every member as unconfirmed, so
+    /// only `ESRCH` ends its wait, as for a member it cannot read.
+    pub(super) static ZOMBIES_UNCONFIRMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The member read a test sets with `ZOMBIES_UNCONFIRMED`.
+#[cfg(test)]
+unsafe fn read_nothing(_group: libc::pid_t) -> Members {
+    Members::Live
+}
+
+/// The member read the watcher uses: the platform's, unless a test set
+/// `ZOMBIES_UNCONFIRMED`.
+fn member_reader() -> ReadMembers {
+    #[cfg(test)]
+    if ZOMBIES_UNCONFIRMED.with(std::cell::Cell::get) {
+        return read_nothing;
+    }
+    read_members
 }
 
 pub(super) struct GroupWatch {
@@ -53,6 +72,7 @@ impl GroupWatch {
         let reader = child_end.as_raw_fd();
         #[cfg(test)]
         let slow_start = SLOW_WATCHER_START.with(std::cell::Cell::get);
+        let read = member_reader();
         // SAFETY: the closure uses only async-signal-safe libc operations and
         // constructs errors from errno. No allocation, locks or Rust I/O run after fork.
         unsafe {
@@ -109,7 +129,7 @@ impl GroupWatch {
                     }
                     libc::kill(-group, libc::SIGKILL);
                     if waits {
-                        wait_until_group_ends(group, sentinel, read_members);
+                        wait_until_group_ends(group, sentinel, read);
                     }
                     libc::_exit(0);
                 }
@@ -546,6 +566,24 @@ mod tests {
     /// frees while the zombie is still unreaped (AC-7 as amended).
     #[test]
     fn the_fence_frees_only_after_the_whole_group_has_ended() {
+        fence_after_the_group_is_killed(false);
+    }
+
+    /// TSK-1318: while a member of the killed group is not confirmed ended,
+    /// the watcher keeps the fence. With every member read as unconfirmed,
+    /// the zombie keeps the fence held until the test reaps it. Before
+    /// TSK-1318 the watcher ended by its own signal and the fence freed
+    /// while that member was left.
+    #[test]
+    fn an_unconfirmed_member_keeps_the_fence_until_it_is_reaped() {
+        super::ZOMBIES_UNCONFIRMED.with(|unconfirmed| unconfirmed.set(true));
+        fence_after_the_group_is_killed(true);
+        super::ZOMBIES_UNCONFIRMED.with(|unconfirmed| unconfirmed.set(false));
+    }
+
+    /// Kill a group with a member left as a zombie and check the fence;
+    /// with `unconfirmed`, the watcher cannot confirm the zombie.
+    fn fence_after_the_group_is_killed(unconfirmed: bool) {
         let home = tempfile::tempdir().unwrap();
         let locks = home.path().join("locks");
         std::fs::create_dir_all(&locks).unwrap();
@@ -589,16 +627,22 @@ mod tests {
             )
         };
         assert_eq!(waited, 0, "{}", std::io::Error::last_os_error());
+        if unconfirmed {
+            std::thread::sleep(Duration::from_millis(500));
+            assert!(
+                !older_take(&fence),
+                "the fence freed while a process of the killed group was left"
+            );
+            assert!(!watch.finished().unwrap(), "the watcher ended early");
+            member.wait().unwrap();
+        }
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         let mut finished = watch.finished().unwrap();
         while !finished && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
             finished = watch.finished().unwrap();
         }
-        assert!(
-            finished,
-            "a group left with only a zombie still holds the fence"
-        );
+        assert!(finished, "the watcher still holds the fence");
         drop(watch);
         // The watcher's exit closes its pipe end and its lock copies
         // together, in no set order, so the take may need a moment.
@@ -607,7 +651,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
             taken = older_take(&fence);
         }
-        assert!(taken, "the fence frees once only a zombie is left");
+        assert!(taken, "the fence frees once the group has ended");
         member.wait().unwrap();
     }
 
