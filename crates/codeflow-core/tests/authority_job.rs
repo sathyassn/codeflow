@@ -1,5 +1,5 @@
 //! TSK-1177 (ADR-0091 "Check identity"): the authority job of the policy
-//! workflow and the last step of every verdict job.
+//! workflow and the refusal step of every policy job.
 //!
 //! The structural tests read the shipped template, its installed baseline
 //! and this repository's copy, one per property of AC-1. The behavioural
@@ -340,11 +340,13 @@ fn each_authority_check_is_concluded_from_its_verdict_job() {
     }
 }
 
-/// AC-1, Mode B: the last step of the authority job and of every verdict
-/// job (before its closing checkout assertion) is the same refusal, over
-/// the trusted names the workflow declares.
+/// AC-1, Mode B: the last step of every verdict job (before its closing
+/// checkout assertion), and the authority job's step just before it
+/// creates any check (TSK-1177 review nit: a refusal there leaves the
+/// `authority:` checks uncreated), is the same refusal over the trusted
+/// names the workflow declares.
 #[test]
-fn every_policy_job_ends_with_the_same_refusal() {
+fn every_policy_job_runs_the_same_refusal() {
     let mut scripts = Vec::new();
     for path in COPIES {
         let (_, workflow) = read(path);
@@ -355,7 +357,11 @@ fn every_policy_job_ends_with_the_same_refusal() {
         for (id, job) in jobs(&workflow) {
             let all = steps(&job);
             let last = if id == "authority" {
-                all.last().unwrap().clone()
+                let create = all
+                    .iter()
+                    .position(|step| str_of(step, "name") == CREATE)
+                    .unwrap();
+                all[create - 1].clone()
             } else {
                 assert_eq!(
                     str_of(all.last().unwrap(), "name"),
@@ -623,7 +629,7 @@ exit 22
         ]);
         assert!(output.status.success(), "{}", text(&output));
         assert!(text(&output).contains(&format!(
-            "no other producer of a trusted or authority name is on {HEAD}"
+            "no other producer of a trusted or authority name is on {HEAD} now; Mode B does not see one that runs later"
         )));
         let calls = host.calls();
         assert_eq!(
@@ -707,7 +713,7 @@ exit 22
             let out = text(&output);
             assert_eq!(output.status.code(), Some(1), "{case}: {out}");
             assert!(out.contains(says), "{case}: {out}");
-            assert!(out.contains("so this check fails closed"), "{case}: {out}");
+            assert!(out.contains("so this check fails;"), "{case}: {out}");
         }
     }
 
