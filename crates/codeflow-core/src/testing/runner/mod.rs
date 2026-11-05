@@ -1740,11 +1740,15 @@ mod tests {
     #[cfg(windows)]
     const CPU_SPIN_MS_VAR: &str = "CODEFLOW_TEST_CPU_SPIN_MS";
 
+    /// The line [`cpu_spin_stand_in`] prints once it has spun.
+    #[cfg(windows)]
+    const CPU_SPIN_DONE: &str = "cpu spin stand-in spun for";
+
     /// Not a test on its own: the CPU-busy target that
     /// [`cpu_work_without_output_can_outlast_the_stall_window`] starts on
     /// Windows. It spins without output for the time [`CPU_SPIN_MS_VAR`]
-    /// names, and returns at once when that variable is unset, as in a
-    /// normal test run.
+    /// names, then prints [`CPU_SPIN_DONE`]. It returns at once, printing
+    /// nothing, when that variable is unset, as in a normal test run.
     #[cfg(windows)]
     #[test]
     fn cpu_spin_stand_in() {
@@ -1759,6 +1763,28 @@ mod tests {
         while std::time::Instant::now() < end {
             x = std::hint::black_box(x.wrapping_mul(13).wrapping_add(17));
         }
+        println!("{CPU_SPIN_DONE} {millis} ms");
+    }
+
+    /// The stand-in really ran and spun: a filter that matches nothing, or
+    /// a variable that does not reach the child, exits 0 at once and fails
+    /// here.
+    #[cfg(windows)]
+    fn assert_cpu_spin_ran(result: &TargetRunResult, millis: u64) {
+        assert!(
+            result
+                .stdout
+                .contains(&format!("{CPU_SPIN_DONE} {millis} ms")),
+            "the stand-in did not spin: {result:?}"
+        );
+        assert!(
+            result
+                .stdout
+                .contains("test testing::runner::tests::cpu_spin_stand_in ... ok"),
+            "{result:?}"
+        );
+        assert!(result.stdout.contains("1 passed"), "{result:?}");
+        assert!(result.duration_ms >= millis, "{result:?}");
     }
 
     /// CPU use refreshes the stall window. On Windows the CPU work runs in
@@ -1780,6 +1806,8 @@ mod tests {
             target.env.insert(CPU_SPIN_MS_VAR.into(), "3000".into());
             target
         };
+        #[cfg(windows)]
+        let spin_ms = 3000;
         #[cfg(not(windows))]
         let mut target = make_target(
             "computing",
@@ -1791,6 +1819,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = run_target(&target, "full", dir.path()).unwrap();
         assert_eq!(result.status(), TargetStatus::Passed, "{result:?}");
+        #[cfg(windows)]
+        assert_cpu_spin_ran(&result, spin_ms);
         #[cfg(target_os = "macos")]
         assert_eq!(
             result
