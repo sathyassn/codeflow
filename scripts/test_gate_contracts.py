@@ -327,7 +327,7 @@ class GateContracts(unittest.TestCase):
         self.assertIn('cleanup', cleanup)
         self.assertIn('check:real-browser-cleanup', read('.codeflow/test-config.json'))
 
-    def test_essential_rust_keeps_doctests_and_full_gate_membership(self):
+    def test_essential_rust_keeps_doctests_and_leaves_matrices_to_full(self):
         targets = {t['name']: t for t in json.loads(read('.codeflow/test-config.json'))['targets']}
         workspace = targets['rust-workspace']
         self.assertEqual(set(workspace['modes']), {'essential'})
