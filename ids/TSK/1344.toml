@@ -1,0 +1,11 @@
+id = "TSK-1344"
+uid = "8fd9eed6-d406-4f48-b451-eba6a108dbdb"
+kind = "TSK"
+title = "Guards judge commands run through the Herdr app the same as bare commands"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T18:18:00Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
