@@ -126,6 +126,30 @@ review is over.
    `--mode dark` or `--theme graphite` if you want a different look. Without
    `--with-notes`, the copy holds the document only, without notes or review
    controls.
+   The export is a review capture at a recorded time. The live session remains
+   the handover surface. Open it once at the current revision before exporting
+   HTML stages: a separate measuring host records their export heights at the
+   content widths 360, 372.8, 480, 640, 768, 832 and 900px, independently of
+   the review rail. The export selects the nearest measured width at or below
+   the available column and retains that iframe width, leaving unused space
+   beside it when necessary. This preserves measured geometry even for authored
+   CSS that grows taller at wider widths. A stage without an eligible width,
+   matching revision and rendering contract keeps
+   its fallback height and says "height not measured at this width; open the
+   session". A stylesheet or font change invalidates earlier measurements.
+
+   Capture tools should wait for `html[data-cf-ready="true"]`. This signal
+   means every stage frame loaded or reached its bounded failure timeout;
+   failed frames show a visible notice. It does not mean all stages were
+   measured. Check `[data-cf-stage-notice]` for limitations before relying
+   on a capture. For a full-page browser screenshot, set the capture viewport
+   height to the document's full scroll height without changing its width,
+   then wait for fonts and two animation frames before taking the image.
+   A frame's load event does not guarantee that its offscreen pixels have
+   been composited. The browser checks use
+   `crates/codeflow-present/web/scripts/export-capture.mjs` to prepare the
+   viewport and inspect captured text pixels as well as geometry.
+
 3. Close the session with `codeflow present close <session-id>`.
 4. To reclaim space later, preview with `codeflow present clear --dry-run`,
    then run `codeflow present clear`.
