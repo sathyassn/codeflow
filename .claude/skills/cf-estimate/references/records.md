@@ -79,6 +79,13 @@ A later revision is profile-v2.md with its own effective date; tasks keep
 the revision they were frozen with. At epic close, on the line before its PR
 to main and so before the line ref is deleted, outcomes/<epic-id>.md holds
 that epic's outcome record.
+
+Estimate records under the root land with planning. The profile and frozen
+forecasts ride in the planning PR or epic amendment that carries the
+breakdown, and an epic's outcome record rides in the records change on its
+line at epic close. A task PR adds only its own task record, as `codeflow ci`
+requires, so under the profile it changes only the Estimate block in that
+record.
 An outcome record names the forecast and package, observed scope/status and stage
 timings, waits, failures/reopens, sources and missing observations. Its timings
 may come from `codeflow estimate outcomes`, which derives them from git and

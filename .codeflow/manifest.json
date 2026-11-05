@@ -275,7 +275,7 @@
     ".agents/skills/cf-estimate/references/records.md": {
       "src": "agents/skills/cf-estimate/references/records.md",
       "ownership": "managed",
-      "sha256": "14588e3f4c6863355ae6312f4d1485f29fae8a987bd9ce0d2e216cb6f1d0d2ef",
+      "sha256": "aad8c7d8e85da078e7443846c3505af8a6d6badd0a41d2dc4d8582b7eff295f4",
       "exec": false
     },
     ".agents/skills/cf-estimate/references/rubric.md": {
@@ -1121,7 +1121,7 @@
     ".claude/skills/cf-estimate/references/records.md": {
       "src": "agents/skills/cf-estimate/references/records.md",
       "ownership": "managed",
-      "sha256": "14588e3f4c6863355ae6312f4d1485f29fae8a987bd9ce0d2e216cb6f1d0d2ef",
+      "sha256": "aad8c7d8e85da078e7443846c3505af8a6d6badd0a41d2dc4d8582b7eff295f4",
       "exec": false
     },
     ".claude/skills/cf-estimate/references/rubric.md": {
