@@ -3,7 +3,7 @@
 Optional. Read when anchored grades would help the estimate; scenarios from
 the operating model stand without them.
 
-Method/rubric version: `codeflow-agentic-1`. This is a provisional classification
+Method/rubric version: `codeflow-agentic-2`. This is a provisional classification
 instrument, not a validated speed model. It adapts the supplied Agentic
 Development Model at commit `87852d69170fad6b15bf2463841c74ef80ceda58` with the
 repairs below. Preserve source provenance when a project versions its adaptation.
@@ -88,10 +88,9 @@ the task's own path. A recorded approval that the path enforces counts, such
 as a pinned table of reviewed digests or a required operator confirmation;
 a refusal rule, a choice of policy authority or an exemption class does
 not, and a drift check is S7. A guard change with none of these may grade
-low by points; its security review set is a reason to move the band, never
-to add points.
+low by points; its review depth adds no points.
 
-Boundaries the reliability check settled:
+Boundaries that decide common cases:
 
 - S4: counting or exact lookup over recorded text is not S4; a matcher that
   normalizes, or a graph walk, proved by a golden case table, is S4.
@@ -114,16 +113,10 @@ elsewhere; lookup, ordering or clamping of recorded state; and duration
 uncertainty.
 
 A disputed point at a cut (1 or 2, 4 or 5, 8 or 9) is settled against the
-pinned anchors below. Where the anchors do not decide because the rubric
-text is ambiguous, record the ambiguity and amend the rubric by a versioned
+driver table and the boundaries above. Where they do not decide because the
+rubric text is ambiguous, record the ambiguity and amend the rubric by a versioned
 adaptation. Never move a band to settle a grade dispute; missing scope is
 UNSIZED, not a tie.
-
-Under an adopted time-box profile (operating-model.md), the planner may move
-a task's band one step from its grade, never two, for a reason the drivers
-miss: proof volume, record volume or a key review set. The reason is stated
-apart from the score and recorded in the task's Estimate block; the points
-stay as scored.
 
 ## Consequence and use
 
@@ -141,33 +134,17 @@ them as a duration predictor rather than defending added complexity.
 Under an adopted time-box profile, a grade maps to the profile's band: a
 budget with a stop rule, not a prediction of the task's duration.
 
-Note, 2026-11-04 (ADR-0096): the sentence above, the S2 definitions, the
-guard anchors, the boundaries the reliability check settled, the
-never-counts list, the dispute rule, the band move rule
-and the anchored examples were added. Points and cuts are unchanged.
+Note, 2026-11-04 (ADR-0096): version `codeflow-agentic-2`. The sentence
+above, the S2 definitions, the guard anchors, the boundaries that decide
+common cases, the never-counts list and the dispute rule were added as
+clarifications. Points and cuts are unchanged, so a grade recorded under
+`codeflow-agentic-1` keeps its label and stands. Moving a band away from
+its grade is the time-box profile's rule (`operating-model.md`, "Time-box
+profile"), not the rubric's. Anchored examples follow once the
+independent check below is recorded for this version.
 
 Before trusting a changed rubric, independently grade representative pinned
 packages across the relevant drivers and ambiguous boundaries. Preserve both
 initial judgments, disagreements and reconciled reasons. Choose meaningful
 cases and acceptance rules before grading; neither a magic sample size nor
 agreement on contrived fixtures establishes field accuracy.
-
-## Anchored examples
-
-From reliability check 1 (`project-management/estimates/rubric-check-1/` in
-CodeFlow's repository, records pinned at `47403d356`): 22 landed CodeFlow
-tasks graded independently by two Claude graders, 18 agreeing on the grade,
-every difference reconciled; one model family, so reduced assurance. Each
-line is the reconciled grade, which both graders gave, pinned at
-`<task id>@47403d356`.
-
-| Grade | Task and outcome | Drivers |
-|---|---|---|
-| Easy | TSK-1018, test fixtures resolve their root on macOS | none, 0: tests alone |
-| Easy | TSK-228, `codeflow ci` warns on a long PR body | S2 1 (one report member); counting is not S4; R 0 (three obligations) |
-| Medium | TSK-212, local `ci` matches the hosted verdict (a fix) | S2 2 (three owned operations change), R 2 (nine refusals): 4 |
-| Medium | TSK-1149, a task branch pushes its own line sync | S2 1, R 1 (six refusals); X 0, a guard relaxation is R: 2 |
-| Hard | TSK-239, outcomes derived from git | S2 1, S4 3 (timings, ratios, medians), R 1: 5 |
-| Hard | TSK-322, blocked names refused at any depth | S2 2 (three policy keys), S4 3 (normalizing matcher, remerge walk), R 2: 7 |
-| Very Hard | TSK-119, form answers stored against revisions | S1 3, S2 2, S3 3, R 2: 10 |
-| Very Hard | TSK-019, portal ownership with schema migration | S1 3, S2 2, S7 1, C 2, X 1, R 2: 11; C scores the custody change and X its confirmation, as the C and X boundary above decides |
