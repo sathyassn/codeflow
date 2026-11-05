@@ -1799,20 +1799,32 @@ fn narrowest<'b>(
 
 /// The advertised tip of the integration line the pushed branch's task
 /// declares, when the branch carries a task and the destination has that
-/// line.
+/// line. The task and its target are read from the records at the pushed
+/// commit under the destination's work prefixes, never from the pushing
+/// checkout (TSK-1257), so a push from a root checkout that lacks the
+/// line's records bounds its range as a push from the task's worktree does.
 fn own_line_tip(
     root: &Path,
     r: &PushRef,
     destination: &Destination<'_>,
 ) -> Result<Option<String>, String> {
-    use codeflow_core::workgraph::{declared_work_target, task_id_from_branch};
+    use codeflow_core::workgraph::{judged_task_id, task_target_at_revision};
     let Some(branch) = r.remote_branch() else {
         return Ok(None);
     };
-    let Some(id) = task_id_from_branch(root, branch).map_err(|error| error.to_string())? else {
+    let Some(id) = judged_task_id(
+        root,
+        &destination.policy.branch_prefixes,
+        branch,
+        &r.local_sha,
+    )
+    .map_err(|error| error.to_string())?
+    else {
         return Ok(None);
     };
-    let Some(target) = declared_work_target(root, &id).map_err(|error| error.to_string())? else {
+    let Some(target) =
+        task_target_at_revision(root, &id, &r.local_sha).map_err(|error| error.to_string())?
+    else {
         return Ok(None);
     };
     let asked = destination

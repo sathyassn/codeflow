@@ -374,6 +374,9 @@ fn ci_recognizes_nested_only_historical_task() {
         "---\nid: TSK-001-001\nepic_id: null\nstandalone_reason: historical task\nintegration_target: main\ntitle: historical\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nNested historical task.\n\n## Acceptance Criteria\n- AC-1 anchored first\n",
     )
     .unwrap();
+    // The record is read from the judged head, never the checkout (TSK-1257).
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add the nested record"]);
 
     let output = run_in(
         dir.path(),

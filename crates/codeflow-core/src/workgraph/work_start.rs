@@ -916,7 +916,8 @@ fn declared_work_record_at_revision(
                 .next()
                 .and_then(markdown_stem)
                 .is_some_and(|id| suffix.starts_with(&format!("{id}-")))
-    })?;
+    })
+    .map_err(|error| at_revision(error, revision))?;
     Ok(records
         .into_values()
         .filter(|record| suffix.starts_with(&format!("{}-", record.id)))
@@ -1410,11 +1411,23 @@ pub(crate) fn task_record_at_revision(
         .map_err(|error| WorkStartError::Repository(format!("{revision}: {error}")))?;
     let records = records_from_tree_matching(&repo, &tree, |path, kind| {
         kind == RecordKind::Task && path.rsplit('/').next().and_then(markdown_stem) == Some(task)
-    })?;
+    })
+    .map_err(|error| at_revision(error, revision))?;
     Ok(records
         .into_iter()
         .find(|(id, _)| id == task)
         .map(|(_, record)| record))
+}
+
+/// A record read failure at `revision`, naming the commit beside the path
+/// the reader names (TSK-1257).
+fn at_revision(error: WorkStartError, revision: &str) -> WorkStartError {
+    match error {
+        WorkStartError::InvalidGraph(message) => {
+            WorkStartError::InvalidGraph(format!("{message} (at commit {revision})"))
+        }
+        other => other,
+    }
 }
 
 /// The `integration_target` task `task`'s record declares at `revision`,
@@ -1912,13 +1925,27 @@ fn task_id_in_head(
 ///
 /// Returns an error if work prefixes or the task inventory cannot be read.
 pub fn branch_claims_task_id(repo_root: &Path, branch: &str) -> Result<bool, WorkStartError> {
-    Ok(
-        work_branch_suffix(repo_root, branch)?.is_some_and(|suffix| {
-            suffix
-                .strip_prefix("TSK-")
-                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
-        }),
-    )
+    Ok(work_branch_suffix(repo_root, branch)?.is_some_and(claims_task_id))
+}
+
+/// [`branch_claims_task_id`] as `codeflow ci` judges a range (TSK-1257):
+/// the work prefixes come from `prefixes`, the `git.branch_prefixes` of the
+/// policy the run judges with, never from the checkout's policy.
+#[must_use]
+pub fn judged_branch_claims_task_id(prefixes: &[String], branch: &str) -> bool {
+    let prefixes: Vec<String> = prefixes
+        .iter()
+        .filter(|prefix| !NON_WORK_PREFIXES.contains(&prefix.as_str()))
+        .cloned()
+        .collect();
+    work_suffix(&prefixes, branch).is_some_and(claims_task_id)
+}
+
+/// Whether a work branch suffix starts with a task id by shape.
+fn claims_task_id(suffix: &str) -> bool {
+    suffix
+        .strip_prefix("TSK-")
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 /// A reviewed predecessor pin. The lookup names its exact branch and commit;
