@@ -422,32 +422,42 @@ fn local_or_upstream(
     local_id: git2::Oid,
 ) -> Result<Option<ResolvedWorkTarget>, WorkStartError> {
     // The kept local branch, named so that reading the name gives this
-    // branch: the bare name when no other commit answers to it, else its
-    // exact ref, since a bare name reads `origin/<name>` first (TSK-416).
+    // branch: the bare name when the ref a bare read takes holds this
+    // commit, else its exact ref (TSK-416).
     let keep = || -> Result<Option<ResolvedWorkTarget>, WorkStartError> {
-        let origin = reference_commit(repo, &format!("refs/remotes/origin/{local}"))?;
-        let target = if origin.is_none_or(|origin| origin == local_id) {
+        let read = target_reference_read(repo, local)?.map(|(_, commit)| commit.id());
+        let target = if read == Some(local_id) {
             local.to_string()
         } else {
             local_ref.to_string()
         };
         Ok(Some(ResolvedWorkTarget { target }))
     };
-    let upstream_ref = match repo.branch_upstream_name(local_ref) {
-        Ok(name) => Some(
-            name.as_str()
-                .map_err(|error| {
-                    WorkStartError::Repository(format!(
-                        "configured upstream is not valid UTF-8: {error}"
-                    ))
-                })?
-                .to_owned(),
-        ),
-        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+    // Only the same branch on a configured remote replaces it: an upstream
+    // naming another branch, which git sets when a line is cut from
+    // `origin/main` and which any config write can change, is never the
+    // line (TSK-416).
+    // A configured upstream git cannot decode is an error, never an absent
+    // upstream (issue 79), whichever remote it names.
+    match repo.branch_upstream_name(local_ref) {
+        Ok(name) if name.as_str().is_err() => {
+            return Err(WorkStartError::Repository(
+                "configured upstream is not valid UTF-8".to_string(),
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+        Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+    }
+    let remotes = repo
+        .remotes()
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let upstream_ref = match configured_upstream(repo, local, &remotes)? {
+        Some(upstream) => Some(upstream),
+        None => {
             let remote = format!("refs/remotes/origin/{local}");
             reference_commit(repo, &remote)?.map(|_| remote)
         }
-        Err(error) => return Err(WorkStartError::Repository(error.to_string())),
     };
     let Some(upstream_ref) = upstream_ref else {
         return keep();
@@ -3445,6 +3455,17 @@ fn tracking_reference(
     read(&landing)
 }
 
+/// [`configured_upstream`] for a caller outside this module.
+pub(crate) fn same_branch_upstream(
+    repo: &Repository,
+    branch: &str,
+) -> Result<Option<String>, WorkStartError> {
+    let remotes = repo
+        .remotes()
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    configured_upstream(repo, branch, &remotes)
+}
+
 /// The upstream configured for local branch `branch`, when it is
 /// `refs/remotes/<remote>/<branch>`, the same branch on a configured remote
 /// other than `.` (the fork case). Any other upstream, including another
@@ -3833,27 +3854,16 @@ pub(crate) fn target_reference_read<'repo>(
     let Some(mut candidates) = target_reference_names(target) else {
         return Ok(None);
     };
-    // A bare name whose local branch tracks a remote-tracking ref of another
-    // remote reads that ref first: a fork's `origin/<name>` is not the line
-    // the branch follows.
+    // A bare name whose local branch tracks the same branch on another
+    // configured remote reads that ref first: a fork's `origin/<name>` is not
+    // the line the branch follows. An upstream naming another branch is never
+    // read, so a config write cannot point the line elsewhere (TSK-416).
     if candidates.len() > 1 {
-        match repo.branch_upstream_name(&format!("refs/heads/{target}")) {
-            Ok(upstream) => {
-                let upstream = upstream.as_str().map_err(|error| {
-                    WorkStartError::Repository(format!(
-                        "the upstream configured for '{target}' is not valid UTF-8: {error}"
-                    ))
-                })?;
-                if upstream.starts_with("refs/remotes/") {
-                    candidates.insert(0, upstream.to_string());
-                }
-            }
-            Err(error)
-                if matches!(
-                    error.code(),
-                    git2::ErrorCode::NotFound | git2::ErrorCode::UnbornBranch
-                ) => {}
-            Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+        let remotes = repo
+            .remotes()
+            .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+        if let Some(upstream) = configured_upstream(repo, target, &remotes)? {
+            candidates.insert(0, upstream);
         }
     }
     for name in candidates {
@@ -5437,9 +5447,9 @@ mod tests {
         let resolved = resolve_work_target_checked(dir.path(), Some("main"))
             .unwrap()
             .unwrap();
-        // The local branch, by its exact ref: the bare name would read the
-        // fork's `origin/main` first (TSK-416).
-        assert_eq!(resolved.target, "refs/heads/main");
+        // The bare name, which reads the configured `upstream/main`, never
+        // the fork's `origin/main` (TSK-416).
+        assert_eq!(resolved.target, "main");
         let repo = Repository::open(dir.path()).unwrap();
         assert_eq!(
             target_reference(&repo, &resolved.target)
@@ -5458,7 +5468,10 @@ mod tests {
     fn a_local_upstream_is_anchored_by_its_exact_ref() {
         // SR-2: `main` tracks the local branch `origin/main`
         // (`branch.main.remote = .`), while a remote `origin/main` exists
-        // too. The ref compared must be the ref anchored on.
+        // too. The ref compared must be the ref anchored on. A local
+        // upstream is not a fetched line, so the fetched `origin/main` is
+        // read, by its exact ref, never the author-made local branch
+        // (TSK-416).
         let dir = fixture();
         add_remote(dir.path(), "origin", false);
         git(
@@ -5481,19 +5494,19 @@ mod tests {
         let resolved = resolve_work_target_checked(dir.path(), Some("main"))
             .unwrap()
             .unwrap();
-        assert_eq!(resolved.target, "refs/heads/origin/main");
+        assert_eq!(resolved.target, "refs/remotes/origin/main");
         let repo = Repository::discover(dir.path()).unwrap();
         let anchored = target_reference(&repo, &resolved.target)
             .unwrap()
             .unwrap()
             .id();
-        let local_upstream = repo
-            .find_reference("refs/heads/origin/main")
+        let fetched = repo
+            .find_reference("refs/remotes/origin/main")
             .unwrap()
             .peel_to_commit()
             .unwrap()
             .id();
-        assert_eq!(anchored, local_upstream);
+        assert_eq!(anchored, fetched);
         assert!(is_stable_work_target(&resolved.target));
     }
 
@@ -6331,6 +6344,95 @@ mod stale_copy_tests {
         let (name, tip) = target_reference_read(&repo, "main").unwrap().unwrap();
         assert_eq!(name, "refs/heads/main");
         assert_eq!(tip.id().to_string(), stale);
+    }
+
+    /// TSK-416 AC-3: the other readers of a bare target read the fetched
+    /// line beside a stale local copy: `work_target_resolves`,
+    /// `anchored_records` (readiness and the pre-push range),
+    /// `tracking_reference` and `resolve_work_target` (the redaction and
+    /// reopen resolver in `status_verb.rs`).
+    #[test]
+    fn the_other_bare_target_readers_read_the_fetched_line() {
+        let dir = fixture();
+        let root = dir.path();
+        let stale = git(root, &["rev-parse", "HEAD"]);
+        let fetched = commit(root, "fetched");
+        let head = commit(root, "task work");
+        git(root, &["update-ref", "refs/remotes/origin/main", &fetched]);
+        git(root, &["update-ref", "refs/heads/main", &stale]);
+        let repo = Repository::open(root).unwrap();
+        assert!(work_target_resolves(root, "main"));
+        let head = Oid::from_str(&head).unwrap();
+        let (base, _) = anchored_records(&repo, "main", head).unwrap();
+        assert_eq!(base, fetched);
+        let (name, tip) = tracking_reference(&repo, "main").unwrap().unwrap();
+        assert_eq!(name, "origin/main");
+        assert_eq!(tip.to_string(), fetched);
+        assert_eq!(
+            resolve_work_target(root, Some("main")).unwrap().as_deref(),
+            Some("refs/remotes/origin/main")
+        );
+    }
+
+    /// An upstream naming another branch is never read for the line: a
+    /// config write (`git branch -u`, `branch.<b>.merge`) or a line cut from
+    /// `origin/main` and pushed without `-u` cannot point it elsewhere.
+    #[test]
+    fn an_upstream_naming_another_branch_is_never_read_for_the_line() {
+        let dir = fixture();
+        let root = dir.path();
+        let base = git(root, &["rev-parse", "HEAD"]);
+        let other = commit(root, "another branch");
+        git(
+            root,
+            &["update-ref", "refs/remotes/origin/feat/fake", &other],
+        );
+        git(root, &["update-ref", "refs/heads/main", &base]);
+        git(root, &["update-ref", "refs/remotes/origin/main", &base]);
+        git(root, &["config", "branch.main.remote", "origin"]);
+        git(
+            root,
+            &["config", "branch.main.merge", "refs/heads/feat/fake"],
+        );
+        let repo = Repository::open(root).unwrap();
+        let (name, tip) = target_reference_read(&repo, "main").unwrap().unwrap();
+        assert_eq!(name, "refs/remotes/origin/main");
+        assert_eq!(tip.id().to_string(), base);
+        let resolved = resolve_work_target_checked(root, Some("main"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, "main");
+
+        // A line cut from `origin/main` tracks it; pushed without `-u`, its
+        // own fetched copy is the one read, and a local copy behind that
+        // copy resolves to it, never to `origin/main`.
+        let line = "integration/x";
+        git(root, &["update-ref", &format!("refs/heads/{line}"), &base]);
+        git(
+            root,
+            &["update-ref", &format!("refs/remotes/origin/{line}"), &other],
+        );
+        git(
+            root,
+            &["config", &format!("branch.{line}.remote"), "origin"],
+        );
+        git(
+            root,
+            &["config", &format!("branch.{line}.merge"), "refs/heads/main"],
+        );
+        let (name, tip) = target_reference_read(&repo, line).unwrap().unwrap();
+        assert_eq!(name, format!("refs/remotes/origin/{line}"));
+        assert_eq!(tip.id().to_string(), other);
+        let resolved = resolve_work_target_checked(root, Some(line))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, format!("refs/remotes/origin/{line}"));
+        // Equal copies keep the bare name, which reads the same commit.
+        git(root, &["update-ref", &format!("refs/heads/{line}"), &other]);
+        let resolved = resolve_work_target_checked(root, Some(line))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, line);
     }
 
     /// A fork's `origin/main` never replaces the upstream `main` tracks.

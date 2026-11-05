@@ -7318,9 +7318,11 @@ fn tsk416_a_reopen_completes_beside_a_stale_local_holding_the_old_completion() {
             true,
         );
         assert_eq!(result.0, 0, "{}", result.1);
+        // The amended criterion, which the stale local copy lacks, stands.
         assert!(std::fs::read_to_string(&path)
             .unwrap()
-            .contains(&amended[..10]));
+            .contains("the system shall work well."));
+        assert!(!amended.contains("shall work."));
         commit(root, "docs(records): complete TSK-001 again");
         let judged = ci_on(root, "origin/main", "fix/TSK-001-again", "Task: TSK-001");
         assert_eq!(judged.0, 0, "{}", judged.1);

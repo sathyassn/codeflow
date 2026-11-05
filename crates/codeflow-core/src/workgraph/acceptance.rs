@@ -2607,19 +2607,19 @@ pub(super) fn judged_target_tips(
     let [(local_ref, local_tip)] = local.as_slice() else {
         return Ok(fetched.into_iter().chain(local).collect());
     };
-    let descends = |of: Oid, ancestor: Oid| {
+    let descends = |of: Oid, ancestor: Oid, fetched_ref: &str| {
         history::descendant_of(repo, of, ancestor).map_err(|error| {
             format!(
-                "cannot read the ancestry of {local_ref} at {local_tip} against the fetched line: {}; judge from a fresh worktree of the fetched line (`git worktree add --detach <path> <fetched ref>`)",
+                "cannot read the ancestry of {local_ref} at {local_tip} against {fetched_ref}: {}; judge from a fresh worktree of the fetched line (`git worktree add --detach <path> {fetched_ref}`)",
                 error.message()
             )
         })
     };
     for (fetched_ref, fetched_tip) in &fetched {
-        if fetched_tip == local_tip || descends(*fetched_tip, *local_tip)? {
+        if fetched_tip == local_tip || descends(*fetched_tip, *local_tip, fetched_ref)? {
             return Ok(fetched);
         }
-        if !descends(*local_tip, *fetched_tip)? {
+        if !descends(*local_tip, *fetched_tip, fetched_ref)? {
             return Err(format!(
                 "the local branch {local_ref} at {local_tip} and {fetched_ref} at {fetched_tip} have diverged, so the line this reopen is judged against is ambiguous; judge from a fresh worktree of the fetched line (`git worktree add --detach <path> {fetched_ref}`), after a plain `git fetch origin`, which does not move the local branch"
             ));
@@ -2629,20 +2629,16 @@ pub(super) fn judged_target_tips(
 }
 
 /// Every tip of the target `name` this clone knows, with the reference
-/// that names it: the configured upstream of its local branch (on any
-/// remote), its `origin` tracking ref, and the local branch, in that
-/// order. Empty when none resolves.
+/// that names it: the configured upstream of its local branch when it is the
+/// same branch on a configured remote (an upstream naming another branch is
+/// never this target, TSK-416), its `origin` tracking ref, and the local
+/// branch, in that order. Empty when none resolves.
 pub(super) fn target_tips(repo: &Repository, name: &str) -> Result<Vec<(String, Oid)>, String> {
     let mut names = Vec::new();
-    match repo.branch_upstream_name(&format!("refs/heads/{name}")) {
-        Ok(upstream) => names.push(
-            upstream
-                .as_str()
-                .map_err(|error| format!("cannot decode configured upstream: {error}"))?
-                .to_string(),
-        ),
-        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
-        Err(error) => return Err(error.to_string()),
+    if let Some(upstream) =
+        super::work_start::same_branch_upstream(repo, name).map_err(|error| error.to_string())?
+    {
+        names.push(upstream);
     }
     // The fetched `origin` ref, then the local branch: the order
     // `target_reference_names` gives a bare name.

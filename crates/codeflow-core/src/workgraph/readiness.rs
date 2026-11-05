@@ -4042,8 +4042,9 @@ mod tests {
         let (_upstream, _origin) = forked(root, true);
         let backlog = backlog(root).unwrap();
         assert_eq!(entry(&backlog, "TSK-001").state, State::Blocked);
+        // The line is read on the configured upstream, and named so.
         assert!(
-            backlog.snapshot_line().contains(" main@"),
+            backlog.snapshot_line().contains(" upstream/main@"),
             "{}",
             backlog.snapshot_line()
         );
