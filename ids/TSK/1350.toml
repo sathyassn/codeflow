@@ -1,0 +1,11 @@
+id = "TSK-1350"
+uid = "ad9bd440-eda4-4c3b-a3d8-f0948f31ca0b"
+kind = "TSK"
+title = "A landing merge carries its ticket footer when the project requires one"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T19:39:47Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
