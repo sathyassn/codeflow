@@ -386,3 +386,66 @@ fn naming_and_depth_are_settings_with_defaults() {
         "{error}"
     );
 }
+
+/// AC-3, security review finding 1: a candidate name that is a symbolic
+/// ref proves nothing about the branch it points at. Pointed at a
+/// checked-out task branch or at the protected `main`, the removal is
+/// refused and the target is kept; before the fix the delete followed the
+/// link and removed the target.
+#[test]
+fn a_symbolic_candidate_is_refused_and_its_target_kept() {
+    let fixture = fixture(None);
+    let root = fixture.root();
+    candidate(root, false);
+    land(root, 0);
+    let target = "task/TSK-003-target";
+    git(root, &["branch", target, CANDIDATE]);
+    let trees = tempfile::tempdir().unwrap();
+    let at = trees.path().join("target");
+    git(
+        root,
+        &["worktree", "add", "-q", at.to_str().unwrap(), target],
+    );
+    for (link, points_at) in [("candidate/link", target), ("candidate/to-main", "main")] {
+        git(
+            root,
+            &[
+                "symbolic-ref",
+                &format!("refs/heads/{link}"),
+                &format!("refs/heads/{points_at}"),
+            ],
+        );
+        let result = remove(root, link, LINE, &no_pull_request);
+        assert!(exists(root, points_at), "{points_at} is kept: {result:?}");
+        assert!(exists(root, link), "{link} is kept");
+        let error = result.unwrap_err();
+        assert!(
+            error.contains(&format!("`{link}` is a symbolic ref")),
+            "{link}: {error}"
+        );
+    }
+}
+
+/// A worktree whose `HEAD` names the candidate in another case holds it
+/// on a case-insensitive filesystem, so the comparison ignores case.
+#[test]
+fn a_checkout_in_another_case_holds_the_candidate() {
+    let fixture = fixture(None);
+    let root = fixture.root();
+    candidate(root, false);
+    land(root, 0);
+    let trees = tempfile::tempdir().unwrap();
+    let at = trees.path().join("upper");
+    git(
+        root,
+        &["worktree", "add", "-q", "--detach", at.to_str().unwrap()],
+    );
+    git(&at, &["symbolic-ref", "HEAD", "refs/heads/Candidate/C1"]);
+    refused(
+        root,
+        CANDIDATE,
+        LINE,
+        &no_pull_request,
+        "a worktree has `candidate/c1` checked out",
+    );
+}

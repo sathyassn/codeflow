@@ -12,7 +12,7 @@
 //!
 //! The removal is refused, naming the cause, when the name is not of the
 //! project's candidate naming (`git.candidate_prefix`), the branch is
-//! protected or is the line, the trees differ, the tree is only on a side
+//! protected or is the line, the branch is a symbolic ref, the trees differ, the tree is only on a side
 //! branch, the line or the branch cannot be read, a worktree has the branch
 //! checked out, or it has an open pull request. A task branch keeps the
 //! ordinary merge proof (`.codeflow/rules/worktrees.md` "Cleanup").
@@ -64,11 +64,12 @@ pub fn remove(
 ) -> Result<Removed, String> {
     let proof = prove(repo_root, branch, line, open_pull_requests)?;
     // Compare and delete: the ref is removed only while it is still at the
-    // tip the proof was made for.
+    // tip the proof was made for, and never through a symbolic link.
     git(
         repo_root,
         &[
             "update-ref",
+            "--no-deref",
             "-d",
             &format!("refs/heads/{branch}"),
             &proof.tip.to_string(),
@@ -128,18 +129,7 @@ pub fn prove(
         ));
     }
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
-    let local = format!("refs/heads/{branch}");
-    let tip = repo
-        .find_reference(&local)
-        .and_then(|reference| reference.peel_to_commit())
-        .map_err(|error| format!("the branch `{branch}` cannot be read: {error}"))?;
-    let checked_out = super::local_branches::checked_out(&repo)
-        .map_err(|error| format!("cannot tell whether a worktree uses `{branch}`: {error}"))?;
-    if checked_out.contains(local.as_bytes()) {
-        return Err(format!(
-            "a worktree has `{branch}` checked out; remove that worktree first (git worktree remove, never --force on a dirty one)"
-        ));
-    }
+    let tip = unused_branch_tip(&repo, branch)?;
     git(
         repo_root,
         &[
@@ -201,6 +191,38 @@ pub fn prove(
         line_commit,
         tree,
     })
+}
+
+/// The tip of the local branch `branch`, refused when it is a symbolic ref
+/// or a worktree has it checked out.
+fn unused_branch_tip<'r>(repo: &'r Repository, branch: &str) -> Result<git2::Commit<'r>, String> {
+    let local = format!("refs/heads/{branch}");
+    let reference = repo
+        .find_reference(&local)
+        .map_err(|error| format!("the branch `{branch}` cannot be read: {error}"))?;
+    // A symbolic ref names another branch: the checks would look at this
+    // name while the delete removed the target.
+    if reference.kind() != Some(git2::ReferenceType::Direct) {
+        return Err(format!(
+            "`{branch}` is a symbolic ref, not a branch of its own; it is never removed by this route (git symbolic-ref refs/heads/{branch} names its target)"
+        ));
+    }
+    let tip = reference
+        .peel_to_commit()
+        .map_err(|error| format!("the branch `{branch}` cannot be read: {error}"))?;
+    let checked_out = super::local_branches::checked_out(repo)
+        .map_err(|error| format!("cannot tell whether a worktree uses `{branch}`: {error}"))?;
+    // Compared without case: on a case-insensitive filesystem a worktree on
+    // `Candidate/C1` holds `candidate/c1`; elsewhere this only refuses more.
+    if checked_out
+        .iter()
+        .any(|held| held.eq_ignore_ascii_case(local.as_bytes()))
+    {
+        return Err(format!(
+            "a worktree has `{branch}` checked out; remove that worktree first (git worktree remove, never --force on a dirty one)"
+        ));
+    }
+    Ok(tip)
 }
 
 /// The first `depth` commits of `tip`'s first-parent history, newest first,
