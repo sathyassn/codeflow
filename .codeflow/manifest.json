@@ -245,7 +245,7 @@
     ".agents/skills/cf-estimate/SKILL.md": {
       "src": "agents/skills/cf-estimate/SKILL.md",
       "ownership": "managed",
-      "sha256": "19c5925a6a8f99873d8d099d2701f0b6001a2fa7adf344eac5d7043f466deb8d",
+      "sha256": "3888c23c5ec6493f66ba9712c1ea2c1465971db7ece12bb097ef3afa89324436",
       "exec": false
     },
     ".agents/skills/cf-estimate/examples/brief.md": {
@@ -275,7 +275,7 @@
     ".agents/skills/cf-estimate/references/records.md": {
       "src": "agents/skills/cf-estimate/references/records.md",
       "ownership": "managed",
-      "sha256": "442b44e96c30d72e62daa9df263b6544def2f06136853359f746c97c2e18883c",
+      "sha256": "7a167e4b9018a1284de907e2dcee72b1276b5f245c86afcb6b88d9691af853c5",
       "exec": false
     },
     ".agents/skills/cf-estimate/references/rubric.md": {
@@ -1091,7 +1091,7 @@
     ".claude/skills/cf-estimate/SKILL.md": {
       "src": "agents/skills/cf-estimate/SKILL.md",
       "ownership": "managed",
-      "sha256": "19c5925a6a8f99873d8d099d2701f0b6001a2fa7adf344eac5d7043f466deb8d",
+      "sha256": "3888c23c5ec6493f66ba9712c1ea2c1465971db7ece12bb097ef3afa89324436",
       "exec": false
     },
     ".claude/skills/cf-estimate/examples/brief.md": {
@@ -1121,7 +1121,7 @@
     ".claude/skills/cf-estimate/references/records.md": {
       "src": "agents/skills/cf-estimate/references/records.md",
       "ownership": "managed",
-      "sha256": "442b44e96c30d72e62daa9df263b6544def2f06136853359f746c97c2e18883c",
+      "sha256": "7a167e4b9018a1284de907e2dcee72b1276b5f245c86afcb6b88d9691af853c5",
       "exec": false
     },
     ".claude/skills/cf-estimate/references/rubric.md": {
@@ -1907,7 +1907,7 @@
     "project-management/templates/task.md": {
       "src": "pm/task.md.tmpl",
       "ownership": "managed",
-      "sha256": "4a7c8fa109b4dae1f0ef70292da7990ee64686b9ea8a3f08290f7ca8fbd550ac",
+      "sha256": "8331f084fdd77c9cfd8c2174ac9116a5a39ec0858703da9cac2733afe4c1a390",
       "exec": false
     }
   }

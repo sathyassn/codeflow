@@ -68,11 +68,12 @@ Profile version: 1; effective <YYYY-MM-DD>
 ```
 
 The planning defaults hold beside the table (`cf-plan`): a task is
-typically Medium or Hard, an Easy task merges into a sibling that shares its
-cause, code path or proof, a Very Hard task is split before claim, an epic
-holds about 5 to 10 tasks, and its finished part reaches main within a few
-days through checkpoint PRs. They are defaults a project can override,
-never caps or gates.
+typically Medium or Hard, with its own outcome and proof; an Easy task
+merges into a sibling that shares its cause, code path or proof; a Very
+Hard task is split before claim; an epic holds about 5 to 10 tasks, a plan
+past about 10 asks whether to split the epic, and its finished part reaches
+main within a few days through checkpoint PRs. They are defaults a project
+can override, never caps or gates.
 
 A later revision is profile-v2.md with its own effective date; tasks keep
 the revision they were frozen with. At epic close, before the epic's line ref

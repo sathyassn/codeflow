@@ -59,8 +59,13 @@ availability), not all estimates. Resolve discoverable facts yourself.
 1. Establish a pinned delivery package. When it holds tasks too small to
    carry their own outcome and proof, merge them by the `cf-plan` sizing
    test before grading; never grade them one by one. The `cf-plan`
-   planning defaults apply: a task is typically Medium or Hard, and a Very
-   Hard task is split before claim. Anchored grades are
+   planning defaults apply, as defaults a project can override, never caps
+   or gates: an epic holds about 5 to 10 tasks, and a plan past about 10
+   asks whether to split the epic; its finished part reaches main within a
+   few days through checkpoint PRs; a task is typically Medium or Hard, an
+   Easy task merges into a sibling that shares its cause, code path or
+   proof, and a Very Hard task is split before claim; every task has its
+   own outcome and proof. Anchored grades are
    optional: where they help, read [rubric.md](references/rubric.md) to
    assign drivers. Materially missing scope/ownership/acceptance is
    UNSIZED; duration uncertainty alone is not. Show conditional alternatives
