@@ -3094,8 +3094,8 @@ fn tsk416_a_pin_on_the_fetched_line_is_met_beside_a_stale_local_copy() {
 
 /// TSK-416, the sibling of AC-1: a predecessor completes on its own line,
 /// and the local copy of that line is behind `origin`'s. The successor's
-/// claim reads the predecessor's status on the fetched line and says it is
-/// complete there, never the stale local copy's `todo`.
+/// claim reads the predecessor's status on the fetched line, never the
+/// stale local copy's `todo`, and cuts from that fetched line (TSK-1047).
 #[test]
 fn tsk416_a_dependency_is_read_on_the_fetched_line_beside_a_stale_local_copy() {
     let dir = fixture();
@@ -3107,15 +3107,15 @@ fn tsk416_a_dependency_is_read_on_the_fetched_line_beside_a_stale_local_copy() {
     git(root, &["push", "-q", "origin", "main"]);
     git(root, &["switch", "-qc", producer]);
     git(root, &["push", "-q", "origin", producer]);
-    complete(root, "TSK-003", "src/findings.rs");
+    let fetched = complete(root, "TSK-003", "src/findings.rs");
     git(root, &["push", "-q", "origin", producer]);
     git(root, &["switch", "-q", "main"]);
     git(root, &["branch", "-q", "-f", producer, &stale]);
 
     let out = cli(root, &["work", "claim", "TSK-004"], None);
-    assert!(!out.status.success(), "{}", text(&out));
+    succeeds(&out);
     assert!(
-        text(&out).contains(&format!("complete on '{producer}' but not in this base")),
+        text(&out).contains(&format!("from origin/{producer}@{}", &fetched[..9])),
         "{}",
         text(&out)
     );
