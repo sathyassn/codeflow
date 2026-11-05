@@ -76,7 +76,7 @@ rules' "Write only what earns its keep" says. An ADR may be drafted and
 revised while its decision is unresolved and unaccepted; once accepted it is
 append-only, and a reversal is a new ADR that supersedes it.
 
-## Planned work moves at speed
+## Planned work keeps to its band
 
 This section is the one home of the pace of planned work; `cf-develop`,
 `cf-model-orchestrator`, `cf-estimate` and the map's build row point here.
@@ -84,10 +84,17 @@ This section is the one home of the pace of planned work; `cf-develop`,
 Exploration, research and planning stay deliberate. Once work is planned
 into an epic and tasks with criteria, builders execute it without
 re-planning, re-litigating settled decisions or confirmation work for its
-own sake. The operator set the throughput expectation as an explicit
-decision of 2026-10-23: each build lane delivers at least one planned task
-to ready-for-review per hour, preferably two. Quality is not traded for
-speed: the criteria, the tests that prove them and real security stay.
+own sake. Where the project adopted the `cf-estimate` time-box profile, each
+task's budget is its band, frozen at breakdown: the clock runs from the
+claim to the later of the bound approval and the end of verification, less
+recorded blocked spans. The band replaces the operator's throughput decision of
+2026-10-23. Quality is not traded for speed: the criteria, the tests that
+prove them and real security stay.
+
+A claim means work begins now. A lane that cannot start, or that waits on
+something outside the task, records `blocked` with its reason, owner and
+revisit; a busy reviewer is not a block. An abandoned claim is handed over
+on its branch, never deleted.
 
 A builder keeps to these practices:
 
@@ -96,12 +103,16 @@ A builder keeps to these practices:
 - push once, at ready, and never rerun a check on an unchanged tree;
 - keep the PR body lean: the criteria with file:line and the test evidence;
 - report any stop longer than 15 minutes at once;
-- decide reversible choices and disclose them.
+- decide reversible choices and disclose them;
+- where the profile is adopted, on a Hard task, log one line at half the
+  band top; at the top, stop new work and choose a finish of at most 30
+  minutes, a split or a re-plan, with a cause line.
 
-The coordinator starts every task whose edges allow, up to host capacity,
-measures each lane's time on its task at every sweep and acts on any lane
-past an hour. Estimates come from this planned throughput and are never
-extrapolated from a slow pace (`cf-estimate`).
+The coordinator starts every task whose edges allow, up to host capacity.
+Where the profile is adopted, it reads each lane's time on its task against
+its band at every sweep and acts on any task past its band top. Estimates
+come from the `cf-estimate` scenarios and, where adopted, the task's band,
+never extrapolated from a slow pace.
 
 ## Execute and integrate
 
