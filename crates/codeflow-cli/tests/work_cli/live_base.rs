@@ -676,3 +676,31 @@ fn a_claim_records_its_base_without_any_git_identity() {
     assert!(identity.stdout.is_empty(), "{}", text(&identity));
     assert!(std::fs::read_dir(home.path()).unwrap().next().is_none());
 }
+
+// A task with no record is a planning finding: it follows
+// `git.work_planning` (TSK-1047 AC-2), while a failed fetch still blocks.
+#[test]
+fn an_unrecorded_task_follows_the_work_planning_level() {
+    for (level, code) in [("warn", 0), ("block", 1)] {
+        let dir = fixture();
+        let root = dir.path();
+        write(
+            root,
+            ".codeflow/policy.json",
+            &format!("{{\"git\":{{\"work_planning\":\"{level}\"}}}}"),
+        );
+        commit(root, "chore: configure planning severity");
+        let _origin = with_bare_origin(root);
+        git(root, &["fetch", "-q", "origin"]);
+        git(root, &["switch", "-qc", "task/TSK-404-missing"]);
+        let out = cli(root, &["work", "start", "TSK-404"], None);
+        assert_eq!(out.status.code(), Some(code), "{level}: {}", text(&out));
+        assert!(text(&out).contains("TSK-404"), "{level}: {}", text(&out));
+        let label = if level == "warn" {
+            "work start: warning:"
+        } else {
+            "work start: error:"
+        };
+        assert!(text(&out).contains(label), "{level}: {}", text(&out));
+    }
+}

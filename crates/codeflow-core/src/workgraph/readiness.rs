@@ -1848,7 +1848,8 @@ fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
 /// Refresh the refs used to resolve a claim before looking up review pins.
 ///
 /// # Errors
-/// Reports target or fetch errors without creating a claim.
+/// Reports target or fetch errors without creating a claim. A task with no
+/// visible record is not an error here: its caller reports that finding.
 pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
     // OS text rule (issue 79): a remote is fetched by name, and a name that is
     // not valid UTF-8 cannot be given to git as text, so claim refresh refuses
@@ -1876,8 +1877,12 @@ pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
             fetch_for_admission(repo_root, remote)?;
         }
     }
-    let declared = claim_target(repo_root, task_id)?
-        .ok_or_else(|| format!("{task_id} has no visible record with an integration_target"))?;
+    // No visible record: every remote was fetched above. The missing record
+    // is a planning finding the caller reports at its policy level; `claim`
+    // refuses it and `start` follows `git.work_planning` (AC-2).
+    let Some(declared) = claim_target(repo_root, task_id)? else {
+        return Ok(());
+    };
     let has_origin = remotes.iter().any(|remote| remote == "origin");
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     // Fetch the remote the target resolves through (never substituting
@@ -3261,9 +3266,8 @@ mod tests {
         let claimed = claim(root, "TSK-002").unwrap();
         assert_eq!(claimed.branch, "task/TSK-002-work-tsk-002");
         assert!(claimed.pushed);
-        // `main` tracks `origin/main` and equals it: the local branch is read,
-        // as `work start` reads it.
-        assert!(claimed.from.starts_with("main@"), "{}", claimed.from);
+        // The claim names the fetched remote tip it was cut from (TSK-1047).
+        assert!(claimed.from.starts_with("origin/main@"), "{}", claimed.from);
         let remote = run(bare.path(), &["branch", "--list"]);
         assert!(remote.contains("task/TSK-002-work-tsk-002"), "{remote}");
 
@@ -4021,7 +4025,8 @@ mod tests {
     }
 
     /// R2-1, the other direction: upstream is ready and the fork adds a
-    /// Blocker. All three accept, and the claim is cut from `main`.
+    /// Blocker. All three accept, and the claim is cut from the configured
+    /// upstream's fetched `main`, which it names.
     #[test]
     fn a_ready_upstream_is_ready_whatever_the_fork_says() {
         let dir = repo();
@@ -4030,7 +4035,11 @@ mod tests {
         let backlog = backlog(root).unwrap();
         assert_eq!(entry(&backlog, "TSK-001").state, State::Ready);
         let claimed = claim(root, "TSK-001").unwrap();
-        assert!(claimed.from.starts_with("main@"), "{}", claimed.from);
+        assert!(
+            claimed.from.starts_with("upstream/main@"),
+            "{}",
+            claimed.from
+        );
         let published = run(origin.path(), &["branch", "--list"]);
         assert!(published.contains(&claimed.branch), "{published}");
         start_from(root, &claimed.branch).unwrap();

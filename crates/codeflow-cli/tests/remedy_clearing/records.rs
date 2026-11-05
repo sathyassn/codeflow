@@ -610,6 +610,35 @@ fn clears_work_target_tip() {
 }
 
 #[test]
+fn clears_work_target_unverified() {
+    const LINE: &str = "integration/x";
+    let dir = ci_repo("{}");
+    let root = dir.path();
+    git(root, &["branch", LINE, "main"]);
+    commit(root, "x.txt", "feat: add x");
+    // The target's tip cannot be read here, so containment is unverified.
+    git(root, &["branch", "-D", LINE]);
+    let args = [
+        "--base", "main", "--head", "HEAD", "--branch", "feat/x", "--into", LINE,
+    ];
+    prove(
+        "WORK_TARGET_UNVERIFIED",
+        "work.target_tip",
+        || {
+            let mut full = vec!["ci"];
+            full.extend(args);
+            codeflow(root, &full)
+        },
+        |printed| {
+            // Repair the target read as the finding says, then rerun.
+            git(root, &["branch", LINE, "main"]);
+            let step = printed_command(printed, "WORK_TARGET_UNVERIFIED", None);
+            run_printed(root, &step, &[], &args);
+        },
+    );
+}
+
+#[test]
 fn clears_work_start_merge_planning() {
     let hosted = Hosted::new();
     let root = &hosted.root;

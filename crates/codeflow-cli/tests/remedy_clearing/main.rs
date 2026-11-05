@@ -103,6 +103,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCS_CAPABILITIES_UNCHECKED", Runs),
     ("WORK_START_RECONCILE", Runs),
     ("WORK_TARGET_TIP", Runs),
+    ("WORK_TARGET_UNVERIFIED", Runs),
     ("WORK_START_MERGE_PLANNING", Runs),
     ("WORK_START_UNBLOCK", Runs),
     ("WORK_CLASSIFICATION", Runs),

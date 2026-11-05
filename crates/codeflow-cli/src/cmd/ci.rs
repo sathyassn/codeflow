@@ -1450,25 +1450,20 @@ fn target_containment_warning(
             tip.clone(),
         )))
     })();
-    let (message, next_step) = match result {
+    let (message, remedy) = match result {
         Ok(None) => return,
         Ok(Some((message, tip))) => (
             message,
-            format!("run `git merge -- \"{tip}\"` on the task branch and rerun `codeflow ci`"),
+            codeflow_core::remedy::WORK_TARGET_TIP.with(&[("tip", &tip)]),
         ),
         Err(error) => (
             format!("target '{target}' tip is unverified: {error}"),
-            "repair the target read and rerun `codeflow ci` until its tip is verified".into(),
+            codeflow_core::remedy::WORK_TARGET_UNVERIFIED.remedy(),
         ),
     };
     tagged.push(TaggedViolation {
         sha: None,
-        violation: Violation::new(
-            "work.target_tip",
-            PolicyLevel::Warn,
-            message,
-            codeflow_core::remedy::WORK_TARGET_TIP.with(&[("next_step", &next_step)]),
-        ),
+        violation: Violation::new("work.target_tip", PolicyLevel::Warn, message, remedy),
     });
 }
 
