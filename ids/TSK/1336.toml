@@ -1,0 +1,11 @@
+id = "TSK-1336"
+uid = "4c492469-6a4f-4177-904d-5691d9f0ea59"
+kind = "TSK"
+title = "codeflow status --md gives the status document in plain text"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:07:03Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
