@@ -403,6 +403,39 @@ fn ci_recognizes_nested_only_historical_task() {
     assert_eq!(output.status.code(), Some(0), "{err}");
 }
 
+#[test]
+fn ci_refuses_a_nested_task_not_planned_on_main() {
+    // The nested record exists only on the branch, so the head carries a
+    // task the target has never planned: the work-start check refuses it.
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    let nested = dir.path().join("project-management/epics/EPC-001/tasks");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        nested.join("TSK-001-001.md"),
+        "---\nid: TSK-001-001\nepic_id: null\nstandalone_reason: historical task\nintegration_target: main\ntitle: historical\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nNested historical task.\n\n## Acceptance Criteria\n- AC-1 anchored first\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add the nested record"]);
+
+    let output = run_in(
+        dir.path(),
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            "task/TSK-001-001-unanchored",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(err.contains("work.stable_planning_anchor"), "{err}");
+}
+
 /// A body satisfying every default-required section with real content.
 const FULL_BODY: &str = "## Summary\n\nAdds a thing so the command explains itself.\n\n- adds a thing\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- one change\n\n\
                          ## Testing\n\n- cargo test: 12 passed\nNot tested: Windows.\n";

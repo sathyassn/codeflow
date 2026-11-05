@@ -269,7 +269,8 @@ fn an_unreadable_head_tree_refuses_naming_commit_and_path() {
     std::fs::remove_file(root.join(".git/objects").join(&blob[..2]).join(&blob[2..])).unwrap();
     assert!(root.join(record_path("TSK-005")).exists());
     let run = push_run(root, &head, "task/TSK-005-lost");
-    assert_ne!(run.0, 0, "an unreadable head record: {}", run.1);
+    // Exit 2: the range cannot be verified, which refuses it.
+    assert_eq!(run.0, 2, "an unreadable head record: {}", run.1);
     for needle in [
         "project-management/tasks/TSK-005.md",
         &format!("at commit {head}"),

@@ -320,15 +320,13 @@ pub(super) fn root_branch_at(root: &Path, base: &str) -> Result<Option<String>, 
 }
 
 /// Whether durable work tracking is on at the head or at the target, so a
-/// pull request cannot switch it off for itself.
+/// pull request cannot switch it off for itself ([`super::tracking_judged`]).
+/// With no range there is no commit to read, so only the checkout counts.
 pub(super) fn tracking_on(root: &Path, range: Option<&Range<'_>>) -> Result<bool, String> {
-    let mut enabled = durable_work_tracking_enabled(root).map_err(|error| error.to_string())?;
-    if let Some(range) = range {
-        for revision in [range.base, range.head] {
-            enabled |= durable_work_tracking_enabled_at(root, revision)?;
-        }
+    match range {
+        Some(range) => super::tracking_judged(root, Some(range.base), range.head),
+        None => durable_work_tracking_enabled(root).map_err(|error| error.to_string()),
     }
-    Ok(enabled)
 }
 
 /// With durable tracking on, an `integration/*` head that is not a release

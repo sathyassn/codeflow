@@ -328,7 +328,11 @@ fn run_ci_ranges(
             }
         };
         let policy = &policy;
-        let base = ci_base(root, r, branch, destination, report)?;
+        // The declared target and the task's own line are found under the
+        // judging policy's work prefixes, as `codeflow ci` judges the range
+        // with that policy (TSK-1257).
+        let prefixes = &policy.branch_prefixes;
+        let base = ci_base(root, r, branch, destination, prefixes, report)?;
         if let Some(base) = base {
             report.status.push(judging);
             let running = policy.test_gate_on_push.to_string();
@@ -339,7 +343,7 @@ fn run_ci_ranges(
             args.extend(["--pushed-ref", &r.remote_ref]);
             // Range boundaries can be unnamed merge bases. Pass destination
             // intent separately so CI does not infer it from coincident refs.
-            let into = ci_target(root, r, branch, &judged, destination, report)?;
+            let into = ci_target(root, r, branch, &judged, (destination, prefixes), report)?;
             let into_arg = into.map(|target| format!("--into={target}"));
             // The push's target is the branch itself: its current tip's
             // baseline list governs the record check, not the boundary's,
@@ -389,7 +393,7 @@ fn ci_target(
     pushed: &PushRef,
     branch: &str,
     judged: &Judged,
-    destination: &Destination<'_>,
+    (destination, prefixes): (&Destination<'_>, &[String]),
     report: &mut StageReport,
 ) -> Result<Option<String>, String> {
     use super::ci::Declared;
@@ -400,6 +404,7 @@ fn ci_target(
         branch,
         &pushed.local_sha,
         &policy.protected_branches,
+        prefixes,
     )? {
         Some(Declared::Eligible(target)) if declared_bounds(root, destination, &target) => {
             Some(target)
@@ -596,6 +601,7 @@ fn ci_base(
     r: &PushRef,
     branch: &str,
     destination: &Destination<'_>,
+    prefixes: &[String],
     report: &mut StageReport,
 ) -> Result<Option<String>, String> {
     Ok(match release_base(root, r, branch, destination, report) {
@@ -603,7 +609,7 @@ fn ci_base(
         Scoped::Release(tip) => Some(tip),
         Scoped::Ordinary => {
             let mut notices = Vec::new();
-            let range = range_base(root, r, destination, &mut notices)?;
+            let range = range_base(root, r, destination, prefixes, &mut notices)?;
             report
                 .status
                 .extend(notices.into_iter().map(|text| format!("note: {text}")));
@@ -1429,19 +1435,20 @@ fn range_base(
     root: &Path,
     r: &PushRef,
     destination: &Destination<'_>,
+    prefixes: &[String],
     notices: &mut Vec<String>,
 ) -> Result<Option<RangeBase>, String> {
     if let Advertised::Tips(tips) = destination.advertised(root) {
-        if let Some(base) = target_base(root, r, destination, tips, notices)? {
+        if let Some(base) = target_base(root, r, destination, prefixes, tips, notices)? {
             return Ok(Some(base));
         }
     }
     if existing_tip(root, r)?.is_some() {
-        return Ok(Some(existing_base(root, r, destination)?));
+        return Ok(Some(existing_base(root, r, destination, prefixes)?));
     }
     let note = match destination.advertised(root) {
         Advertised::Tips(tips) if !tips.commits.is_empty() => {
-            let line = own_line_tip(root, r, destination)?;
+            let line = own_line_tip(root, r, destination, prefixes)?;
             return Ok(bounded_by(
                 root,
                 &r.local_sha,
@@ -1514,6 +1521,7 @@ fn target_base(
     root: &Path,
     r: &PushRef,
     destination: &Destination<'_>,
+    prefixes: &[String],
     tips: &AdvertisedTips,
     notices: &mut Vec<String>,
 ) -> Result<Option<RangeBase>, String> {
@@ -1537,6 +1545,7 @@ fn target_base(
             branch,
             &r.local_sha,
             &policy.protected_branches,
+            prefixes,
         )?;
         let Some(declared) = declared else {
             return Ok(None);
@@ -1626,11 +1635,12 @@ fn existing_base(
     root: &Path,
     r: &PushRef,
     destination: &Destination<'_>,
+    prefixes: &[String],
 ) -> Result<RangeBase, String> {
     let branch = r.remote_branch().unwrap_or_default();
     let shown_branch = display_text(branch);
     let old = &r.remote_sha;
-    let line = own_line_tip(root, r, destination)?;
+    let line = own_line_tip(root, r, destination, prefixes)?;
     let (base, failed): (String, Option<&String>) = match destination.advertised(root) {
         Advertised::Tips(tips) => (
             bounded_by(
@@ -1800,25 +1810,23 @@ fn narrowest<'b>(
 /// The advertised tip of the integration line the pushed branch's task
 /// declares, when the branch carries a task and the destination has that
 /// line. The task and its target are read from the records at the pushed
-/// commit under the destination's work prefixes, never from the pushing
-/// checkout (TSK-1257), so a push from a root checkout that lacks the
-/// line's records bounds its range as a push from the task's worktree does.
+/// commit under `prefixes`, the work prefixes of the policy that judges the
+/// push (the destination default branch's), never from the pushing
+/// checkout's records or policy (TSK-1257), so a push from a root checkout
+/// that lacks the line's records bounds its range as a push from the task's
+/// worktree does.
 fn own_line_tip(
     root: &Path,
     r: &PushRef,
     destination: &Destination<'_>,
+    prefixes: &[String],
 ) -> Result<Option<String>, String> {
     use codeflow_core::workgraph::{judged_task_id, task_target_at_revision};
     let Some(branch) = r.remote_branch() else {
         return Ok(None);
     };
-    let Some(id) = judged_task_id(
-        root,
-        &destination.policy.branch_prefixes,
-        branch,
-        &r.local_sha,
-    )
-    .map_err(|error| error.to_string())?
+    let Some(id) =
+        judged_task_id(root, prefixes, branch, &r.local_sha).map_err(|error| error.to_string())?
     else {
         return Ok(None);
     };

@@ -396,8 +396,18 @@ pub fn run(args: &CiArgs) -> i32 {
     };
 
     // Resolve names and pin revisions once before any range rule runs.
-    let context = match context::resolve(&root, args, &environment, &working.git.protected_branches)
-    {
+    // The working copy's policy finds the range, its work prefixes as its
+    // protected branches (see `judging_policy`): the judging policy is read at
+    // the base, which the declared target picks. The pre-push hook picks the
+    // base and target under the judging policy's prefixes and passes them as
+    // `--base` and `--into` (TSK-1257).
+    let context = match context::resolve(
+        &root,
+        args,
+        &environment,
+        &working.git.protected_branches,
+        &working.git.branch_prefixes,
+    ) {
         Ok(context) => context,
         Err(error) => {
             eprintln!(
