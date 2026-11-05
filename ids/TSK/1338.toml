@@ -1,0 +1,11 @@
+id = "TSK-1338"
+uid = "680e93e5-0697-4d66-8de0-5f83e84c38f0"
+kind = "TSK"
+title = "An away session claims, dispatches and lands work only under recorded checks"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:09:44Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
