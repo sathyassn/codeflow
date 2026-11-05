@@ -1190,9 +1190,10 @@ fn ci_scaffold_range_skips_unmodified_managed_files() {
     assert_eq!(code, Some(0), "{all}");
     assert!(!all.contains("git.policy_characters"), "{all}");
     assert!(!all.contains("skipped:"), "{all}");
-    // The only findings are the warnings that the range adds the managed
-    // workflows, which change who judges pull requests (TSK-336 AC-11).
-    assert!(all.contains("3 warning(s) only"), "{all}");
+    // The range adds managed workflows, which change who judges pull
+    // requests (TSK-336 AC-11), and its head omits the fixture's trunk tip.
+    assert!(all.contains("4 warning(s) only"), "{all}");
+    assert!(all.contains("work.target_tip"), "{all}");
     assert_eq!(
         all.matches("warning — ci.workflow_change").count(),
         3,
