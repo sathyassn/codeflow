@@ -2139,7 +2139,7 @@ pub fn claim_on(
     }
     Ok(Claim {
         branch,
-        from: format!("{}@{}", shown(&selected.source), &tip.to_string()[..9]),
+        from: format!("{}@{}", shown_read(&selected.source), &tip.to_string()[..9]),
         pushed: has_origin,
         informational_branches: information,
         omitted_words: named.omitted,
