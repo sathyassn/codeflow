@@ -1,0 +1,11 @@
+id = "TSK-1356"
+uid = "c41d6f9c-06b2-40f1-81bd-20f2d3a295bc"
+kind = "TSK"
+title = "The gates job reads test config and policy from the base authority, fail closed"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T21:21:13Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
