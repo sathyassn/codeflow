@@ -443,12 +443,11 @@ fn local_or_upstream(
     // A configured upstream git cannot decode is an error, never an absent
     // upstream (issue 79), whichever remote it names.
     match repo.branch_upstream_name(local_ref) {
-        Ok(name) if name.as_str().is_err() => {
-            return Err(WorkStartError::Repository(
-                "configured upstream is not valid UTF-8".to_string(),
-            ));
+        Ok(name) => {
+            name.as_str().map_err(|_| {
+                WorkStartError::Repository("configured upstream is not valid UTF-8".to_string())
+            })?;
         }
-        Ok(_) => {}
         Err(error) if error.code() == git2::ErrorCode::NotFound => {}
         Err(error) => return Err(WorkStartError::Repository(error.to_string())),
     }
