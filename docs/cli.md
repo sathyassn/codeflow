@@ -589,9 +589,7 @@ primary handles the remote landing through the project's PR flow.
 - After landing, clean linked worktrees that have the target checked out are
   reset to the tested tip, and a dirty one is reported.
 
-Claim and start use these rules.
-
-| Case | Base and admission behavior |
+| Claim or start case | Base and admission behavior |
 |---|---|
 | Predecessor complete on another line | `codeflow work claim TSK-NNN` selects that line's live tip without changing the target. Create a linked worktree on the reported branch, then run `codeflow work start TSK-NNN`. |
 | Two unmerged sources, or missing shared planning | Claim refuses and names the line-sync route. |
