@@ -21,7 +21,7 @@ The project-owned `.codeflow/estimate.json` records the decision:
   "schema_version": 1,
   "status": "adopted",
   "rationale": "Use explicit agent-delivery forecasts for capacity decisions.",
-  "method_version": "codeflow-agentic-1",
+  "method_version": "codeflow-agentic-2",
   "root": "project-management/estimates",
   "re_offer_when": "The delivery boundary or existing planning authority changes."
 }
@@ -52,6 +52,39 @@ updates. Naming below is illustrative, not another global record allocator:
 A profile states what constitutes full delivery, actual resources/availability,
 qualified binding references, evidence comparability, any justified local grade
 ranges, and prospective evaluation rules. Do not seed invented calibration data.
+A project that adopts the time-box profile (operating-model.md) adds to
+profile-v1.md its profile version, its effective date, the started point and
+the end point of the clock in one sentence each, and its band table. The
+shipped starting bands may be copied in as a starting profile; they are a
+stop rule the project chose, not calibration data:
+
+```text
+Profile version: 1; effective <YYYY-MM-DD>
+| Grade | Points | Band (clock hours) |
+| Easy | 0 to 1 | 1 to 2 |
+| Medium | 2 to 4 | 2 to 4 |
+| Hard | 5 to 8 | 4 to 6 |
+| Very Hard | 9 or more | 6 to 8; split before claim |
+```
+
+Read the table with the `cf-plan` sizing guidance. Grade tasks by judgement:
+most are Medium or Hard, an Easy task usually belongs with a sibling that
+shares its cause, code path or proof, and a Very Hard task is split before
+claim. Every task carries its own outcome and proof. An epic is one coherent
+outcome built from meaningful Medium-to-Hard tasks, small enough that its
+finished part reaches main within a few days through checkpoint PRs; about 5
+to 10 tasks is a reference point for that, not a rule.
+
+A later revision is profile-v2.md with its own effective date; tasks keep
+the revision they were frozen with. At epic close, on the line before its PR
+to main and so before the line ref is deleted, outcomes/<epic-id>.md holds
+that epic's outcome record.
+
+Profiles and frozen forecasts under the root land with planning: they ride
+in the planning PR or epic amendment that carries the breakdown. An epic's
+outcome record rides in the records change on its line at epic close. A task PR adds only its own task record, as `codeflow ci`
+requires, so under the profile it changes only the Estimate block in that
+record.
 An outcome record names the forecast and package, observed scope/status and stage
 timings, waits, failures/reopens, sources and missing observations. Its timings
 may come from `codeflow estimate outcomes`, which derives them from git and

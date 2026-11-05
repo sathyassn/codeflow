@@ -1,0 +1,6 @@
+/* A companion figure says where it comes from, under the figure. The
+   companion opts out of Starlight's content styles (not-content), which
+   would otherwise reach the figure's legend keys and twin marker, so the
+   source line sets its own inline code. */
+.cf-companion-source { margin: var(--cf-length-6px-value) 0 var(--cf-length-18px); font-size: var(--cf-fs-caption); color: var(--cf-text-muted); }
+.cf-companion-source code { padding: var(--cf-length-0-125rem) var(--cf-length-0-375rem); font-size: var(--sl-text-code-sm); background-color: var(--sl-color-bg-inline-code); }
