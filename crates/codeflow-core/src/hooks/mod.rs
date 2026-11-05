@@ -491,6 +491,13 @@ mod tests {
                 if serde_json::from_value::<PolicyLevel>((*value).clone()).is_err() {
                     return false;
                 }
+                // An `off | on` switch (such as `scan_on_push`) also
+                // defaults to `off`; a level field takes every level.
+                let mut every = defaults.clone();
+                every[key.as_str()] = "warn".into();
+                if serde_json::from_value::<policy::GitPolicy>(every).is_err() {
+                    return false;
+                }
                 let mut probe = defaults.clone();
                 probe[key.as_str()] = "not-a-level".into();
                 serde_json::from_value::<policy::GitPolicy>(probe).is_err()
