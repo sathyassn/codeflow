@@ -1,0 +1,11 @@
+id = "TSK-1346"
+uid = "cb74fdec-7de1-43a4-9fef-6b2e2e80a572"
+kind = "TSK"
+title = "Guards refuse dispatching a release or creating a release tag through the API"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T18:51:14Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
