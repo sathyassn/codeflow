@@ -1,0 +1,11 @@
+id = "TSK-1337"
+uid = "520f82d6-c528-4fd4-a30e-b0607dcdd7c7"
+kind = "TSK"
+title = "The dashboard shell draws its menu, tabs, export and comments"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:07:18Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
