@@ -59,9 +59,10 @@ use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUS
 pub const CREATE_SUSPENDED: u32 = windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 
 /// The job holding one target's process tree, with the target's fence
-/// watcher. Dropping it never waits. The watcher, signaled after the job
-/// handle closes, ends any process still in the tree and exits once the job
-/// is empty; with no watcher, closing the handle ends them.
+/// watcher. Dropping it never waits. The watcher, signaled by
+/// [`Self::terminate`] or at the latest by the drop, ends any process still
+/// in the tree and exits once the job is empty; with no watcher, closing the
+/// handle ends them.
 pub struct TargetJob {
     job: OwnedHandle,
     watch: Option<super::job_watch::JobWatch>,

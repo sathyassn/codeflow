@@ -119,10 +119,11 @@ pub(super) fn run_observed(
             deadline.info.cleanup_details.push(error);
         }
     }
-    // On Windows the target's tree ends with this process: the job is
-    // closed when the gate exits or is killed. The OS gives no order between
-    // that and freeing the gate's own locks, so while this process holds a
-    // fence a watcher outside the job holds it too and frees it only once
+    // On Windows the target's tree ends with this process. With no fence
+    // held, the job closes when the gate exits or is killed. The OS gives no
+    // order between that and freeing the gate's own locks, so while this
+    // process holds a fence a watcher outside the job holds it too, with a
+    // copy of the job handle; it ends the job and frees the fence only once
     // the job is empty (TSK-1318).
     // A job failure ends the still-suspended child before its command runs
     // and fails the spawn (TSK-142 AC-3), as it did before supervision.
