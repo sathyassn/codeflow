@@ -117,6 +117,16 @@ pub fn prove(
             "`{branch}` is a protected branch or the line itself, which is never removed"
         ));
     }
+    // The line is a ref class the policy defines, never a name the requester
+    // picks: a copy of the tree on an ordinary branch can be deleted later.
+    let is_line = line.starts_with(crate::hooks::policy::INTEGRATION_BRANCH_PREFIX)
+        || git_policy.branch_is_protected_name(&GitName::from_text(line));
+    if !is_line {
+        return Err(format!(
+            "`{line}` is not a line: name a protected branch or an `{}` branch, so the proof holds only while the work is on a branch the policy protects or a line lands through",
+            crate::hooks::policy::INTEGRATION_BRANCH_PREFIX
+        ));
+    }
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let local = format!("refs/heads/{branch}");
     let tip = repo

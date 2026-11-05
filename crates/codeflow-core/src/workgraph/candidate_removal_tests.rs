@@ -334,6 +334,62 @@ fn each_other_cause_refuses_and_keeps_the_branch() {
     );
 }
 
+/// AC-2, review finding 1: the line must be a line. A copy of the
+/// candidate's tree pushed to an unprotected branch, named as `--line`,
+/// proves nothing: that branch can be deleted or force-pushed later.
+#[test]
+fn a_branch_that_is_not_a_line_proves_nothing() {
+    let fixture = fixture(None);
+    let root = fixture.root();
+    candidate(root, false);
+    git(
+        root,
+        &[
+            "push",
+            "-q",
+            "origin",
+            &format!("{CANDIDATE}:task/TSK-002-copy"),
+        ],
+    );
+    refused(
+        root,
+        CANDIDATE,
+        "task/TSK-002-copy",
+        &no_pull_request,
+        "`task/TSK-002-copy` is not a line",
+    );
+}
+
+/// Review nit: the branch named as its own line, and a candidate name the
+/// policy protects, refuse and keep the branch.
+#[test]
+fn the_line_itself_and_a_protected_name_refuse() {
+    let fixture_line = fixture(None);
+    let root = fixture_line.root();
+    candidate(root, false);
+    land(root, 0);
+    refused(
+        root,
+        CANDIDATE,
+        CANDIDATE,
+        &no_pull_request,
+        "is a protected branch or the line itself",
+    );
+
+    let policy = r#"{"schema_version": 1, "git": {"protected_branches": ["main", "integration/*", "candidate/c1"]}}"#;
+    let fixture_protected = fixture(Some(policy));
+    let root = fixture_protected.root();
+    candidate(root, false);
+    land(root, 0);
+    refused(
+        root,
+        CANDIDATE,
+        LINE,
+        &no_pull_request,
+        "is a protected branch or the line itself",
+    );
+}
+
 /// AC-5: the naming and the depth are policy settings with defaults read
 /// at the policy authority. The default depth finds a tree 3 commits
 /// deep; an override of 2 does not, and an override prefix changes which

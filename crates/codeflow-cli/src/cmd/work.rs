@@ -68,7 +68,8 @@ pub enum WorkCommand {
     RemoveCandidate {
         /// The candidate branch, named with `git.candidate_prefix`.
         branch: String,
-        /// The line on origin the candidate landed on.
+        /// The line on origin the candidate landed on: a protected branch
+        /// or an `integration/` line.
         #[arg(long, value_name = "BRANCH")]
         line: String,
         /// Check and print the proof without removing anything.

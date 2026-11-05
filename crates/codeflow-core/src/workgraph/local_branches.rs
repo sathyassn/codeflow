@@ -15,7 +15,9 @@
 //! Any other local branch is a leftover copy: a landing candidate that was
 //! replaced, or a task branch left from an earlier use of an id. It is
 //! named as information, never as a completion or a claim. A clone with no
-//! remote has only local branches, so every one of them still counts.
+//! `origin` remote has local branches that `work claim` never published
+//! (it pushes a fresh claim only to `origin`), so every one of them still
+//! counts there.
 //!
 //! Every doubt counts the branch: a ref list or a worktree that cannot be
 //! read makes each local branch live, so the checks refuse as before.
@@ -28,7 +30,7 @@ use crate::git::GitName;
 
 /// The facts that decide whether a local branch is live, read once.
 pub(crate) struct LocalBranches {
-    /// `None` when every local branch counts: the clone has no remote, or
+    /// `None` when every local branch counts: the clone has no `origin`, or
     /// the refs, remotes or worktrees could not be read.
     known: Option<Known>,
 }
@@ -74,7 +76,9 @@ impl LocalBranches {
 
 fn read_known(repo: &Repository) -> Option<Known> {
     let remotes = crate::git::name::remote_names(repo).ok()?;
-    if remotes.is_empty() {
+    // `work claim` pushes a fresh claim only to `origin`, so without it a
+    // live claim may have no remote copy yet: every branch counts.
+    if !remotes.iter().any(|remote| remote.bytes() == b"origin") {
         return None;
     }
     let mut refs = BTreeSet::new();
@@ -163,6 +167,19 @@ mod tests {
     fn every_local_branch_counts_in_a_clone_with_no_remote() {
         let dir = repo();
         assert!(live(dir.path(), "leftover"));
+    }
+
+    /// `work claim` pushes a fresh claim only to `origin`, so a clone
+    /// without `origin` keeps every local branch as live (review finding 2).
+    #[test]
+    fn every_local_branch_counts_in_a_clone_without_origin() {
+        let dir = repo();
+        let root = dir.path();
+        git(
+            root,
+            &["remote", "add", "upstream", "file:///nonexistent/upstream"],
+        );
+        assert!(live(root, "leftover"));
     }
 
     #[test]
