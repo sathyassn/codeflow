@@ -13,7 +13,7 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -71,10 +71,10 @@ class RunDirectory:
         self.list = self.root / "tests.json"
         self.list.write_text(listing(TESTS), encoding="utf-8")
 
-    def write(self, partition, tests, prefix="windows-junit"):
+    def write(self, partition, tests, prefix="windows-junit", seconds=60.0):
         folder = self.results / f"{prefix}-{partition}"
         folder.mkdir()
-        (folder / "junit.xml").write_text(junit(tests), encoding="utf-8")
+        (folder / "junit.xml").write_text(junit(tests, seconds), encoding="utf-8")
 
     def run(self, *args):
         out = StringIO()
@@ -103,13 +103,34 @@ class CheckTests(unittest.TestCase):
         self.run_dir = RunDirectory(self)
         self.planned = by_partition(TESTS)
 
-    def write_all(self, plan=None):
+    def write_all(self, plan=None, seconds=None):
         for partition, tests in (plan or self.planned).items():
-            self.run_dir.write(partition, tests)
+            self.run_dir.write(partition, tests, seconds=(seconds or {}).get(partition, 60.0))
 
-    def check(self):
+    def check(self, margin="24", setup="2"):
         return self.run_dir.run("check", "--count", str(COUNT), "--prefix", "windows-junit",
+                                "--margin-minutes", margin, "--setup-minutes", setup,
                                 "--list", str(self.run_dir.list), "--results", str(self.run_dir.results))
+
+    def test_a_partition_past_the_24_minute_margin_fails_and_one_at_it_passes(self):
+        # TSK-1063: 22 test minutes plus 2 of setup is the margin itself; 22.5 passes it.
+        self.write_all(seconds={1: 22 * 60, 2: 22.5 * 60})
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("partition 2 took 22.5 test minutes, about 24.5 job minutes with 2 of setup, past the 24 "
+                      "minute margin of the 30 minute job limit (TSK-1063)", out)
+        self.assertNotIn("partition 1 took", out)
+
+    def test_the_margin_and_setup_are_required_and_checked(self):
+        self.write_all()
+        for args in (("--setup-minutes", "2"), ("--margin-minutes", "24")):
+            with self.subTest(args=args), self.assertRaises(SystemExit), redirect_stderr(StringIO()):
+                self.run_dir.run("check", "--count", str(COUNT), "--prefix", "windows-junit", *args,
+                                 "--list", str(self.run_dir.list), "--results", str(self.run_dir.results))
+        for margin, setup in (("0", "2"), ("24", "-1")):
+            with self.subTest(margin=margin, setup=setup), self.assertRaises(SystemExit) as refused:
+                self.check(margin, setup)
+            self.assertIn("--margin-minutes must be above 0", str(refused.exception.code))
 
     def test_a_run_by_hash_passes_and_prints_each_partitions_minutes_and_the_slowest_test(self):
         self.write_all()
@@ -175,7 +196,8 @@ class CheckTests(unittest.TestCase):
         other.write_text(listing(TESTS[1:]), encoding="utf-8")
         self.write_all()
         with self.assertRaises(SystemExit) as refused:
-            self.run_dir.run("check", "--count", str(COUNT), "--prefix", "windows-junit", "--list",
+            self.run_dir.run("check", "--count", str(COUNT), "--prefix", "windows-junit",
+                             "--margin-minutes", "24", "--setup-minutes", "2", "--list",
                              str(self.run_dir.list), str(other), "--results", str(self.run_dir.results))
         self.assertIn("lists other tests", str(refused.exception.code))
 
@@ -246,7 +268,8 @@ class CoverageShardTests(unittest.TestCase):
 
     def check(self):
         lists = [str(self.run_dir.results / f"coverage-shard-{n}" / "tests.json") for n in (1, 2)]
-        return self.run_dir.run("check", "--count", "2", "--prefix", "coverage-shard", "--list", *lists,
+        return self.run_dir.run("check", "--count", "2", "--prefix", "coverage-shard",
+                                "--margin-minutes", "24", "--setup-minutes", "6", "--list", *lists,
                                 "--results", str(self.run_dir.results))
 
     def test_both_shards_pass(self):
@@ -254,6 +277,18 @@ class CoverageShardTests(unittest.TestCase):
         self.shard(2)
         code, out = self.check()
         self.assertEqual(code, 0, out)
+
+    def test_a_shard_past_the_margin_with_its_setup_fails(self):
+        # A coverage shard takes about 6 minutes to build and set up, so 18.5
+        # test minutes passes the 24 minute margin (TSK-1063).
+        self.shard(1)
+        folder = self.run_dir.results / "coverage-shard-2"
+        folder.mkdir()
+        (folder / "junit.xml").write_text(junit(self.planned[2], 18.5 * 60), encoding="utf-8")
+        (folder / "tests.json").write_text(listing(TESTS), encoding="utf-8")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("partition 2 took 18.5 test minutes, about 24.5 job minutes with 6 of setup", out)
 
     def test_a_sole_surviving_shard_is_numbered_and_the_other_named(self):
         (self.run_dir.results / "junit.xml").write_text(junit(self.planned[2]), encoding="utf-8")

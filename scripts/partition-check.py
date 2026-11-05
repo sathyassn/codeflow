@@ -20,12 +20,19 @@ when a listed test ran in no partition, ran in two, ran outside the partition
 its hash gives it, or ran without being listed. It prints each partition's
 test minutes and the slowest test.
 
+`check` also fails when a partition's test minutes plus `--setup-minutes`
+pass `--margin-minutes`. The workflows pass 24, 80 percent of the 30 minute
+job limit (TSK-1063), so a growing suite fails while its jobs still finish,
+before a slow runner hits the limit and the job ends without a report. With
+hash placement the remedy is a higher partition count.
+
 download-artifact writes a sole matching artifact into the results directory
 itself, without its `<prefix>-<n>` directory. Such a report is numbered by
 the hash of its tests, which must all agree.
 
 Usage: partition-check.py reports --count <n> --prefix <name> --results <dir> [--list <json>...]
-       partition-check.py check --count <n> --prefix <name> --list <json>... --results <dir>
+       partition-check.py check --count <n> --prefix <name> --margin-minutes <m> --setup-minutes <s>
+                                --list <json>... --results <dir>
 """
 
 from __future__ import annotations
@@ -166,8 +173,10 @@ def missing_message(missing: list[int], tests: int) -> str:
             "known to have failed")
 
 
-def check(listed: set[tuple[str, str]], reports: dict[int, Path], count: int) -> tuple[list[str], list[str]]:
-    """(problems, summary lines) for one run's reports against the test list."""
+def check(listed: set[tuple[str, str]], reports: dict[int, Path], count: int,
+          margin: float | None = None, setup: float = 0.0) -> tuple[list[str], list[str]]:
+    """(problems, summary lines) for one run's reports against the test list.
+    With a margin, a partition whose test minutes plus setup pass it is a problem."""
     problems = []
     missing = missing_partitions(reports, count)
     if missing:
@@ -196,6 +205,14 @@ def check(listed: set[tuple[str, str]], reports: dict[int, Path], count: int) ->
             problems.append(f"{test[0]} {test[1]} ran in partition {found[0]}; its hash gives partition {home}")
     for test in sorted(set(where) - listed):
         problems.append(f"{test[0]} {test[1]} ran but is not in the list of tests")
+    if margin is not None:
+        for partition, seconds in sorted(times.items()):
+            job = seconds / 60 + setup
+            if job > margin:
+                problems.append(f"partition {partition} took {seconds / 60:.1f} test minutes, about {job:.1f} job "
+                                f"minutes with {setup:g} of setup, past the {margin:g} minute margin of the 30 minute "
+                                "job limit (TSK-1063): raise the partition count before a slow runner reaches the "
+                                "limit")
     counts = {p: sum(1 for found in where.values() for at in found if at == p) for p in sorted(reports)}
     summary = [f"{len(listed)} listed tests, {sum(counts.values())} ran in {len(reports)} of {count} partitions"]
     if times:
@@ -228,9 +245,15 @@ def main(argv: list[str] | None = None) -> int:
         sub.add_argument("--results", type=Path, required=True)
     gone.add_argument("--list", type=Path, nargs="+")
     proof.add_argument("--list", type=Path, nargs="+", required=True)
+    proof.add_argument("--margin-minutes", type=float, required=True,
+                       help="fail a partition whose test minutes plus setup pass this")
+    proof.add_argument("--setup-minutes", type=float, required=True,
+                       help="a job's minutes outside its test run")
     args = parser.parse_args(argv)
     if args.count < 1:
         raise SystemExit(f"{NAME}: --count must be at least 1")
+    if args.command == "check" and (args.margin_minutes <= 0 or args.setup_minutes < 0):
+        raise SystemExit(f"{NAME}: --margin-minutes must be above 0 and --setup-minutes at least 0")
     reports = junit_reports(args.results, args.prefix, args.count)
     if args.command == "reports":
         missing = missing_partitions(reports, args.count)
@@ -249,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
     if not paths:
         raise SystemExit(f"{NAME}: none of the test lists exists; the jobs that wrote them ended without their "
                          "results (a timeout or a cancellation)")
-    problems, summary = check(listed_once(paths), reports, args.count)
+    problems, summary = check(listed_once(paths), reports, args.count, args.margin_minutes, args.setup_minutes)
     for line in summary:
         print(f"{NAME}: {line}")
         write_github("GITHUB_STEP_SUMMARY", f"- {line}")

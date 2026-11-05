@@ -347,7 +347,7 @@ COVERAGE_REPORT_JOB = """\
       - name: Every test ran in exactly one shard
         if: ${{ !cancelled() }}
         shell: bash
-        run: python3 -B scripts/test_partition_check.py && python3 -B scripts/partition-check.py check --count @COUNT@ --prefix coverage-shard --list @LISTS@ --results target/coverage/results
+        run: python3 -B scripts/test_partition_check.py && python3 -B scripts/partition-check.py check --count @COUNT@ --prefix coverage-shard --margin-minutes 24 --setup-minutes 6 --list @LISTS@ --results target/coverage/results
 """
 
 

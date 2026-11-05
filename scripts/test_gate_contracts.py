@@ -62,7 +62,8 @@ class GateContracts(unittest.TestCase):
         # journeys run in a job that starts with the run.
         journeys = windows['windows-journeys']
         self.assertIn('journey-gate.py --results target/nextest/partitions --skip-benchmark --part results', journeys)
-        self.assertIn('partition-check.py check --count 16 --prefix windows-junit --list', journeys)
+        self.assertIn('partition-check.py check --count 16 --prefix windows-junit --margin-minutes 24 '
+                      '--setup-minutes 2 --list', journeys)
         self.assertNotIn('test_release.py', journeys)
         self.assertIn('needs: windows-tests', journeys)
         self.assertIn('pattern: windows-junit-*', journeys)
