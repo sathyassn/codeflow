@@ -1,0 +1,11 @@
+id = "TSK-1359"
+uid = "908aff26-0541-46f9-940e-e17f4b27a4bc"
+kind = "TSK"
+title = "New task and epic records state the work they overlap, their value class and who they serve"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T23:50:24Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
