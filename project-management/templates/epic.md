@@ -80,14 +80,12 @@ created: {{DATE}}
      predecessors (`depends_on`); this is not a second task roster. -->
 
 <!-- Optional, only where the project adopted the estimation time-box
-     profile (`cf-estimate`); otherwise leave it out. `cf-plan` writes it at
-     breakdown; the expected mix is frozen then. Copy it out of this comment
-     as a `## Estimate` section here:
-
-     An epic is one coherent outcome built from meaningful Medium-to-Hard
-     tasks, small enough that its finished part reaches main within a few days
-     through checkpoint PRs; about 5 to 10 tasks is a reference point for
-     that, not a rule.
+     profile (`cf-estimate`); otherwise leave it out. An epic is one coherent
+     outcome built from meaningful Medium-to-Hard tasks, small enough that its
+     finished part reaches main within a few days through checkpoint PRs;
+     about 5 to 10 tasks is a reference point for that, not a rule.
+     `cf-plan` writes this section at breakdown; the expected mix is frozen
+     then. Copy it out of this comment as a `## Estimate` section here:
 
      ## Estimate
      - spec_pin: <SPC-NNN or source>@<commit>

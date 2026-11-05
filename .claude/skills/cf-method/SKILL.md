@@ -106,10 +106,9 @@ from evidence; do not offload research to the operator.
 
 An epic is one outcome. When its criteria describe two outcomes, it is two
 epics on one integration line; the epic that does not own the line declares
-it with `parent_line: integration/<epic-id>-<slug>`. Size tasks by the rule
-in the orchestrator's task-graph contract: one observable outcome per task,
-split only for a written reason. Size tasks by the sizing test, which is
-guidance: a task is one noticeable outcome with its own proof; siblings that
+it with `parent_line: integration/<epic-id>-<slug>`. Size tasks by the
+sizing test, which is guidance and matches the orchestrator's task-graph
+contract (one observable outcome per task, split only for a written reason): a task is one noticeable outcome with its own proof; siblings that
 share a cause, a code path or a proof merge, keeping every criterion; a
 helper-only task folds into the task it helps; a misfiled task moves to the
 epic that owns its outcome. No number caps a task's size or a plan's task

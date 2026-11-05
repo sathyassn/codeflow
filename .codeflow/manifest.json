@@ -275,7 +275,7 @@
     ".agents/skills/cf-estimate/references/records.md": {
       "src": "agents/skills/cf-estimate/references/records.md",
       "ownership": "managed",
-      "sha256": "aad8c7d8e85da078e7443846c3505af8a6d6badd0a41d2dc4d8582b7eff295f4",
+      "sha256": "8c74210899f5161dbec987d1ab15527a8a8e58bf3a4b2a5c9e2d6907cee7ee70",
       "exec": false
     },
     ".agents/skills/cf-estimate/references/rubric.md": {
@@ -413,7 +413,7 @@
     ".agents/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "3e8a400fe1ccccd25640285f997c21f7e926f47d8214a224ffa628d29c6c72b2",
+      "sha256": "6df35a9d88d9c443cd5ea6d5d77a8f7240df931c4c94770e0f6ab72ca8398907",
       "exec": false
     },
     ".agents/skills/cf-method/references/autonomy.md": {
@@ -1121,7 +1121,7 @@
     ".claude/skills/cf-estimate/references/records.md": {
       "src": "agents/skills/cf-estimate/references/records.md",
       "ownership": "managed",
-      "sha256": "aad8c7d8e85da078e7443846c3505af8a6d6badd0a41d2dc4d8582b7eff295f4",
+      "sha256": "8c74210899f5161dbec987d1ab15527a8a8e58bf3a4b2a5c9e2d6907cee7ee70",
       "exec": false
     },
     ".claude/skills/cf-estimate/references/rubric.md": {
@@ -1259,7 +1259,7 @@
     ".claude/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "3e8a400fe1ccccd25640285f997c21f7e926f47d8214a224ffa628d29c6c72b2",
+      "sha256": "6df35a9d88d9c443cd5ea6d5d77a8f7240df931c4c94770e0f6ab72ca8398907",
       "exec": false
     },
     ".claude/skills/cf-method/references/autonomy.md": {
@@ -1889,7 +1889,7 @@
     "project-management/templates/epic.md": {
       "src": "pm/epic.md.tmpl",
       "ownership": "managed",
-      "sha256": "d899d22fae913e522a5ba5c0038713e1da288fe4de99fa066c3dfaad869cc218",
+      "sha256": "1004b9a02fe1ac1607e93de106d1eceefa3faedae4d68d81da5be0c837276a3f",
       "exec": false
     },
     "project-management/templates/feedback.md": {
