@@ -716,7 +716,10 @@ exit 22
             assert!(out.contains("so this check fails;"), "{case}: {out}");
             // A check run cannot be removed from a commit, so the way out
             // is a new head commit, never a re-run (review N4).
-            assert!(out.contains("then push a new commit"), "{case}: {out}");
+            assert!(
+                out.contains("then add a new commit to the pull request"),
+                "{case}: {out}"
+            );
         }
     }
 
