@@ -26,6 +26,7 @@
       "scripts/check-gate-browser.mjs",
       "scripts/*.sh",
       "scripts/*.mjs",
+      "scripts/design-tokens-sync.ts",
       "tests/release-qualification/**",
       "journey_gate.toml",
       ".codex/**",

@@ -1,3 +1,4 @@
+/* Generated from source/styles and source/*.json. Do not edit. */
 /* CodeFlow figure sheet: frame, title line, legend, caption, details with the table twin, and the mark vocabulary of figure-grammar.md.
    Colours, faces and rules come from --cf-fig-* tokens only. Carried byte for byte by the products. */
 
@@ -93,3 +94,8 @@
 [data-cf-tone] :is(.cf-m-layer, .cf-m-layer--remote) { fill: var(--cf-fig-tone-soft); stroke: var(--cf-fig-tone); }
 [data-cf-tone] .cf-m-cap { fill: var(--cf-fig-tone); }
 [data-cf-tone] :is(.cf-m-state, .cf-m-node, .cf-m-optional, .cf-m-denied) { stroke: var(--cf-fig-tone); }
+
+/* Shared positive-count charts retain exact labels beside their visual floors. */
+.cf-count-bar { display: block; width: 100%; }
+.cf-count-ring { display: block; width: 96px; max-width: 100%; }
+.cf-count-key { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; font-size: var(--cf-fs-caption); }
