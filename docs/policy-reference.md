@@ -891,6 +891,42 @@ task PR.
 The hosted `codeflow-policy.yml` job passes no `--policy-from`, so it
 judges against the pull request's target only.
 
+## An epic's parent line
+
+`codeflow ci` and the pre-push hook bind an epic line
+`integration/EPC-NNN-<slug>` to a task of its own epic, or to a task of an
+epic whose record declares `parent_line: integration/EPC-NNN-<slug>`, the
+line's exact name (TSK-1286, `work.epic_line`):
+
+- The declaration is read only from the trusted records: the protected
+  branch's tip and the line's fetched `origin/<line>` tip. A `parent_line`
+  added in the pushed head binds nothing, and a head that changes or
+  removes a trusted declaration is refused.
+- One level only: `parent_line` names the anchor epic's own line, and the
+  anchor epic declares no `parent_line` of its own. When it does:
+  - A task of a declaring epic is refused at every trusted anchor.
+  - Once that anchor also holds a declaring epic's task targeting the
+    line, the whole line refuses: its own epic's tasks, standalone tasks,
+    the line-tip check, the line's proof to `main` and the receiving line
+    `codeflow task status` picks. It stays refused until a planning pull
+    request removes the chain or the declaring tasks.
+
+  Each refusal names the cause:
+
+  ```text
+  EPC-001, the epic of 'integration/EPC-001-anchor', itself declares parent_line 'integration/EPC-009-elsewhere' on <place>; one level only, so no other epic's parent_line binds this line
+  ```
+- A declaring epic that is cancelled or archived at any anchor refuses, as
+  does a `parent_line` on a task record.
+
+When no task on the line belongs to a bound epic, the run refuses the
+head as the line's next tip, and its message ends with the cause, for
+example:
+
+```text
+'integration/EPC-001-anchor' is not the target of any task of EPC-001 on 'origin/integration/EPC-001-anchor', nor of a task of an epic declaring parent_line 'integration/EPC-001-anchor' there, so it is not a bound epic line
+```
+
 ## Destination lookup failures
 
 `codeflow ci` and pre-push refuse under `ci.destination_unavailable` when

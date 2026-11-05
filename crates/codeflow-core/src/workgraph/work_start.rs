@@ -1215,6 +1215,31 @@ pub fn epic_line_bound_at(
     Ok(bound_in(&records, line, epic_id, place))
 }
 
+/// Whether the trusted records at commit `tip` bind `line`, judged by
+/// [`bound_in`] as every other reader judges it, so `codeflow task status`
+/// picks a receiving line exactly as `codeflow ci` would bind it (TSK-1286).
+///
+/// # Errors
+///
+/// Returns why the commit or a record at it could not be read.
+pub(crate) fn line_bound_at_tip(
+    repo: &Repository,
+    tip: git2::Oid,
+    line: &str,
+) -> Result<EpicLineBinding, String> {
+    let line = logical_target(line);
+    let epic_id = match super::line_adoption::epic_id(line) {
+        Ok(epic_id) => epic_id,
+        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+    };
+    let tree = repo
+        .find_commit(tip)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| format!("{tip}: {error}"))?;
+    let records = records_from_tree(repo, &tree).map_err(|error| error.to_string())?;
+    Ok(bound_in(&records, line, epic_id, "the tip"))
+}
+
 /// Whether one trusted record set (named `place`) binds `line`, whose name
 /// carries `epic_id`: that epic exists there without being cancelled or
 /// archived, and a task there targets this exact line as a task of that
@@ -1239,6 +1264,9 @@ fn bound_in(
             epic.status
         ));
     }
+    if let Some(reason) = chained_owner(records, line, place) {
+        return EpicLineBinding::Refused(reason);
+    }
     if !line_has_member_task(records, line, place) {
         return EpicLineBinding::Unbound(format!(
             "is not the target of any task of {epic_id} on {place}, nor of a task of an epic declaring {} '{line}' there",
@@ -1257,8 +1285,9 @@ pub(crate) enum LineMembership {
     /// is neither cancelled nor archived, and the line's own epic has a
     /// record there.
     Declared,
-    /// The epic's record there is cancelled or archived: a refusal, which
-    /// a declaration at another anchor never outweighs.
+    /// The epic's record there is cancelled or archived, or the line's own
+    /// epic there itself declares a `parent_line`: a refusal, which a
+    /// declaration at another anchor never outweighs.
     Refused(String),
     /// Neither; the reason names what is missing or different.
     Not(String),
@@ -1272,9 +1301,10 @@ pub(crate) struct EpicFacts {
 
 /// Whether tasks of `epic` land on `line` according to one record set,
 /// read through `lookup` (an epic's facts there, `None` when it has no epic
-/// record there) and named `place` in messages. One hop only: the
+/// record there) and named `place` in messages. One level only: the
 /// declaring epic names this exact line, so a chain through a third epic
-/// never binds, and no prefix or case spelling of the line matches.
+/// never binds and no prefix or case spelling of the line matches, and a
+/// line whose own epic itself declares a `parent_line` refuses.
 pub(crate) fn line_membership(
     line: &str,
     epic: &str,
@@ -1300,11 +1330,54 @@ pub(crate) fn line_membership(
         Some(declared) if declared != line => LineMembership::Not(format!(
             "{epic} declares {field} '{declared}' on {place}, not '{line}'"
         )),
-        Some(_) if lookup(line_epic).is_none() => LineMembership::Not(format!(
-            "{epic}'s {field} names {line_epic}, which has no epic record on {place}"
-        )),
-        Some(_) => LineMembership::Declared,
+        Some(_) => match lookup(line_epic) {
+            None => LineMembership::Not(format!(
+                "{epic}'s {field} names {line_epic}, which has no epic record on {place}"
+            )),
+            Some(owner) => match owner.parent_line.as_deref() {
+                Some(parent) => {
+                    LineMembership::Refused(owner_parent_refusal(line, line_epic, parent, place))
+                }
+                None => LineMembership::Declared,
+            },
+        },
     }
+}
+
+/// The refusal when `line`'s own epic `line_epic` itself declares a
+/// `parent_line` (`parent`) on `place`: one level only (TSK-1286 AC-3).
+fn owner_parent_refusal(line: &str, line_epic: &str, parent: &str, place: &str) -> String {
+    let field = super::line_adoption::PARENT_LINE_FIELD;
+    format!(
+        "{line_epic}, the epic of '{line}', itself declares {field} '{parent}' on {place}; one level only, so no other epic's {field} binds this line"
+    )
+}
+
+/// One level only (TSK-1286 AC-3): when the line's own epic itself declares
+/// a `parent_line` in `records` (named `place`) and a task there targets
+/// the line as a task of an epic declaring it, the refusal naming the cause.
+/// A line with only its own epic's tasks is untouched.
+fn chained_owner(records: &BTreeMap<String, Record>, line: &str, place: &str) -> Option<String> {
+    let line_epic = super::line_adoption::epic_id(line).ok()?;
+    let epic_record = |id: &str| {
+        records
+            .get(id)
+            .filter(|record| record.kind == RecordKind::Epic)
+    };
+    let parent = epic_record(line_epic)?.parent_line.as_deref()?;
+    let declaring = records.values().any(|record| {
+        record.kind == RecordKind::Task
+            && record
+                .integration_target
+                .as_deref()
+                .is_some_and(|target| logical_target(target) == line)
+            && record.epic_id.as_deref().is_some_and(|epic| {
+                epic != line_epic
+                    && epic_record(epic)
+                        .is_some_and(|declarer| declarer.parent_line.as_deref() == Some(line))
+            })
+    });
+    declaring.then(|| owner_parent_refusal(line, line_epic, parent, place))
 }
 
 /// The epic facts of a parsed record set, for [`line_membership`].
@@ -1359,6 +1432,9 @@ fn declared_line_tasks(
     let field = super::line_adoption::PARENT_LINE_FIELD;
     let mut declared = BTreeMap::new();
     for (records, place) in anchors {
+        if let Some(reason) = chained_owner(records, line, place) {
+            return Err(reason);
+        }
         for record in records.values() {
             let Some(epic) = record.epic_id.as_deref() else {
                 continue;
@@ -4656,6 +4732,145 @@ mod tests {
             epic_line_bound_at(root, DECLARED_LINE, "main", "protected branch").unwrap(),
             EpicLineBinding::Unbound(_)
         ));
+    }
+
+    /// TSK-1286 review F1: once the anchor holds a line epic that itself
+    /// declares a `parent_line` and a declaring epic's task on the line, the
+    /// whole line refuses, its own epic's tasks included, until the chain or
+    /// the declaring tasks are removed through a planning pull request.
+    #[test]
+    fn a_chained_line_refuses_its_own_epics_tasks_too() {
+        let cause =
+            "EPC-001, the epic of 'integration/EPC-001-outcome', itself declares parent_line";
+        let declared = second_epic(Some(DECLARED_LINE), "planning");
+        let dir = declared_fixture(Some(declared.as_str()), Some(declared.as_str()));
+        let root = dir.path();
+        git(root, &["switch", "main"]);
+        fs::write(
+            root.join("project-management/tasks/TSK-003.md"),
+            format!("---\nid: TSK-003\nepic_id: EPC-002\nstandalone_reason: null\nintegration_target: {DECLARED_LINE}\nstatus: todo\n---\n"),
+        )
+        .unwrap();
+        let owner = root.join("project-management/epics/EPC-001.md");
+        fs::write(
+            &owner,
+            fs::read_to_string(&owner).unwrap().replacen(
+                "---\n",
+                "---\nparent_line: integration/EPC-009-elsewhere\n",
+                1,
+            ),
+        )
+        .unwrap();
+        git(root, &["add", "-A"]);
+        git(
+            root,
+            &["commit", "-qm", "a chained line with a declaring task"],
+        );
+        git(root, &["switch", "-q", "task/TSK-002-work"]);
+        git(root, &["merge", "-q", "--no-edit", "main"]);
+        // The branch's task now belongs to the line's own epic.
+        let task = root.join("project-management/tasks/TSK-002.md");
+        fs::write(
+            &task,
+            fs::read_to_string(&task)
+                .unwrap()
+                .replace("epic_id: EPC-002", "epic_id: EPC-001"),
+        )
+        .unwrap();
+        git(root, &["commit", "-qam", "an own-epic task"]);
+        for (reader, binding) in [
+            ("own-epic branch", bind_declared(root)),
+            (
+                "line tip",
+                epic_line_bound_at(root, DECLARED_LINE, "main", "protected branch").unwrap(),
+            ),
+        ] {
+            assert!(
+                matches!(&binding, EpicLineBinding::Refused(reason) if reason.contains(cause)),
+                "{reader}: {binding:?}"
+            );
+        }
+    }
+
+    /// TSK-1286 AC-3: one level only. When the line's own epic itself
+    /// declares a `parent_line` at the trusted anchor, a task of an epic
+    /// that declares the line is refused, naming the cause, in every reader:
+    /// the branch binding, the task binding, the line's binding at its tip
+    /// and the line proof. Before this check all four bound or verified.
+    #[test]
+    fn an_anchor_epic_that_declares_a_parent_line_refuses_declared_tasks() {
+        let cause = "EPC-001, the epic of 'integration/EPC-001-outcome', itself declares parent_line 'integration/EPC-009-elsewhere' on";
+        let chained = |path: &Path| {
+            fs::write(
+                path,
+                fs::read_to_string(path).unwrap().replacen(
+                    "---\n",
+                    "---\nparent_line: integration/EPC-009-elsewhere\n",
+                    1,
+                ),
+            )
+            .unwrap();
+        };
+        let declared = second_epic(Some(DECLARED_LINE), "planning");
+        let dir = declared_fixture(Some(declared.as_str()), Some(declared.as_str()));
+        let root = dir.path();
+        git(root, &["switch", "main"]);
+        // The line's only task on the anchor belongs to the declaring epic,
+        // and the line's own epic declares a parent line of its own.
+        let first = root.join("project-management/tasks/TSK-001.md");
+        fs::write(
+            &first,
+            fs::read_to_string(&first)
+                .unwrap()
+                .replace("epic_id: EPC-001", "epic_id: EPC-002"),
+        )
+        .unwrap();
+        chained(&root.join("project-management/epics/EPC-001.md"));
+        git(
+            root,
+            &["commit", "-qam", "the line's epic declares a parent"],
+        );
+        git(root, &["switch", "-q", "task/TSK-002-work"]);
+        git(root, &["merge", "-q", "--no-edit", "main"]);
+        for (reader, binding) in [
+            ("branch", bind_declared(root)),
+            (
+                "task",
+                task_line_binding(
+                    root,
+                    "TSK-002",
+                    "HEAD",
+                    DECLARED_LINE,
+                    &[("main", "protected branch")],
+                )
+                .unwrap(),
+            ),
+            (
+                "line tip",
+                epic_line_bound_at(root, DECLARED_LINE, "main", "protected branch").unwrap(),
+            ),
+        ] {
+            assert!(
+                matches!(&binding, EpicLineBinding::Refused(reason) if reason.contains(cause)),
+                "{reader}: {binding:?}"
+            );
+        }
+        let proof_dir = proof_fixture(true, Some(&declared));
+        let proof_root = proof_dir.path();
+        git(proof_root, &["switch", "-q", "main"]);
+        chained(&proof_root.join("project-management/epics/EPC-001.md"));
+        git(
+            proof_root,
+            &["commit", "-qam", "the line's epic declares a parent"],
+        );
+        git(proof_root, &["switch", "-q", DECLARED_LINE]);
+        git(proof_root, &["merge", "-q", "--no-edit", "main"]);
+        let proof =
+            epic_line_proof(proof_root, DECLARED_LINE, "main", "main", DECLARED_LINE).unwrap();
+        assert!(
+            matches!(&proof, EpicLineProof::NotLine(reason) if reason.contains(cause)),
+            "line proof: {proof:?}"
+        );
     }
 
     /// TSK-1286 review: a declaring epic cancelled at one trusted anchor

@@ -282,7 +282,11 @@ With tracking on, `codeflow ci` classifies every pull request as one of:
 - an epic's integration line: `Task: EPC-NNN`. A task of the epic, or of an
   epic whose record declares the line as its `parent_line`, targets it, it
   lands on the default target, and it holds merges or direct commits with
-  landed `line_adoptions` entries in its epic record (SPC-013 R-52)
+  landed `line_adoptions` entries in its epic record (SPC-013 R-52). One
+  level only: `parent_line` names the anchor epic's own line. When the
+  anchor epic itself declares a `parent_line`, a declaring epic's task is
+  refused, and once the anchor holds such a task the whole line refuses,
+  its own epic's tasks included (TSK-1286)
 - an automation profile
 
 Related rules:
