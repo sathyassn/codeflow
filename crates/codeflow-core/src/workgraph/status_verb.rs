@@ -660,46 +660,15 @@ fn qualify(
 }
 
 /// Whether the records at `tip` name `line` as an epic's integration line,
-/// as `check_epic_line` binds a landing line: the epic the line's name
-/// carries exists there, neither cancelled nor archived, and a task of
-/// that epic, or of an epic whose record there declares this line as its
-/// `parent_line` (TSK-1286), declares exactly this line. Only the trusted
-/// tip's records are read, so its tasks and epics there are the record of
-/// it.
+/// judged as every other reader binds a line (TSK-1286): the epic the
+/// line's name carries exists there, neither cancelled nor archived, a task
+/// of that epic, or of an epic whose record there declares this line as
+/// its `parent_line`, declares exactly this line, and no refusal there
+/// applies, such as a line epic that itself declares a `parent_line`. Only
+/// the trusted tip's records are read.
 fn epic_line_at(repo: &git2::Repository, tip: git2::Oid, line: &str) -> Result<bool, String> {
-    use super::work_start::{line_membership, EpicFacts, LineMembership};
-    let Ok(epic_id) = super::line_adoption::epic_id(line) else {
-        return Ok(false);
-    };
-    let graph = Graph::from_revision(repo, &tip.to_string())?;
-    let open = graph
-        .records
-        .get(epic_id)
-        .is_some_and(|epic| !matches!(epic.status.as_str(), "cancelled" | "archived"));
-    let facts = |id: &str| {
-        graph
-            .records
-            .get(id)
-            .filter(|record| record.kind == RecordKind::Epic)
-            .map(|record| EpicFacts {
-                status: record.status.clone(),
-                parent_line: record.parent_line.clone(),
-            })
-    };
-    Ok(open
-        && graph.records.values().any(|task| {
-            task.kind == RecordKind::Task
-                && task
-                    .integration_target
-                    .as_deref()
-                    .is_some_and(|target| super::work_start::logical_target(target) == line)
-                && task.epic_id.as_deref().is_some_and(|epic| {
-                    matches!(
-                        line_membership(line, epic, &facts, "the tip"),
-                        LineMembership::Own | LineMembership::Declared
-                    )
-                })
-        }))
+    Ok(super::work_start::line_bound_at_tip(repo, tip, line)?
+        == super::work_start::EpicLineBinding::Bound)
 }
 
 /// The default target's name and tip for a pinned or remoteless run
@@ -1077,6 +1046,69 @@ fn supersede_active_block(content: &str, reason: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TSK-1286 review F3: `task status` picks a receiving line as
+    /// `codeflow ci` binds it. A tip whose line epic itself declares a
+    /// `parent_line` while a declaring epic's task targets the line is not
+    /// a receiving line, though the line's own task is there too. Before
+    /// the fix `epic_line_at` read only task membership and said yes.
+    #[test]
+    fn epic_line_at_refuses_a_chained_line_as_the_other_readers_do() {
+        const LINE: &str = "integration/EPC-001-outcome";
+        let tip_with = |owner_parent: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = git2::Repository::init(dir.path()).unwrap();
+            let epic = |id: &str, parent: &str| {
+                format!("---\nid: {id}\ntitle: {id}\nstatus: planning\nwork_type: feat\nspecs: []\n{parent}created: 2026-11-04\n---\n")
+            };
+            let task = |id: &str, epic: &str| {
+                format!("---\nid: {id}\nepic_id: {epic}\nstandalone_reason: null\nintegration_target: {LINE}\nstatus: todo\n---\n")
+            };
+            let files = [
+                (
+                    "project-management/epics/EPC-001.md",
+                    epic("EPC-001", owner_parent),
+                ),
+                (
+                    "project-management/epics/EPC-002.md",
+                    epic("EPC-002", &format!("parent_line: {LINE}\n")),
+                ),
+                ("project-management/epics/EPC-009.md", epic("EPC-009", "")),
+                (
+                    "project-management/tasks/TSK-001.md",
+                    task("TSK-001", "EPC-001"),
+                ),
+                (
+                    "project-management/tasks/TSK-002.md",
+                    task("TSK-002", "EPC-002"),
+                ),
+            ];
+            for (path, text) in &files {
+                let path = dir.path().join(path);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, text).unwrap();
+            }
+            let mut index = repo.index().unwrap();
+            index
+                .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+                .unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let signature = git2::Signature::now("Test", "test@example.test").unwrap();
+            let tip = repo
+                .commit(None, &signature, &signature, "records", &tree, &[])
+                .unwrap();
+            drop(tree);
+            (dir, repo, tip)
+        };
+        let (_plain_dir, plain, plain_tip) = tip_with("");
+        assert!(epic_line_at(&plain, plain_tip, LINE).unwrap(), "plain");
+        let (_chained_dir, chained, chained_tip) =
+            tip_with("parent_line: integration/EPC-009-elsewhere\n");
+        assert!(
+            !epic_line_at(&chained, chained_tip, LINE).unwrap(),
+            "chained"
+        );
+    }
 
     #[test]
     fn r22_target_anchor_refuses_an_unpeelable_object() {
