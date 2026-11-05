@@ -810,7 +810,8 @@ class WindowsTierControls(unittest.TestCase):
     def test_a_wider_reduced_tier_list_or_a_narrower_compiled_in_list_is_refused(self):
         for old, new in (("REDUCED_TIER_PATHS: '^(project-management/",
                           "REDUCED_TIER_PATHS: '^(crates/|project-management/"),
-                         ("COMPILED_IN: '^(docs/coordination-ledger\\.md|", "COMPILED_IN: '^(")):
+                         ("COMPILED_IN: '^(docs/coordination-ledger\\.md|", "COMPILED_IN: '^("),
+                         ("REGULAR: '^:(000000 100644|", "REGULAR: '^:(100644 120000|000000 100644|")):
             with self.subTest(old=old):
                 self.assertIn(old, WORKFLOW)
                 changed = WORKFLOW.replace(old, new)

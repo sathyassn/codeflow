@@ -62,6 +62,44 @@ def takes_reduced(path: str) -> bool:
 BASH = shutil.which("bash")
 
 
+INCLUDE = re.compile(r"\b(include_str|include_bytes|include)!\s*\(")
+LITERAL = re.compile(r'"([^"\\]*)"')
+MANIFEST = re.compile(r'concat!\(\s*env!\(\s*"CARGO_MANIFEST_DIR"\s*\)\s*,\s*"([^"\\]*)"\s*,?\s*\)')
+
+
+def rust_includes(root: Path) -> tuple[set[str], list[str]]:
+    """(repository paths the Rust code compiles in, include calls whose path
+    form this scanner cannot resolve). Two forms are resolved: a string
+    literal, relative to the source file, and concat!(env!("CARGO_MANIFEST_DIR"),
+    "<path>"), relative to the crate. Any other form is returned as unknown,
+    so a new form fails the test until the scanner learns it."""
+    found, unknown = set(), []
+    for source in sorted((root / "crates").rglob("*.rs")):
+        if "target" in source.parts:
+            continue
+        try:
+            text = source.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        crate = next(parent for parent in source.parents if (parent / "Cargo.toml").exists())
+        for match in INCLUDE.finditer(text):
+            depth, at = 1, match.end()
+            while depth and at < len(text):
+                depth += {"(": 1, ")": -1}.get(text[at], 0)
+                at += 1
+            argument = text[match.end():at - 1].strip()
+            if (literal := LITERAL.fullmatch(argument)) is not None:
+                base, relative = source.parent, literal.group(1)
+            elif (manifest := MANIFEST.fullmatch(argument)) is not None:
+                base, relative = crate, manifest.group(1).lstrip("/")
+            else:
+                line = text.count("\n", 0, match.start()) + 1
+                unknown.append(f"{source.relative_to(root).as_posix()}:{line}: {match.group(1)}!({argument})")
+                continue
+            found.add(Path(os.path.normpath(base / relative)).relative_to(root).as_posix())
+    return found, unknown
+
+
 def git(cwd: Path, *args: str) -> str:
     env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com", "GIT_CONFIG_NOSYSTEM": "1"}
@@ -95,15 +133,20 @@ class TierTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
 
-    def merge(self, files: dict[str, str | None], renames: dict[str, str] | None = None) -> tuple[str, str]:
+    def merge(self, files: dict[str, str | None], renames: dict[str, str] | None = None,
+              prepare=None) -> tuple[str, str]:
         """A head branch with these changes, merged into the base as GitHub's
-        refs/pull/<n>/merge is: (head sha, merge sha), merge checked out."""
+        refs/pull/<n>/merge is: (head sha, merge sha), merge checked out.
+        `prepare` runs in the head checkout after staging and stages its own
+        change, which `git add -A` would otherwise undo."""
         git(self.repo, "checkout", "-q", "-b", "head", self.base)
         self.write(files)
         for old, new in (renames or {}).items():
             (self.repo / new).parent.mkdir(parents=True, exist_ok=True)
             git(self.repo, "mv", old, new)
         git(self.repo, "add", "-A")
+        if prepare:
+            prepare()
         git(self.repo, "commit", "-q", "--allow-empty", "-m", "head")
         head = git(self.repo, "rev-parse", "HEAD")
         git(self.repo, "checkout", "-q", "--detach", self.base)
@@ -119,6 +162,7 @@ class TierTests(unittest.TestCase):
         env = {"PATH": os.environ["PATH"], "HOME": self.dir.name, "GIT_CONFIG_NOSYSTEM": "1",
                "REDUCED_TIER": switch, "BASE": base_ref, "BASE_SHA": base_sha or self.base, "HEAD_SHA": head,
                "REDUCED_TIER_PATHS": TIER_ENV["REDUCED_TIER_PATHS"], "COMPILED_IN": TIER_ENV["COMPILED_IN"],
+               "REGULAR": TIER_ENV["REGULAR"],
                "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary), **(patterns or {})}
         result = subprocess.run([BASH, "--noprofile", "--norc", "-eo", "pipefail", "-c", TIER_SCRIPT],
                                 cwd=cwd or self.repo, env=env, capture_output=True, text=True)
@@ -151,7 +195,8 @@ class TierTests(unittest.TestCase):
                 self.assertIn(f"it changes {path} and 0 other path(s) outside the reduced-tier list", out)
 
     def test_a_listed_file_rust_compiles_in_takes_the_full_tier(self):
-        for path in ("docs/coordination-ledger.md", "changelog.d/TSK-322.md", "changelog.d/TSK-1079.md"):
+        for path in ("docs/coordination-ledger.md", "docs/policy-reference.md", "changelog.d/TSK-322.md",
+                     "changelog.d/TSK-1079.md"):
             with self.subTest(path=path):
                 self.setUp()
                 head, _ = self.merge({path: "changed\n", "docs/guide.md": "more\n"})
@@ -161,11 +206,42 @@ class TierTests(unittest.TestCase):
 
     def test_a_grep_error_takes_the_full_tier(self):
         head, _ = self.merge({"docs/guide.md": "more\n"})
-        for name in ("REDUCED_TIER_PATHS", "COMPILED_IN"):
+        for name in ("REDUCED_TIER_PATHS", "COMPILED_IN", "REGULAR"):
             with self.subTest(pattern=name):
                 tier, out = self.tier(head, patterns={name: "(["})
                 self.assertEqual(tier, "full")
                 self.assertIn("the path patterns could not be matched", out)
+
+    def test_a_listed_path_that_is_not_a_regular_file_changed_in_place_takes_the_full_tier(self):
+        # A Windows checkout writes a link's target as text and a submodule as
+        # a folder, so only regular files added or changed in place qualify.
+        def link():
+            os.symlink("../crates/core/src/lib.rs", self.repo / "docs/link.md")
+            git(self.repo, "add", "docs/link.md")
+
+        def gitlink():
+            git(self.repo, "update-index", "--add", "--cacheinfo", f"160000,{self.base},docs/sub.md")
+
+        def executable():
+            os.chmod(self.repo / "docs/guide.md", 0o755)
+            git(self.repo, "update-index", "--chmod=+x", "docs/guide.md")
+
+        cases = {"a symbolic link": ({}, link, "docs/link.md"),
+                 "a submodule": ({}, gitlink, "docs/sub.md"),
+                 "a mode change": ({}, executable, "docs/guide.md"),
+                 "a deletion": ({"docs/guide.md": None}, None, "docs/guide.md")}
+        for name, (files, prepare, path) in cases.items():
+            with self.subTest(case=name):
+                self.setUp()
+                head, _ = self.merge({"project-management/tasks/TSK-1.md": "two\n", **files}, prepare=prepare)
+                tier, out = self.tier(head)
+                self.assertEqual(tier, "full")
+                self.assertRegex(out, rf"{re.escape(path)} is not a regular file added or changed in place")
+
+    def test_a_new_regular_file_on_the_list_takes_the_reduced_tier(self):
+        head, _ = self.merge({"changelog.d/TSK-9.md": "entry\n", "project-management/tasks/TSK-2.md": "new\n"})
+        tier, out = self.tier(head)
+        self.assertEqual(tier, "reduced", out)
 
     def test_a_deleted_or_renamed_crate_file_takes_the_full_tier(self):
         head, _ = self.merge({"crates/core/src/lib.rs": None})
@@ -241,7 +317,7 @@ class TierTests(unittest.TestCase):
     def test_the_step_reads_no_author_controlled_event_field(self):
         job = JOBS["windows-tier"]
         self.assertEqual(set(TIER_ENV), {"REDUCED_TIER", "BASE", "BASE_SHA", "HEAD_SHA", "REDUCED_TIER_PATHS",
-                                         "COMPILED_IN"})
+                                         "COMPILED_IN", "REGULAR"})
         for field in ("title", "body", "label", "head.ref", "head_ref", "user", "inputs"):
             self.assertNotIn(field, job.replace("head.sha", ""))
         self.assertIn("BASE_SHA: ${{ github.event.pull_request.base.sha }}", job)
@@ -260,21 +336,44 @@ class ReducedTierPathTests(unittest.TestCase):
                     self.assertFalse(takes_reduced(script))
 
     def test_no_repository_file_the_rust_code_includes_takes_the_reduced_tier(self):
-        found = set()
+        found, unknown = rust_includes(ROOT)
+        self.assertEqual(unknown, [], "teach rust_includes this include form")
+        self.assertTrue({"docs/coordination-ledger.md", "docs/policy-reference.md", "changelog.d/TSK-322.md"}
+                        <= found, found)
+        for path in sorted(found):
+            with self.subTest(path=path):
+                self.assertFalse(takes_reduced(path))
+
+    def test_the_scanner_resolves_both_include_forms_and_reports_any_other(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "crates" / "core" / "src" / "lib.rs"
+            source.parent.mkdir(parents=True)
+            (root / "crates" / "core" / "Cargo.toml").write_text("", encoding="utf-8")
+            source.write_text('const A: &str = include_str!("../../../docs/a.md");\n'
+                              'const B: &str = include_str!(concat!(\n    env!("CARGO_MANIFEST_DIR"),\n'
+                              '    "/../../docs/b.md"\n));\n'
+                              'const C: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/c.bin"));\n',
+                              encoding="utf-8")
+            found, unknown = rust_includes(root)
+        self.assertEqual(found, {"docs/a.md", "docs/b.md"})
+        self.assertEqual(len(unknown), 1)
+        self.assertIn("crates/core/src/lib.rs:6: include_bytes!", unknown[0])
+
+    def test_no_folder_the_binaries_embed_holds_a_reduced_tier_path(self):
+        folders = set()
         for source in (ROOT / "crates").rglob("*.rs"):
-            if "target" in source.parts:
-                continue
             try:
                 text = source.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
-            for included in re.findall(r'include_(?:str|bytes)!\(\s*"([^"]+)"', text):
-                resolved = Path(os.path.normpath(source.parent / included))
-                found.add(resolved.relative_to(ROOT).as_posix())
-        self.assertTrue({"docs/coordination-ledger.md", "changelog.d/TSK-322.md"} <= found, found)
-        for path in sorted(found):
-            with self.subTest(path=path):
-                self.assertFalse(takes_reduced(path))
+            for folder in re.findall(r'#\[folder\s*=\s*"([^"]+)"\]', text):
+                crate = next(parent for parent in source.parents if (parent / "Cargo.toml").exists())
+                folders.add(Path(os.path.normpath(crate / folder)).relative_to(ROOT).as_posix())
+        self.assertIn("assets", folders)
+        for folder in sorted(folders):
+            with self.subTest(folder=folder):
+                self.assertFalse(takes_reduced(f"{folder}/x.md"))
 
     def test_records_changelog_entries_and_docs_markdown_take_the_reduced_tier(self):
         for path in ("project-management/tasks/TSK-1321.md", "docs/architecture.md", "docs/decisions/0001-x.md",
