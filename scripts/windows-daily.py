@@ -19,13 +19,14 @@ overall verdict can pass without it, and that pass says nothing about it. main i
 listing or a read fails, the run fails and offers no lines. Other branches are not
 covered.
 
-What a run skips: no Windows job and no Linux coverage shard. A selected line gets
+What a run skips: no job of the full Linux and Windows suites. A selected line gets
 no new run when its exact tip
 already has a passing daily run recorded, younger than the age windows-daily.yml
 declares, which keeps image drift covered at a known interval. A failed, missing,
 unfinished or unreadable run, or an age that is absent or not a positive whole
-number, means no skip. It runs every Windows job and the Linux coverage shards with
-their report; the other Linux gates are not part of it. A commit that was never a
+number, means no skip. It runs the Linux build and gates parts, the Linux coverage
+shards with their report and every Windows job (ADR-0097); the release gates are
+not part of it. A commit that was never a
 line's tip at discovery is not tested, and a later tip gets no credit.
 
 What is credited: a requested line's run, started after the request, whose recorded
@@ -62,6 +63,9 @@ WINDOWS_JOBS = frozenset({
 })
 # The runner's Linux coverage jobs, with the ids and commands of codeflow-ci.yml's.
 COVERAGE_JOBS = frozenset({"gates-coverage", "gates-coverage-report"})
+# The runner's Linux build and gates parts, with the ids and commands of codeflow-ci.yml's.
+LINUX_GATE_JOBS = frozenset({"gates-build", "gates"})
+GATE_PARTS = ("present", "checks")
 COVERAGE_SHARDS = 2
 SHA = re.compile(r"[0-9a-f]{40}")
 REF = re.compile(r"refs/heads/(?:main|integration/[A-Za-z0-9_./-]+)")
@@ -75,6 +79,7 @@ RUN_JOB_NAMES = frozenset({
     "windows test build", "windows checks (doc, clippy, Node)", "windows release journey", "windows journeys",
     *(f"windows tests ({n} of {PARTITIONS})" for n in range(1, PARTITIONS + 1)),
     "linux coverage report", *(f"linux coverage ({n} of {COVERAGE_SHARDS})" for n in range(1, COVERAGE_SHARDS + 1)),
+    "linux build", *(f"linux gates ({part})" for part in GATE_PARTS),
 })
 RUN_EVENT = "workflow_dispatch"
 DISPATCHER_EVENTS = frozenset({"schedule", "workflow_dispatch"})

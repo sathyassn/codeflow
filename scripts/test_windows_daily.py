@@ -101,8 +101,14 @@ RECORD_TOTAL = ("python3 -B scripts/coverage-merge.py --floor-from .codeflow/tes
                 "--total-file target/coverage/daily-coverage-total.json target/coverage/data")
 
 
-def commands(job):
-    """Read run scalars from the repository's fixed-indentation workflow style."""
+def commands(job, push_only=True):
+    """Read run scalars from the repository's fixed-indentation workflow style.
+    With push_only False, a step that runs only on a push is left out: the daily
+    run is a dispatch, so it has no such step."""
+    if not push_only:
+        steps = re.split(r"(?m)^(?=      - )", job)
+        job = "".join(step for step in steps
+                      if not re.search(r"(?m)^        if: .*github\.event_name == 'push'", step))
     found = []
     for m in re.finditer(r"^        run: (.*)(?:\n|$)", job, re.M):
         command = m.group(1)
@@ -135,14 +141,14 @@ class WorkflowTests(unittest.TestCase):
         permissions = runner.split("\npermissions:\n", 1)[1].split("\n\n", 1)[0]
         self.assertEqual(permissions.split(), ["contents:", "read"])
 
-    def test_daily_jobs_execute_the_full_existing_windows_and_coverage_commands(self):
+    def test_daily_jobs_execute_the_full_existing_linux_and_windows_commands(self):
         existing = jobs((ROOT / ".github/workflows/codeflow-ci.yml").read_text())
         added = jobs(workflow("windows-daily-run"))
-        self.assertEqual(set(added), daily.WINDOWS_JOBS | daily.COVERAGE_JOBS)
-        for name in daily.WINDOWS_JOBS | daily.COVERAGE_JOBS:
+        self.assertEqual(set(added), daily.WINDOWS_JOBS | daily.COVERAGE_JOBS | daily.LINUX_GATE_JOBS)
+        for name in daily.WINDOWS_JOBS | daily.COVERAGE_JOBS | daily.LINUX_GATE_JOBS:
             with self.subTest(job=name):
                 daily_only = [RECORD_TOTAL] if name == "gates-coverage-report" else []
-                self.assertEqual(commands(added[name]), commands(existing[name]) + daily_only)
+                self.assertEqual(commands(added[name]), commands(existing[name], push_only=False) + daily_only)
                 runner = "windows-latest" if name in daily.WINDOWS_JOBS else "ubuntu-24.04"
                 self.assertIn(f"runs-on: {runner}", added[name])
                 self.assertEqual(added[name].count("persist-credentials: false"), 1)
@@ -152,6 +158,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r"^\s+shard: \[1, 2\]$", existing["gates-coverage"], re.M)), 1)
         self.assertIn("partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]", added["windows-tests"])
         self.assertIn("fail-fast: false", added["windows-tests"])
+        self.assertIn("needs: gates-build", added["gates"])
+
+    def test_the_daily_gate_parts_run_codeflow_ci_s_targets(self):
+        def parts(job):
+            return re.findall(r"- part: (\S+)\n(?:\s*#.*\n)*\s+only: (\S+)", job)
+        existing = jobs(workflow("codeflow-ci"))["gates"]
+        added = jobs(workflow("windows-daily-run"))["gates"]
+        self.assertEqual(parts(added), parts(existing))
+        self.assertEqual(tuple(part for part, _ in parts(added)), daily.GATE_PARTS)
+        self.assertIn(f"part: [{', '.join(daily.GATE_PARTS)}]", added)
 
     def test_the_total_is_recorded_for_this_commit_and_kept_under_the_floor_too(self):
         report = jobs(workflow("windows-daily-run"))["gates-coverage-report"]
@@ -168,7 +184,7 @@ class WorkflowTests(unittest.TestCase):
         """The exact-SHA check: dispatching at a ref runs its tip, which can have moved."""
         added = jobs(workflow("windows-daily-run"))
         self.assertIn("TESTED_SHA: ${{ inputs.source-sha }}", workflow("windows-daily-run"))
-        for name in daily.WINDOWS_JOBS | daily.COVERAGE_JOBS:
+        for name in daily.WINDOWS_JOBS | daily.COVERAGE_JOBS | daily.LINUX_GATE_JOBS:
             with self.subTest(job=name):
                 steps = re.findall(r"^      - name: (.*)$", added[name], re.M)
                 self.assertEqual(steps[:2], ["Check out this run's commit", "Report and verify the tested commit"])
@@ -583,15 +599,17 @@ class DailyCacheTests(unittest.TestCase):
         return re.findall(pattern, workflow("windows-daily-run"), re.M)
 
     def test_each_rust_cache_restores_and_never_saves(self):
+        # Two Windows jobs, the coverage shards, the Linux build and the gate parts.
         steps = self.steps_using("Swatinem/rust-cache")
-        self.assertEqual(len(steps), 3)
+        self.assertEqual(len(steps), 5)
         for step in steps:
             self.assertIn("save-if: false", step)
             self.assertNotIn("cache-on-failure", step)
 
     def test_node_uses_no_package_cache(self):
+        # One Windows job, the coverage shards, and two in the gate parts.
         steps = self.steps_using("actions/setup-node")
-        self.assertEqual(len(steps), 2)
+        self.assertEqual(len(steps), 4)
         for step in steps:
             self.assertIn("package-manager-cache: false", step)
             self.assertNotRegex(step, r"(?m)^\s*(cache|cache-dependency-path):")
@@ -749,6 +767,7 @@ class DailyCoverageTests(unittest.TestCase):
             "windows-journeys": ["${{ always() && needs.windows-tests.result != 'skipped' }}"],
             "gates-coverage": [],
             "gates-coverage-report": ["${{ always() && needs.gates-coverage.result != 'skipped' }}"],
+            "gates-build": [], "gates": [],
         })
 
     def test_a_selected_line_that_fails_its_build_fails_visibly(self):
@@ -758,13 +777,14 @@ class DailyCoverageTests(unittest.TestCase):
         self.assertEqual(result["result"], "failure")
         self.assertIsNone(result["tested_sha"])
 
-    def test_the_daily_run_is_windows_and_linux_coverage_only(self):
+    def test_the_daily_run_is_the_full_linux_and_windows_suites_without_the_release_gates(self):
         runner = jobs(workflow("windows-daily-run"))
         for name in daily.WINDOWS_JOBS:
             self.assertIn("runs-on: windows-latest", runner[name])
-        for name in daily.COVERAGE_JOBS:
+        for name in daily.COVERAGE_JOBS | daily.LINUX_GATE_JOBS:
             self.assertIn("runs-on: ubuntu-24.04", runner[name])
-        self.assertEqual(set(runner), daily.WINDOWS_JOBS | daily.COVERAGE_JOBS)
+        self.assertEqual(set(runner), daily.WINDOWS_JOBS | daily.COVERAGE_JOBS | daily.LINUX_GATE_JOBS)
+        self.assertNotIn("gates-release", runner)
 
 
 class CoverageReaderTests(unittest.TestCase):
