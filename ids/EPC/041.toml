@@ -1,0 +1,11 @@
+id = "EPC-041"
+uid = "fd3883c8-0645-4458-b775-9681f7f9fa4e"
+kind = "EPC"
+title = "Pushes and claims are judged by the live line they target"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:01:43Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
