@@ -1,0 +1,11 @@
+id = "TSK-1335"
+uid = "2671281a-3b41-4d89-ab85-70bd2b3d21be"
+kind = "TSK"
+title = "The status document's views drill down to decisions with stable ids"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:06:49Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
