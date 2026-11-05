@@ -46,13 +46,82 @@ Select and disclose a basis for each estimate:
 The source draft's assumed 2/6/12/20-hour bands and long bands are **not** defaults.
 There is no universal grade-to-time conversion, agent speed multiplier, or fixed
 minimum observation count. An adopted locally useful grade band can seed a new
-package estimate, but explain departures and preserve its actual basis.
+package estimate, but explain departures and preserve its actual basis. The
+time-box profile below is the exception a project opts into: its bands are the
+starting bands of a project that turns it on, a stop rule per task rather than
+a forecast or a universal conversion, and the project revises them by a
+profile revision from its own outcomes.
+
+Note, 2026-11-04 (ADR-0096): the paragraph above gained its last sentence. The
+source draft's bands stay rejected; only an adopted time-box profile carries
+bands, and only as a stop rule.
 
 Favorable/planning/adverse are coherent scenarios, not percentile labels. Include
 plausible differences in discovery, rework, constraints and availability; do not
 just apply an unexplained percentage to the same total. Define the conditions
 that make each scenario relevant and report sensitivity to consequential unknowns.
 Do not manufacture a probability or average away unresolved disagreement.
+
+## Time-box profile
+
+Optional, and only where the project adopted it (records.md). It runs beside
+the scenario forecast and never replaces it.
+
+- **The clock.** One clock per task: wall-clock time from the claim commit
+  (for an adopted branch, the earlier first task commit) to the later of the
+  bound review approval and the completion of verification, minus recorded
+  `blocked` spans. Build, review, checks, journeys and rework are inside it.
+  A wait outside the task (a merge lock, a maintainer action, a seat outage)
+  is recorded `blocked` and is outside it; a busy reviewer is not a block.
+  Until `codeflow estimate outcomes` reads the claim and the approval point,
+  the reader takes the first task commit as the start and the completion
+  commit as the end, and states that.
+- **The bands.** The profile maps each rubric grade to a band of clock
+  hours. The shipped starting profile: Easy 1 to 2, Medium 2 to 4, Hard 4 to
+  6, Very Hard 6 to 8. The band is frozen at breakdown in the task's
+  Estimate block with the profile revision; no task created before the
+  profile's effective date carries one, and none is back-filled.
+- **Move and split.** The planner may move a band one step, never two, for a
+  reason the drivers miss (proof volume, record volume, a key review set,
+  such as a guard's security review), recorded in the block. The rubric
+  points stay as scored; a move never adds points. A two-step gap between
+  grade and expected effort means the scope is wrong: re-cut the task. A Very Hard task, graded or
+  moved there, is split before claim, so no claimed task's top is above
+  Hard's.
+- **Epic and task size.** An epic is one coherent outcome built from
+  meaningful Medium-to-Hard tasks, small enough that its finished part reaches
+  main within a few days through checkpoint PRs; about 5 to 10 tasks is a
+  reference point for that, not a rule. Grade tasks by judgement: most are
+  Medium or Hard, an Easy task usually belongs with a sibling that shares its
+  cause, code path or proof, and a Very Hard task is split before claim. Every
+  task carries its own outcome and proof.
+- **Checkpoints and the top.** A Hard task logs one line at half its top.
+  At the top, new work stops and one of three is chosen: a finish allowance
+  of at most 30 minutes (counted as a miss), a split, or a re-plan; a cause
+  line names why (blocker, wrong estimate, scope, review wait, host). A
+  re-plan or split keeps the parent's start, band and breach on record, and
+  each successor gets its own frozen band.
+- **Hit, miss and breach.** A task that finishes at or under its band top
+  is a hit; one that finishes later is a miss. A task running past its top
+  is in breach until one of the three choices is made, and a breach still
+  unresolved at twice the top is re-planned or cancelled. A breach is
+  reported, never a gate, a failed check or a block on delivery.
+- **A band top is not a forecast.** The top is a budget with a stop rule for
+  one task. It says nothing about when a set of tasks lands: waits, shared
+  reviewers, human gates and merge windows sit outside it. Never sum band
+  tops into a date.
+- **From a feature mix to forecast activities.** A feature's Delivery size
+  block gives a task mix by grade and an envelope: the fewest tasks at their
+  band floors to the most at their band tops, a budget cross-check only. A
+  milestone date comes from the scenario forecast above: each expected task
+  becomes implement, review, verify and rework activities on named seats,
+  with the dependencies, human gates and merge windows as resources and
+  boundaries. The band comparison is reported apart from the forecast.
+- **Close and learn.** At epic close the outcome record compares expected
+  and actual mix, scenario rate and actual rate, hit rate, misses and wait
+  causes; the next feature estimate reads it. Change a band only by a new
+  profile revision from these outcomes; every task keeps the revision it was
+  frozen with.
 
 ## Make each allocation feasible
 

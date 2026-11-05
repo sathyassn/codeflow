@@ -42,6 +42,15 @@ pub const DEFAULT_REQUIRED_CHECKS: &[&str] = &[
     "trusted: commit standards",
 ];
 
+/// The words a generated branch name leaves out unless a project sets its own
+/// list, the default of [`GitPolicy::branch_name_omit_words`].
+///
+/// These are what the Claude Code sandbox was probed to refuse among names a
+/// slug can form (2026-11-03): any file name holding `secret` or
+/// `credentials`. `credential`, `token`, `password` and `key` stayed readable.
+/// Other harnesses differ, which is why this is a default and not a rule.
+pub const DEFAULT_BRANCH_NAME_OMIT_WORDS: &[&str] = &["secret", "credentials"];
+
 /// Enforcement level for a policy rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -202,6 +211,49 @@ fn decided_none() -> String {
     "none".to_string()
 }
 
+/// The value of the policy key `key` within its declared bounds
+/// ([`super::limits`]). Zero, a negative or fractional number, a value too
+/// large to hold and a non-number refuse at load with the key named, so
+/// nothing wraps or panics later (TSK-1301).
+fn declared_limit<'de, D>(key: &str, deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let limit = super::limits::for_key(key)
+        .ok_or_else(|| serde::de::Error::custom(format!("{key} has no declared limit")))?;
+    value
+        .as_u64()
+        .filter(|number| *number >= limit.min && limit.max.is_none_or(|max| *number <= max))
+        .ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "invalid value {value} for {key}; expected {}",
+                super::limits::bounds_text(limit)
+            ))
+        })
+}
+
+fn remote_query_timeout_seconds<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    declared_limit(crate::git::remote_query::TIMEOUT_KEY, deserializer)
+}
+
+fn remote_query_attempts<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    declared_limit(crate::git::remote_query::ATTEMPTS_KEY, deserializer)
+}
+
+fn remote_fetch_timeout_seconds<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    declared_limit(crate::git::remote_query::FETCH_TIMEOUT_KEY, deserializer)
+}
+
 /// The `git` section of `.codeflow/policy.json` (charter §6.1, verbatim
 /// schema). Defaults carry the v1 strictness decision (D16).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,8 +318,30 @@ pub struct GitPolicy {
     /// Additional remotes whose branches count as advisory work claims.
     /// Origin and the target's fetch remote always count. Empty by default.
     pub claim_remotes: Vec<String>,
+    /// Words a generated branch name leaves out, because a sandbox can refuse
+    /// to read a ref file with such a word in its name. A project sets the
+    /// list its own harness needs; an empty list keeps every word.
+    pub branch_name_omit_words: Vec<String>,
     /// Days since a line sync before orient suggests syncing; zero disables it.
     pub line_sync_interval: u32,
+    /// Seconds one `git ls-remote` attempt may take when the pre-push hook,
+    /// `codeflow ci`, `task status` or the id sync asks a destination what
+    /// it holds (TSK-1301). An integer of at least 1 with no policy ceiling;
+    /// default [`DEFAULT_TIMEOUT_SECONDS`](crate::git::remote_query::DEFAULT_TIMEOUT_SECONDS).
+    /// Read from the default branch's committed policy, never a pushed head.
+    #[serde(deserialize_with = "remote_query_timeout_seconds")]
+    pub remote_query_timeout_seconds: u64,
+    /// How many attempts a timed-out `git ls-remote` gets, the first
+    /// included (TSK-1301). An integer of at least 1 with no policy
+    /// ceiling; default [`DEFAULT_ATTEMPTS`](crate::git::remote_query::DEFAULT_ATTEMPTS).
+    #[serde(deserialize_with = "remote_query_attempts")]
+    pub remote_query_attempts: u64,
+    /// Seconds a fetch of the objects a judge needs may take (TSK-1301):
+    /// the destination's default-branch tip or a target this clone lacks.
+    /// An integer of at least 1 with no policy ceiling; default
+    /// [`DEFAULT_FETCH_TIMEOUT_SECONDS`](crate::git::remote_query::DEFAULT_FETCH_TIMEOUT_SECONDS).
+    #[serde(deserialize_with = "remote_fetch_timeout_seconds")]
+    pub remote_fetch_timeout_seconds: u64,
     /// The status check names a protected branch requires before merging,
     /// on a branch that is up to date with its base (`codeflow remote
     /// protect`, `codeflow doctor --check remote-perimeter`). Default
@@ -572,7 +646,14 @@ impl Default for GitPolicy {
                 .map(ToString::to_string)
                 .collect(),
             claim_remotes: Vec::new(),
+            branch_name_omit_words: DEFAULT_BRANCH_NAME_OMIT_WORDS
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             line_sync_interval: 0,
+            remote_query_timeout_seconds: crate::git::remote_query::DEFAULT_TIMEOUT_SECONDS,
+            remote_query_attempts: crate::git::remote_query::DEFAULT_ATTEMPTS,
+            remote_fetch_timeout_seconds: crate::git::remote_query::DEFAULT_FETCH_TIMEOUT_SECONDS,
             required_checks: DEFAULT_REQUIRED_CHECKS
                 .iter()
                 .map(ToString::to_string)

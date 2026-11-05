@@ -14,7 +14,9 @@ const committedAssets = join(crateRoot, "assets");
 
 run("npx", ["tsc", "--noEmit"]);
 checkBinaryAttributes();
-run("node", ["--test", "scripts/toolchain.test.mjs", "scripts/likeness.test.mjs", "scripts/codeflow-binary.test.mjs", "scripts/browser-close-bound.test.mjs"]);
+const tokenTests = (await readdir(join(repoRoot, "assets/base/agents/skills/cf-present/resources/design-system/source"))).filter(name => name.endsWith(".test.ts")).map(name => join(repoRoot, "assets/base/agents/skills/cf-present/resources/design-system/source", name));
+run("node", ["--test", ...tokenTests]);
+run("node", ["--test", "scripts/toolchain.test.mjs", "scripts/token-lint.test.mjs", "scripts/likeness.test.mjs", "scripts/codeflow-binary.test.mjs", "scripts/browser-close-bound.test.mjs", "scripts/export-stages.test.mjs", "scripts/export-paint.test.mjs", "scripts/export-capture.test.mjs"]);
 await checkSelectorOffsets();
 await checkEntityLabelParity();
 await checkAnswerRuleParity();
@@ -177,18 +179,18 @@ function checkExportGzipHeader(bytes) {
   }
 }
 
-// The app entry loads exactly three chunks lazily: syntax highlighting, the
-// figure grammar and the bundled fonts. Anything else is a new lazy path to
+// The app entry loads four reviewed chunks lazily: syntax highlighting,
+// figure grammar, bundled fonts and export stage measurement. Anything else is a new lazy path to
 // review, not a silent addition.
 function assertLazyEntryPaths(app) {
   const paths = [...new Set(app.imports
     .filter((item) => item.kind === "dynamic-import")
     .map((item) => item.request_path))].sort();
   const lazy = paths
-    .map((path) => path.match(/^\/app\/assets\/chunk-([a-z]+)-[A-Z0-9]+\.js$/u)?.[1] ?? path)
+    .map((path) => path.match(/^\/app\/assets\/chunk-([a-z-]+)-[A-Z0-9]+\.js$/u)?.[1] ?? path)
     .sort();
-  if (lazy.join(",") !== "figure,fonts,syntax") {
-    throw new Error(`The app entry's dynamic imports must be exactly one syntax, one figure and one fonts chunk; found ${paths.join(", ")}`);
+  if (lazy.join(",") !== "figure,fonts,stage-measuring,syntax") {
+    throw new Error(`The app entry's dynamic imports must be exactly one syntax, figure, fonts and stage-measuring chunk; found ${paths.join(", ")}`);
   }
 }
 

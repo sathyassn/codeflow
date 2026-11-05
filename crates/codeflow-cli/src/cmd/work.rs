@@ -1,6 +1,6 @@
 //! Durable-work commands: `work next`, `work claim` and `work start`. All three
-//! read the one readiness core (SPC-013 R-40, R-110); only `work claim`
-//! writes, and what it writes is a branch. `work status` is the recovery
+//! read the one readiness core (SPC-013 R-40, R-110). Claim and start fetch;
+//! claim also writes a branch and its fixed base evidence. `work status` is the recovery
 //! inventory: per task, the worktrees holding work found nowhere else.
 
 use std::fmt::Write as _;
@@ -10,6 +10,7 @@ use codeflow_core::hooks::policy::Policy;
 use codeflow_core::hooks::PolicyLevel;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::readiness::{self, Backlog, Entry, State};
+use codeflow_core::workgraph::work_start::{ReviewedPin, REVIEW_LOOKUP_TIMEOUT};
 use codeflow_core::workgraph::{
     declared_work_target, durable_work_tracking_enabled, resolve_work_target_checked,
 };
@@ -34,9 +35,10 @@ pub enum WorkCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Fetch, check the task is ready and unclaimed on its target tip, then
-    /// create and push `task/<id>-<slug>` from that tip. The pushed branch is
-    /// an advisory mark others can see.
+    /// Fetch, choose the live target tip or the single line holding a completed
+    /// predecessor the target has not received, then create and push
+    /// `task/<id>-<slug>` from that base. The pushed branch is an advisory mark
+    /// others can see.
     Claim {
         /// Stable task id.
         task_id: String,
@@ -44,7 +46,7 @@ pub enum WorkCommand {
         #[arg(long, value_name = "TSK-NNN@SHA")]
         on: Vec<String>,
     },
-    /// Verify that a durable task was planned and anchored before implementation.
+    /// Fetch, verify planning, and require HEAD to contain its recorded claim base or the current selected base.
     Start {
         /// Stable task id.
         task_id: String,
@@ -301,6 +303,12 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
                 "work claim: {task_id} -> {} from {}",
                 claim.branch, claim.from
             );
+            if !claim.omitted_words.is_empty() {
+                println!(
+                    "  {}",
+                    codeflow_core::workgraph::light_paths::omitted_words_note(&claim.omitted_words)
+                );
+            }
             for information in &claim.informational_branches {
                 println!("  {}", codeflow_core::git::display_output(information));
             }
@@ -328,7 +336,7 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
 /// `work start`: the planning checks, once per task, at the
 /// `git.work_planning` level (TSK-133). At `warn` a finding is reported and
 /// the command succeeds; CI reports the same finding at the same level. An
-/// unreadable tracking state always blocks.
+/// unreadable tracking state or unverifiable explicit pin always blocks.
 fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
@@ -359,14 +367,53 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
             return 2;
         }
     };
+    // Missing live base evidence blocks even at the project's warning level.
+    // Fetch before resolving pins, as `work claim` does, so a replacement pin
+    // is judged against the pushed predecessor head.
+    if let Err(error) = readiness::refresh_claim(&root, task_id) {
+        eprintln!("work start: error: {}", crate::cmd::shown(&error));
+        return 1;
+    }
+    // Explicit review evidence is required even when planning findings warn.
+    // Keep verification failures outside the policy-controlled findings.
+    let pins = match resolve_pins(&root, on) {
+        Ok(pins) => pins,
+        Err(error) => {
+            eprintln!(
+                "work start: error: {error}",
+                error = crate::cmd::shown(&error)
+            );
+            return 1;
+        }
+    };
     let level = policy.git.work_planning_level();
-    let Err(findings) = plan_check(&root, task_id, target, on) else {
-        return 0;
+    let findings = match plan_check(&root, task_id, target, &pins) {
+        Ok(verified) => {
+            match codeflow_core::workgraph::claim_base::renew_reviewed(
+                &root,
+                task_id,
+                &verified.branch,
+                &verified.target,
+                &pins,
+            ) {
+                Ok(Some(note)) => println!("  {}", crate::cmd::shown(&note)),
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!(
+                        "work start: error: recording reviewed claim base failed: {}",
+                        crate::cmd::shown(&error)
+                    );
+                    return 1;
+                }
+            }
+            return 0;
+        }
+        Err(findings) => findings,
     };
     let warn = level == PolicyLevel::Warn;
     let label = if warn { "warning" } else { "error" };
     for finding in &findings {
-        eprintln!("work start: {label}: {finding}");
+        eprintln!("work start: {label}: {}", crate::cmd::shown(finding));
     }
     if warn {
         eprintln!(
@@ -378,14 +425,21 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
     }
 }
 
+/// The branch and target that passed `plan_check`, which `work start` uses
+/// to renew a reviewed claim base.
+struct VerifiedClaim {
+    branch: String,
+    target: String,
+}
+
 /// The planning checks behind `work start`: the anchor report printed on
 /// success, or every finding.
 fn plan_check(
     root: &std::path::Path,
     task_id: &str,
     target: Option<&str>,
-    on: &[String],
-) -> Result<(), Vec<String>> {
+    pins: &[ReviewedPin],
+) -> Result<VerifiedClaim, Vec<String>> {
     let workgraph = validate_workgraph(root);
     if !workgraph.is_clean() {
         let mut findings = workgraph.issues;
@@ -401,14 +455,16 @@ fn plan_check(
         Ok(resolved) => resolved.map_or_else(|| "main".to_string(), |r| r.target),
         Err(error) => return Err(vec![error.to_string()]),
     };
-    let pins = resolve_pins(root, on).map_err(|error| vec![error])?;
     let report =
-        codeflow_core::workgraph::work_start::check_work_start_on(root, task_id, &target, &pins)
+        codeflow_core::workgraph::work_start::check_work_start_on(root, task_id, &target, pins)
             .map_err(|error| vec![error.to_string()])?;
     println!(
         "work start: {} anchored at {} for {} -> {}",
         report.task_id, report.merge_base, report.branch, report.target
     );
+    if let Some(note) = report.base_note {
+        println!("  {}", crate::cmd::shown(&note));
+    }
     if let Some(epic) = report.epic_id {
         println!("  epic: {epic}");
     } else {
@@ -431,7 +487,10 @@ fn plan_check(
             error = crate::cmd::shown(&error)
         ),
     }
-    Ok(())
+    Ok(VerifiedClaim {
+        branch: report.branch,
+        target: report.target,
+    })
 }
 
 fn resolve_pins(
@@ -548,18 +607,33 @@ fn pr_review(
         .map_err(|error| format!("cannot verify review for this pin: {error}"))?;
     let start = Instant::now();
     let status = loop {
+        if start.elapsed() >= REVIEW_LOOKUP_TIMEOUT {
+            break Err(format!(
+                "cannot verify review for this pin: provider timed out after {} seconds",
+                REVIEW_LOOKUP_TIMEOUT.as_secs()
+            ));
+        }
+        match output.metadata() {
+            Ok(metadata) if metadata.len() <= 1_048_576 => {}
+            Ok(_) => {
+                break Err(
+                    "cannot verify review for this pin: review response too large".to_string(),
+                );
+            }
+            Err(error) => {
+                break Err(format!(
+                    "cannot verify review for this pin: cannot inspect provider response: {error}"
+                ));
+            }
+        }
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
-            Ok(None)
-                if start.elapsed() < Duration::from_secs(5)
-                    && output.metadata().is_ok_and(|m| m.len() <= 1_048_576) =>
-            {
-                std::thread::sleep(Duration::from_millis(20));
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(error) => {
+                break Err(format!(
+                    "cannot verify review for this pin: cannot wait for provider: {error}"
+                ));
             }
-            _ => break Err(
-                "cannot verify review for this pin: provider unavailable, too large or timed out"
-                    .to_string(),
-            ),
         }
     };
     // Terminate descendants too, including those holding the output file open.
@@ -583,7 +657,7 @@ fn pr_review(
         .read_to_end(&mut bytes)
         .map_err(|error| error.to_string())?;
     if bytes.len() > 1_048_576 {
-        return Err("review response too large".into());
+        return Err("cannot verify review for this pin: review response too large".into());
     }
     serde_json::from_slice(&bytes)
         .map_err(|error| format!("cannot parse predecessor review: {error}"))

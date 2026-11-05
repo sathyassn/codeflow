@@ -1,0 +1,3 @@
+// Generated display choices.
+globalThis.CF_DISPLAY_SETTINGS = {"themes":{"graphite":["green","plum"],"slate":["green","violet"],"sage":["green","plum"]},"modes":["system","light","dark"],"sizes":["compact","default","large"],"defaultTheme":"graphite","defaultAccent":"green"};
+globalThis.CF_RUNTIME_LAYOUT = {"lengths":{"px2":2,"px4":4,"px8":8,"px10":10,"px12":12,"px16":16,"px20":20,"px24":24,"px26":26,"px40":40,"px46":46,"px48":48,"px64":64,"px240":240,"px280":280,"px360":360},"minimumMarkerRem":2.25,"paper":"#ffffff","ink":"#1c1c1c","compactQuery":"(max-width: 879.98px)","tocQuery":"(max-width: 1119.98px)","phoneQuery":"(max-width: 599.98px)","cardQuery":"(max-width: 639.98px)"};

@@ -24,12 +24,27 @@
 /// about 0.1 to 0.5 seconds on a loaded host, so this leaves room for a
 /// cold start and a slow disk while bounding how long a stalled guard holds
 /// a session.
-pub const GUARD_HOOK_TIMEOUT_SECS: u64 = 30;
+pub const GUARD_HOOK_TIMEOUT_SECS: u64 = super::limits::GUARD_HOOK_TIMEOUT.default;
 
 /// Seconds after which a guard process refuses on its own, well inside
 /// [`GUARD_HOOK_TIMEOUT_SECS`] so the refusal reaches the harness before
 /// the harness stops waiting.
-pub const GUARD_DEADLINE_SECS: u64 = 20;
+pub const GUARD_DEADLINE_SECS: u64 = super::limits::GUARD_DEADLINE.default;
+
+/// Seconds a guard waits for one remote lookup, inside
+/// [`GUARD_DEADLINE_SECS`] with room for its other work (TSK-1301). A remote
+/// that does not answer in time gets a named refusal from the guard, never
+/// the harness kill. A command naming several repositories can make several
+/// lookups, and the deadline bounds them all.
+pub const GUARD_REMOTE_QUERY_SECS: u64 = super::limits::GUARD_REMOTE_QUERY_WAIT.default;
+
+/// Seconds the git guard waits for `gh pr view` to name a pull request's
+/// base branch; no answer in time is doubt, and the guard blocks on doubt.
+pub const GUARD_PR_LOOKUP_SECS: u64 = super::limits::GUARD_PR_LOOKUP_WAIT.default;
+
+/// Seconds the deadline's refusal waits for its reason to be written before
+/// the guard exits 2 regardless.
+pub const GUARD_REFUSAL_WRITE_SECS: u64 = super::limits::GUARD_REFUSAL_WRITE_WAIT.default;
 
 /// The session guards whose hook entries carry these bounds.
 pub const GUARDS: [&str; 3] = ["git-guard", "exec-guard", "edit-guard"];
@@ -54,6 +69,7 @@ mod tests {
     #[test]
     fn the_deadline_falls_inside_the_harness_timeout() {
         const { assert!(GUARD_DEADLINE_SECS + 5 <= GUARD_HOOK_TIMEOUT_SECS) };
+        const { assert!(GUARD_REMOTE_QUERY_SECS + 5 <= GUARD_DEADLINE_SECS) };
     }
 
     #[test]
