@@ -18,7 +18,7 @@
     },
     "astro.config.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "0ee00ddd28dd3ced03a8edea64d9f6d2d025fb851e4b9875c22acae2d35f9cb3"
+      "pristine_sha256": "d34144e3a181a43878fdd9c2afe6da0b2fed04da4c70308478826fca9bb1d264"
     },
     "osv-scanner.toml": {
       "ownership": "user-owned",
@@ -46,7 +46,7 @@
     },
     "public/portal-chrome.js": {
       "ownership": "managed",
-      "pristine_sha256": "6daa5664769185201c7bdb5360146d71196f83c9cd96aa7c41896734edb03e17"
+      "pristine_sha256": "5e77b20083b2cdb05ef68e4f8b9feeaea8729ebcb5193f126454915e75328dc1"
     },
     "public/portal-preview.js": {
       "ownership": "managed",
@@ -122,11 +122,11 @@
     },
     "scripts/runtime-scripts.json": {
       "ownership": "managed",
-      "pristine_sha256": "21814ae5af05f2703f47fa420c9d01e076bb94e013af740cafcc52e54558ea66"
+      "pristine_sha256": "496b41ca73ea9c07ea5baf3a24341776add6c271cea3217ee1af43a5624f15fc"
     },
     "scripts/runtime-scripts.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "ca23ba9ece998b02fa687cafea5a402369df17f299665e7aa37eec05332df588"
+      "pristine_sha256": "084072fb5006edc72a3deec3abec93bbfbae227e54dd794514bdb5956f60da7f"
     },
     "scripts/site-server.mjs": {
       "ownership": "managed",
@@ -202,19 +202,19 @@
     },
     "src/styles/figure-roles.css": {
       "ownership": "managed",
-      "pristine_sha256": "58a75d1e0a419f4fc59cdd7475ee78001339e883ee03beacdea10c9579daf748"
+      "pristine_sha256": "ec979b16b368acea944881b01ab1af610ad8bfc1317cfab694819377af6a7edd"
     },
     "src/styles/figure.css": {
       "ownership": "managed",
-      "pristine_sha256": "f652b408358279943ed6f57a96366f4859a0337360b45ccaee3f4e82a4d47cd4"
+      "pristine_sha256": "3fd6ad4da9f0a5879663e07732f050d30c59e4e43b36ad0c1681b3f33c78acfe"
     },
     "src/styles/portal.css": {
       "ownership": "managed",
-      "pristine_sha256": "1931b291720212a948cb6f4ff97e8d0e9dd379d1f24171abeaef41ef014113b3"
+      "pristine_sha256": "fdbefc97b3f441f8d4b818b1c43df9e631ae8eb33df8bd6c5024da4eae3b0094"
     },
     "src/styles/utility-tokens.css": {
       "ownership": "managed",
-      "pristine_sha256": "5f6ab3808bd05ee37008510fc4573f881f17b900574ba1d1d1e40a8fd29d66ee"
+      "pristine_sha256": "152f3298b0cdd1fc1d2540df50f45289a3a41e756ad3197c7ebdb54b8130079e"
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
@@ -226,7 +226,7 @@
     },
     "tests/chrome.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "771822f257533ab48ac3d4e47017ccd7320af22df1b39e43ef557e489d8eed54"
+      "pristine_sha256": "96a65c878596234bab7725d9a732542fbc53946efefb3faba96fae67954f9694"
     },
     "tests/composition-browser.test.mjs": {
       "ownership": "managed",
@@ -238,7 +238,7 @@
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "6fb4e47a8bbc8e05a602844c056bfe32df3bf3208ae5218f1ad48698ed2488ec"
+      "pristine_sha256": "9ce179a7df2a6a59ead88ea418a83e640449de07857d2ff474e8c3ea6fd374b7"
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",
@@ -380,9 +380,17 @@
       "ownership": "managed",
       "pristine_sha256": "abe8f1c9144fddb587d6f65d3ddc6e851f392d0ca4b379c2658fd68cd45d48b5"
     },
+    "tests/fixtures/pre-paint-script.json": {
+      "ownership": "managed",
+      "pristine_sha256": "e096b671d83f682e7616e22dc109585f9c883e6a627dc834d031b1498971be2e"
+    },
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",
       "pristine_sha256": "0b442af14a23ccd4a3636d0c1cb7e3c43f24aab07313bda13ea136fcf5cd290a"
+    },
+    "tests/fixtures/runtime-scripts-cases.json": {
+      "ownership": "managed",
+      "pristine_sha256": "7d9d62ed6a8c7b45fb90005e0ab337e1b44d9e319557c5f2454cc670c6ceb5ec"
     },
     "tests/page-anatomy-browser.test.mjs": {
       "ownership": "managed",
@@ -407,6 +415,18 @@
     "tsconfig.json": {
       "ownership": "managed",
       "pristine_sha256": "974b0a3b37e52f3649d9df63e72e374794e9e797c8ae61eca4812f844406f7ef"
+    },
+    "public/tokens.js": {
+      "ownership": "managed",
+      "pristine_sha256": "dd8b92feec0fecde2fc4815036a16e30907801126ce2238c233f2b2145fc589c"
+    },
+    "src/tokens.ts": {
+      "ownership": "managed",
+      "pristine_sha256": "c8a09c7721a0a3796038bb7a1362cd65436a0870862b40a7c87356b6500dee7c"
+    },
+    "src/components/PortalThemeProvider.astro": {
+      "ownership": "managed",
+      "pristine_sha256": "9feb61b0448a72e57d4a8fd22daeb6314ce4ce5e8ff7a0a7ac0f877a6f1362e2"
     }
   }
 }
