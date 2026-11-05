@@ -1,0 +1,11 @@
+id = "EPC-050"
+uid = "22d01ff5-88ff-469e-a68e-9b84ed800c39"
+kind = "EPC"
+title = "Guards protect the files and paths that run code later"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:19:10Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
