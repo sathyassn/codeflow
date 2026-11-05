@@ -55,15 +55,14 @@ when a single outcome becomes one standalone task.
    keeping every criterion; a helper-only task folds into the task it helps;
    a misfiled task moves to the epic that owns its outcome. No number caps a
    task's size or a plan's task count, so each merge, fold or split is a
-   stated judgement. Planning defaults, which a project can override and which
-   are never caps or gates: an epic holds about 5 to 10 tasks, and a plan past
-   about 10 asks whether to split the epic; an epic's finished part reaches
-   main within a few days through checkpoint PRs, never parked on a line; a
-   task is typically Medium or Hard, so an Easy task merges into a sibling
-   that shares its cause, code path or proof, and a Very Hard task is split
-   before claim; every task is meaningful, with its own outcome and proof.
-   When a work item is planned, started, blocked, completed or cancelled,
-   follow
+   stated judgement. An epic is one coherent outcome built from meaningful
+   Medium-to-Hard tasks, small enough that its finished part reaches main
+   within a few days through checkpoint PRs; about 5 to 10 tasks is a
+   reference point for that, not a rule. Grade tasks by judgement: most are
+   Medium or Hard, an Easy task usually belongs with a sibling that shares its
+   cause, code path or proof, and a Very Hard task is split before claim.
+   Every task carries its own outcome and proof. When a work item is planned,
+   started, blocked, completed or cancelled, follow
    [the work lifecycle](../cf-method/references/project-organization.md#the-work-lifecycle):
    its standalone test decides between an epic and a standalone task, and it
    names the allocation verbs and dependency forms.

@@ -55,10 +55,10 @@ created: {{DATE}}
      - H: none; B: none
 
      A move names one step and its reason (proof volume, record volume or a
-     key review set). A task is typically Medium or Hard: an Easy task
-     merges into a sibling that shares its cause, code path or proof, and a
-     Very Hard task is split before claim; every task has its own outcome
-     and proof. These are defaults, never caps.
+     key review set). Grade tasks by judgement: most are Medium or Hard,
+     an Easy task usually belongs with a sibling that shares its cause, code
+     path or proof, and a Very Hard task is split before claim. Every task
+     carries its own outcome and proof.
      During the
      work a Hard task adds `- Half-top: <time> <one line>`, and a task past
      its top adds `- Cause: <blocker | wrong estimate | scope | review wait
