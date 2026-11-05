@@ -404,7 +404,10 @@ the base and waits for the fresh run first.
   the profile's approvals, and strict checks pinned to the identity that
   must produce them: the GitHub App given by `--check-app <id>` for the
   `authority:` names (Mode A), else GitHub Actions for the `trusted:` names
-  (Mode B). No force push, no deletion, no bypass.
+  (Mode B). No force push, no deletion, no bypass. Mode B is a lower
+  tier: it does not close forgery by a later producer, since a workflow
+  that runs after the verdict job can still produce a `trusted:` check;
+  only Mode A, the App authority, closes it.
 - "codeflow line checks" on the integration lines (`--lines`, default
   `integration/**`): a pull request, the `trusted:` names and the test
   verdicts pinned to GitHub Actions and strict, no force push, no deletion,

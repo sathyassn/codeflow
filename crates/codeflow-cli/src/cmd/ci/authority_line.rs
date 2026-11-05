@@ -11,8 +11,8 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use codeflow_core::remote::{
-    AUTHORITY_PREFIX, GITHUB_ACTIONS_APP_ID, RULESET_AUTHORITY_CHECKS, RULESET_AUTHORITY_UPDATES,
-    TRUSTED_PREFIX,
+    AUTHORITY_PREFIX, GITHUB_ACTIONS_APP_ID, MODE_B_LIMIT, RULESET_AUTHORITY_CHECKS,
+    RULESET_AUTHORITY_UPDATES, TRUSTED_PREFIX,
 };
 use serde_json::Value;
 
@@ -109,7 +109,8 @@ fn pins(rules: &[Value]) -> Vec<(String, Option<u64>)> {
 }
 
 /// The identity a required verdict check accepts: the App pinned on the
-/// `authority:` names (Mode A), else GitHub Actions (Mode B).
+/// `authority:` names (Mode A), else GitHub Actions (Mode B), named as
+/// the lower tier that does not close forgery by a later producer.
 fn identity(pins: &[(String, Option<u64>)]) -> String {
     let mut apps: Vec<u64> = pins
         .iter()
@@ -120,7 +121,7 @@ fn identity(pins: &[(String, Option<u64>)]) -> String {
     apps.sort_unstable();
     apps.dedup();
     if apps.is_empty() {
-        "Actions".to_string()
+        format!("Actions ({MODE_B_LIMIT})")
     } else {
         apps.iter()
             .map(|app| format!("App {app}"))
@@ -270,7 +271,11 @@ mod tests {
             "rulesets": rulesets()
         });
         let text = line(&document);
-        assert!(text.contains("check identity: Actions;"), "{text}");
+        assert!(text.contains("check identity: Actions (Mode B is a lower tier: it does not close forgery by a later producer"), "{text}");
+        assert!(
+            text.contains("only Mode A, the App authority, closes it);"),
+            "{text}"
+        );
         assert!(
             text.contains("A absent, B absent, no pull request rule, strict no"),
             "{text}"
@@ -291,7 +296,7 @@ mod tests {
                 ] } }],
             "rulesets": rulesets()
         });
-        assert!(line(&document).contains("check identity: Actions;"));
+        assert!(line(&document).contains("check identity: Actions (Mode B"));
     }
 
     #[test]

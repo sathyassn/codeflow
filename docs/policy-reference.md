@@ -1136,7 +1136,12 @@ The flags:
 - **`--check-app <id>`**: Mode A, where B requires the `authority:` names
   pinned to that GitHub App. Without it, Mode B: B requires the `trusted:`
   names pinned to GitHub Actions (15368). GitHub Actions' own id is
-  refused.
+  refused. Mode B is a lower tier: it does not close forgery by a later
+  producer. Its refusal step reads the producers once, when each verdict
+  job ends, and GitHub takes the newest check run of a name, so a
+  workflow that runs later, for example on an event the policy workflow
+  does not run on, can still satisfy a `trusted:` name. Only Mode A, the
+  App authority, closes it.
 - **`--lines <pattern>`**: the pattern C targets, below `refs/heads/`;
   default `integration/**`.
 
@@ -1223,7 +1228,8 @@ one session. Step 7 has no ordering dependency.
    remove the operator's login from the seats' credential stores.
 
 On GitHub Free, environment secrets exist only in public repositories; a
-private repository on Free uses Mode B.
+private repository on Free uses Mode B, which does not close forgery by a
+later producer.
 
 ### Recovery window
 
