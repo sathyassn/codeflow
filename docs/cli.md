@@ -533,31 +533,6 @@ a rule; the rulesets, profiles and recovery window are in the
 fails or does not parse writes nothing. `codeflow doctor --check
 remote-perimeter` reads the default branch's live rules back.
 
-`codeflow scan --base <REF>` gives locally the verdict of the hosted
-`trusted: secret scan` job and the dependency audit for `base..head`. Every
-input that decides the verdict is read from the base commit: the levels
-(`git.secret_scan`, `git.security_review`, `git.dep_audit`),
-`.gitleaksignore`, the gitleaks configuration, `.gitattributes`, each
-`osv-scanner.toml` and `.codeflow/audit-exceptions.sh`. Edits to them in the
-working tree or in the range change nothing until they land on the base.
-
-- The secret scan reads every commit the head holds and the base does not,
-  as the hosted job does, with replace refs ignored. A range holding an
-  octopus merge, or a path holding a backslash, double quote or control
-  character, is refused.
-- The dependency audit runs osv-scanner over the head's tree and queries
-  OSV.dev, so it needs the network.
-- Both binaries are found on `PATH` and used only when their SHA-256 and
-  version match the pins; `codeflow doctor --check scan-tools` shows what was
-  found. The command never downloads them.
-- Exit codes: 0 when nothing blocks (a `warn` finding included), 1 when a
-  finding or an unusable scan blocks at `block`, 2 when the arguments or the
-  base's policy cannot be read.
-- `git.scan_on_push: on` runs the same scan from the pre-push hook on each
-  pushed range and refuses the push when the scan does not exit 0. The research behind these
-  choices is in
-  [the local scan research note](verification/local-scan-research-2026-11-05.md).
-
 ### Verify notes
 
 `codeflow test` runs the configured targets, or the tests of a detected stack,

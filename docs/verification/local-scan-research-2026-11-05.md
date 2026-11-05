@@ -65,6 +65,21 @@ implements. Checked on 2026-11-05 against gitleaks 8.30.1 and osv-scanner
   hosted step does. The pre-push hook calls the same command
   (`cmd/push_set.rs`), so there is one engine for all three surfaces.
 
+## How the command behaves
+
+- Every input that decides the verdict is read from the base commit: the
+  levels (`git.secret_scan`, `git.security_review`, `git.dep_audit`),
+  `.gitleaksignore`, the gitleaks configuration, `.gitattributes`, each
+  `osv-scanner.toml` and `.codeflow/audit-exceptions.sh`. Edits to them in
+  the working tree or the range change nothing until they land on the base.
+- A range holding an octopus merge, or a path holding a backslash, double
+  quote or control character, is refused.
+- Exit codes: 0 when nothing blocks (a `warn` finding included), 1 when a
+  finding or an unusable scan blocks at `block`, 2 when the arguments or the
+  base's policy cannot be read.
+- `git.scan_on_push: on` runs the same command from the pre-push hook on
+  each pushed range and refuses the push when it does not exit 0.
+
 ## Limits
 
 - A range holding a merge commit is refused on Windows, because the remerge
