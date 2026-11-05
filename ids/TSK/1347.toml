@@ -1,0 +1,11 @@
+id = "TSK-1347"
+uid = "a373fb33-7fb6-4da1-908f-86ac5c157fdb"
+kind = "TSK"
+title = "The policy check keeps running when GitHub blocks pull_request_target by default"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T18:54:37Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
