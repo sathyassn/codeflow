@@ -433,7 +433,7 @@ esac
                     "{case}: {text}"
                 );
                 assert!(
-                    text.contains("read the Actions event policies in the repository's Settings"),
+                    text.contains("read the Actions event policies in the host rules"),
                     "{case}: {text}"
                 );
             }
