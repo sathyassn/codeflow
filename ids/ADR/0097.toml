@@ -1,0 +1,11 @@
+id = "ADR-0097"
+uid = "81e92713-da0c-41dd-8028-17c160c2534e"
+kind = "ADR"
+title = "CI suite placement by event"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T21:07:54Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
