@@ -264,19 +264,23 @@ ci` admits it as a sync when its history proves one:
   default branch's own commit, never a ref name;
 - each merge's tree is the conflict-free automatic merge of its parents.
 
-The net diff may then carry anything `main` holds, release notes in
+The net diff may then carry what `main` holds, release notes in
 `changelog.d/` included. Every other check still judges the range: frozen
-criteria, epic criteria and the record checks, so a sync cannot change the
-line's records beyond what `main` already holds. A records-only sync that
-already passes as a planning amendment keeps that class.
+criteria and the record checks. A sync also cannot change the line's own
+records: the epic's record, the record of an epic that lands on the line, or
+the record of a task of that epic or one targeting the line, even when `main`
+holds the change. A records-only sync that already passes as a planning
+amendment keeps that class.
 
 Refused, naming the cause:
 
 | What the range holds | Why |
 |---|---|
 | A merge of a commit that is not on `main`'s trusted commit, such as a local branch or a ref named like `origin/main` | The second parent is not reviewed default-branch history |
+| A merge of the line into the sync branch, after the line moved | Its second parent is the line's, not `main`'s; redo the sync from the line's new tip |
 | A run with no `--policy-from` | No default-branch commit to trust |
-| A commit that is not a merge, after the merge or as the whole range | The commit is work of its own; it lands through its task |
+| A change to one of the line's own records | Those change through a planning amendment that names the epic |
+| A commit that is not a merge, before or after the merge or as the whole range | The commit is work of its own; it lands through its task |
 | A merge with a resolved conflict or a change of its own | Its tree differs from the clean merge of its parents; land it through a task |
 | A branch named like a sync whose history is not one | A name proves nothing |
 

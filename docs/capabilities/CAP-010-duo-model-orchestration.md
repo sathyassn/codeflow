@@ -288,7 +288,7 @@ With tracking on, `codeflow ci` classifies every pull request as one of:
   task, when every commit beyond the line and the default branch's trusted
   commit is a two-parent merge whose second parent is on that commit and
   whose tree is the clean merge of its parents; its criteria stay frozen
-  (TSK-1312)
+  and it does not change the line's own records (TSK-1312)
 - an automation profile
 
 Related rules:

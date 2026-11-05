@@ -3379,20 +3379,70 @@ fn outside_own_record(
         {
             continue;
         }
-        let change = match after {
-            None => format!("{} removes its record", before.id),
-            Some(record) if before.status != record.status => format!(
-                "{} changes its status from {} to {}",
-                record.id, before.status, record.status
-            ),
-            Some(record) if before.criteria.signature() != record.criteria.signature() => {
-                format!("{} changes its criteria", record.id)
-            }
-            Some(record) => format!("{} changes its record", record.id),
-        };
+        let change = record_change(before, after);
         found.push(finding(
             FROZEN_RULE,
             format!("{change} in {own}'s pull request; a task pull request amends only its own record, and another task's or an epic's record changes through a planning amendment that names its epic (ADR-0078)"),
+        ));
+    }
+    found
+}
+
+/// How a record the target holds differs at the head.
+fn record_change(before: &RecordView, after: Option<&RecordView>) -> String {
+    match after {
+        None => format!("{} removes its record", before.id),
+        Some(record) if before.status != record.status => format!(
+            "{} changes its status from {} to {}",
+            record.id, before.status, record.status
+        ),
+        Some(record) if before.criteria.signature() != record.criteria.signature() => {
+            format!("{} changes its criteria", record.id)
+        }
+        Some(record) => format!("{} changes its record", record.id),
+    }
+}
+
+/// What a sync of the default branch changes in `line`'s own records, which
+/// only a planning amendment may change (TSK-1312): the record of `epic`, of
+/// an epic that lands on the line, and of a task of `epic` or one that
+/// targets the line, imported from the default branch or not. The default
+/// branch's other records come along, judged by the criteria freeze and the
+/// completion binding; a record the range adds is new, not a change.
+fn line_records_changed(
+    (head, target): (&Graph, &Graph),
+    changed_paths: &[String],
+    epic: &str,
+    line: &str,
+) -> Vec<Finding> {
+    let on_line = |declared: Option<&String>| {
+        declared.is_some_and(|name| {
+            super::work_start::logical_target(name) == super::work_start::logical_target(line)
+        })
+    };
+    let mut found = Vec::new();
+    for before in target.records.values() {
+        let line_record = match before.kind {
+            RecordKind::Epic => before.id == epic || on_line(before.parent_line.as_ref()),
+            RecordKind::Task => {
+                before.epic_id.as_deref() == Some(epic)
+                    || on_line(before.integration_target.as_ref())
+            }
+            RecordKind::Spec => false,
+        };
+        if !line_record {
+            continue;
+        }
+        let after = head.records.get(&before.id);
+        let touched = changed_paths.contains(&before.path)
+            || after.is_some_and(|record| changed_paths.contains(&record.path));
+        if !touched || after.is_some_and(|record| record.content == before.content) {
+            continue;
+        }
+        let change = record_change(before, after);
+        found.push(finding(
+            FROZEN_RULE,
+            format!("{change} in a sync of the default branch into {line}; a sync does not change the line's records, which change through a planning amendment that names the epic (ADR-0078)"),
         ));
     }
     found
@@ -4572,6 +4622,10 @@ pub enum Criteria {
     /// change to a record of any other epic is refused. A push has no body
     /// yet, so it carries `None` and its report names the epics it finds.
     Amendment(Option<Vec<String>>),
+    /// A sync of the default branch into `epic`'s `line` (TSK-1312): criteria
+    /// stay frozen, and no record of the line changes, whatever the default
+    /// branch holds.
+    Sync { epic: String, line: String },
 }
 
 impl Criteria {
@@ -4748,6 +4802,9 @@ pub fn pull_request_findings_into(
         found.extend(line_landing_copies(&repo, target_tip, head_tip, anchor)?);
     } else {
         let mut paths = super::lifecycle::changed_paths(&repo, &anchor.to_string(), Some(head))?;
+        // A sync's freeze of the line's records reads every path: an epic's
+        // record has the default branch as its home, so it reads as imported.
+        let all_paths = paths.clone();
         paths.retain(|path| !imported.values().any(|source| source.path == *path));
         let at_target = Graph::from_revision(&repo, base)?;
         let range = Range {
@@ -4797,6 +4854,23 @@ pub fn pull_request_findings_into(
                 &stacked,
                 &mut judging,
             )),
+            Criteria::Sync { epic, line } => {
+                found.extend(frozen_criteria(
+                    &at_head,
+                    &at_target,
+                    &paths,
+                    &none(),
+                    &none(),
+                    &stacked,
+                    &mut judging,
+                ));
+                found.extend(line_records_changed(
+                    (&at_head, &at_target),
+                    &all_paths,
+                    epic,
+                    line,
+                ));
+            }
             _ => found.extend(frozen_criteria(
                 &at_head,
                 &at_target,

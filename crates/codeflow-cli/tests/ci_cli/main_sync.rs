@@ -257,6 +257,179 @@ fn a_range_with_a_commit_of_its_own_is_refused() {
     );
 }
 
+/// AC-3: a commit before the merge is caught as one after it is: the merge
+/// proves nothing about the first parent it stands on.
+#[test]
+fn a_commit_hidden_under_the_merge_is_refused() {
+    let dir = fixture();
+    let root = dir.path();
+    super::git(root, &["switch", "-q", "-C", SYNC, LINE]);
+    write(
+        root,
+        "src/line.rs",
+        "pub fn line() {}\npub fn hidden() {}\n",
+    );
+    commit(root, "fix: a change under the merge");
+    let hidden = stdout_of(root, &["rev-parse", "HEAD"]);
+    super::git(root, &["merge", "--no-ff", "-q", "--no-edit", "main"]);
+    blocks(
+        &ci(root, "Task: EPC-001", None),
+        "commit under the merge",
+        &format!("commit {} is not a merge", &hidden[..9]),
+    );
+}
+
+/// AC-3: the trust is the exact commit the run names. Main's newer commit is
+/// refused while the authority is an older one, and an octopus merge is
+/// refused though each of its parents is on the authority's history.
+#[test]
+fn only_the_named_commit_and_two_parents_count() {
+    let dir = fixture();
+    let root = dir.path();
+    let older = stdout_of(root, &["rev-parse", "main~1"]);
+    sync_branch(root);
+    blocks(
+        &ci(root, "Task: EPC-001", Some(&older)),
+        "merge beyond the authority",
+        "is not on the default branch's commit",
+    );
+
+    // Two heads neither of which holds the other, both on main's next commit.
+    let fix = stdout_of(root, &["rev-parse", "main"]);
+    super::git(root, &["switch", "-q", "-C", "side", &older]);
+    write(root, "docs/side.md", "# A side note\n");
+    commit(root, "docs: a side note");
+    super::git(root, &["switch", "-q", "main"]);
+    super::git(root, &["merge", "--no-ff", "-q", "--no-edit", "side"]);
+    super::git(root, &["switch", "-q", "-C", SYNC, LINE]);
+    super::git(root, &["merge", "-q", "--no-edit", &fix, "side"]);
+    blocks(
+        &ci(root, "Task: EPC-001", None),
+        "octopus merge",
+        "is an octopus merge",
+    );
+}
+
+/// AC-3: merging the line into an open sync is not a merge of the default
+/// branch, so a line that moved means a new sync from its tip, as
+/// docs/delivery.md says.
+#[test]
+fn a_merge_of_the_line_into_the_sync_is_refused() {
+    let dir = fixture();
+    let root = dir.path();
+    sync_branch(root);
+    super::git(root, &["switch", "-q", LINE]);
+    write(root, "docs/line.md", "# The line's notes\n\nMore.\n");
+    commit(root, "docs: the line moves again");
+    let tip = stdout_of(root, &["rev-parse", "HEAD"]);
+    super::git(root, &["switch", "-q", SYNC]);
+    super::git(root, &["merge", "--no-ff", "-q", "--no-edit", LINE]);
+    blocks(
+        &ci(root, "Task: EPC-001", None),
+        "line merged into the sync",
+        &format!("takes {}, which is not on the default branch", &tip[..9]),
+    );
+}
+
+/// The route belongs to the epic of the line the range targets: naming
+/// another epic admits nothing, whatever the history proves.
+#[test]
+fn a_sync_naming_another_epic_is_refused() {
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        "project-management/epics/EPC-002.md",
+        &EPIC.replace("EPC-001", "EPC-002"),
+    );
+    commit(root, "chore: another epic on main");
+    sync_branch(root);
+    let refused = ci(root, "Task: EPC-002", None);
+    blocks(&refused, "another epic", "work.classification");
+    assert!(
+        !text(&refused).contains("pull request class: sync"),
+        "{}",
+        text(&refused)
+    );
+}
+
+/// AC-2: every other refusal still applies. A clean sync that would change
+/// a line task's criteria, its status or its text, or the epic's criteria,
+/// because main holds that change, is refused by the frozen criteria.
+#[test]
+fn a_clean_sync_cannot_change_the_lines_records() {
+    for (path, content, what) in [
+        (
+            "project-management/tasks/TSK-001.md",
+            task("TSK-001", LINE).replace(
+                "- AC-1 When run, the system shall work.",
+                "- AC-1 When run, the system may work.",
+            ),
+            "a task's criteria",
+        ),
+        (
+            "project-management/epics/EPC-001.md",
+            EPIC.replace(
+                "- AC-1 When run, the system shall deliver.",
+                "- AC-1 When run, the system may deliver.",
+            ),
+            "the epic's criteria",
+        ),
+        (
+            "project-management/tasks/TSK-001.md",
+            task("TSK-001", LINE).replace("status: todo", "status: blocked"),
+            "a task's status",
+        ),
+        (
+            "project-management/tasks/TSK-001.md",
+            task("TSK-001", LINE).replace("Work.", "Other work."),
+            "a task's text",
+        ),
+    ] {
+        let dir = fixture();
+        let root = dir.path();
+        write(root, path, &content);
+        commit(root, "docs: main changes the criteria");
+        sync_branch(root);
+        let refused = ci(root, "Task: EPC-001", None);
+        let said = text(&refused);
+        assert!(
+            said.contains("pull request class: sync"),
+            "{what} is judged as a sync: {said}"
+        );
+        blocks(&refused, what, "work.criteria_frozen");
+    }
+}
+
+/// AC-2: the freeze covers the line's records, so another epic's record that
+/// main changed comes along with the sync.
+#[test]
+fn a_clean_sync_carries_another_epics_record() {
+    let dir = fixture();
+    let root = dir.path();
+    let other = task("TSK-003", "main").replace("epic_id: EPC-001", "epic_id: EPC-002");
+    write(
+        root,
+        "project-management/epics/EPC-002.md",
+        &EPIC.replace("EPC-001", "EPC-002"),
+    );
+    write(root, "project-management/tasks/TSK-003.md", &other);
+    commit(root, "docs: plan another epic");
+    // The line takes that plan, and main then rewords the other epic's task.
+    super::git(root, &["switch", "-q", LINE]);
+    super::git(root, &["merge", "--no-ff", "-q", "--no-edit", "main"]);
+    super::git(root, &["switch", "-q", "main"]);
+    write(
+        root,
+        "project-management/tasks/TSK-003.md",
+        &other.replace("Work.", "Other work."),
+    );
+    write(root, "changelog.d/TSK-003.md", FRAGMENT);
+    commit(root, "docs: reword the other epic's task");
+    sync_branch(root);
+    passes(&ci(root, "Task: EPC-001", None), "another epic's record");
+}
+
 /// AC-3: a merge whose tree is not the clean merge of its parents carries
 /// a hunk of its own, which a sync cannot hold.
 #[test]
