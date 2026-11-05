@@ -2474,14 +2474,21 @@ pub struct OwnLine {
 pub use super::landing::Replaced;
 
 /// What a run's judgement of task records may take beyond its bases:
-/// the bounded own-line exception, and the remote-tracking ref the run
-/// replaces (TSK-350).
+/// the bounded own-line exception, the remote-tracking ref the run
+/// replaces (TSK-350), and the work branch prefixes of the policy the run
+/// judges with (TSK-1309 AC-6).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Scope<'a> {
     /// The own-line exception, when the caller verified one.
     pub own_line: Option<&'a OwnLine>,
     /// The remote-tracking ref this run replaces.
     pub replaced: Option<&'a super::landing::Replaced>,
+    /// The judged policy's `git.branch_prefixes`, from which the judged
+    /// branch's task is read, as [`super::work_start::judged_task_id`]
+    /// reads it. `None` reads them from the checkout's policy, for a
+    /// library caller that judges with the checkout; `codeflow ci` always
+    /// passes the policy it judges with.
+    pub branch_prefixes: Option<&'a [String]>,
 }
 
 /// Whether a record of a task shows a completion of it: it is complete,
@@ -3597,6 +3604,7 @@ impl<'r> Judging<'r> {
         let scope = Scope {
             own_line: self.own_line.as_ref(),
             replaced: self.replaced.as_ref(),
+            branch_prefixes: None,
         };
         judge_in_range(
             &mut self.store,
@@ -4117,6 +4125,7 @@ pub fn completions_in_range(
         run,
         (line, receiving_line(line, None), None),
         stacked,
+        None,
     )
 }
 
@@ -4149,6 +4158,7 @@ fn completions_received(
     run: &RunBases,
     (line, receiving, sync_tip): (Option<&str>, Option<&str>, Option<LineSyncTip>),
     stacked: &[StackedHead],
+    prefixes: Option<&[String]>,
 ) -> Result<Vec<Finding>, String> {
     let _judgment = history::judgment();
     let amendable = criteria.amends();
@@ -4190,12 +4200,14 @@ fn completions_received(
         *criteria == Criteria::Amendable,
     );
     let branch_task = if receiving.is_some() && receiving_line(line, None).is_none() {
+        let root = repo.workdir().unwrap_or_else(|| repo.path());
+        // The judged policy's prefixes, as `codeflow ci` reads its own
+        // task (TSK-1309 AC-6): the checkout's policy may name others.
         line.map(|branch| {
-            super::work_start::task_id_from_branch_at(
-                repo.workdir().unwrap_or_else(|| repo.path()),
-                branch,
-                head,
-            )
+            match prefixes {
+                Some(prefixes) => super::work_start::judged_task_id(root, prefixes, branch, head),
+                None => super::work_start::task_id_from_branch_at(root, branch, head),
+            }
             .map_err(|error| error.to_string())
         })
         .transpose()?
@@ -4937,6 +4949,7 @@ pub fn pull_request_findings_into(
         &run,
         (branch, receiving_line(branch, into), sync_tip),
         &stacked,
+        scope.branch_prefixes,
     )?);
     Ok(found)
 }

@@ -121,7 +121,11 @@ pub(super) fn findings(
 
 /// Walk backward from each reviewed head through its first parents, stopping
 /// before the receiving first-parent chain or any ancestor of the run's base.
-/// Task commits previously landed through a side parent retain their credit.
+/// Every commit on that first-parent chain is credited, including history
+/// no receiving merge has landed yet that the task did not write (the
+/// recorded limit in TSK-1309 Findings). A side parent of a merge on the
+/// chain is never credited, so a task branch's own merged sub-branch stays
+/// refused at landing.
 /// When judging the matching unlanded task branch, stop at its supplied base
 /// instead: the judged first-parent chain belongs to that task itself.
 fn reviewed_own_commits(
@@ -636,8 +640,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_task_branch_review_covers_its_hand_resolved_sync_of_the_line() {
+    /// A task branch for TSK-002 that hand-resolves its sync of the line,
+    /// then completes at its reviewed head: the directory, repository,
+    /// line tip and branch head.
+    fn hand_resolved_branch() -> (tempfile::TempDir, Repository, Oid, Oid) {
         let dir = tempfile::tempdir().unwrap();
         let (repo, base) = crate::git::repo_with_tree(
             dir.path(),
@@ -690,21 +696,40 @@ mod tests {
             "receiving line before landing",
         )
         .unwrap();
-        let found = super::super::pull_request_findings_into(
+        (dir, repo, line, head)
+    }
+
+    /// The pull request check of `head`, named `branch`, into the line.
+    fn branch_into_line(
+        repo: &Repository,
+        line: Oid,
+        head: Oid,
+        branch: &str,
+        scope: super::super::Scope<'_>,
+    ) -> Vec<Finding> {
+        super::super::pull_request_findings_into(
             repo.workdir().unwrap(),
             &line.to_string(),
             &head.to_string(),
             &super::super::Criteria::OwnTask("TSK-002".into()),
             None,
-            (
-                Some("task/TSK-002-own-work"),
-                Some("integration/EPC-001-line"),
-                None,
-            ),
+            (Some(branch), Some("integration/EPC-001-line"), None),
             &[],
-            super::super::Scope::default(),
+            scope,
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    #[test]
+    fn a_task_branch_review_covers_its_hand_resolved_sync_of_the_line() {
+        let (_dir, repo, line, head) = hand_resolved_branch();
+        let found = branch_into_line(
+            &repo,
+            line,
+            head,
+            "task/TSK-002-own-work",
+            super::super::Scope::default(),
+        );
         assert!(
             !found.iter().any(|finding| !finding.note),
             "the task's review covers its own hand-resolved sync: {found:?}"
@@ -864,6 +889,74 @@ mod tests {
         assert!(
             refuses_earlier(&found),
             "a completion made on another task's tip stays refused: {found:?}"
+        );
+    }
+
+    /// [`hand_resolved_branch`] judged as `branch` with the judged
+    /// policy's `prefixes` (TSK-1309 AC-6).
+    fn judged_branch(branch: &str, prefixes: &[String]) -> Vec<Finding> {
+        let (_dir, repo, line, head) = hand_resolved_branch();
+        let scope = super::super::Scope {
+            branch_prefixes: Some(prefixes),
+            ..super::super::Scope::default()
+        };
+        branch_into_line(&repo, line, head, branch, scope)
+    }
+
+    #[test]
+    fn the_judged_policy_names_the_branch_task_the_checkout_does_not() {
+        // The checkout's policy (the defaults) has no `lane/` prefix; the
+        // judged policy has it, so the branch is TSK-002's own.
+        let found = judged_branch("lane/TSK-002-own-work", &["lane/".to_string()]);
+        assert!(
+            !found.iter().any(|finding| !finding.note),
+            "the judged policy's prefix must find the branch's own task: {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_checkout_prefix_the_judged_policy_lacks_names_no_branch_task() {
+        // The checkout's defaults have `task/`; the judged policy does not,
+        // so the branch carries no task and its own work stays refused.
+        let found = judged_branch("task/TSK-002-own-work", &["feat/".to_string()]);
+        assert!(
+            found
+                .iter()
+                .any(|finding| !finding.note && finding.message.contains("src/shared.rs")),
+            "a prefix only the checkout names must grant no branch credit: {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_task_branchs_own_sub_branch_work_is_refused_at_landing() {
+        // TSK-1309 AC-8: the task merges its own sub-branch, not the line.
+        // The walk credits only the reviewed head's first parents, so the
+        // sub-branch's product work stays refused (fail closed).
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, base) = crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"base")]);
+        let line = commit(
+            &repo,
+            base,
+            b"project-management/tasks/TSK-001.md",
+            b"records only",
+        );
+        let own = commit(&repo, base, b"src/own.rs", b"own work");
+        let sub = commit(&repo, own, b"src/sub.rs", b"sub-branch work");
+        let joined = merge(&repo, own, sub);
+        let reviewed = commit(&repo, joined, b"src/own.rs", b"reviewed own work");
+        let head = merge(&repo, line, reviewed);
+        let found = judge(&repo, base, head, &[reviewed]).unwrap();
+        assert!(
+            found
+                .iter()
+                .any(|finding| !finding.note && finding.message.contains("src/sub.rs")),
+            "the sub-branch's product work must be refused: {found:?}"
+        );
+        assert!(
+            !found
+                .iter()
+                .any(|finding| finding.message.contains("src/own.rs")),
+            "the task's own first-parent work stays credited: {found:?}"
         );
     }
 }
