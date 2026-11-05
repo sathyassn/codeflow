@@ -1,0 +1,11 @@
+id = "ADR-0098"
+uid = "178bffed-3a90-4903-b45d-657676167029"
+kind = "ADR"
+title = "Tasks reach main directly when a human merges as they are ready, otherwise through checkpointed epic lines"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T22:38:40Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
