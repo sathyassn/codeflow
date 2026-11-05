@@ -1,0 +1,11 @@
+id = "TSK-1349"
+uid = "ad905376-3164-49ee-a474-76841cfdcba5"
+kind = "TSK"
+title = "The guards refuse the flags that skip git hooks"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T19:39:35Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
