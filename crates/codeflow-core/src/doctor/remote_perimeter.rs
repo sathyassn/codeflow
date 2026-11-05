@@ -181,36 +181,34 @@ pub(super) fn check(opts: &Options) -> CheckResult {
             format!("{nwo}: {}; {message}", extra.fails.join("; ")),
         );
     }
-    // Each part of the answer keeps its own remedy: the event policy is
-    // cleared on the Actions settings, not by `remote protect`.
+    result(status(&base, &extra, &branch), message)
+}
+
+/// The status of an answer without failures. Each part keeps its own
+/// remedy: the event policy is cleared on the host's Actions settings, not
+/// by `remote protect` (TSK-1347).
+fn status(base: &Answer, extra: &Perimeter, branch: &str) -> Status {
     let rules_warn = matches!(base, Answer::Warn(_)) || !extra.warns.is_empty();
     let rules_note = matches!(base, Answer::Note(_)) || !extra.unread.is_empty();
-    let event_warn = remedy::DOCTOR_EVENT_POLICY.remedy();
-    let event_note = remedy::DOCTOR_EVENT_POLICY_UNREAD.remedy();
-    let warn = || {
-        let rules = remedy::DOCTOR_REMOTE_PERIMETER.with(&[("branch", &branch)]);
-        let remedy = match (rules_warn, extra.event_warns.is_empty()) {
-            (true, true) => rules,
-            (true, false) => rules.and(&event_warn),
-            (false, _) => event_warn.clone(),
-        };
-        result(Status::Warn(remedy), message.clone())
+    let event_warn = !extra.event_warns.is_empty();
+    let event_note = !extra.event_unread.is_empty();
+    let both = |rules: Option<remedy::Remedy>, event: Option<remedy::Remedy>| match (rules, event) {
+        (Some(rules), Some(event)) => rules.and(&event),
+        (Some(only), None) | (None, Some(only)) => only,
+        (None, None) => unreachable!("a status with a remedy has a part to clear"),
     };
-    let unread = || {
-        let rules = remedy::DOCTOR_REMOTE_UNREAD.remedy();
-        let remedy = match (rules_note, extra.event_unread.is_empty()) {
-            (true, true) => rules,
-            (true, false) => rules.and(&event_note),
-            (false, _) => event_note.clone(),
-        };
-        result(Status::Note(remedy), message.clone())
-    };
-    if rules_warn || !extra.event_warns.is_empty() {
-        warn()
-    } else if rules_note || !extra.event_unread.is_empty() {
-        unread()
+    if rules_warn || event_warn {
+        Status::Warn(both(
+            rules_warn.then(|| remedy::DOCTOR_REMOTE_PERIMETER.with(&[("branch", branch)])),
+            event_warn.then(|| remedy::DOCTOR_EVENT_POLICY.remedy()),
+        ))
+    } else if rules_note || event_note {
+        Status::Note(both(
+            rules_note.then(|| remedy::DOCTOR_REMOTE_UNREAD.remedy()),
+            event_note.then(|| remedy::DOCTOR_EVENT_POLICY_UNREAD.remedy()),
+        ))
     } else {
-        result(Status::Pass, message)
+        Status::Pass
     }
 }
 
