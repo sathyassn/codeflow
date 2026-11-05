@@ -463,7 +463,12 @@ added lines outside the criteria, acceptance blocks, Deliverables and
 Closeout, made by exactly one commit on the first-parent line of a target
 tip the run is judged against, with the new epic landing on the task's
 unchanged `integration_target`; any other difference, or anything it cannot
-read, refuses and names the commit and the part (TSK-1320).
+read, refuses and names the commit and the part (TSK-1320). The task
+branch's own commits after the review never count as that commit. The
+check proves the commit is on a trusted tip's first-parent line, not that a
+reviewed planning pull request made it: on a line pull request into `main`
+the tip is the line head, so the operator's review of that pull request is
+the move's authority there.
 A task pull request that merges its moved target after the review keeps its
 binding when each merge brings a commit on the first-parent line of a target
 tip the run is judged against, and the merge's recorded result equals the
