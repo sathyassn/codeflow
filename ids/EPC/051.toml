@@ -1,0 +1,11 @@
+id = "EPC-051"
+uid = "9f2b534b-7b39-422c-aaa5-196a64144936"
+kind = "EPC"
+title = "Hook binaries and harness tools cannot slip past the guards"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:19:24Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
