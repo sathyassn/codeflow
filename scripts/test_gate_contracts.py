@@ -36,8 +36,13 @@ class GateContracts(unittest.TestCase):
         jobs = dict(zip(parts[1::2], parts[2::2]))
         windows = {key: text for key, text in jobs.items() if key.startswith('windows')}
         gated = ('windows', 'windows-build', 'windows-tests', 'windows-journeys', 'windows-release-journey')
-        self.assertEqual(set(windows), {*gated, 'windows-verdict', 'windows-image'})
+        self.assertEqual(set(windows), {*gated, 'windows-verdict', 'windows-image', 'windows-tier', 'windows-tier-journeys'})
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
+        # TSK-1242: the tier only applies to pull requests. Neither job is a
+        # publication check; `scripts/gate-parity.py` pins their text.
+        for key in ('windows-tier', 'windows-tier-journeys'):
+            self.assertNotIn(windows[key].split('name: ', 1)[1].split('\n', 1)[0], checks)
+        self.assertIn("    if: github.event_name == 'pull_request'\n", windows['windows-tier'])
         # TSK-359: `windows-image` only reads the push's Windows runner image
         # for the reuse decision. It runs on pushes alone and is no gate.
         image = windows['windows-image']
@@ -77,7 +82,8 @@ class GateContracts(unittest.TestCase):
         # `codeflow gates` is: one accepted body, so no edit can add another
         # way for it to pass.
         self.assertEqual(PARITY.windows_verdict_problems(workflow), [])
-        self.assertEqual(windows['windows-verdict'].count('exit 0'), 1)
+        # Two ways to pass: the reduced tier (TSK-1242) and a reused or full run.
+        self.assertEqual(windows['windows-verdict'].count('exit 0'), 2)
         self.assertEqual([check for check in checks if 'windows' in check], ['windows'])
 
     def test_an_extra_way_for_the_windows_verdict_to_pass_is_refused(self):
@@ -113,10 +119,13 @@ class GateContracts(unittest.TestCase):
         self.assertIn('    permissions:\n      contents: read\n      actions: read\n      pull-requests: read\n', reuse)
         self.assertNotIn(': write', workflow)
         self.assertIn('python3 -I scripts/ci-reuse.py', reuse)
-        for key in ('gates', 'windows', 'windows-build', 'windows-release-journey'):
+        for key in ('gates', 'windows', 'windows-release-journey'):
             with self.subTest(job=key):
                 self.assertIn("    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (", jobs[key])
                 self.assertIn('    needs: [reuse, gates-build]\n' if key == 'gates' else '    needs: reuse\n', jobs[key])
+        # TSK-1242: the build also follows the tier, and still follows the reuse decision.
+        self.assertIn("    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (", jobs['windows-build'])
+        self.assertIn('    needs: [reuse, windows-tier]\n', jobs['windows-build'])
         self.assertIn("needs.windows-build.result == 'success'", jobs['windows-tests'])
         self.assertIn("needs.windows-tests.result != 'skipped'", jobs['windows-journeys'])
 

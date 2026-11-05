@@ -1,0 +1,44 @@
+# Daily full Windows coverage of main and each active integration line, as
+# scripts/windows-daily.py defines active. A daily result
+# is never merge evidence. With the reduced tier on (codeflow-ci.yml), the twelve
+# partitions leave line pull requests, and this run and the line pushes cover them.
+name: daily Windows
+
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sources:
+    name: resolve daily Windows source commits
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.sources.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Discover main and each active integration line at immutable commits
+        id: sources
+        run: python3 -I -B scripts/windows-daily.py discover
+
+  lines:
+    name: daily Windows ${{ matrix.ref }} at ${{ matrix.sha }}
+    needs: sources
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.sources.outputs.matrix) }}
+    uses: ./.github/workflows/windows-daily-run.yml
+    with:
+      source-ref: ${{ matrix.ref }}
+      source-sha: ${{ matrix.sha }}
+      artifact-key: ${{ matrix.key }}

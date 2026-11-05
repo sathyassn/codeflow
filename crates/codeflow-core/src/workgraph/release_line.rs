@@ -44,6 +44,7 @@ use std::path::Path;
 
 use git2::{Oid, Repository};
 
+use crate::git::remote_query::QueryLimits;
 use crate::git::{display_text, GitName};
 
 use super::acceptance::{
@@ -156,17 +157,33 @@ pub struct Destination {
     pub default: Option<(String, Oid)>,
     /// Every advertised branch (name without `refs/heads/`) and its tip.
     pub heads: Vec<(String, Oid)>,
+    /// The waits for fetching a tip this clone lacks, from the trusted
+    /// policy (TSK-1301); the shipped defaults until a caller sets them.
+    pub limits: QueryLimits,
 }
 
-/// Ask `url` for its default branch and its branches. With no `url` the
-/// destination is empty, and the built-in pattern applies.
+impl Destination {
+    /// This destination, fetching within `limits`.
+    #[must_use]
+    pub fn with_limits(self, limits: QueryLimits) -> Self {
+        Self { limits, ..self }
+    }
+}
+
+/// Ask `url` for its default branch and its branches, within `limits`.
+/// With no `url` the destination is empty, and the built-in pattern
+/// applies.
 ///
 /// # Errors
 ///
 /// Returns why the destination cannot be read: it cannot be asked, or it
 /// has branches but names no default branch that exists.
-pub fn ask_destination(repo_root: &Path, url: Option<&str>) -> Result<Destination, String> {
-    ask(repo_root, url).and_then(|answer| answer)
+pub fn ask_destination(
+    repo_root: &Path,
+    url: Option<&str>,
+    limits: QueryLimits,
+) -> Result<Destination, String> {
+    ask(repo_root, url, limits).and_then(|answer| answer)
 }
 
 /// As [`ask_destination`], keeping apart a destination that did not answer
@@ -176,25 +193,33 @@ pub fn ask_destination(repo_root: &Path, url: Option<&str>) -> Result<Destinatio
 /// # Errors
 ///
 /// Returns why the destination could not be asked.
-pub fn ask(repo_root: &Path, url: Option<&str>) -> Result<Result<Destination, String>, String> {
+pub fn ask(
+    repo_root: &Path,
+    url: Option<&str>,
+    limits: QueryLimits,
+) -> Result<Result<Destination, String>, String> {
     let Some(url) = url else {
         return Ok(Ok(Destination::default()));
     };
-    Ok(from_advertisement(url, &advertisement(repo_root, url)?))
+    Ok(
+        from_advertisement(url, &advertisement(repo_root, url, limits)?)
+            .map(|destination| destination.with_limits(limits)),
+    )
 }
 
 /// What `url` advertises: its default branch, branches and tags (peeled),
-/// in one bounded lookup (`git ls-remote --symref`, with timeout retries).
-/// A caller that already holds it, such as pre-push, passes it on instead
-/// of asking again.
+/// in one bounded lookup (`git ls-remote --symref`, with the timeout and
+/// attempts `limits` sets from the trusted policy). A caller that already
+/// holds it, such as pre-push, passes it on instead of asking again.
 ///
 /// # Errors
 ///
 /// Returns why the destination could not be asked.
-pub fn advertisement(repo_root: &Path, url: &str) -> Result<String, String> {
+pub fn advertisement(repo_root: &Path, url: &str, limits: QueryLimits) -> Result<String, String> {
     crate::git::remote_query::ls_remote(
         repo_root,
         &["--symref", url, "HEAD", "refs/heads/*", "refs/tags/*"],
+        limits,
     )
     .map_err(|why| {
         let shown = crate::git::remote_query::display_url(url);
@@ -260,6 +285,7 @@ pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String
         url: Some(url.to_string()),
         default,
         heads,
+        limits: QueryLimits::default(),
     })
 }
 
@@ -379,7 +405,11 @@ pub fn scope(
 /// # Errors
 ///
 /// As [`scope`], and when `origin` cannot be asked.
-pub fn checkout_scope(repo_root: &Path, into: Option<&str>) -> Result<Scope, String> {
+pub fn checkout_scope(
+    repo_root: &Path,
+    into: Option<&str>,
+    limits: QueryLimits,
+) -> Result<Scope, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let branch = super::light_paths::current_branch(repo_root)
         .map_err(|error| format!("the checked-out branch cannot be read: {error}"))?
@@ -400,7 +430,7 @@ pub fn checkout_scope(repo_root: &Path, into: Option<&str>) -> Result<Scope, Str
         Err(error) if error.code() == git2::ErrorCode::NotFound => None,
         Err(error) => return Err(format!("cannot read origin for release policy: {error}")),
     };
-    let destination = ask_destination(repo_root, url.as_deref())?;
+    let destination = ask_destination(repo_root, url.as_deref(), limits)?;
     scope(repo_root, &destination, &branch, into)
 }
 
@@ -644,7 +674,7 @@ fn ensure_objects(
     let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
     let fetched = destination.url.as_deref().map_or_else(
         || Err("no destination to fetch from".to_string()),
-        |url| crate::git::remote_query::fetch_objects(repo_root, url, &refs),
+        |url| crate::git::remote_query::fetch_objects(repo_root, url, &refs, destination.limits),
     );
     history::refresh(repo);
     let still = missing(wanted);
