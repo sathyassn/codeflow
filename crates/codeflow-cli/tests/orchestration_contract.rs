@@ -2692,10 +2692,10 @@ fn planned_work_band_rule_has_one_home_and_pointers() {
         ),
         (
             "assets/base/rule-map.toml",
-            &["where the time-box profile is adopted, each task keeps to its band;", "section = \"Planned work keeps to its band\""],
+            &["an adopted time-box profile holds each task to its band;", "section = \"Planned work keeps to its band\""],
         ),
-        ("assets/base/AGENTS.md.tmpl", &["where the time-box profile is adopted, each task keeps to its band;"]),
-        ("assets/base/AGENTS.full.md.tmpl", &["where the time-box profile is adopted, each task keeps to its band;"]),
+        ("assets/base/AGENTS.md.tmpl", &["an adopted time-box profile holds each task to its band;"]),
+        ("assets/base/AGENTS.full.md.tmpl", &["an adopted time-box profile holds each task to its band;"]),
     ];
     for (path, required) in pointers {
         let text = normalize_whitespace(&read(path));
