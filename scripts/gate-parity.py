@@ -525,8 +525,10 @@ WINDOWS_VERDICT_JOB = """\
 
 # TSK-1242: the switch is the one value of this job that may differ, off or on.
 # A pull request into an integration line takes the reduced tier only when it
-# is on and its changes touch none of the FULL_TIER_PATHS (TSK-1321); any
-# other value, base, event or unreadable change list takes the full tier.
+# is on and every changed file is on the REDUCED_TIER_PATHS list and none is
+# COMPILED_IN (TSK-1321). Everything else takes the full tier: any other
+# value, base or event, an empty, quoted or unreadable change list, and a
+# grep error.
 TIER_SWITCH = re.compile(r'^( {10}REDUCED_TIER: )"(?:on|off)"$', re.M)
 WINDOWS_TIER_JOB = """\
     if: github.event_name == 'pull_request'
@@ -543,12 +545,20 @@ WINDOWS_TIER_JOB = """\
       - name: Choose the Windows tier
         id: tier
         shell: bash
+        # Only the REDUCED_TIER_PATHS take the reduced tier; everything else
+        # takes the full tier. The partitions read this Markdown only as text
+        # with line endings, separators and whitespace normalised
+        # (doc_fact_pins.rs, release_contract.rs link checks,
+        # command_reference.rs), and checkout keeps it LF (.gitattributes
+        # eol=lf). Rust compiles in the COMPILED_IN files with include_str
+        # (coord_store.rs, path_policy.rs), so they take the full tier.
         env:
           REDUCED_TIER: "off"
           BASE: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          FULL_TIER_PATHS: '^(crates/|assets/|docs-portal/|evals/|tests/|scripts/fixtures/|\\.cargo/|\\.codeflow/\\.baseline/\\.github/|Cargo\\.toml$|Cargo\\.lock$|rust-toolchain\\.toml$|\\.config/nextest\\.toml$|\\.github/workflows/codeflow-(ci|release)\\.yml$|\\.codeflow/policy\\.json$|\\.release/config\\.json$|docs/coordination-ledger\\.md$|changelog\\.d/TSK-(322|1079)\\.md$|scripts/(journey-gate|test_journey_gate|partition-check|test_partition_check|release)\\.py$)'
+          REDUCED_TIER_PATHS: '^(project-management/.+\\.md|docs/.+\\.md|changelog\\.d/[^/]+\\.md|README\\.md)$'
+          COMPILED_IN: '^(docs/coordination-ledger\\.md|changelog\\.d/TSK-(322|1079)\\.md)$'
         run: |
           tier=full
           if [ "$REDUCED_TIER" != on ]; then
@@ -566,11 +576,20 @@ WINDOWS_TIER_JOB = """\
                   reason="the diff lists no changed file"
                 elif printf '%s\\n' "$files" | grep '^"' > /dev/null; then
                   reason="a changed path holds characters git quotes, so it cannot be matched by name"
-                elif touched=$(printf '%s\\n' "$files" | grep -E "$FULL_TIER_PATHS"); then
-                  reason="it changes ${touched%%$'\\n'*} and $(($(printf '%s\\n' "$touched" | wc -l) - 1)) other full-tier path(s)"
                 else
-                  tier=reduced
-                  reason="none of its $(printf '%s\\n' "$files" | wc -l | tr -d ' ') changed files is a full-tier path"
+                  if outside=$(printf '%s\\n' "$files" | grep -vE "$REDUCED_TIER_PATHS"); then off=0; else off=$?; fi
+                  if compiled=$(printf '%s\\n' "$files" | grep -E "$COMPILED_IN"); then built=0; else built=$?; fi
+                  count=$(printf '%s\\n' "$files" | wc -l | tr -d ' ')
+                  if [ "$off" -gt 1 ] || [ "$built" -gt 1 ]; then
+                    reason="the path patterns could not be matched (grep exit $off and $built)"
+                  elif [ "$off" -eq 0 ]; then
+                    reason="it changes ${outside%%$'\\n'*} and $(($(printf '%s\\n' "$outside" | wc -l) - 1)) other path(s) outside the reduced-tier list"
+                  elif [ "$built" -eq 0 ]; then
+                    reason="it changes ${compiled%%$'\\n'*}, which Rust compiles in"
+                  else
+                    tier=reduced
+                    reason="all of its $count changed files are on the reduced-tier list"
+                  fi
                 fi
                 ;;
               *) reason="the base $BASE is not an integration line" ;;

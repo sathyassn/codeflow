@@ -52,7 +52,13 @@ def step(job: str, name: str) -> tuple[dict[str, str], str]:
 
 TIER_ENV, TIER_SCRIPT = step("windows-tier", "Choose the Windows tier")
 VERDICT_ENV, VERDICT_SCRIPT = step("windows-verdict", "Every Windows job the tier runs passed")
-FULL_TIER_PATHS = re.compile(TIER_ENV["FULL_TIER_PATHS"])
+REDUCED_TIER_PATHS = re.compile(TIER_ENV["REDUCED_TIER_PATHS"])
+COMPILED_IN = re.compile(TIER_ENV["COMPILED_IN"])
+
+
+def takes_reduced(path: str) -> bool:
+    """Whether a pull request changing only this path may take the reduced tier."""
+    return bool(REDUCED_TIER_PATHS.search(path)) and not COMPILED_IN.search(path)
 BASH = shutil.which("bash")
 
 
@@ -104,15 +110,16 @@ class TierTests(unittest.TestCase):
         git(self.repo, "merge", "-q", "--no-ff", "-m", "merge", head)
         return head, git(self.repo, "rev-parse", "HEAD")
 
-    def tier(self, head: str, base_ref="integration/EPC-022-fixes", base_sha=None, switch="on", cwd=None):
+    def tier(self, head: str, base_ref="integration/EPC-022-fixes", base_sha=None, switch="on", cwd=None,
+             patterns=None):
         out = Path(self.dir.name) / "output"
         summary = Path(self.dir.name) / "summary"
         for path in (out, summary):
             path.write_text("", encoding="utf-8")
         env = {"PATH": os.environ["PATH"], "HOME": self.dir.name, "GIT_CONFIG_NOSYSTEM": "1",
                "REDUCED_TIER": switch, "BASE": base_ref, "BASE_SHA": base_sha or self.base, "HEAD_SHA": head,
-               "FULL_TIER_PATHS": TIER_ENV["FULL_TIER_PATHS"], "GITHUB_OUTPUT": str(out),
-               "GITHUB_STEP_SUMMARY": str(summary)}
+               "REDUCED_TIER_PATHS": TIER_ENV["REDUCED_TIER_PATHS"], "COMPILED_IN": TIER_ENV["COMPILED_IN"],
+               "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary), **(patterns or {})}
         result = subprocess.run([BASH, "--noprofile", "--norc", "-eo", "pipefail", "-c", TIER_SCRIPT],
                                 cwd=cwd or self.repo, env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -120,22 +127,45 @@ class TierTests(unittest.TestCase):
         return out.read_text(encoding="utf-8").strip().removeprefix("tier="), result.stdout
 
     def test_a_records_only_pull_request_takes_the_reduced_tier(self):
-        head, _ = self.merge({"project-management/tasks/TSK-1.md": "two\n", "docs/guide.md": "more\n"})
+        head, _ = self.merge({"project-management/tasks/TSK-1.md": "two\n", "docs/guide.md": "more\n",
+                              "changelog.d/TSK-9.md": "entry\n", "README.md": "read me\n"})
         tier, out = self.tier(head)
         self.assertEqual(tier, "reduced")
-        self.assertIn("none of its 2 changed files is a full-tier path", out)
+        self.assertIn("all of its 4 changed files are on the reduced-tier list", out)
 
-    def test_each_path_the_partitions_compile_or_run_takes_the_full_tier(self):
+    def test_every_path_off_the_list_takes_the_full_tier(self):
+        # The list is short on purpose: a path nobody thought about, a new
+        # top-level file or a workflow, takes the full tier like any code.
         for path in ("crates/core/src/new.rs", "Cargo.toml", "Cargo.lock", ".config/nextest.toml",
-                     ".github/workflows/codeflow-ci.yml", "scripts/partition-check.py",
-                     "scripts/test_partition_check.py", "scripts/journey-gate.py", "scripts/test_journey_gate.py",
-                     "assets/base/policy.json", "rust-toolchain.toml"):
+                     ".github/workflows/codeflow-ci.yml", ".github/workflows/release.yml", ".gitattributes",
+                     "dist-workspace.toml", ".codex/config.toml", ".claude/settings.json", ".grok/hooks/x",
+                     ".agents/skills/x/SKILL.md", "AGENTS.md", "CHANGELOG.md", "docs-portal/figures/x.json",
+                     "docs/verification/evidence/x.json", "docs/guide.txt", "scripts/partition-check.py",
+                     "scripts/release-notes.py", "assets/base/policy.json", "rust-toolchain.toml",
+                     "crates/core/README.md", "changelog.d/sub/x.md", "brand-new-file"):
             with self.subTest(path=path):
                 self.setUp()
                 head, _ = self.merge({path: "changed\n", "project-management/tasks/TSK-1.md": "two\n"})
                 tier, out = self.tier(head)
                 self.assertEqual(tier, "full")
-                self.assertIn(f"it changes {path} and 0 other full-tier path(s)", out)
+                self.assertIn(f"it changes {path} and 0 other path(s) outside the reduced-tier list", out)
+
+    def test_a_listed_file_rust_compiles_in_takes_the_full_tier(self):
+        for path in ("docs/coordination-ledger.md", "changelog.d/TSK-322.md", "changelog.d/TSK-1079.md"):
+            with self.subTest(path=path):
+                self.setUp()
+                head, _ = self.merge({path: "changed\n", "docs/guide.md": "more\n"})
+                tier, out = self.tier(head)
+                self.assertEqual(tier, "full")
+                self.assertIn(f"it changes {path}, which Rust compiles in", out)
+
+    def test_a_grep_error_takes_the_full_tier(self):
+        head, _ = self.merge({"docs/guide.md": "more\n"})
+        for name in ("REDUCED_TIER_PATHS", "COMPILED_IN"):
+            with self.subTest(pattern=name):
+                tier, out = self.tier(head, patterns={name: "(["})
+                self.assertEqual(tier, "full")
+                self.assertIn("the path patterns could not be matched", out)
 
     def test_a_deleted_or_renamed_crate_file_takes_the_full_tier(self):
         head, _ = self.merge({"crates/core/src/lib.rs": None})
@@ -210,7 +240,8 @@ class TierTests(unittest.TestCase):
 
     def test_the_step_reads_no_author_controlled_event_field(self):
         job = JOBS["windows-tier"]
-        self.assertEqual(set(TIER_ENV), {"REDUCED_TIER", "BASE", "BASE_SHA", "HEAD_SHA", "FULL_TIER_PATHS"})
+        self.assertEqual(set(TIER_ENV), {"REDUCED_TIER", "BASE", "BASE_SHA", "HEAD_SHA", "REDUCED_TIER_PATHS",
+                                         "COMPILED_IN"})
         for field in ("title", "body", "label", "head.ref", "head_ref", "user", "inputs"):
             self.assertNotIn(field, job.replace("head.sha", ""))
         self.assertIn("BASE_SHA: ${{ github.event.pull_request.base.sha }}", job)
@@ -218,17 +249,17 @@ class TierTests(unittest.TestCase):
         self.assertNotRegex(TIER_SCRIPT, r"\bcat\b|\bsource\b|python|\./")
 
 
-class FullTierPathTests(unittest.TestCase):
-    """AC-4: the full-tier list covers what the skipped jobs run and what the
-    partitions compile, so a new input cannot slip into the reduced tier."""
+class ReducedTierPathTests(unittest.TestCase):
+    """AC-4: only the listed paths take the reduced tier, and nothing the
+    skipped jobs run or the partitions compile is on the list."""
 
-    def test_every_script_the_skipped_jobs_run_is_a_full_tier_path(self):
+    def test_no_script_the_skipped_jobs_run_takes_the_reduced_tier(self):
         for job in ("windows-build", "windows-tests", "windows-journeys"):
             for script in set(re.findall(r"\bscripts/[\w.-]+", JOBS[job])):
                 with self.subTest(job=job, script=script):
-                    self.assertRegex(script, FULL_TIER_PATHS)
+                    self.assertFalse(takes_reduced(script))
 
-    def test_every_repository_file_the_rust_code_includes_is_a_full_tier_path(self):
+    def test_no_repository_file_the_rust_code_includes_takes_the_reduced_tier(self):
         found = set()
         for source in (ROOT / "crates").rglob("*.rs"):
             if "target" in source.parts:
@@ -240,16 +271,16 @@ class FullTierPathTests(unittest.TestCase):
             for included in re.findall(r'include_(?:str|bytes)!\(\s*"([^"]+)"', text):
                 resolved = Path(os.path.normpath(source.parent / included))
                 found.add(resolved.relative_to(ROOT).as_posix())
-        self.assertTrue(found)
+        self.assertTrue({"docs/coordination-ledger.md", "changelog.d/TSK-322.md"} <= found, found)
         for path in sorted(found):
             with self.subTest(path=path):
-                self.assertRegex(path, FULL_TIER_PATHS)
+                self.assertFalse(takes_reduced(path))
 
-    def test_records_and_docs_are_not_full_tier_paths(self):
-        for path in ("project-management/tasks/TSK-1321.md", "docs/architecture.md", "changelog.d/TSK-1321.md",
-                     "RELEASE-PLAN.md", "scripts/release-notes.py"):
+    def test_records_changelog_entries_and_docs_markdown_take_the_reduced_tier(self):
+        for path in ("project-management/tasks/TSK-1321.md", "docs/architecture.md", "docs/decisions/0001-x.md",
+                     "changelog.d/TSK-1321.md", "README.md"):
             with self.subTest(path=path):
-                self.assertNotRegex(path, FULL_TIER_PATHS)
+                self.assertTrue(takes_reduced(path))
 
 
 def needs(**results):
