@@ -325,6 +325,123 @@ esac
     );
 }
 
+/// TSK-1347: on a public repository whose default branch runs the shipped
+/// policy workflow on `pull_request_target`, doctor reads the Actions event
+/// policies through `gh`: the live policy of `sathyassn/codeflow` passes, no
+/// policy warns with the fix, and a token that cannot read them gets a
+/// note, never a pass.
+#[cfg(unix)]
+#[test]
+fn doctor_judges_the_actions_event_policy_of_a_public_repository() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let shipped = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/base/ci/codeflow-policy.yml"
+    );
+    let cases = [
+        (
+            "allowed",
+            r#"printf '%s' '{"total_count":1,"policies":[{"id":11322,"name":"codeflow policy check","source_type":"Repository","source":"o/r","enforcement":"active"}]}'"#,
+            "ok    remote-perimeter: o/r main requires",
+        ),
+        (
+            "blocked",
+            r#"printf '%s' '{"total_count":0,"policies":[]}'"#,
+            "no Actions event policy allows pull_request_target for .github/workflows/codeflow-policy.yml",
+        ),
+        (
+            "unreadable",
+            "echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1",
+            "note  remote-perimeter: o/r main requires",
+        ),
+    ];
+    for (case, policies, expected) in cases {
+        let home = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path(), "public");
+        let git = repo.path().join(".git");
+        fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        fs::create_dir_all(git.join("objects")).unwrap();
+        fs::create_dir_all(git.join("refs/heads")).unwrap();
+        fs::write(
+            git.join("config"),
+            "[core]\n\trepositoryformatversion = 0\n\tbare = false\n[remote \"origin\"]\n\turl = https://github.com/o/r.git\n",
+        )
+        .unwrap();
+
+        let shims = tempfile::tempdir().unwrap();
+        let gh = shims.path().join("gh");
+        fs::write(
+            &gh,
+            format!(
+                r#"#!/bin/sh
+case "$*" in
+  "api repos/o/r") printf '%s' '{{"default_branch":"main","visibility":"public","name":"r","id":1,"owner":{{"login":"o","type":"User"}}}}' ;;
+  "api repos/o/r/rules/branches/main?per_page=100&page=1") printf '%s' '[{{"type":"required_status_checks","parameters":{{"strict_required_status_checks_policy":true,"required_status_checks":[{{"context":"codeflow gates","integration_id":15368}},{{"context":"secret scan","integration_id":15368}},{{"context":"security review","integration_id":15368}},{{"context":"trusted: commit standards","integration_id":15368}}]}},"ruleset_id":7}}]' ;;
+  "api repos/o/r/rulesets/7") printf '%s' '{{"id":7,"bypass_actors":[]}}' ;;
+  "api repos/o/r/rulesets?per_page=100&page=1") printf '%s' '[]' ;;
+  "api repos/o/r/contents/.github/workflows?ref=main") printf '%s' '[{{"path":".github/workflows/codeflow-policy.yml","type":"file"}}]' ;;
+  "api -H Accept: application/vnd.github.raw repos/o/r/contents/.github/workflows/codeflow-policy.yml?ref=main") cat '{shipped}' ;;
+  "api repos/o/r/actions/policies?per_page=100&page=1") {policies} ;;
+  "api repos/o/r/actions/policies/11322") printf '%s' '{{"id":11322,"name":"codeflow policy check","source_type":"Repository","source":"o/r","enforcement":"active","conditions":{{"workflow_path":{{"exclude":[],"include":[".github/workflows/codeflow-policy.yml"]}}}},"rules":[{{"type":"restrict_action_events","parameters":{{"allowed_events":["pull_request_target"]}}}}]}}' ;;
+  *) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
+esac
+"#
+            ),
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&gh).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&gh, perms).unwrap();
+        let path = format!(
+            "{}:{}",
+            shims.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+
+        let out = codeflow()
+            .args(["doctor", "--check", "remote-perimeter"])
+            .current_dir(repo.path())
+            .env("CODEFLOW_HOME", home.path())
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        let text = stdout(&out);
+        assert!(out.status.success(), "{case}: doctor failed: {text}");
+        assert!(text.contains(expected), "{case}: {text}");
+        match case {
+            "blocked" => {
+                assert!(
+                    text.contains("warn  remote-perimeter: o/r main requires"),
+                    "{case}: {text}"
+                );
+                // The clearing step is the event policy, never the
+                // up-to-date rule the branch already has.
+                assert!(
+                    text.contains("create or narrow the Actions event policy the finding names"),
+                    "{case}: {text}"
+                );
+                assert!(
+                    !text.contains("Require branches to be up to date"),
+                    "{case}: {text}"
+                );
+            }
+            "unreadable" => {
+                assert!(
+                    text.contains("the Actions event policies of o/r are not readable"),
+                    "{case}: {text}"
+                );
+                assert!(
+                    text.contains("read the Actions event policies in the repository's Settings"),
+                    "{case}: {text}"
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Round 23: `remote protect` finds its project as main does, the nearest
 /// directory initialized for `CodeFlow`, never the git work tree root, so a
 /// project nested inside another repository protects its own branches.

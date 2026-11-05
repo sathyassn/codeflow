@@ -776,6 +776,14 @@ catalog! {
     /// Host rules doctor could not read.
     DOCTOR_REMOTE_UNREAD = Step::Manual("read the host rules for the default branch"),
         "read the host rules for the default branch in the host's settings and confirm they require every check in git.required_checks on an up-to-date branch; `codeflow doctor` cannot verify them here";
+    /// A public repository whose Actions event policies would stop a
+    /// `pull_request_target` workflow, or allow the event too widely
+    /// (TSK-1347).
+    DOCTOR_EVENT_POLICY = Step::Codeflow("codeflow doctor"),
+        "as a repository administrator, create or narrow the Actions event policy the finding names (repository Settings, Actions, Policies, or the `gh api` command it prints); then `codeflow doctor --check remote-perimeter` confirms it";
+    /// Actions event policies doctor could not read (TSK-1347).
+    DOCTOR_EVENT_POLICY_UNREAD = Step::Manual("read the Actions event policies"),
+        "read the Actions event policies in the repository's Settings, Actions, Policies (or rerun doctor with an administrator's token) and confirm one allows pull_request_target for the policy workflow alone; `codeflow doctor` cannot verify them here";
     /// Managed regions edited by hand.
     DOCTOR_MANAGED_DRIFT = Step::Codeflow("codeflow update"),
         "move the hand edits outside the codeflow markers (or accept losing them), then `codeflow update` rewrites the blocks";

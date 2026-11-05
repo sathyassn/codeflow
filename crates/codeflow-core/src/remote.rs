@@ -744,6 +744,8 @@ pub struct Declared {
     /// `(file, job id)` for each job that references an environment, with
     /// the environment as written.
     pub environments: Vec<(String, String, String)>,
+    /// `(file, events)` for each workflow: the events its `on:` names.
+    pub events: Vec<(String, Vec<String>)>,
 }
 
 impl Declared {
@@ -808,6 +810,38 @@ pub fn workflow_environments(text: &str) -> Result<Vec<(String, String)>, String
             Some((id.clone(), name))
         })
         .collect())
+}
+
+/// The events a workflow's `on:` names, in the order written: a single
+/// event, a list of events, or the keys of a mapping. A workflow without
+/// `on:` names none.
+///
+/// # Errors
+///
+/// Returns an error when the text is not a YAML workflow or `on:` is not an
+/// event, a list of events or a mapping keyed by event.
+pub fn workflow_events(text: &str) -> Result<Vec<String>, String> {
+    let doc: serde_yaml::Value =
+        serde_yaml::from_str(text).map_err(|error| format!("not YAML: {error}"))?;
+    // A YAML 1.1 reader takes a bare `on` as true, so both keys are read.
+    let Some(on) = doc
+        .get("on")
+        .or_else(|| doc.get(serde_yaml::Value::Bool(true)))
+    else {
+        return Ok(Vec::new());
+    };
+    let name = |value: &serde_yaml::Value| {
+        value
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| "an event in `on:` is not a string".to_string())
+    };
+    match on {
+        serde_yaml::Value::String(event) => Ok(vec![event.clone()]),
+        serde_yaml::Value::Sequence(events) => events.iter().map(name).collect(),
+        serde_yaml::Value::Mapping(events) => events.keys().map(name).collect(),
+        _ => Err("`on:` is not an event, a list or a mapping".to_string()),
+    }
 }
 
 fn workflow_jobs(text: &str) -> Result<Vec<(String, serde_yaml::Mapping)>, String> {
@@ -910,6 +944,8 @@ pub fn read_declared(
                 .environments
                 .push((path.to_string(), job, environment));
         }
+        let events = workflow_events(&text).map_err(|why| format!("{path} on {branch}: {why}"))?;
+        declared.events.push((path.to_string(), events));
         if path == POLICY_WORKFLOW {
             declared.policy_workflow = true;
             declared.policy_text.clone_from(&text);

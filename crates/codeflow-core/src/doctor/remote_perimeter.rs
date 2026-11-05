@@ -29,6 +29,10 @@
 //! authority environment that admits more than the default branch or that
 //! a second job references, and a foreign ruleset that requires a name no
 //! workflow on the default branch produces.
+//!
+//! On a public repository it also reads the Actions event policies, since
+//! GitHub blocks `pull_request_target` there unless one allows it
+//! (TSK-1347, `event_policy`).
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -37,6 +41,8 @@ use serde_json::Value;
 
 use super::{CheckResult, Options, Status};
 use crate::remedy;
+
+mod event_policy;
 use crate::remote::{
     self, Profile, Targeting, AUTHORITY_PREFIX, DEFAULT_LINES, GITHUB_ACTIONS_APP_ID,
     POLICY_WORKFLOW, RULESET_AUTHORITY_CHECKS, RULESET_AUTHORITY_UPDATES, RULESET_LINE_CHECKS,
@@ -139,7 +145,15 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         Some(Ok(profile)) => Some(profile),
         Some(Err(why)) => return note(why),
     };
-    let extra = perimeter(&gh, &nwo, &branch, classic.as_ref(), profile, &problems);
+    let extra = perimeter(
+        &gh,
+        &nwo,
+        &repo,
+        &branch,
+        classic.as_ref(),
+        profile,
+        &problems,
+    );
     let base = base_answer(
         &nwo,
         &branch,
@@ -152,7 +166,13 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     let mut message = match &base {
         Answer::Pass(m) | Answer::Warn(m) | Answer::Note(m) => m.clone(),
     };
-    for part in extra.warns.iter().chain(&extra.unread) {
+    for part in extra
+        .warns
+        .iter()
+        .chain(&extra.event_warns)
+        .chain(&extra.unread)
+        .chain(&extra.event_unread)
+    {
         message = format!("{message}; {part}");
     }
     if !extra.fails.is_empty() {
@@ -161,18 +181,36 @@ pub(super) fn check(opts: &Options) -> CheckResult {
             format!("{nwo}: {}; {message}", extra.fails.join("; ")),
         );
     }
+    // Each part of the answer keeps its own remedy: the event policy is
+    // cleared on the Actions settings, not by `remote protect`.
+    let rules_warn = matches!(base, Answer::Warn(_)) || !extra.warns.is_empty();
+    let rules_note = matches!(base, Answer::Note(_)) || !extra.unread.is_empty();
+    let event_warn = remedy::DOCTOR_EVENT_POLICY.remedy();
+    let event_note = remedy::DOCTOR_EVENT_POLICY_UNREAD.remedy();
     let warn = || {
-        result(
-            Status::Warn(remedy::DOCTOR_REMOTE_PERIMETER.with(&[("branch", &branch)])),
-            message.clone(),
-        )
+        let rules = remedy::DOCTOR_REMOTE_PERIMETER.with(&[("branch", &branch)]);
+        let remedy = match (rules_warn, extra.event_warns.is_empty()) {
+            (true, true) => rules,
+            (true, false) => rules.and(&event_warn),
+            (false, _) => event_warn.clone(),
+        };
+        result(Status::Warn(remedy), message.clone())
     };
-    match base {
-        Answer::Warn(_) => warn(),
-        _ if !extra.warns.is_empty() => warn(),
-        Answer::Note(_) => note(message.clone()),
-        Answer::Pass(_) if !extra.unread.is_empty() => note(message.clone()),
-        Answer::Pass(_) => result(Status::Pass, message.clone()),
+    let unread = || {
+        let rules = remedy::DOCTOR_REMOTE_UNREAD.remedy();
+        let remedy = match (rules_note, extra.event_unread.is_empty()) {
+            (true, true) => rules,
+            (true, false) => rules.and(&event_note),
+            (false, _) => event_note.clone(),
+        };
+        result(Status::Note(remedy), message.clone())
+    };
+    if rules_warn || !extra.event_warns.is_empty() {
+        warn()
+    } else if rules_note || !extra.event_unread.is_empty() {
+        unread()
+    } else {
+        result(Status::Pass, message)
     }
 }
 
@@ -243,13 +281,19 @@ struct Perimeter {
     fails: Vec<String>,
     warns: Vec<String>,
     unread: Vec<String>,
+    /// The Actions event policy findings, which clear on the host's Actions
+    /// settings (TSK-1347).
+    event_warns: Vec<String>,
+    event_unread: Vec<String>,
 }
 
-/// Judge the owned rulesets, the line rules, the authority environment and
-/// the rulesets that require names nothing produces.
+/// Judge the Actions event policies, the owned rulesets, the line rules,
+/// the authority environment and the rulesets that require names nothing
+/// produces.
 fn perimeter(
     gh: &dyn Fn(&[&str]) -> Result<String, String>,
     nwo: &str,
+    repo: &Value,
     branch: &str,
     classic: Option<&Value>,
     profile: Option<Profile>,
@@ -265,6 +309,13 @@ fn perimeter(
         out.warns.push(format!(
             "classic branch protection on {branch} does not bind administrators (enforce_admins is off)"
         ));
+    }
+    // What the default branch declares is read first, so a ruleset list
+    // that cannot be read does not hide the event policies.
+    let declared = remote::read_declared(gh, nwo, branch);
+    match &declared {
+        Ok(declared) => event_policy::judge(gh, nwo, repo, declared, &mut out),
+        Err(why) => out.unread.push(why.clone()),
     }
     let rulesets = match all_rulesets(gh, nwo) {
         Ok(rulesets) => rulesets,
@@ -291,7 +342,7 @@ fn perimeter(
     line_rules(&rulesets, &lines, profile.is_some(), &mut out);
 
     loose_authority_pins(&rulesets, &mut out);
-    declared_findings(gh, nwo, branch, &rulesets, &mut out);
+    declared_findings(gh, nwo, branch, &rulesets, declared.ok().as_ref(), &mut out);
     out
 }
 
@@ -365,12 +416,14 @@ fn declared_findings(
     nwo: &str,
     branch: &str,
     rulesets: &[Value],
+    declared: Option<&remote::Declared>,
     out: &mut Perimeter,
 ) {
     let environment = authority_environment(gh, nwo, branch, out);
-    match remote::read_declared(gh, nwo, branch) {
-        Err(why) => out.unread.push(why),
-        Ok(declared) => {
+    // An unreadable declaration is already named by `perimeter`.
+    match declared {
+        None => {}
+        Some(declared) => {
             if environment {
                 let references: Vec<String> = declared
                     .environments
@@ -1162,7 +1215,9 @@ mod tests {
         bypass: &str,
     ) -> Result<String, String> {
         match args {
-            ["api", "repos/o/r"] => Ok(r#"{"default_branch":"main"}"#.into()),
+            ["api", "repos/o/r"] => {
+                Ok(r#"{"default_branch":"main","visibility":"private"}"#.into())
+            }
             // The first page; a later page is empty unless a test serves one.
             ["api", url] if url.starts_with("repos/o/r/rules/branches/main") => {
                 Ok(if url.ends_with("&page=1") || !url.contains("page=") {
@@ -1389,6 +1444,89 @@ mod tests {
             result.message.contains("o/r main requires"),
             "{}",
             result.message
+        );
+    }
+
+    /// TSK-1347: on a public repository whose default branch carries the
+    /// shipped policy workflow, the answer follows its Actions event
+    /// policies: allowed passes, blocked warns, unreadable is a note.
+    #[test]
+    fn a_public_repository_is_judged_by_its_event_policies() {
+        const SHIPPED: &str = include_str!("../../../../assets/base/ci/codeflow-policy.yml");
+        const ALLOW: &str = r#"{"id":11322,"name":"codeflow policy check","source_type":"Repository","source":"o/r","enforcement":"active","conditions":{"workflow_path":{"exclude":[],"include":[".github/workflows/codeflow-policy.yml"]}},"rules":[{"type":"restrict_action_events","parameters":{"allowed_events":["pull_request_target"]}}]}"#;
+        const LIST: &str = r#"{"total_count":1,"policies":[{"id":11322,"name":"codeflow policy check","source_type":"Repository","source":"o/r","enforcement":"active"}]}"#;
+        fn public(args: &[&str], policies: Result<&str, &str>) -> Result<String, String> {
+            match args {
+                ["api", "repos/o/r"] => Ok(
+                    r#"{"default_branch":"main","visibility":"public","name":"r","id":1,"owner":{"login":"o","type":"User"}}"#
+                        .into(),
+                ),
+                ["api", "repos/o/r/contents/.github/workflows?ref=main"] => Ok(
+                    r#"[{"path":".github/workflows/codeflow-policy.yml","type":"file"}]"#.into(),
+                ),
+                ["api", "-H", _, "repos/o/r/contents/.github/workflows/codeflow-policy.yml?ref=main"] => {
+                    Ok(SHIPPED.into())
+                }
+                ["api", "repos/o/r/actions/policies?per_page=100&page=1"] => {
+                    policies.map(str::to_string).map_err(str::to_string)
+                }
+                ["api", "repos/o/r/actions/policies/11322"] => Ok(ALLOW.into()),
+                _ => host(args, &ruleset(true), None, "[]"),
+            }
+        }
+        fn allowed(_: &str, args: &[&str]) -> Result<String, String> {
+            public(args, Ok(LIST))
+        }
+        fn blocked(_: &str, args: &[&str]) -> Result<String, String> {
+            public(args, Ok(r#"{"total_count":0,"policies":[]}"#))
+        }
+        fn unreadable(_: &str, args: &[&str]) -> Result<String, String> {
+            public(
+                args,
+                Err("gh: Resource not accessible by integration (HTTP 403)"),
+            )
+        }
+        let dir = project();
+
+        let result = check(&opts(dir.path(), allowed));
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
+
+        let text = warn_text(&check(&opts(dir.path(), blocked)));
+        assert!(
+            text.contains("no Actions event policy allows pull_request_target for .github/workflows/codeflow-policy.yml"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gh api --method POST repos/o/r/actions/policies --input -"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "| as a repository administrator, create or narrow the Actions event policy"
+            ),
+            "{text}"
+        );
+
+        let result = check(&opts(dir.path(), unreadable));
+        assert!(
+            matches!(result.status, Status::Note(_)),
+            "{:?}: {}",
+            result.status,
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains("the Actions event policies of o/r are not readable"),
+            "{}",
+            result.message
+        );
+        let Status::Note(remedy) = &result.status else {
+            unreachable!()
+        };
+        assert!(
+            remedy.contains("read the Actions event policies"),
+            "{remedy}"
         );
     }
 
@@ -1778,7 +1916,11 @@ mod tests {
             let world = world.borrow();
             let not_found = || Err("gh: Not Found (HTTP 404)".to_string());
             match args {
-                ["api", "repos/o/r"] => Ok(r#"{"default_branch":"main"}"#.into()),
+                // A private repository: GitHub's `pull_request_target` block
+                // does not apply, so no event policy is read (TSK-1347).
+                ["api", "repos/o/r"] => {
+                    Ok(r#"{"default_branch":"main","visibility":"private"}"#.into())
+                }
                 ["api", url] if url.starts_with("repos/o/r/rules/branches/main") => {
                     if !url.ends_with("&page=1") {
                         return Ok("[]".into());
