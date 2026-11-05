@@ -12,8 +12,9 @@
 # R-113), and judges with the authority's policy, never the target's. The
 # pull request's base and head are fetched only as git data and never run.
 # After every step the job asserts that the checkout is still the authority.
-# Its token is read-only and it uses no secret. Builds and tests of the head
-# run in codeflow-ci.yml on `pull_request`.
+# The verdict job's token is read-only and the job uses no secret; only the
+# `authority` job below holds one. Builds and tests of the head run in
+# codeflow-ci.yml on `pull_request`.
 #
 # `codeflow ci` runs the SAME commit-format, no-AI-attribution, no-emoji,
 # breaking-footer, branch-naming and PR-body checks as the git hooks and the
@@ -34,13 +35,18 @@
 # judging run reads the pull request's body from the API when it runs,
 # never from its event, so the newest body is judged whichever run survives.
 #
-# Each verdict job ends by refusing any other producer of a trusted name on
-# the head: a check run of that name from another workflow, event or app,
-# or a commit status of a trusted or authority name (Mode B, the floor).
-# For a pull request into the default branch, the `authority` job then
-# creates the `authority:` checks with a GitHub App held in the environment
-# `codeflow-authority` (Mode A), concluded from the verdict jobs; without
-# the App it creates none (ADR-0091, TSK-1177).
+# Each verdict job ends by refusing another producer of a trusted name that
+# is on the head when the job ends: a check run of that name from another
+# workflow, event or app, or a commit status of a trusted or authority name
+# (Mode B). Mode B is a lower tier: it does not close forgery by a later
+# producer. GitHub takes the newest check run of a name, so a workflow that
+# runs after the verdict job, for example on an event this file does not
+# run on, can still satisfy a trusted: name pinned to GitHub Actions. Only
+# Mode A closes it: for a pull request into the default branch, the
+# `authority` job creates the `authority:` checks with a GitHub App held in
+# the environment `codeflow-authority`, concluded from the verdict jobs,
+# and ruleset B pins those names to the App. Without the App it creates
+# none (ADR-0091, TSK-1177).
 #
 # This repository's copy: CodeFlow is its own first consumer, so the verdict
 # jobs build the authority's own source in place of the pinned release, and
@@ -364,8 +370,11 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
-      # The last check refuses any other producer of a trusted name on the
-      # head (ADR-0091, Mode B: the floor that also holds beneath the App).
+      # The last check refuses another producer of a trusted name that is on
+      # the head when it runs (ADR-0091, Mode B). It reads once: a producer
+      # that runs later is not seen, and GitHub takes the newest check run
+      # of a name, so Mode B does not close forgery by a later producer;
+      # only Mode A, the App authority, does.
       # A check run of a trusted name counts only when GitHub Actions
       # created it in a pull_request_target run of this workflow's own path,
       # which only the default branch's file can start. A job of that name
@@ -445,10 +454,10 @@ jobs:
             page=$((page + 1))
           done
           if [ "$found" -ne 0 ]; then
-            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails closed; remove the workflow, job or status that produced it, then re-run this check"
+            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails; remove the workflow, job or status that produced it, then re-run this check"
             exit 1
           fi
-          echo "no other producer of a trusted or authority name is on ${HEAD_SHA}"
+          echo "no other producer of a trusted or authority name is on ${HEAD_SHA} now; Mode B does not see one that runs later"
 
       - name: Assert the authority checkout
         env:
@@ -661,8 +670,11 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
-      # The last check refuses any other producer of a trusted name on the
-      # head (ADR-0091, Mode B: the floor that also holds beneath the App).
+      # The last check refuses another producer of a trusted name that is on
+      # the head when it runs (ADR-0091, Mode B). It reads once: a producer
+      # that runs later is not seen, and GitHub takes the newest check run
+      # of a name, so Mode B does not close forgery by a later producer;
+      # only Mode A, the App authority, does.
       # A check run of a trusted name counts only when GitHub Actions
       # created it in a pull_request_target run of this workflow's own path,
       # which only the default branch's file can start. A job of that name
@@ -742,10 +754,10 @@ jobs:
             page=$((page + 1))
           done
           if [ "$found" -ne 0 ]; then
-            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails closed; remove the workflow, job or status that produced it, then re-run this check"
+            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails; remove the workflow, job or status that produced it, then re-run this check"
             exit 1
           fi
-          echo "no other producer of a trusted or authority name is on ${HEAD_SHA}"
+          echo "no other producer of a trusted or authority name is on ${HEAD_SHA} now; Mode B does not see one that runs later"
 
       - name: Assert the authority checkout
         env:
@@ -774,9 +786,10 @@ jobs:
   # `authority:` names to the App, so no workflow, and no token an agent
   # holds, can produce them.
   #
-  # Mode B, the floor: with no App configured, the job creates no check,
-  # and its last step refuses any other producer of a trusted name, as
-  # each verdict job's last step does.
+  # Mode B, the lower tier: with no App configured, the job creates no
+  # check, and its refusal step reads the producers of the trusted names
+  # once, as each verdict job's last step does. Mode B does not close
+  # forgery by a later producer; only Mode A does.
   authority:
     name: authority checks
     needs: [commit-lint, release-impact]
@@ -784,7 +797,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: codeflow-authority
-    # The workflow token only reads, for the last step; the App token is
+    # The workflow token only reads, for the refusal step; the App token is
     # minted inside the step that creates the checks.
     permissions:
       actions: read
@@ -810,6 +823,96 @@ jobs:
           done
           echo "judged by ${DEFAULT_BRANCH}@${AUTHORITY_SHA}" | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # Before any check is created, this job refuses another producer of a
+      # trusted name that is on the head now (ADR-0091, Mode B), so in
+      # Mode A a refusal leaves the authority: checks uncreated and the
+      # merge blocked. It reads once: a producer that runs later is not
+      # seen, so Mode B does not close forgery by a later producer; only
+      # Mode A, the App authority, does.
+      # A check run of a trusted name counts only when GitHub Actions
+      # created it in a pull_request_target run of this workflow's own path,
+      # which only the default branch's file can start. A job of that name
+      # in another workflow or event (skipped, sleeping or built from an
+      # expression), a check run from any other app and any commit status
+      # of a trusted or authority name fail this job, and so does an API
+      # error (TSK-1177 AC-1).
+      - name: Refuse another producer of a trusted name
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TRUSTED_NAMES: |
+            trusted: commit standards
+            trusted: release impact
+        run: |
+          set -euo pipefail
+          umask 077
+          if ! printf '%s\n' "$HEAD_SHA" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error::the pull request head '${HEAD_SHA}' is not a full commit id; nothing is judged"; exit 1
+          fi
+          work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/codeflow-producers.XXXXXX")
+          trap 'rm -rf "$work"' EXIT
+          printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\n' "$GH_TOKEN" > "${work}/headers"
+          api() { curl -fsS --retry 3 --max-time 60 -H @"${work}/headers" "$@"; }
+          repo="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
+          workflow=${GITHUB_WORKFLOW_REF#"${GITHUB_REPOSITORY}/"}
+          workflow=${workflow%%@*}
+          found=0
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            encoded=$(jq -rn --arg v "$name" '$v | @uri')
+            page=1
+            while :; do
+              api "${repo}/commits/${HEAD_SHA}/check-runs?check_name=${encoded}&filter=all&per_page=100&page=${page}" > "${work}/runs.json"
+              count=$(jq -e '.check_runs | if type == "array" then length else error("no check_runs list") end' "${work}/runs.json")
+              jq -r '.check_runs[] | [(.id | tostring), (.app.id // 0 | tostring), (.check_suite.id // 0 | tostring)] | @tsv' "${work}/runs.json" > "${work}/runs.tsv"
+              while IFS=$'\t' read -r id app suite; do
+                why=
+                if [ "$app" != 15368 ]; then
+                  why="app ${app} created it, not GitHub Actions"
+                else
+                  case "$suite" in
+                    '' | *[!0-9]*) echo "::error::check run ${id} names no readable check suite"; exit 1 ;;
+                  esac
+                  if [ ! -f "${work}/suite-${suite}" ]; then
+                    api "${repo}/actions/runs?check_suite_id=${suite}&per_page=1" > "${work}/suite.json"
+                    jq -r 'def clean: gsub("[^ -~]"; "?"); [(.workflow_runs[0].event // "(no run)" | clean), (.workflow_runs[0].path // "(no run)" | clean)] | @tsv' "${work}/suite.json" > "${work}/suite-${suite}"
+                  fi
+                  IFS=$'\t' read -r event path < "${work}/suite-${suite}"
+                  if [ "$event" != pull_request_target ] || [ "$path" != "$workflow" ]; then
+                    why="a ${event} run of ${path} created it, not a pull_request_target run of ${workflow}"
+                  fi
+                fi
+                if [ -n "$why" ]; then
+                  echo "::error::check run ${id} named '${name}' is on ${HEAD_SHA}: ${why}"
+                  found=1
+                fi
+              done < "${work}/runs.tsv"
+              [ "$count" -ge 100 ] || break
+              page=$((page + 1))
+            done
+          done <<< "$TRUSTED_NAMES"
+          page=1
+          while :; do
+            api "${repo}/commits/${HEAD_SHA}/statuses?per_page=100&page=${page}" > "${work}/statuses.json"
+            count=$(jq -e 'if type == "array" then length else error("not a list of statuses") end' "${work}/statuses.json")
+            jq -r --arg names "$TRUSTED_NAMES" 'def clean: gsub("[^ -~]"; "?");
+              ($names | split("\n") | map(select(length > 0))) as $trusted
+              | ($trusted + ($trusted | map("authority: " + ltrimstr("trusted: ")))) as $all
+              | .[] | select(.context as $c | any($all[]; . == $c))
+              | [(.id | tostring), (.context | clean), (.state // "?" | clean), (.creator.login // "?" | clean)] | @tsv' "${work}/statuses.json" > "${work}/statuses.tsv"
+            while IFS=$'\t' read -r id context state creator; do
+              echo "::error::commit status ${id} named '${context}' (${state}, set by ${creator}) is on ${HEAD_SHA}; no status may carry a trusted or authority name"
+              found=1
+            done < "${work}/statuses.tsv"
+            [ "$count" -ge 100 ] || break
+            page=$((page + 1))
+          done
+          if [ "$found" -ne 0 ]; then
+            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails; remove the workflow, job or status that produced it, then re-run this check"
+            exit 1
+          fi
+          echo "no other producer of a trusted or authority name is on ${HEAD_SHA} now; Mode B does not see one that runs later"
+
       - name: Create the authority checks
         env:
           APP_ID: ${{ vars.CODEFLOW_AUTHORITY_APP_ID }}
@@ -824,7 +927,7 @@ jobs:
           set -euo pipefail
           umask 077
           if [ -z "$APP_ID" ] && [ -z "$APP_KEY" ]; then
-            echo "Mode B: no authority App is configured, so no authority: check is created; the trusted: checks and the last step are the floor" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Mode B: no authority App is configured, so no authority: check is created; Mode B does not close forgery by a later producer, and only Mode A, the App authority, does" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           if [ -z "$APP_ID" ] || [ -z "$APP_KEY" ]; then
@@ -901,89 +1004,3 @@ jobs:
             api -X PATCH --data @"${work}/conclude.json" "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/check-runs/${id}" >/dev/null
             echo "${name}: ${conclusion}" | tee -a "$GITHUB_STEP_SUMMARY"
           done < "${work}/created.tsv"
-
-      # The last check refuses any other producer of a trusted name on the
-      # head (ADR-0091, Mode B: the floor that also holds beneath the App).
-      # A check run of a trusted name counts only when GitHub Actions
-      # created it in a pull_request_target run of this workflow's own path,
-      # which only the default branch's file can start. A job of that name
-      # in another workflow or event (skipped, sleeping or built from an
-      # expression), a check run from any other app and any commit status
-      # of a trusted or authority name fail this job, and so does an API
-      # error (TSK-1177 AC-1).
-      - name: Refuse another producer of a trusted name
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          TRUSTED_NAMES: |
-            trusted: commit standards
-            trusted: release impact
-        run: |
-          set -euo pipefail
-          umask 077
-          if ! printf '%s\n' "$HEAD_SHA" | grep -Eqx '[0-9a-f]{40}'; then
-            echo "::error::the pull request head '${HEAD_SHA}' is not a full commit id; nothing is judged"; exit 1
-          fi
-          work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/codeflow-producers.XXXXXX")
-          trap 'rm -rf "$work"' EXIT
-          printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\n' "$GH_TOKEN" > "${work}/headers"
-          api() { curl -fsS --retry 3 --max-time 60 -H @"${work}/headers" "$@"; }
-          repo="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
-          workflow=${GITHUB_WORKFLOW_REF#"${GITHUB_REPOSITORY}/"}
-          workflow=${workflow%%@*}
-          found=0
-          while IFS= read -r name; do
-            [ -n "$name" ] || continue
-            encoded=$(jq -rn --arg v "$name" '$v | @uri')
-            page=1
-            while :; do
-              api "${repo}/commits/${HEAD_SHA}/check-runs?check_name=${encoded}&filter=all&per_page=100&page=${page}" > "${work}/runs.json"
-              count=$(jq -e '.check_runs | if type == "array" then length else error("no check_runs list") end' "${work}/runs.json")
-              jq -r '.check_runs[] | [(.id | tostring), (.app.id // 0 | tostring), (.check_suite.id // 0 | tostring)] | @tsv' "${work}/runs.json" > "${work}/runs.tsv"
-              while IFS=$'\t' read -r id app suite; do
-                why=
-                if [ "$app" != 15368 ]; then
-                  why="app ${app} created it, not GitHub Actions"
-                else
-                  case "$suite" in
-                    '' | *[!0-9]*) echo "::error::check run ${id} names no readable check suite"; exit 1 ;;
-                  esac
-                  if [ ! -f "${work}/suite-${suite}" ]; then
-                    api "${repo}/actions/runs?check_suite_id=${suite}&per_page=1" > "${work}/suite.json"
-                    jq -r 'def clean: gsub("[^ -~]"; "?"); [(.workflow_runs[0].event // "(no run)" | clean), (.workflow_runs[0].path // "(no run)" | clean)] | @tsv' "${work}/suite.json" > "${work}/suite-${suite}"
-                  fi
-                  IFS=$'\t' read -r event path < "${work}/suite-${suite}"
-                  if [ "$event" != pull_request_target ] || [ "$path" != "$workflow" ]; then
-                    why="a ${event} run of ${path} created it, not a pull_request_target run of ${workflow}"
-                  fi
-                fi
-                if [ -n "$why" ]; then
-                  echo "::error::check run ${id} named '${name}' is on ${HEAD_SHA}: ${why}"
-                  found=1
-                fi
-              done < "${work}/runs.tsv"
-              [ "$count" -ge 100 ] || break
-              page=$((page + 1))
-            done
-          done <<< "$TRUSTED_NAMES"
-          page=1
-          while :; do
-            api "${repo}/commits/${HEAD_SHA}/statuses?per_page=100&page=${page}" > "${work}/statuses.json"
-            count=$(jq -e 'if type == "array" then length else error("not a list of statuses") end' "${work}/statuses.json")
-            jq -r --arg names "$TRUSTED_NAMES" 'def clean: gsub("[^ -~]"; "?");
-              ($names | split("\n") | map(select(length > 0))) as $trusted
-              | ($trusted + ($trusted | map("authority: " + ltrimstr("trusted: ")))) as $all
-              | .[] | select(.context as $c | any($all[]; . == $c))
-              | [(.id | tostring), (.context | clean), (.state // "?" | clean), (.creator.login // "?" | clean)] | @tsv' "${work}/statuses.json" > "${work}/statuses.tsv"
-            while IFS=$'\t' read -r id context state creator; do
-              echo "::error::commit status ${id} named '${context}' (${state}, set by ${creator}) is on ${HEAD_SHA}; no status may carry a trusted or authority name"
-              found=1
-            done < "${work}/statuses.tsv"
-            [ "$count" -ge 100 ] || break
-            page=$((page + 1))
-          done
-          if [ "$found" -ne 0 ]; then
-            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails closed; remove the workflow, job or status that produced it, then re-run this check"
-            exit 1
-          fi
-          echo "no other producer of a trusted or authority name is on ${HEAD_SHA}"
