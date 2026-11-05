@@ -1,0 +1,11 @@
+id = "EPC-054"
+uid = "1bdcb28f-291b-46f5-b5cd-8dce81696b85"
+kind = "EPC"
+title = "Local hooks and pushes trust only the landed policy and the real remote"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:24:57Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
