@@ -15,6 +15,8 @@ use super::work_start::{self, Record, ReviewedPin};
 
 const CLAIM_VERSION: u32 = 1;
 const REVIEWED_SOURCE: &str = "reviewed pins";
+const CLAIM_TAGGER_NAME: &str = "CodeFlow";
+const CLAIM_TAGGER_EMAIL: &str = "codeflow@localhost";
 
 /// The fixed base a claim selected, or the live base an unclaimed start needs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,7 +216,11 @@ pub(crate) fn record(
         base: base.clone(),
     })
     .map_err(|e| e.to_string())?;
-    let signature = repo.signature().map_err(|e| e.to_string())?;
+    // The tag is CodeFlow plumbing, never authored work: its tagger is a fixed
+    // identity, so a claim needs no `user.name` or `user.email` (a hosted
+    // runner or a fresh machine has neither) and never reads or writes them.
+    let signature =
+        git2::Signature::now(CLAIM_TAGGER_NAME, CLAIM_TAGGER_EMAIL).map_err(|e| e.to_string())?;
     let tag = repo
         .tag_annotation_create(branch, commit.as_object(), &signature, &message)
         .map_err(|e| e.to_string())?;

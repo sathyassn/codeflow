@@ -628,3 +628,51 @@ fn an_unrelated_source_advance_does_not_restore_a_reopened_predecessor() {
     assert!(!out.status.success(), "{}", text(&out));
     assert!(git(root, &["branch", "--list", CHILD]).is_empty());
 }
+
+// A hosted Windows runner and many adopters have no Git identity at all.
+// Recording the claim's base is CodeFlow plumbing and must not need one.
+#[test]
+fn a_claim_records_its_base_without_any_git_identity() {
+    let dir = fixture();
+    let root = dir.path();
+    git(root, &["config", "--unset", "user.name"]);
+    git(root, &["config", "--unset", "user.email"]);
+    let home = tempfile::tempdir().unwrap();
+    let binary = std::env::var_os("CODEFLOW_TEST_BINARY")
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_codeflow").into());
+    // libgit2 takes a signature only from config, never from GIT_AUTHOR_*.
+    let mut cmd = std::process::Command::new(binary);
+    cmd.current_dir(root)
+        .args(["work", "claim", "TSK-001"])
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env("XDG_CONFIG_HOME", home.path().join(".config"))
+        .env("GIT_CONFIG_GLOBAL", home.path().join("gitconfig"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_SYSTEM", home.path().join("gitconfig-system"));
+    let out = cmd.output().unwrap();
+    succeeds(&out);
+    let branch = git(
+        root,
+        &[
+            "branch",
+            "--list",
+            "--format=%(refname:short)",
+            "task/TSK-001*",
+        ],
+    );
+    assert!(!branch.is_empty(), "{}", text(&out));
+    let tagged = git(
+        root,
+        &["cat-file", "-p", &format!("refs/codeflow/claims/{branch}")],
+    );
+    assert!(tagged.contains("\"task\":\"TSK-001\""), "{tagged}");
+    // The user's configuration is never written to supply an identity.
+    let identity = std::process::Command::new("git")
+        .args(["config", "--local", "--get-regexp", "^user\\."])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(identity.stdout.is_empty(), "{}", text(&identity));
+    assert!(std::fs::read_dir(home.path()).unwrap().next().is_none());
+}
