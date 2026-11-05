@@ -567,16 +567,16 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ),
     // a test target's captured output, shown
     (
-        "codeflow-core/src/testing/runner/mod.rs",
-        "render_capture",
+        "codeflow-core/src/testing/runner/output.rs",
+        "Output::rendered",
         "from_utf8_lossy",
         1,
         "display",
     ),
     // a test target's output scanned for progress words
     (
-        "codeflow-core/src/testing/runner/mod.rs",
-        "spawn_reader_with_progress",
+        "codeflow-core/src/testing/runner/output.rs",
+        "Output::ingest",
         "from_utf8_lossy",
         1,
         "grammar:test-progress",
@@ -4518,14 +4518,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // Splits captured output only to render progress notifications; it neither changes the subprocess output buffer nor gate results.
-    (
-        "crates/codeflow-core/src/testing/runner/mod.rs",
-        "spawn_reader_with_progress",
-        "lines",
-        1,
-        "display",
-    ),
     // Strips quote characters only from the displayed serialized runner enum label; target configuration and execution retain the typed Runner value.
     (
         "crates/codeflow-core/src/testing/setup/wizard.rs",
@@ -4962,7 +4954,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/workgraph/acceptance.rs",
         "waiver_problem",
         "trim",
-        12,
+        11,
         "display",
     ),
     // Normalizes human-authored standalone explanation and rejects an empty narrative; task identity and integration target are separate exact fields.
@@ -4981,19 +4973,19 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
-    // Invalid UTF-8 returns the entry problem; range_problem treats that returned problem as a planning-only refusal.
-    (
-        "crates/codeflow-core/src/workgraph/amendment.rs",
-        "entry_problem",
-        "obtain-absent:from_utf8",
-        1,
-        "unproven",
-    ),
     // A discovery error becomes Err inside the status read, and epic_problem then returns Some(cannot read the epic records), a refusal.
     (
         "crates/codeflow-core/src/workgraph/amendment.rs",
         "epic_problem",
         "obtain-absent:Repository::discover",
+        1,
+        "unproven",
+    ),
+    // Invalid UTF-8 returns the irregular entry; entry_problem and the waiver's waiver_amendment_change treat it as a refusal.
+    (
+        "crates/codeflow-core/src/workgraph/amendment.rs",
+        "irregular_entry",
+        "obtain-absent:from_utf8",
         1,
         "unproven",
     ),
