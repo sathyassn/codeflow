@@ -454,7 +454,7 @@ jobs:
             page=$((page + 1))
           done
           if [ "$found" -ne 0 ]; then
-            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails; remove the workflow, job or status that produced it, then re-run this check"
+            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails; remove the workflow, job or status that produced it, then push a new commit, since a re-run on this head reads the same check runs and fails again"
             exit 1
           fi
           echo "no other producer of a trusted or authority name is on ${HEAD_SHA} now; Mode B does not see one that runs later"
@@ -754,7 +754,7 @@ jobs:
             page=$((page + 1))
           done
           if [ "$found" -ne 0 ]; then
-            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails; remove the workflow, job or status that produced it, then re-run this check"
+            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails; remove the workflow, job or status that produced it, then push a new commit, since a re-run on this head reads the same check runs and fails again"
             exit 1
           fi
           echo "no other producer of a trusted or authority name is on ${HEAD_SHA} now; Mode B does not see one that runs later"
@@ -908,7 +908,7 @@ jobs:
             page=$((page + 1))
           done
           if [ "$found" -ne 0 ]; then
-            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails; remove the workflow, job or status that produced it, then re-run this check"
+            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails; remove the workflow, job or status that produced it, then push a new commit, since a re-run on this head reads the same check runs and fails again"
             exit 1
           fi
           echo "no other producer of a trusted or authority name is on ${HEAD_SHA} now; Mode B does not see one that runs later"

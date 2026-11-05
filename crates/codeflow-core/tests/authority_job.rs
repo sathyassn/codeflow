@@ -714,6 +714,9 @@ exit 22
             assert_eq!(output.status.code(), Some(1), "{case}: {out}");
             assert!(out.contains(says), "{case}: {out}");
             assert!(out.contains("so this check fails;"), "{case}: {out}");
+            // A check run cannot be removed from a commit, so the way out
+            // is a new head commit, never a re-run (review N4).
+            assert!(out.contains("then push a new commit"), "{case}: {out}");
         }
     }
 
