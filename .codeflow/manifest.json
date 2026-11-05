@@ -155,7 +155,7 @@
     ".agents/skills/cf-docs-portal/resources/design-system/chrome.js": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/chrome.js",
       "ownership": "managed",
-      "sha256": "d326be847775e8043eee8ea3c74e4729e876f5af2f59e0f2057029185d3a8d92",
+      "sha256": "df5f5aa072a085191324b59db5afcdfdd5a72eae735cc92f3ea3ed0b17c00192",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/count-charts.js": {
@@ -983,7 +983,7 @@
     ".agents/skills/cf-present/resources/design-system/chrome.js": {
       "src": "agents/skills/cf-present/resources/design-system/chrome.js",
       "ownership": "managed",
-      "sha256": "d326be847775e8043eee8ea3c74e4729e876f5af2f59e0f2057029185d3a8d92",
+      "sha256": "df5f5aa072a085191324b59db5afcdfdd5a72eae735cc92f3ea3ed0b17c00192",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/count-charts.js": {
@@ -1517,7 +1517,7 @@
     ".claude/skills/cf-docs-portal/resources/design-system/chrome.js": {
       "src": "agents/skills/cf-docs-portal/resources/design-system/chrome.js",
       "ownership": "managed",
-      "sha256": "d326be847775e8043eee8ea3c74e4729e876f5af2f59e0f2057029185d3a8d92",
+      "sha256": "df5f5aa072a085191324b59db5afcdfdd5a72eae735cc92f3ea3ed0b17c00192",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/count-charts.js": {
@@ -2345,7 +2345,7 @@
     ".claude/skills/cf-present/resources/design-system/chrome.js": {
       "src": "agents/skills/cf-present/resources/design-system/chrome.js",
       "ownership": "managed",
-      "sha256": "d326be847775e8043eee8ea3c74e4729e876f5af2f59e0f2057029185d3a8d92",
+      "sha256": "df5f5aa072a085191324b59db5afcdfdd5a72eae735cc92f3ea3ed0b17c00192",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/count-charts.js": {

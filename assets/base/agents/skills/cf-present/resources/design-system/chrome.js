@@ -1270,7 +1270,7 @@
       return `<div class="cf-earlier-head"><span>Revision ${esc(rv.revision)}</span><span class="cf-status-chip"><span class="cf-shape cf-shape--${v[0]} cf-tone-${v[1]}" aria-hidden="true"></span>${v[2]}</span><span>${esc(rv.date)}</span></div>` +
         rv.notes.map(n => {
           const orphan = n.state === 'orphaned';
-          return `<div class="cf-earlier-note"><span class="cf-earlier-state"><span class="cf-shape cf-shape--${orphan ? 'ring' : 'dot'} cf-tone-${orphan ? 'warning' : 'positive'}" aria-hidden="true"></span>${orphan ? 'Unresolved: ' + esc(n.reason) : 'Reanchored'}</span><p class="cf-note-target">${n.kind} · ${esc(n.target)}</p><p class="cf-note-body">${esc(n.body)}</p></div>`;
+          return `<div class="cf-earlier-note"><span class="cf-earlier-state"><span class="cf-shape cf-shape--${orphan ? 'ring' : 'dot'} cf-tone-${orphan ? 'warning' : 'positive'}" aria-hidden="true"></span>${orphan ? 'Unresolved: ' + esc(n.reason) : 'Reanchored'}</span><p class="cf-note-target">${esc(n.kind)} · ${esc(n.target)}</p><p class="cf-note-body">${esc(n.body)}</p></div>`;
         }).join('');
     }).join('') : '<p class="cf-note-target">No earlier feedback.</p>';
 
