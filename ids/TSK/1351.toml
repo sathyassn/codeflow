@@ -1,0 +1,11 @@
+id = "TSK-1351"
+uid = "33d51f46-a93d-40ae-bee0-748b83138196"
+kind = "TSK"
+title = "A landing candidate branch is pushable and judged against its line"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T21:18:40Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
