@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 82] = [
+pub const SCHEMA: [KeySpec; 83] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -444,6 +444,19 @@ pub const SCHEMA: [KeySpec; 82] = [
                 must be configured when work claim lists their branches. The \
                 shipped policy file does not list it, so an older binary never \
                 meets the key.",
+    },
+    KeySpec {
+        path: "git.branch_name_omit_words",
+        kind: KeyKind::StringList,
+        valid: "an array of words of lower-case letters and digits",
+        purpose: "Words that work claim and epic new --integration leave out of a \
+                  generated branch name.",
+        notes: "A loose ref is a file named after its branch, and a sandbox can refuse \
+                to read a file by its name; git then reports that ref as broken. An \
+                entry matches anywhere inside a title word. The default holds the \
+                words the Claude Code sandbox was probed to refuse; set the list your \
+                harness needs, or an empty list to keep every word. The shipped \
+                policy file does not list it, so an older binary never meets the key.",
     },
     KeySpec {
         path: "git.required_checks",
@@ -1332,6 +1345,28 @@ fn release_pattern_errors(obj: &serde_json::Map<String, Value>, errors: &mut Vec
     }
 }
 
+/// Each `git.branch_name_omit_words` entry must be one lower-case word, since
+/// a title is matched one lower-case word at a time.
+fn validate_branch_name_omit_words(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    for entry in value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        let is_word = !entry.is_empty()
+            && entry
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+        if !is_word {
+            errors.push(PolicyError {
+                key: path.to_string(),
+                message: format!("invalid word '{entry}' in {path}; use lower-case letters and digits only, because a title is matched one lower-case word at a time"),
+            });
+        }
+    }
+}
+
 /// The value checks for the root-checkout keys that their kind alone does
 /// not catch: `git.root_branch` must be a branch name, and each
 /// `git.worktree_locations` entry must be a folder `doctor` can expand.
@@ -1380,6 +1415,7 @@ fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<Policy
                 }
             }
         }
+        "git.branch_name_omit_words" => validate_branch_name_omit_words(path, value, errors),
         "git.required_checks" => {
             let entries = value.as_array().map_or(&[][..], Vec::as_slice);
             if value.is_array() && entries.is_empty() {
@@ -1988,6 +2024,40 @@ mod tests {
                     .to_string();
                 assert!(loaded.contains(&format!("git.{key}")), "{text}: {loaded}");
             }
+        }
+    }
+
+    #[test]
+    fn branch_name_omit_words_accepts_words_and_rejects_what_a_word_cannot_match() {
+        assert_eq!(
+            default_policy_value()["git"]["branch_name_omit_words"],
+            serde_json::json!(["secret", "credentials"])
+        );
+        for list in ["[]", r#"["vault","key2"]"#] {
+            let text = format!(r#"{{"git":{{"branch_name_omit_words":{list}}}}}"#);
+            validate_policy_str(&text).unwrap();
+            let policy: Policy = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                serde_json::to_value(policy).unwrap()["git"]["branch_name_omit_words"],
+                serde_json::from_str::<Value>(list).unwrap()
+            );
+        }
+        for list in [
+            r#""secret""#,
+            "[1]",
+            r#"[""]"#,
+            r#"["Secret"]"#,
+            r#"["api-key"]"#,
+            r#"["a word"]"#,
+        ] {
+            let text = format!(r#"{{"git":{{"branch_name_omit_words":{list}}}}}"#);
+            let errors = validate_policy_str(&text).unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .all(|error| error.key == "git.branch_name_omit_words"),
+                "{errors:?}"
+            );
         }
     }
 

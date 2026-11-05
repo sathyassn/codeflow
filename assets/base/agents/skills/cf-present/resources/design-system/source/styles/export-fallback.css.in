@@ -1,0 +1,2 @@
+/* System exports use the resolved palettes before and after JavaScript. */
+{{export-tokens}}

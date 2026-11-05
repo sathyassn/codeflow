@@ -1,0 +1,39 @@
+✔ CIEDE2000 reproduces Sharma reference vectors, including hue wrap (0.722833ms)
+✔ contrast and D65 lightness endpoints reproduce reference values (0.284959ms)
+✔ simulation has identity endpoints and collapses identical pairs (0.186625ms)
+✔ planted hex literal fails lint (4.942584ms)
+✔ planted functional literal fails lint (0.089416ms)
+✔ planted named literal fails lint (0.214042ms)
+✔ planted named extended literal fails lint (0.07475ms)
+✔ planted absolute size literal fails lint (0.071042ms)
+✔ planted exponent size literal fails lint (0.062125ms)
+✔ planted size literal fails lint (0.052417ms)
+✔ planted radius literal fails lint (1.053958ms)
+✔ planted fallback literal fails lint (0.084042ms)
+✔ planted named fallback literal fails lint (0.098583ms)
+✔ clean token control permits intrinsic values and CSS variables (0.486292ms)
+✔ every authored style template is free of colour, size and radius literals (21.104417ms)
+✔ pseudo-highlight selectors are not named colour declarations (0.12025ms)
+✔ one of 300 is visible at wide and phone widths without changing labels (0.679875ms)
+✔ zero counts stay absent and a single positive count fills its chart (0.679167ms)
+✔ invalid or impossible geometry fails explicitly (0.2005ms)
+✔ planted cast is rejected (2.138917ms)
+✔ planted white is rejected (3.98625ms)
+✔ planted black is rejected (0.513625ms)
+✔ planted Neutral is rejected (3.455541ms)
+✔ planted one accent is rejected (1.688375ms)
+✔ planted contrast is rejected (1.04725ms)
+✔ planted status hue is rejected (0.506916ms)
+✔ clean Graphite theme control passes every theme check (0.606083ms)
+✔ every shipped theme and accent passes the colour floors (0.483625ms)
+✔ near-identical dark stage inks fail normal and all simulated floors (0.328625ms)
+✔ missed stage surface floor fails, with a clean palette control (0.12375ms)
+✔ all curated companions meet unchanged ordinary and simulated floors (9.522584ms)
+ℹ tests 31
+ℹ suites 0
+ℹ pass 31
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 164.864667
