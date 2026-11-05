@@ -616,6 +616,75 @@ fn verify_runtime_boundaries(fixture: &TestProject, running: &RunningPresentatio
     assert!(history.contains("\"event\": \"addressed\""));
 }
 
+/// Separate exports can cross a second boundary, especially under coverage.
+/// Validate the generated capture time before removing only that element
+/// from byte comparisons; authored times and all other HTML stay significant.
+fn export_without_capture_time(html: &str) -> String {
+    let marker = "<aside aria-label=\"Export status\">Review capture of the session at ";
+    assert_eq!(html.matches(marker).count(), 1, "one export capture status");
+    let start = html.find(marker).unwrap() + marker.len();
+    let end = html[start..]
+        .find("</time>")
+        .expect("a closed export capture time")
+        + "</time>".len();
+    let time = regex::Regex::new(
+        r#"^<time datetime="([0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z)" data-cf-unix="([0-9]+)">([^<]+)</time>$"#,
+    )
+    .unwrap();
+    let capture = time
+        .captures(&html[start..start + end])
+        .expect("a well-formed UTC export capture time and Unix seconds");
+    assert_eq!(
+        &capture[1], &capture[3],
+        "capture datetime matches its text"
+    );
+    capture[2]
+        .parse::<u64>()
+        .expect("capture Unix seconds fit u64");
+    let mut normalised = html.to_string();
+    normalised.replace_range(start..start + end, "<time>CAPTURE_TIME</time>");
+    normalised
+}
+
+#[test]
+fn export_comparison_ignores_only_the_capture_time() {
+    let first = "<aside aria-label=\"Export status\">Review capture of the session at <time datetime=\"2026-11-03T07:58:43Z\" data-cf-unix=\"1793692723\">2026-11-03T07:58:43Z</time>.</aside><p>Keep <time>12:34 UTC</time></p>";
+    let second = first
+        .replace("07:58:43", "07:58:44")
+        .replace("1793692723", "1793692724");
+    assert_ne!(first, second);
+    assert_eq!(
+        export_without_capture_time(first),
+        export_without_capture_time(&second)
+    );
+    assert_ne!(
+        export_without_capture_time(first),
+        export_without_capture_time(&second.replace("12:34 UTC", "12:35 UTC"))
+    );
+}
+
+#[test]
+#[should_panic(expected = "one export capture status")]
+fn export_comparison_refuses_a_missing_capture_time() {
+    export_without_capture_time("<p>No capture status</p>");
+}
+
+#[test]
+#[should_panic(expected = "a well-formed UTC export capture time and Unix seconds")]
+fn export_comparison_refuses_a_malformed_capture_time() {
+    export_without_capture_time(
+        "<aside aria-label=\"Export status\">Review capture of the session at <time datetime=\"2026-11-03T25:58:43Z\" data-cf-unix=\"1793692723\">2026-11-03T25:58:43Z</time>.</aside>",
+    );
+}
+
+#[test]
+#[should_panic(expected = "capture datetime matches its text")]
+fn export_comparison_refuses_mismatched_capture_text() {
+    export_without_capture_time(
+        "<aside aria-label=\"Export status\">Review capture of the session at <time datetime=\"2026-11-03T07:58:43Z\" data-cf-unix=\"1793692723\">2026-11-03T07:58:44Z</time>.</aside>",
+    );
+}
+
 fn export_theme_aliases_match_canonical_bytes(
     fixture: &TestProject,
     running: &RunningPresentation,
@@ -652,9 +721,12 @@ fn export_theme_aliases_match_canonical_bytes(
                 .contains("data-cf-typeface"),
             "a skin must not select a typeface"
         );
-        canonical.insert(skin, html);
+        canonical.insert(skin, export_without_capture_time(&html));
     }
-    assert_eq!(canonical["graphite"], graphite_export);
+    assert_eq!(
+        canonical["graphite"],
+        export_without_capture_time(graphite_export)
+    );
     for (alias, skin) in [
         ("instrument", "graphite"),
         ("technical", "graphite"),
@@ -678,7 +750,7 @@ fn export_theme_aliases_match_canonical_bytes(
             ],
         ));
         assert_eq!(
-            fs::read_to_string(path).unwrap(),
+            export_without_capture_time(&fs::read_to_string(path).unwrap()),
             canonical[skin],
             "{alias} maps to {skin}"
         );
@@ -698,7 +770,7 @@ fn export_theme_aliases_match_canonical_bytes(
         ],
     ));
     assert_eq!(
-        fs::read_to_string(path).unwrap(),
+        export_without_capture_time(&fs::read_to_string(path).unwrap()),
         canonical["slate"],
         "the retained default resolves to Slate"
     );

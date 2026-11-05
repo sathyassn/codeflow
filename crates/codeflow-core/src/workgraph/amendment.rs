@@ -613,6 +613,30 @@ pub(crate) fn special_entry_kind(mode: i32) -> Option<&'static str> {
     }
 }
 
+/// The first entry `diff` changes that a planning amendment cannot carry,
+/// read from the entry itself on both sides, so no name decoding stands
+/// between an entry and its check: with its kind for a symbolic link or
+/// submodule on either side (a transition to or from one included), or
+/// with no kind for a name that is not UTF-8 or holds a backslash. The
+/// planning pull request and every waiver's amendment share this rule.
+pub(crate) fn irregular_entry(diff: &git2::Diff<'_>) -> Option<(String, Option<&'static str>)> {
+    for delta in diff.deltas() {
+        for file in [delta.old_file(), delta.new_file()] {
+            let Some(name) = file.path_bytes() else {
+                continue;
+            };
+            let shown = crate::git::GitName::from_bytes(name).display().to_string();
+            if std::str::from_utf8(name).is_err() || name.contains(&b'\\') {
+                return Some((shown, None));
+            }
+            if let Some(kind) = special_entry_kind(i32::from(file.mode())) {
+                return Some((shown, Some(kind)));
+            }
+        }
+    }
+    None
+}
+
 /// Why an entry the range changes cannot ride in a planning amendment,
 /// read from the diff of the trees, from the merge-base of `base` and
 /// `head` to `head` as `codeflow ci` reads the range, so no name decoding
@@ -649,23 +673,18 @@ fn entry_problem(repo: &Repository, base: Oid, head: Oid) -> Option<(String, Str
             ))
         }
     };
-    for delta in diff.deltas() {
-        for file in [delta.old_file(), delta.new_file()] {
-            let Some(name) = file.path_bytes() else {
-                continue;
-            };
-            let shown = crate::git::GitName::from_bytes(name).display().to_string();
-            if std::str::from_utf8(name).is_err() || name.contains(&b'\\') {
-                let message = odd_name_problem(&shown);
-                return Some((shown, message));
-            }
-            if let Some(kind) = special_entry_kind(i32::from(file.mode())) {
-                let message = format!(
-                    "a planning-only pull request changes the {kind} {shown}; a planning amendment carries regular files only"
-                );
-                return Some((shown, message));
-            }
+    match irregular_entry(&diff) {
+        Some((shown, None)) => {
+            let message = odd_name_problem(&shown);
+            return Some((shown, message));
         }
+        Some((shown, Some(kind))) => {
+            let message = format!(
+                "a planning-only pull request changes the {kind} {shown}; a planning amendment carries regular files only"
+            );
+            return Some((shown, message));
+        }
+        None => {}
     }
     None
 }

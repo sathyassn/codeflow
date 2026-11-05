@@ -102,6 +102,59 @@ continue executing their targets until their dependencies are declared.
 | `evidence.membership` | An executable-and-argument array that reports test membership, or `[]` when no membership applies |
 | `evidence.covers_modes` | Other modes, `quick` or `essential`, covered by this target's full command. The command must be identical; matching membership and other dependencies are still required |
 | `requires` and `outputs` | Producer relationships and their output files. A missing or changed producer output executes the consumer and its prerequisites |
+| `timeout_seconds` | Base deadline, default 600 seconds. Heavy targets have a ceiling four times this value; light targets retain a fixed deadline |
+| `cleanup_grace_seconds` | Time allowed after a target stops for termination, reaping and pipe draining, default 5 seconds, from 1 through 3600. On Unix a supervised process group still running at half this time is killed; on Windows the target's job is terminated when it stops. Cleanup that does not finish is a non-pass |
+| `stall_timeout_seconds` | Heavy-target inactivity window, default 300 seconds. Early stalls require valid scoped CPU accounting; otherwise the run explicitly uses its ceiling |
+
+`timeout_seconds` and `stall_timeout_seconds` accept integers from 1 through 4611686018427386 seconds.
+The loader and schema reject zero, fractional values and values beyond that
+bound. A stall window greater than the ceiling is valid; the ceiling wins.
+New stdout/stderr or increasing scoped CPU counts as activity. Process
+existence alone does not. Repeating logs and computing loops cannot extend
+the absolute ceiling. Every five minutes an unfinished heavy target prints
+tests done (or unknown) and CPU state; these gate-generated lines do not
+refresh its activity deadline.
+
+Windows uses its target job's cumulative CPU accounting. Linux creates a
+fresh per-target cgroup only within existing writable cgroup v2 delegation,
+placing the launch child there before workload execution. Its CPU counter
+covers short-lived and auto-reaped work. Early stalls use that accounting
+without an additional containment launcher. If the group becomes unpopulated,
+a population notification occurs while the launch child remains live, or that
+child leaves its group, the run reports the anomaly and uses ceiling-only
+monitoring. Unreadable accounting does the same. Tests are assumed not to
+migrate cgroups; an undetected migration can cause a false stall, which fails
+the gate. No delegation is provisioned and no host configuration changes.
+Without delegation the status says `early stall unavailable: no delegated
+cgroup`. macOS is ceiling-only, an accepted 4.0.0 limitation reported as
+`early stall unavailable: macOS complete descendant accounting unavailable`.
+Without a cgroup, Unix confirmation uses the direct child's exit, watcher
+completion and pipe EOF. An uninterruptible group member with closed pipes
+can outlive those observations; this is a pre-existing known limit, not a
+claim of complete kernel accounting.
+
+A stall reports `stalled: no progress for N s (workers W of M)`. The ceiling
+reports `timed out at the ceiling after S s`. Both fail the gate with target
+exit 124; dependents retain the prerequisite's stall or timeout cause.
+An exit first observed after the ceiling cannot pass. Termination and pipe
+collection have a cleanup grace, `cleanup_grace_seconds`, default five
+seconds, including a descendant that keeps a pipe open. On Unix, at half the
+grace a supervised group that has not ended is killed by the gate itself, so a
+slow watcher on a loaded host cannot turn a passing target into a failure. On
+Windows the target's job is terminated when the target stops. Incomplete cleanup remains a failure. Target summaries
+and saved `result.json` reports retain monitoring mode, deadline cause and
+`termination_unconfirmed`. Once membership or population evidence becomes
+uncertain, a direct-child exit, closed pipes and an empty original group do
+not prove escaped descendants ended. The run retains that uncertainty and
+fails with unconfirmed termination. CPU-counter unavailability alone is a
+separate ceiling fallback.
+
+Group-record bookkeeping shares the remaining cleanup deadline across its
+mutex and all record locks. Deferred filesystem work is not joined after
+that deadline; an unconfirmed write remains a cleanup failure. Missed writes
+leave stale records conservatively; a late completion cannot turn the result
+into a pass. Related task TSK-1279 retains allocation and lease
+for an unconfirmed target until termination is confirmed or the gate exits.
 
 Tool and membership probes run in the target's working directory with its
 configured environment. Their output is hashed for equality. Commands that

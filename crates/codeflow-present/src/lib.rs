@@ -49,6 +49,7 @@ pub mod revision;
 mod safe_html;
 mod scoped_css;
 pub mod service;
+mod stage_measurements;
 pub mod state;
 
 pub use document::PresentationDocument;
