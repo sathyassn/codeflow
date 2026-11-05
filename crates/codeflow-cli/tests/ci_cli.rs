@@ -365,8 +365,12 @@ fn ci_blocks_indeterminate_state_without_a_task_directory() {
 
 #[test]
 fn ci_recognizes_nested_only_historical_task() {
+    // The record is planned on `main` in the nested historical layout, and
+    // the branch carries it at its head, where `codeflow ci` reads it
+    // (TSK-1257): the task is recognized, so no missing-record refusal.
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
+    git(dir.path(), &["checkout", "main"]);
     let nested = dir.path().join("project-management/epics/EPC-001/tasks");
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::write(
@@ -374,9 +378,13 @@ fn ci_recognizes_nested_only_historical_task() {
         "---\nid: TSK-001-001\nepic_id: null\nstandalone_reason: historical task\nintegration_target: main\ntitle: historical\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nNested historical task.\n\n## Acceptance Criteria\n- AC-1 anchored first\n",
     )
     .unwrap();
-    // The record is read from the judged head, never the checkout (TSK-1257).
     git(dir.path(), &["add", "."]);
-    git(dir.path(), &["commit", "-m", "docs: add the nested record"]);
+    git(
+        dir.path(),
+        &["commit", "-m", "docs: plan the nested record"],
+    );
+    git(dir.path(), &["checkout", "feat/x"]);
+    git(dir.path(), &["rebase", "-q", "main"]);
 
     let output = run_in(
         dir.path(),
@@ -387,12 +395,12 @@ fn ci_recognizes_nested_only_historical_task() {
             "--head",
             "HEAD",
             "--branch",
-            "task/TSK-001-001-unanchored",
+            "task/TSK-001-001-historical",
         ],
     );
-    assert_eq!(output.status.code(), Some(1));
     let err = String::from_utf8_lossy(&output.stderr);
-    assert!(err.contains("work.stable_planning_anchor"), "{err}");
+    assert!(!err.contains("work.task_record"), "{err}");
+    assert_eq!(output.status.code(), Some(0), "{err}");
 }
 
 /// A body satisfying every default-required section with real content.
