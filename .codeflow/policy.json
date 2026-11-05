@@ -83,7 +83,7 @@
     "security_review": "block",
     "dep_audit": "block",
     "pr_sections": "block",
-    "pr_release_impact": "warn",
+    "pr_release_impact": "block",
     "pr_breaking_level": "major",
     "pr_required_sections": [
       "Summary",
