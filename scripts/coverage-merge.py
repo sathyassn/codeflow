@@ -27,17 +27,21 @@ disagree, and the run fails instead of judging the floor on a number the
 local gate would not produce. It also fails when a shard is missing or empty,
 or when the shards were built from different code.
 
-Usage: coverage-merge.py --floor-from <test-config.json> --shards <n> <directory>
-       coverage-merge.py --floor <percent> --shards <n> <directory>
+Usage: coverage-merge.py --floor-from <test-config.json> --shards <n> [--total-file <json>] <directory>
+       coverage-merge.py --floor <percent> --shards <n> [--total-file <json>] <directory>
 
 The directory holds coverage-data-<n>/coverage.json, each shard's
-`cargo llvm-cov report --json`, for every shard from 1 to n.
+`cargo llvm-cov report --json`, for every shard from 1 to n. With
+--total-file, the script also writes the lines, the covered lines, the floor
+and the commit in GITHUB_SHA to that file, under the floor too, for the
+daily verdict to report (scripts/windows-daily.py).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -308,6 +312,7 @@ def main() -> int:
     which.add_argument("--floor-from", type=Path, help="test config whose rust-coverage command names the floor")
     which.add_argument("--floor", type=float, help="the floor in percent")
     parser.add_argument("--shards", type=int, required=True, help="how many shards ran")
+    parser.add_argument("--total-file", type=Path, help="write the total and the commit measured here")
     parser.add_argument("directory", type=Path, help="holds coverage-data-<n>/coverage.json for each shard")
     args = parser.parse_args()
     try:
@@ -319,6 +324,9 @@ def main() -> int:
     for note in notes:
         print(f"coverage-merge: {note}")
     percent = hit * 100.0 / lines
+    if args.total_file:
+        args.total_file.write_text(json.dumps({"lines": lines, "covered": hit, "floor": floor,
+                                               "sha": os.environ.get("GITHUB_SHA")}) + "\n", encoding="utf-8")
     print(f"coverage-merge: the {args.shards} shards together cover {hit} of {lines} lines, "
           f"{percent:.2f} percent; the floor is {floor:g} percent")
     if percent < floor:
