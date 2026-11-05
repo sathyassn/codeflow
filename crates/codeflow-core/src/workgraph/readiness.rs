@@ -1983,6 +1983,59 @@ fn standalone_claim_base(
     Ok(Some((head.id(), task.clone(), current)))
 }
 
+/// Refuse a claim on `task_id` that a visible branch already holds, or whose
+/// work has already landed on `reference`, and return the informational
+/// branches a claim reports. `renamed` is the standalone branch the claim
+/// renames, which never counts against itself.
+fn refuse_claimed_or_landed(
+    repo: &Repository,
+    repo_root: &Path,
+    task_id: &str,
+    reference: &str,
+    remotes: &BTreeSet<String>,
+    renamed: Option<&GitName>,
+    target_tip: git2::Oid,
+) -> Result<Vec<String>, String> {
+    let ids = BTreeSet::from([task_id.to_string()]);
+    let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
+    // A leftover local branch, such as one from an earlier use of the id,
+    // is not a claim (TSK-1308); the claim names it.
+    let local = super::local_branches::LocalBranches::read(repo);
+    let mut visible = visible_work_branches(repo, &prefixes, &ids, remotes, Some(&local))?;
+    let information = visible.information(task_id, reference);
+    let mut carried = visible.claims.remove(task_id).unwrap_or_default();
+    for remote in remotes {
+        carried.extend(remote_claims(repo, repo_root, &prefixes, task_id, remote)?);
+    }
+    if let Some(current) = renamed {
+        carried.retain(|(name, _)| name != current);
+    }
+    let (open, done) = split_landed(repo, repo_root, &carried, target_tip);
+    if !open.is_empty() {
+        let shown: Vec<String> = open.iter().map(|name| name.display().to_string()).collect();
+        return Err(format!(
+            "{task_id} is already claimed by a visible branch: {}",
+            shown.join(", ")
+        ));
+    }
+    // Finished work is not claimed again (TSK-1038): the landed branch and
+    // the one command that settles the record are named.
+    let landed = landed_work_branches(repo, &LandLine::new(), &carried, &done, target_tip, task_id);
+    if !landed.is_empty() {
+        let names: Vec<String> = landed
+            .iter()
+            .map(|name| name.display().to_string())
+            .collect();
+        return Err(format!(
+            "{task_id} has already landed on {} in {} while its record is still open; settle the record with `{}`",
+            shown(reference),
+            names.join(", "),
+            landed_status_command(task_id)
+        ));
+    }
+    Ok(information)
+}
+
 /// Claim from reviewed predecessors, or rename the branch holding a new standalone record.
 ///
 /// # Errors
@@ -2024,49 +2077,15 @@ pub fn claim_on(
     super::claim_base::project_dependencies(&repo, &mut records, task_id, target_tip, tip, pins)?;
     super::work_start::validate_anchored_task_on(&repo, &records, task_id, &reference, pins)
         .map_err(|error| format!("not ready on {reference_shown}: {error}"))?;
-    let ids = BTreeSet::from([task_id.to_string()]);
-    let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
-    // A leftover local branch, such as one from an earlier use of the id,
-    // is not a claim (TSK-1308); the claim names it.
-    let local = super::local_branches::LocalBranches::read(&repo);
-    let mut visible = visible_work_branches(&repo, &prefixes, &ids, &remotes, Some(&local))?;
-    let information = visible.information(task_id, &reference);
-    let mut carried = visible.claims.remove(task_id).unwrap_or_default();
-    for remote in &remotes {
-        carried.extend(remote_claims(&repo, repo_root, &prefixes, task_id, remote)?);
-    }
-    if let Some(current) = &renamed {
-        carried.retain(|(name, _)| name != current);
-    }
-    let (open, done) = split_landed(&repo, repo_root, &carried, target_tip);
-    if !open.is_empty() {
-        let shown: Vec<String> = open.iter().map(|name| name.display().to_string()).collect();
-        return Err(format!(
-            "{task_id} is already claimed by a visible branch: {}",
-            shown.join(", ")
-        ));
-    }
-    // Finished work is not claimed again (TSK-1038): the landed branch and
-    // the one command that settles the record are named.
-    let landed = landed_work_branches(
+    let information = refuse_claimed_or_landed(
         &repo,
-        &LandLine::new(),
-        &carried,
-        &done,
-        target_tip,
+        repo_root,
         task_id,
-    );
-    if !landed.is_empty() {
-        let shown: Vec<String> = landed
-            .iter()
-            .map(|name| name.display().to_string())
-            .collect();
-        return Err(format!(
-            "{task_id} has already landed on {reference_shown} in {} while its record is still open; settle the record with `{}`",
-            shown.join(", "),
-            landed_status_command(task_id)
-        ));
-    }
+        &reference,
+        &remotes,
+        renamed.as_ref(),
+        target_tip,
+    )?;
     let title = records
         .get(task_id)
         .map_or("", |record| record.title.as_str());
