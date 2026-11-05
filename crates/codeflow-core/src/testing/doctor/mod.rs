@@ -452,6 +452,8 @@ mod tests {
             ci_skip: None,
             ci_skip_reason: None,
             timeout_seconds: None,
+            stall_timeout_seconds: None,
+            cleanup_grace_seconds: None,
             structural: None,
             tags: Vec::new(),
             test_files: Vec::new(),
