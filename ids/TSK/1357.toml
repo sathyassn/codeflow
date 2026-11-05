@@ -1,0 +1,11 @@
+id = "TSK-1357"
+uid = "a677734e-7dec-4651-8de1-3bee8ec3139b"
+kind = "TSK"
+title = "The read benchmark's memory budget scales with its fixture's input size"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T22:08:05Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
