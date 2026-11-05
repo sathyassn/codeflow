@@ -4714,3 +4714,442 @@ fn the_removed_default_branch_flag_is_rejected() {
     assert_eq!(result.0, 2, "{}", result.1);
     assert!(result.1.contains("--default-branch"), "{}", result.1);
 }
+
+// ---------------------------------------------------------------------------
+// TSK-1252: the destination lookup with the run's read-only token
+// ---------------------------------------------------------------------------
+
+/// The fake run token the fixtures use; never a real credential.
+const FAKE_TOKEN: &str = "ghs_fixtureRunToken0123456789abcdef";
+
+/// The `Authorization` value git sends for `token`, as GitHub expects it.
+fn basic_for(token: &str) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = format!("x-access-token:{token}").into_bytes();
+    let mut encoded = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0_u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                encoded.push(char::from(TABLE[(n >> (18 - 6 * i)) as usize & 63]));
+            } else {
+                encoded.push('=');
+            }
+        }
+    }
+    format!("basic {encoded}")
+}
+
+/// How a token-protected fixture origin answers.
+#[derive(Clone)]
+enum Origin {
+    /// Serves the repository to a request carrying the token, else `401`.
+    Requires(String),
+    /// Knows the token but grants it no read access: `404`, as GitHub
+    /// answers a token without access to a private repository.
+    NoAccess(String),
+    /// Redirects every request to another base URL.
+    RedirectTo(String),
+}
+
+/// One HTTP request's header block and body, read from `stream`.
+fn read_request(stream: &mut std::net::TcpStream) -> Option<(String, Vec<u8>)> {
+    use std::io::Read as _;
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        match stream.read(&mut byte) {
+            Ok(1) => head.push(byte[0]),
+            _ => return None,
+        }
+    }
+    let head = String::from_utf8_lossy(&head).into_owned();
+    let header = |name: &str| {
+        head.lines().skip(1).find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.trim()
+                .eq_ignore_ascii_case(name)
+                .then(|| value.trim().to_string())
+        })
+    };
+    let mut body = Vec::new();
+    if let Some(length) = header("content-length").and_then(|n| n.parse::<usize>().ok()) {
+        body.resize(length, 0);
+        stream.read_exact(&mut body).ok()?;
+    } else if header("transfer-encoding").is_some_and(|v| v.eq_ignore_ascii_case("chunked")) {
+        loop {
+            let mut line = Vec::new();
+            while !line.ends_with(b"\r\n") {
+                stream.read_exact(&mut byte).ok()?;
+                line.push(byte[0]);
+            }
+            let size =
+                usize::from_str_radix(String::from_utf8_lossy(&line).trim().split(';').next()?, 16)
+                    .ok()?;
+            let mut chunk = vec![0; size + 2];
+            stream.read_exact(&mut chunk).ok()?;
+            if size == 0 {
+                break;
+            }
+            body.extend_from_slice(&chunk[..size]);
+        }
+    }
+    Some((head, body))
+}
+
+/// An HTTP endpoint that records every request's header block and answers
+/// as `mode` says; a served request runs `git http-backend` on `bare`.
+/// Returns its base URL (`http://127.0.0.1:<port>`).
+fn http_origin(bare: &Path, mode: Origin, requests: Requests) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let bare = bare.to_path_buf();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let Some((head, body)) = read_request(&mut stream) else {
+                continue;
+            };
+            requests.lock().unwrap().push(head.clone());
+            let header = |name: &str| {
+                head.lines().skip(1).find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.trim()
+                        .eq_ignore_ascii_case(name)
+                        .then(|| value.trim().to_string())
+                })
+            };
+            let mut first = head.lines().next().unwrap_or_default().split(' ');
+            let method = first.next().unwrap_or_default().to_string();
+            let target = first.next().unwrap_or_default().to_string();
+            let authorized = |token: &str| {
+                header("authorization")
+                    .is_some_and(|value| value.eq_ignore_ascii_case(&basic_for(token)))
+            };
+            let refuse = |stream: &mut std::net::TcpStream, status: &str| {
+                let _ = stream.write_all(
+                    format!("HTTP/1.1 {status}\r\nWWW-Authenticate: Basic realm=\"private\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(),
+                );
+            };
+            match &mode {
+                Origin::RedirectTo(base) => {
+                    let _ = stream.write_all(
+                        format!("HTTP/1.1 302 Found\r\nLocation: {base}{target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(),
+                    );
+                    continue;
+                }
+                Origin::Requires(token) if !authorized(token) => {
+                    refuse(&mut stream, "401 Unauthorized");
+                    continue;
+                }
+                Origin::NoAccess(token) => {
+                    if authorized(token) {
+                        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    } else {
+                        refuse(&mut stream, "401 Unauthorized");
+                    }
+                    continue;
+                }
+                Origin::Requires(_) => {}
+            }
+            let (path, query) = target.split_once('?').unwrap_or((&target, ""));
+            let rest = path.strip_prefix("/owner/private.git").unwrap_or(path);
+            let mut cgi = Command::new("git");
+            cgi.arg("http-backend")
+                .env_clear()
+                .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_HTTP_EXPORT_ALL", "1")
+                .env("REQUEST_METHOD", &method)
+                .env("PATH_TRANSLATED", format!("{}{rest}", bare.display()))
+                .env("QUERY_STRING", query)
+                .env("REMOTE_ADDR", "127.0.0.1")
+                .env("CONTENT_LENGTH", body.len().to_string())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped());
+            for (name, variable) in [
+                ("content-type", "CONTENT_TYPE"),
+                ("content-encoding", "HTTP_CONTENT_ENCODING"),
+                ("git-protocol", "HTTP_GIT_PROTOCOL"),
+            ] {
+                if let Some(value) = header(name) {
+                    cgi.env(variable, value);
+                }
+            }
+            let mut child = cgi.spawn().unwrap();
+            child.stdin.take().unwrap().write_all(&body).unwrap();
+            let out = child.wait_with_output().unwrap().stdout;
+            let split = out
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map_or((out.len(), 0), |at| (at, 4));
+            let cgi_head = String::from_utf8_lossy(&out[..split.0]).into_owned();
+            let mut status = "200 OK".to_string();
+            let mut response = String::new();
+            for line in cgi_head.lines() {
+                if let Some(value) = line.strip_prefix("Status:") {
+                    status = value.trim().to_string();
+                } else if !line.is_empty() {
+                    response.push_str(line);
+                    response.push_str("\r\n");
+                }
+            }
+            let _ = stream.write_all(
+                format!("HTTP/1.1 {status}\r\n{response}Connection: close\r\n\r\n").as_bytes(),
+            );
+            let _ = stream.write_all(&out[split.0 + split.1..]);
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+/// Every request in `requests` that carried an `Authorization` header.
+fn authorized_requests(requests: &Requests) -> usize {
+    header_names_each(requests)
+        .iter()
+        .filter(|names| names.iter().any(|name| name == "authorization"))
+        .count()
+}
+
+fn header_names_each(requests: &Requests) -> Vec<Vec<String>> {
+    requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|head| {
+            head.lines()
+                .skip(1)
+                .filter_map(|line| line.split_once(':'))
+                .map(|(name, _)| name.trim().to_ascii_lowercase())
+                .collect()
+        })
+        .collect()
+}
+
+/// Every file under `dir` whose bytes contain `needle`.
+fn files_holding(dir: &Path, needle: &[u8]) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(next) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&next) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if std::fs::read(&path)
+                .is_ok_and(|bytes| bytes.windows(needle.len()).any(|w| w == needle))
+            {
+                found.push(path);
+            }
+        }
+    }
+    found
+}
+
+impl Fx {
+    /// The fixture as a hardened hosted checkout of a private repository
+    /// sees it: every branch fetched (fetch-depth: 0), no stored
+    /// credential, and `origin` pointed at an endpoint that answers as
+    /// `mode` says. Returns the URL and what the endpoint receives.
+    fn make_token_private(&self, mode: Origin) -> (String, Requests) {
+        self.git(&["fetch", "-q", "origin"]);
+        let requests = Requests::default();
+        let base = http_origin(&self.origin, mode, requests.clone());
+        let url = format!("{base}/owner/private.git");
+        self.git(&["remote", "set-url", "origin", &url]);
+        (url, requests)
+    }
+
+    /// `codeflow ci` as the managed policy step runs it: the runner's
+    /// server URL and repository, the run's token in `token` (none when
+    /// `None`), HOME and the global git config in the fixture folder.
+    fn ci_with_token(&self, server: &str, token: Option<&str>, args: &[&str]) -> (i32, String) {
+        let event = event_file(self, "main");
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+        clean_env(&mut command)
+            .arg("ci")
+            .args(args)
+            .env("HOME", self.root.parent().unwrap())
+            .env("GITHUB_ACTIONS", "true")
+            .env("GITHUB_EVENT_NAME", "pull_request_target")
+            .env("GITHUB_EVENT_PATH", event)
+            .env("GITHUB_SERVER_URL", server)
+            .env("GITHUB_REPOSITORY", "owner/private")
+            .env("CODEFLOW_PR_BODY", HOSTED_BODY)
+            .env_remove("CODEFLOW_CI_TOKEN")
+            .current_dir(&self.root);
+        if let Some(token) = token {
+            command.env("CODEFLOW_CI_TOKEN", token);
+        }
+        output(&command.output().unwrap())
+    }
+
+    /// The task branch's range on line A, as the policy step passes it.
+    fn line_range(&self, head: &str) -> Vec<String> {
+        let base = self.git(&["rev-parse", LINE_A]);
+        [
+            "--base",
+            &base,
+            "--head",
+            head,
+            "--branch",
+            "task/TSK-001-work",
+            "--into",
+            LINE_A,
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+    }
+}
+
+/// The server URL part of a fixture origin URL.
+fn server_of(url: &str) -> String {
+    url.strip_suffix("/owner/private.git").unwrap().to_string()
+}
+
+/// Asserts the token appears in no output, no git config and no file.
+fn token_left_no_trace(fx: &Fx, result: &(i32, String)) {
+    let encoded = basic_for(FAKE_TOKEN);
+    let encoded = encoded.strip_prefix("basic ").unwrap();
+    for needle in [FAKE_TOKEN, encoded] {
+        assert!(!result.1.contains(needle), "the token reached the output");
+        let config = fx.git(&["config", "--list", "--show-origin"]);
+        assert!(!config.contains(needle), "the token reached git config");
+        let holding = files_holding(fx.root.parent().unwrap(), needle.as_bytes());
+        assert!(holding.is_empty(), "the token reached files: {holding:?}");
+    }
+}
+
+/// TSK-1252 AC-1, AC-3, AC-6: a hardened checkout of a private repository
+/// (no stored credential) learns the default branch from the destination
+/// with the run's token, sent only there, and passes; the token is left in
+/// no output, git config or file.
+#[test]
+fn the_run_token_answers_a_private_destination() {
+    let fx = Fx::new(false);
+    let head = fx.task_on_line();
+    let (url, requests) = fx.make_token_private(Origin::Requires(FAKE_TOKEN.into()));
+    let range = fx.line_range(&head);
+    let args: Vec<&str> = range.iter().map(String::as_str).collect();
+    let result = fx.ci_with_token(&server_of(&url), Some(FAKE_TOKEN), &args);
+    println!("{}", result.1);
+    passes(&result, "the run's token on a private destination");
+    let seen = requests.lock().unwrap().len();
+    assert!(seen > 0, "the destination was never asked");
+    assert_eq!(
+        authorized_requests(&requests),
+        seen,
+        "every request to the destination carries the token"
+    );
+    token_left_no_trace(&fx, &result);
+}
+
+/// TSK-1252 AC-2, AC-6: with no token the private destination refuses and
+/// `codeflow ci` fails closed, naming the missing input.
+#[test]
+fn a_missing_run_token_refuses_and_names_the_input() {
+    let fx = Fx::new(false);
+    let head = fx.task_on_line();
+    let (url, requests) = fx.make_token_private(Origin::Requires(FAKE_TOKEN.into()));
+    let range = fx.line_range(&head);
+    let args: Vec<&str> = range.iter().map(String::as_str).collect();
+    let result = fx.ci_with_token(&server_of(&url), None, &args);
+    println!("{}", result.1);
+    refuses_for_the_credential(&result, &requests);
+    assert!(
+        result.1.contains("The missing input is CODEFLOW_CI_TOKEN"),
+        "{}",
+        result.1
+    );
+}
+
+/// TSK-1252 AC-2: a token the destination rejects, and a token without
+/// read access, both fail closed with the credential message.
+#[test]
+fn a_rejected_or_unpermitted_run_token_refuses() {
+    for (mode, what) in [
+        (Origin::Requires("ghs_otherToken".into()), "rejected"),
+        (Origin::NoAccess(FAKE_TOKEN.into()), "without read access"),
+    ] {
+        let fx = Fx::new(false);
+        let head = fx.task_on_line();
+        let (url, requests) = fx.make_token_private(mode);
+        let range = fx.line_range(&head);
+        let args: Vec<&str> = range.iter().map(String::as_str).collect();
+        let result = fx.ci_with_token(&server_of(&url), Some(FAKE_TOKEN), &args);
+        println!("{what}:\n{}", result.1);
+        assert_ne!(result.0, 0, "{what}: {}", result.1);
+        assert!(!requests.lock().unwrap().is_empty(), "{what}: never asked");
+        for needle in [
+            NEEDS_CREDENTIAL,
+            "The destination did not accept the run's token (CODEFLOW_CI_TOKEN)",
+        ] {
+            assert!(
+                result.1.contains(needle),
+                "{what}: missing {needle:?}:\n{}",
+                result.1
+            );
+        }
+        token_left_no_trace(&fx, &result);
+    }
+}
+
+/// TSK-1252 AC-3: a destination that redirects to another host never
+/// passes the token on; git does not follow the redirect and the run
+/// fails closed.
+#[test]
+fn a_redirect_never_carries_the_run_token_to_another_host() {
+    let fx = Fx::new(false);
+    let head = fx.task_on_line();
+    let elsewhere = Requests::default();
+    let other = http_origin(
+        &fx.origin,
+        Origin::Requires(FAKE_TOKEN.into()),
+        elsewhere.clone(),
+    );
+    let other = other.replace("127.0.0.1", "localhost");
+    let (url, requests) = fx.make_token_private(Origin::RedirectTo(other));
+    let range = fx.line_range(&head);
+    let args: Vec<&str> = range.iter().map(String::as_str).collect();
+    let result = fx.ci_with_token(&server_of(&url), Some(FAKE_TOKEN), &args);
+    println!("{}", result.1);
+    assert_ne!(result.0, 0, "{}", result.1);
+    assert!(!requests.lock().unwrap().is_empty(), "never asked");
+    assert_eq!(
+        authorized_requests(&elsewhere),
+        0,
+        "the token reached the redirect target: {:?}",
+        elsewhere.lock().unwrap()
+    );
+    token_left_no_trace(&fx, &result);
+}
+
+/// TSK-1252 AC-3: a destination that is not the run's own repository (a
+/// rewritten `origin`) never receives the token; the run says why and
+/// fails closed.
+#[test]
+fn a_destination_other_than_the_run_repository_gets_no_token() {
+    let fx = Fx::new(false);
+    let head = fx.task_on_line();
+    let (_, requests) = fx.make_token_private(Origin::Requires(FAKE_TOKEN.into()));
+    let range = fx.line_range(&head);
+    let args: Vec<&str> = range.iter().map(String::as_str).collect();
+    let result = fx.ci_with_token("https://github.com", Some(FAKE_TOKEN), &args);
+    println!("{}", result.1);
+    refuses_for_the_credential(&result, &requests);
+    assert!(
+        result
+            .1
+            .contains("CODEFLOW_CI_TOKEN was given but not sent"),
+        "{}",
+        result.1
+    );
+    token_left_no_trace(&fx, &result);
+}
