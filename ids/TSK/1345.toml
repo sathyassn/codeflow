@@ -1,0 +1,11 @@
+id = "TSK-1345"
+uid = "80ca9db1-cb24-4f0d-8d02-ea43b1e47a94"
+kind = "TSK"
+title = "Seats run on the new Herdr app through hc, and CodeFlow drops the old Herdr host"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T18:18:10Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
