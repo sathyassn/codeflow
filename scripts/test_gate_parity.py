@@ -807,10 +807,14 @@ class WindowsTierControls(unittest.TestCase):
         changed = WORKFLOW.replace(arm, '            case "$BASE" in\n              */*)\n')
         self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)))
 
-    def test_a_narrower_full_tier_path_list_is_refused(self):
-        self.assertIn("FULL_TIER_PATHS: '^(crates/|", WORKFLOW)
-        changed = WORKFLOW.replace("FULL_TIER_PATHS: '^(crates/|", "FULL_TIER_PATHS: '^(")
-        self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)))
+    def test_a_wider_reduced_tier_list_or_a_narrower_compiled_in_list_is_refused(self):
+        for old, new in (("REDUCED_TIER_PATHS: '^(project-management/",
+                          "REDUCED_TIER_PATHS: '^(crates/|project-management/"),
+                         ("COMPILED_IN: '^(docs/coordination-ledger\\.md|", "COMPILED_IN: '^(")):
+            with self.subTest(old=old):
+                self.assertIn(old, WORKFLOW)
+                changed = WORKFLOW.replace(old, new)
+                self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)))
 
     def test_a_tier_journey_job_with_another_test_run_is_refused(self):
         self.assertIn(parity.TIER_RUN, WORKFLOW)
