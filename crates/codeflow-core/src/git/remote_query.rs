@@ -340,9 +340,10 @@ impl HttpAuth {
                 display_url(url)
             ));
         }
-        use base64::Engine as _;
-        let basic = base64::engine::general_purpose::STANDARD
-            .encode(format!("x-access-token:{token}").as_bytes());
+        let basic = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            format!("x-access-token:{token}").as_bytes(),
+        );
         Ok(Self {
             url: url.to_string(),
             header: format!("AUTHORIZATION: basic {basic}"),
