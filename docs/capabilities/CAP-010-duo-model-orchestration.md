@@ -457,6 +457,13 @@ and the landed task head; unrelated line work before the landing does not
 invalidate that source. Direct work and transported work use the same
 binding predicate. At a batch landing each completion binds at the commit
 that introduced its block, so reviewed heads land together on one candidate.
+When such a merge brings a landed planning move of the task's epic, the
+record may also differ by that edit alone: the `epic_id` line and plain
+added lines outside the criteria, acceptance blocks, Deliverables and
+Closeout, made by exactly one commit on the first-parent line of a target
+tip the run is judged against, with the new epic landing on the task's
+unchanged `integration_target`; any other difference, or anything it cannot
+read, refuses and names the commit and the part (TSK-1320).
 A task pull request that merges its moved target after the review keeps its
 binding when each merge brings a commit on the first-parent line of a target
 tip the run is judged against, and the merge's recorded result equals the
