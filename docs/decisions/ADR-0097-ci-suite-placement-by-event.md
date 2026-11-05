@@ -27,19 +27,21 @@ were recorded only in workspace notes and in task and epic criteria, and no
 CodeFlow document said where each suite runs. Later rulings drifted from
 the decisions as a result.
 
+
 ## Decision
 
 Suite placement is decided by the event that starts the run. A pull request
 into an integration line runs only the short checks: the Linux build and
 lint checks, the policy check, commit standards, secret scan and release
-impact. Linux coverage and every Windows job leave line pull requests. Line
-pushes, which are the landing batch's hosted proof, pull requests into
-`main`, and the daily and weekly runs keep the full Linux and Windows
-suites. The daily run also measures Linux coverage. A required check passes
-when its suite is not selected for the event, through the reserved "not
-selected" result (TSK-1259, TSK-1190), and an event or base the workflow
-cannot read fails closed to the full run. TSK-1321 (PR 620) owns building
-the line pull request placement and the daily coverage.
+impact. The Linux tests, Linux coverage and every Windows job leave line
+pull requests. Line pushes, which are the landing batch's hosted proof,
+pull requests into `main`, and the daily and weekly runs keep the full Linux
+and Windows suites, coverage included. A required check passes when its
+suite is not selected for the event, through the reserved "not selected"
+result (TSK-1259, TSK-1190), and an event or base the workflow cannot read
+fails closed to the full run. Building this placement, the daily Linux
+suites included, is assigned to TSK-1321 (PR 620); coord/ci amends that
+task's criteria to it.
 
 Changing where a suite runs is an operator decision. Agents and
 Coordinators never rule on it; they bring the evidence and a
@@ -47,23 +49,32 @@ recommendation to the operator.
 
 Placement as decided on 2026-11-05:
 
-| Event | Short checks | Linux build, lint and tests | Linux coverage | Windows checks and journeys | Windows partitions | Release gates |
-|---|---|---|---|---|---|---|
-| Draft pull request, any base | secret scan and security review; commit standards passes only on a ready run | no | no | no | no | no |
-| Pull request into an integration line | yes | build and lint only | no | no | no | no |
-| Push to an integration line | secret scan and security review | yes | yes | yes | yes | no |
-| Pull request into `main` | yes | yes | yes | yes | yes | yes |
-| Push to `main` | secret scan and security review | yes, or the merged pull request's reused verdict | yes, or reused | yes, or reused | yes, or reused | yes, or reused |
-| Daily run, `main` and each active line | no | no | yes | yes | yes | no |
-| Weekly run, `main` | secret scan of the full history and dependency audit | yes | yes | yes | yes | yes |
+| Event | Short checks | Linux build and lint | Linux tests | Linux coverage | Windows checks and journeys | Windows partitions | Release gates |
+|---|---|---|---|---|---|---|---|
+| Draft pull request, any base | secret scan and security review only; commit standards passes only on a ready run | no | no | no | no | no | no |
+| Pull request into an integration line | yes | yes | no | no | no | no | no |
+| Push to an integration line | secret scan and security review | yes | yes | yes | yes | yes | no |
+| Pull request into `main` | yes | yes | yes | yes | yes | yes | yes |
+| Push to `main` | secret scan and security review | yes, or the merged pull request's reused verdict | yes, or reused | yes, or reused | yes, or reused | yes, or reused | yes, or reused |
+| Daily run, `main` and each active line | no | yes | yes | yes | yes | yes | no |
+| Weekly run, `main` | secret scan of the full history and dependency audit | yes | yes | yes | yes | yes | yes |
 
-"Short checks" means the Linux build and lint checks, the policy check
-(`codeflow-policy.yml`, pull requests only) with its `trusted: commit
-standards` and `trusted: release impact` jobs, and the secret scan in
-`codeflow-ci.yml`. The security review runs on every event beside them. On
-this repository the Linux tests run inside the
-coverage shards, so leaving coverage off line pull requests also leaves the
-Linux tests off them.
+How to read the table:
+
+- The short checks are the five the operator named: the Linux build and
+  lint checks, the policy check (`codeflow-policy.yml`, pull requests only)
+  with its `trusted: commit standards` and `trusted: release impact` jobs,
+  and the secret scan in `codeflow-ci.yml`.
+- The security review is not on the operator's list. It stays on every
+  event, line pull requests included, as a secure-default reading: the job
+  has no event condition today (`codeflow-ci.yml`, `security-review`), and
+  removing a security check needs its own operator decision.
+- On this repository the Linux tests run inside the coverage shards, so the
+  Linux tests and Linux coverage columns move together.
+- The release gates (the benchmark, the exhaustive prose checks and the
+  present browser parts) are not part of "the full Linux and Windows
+  suites" in the decision; they keep their current events, which the daily
+  run is not one of.
 
 Until TSK-1321 lands, the line at `1107c5974` differs from this table:
 
@@ -73,8 +84,8 @@ Until TSK-1321 lands, the line at `1107c5974` differs from this table:
   the reduced tier's journey job; only the build, the partitions and their
   journey job are skipped, by the reduced tier switch
   (`codeflow-ci.yml:758`, `REDUCED_TIER: "on"`).
-- The daily run is Windows only (`windows-daily-run.yml`) and measures no
-  Linux coverage.
+- The daily run is Windows only (`windows-daily-run.yml`): it runs no Linux
+  build, lint, tests or coverage.
 - The daily workflows start only from `main` (`windows-daily.yml`, the
   `sources` job), and `main` does not hold them until the EPC-022 line
   merges, so no daily run exists yet. PR 597 (TSK-1314, merge `df718e015`)
@@ -84,13 +95,15 @@ Until TSK-1321 lands, the line at `1107c5974` differs from this table:
 
 - A line pull request reaches its verdicts after the short checks, so it
   holds no Windows runner and no coverage shard.
-- A Windows or coverage failure that a line pull request brings is found on
-  the line push, the daily run or the pull request into `main`. The
-  operator accepted fixing such a failure forward on the line until the
+- A Linux test, Windows or coverage failure that a line pull request brings
+  is found on the line push, the daily run or the pull request into `main`.
+  The operator accepted fixing such a failure forward on the line until the
   candidate push task lands.
-- A line push cannot reuse a line pull request's verdict, since that run
-  skipped the suites the push needs, so every line push runs the full
-  suites (`scripts/ci-reuse.py`).
+- Today a line push cannot reuse a line pull request's verdict, since that
+  run skipped the suites the push needs, so every line push runs the full
+  suites (`scripts/ci-reuse.py`). TSK-1026 AC-7 and AC-12 plan per-job reuse
+  on line pushes for jobs the pull request run ran and passed, which would
+  change this.
 - Moving a suite between events is one recorded operator decision, added to
   the history below and to the maintainer page, never a ruling in a task or
   a sweep.
@@ -98,34 +111,43 @@ Until TSK-1321 lands, the line at `1107c5974` differs from this table:
 ## Decision history
 
 Each entry gives the operator's words where the record marks them as such,
-then the record's own text, each quoted exactly. The workspace repository
-holds `RELEASE-PLAN.md` and `coordination/HANDOFF-2026-10-27.md`.
+then the record's own text, each quoted exactly. Entries are cited by their
+date and time in the workspace repository's `RELEASE-PLAN.md` and
+`coordination/HANDOFF-2026-10-27.md`, since both files grow and their line
+numbers move.
 
 - 2026-11-01, 19:00 to 19:15 EST. The record reads: "parallel decision 4
   approved as recommended (verdict reuse yes, path-scoped Windows skipping
   no)". Decision 5 was replaced by the operator's "run in CI only what must
-  run hosted, prove the rest locally" (`HANDOFF-2026-10-27.md:1504-1507`).
+  run hosted, prove the rest locally" (HANDOFF, entry "Operator inputs
+  19:00 to 19:15 EST (11-01)").
 - 2026-11-02, 19:35 EST. The record reads: "card 2 yes (uninstrumented
   Linux on integration PRs, coverage on PRs to main and nightly); card 3
   yes (Windows partitions to PRs to main once a daily exact-SHA run
-  exists)" (`HANDOFF-2026-10-27.md:382-385`; also `RELEASE-PLAN.md:1279`).
+  exists)" (HANDOFF, entry "2026-11-02 19:35 EST, operator: CI decisions approved
+  as recommended"; also
+  `RELEASE-PLAN.md`, entry "2026-11-02 19:35 EST, operator decisions").
 - 2026-11-03, Windows switch order. Operator: "fine with A.". The record
   reads: "pull requests into a line drop the twelve partitions after one
   dispatched run of all twelve at the line tip's exact SHA; line pushes and
-  pull requests into main keep them" (`RELEASE-PLAN.md:78`; EPC-022
+  pull requests into main keep them" (`RELEASE-PLAN.md`, entry
+  "2026-11-03: Operator decision on the Windows switch order"; EPC-022
   AC-232; TSK-1242, TSK-1273).
 - 2026-11-03, 19:32, Linux coverage. Operator: "on keep coverage on line -
   ok as recommended". The record reads: "line pull requests keep the
   coverage shards; this replaces card 2 of 2026-11-02 for line pull
-  requests only" (`RELEASE-PLAN.md:76`; `HANDOFF-2026-10-27.md:691`;
+  requests only" (`RELEASE-PLAN.md`, entry "2026-11-03: Operator decision
+  on Linux coverage"; HANDOFF, entry "2026-11-03 19:32, operator";
   TSK-1241, TSK-1290, EPC-022 AC-232). The next entry replaces it for line
   pull requests.
 - 2026-11-05, 15:57, this record. Operator: "A plus Linux off line PRs".
   The record reads: "pull requests into an integration line run only the
   short checks (Linux build and lint checks, policy check, commit
   standards, secret scan, release impact). Linux coverage, Windows checks,
-  Windows journeys and the Windows release journey leave line PRs"
-  (`RELEASE-PLAN.md:1287`).
+  Windows journeys and the Windows release journey leave line PRs" and
+  "Line pushes (the batch's hosted proof), PRs into main, and the daily and
+  weekly runs keep the full Linux and Windows suites" (`RELEASE-PLAN.md`,
+  entry "2026-11-05 15:57: Operator decision on CI placement").
 
 ## Architecture impact
 

@@ -223,26 +223,31 @@ Release impact rules for each PR:
 The event that starts a hosted run decides which suites it runs. A pull
 request into an integration line runs only the short checks. Line pushes,
 pull requests into `main` and the daily and weekly runs run the full Linux
-and Windows suites. [ADR-0097](decisions/ADR-0097-ci-suite-placement-by-event.md)
+and Windows suites, coverage included. [ADR-0097](decisions/ADR-0097-ci-suite-placement-by-event.md)
 records the decision and its dated history. Changing where a suite runs is
 an operator decision; agents and Coordinators never rule on it.
 
-| Event | Short checks | Linux build, lint and tests | Linux coverage | Windows checks and journeys | Windows partitions | Release gates |
-|---|---|---|---|---|---|---|
-| Draft pull request, any base | secret scan and security review; commit standards passes only on a ready run | no | no | no | no | no |
-| Pull request into an integration line | yes | build and lint only | no | no | no | no |
-| Push to an integration line | secret scan and security review | yes | yes | yes | yes | no |
-| Pull request into `main` | yes | yes | yes | yes | yes | yes |
-| Push to `main` | secret scan and security review | yes, or the merged pull request's reused verdict | yes, or reused | yes, or reused | yes, or reused | yes, or reused |
-| Daily run, `main` and each active line | no | no | yes | yes | yes | no |
-| Weekly run, `main` | secret scan of the full history and dependency audit | yes | yes | yes | yes | yes |
+| Event | Short checks | Linux build and lint | Linux tests | Linux coverage | Windows checks and journeys | Windows partitions | Release gates |
+|---|---|---|---|---|---|---|---|
+| Draft pull request, any base | secret scan and security review only; commit standards passes only on a ready run | no | no | no | no | no | no |
+| Pull request into an integration line | yes | yes | no | no | no | no | no |
+| Push to an integration line | secret scan and security review | yes | yes | yes | yes | yes | no |
+| Pull request into `main` | yes | yes | yes | yes | yes | yes | yes |
+| Push to `main` | secret scan and security review | yes, or the merged pull request's reused verdict | yes, or reused | yes, or reused | yes, or reused | yes, or reused | yes, or reused |
+| Daily run, `main` and each active line | no | yes | yes | yes | yes | yes | no |
+| Weekly run, `main` | secret scan of the full history and dependency audit | yes | yes | yes | yes | yes | yes |
 
 - The short checks are the Linux build and lint checks, the policy check
   (`codeflow-policy.yml`, pull requests only) with its `trusted: commit
   standards` and `trusted: release impact` jobs, and the secret scan in
-  `codeflow-ci.yml`. The security review runs on every event beside them.
-- The Linux tests run inside the coverage shards, so a line pull request
-  runs no Linux tests.
+  `codeflow-ci.yml`.
+- The security review is not one of the short checks the operator named.
+  It runs on every event as a secure default; removing it from an event
+  needs its own operator decision.
+- The Linux tests run inside the coverage shards, so the Linux tests and
+  Linux coverage columns move together.
+- The release gates keep their current events, which the daily run is not
+  one of.
 - A required check passes when its suite is not selected for the event,
   and an event or base the workflow cannot read runs the full suites.
 - Local full gates keep coverage instrumentation whatever the event.
@@ -255,7 +260,8 @@ Until TSK-1321 lands, the workflows differ from the table in four places:
   the reduced tier's journey job. The reduced tier switch in
   `codeflow-ci.yml` (`REDUCED_TIER`) skips only the Windows build, the
   partitions and their journey job.
-- The daily run is Windows only and measures no Linux coverage.
+- The daily run is Windows only: it runs no Linux build, lint, tests or
+  coverage.
 - The daily workflows start only from `main`, which does not hold them
   until the EPC-022 line merges.
 
