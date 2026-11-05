@@ -24,6 +24,8 @@ mod destination;
 mod document_indexes;
 #[path = "ci_cli/line_tip.rs"]
 mod line_tip;
+#[path = "ci_cli/main_sync.rs"]
+mod main_sync;
 #[path = "ci_cli/outcome_marker.rs"]
 mod outcome_marker;
 #[path = "ci_cli/pr_body_fixtures.rs"]

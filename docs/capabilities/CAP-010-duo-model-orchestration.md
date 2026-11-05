@@ -283,6 +283,12 @@ With tracking on, `codeflow ci` classifies every pull request as one of:
   epic whose record declares the line as its `parent_line`, targets it, it
   lands on the default target, and it holds merges or direct commits with
   landed `line_adoptions` entries in its epic record (SPC-013 R-52)
+- a sync of the default branch into a line: `Task: EPC-NNN` naming the
+  epic of the integration line it targets, from a branch that carries no
+  task, when every commit beyond the line and the default branch's trusted
+  commit is a two-parent merge whose second parent is on that commit and
+  whose tree is the clean merge of its parents; its criteria stay frozen
+  (TSK-1312)
 - an automation profile
 
 Related rules:

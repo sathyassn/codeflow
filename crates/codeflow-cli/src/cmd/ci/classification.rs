@@ -25,6 +25,10 @@ use codeflow_core::workgraph::{
     durable_work_tracking_enabled_at, resolve_work_target_checked, task_id_from_branch,
 };
 
+/// A proven sync's line and merges, or why the range is not one; `None`
+/// when the range does not target the epic's line.
+pub(super) type SyncProof = Option<Result<(String, Vec<String>), String>>;
+
 /// The value of one `Task:` line in a pull request body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TaskLine {
@@ -143,6 +147,16 @@ pub(super) enum Class {
     /// (ADR-0074); small edits land on it directly, and each nested project
     /// lands through its own repository.
     RootBranch(String),
+    /// A sync of the default branch into the epic's integration line
+    /// (TSK-1312): every commit beyond the line and the trusted default
+    /// branch commit is a clean two-parent merge of a commit on it
+    /// ([`codeflow_core::workgraph::main_sync::sync_merges`]). It starts no
+    /// work, and its criteria stay frozen.
+    MainSync {
+        epic: String,
+        line: String,
+        merges: Vec<String>,
+    },
 }
 
 /// The existing unit whose reviewed false positive an exemption names.
@@ -202,6 +216,11 @@ pub(super) struct Input<'a> {
     /// Why an epic a planning amendment names cannot be named: absent from
     /// the head, or cancelled at the target. `None` when it can.
     pub epic_problem: &'a dyn Fn(&str) -> Option<String>,
+    /// For an epic whose integration line the range targets: the merges of
+    /// a proven sync of the default branch, or why the range is not one.
+    /// `None` when the range does not target that epic's line. Asked only
+    /// when the range cannot be a planning amendment.
+    pub main_sync: &'a dyn Fn(&str) -> SyncProof,
 }
 
 /// Resolve the class, or the reason the pull request has none.
@@ -249,7 +268,7 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
                 }
                 Ok(Class::SecretScanExemption(ExemptionWork::Epic(epic)))
             } else {
-                planning(input, vec![epic])
+                planning_or_sync(input, epic)
             }
         }
         Some(TaskLine::Epics(epics)) => {
@@ -288,6 +307,26 @@ fn planning(input: &Input<'_>, epics: Vec<String>) -> Result<Class, String> {
     match (input.amendment_problem)(input.files) {
         Some(problem) => Err(problem),
         None => Ok(Class::PlanningOnly { epics }),
+    }
+}
+
+/// One epic named off its line: a planning amendment when the range carries
+/// only what one may, else a sync of the default branch into the epic's
+/// line when its history proves one (TSK-1312). A range that is neither is
+/// refused with both reasons when it targets the epic's line.
+fn planning_or_sync(input: &Input<'_>, epic: String) -> Result<Class, String> {
+    if let Some(problem) = (input.epic_problem)(&epic) {
+        return Err(problem);
+    }
+    let Some(problem) = (input.amendment_problem)(input.files) else {
+        return Ok(Class::PlanningOnly { epics: vec![epic] });
+    };
+    match (input.main_sync)(&epic) {
+        None => Err(problem),
+        Some(Ok((line, merges))) => Ok(Class::MainSync { epic, line, merges }),
+        Some(Err(reason)) => Err(format!(
+            "{problem}; nor is it a sync of the default branch into the line: {reason}"
+        )),
     }
 }
 
@@ -586,6 +625,7 @@ pub(super) fn dispatch(
     branch: &str,
     range: Option<&Range<'_>>,
     release: Option<&ReleaseHead>,
+    trusted: Option<&str>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) -> Option<Class> {
@@ -651,6 +691,7 @@ pub(super) fn dispatch(
         root_branch: root_branch.as_deref() == Some(branch),
         amendment_problem: &amendment_problem,
         epic_problem: &epic_problem,
+        main_sync: &|epic: &str| main_sync(root, range, trusted, epic),
     };
     let class = match classify(&input)
         .and_then(|class| cancellation_entry(root, branch, range, &files, class))
@@ -690,6 +731,25 @@ pub(super) fn dispatch(
         _ => {}
     }
     Some(class)
+}
+
+/// Whether the range is a sync of the default branch into `epic`'s line
+/// (TSK-1312). Only a range that targets that line can be one. The default
+/// branch is the commit the run's authority names (`--policy-from`, the
+/// default branch's own commit in the hosted check), bound by id; a run
+/// without one has nothing to trust and is refused.
+fn main_sync(root: &Path, range: &Range<'_>, trusted: Option<&str>, epic: &str) -> SyncProof {
+    let line = range.target;
+    if codeflow_core::workgraph::line_adoption::epic_id(line).ok()? != epic {
+        return None;
+    }
+    Some(match trusted {
+        None => Err("there is no default branch commit to trust; the run names none with --policy-from, as the hosted policy check does".to_string()),
+        Some(trusted) => {
+            codeflow_core::workgraph::main_sync::sync_merges(root, range.base, range.head, trusted)
+                .map(|merges| (line.to_string(), merges))
+        }
+    })
 }
 
 type EpicLineResult = Result<(String, AdoptionReport), String>;
@@ -824,6 +884,18 @@ fn announce(class: &Class, line: Option<&EpicLineResult>) {
         }
         Class::RootBranch(name) => {
             println!("codeflow ci: pull request class: workspace root branch {name}");
+        }
+        Class::MainSync {
+            epic,
+            line,
+            merges,
+        } => {
+            let merges: Vec<&str> = merges.iter().map(|merge| &merge[..9]).collect();
+            println!(
+                "codeflow ci: pull request class: sync of the default branch into {} for {epic} (clean merges {}; the criteria stay frozen)",
+                codeflow_core::git::display_text(line),
+                merges.join(", ")
+            );
         }
         Class::Tracked { task_id } => println!(
             "codeflow ci: pull request class: tracked {task_id} (from the Task: line)"
@@ -1482,7 +1554,12 @@ mod tests {
             root_branch: false,
             amendment_problem: &path_problem,
             epic_problem: &no_problem,
+            main_sync: &no_sync,
         }
+    }
+
+    fn no_sync(_: &str) -> SyncProof {
+        None
     }
 
     fn planning(epics: &[&str]) -> Class {
