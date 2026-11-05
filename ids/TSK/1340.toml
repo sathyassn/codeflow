@@ -1,0 +1,11 @@
+id = "TSK-1340"
+uid = "1cc363db-0959-4198-8051-439ec6ffee4a"
+kind = "TSK"
+title = "A code dependency can be pinned at a commit landed on the line, and validate refuses an unknown dependency kind"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:52:47Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
