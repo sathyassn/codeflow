@@ -2736,9 +2736,9 @@ fn portal_utility_tokens_match_present_skins() {
 /// writing rules that other skill files point at.
 const COPY_GUIDE: &str = "assets/base/agents/skills/cf-editorial-review/references/copy-guide.md";
 
-/// The sections of the copy guide, in order: the thirteen of TSK-073 AC-2
-/// and "Names and code strings" from TSK-266.
-const COPY_GUIDE_SECTIONS: [&str; 14] = [
+/// The sections of the copy guide, in order: the thirteen of TSK-073 AC-2,
+/// "Names and code strings" from TSK-266 and "Page limits" from TSK-1255.
+const COPY_GUIDE_SECTIONS: [&str; 15] = [
     "Voice",
     "Sentences",
     "Words",
@@ -2748,6 +2748,7 @@ const COPY_GUIDE_SECTIONS: [&str; 14] = [
     "Legend keys and descriptions",
     "Summaries",
     "Bullets and tables",
+    "Page limits",
     "Microcopy",
     "Names and code strings",
     "Replies",
@@ -3031,9 +3032,10 @@ fn kit_readme_writing_bullets(readme: &str) -> Vec<String> {
         .collect()
 }
 
-/// TSK-073 AC-5. The kit README keeps its six writing bullets and names the
-/// guide, and the guide carries the six bullets verbatim; the README copies
-/// stay byte-identical across the two skills.
+/// TSK-073 AC-5. The kit README keeps its writing bullets (ten since
+/// TSK-1255 added the page limits) and names the guide, and the guide
+/// carries them verbatim; the README copies stay byte-identical across the
+/// two skills.
 #[test]
 fn kit_readme_writing_bullets_are_carried_verbatim_by_the_copy_guide() {
     let present =
@@ -3042,7 +3044,7 @@ fn kit_readme_writing_bullets_are_carried_verbatim_by_the_copy_guide() {
         repo_text("assets/base/agents/skills/cf-docs-portal/resources/design-system/README.md");
     assert_eq!(present, portal, "kit README drifted between the skills");
     let bullets = kit_readme_writing_bullets(&present);
-    assert_eq!(bullets.len(), 6, "kit README keeps six writing bullets");
+    assert_eq!(bullets.len(), 10, "kit README keeps ten writing bullets");
     assert!(
         normalized_whitespace(&present).contains("`cf-editorial-review/references/copy-guide.md`"),
         "kit README must name the copy guide"
@@ -3056,10 +3058,61 @@ fn kit_readme_writing_bullets_are_carried_verbatim_by_the_copy_guide() {
     }
 }
 
+/// TSK-1255 AC-1: each page limit is stated in the copy guide's "Page
+/// limits" and in the cf-present and cf-docs-portal skills, in the shipped
+/// source and in every mirror the repository keeps.
+#[test]
+fn page_limits_are_stated_in_every_mirror() {
+    let roots = [
+        "assets/base/agents/skills",
+        ".claude/skills",
+        ".agents/skills",
+        ".codeflow/.baseline/.claude/skills",
+        ".codeflow/.baseline/.agents/skills",
+    ];
+    let guide_limits = [
+        "within 136 characters",
+        "Put one point in each bullet.",
+        "Put at most three text blocks in a row",
+        "Make a figure the main view of any flow, comparison or status.",
+        "Text in styled boxes, cards or callouts is not a figure",
+        "Give every number its unit",
+        "Put a subject's name before its identifier",
+    ];
+    let skill_limits = [
+        "at most 136 characters per text block",
+        "at most three text blocks in a row",
+        "one point per bullet",
+        "a figure as the main view of any flow, comparison or status",
+        "unit on every number",
+        "names before identifiers",
+    ];
+    let mut missing = Vec::new();
+    for root in roots {
+        let guide = normalized_whitespace(&repo_text(&format!(
+            "{root}/cf-editorial-review/references/copy-guide.md"
+        )));
+        for limit in guide_limits {
+            if !guide.contains(limit) {
+                missing.push(format!("{root} copy guide: {limit}"));
+            }
+        }
+        for skill in ["cf-present", "cf-docs-portal"] {
+            let text = normalized_whitespace(&repo_text(&format!("{root}/{skill}/SKILL.md")));
+            for limit in skill_limits {
+                if !text.contains(limit) {
+                    missing.push(format!("{root}/{skill}: {limit}"));
+                }
+            }
+        }
+    }
+    assert!(missing.is_empty(), "page limits missing: {missing:#?}");
+}
+
 /// Sentences that restated the writing rules outside their homes before
-/// TSK-073, and the six kit README bullets. A paraphrase that avoids these
+/// TSK-073, and the kit README bullets. A paraphrase that avoids these
 /// words is not detected; review owns that case.
-const WRITING_RULE_RESTATEMENTS: [&str; 16] = [
+const WRITING_RULE_RESTATEMENTS: [&str; 20] = [
     "short plain sentences, bullets or a table where they carry facts better than a sentence",
     "The lead sentence says what the reader is looking at; it does not restate the caption",
     "one sentence saying what the reader takes from it; it never repeats the title",
@@ -3070,10 +3123,14 @@ const WRITING_RULE_RESTATEMENTS: [&str; 16] = [
     "Avoid cryptic headings, invented personality",
     "Keep titles literal and findable",
     "Utility language remains neutral when no project voice is established",
-    "Visuals first: a lead sentence above each figure, the acting sentences below.",
-    "Short plain sentences; bullets or a table where they carry facts better than prose.",
+    "Visuals first: a figure is the main view of any flow, comparison or status, with a lead sentence above it and the acting sentences below.",
+    "Boxed text is not a figure: text in styled boxes, cards or callouts stays text, and the page leans visual, elegant and balanced.",
+    "Short blocks: short plain sentences, at most 136 characters per text block outside collapsed detail (about two desktop lines), at most three text blocks in a row, one point per bullet and a unit on every number.",
     "No em or en dash; use a comma, colon, full stop or hyphen.",
-    "Titles name the subject in words, never a bare identifier.",
+    "Names first: a title is never a bare identifier, and a row, chip, menu entry, crumb, cell or figure label names its subject in words, with the identifier after it.",
+    "Context whole: no \"...\", ellipsis or clipped text; a long string wraps or goes behind a disclosure.",
+    "Times are wall clock with a zone (\"16:12 EST, 2 Nov\"); a relative time only accompanies it.",
+    "An entity view opens with what it is, for whom and why now, each as a short phrase.",
     "Sentence case, except the uppercase mono kicker.",
     "No slogans, no \"not X but Y\" turns, no rhetorical triplets.",
 ];

@@ -335,7 +335,8 @@
         "first-section-of-a-new-skill",
         "adr-for-a-byte-pinned-sheet",
         "operator-reply-is-plain-prose-and-bullets",
-        "identifier-only-title-gets-words"
+        "identifier-only-title-gets-words",
+        "entity-row-and-page-from-the-record"
       ]
     },
     {

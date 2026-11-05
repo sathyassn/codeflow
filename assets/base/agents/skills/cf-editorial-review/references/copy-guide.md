@@ -4,15 +4,27 @@ This guide says how to write each kind of string CodeFlow ships or replies
 with, one section per string. Each section gives its rules and examples
 that exist word for word in a named source.
 
-The design system kit states the same rules in six lines, so a product that
-reads only the kit still gets them. The six lines below are the kit's own
+The design system kit states the same rules in short lines, so a product
+that reads only the kit still gets them. The lines below are the kit's own
 (`cf-docs-portal/resources/design-system/README.md`, "Writing rules"):
 
-- Visuals first: a lead sentence above each figure, the acting sentences below.
-- Short plain sentences; bullets or a table where they carry facts better
-  than prose.
+- Visuals first: a figure is the main view of any flow, comparison or
+  status, with a lead sentence above it and the acting sentences below.
+- Boxed text is not a figure: text in styled boxes, cards or callouts stays
+  text, and the page leans visual, elegant and balanced.
+- Short blocks: short plain sentences, at most 136 characters per text
+  block outside collapsed detail (about two desktop lines), at most three
+  text blocks in a row, one point per bullet and a unit on every number.
 - No em or en dash; use a comma, colon, full stop or hyphen.
-- Titles name the subject in words, never a bare identifier.
+- Names first: a title is never a bare identifier, and a row, chip, menu
+  entry, crumb, cell or figure label names its subject in words, with the
+  identifier after it.
+- Context whole: no "...", ellipsis or clipped text; a long string wraps or
+  goes behind a disclosure.
+- Times are wall clock with a zone ("16:12 EST, 2 Nov"); a relative time
+  only accompanies it.
+- An entity view opens with what it is, for whom and why now, each as a
+  short phrase.
 - Sentence case, except the uppercase mono kicker.
 - No slogans, no "not X but Y" turns, no rhetorical triplets.
 
@@ -93,6 +105,11 @@ a digit where a number is measured.
   minutes". A small count in running prose may be a word.
 - Prefer the short common word when it is exact: "use", not "utilise";
   "before", not "prior to".
+- Write a time a reader sees as wall clock with its zone ("16:12 EST, 2
+  Nov"); a relative time ("40 minutes ago") may accompany it, never
+  replace it.
+- Keep a context string whole: no "...", ellipsis or clipped text. Wrap
+  it, or put the rest behind a disclosure.
 
 Example, an acronym expanded once (source: `docs/decisions/README.md`):
 > architecture decision record (ADR)
@@ -109,7 +126,11 @@ A title or heading is a noun phrase in words that names its subject.
 
 - Name the subject in words. A bare identifier (`TSK-066`, `ADR-0032`) or an
   unexpanded acronym is never the whole title; it goes in the body, the link
-  or the frontmatter. An identifier followed by words is fine.
+  or the frontmatter, or after the name in words.
+- Keep the same order in a row, chip, menu entry, breadcrumb, table cell
+  or figure label: the name in words first, the identifier after it, as a
+  tag or in parentheses. A reader scans names; the identifier is for the
+  lookup.
 - Name the outcome in a how-to heading: what the reader has when the section
   is done.
 - Use sentence case: capitalise the first word and proper nouns only. The
@@ -200,6 +221,9 @@ stands, in a few lines, before the bullets or table that carry the details.
 - Open these with a summary: a closeout, a pull request body, a report, and
   a reply that leads into a list or table. An ADR context has its own
   shape, in the last section.
+- Open an entity's page or card (an epic, task, capability or issue) with
+  what it is, for whom and why now, each as a short phrase, before any
+  number or identifier.
 - Write a few lines a reader with no context understands. It is judgment,
   not a sentence count or a list of banned items: a key number, file name,
   data point or caveat belongs there when it is part of that context.
@@ -243,6 +267,38 @@ Example, the bullet rule for a pull request (source: `.github/pull_request_templ
 
 Example, noun headers (source: `cf-docs-portal/resources/design-system/README.md`):
 > | Check | How |
+
+## Page limits
+
+A present or portal page carries its facts in figures and short blocks;
+the rest goes behind a disclosure.
+
+- Keep each text block outside collapsed detail within 136 characters.
+  That is a character budget, not a line count: it approximates two
+  desktop lines of a paragraph, list item or lede at the 68ch reading
+  measure, and about five lines on a phone. Long words, wide glyphs and
+  narrow table or comparison cells wrap sooner and are held to the same
+  budget. A hard break ends its line. A disclosure, a stage's Details and
+  a code block are exempt.
+- Put one point in each bullet.
+- Put at most three text blocks in a row; the fourth needs a figure, table
+  or status rows before it.
+- Make a figure the main view of any flow, comparison or status. Text in
+  styled boxes, cards or callouts is not a figure; a stage holds at most
+  about 320 characters of text.
+- Give every number its unit: "12 tasks", "40 minutes", "3.2 MB".
+- Put a subject's name before its identifier, as "Titles and headings"
+  sets out.
+- Lean the page visual, elegant and balanced: figures and short blocks
+  alternate.
+- Run `codeflow present check` on a present document and `codeflow
+  validate --portal` on a built portal. Both warn on a block over the
+  budget, more than three text blocks in a row, an ellipsis that may cut
+  text short and a time without a zone. Fix each warning, or keep an exact
+  quote or title as it is and say why in the hand-off.
+
+Example, the limits as the kit states them (source: `cf-present/resources/design-system/README.md`):
+> Short blocks: short plain sentences, at most 136 characters per text block outside collapsed detail (about two desktop lines), at most three text blocks in a row, one point per bullet and a unit on every number.
 
 ## Microcopy
 

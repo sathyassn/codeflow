@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "title": "Where the release stands",
+  "summary": "The same page in short blocks, whole sentences and zoned times",
+  "blocks": [
+    {
+      "type": "narrative",
+      "id": "lede",
+      "markdown": "The line moved at 13:41 EST, 2 Nov.\n\nThe records were read at 2026-11-02 12:26 EST.\n\nThe contrast floor is 4.5:1; `a...b` and `13:41` are code spans."
+    },
+    {
+      "type": "table",
+      "id": "rows",
+      "title": "Open items",
+      "columns": [
+        "Item",
+        "State"
+      ],
+      "rows": [
+        [
+          "Milestone fixes and quality defaults",
+          "open since 08:15Z"
+        ]
+      ]
+    },
+    {
+      "type": "bullets",
+      "id": "points",
+      "items": [
+        "Gate green at 09:00 UTC",
+        "Review settled",
+        "Release notes updated"
+      ]
+    },
+    {
+      "type": "disclosure",
+      "id": "more",
+      "summary": "How the line moved",
+      "blocks": [
+        {
+          "type": "narrative",
+          "id": "detail",
+          "markdown": "The milestone fixes landed on the integration line after the review settled, and the quality defaults followed once the gate was green, so the release notes now describe both changes in full detail here."
+        }
+      ]
+    },
+    {
+      "type": "code",
+      "id": "log",
+      "language": "text",
+      "code": "13:41 fetch origin ... done, and a long line of log output that runs well past two lines of the reading measure"
+    }
+  ]
+}

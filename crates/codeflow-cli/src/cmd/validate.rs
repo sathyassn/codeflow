@@ -5,11 +5,15 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use codeflow_core::hooks::policy_schema;
+use codeflow_core::remedy::{Finding, PORTAL_COPY};
 use codeflow_core::validate::docs::lint_docs;
-use codeflow_core::validate::portal::{validate_portal_with, LookupInputs};
+use codeflow_core::validate::portal::{
+    validate_portal_with, ContentBlock, ContentText, LookupInputs,
+};
 use codeflow_core::validate::{
     validate_epic, validate_spec, validate_task, validate_workgraph, ValidateOptions,
 };
+use codeflow_present::copy_rules::{page_findings, CopyFinding, PageBlock, PageText};
 
 #[derive(Args)]
 pub struct ValidateArgs {
@@ -23,6 +27,11 @@ pub struct ValidateArgs {
     /// Verify a portal evidence manifest without executing project code.
     #[arg(long, value_name = "DIR", conflicts_with = "path")]
     pub portal: Option<PathBuf>,
+
+    /// With --portal, list every copy warning by block instead of one
+    /// summary line a page.
+    #[arg(long, requires = "portal")]
+    pub copy_detail: bool,
 
     /// Also judge every record changed since REF (a commit or branch)
     /// against the lifecycle transition rules, as CI judges a pull request.
@@ -42,7 +51,7 @@ pub fn run(args: &ValidateArgs) -> i32 {
 
     failed |= !validate_policy(&root);
     if let Some(portal) = &args.portal {
-        failed |= !run_portal_validation(&root, portal);
+        failed |= !run_portal_validation(&root, portal, args.copy_detail);
         if args.docs {
             failed |= !run_docs_lint(&root);
         }
@@ -64,13 +73,19 @@ pub fn run(args: &ValidateArgs) -> i32 {
     i32::from(failed)
 }
 
-fn run_portal_validation(root: &Path, portal: &Path) -> bool {
+fn run_portal_validation(root: &Path, portal: &Path, copy_detail: bool) -> bool {
     let stages = super::git_hook::stage_names();
     let inputs = LookupInputs {
         assets: &crate::embedded::EmbeddedAssets,
         hook_stages: &stages,
     };
     let report = validate_portal_with(root, portal, Some(&inputs));
+    let pages = portal_copy_findings(&report.page_text);
+    for warning in portal_copy_warnings(&pages, copy_detail) {
+        eprintln!("{}", warning.line("validate --portal", "warning"));
+    }
+    // Integrity errors come after the copy warnings, so they are the last
+    // thing a reader sees.
     for issue in &report.issues {
         eprintln!("validate --portal: error: {issue}");
     }
@@ -84,6 +99,112 @@ fn run_portal_validation(root: &Path, portal: &Path) -> bool {
         );
         false
     }
+}
+
+fn portal_copy_warnings(pages: &[PageCopy], copy_detail: bool) -> Vec<Finding> {
+    let lines = if copy_detail {
+        copy_detail_lines(pages)
+    } else {
+        copy_summary_lines(pages)
+    };
+    lines
+        .into_iter()
+        .map(|line| Finding::new(line, PORTAL_COPY.remedy()))
+        .collect()
+}
+
+/// One built page's copy warnings (TSK-1255) and its longest text block in
+/// characters.
+struct PageCopy {
+    path: String,
+    findings: Vec<CopyFinding>,
+    longest: usize,
+}
+
+/// The copy warnings for each built page: the same character budget, run,
+/// ellipsis and time rules `present check` applies, read from the page's
+/// paragraphs and list items. Pages with no warning are left out. They never
+/// fail validation.
+fn portal_copy_findings(page_text: &[(String, Vec<ContentBlock>)]) -> Vec<PageCopy> {
+    let page = |text: &ContentText| PageText {
+        text: text.text.clone(),
+        prose: text.prose.clone(),
+    };
+    let mut pages = Vec::new();
+    for (path, content) in page_text {
+        let blocks: Vec<PageBlock> = content
+            .iter()
+            .map(|block| match block {
+                ContentBlock::Paragraph(text) => PageBlock::Paragraph(page(text)),
+                ContentBlock::List(items) => PageBlock::List(items.iter().map(page).collect()),
+                ContentBlock::Visual => PageBlock::Visual,
+            })
+            .collect();
+        let findings = page_findings(&blocks);
+        if findings.is_empty() {
+            continue;
+        }
+        let longest = content
+            .iter()
+            .flat_map(|block| match block {
+                ContentBlock::Paragraph(text) => std::slice::from_ref(text),
+                ContentBlock::List(items) => items.as_slice(),
+                ContentBlock::Visual => &[],
+            })
+            .map(|text| text.text.chars().count())
+            .max()
+            .unwrap_or(0);
+        pages.push(PageCopy {
+            path: path.clone(),
+            findings,
+            longest,
+        });
+    }
+    pages
+}
+
+/// One line a page, with its count by rule and its longest block, then a
+/// total that names the flag for the per-block list.
+fn copy_summary_lines(pages: &[PageCopy]) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut total = 0;
+    for page in pages {
+        let mut by_rule = std::collections::BTreeMap::<&str, usize>::new();
+        for finding in &page.findings {
+            *by_rule.entry(finding.rule).or_default() += 1;
+        }
+        let counts: Vec<String> = by_rule
+            .iter()
+            .map(|(rule, count)| format!("{rule} {count}"))
+            .collect();
+        total += page.findings.len();
+        lines.push(format!(
+            "{}: {} copy warning(s) ({}); longest block {} characters",
+            page.path,
+            page.findings.len(),
+            counts.join(", "),
+            page.longest
+        ));
+    }
+    if total > 0 {
+        lines.push(format!(
+            "{total} copy warning(s) on {} page(s); `--copy-detail` lists each block",
+            pages.len()
+        ));
+    }
+    lines
+}
+
+/// Every copy warning by page and rule, with its message.
+fn copy_detail_lines(pages: &[PageCopy]) -> Vec<String> {
+    pages
+        .iter()
+        .flat_map(|page| {
+            page.findings
+                .iter()
+                .map(|finding| format!("{}: {}: {}", page.path, finding.rule, finding.message))
+        })
+        .collect()
 }
 
 fn run_workgraph_validation(root: &Path) -> bool {
@@ -332,6 +453,129 @@ fn run_docs_lint(root: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        copy_detail_lines, copy_summary_lines, portal_copy_findings, ContentBlock, ContentText,
+    };
+
+    fn text(value: &str) -> ContentText {
+        ContentText {
+            text: value.to_string(),
+            prose: value.to_string(),
+        }
+    }
+
+    /// TSK-1255: a built page with a long paragraph, a cut list item and a
+    /// run of text blocks draws the copy warnings, named by its path; a
+    /// short page with a figure between its blocks draws none.
+    #[test]
+    fn portal_copy_warnings_name_the_page_and_rule() {
+        let long = "word ".repeat(30);
+        let pages = vec![
+            (
+                "dist/status/index.html".to_string(),
+                vec![
+                    ContentBlock::Paragraph(text(long.trim())),
+                    ContentBlock::List(vec![text("items cut to that...")]),
+                    ContentBlock::Paragraph(text("Read at 13:41.")),
+                    ContentBlock::Paragraph(text("Four.")),
+                ],
+            ),
+            (
+                "dist/clean/index.html".to_string(),
+                vec![
+                    ContentBlock::Paragraph(text("Lead at 13:41 EST.")),
+                    ContentBlock::Visual,
+                    ContentBlock::Paragraph(text("After the figure.")),
+                ],
+            ),
+        ];
+        let rules: Vec<String> = copy_detail_lines(&portal_copy_findings(&pages))
+            .iter()
+            .map(|warning| {
+                warning
+                    .splitn(3, ": ")
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(": ")
+            })
+            .collect();
+        assert_eq!(
+            rules,
+            [
+                "dist/status/index.html: copy-density",
+                "dist/status/index.html: copy-ellipsis",
+                "dist/status/index.html: copy-time-zone",
+                "dist/status/index.html: copy-run",
+            ]
+        );
+    }
+
+    /// TSK-1255: by default each page with warnings gets one line, with its
+    /// count by rule and its longest block, and a total follows; a clean
+    /// page gets no line.
+    #[test]
+    fn portal_copy_summary_is_one_line_a_page_and_a_total() {
+        let long = "word ".repeat(30);
+        let pages = vec![
+            (
+                "dist/status/index.html".to_string(),
+                vec![
+                    ContentBlock::Paragraph(text(long.trim())),
+                    ContentBlock::List(vec![text("items cut to that...")]),
+                    ContentBlock::Paragraph(text("Read at 13:41.")),
+                    ContentBlock::Paragraph(text("Four.")),
+                ],
+            ),
+            (
+                "dist/clean/index.html".to_string(),
+                vec![ContentBlock::Paragraph(text("Lead at 13:41 EST."))],
+            ),
+            (
+                "dist/guide/index.html".to_string(),
+                vec![ContentBlock::Paragraph(text(&"word ".repeat(40)))],
+            ),
+        ];
+        assert_eq!(
+            copy_summary_lines(&portal_copy_findings(&pages)),
+            [
+                "dist/status/index.html: 4 copy warning(s) (copy-density 1, copy-ellipsis 1, \
+                 copy-run 1, copy-time-zone 1); longest block 149 characters",
+                "dist/guide/index.html: 1 copy warning(s) (copy-density 1); \
+                 longest block 200 characters",
+                "5 copy warning(s) on 2 page(s); `--copy-detail` lists each block",
+            ]
+        );
+        assert!(copy_summary_lines(&portal_copy_findings(&pages[1..2])).is_empty());
+    }
+
+    #[test]
+    fn portal_copy_warnings_carry_a_remedy_in_summary_and_detail_order() {
+        let pages = portal_copy_findings(&[(
+            "dist/status/index.html".to_string(),
+            vec![ContentBlock::Paragraph(text("Read at 13:41."))],
+        )]);
+        for detail in [false, true] {
+            let expected = if detail {
+                copy_detail_lines(&pages)
+            } else {
+                copy_summary_lines(&pages)
+            };
+            let warnings = super::portal_copy_warnings(&pages, detail);
+            assert_eq!(warnings.len(), if detail { 1 } else { 2 });
+            for (warning, line) in warnings.iter().zip(expected) {
+                assert_eq!(
+                    warning.line("validate --portal", "warning"),
+                    format!(
+                        "validate --portal: warning: {line}\n  clear it: revise the source page \
+                         to address the copy rules, rebuild the portal, then rerun \
+                         `codeflow validate --portal <dir> --copy-detail`"
+                    )
+                );
+            }
+        }
+        assert!(super::portal_copy_warnings(&[], false).is_empty());
+        assert!(super::portal_copy_warnings(&[], true).is_empty());
+    }
 
     /// A record home behind a dangling link cannot be read; it is never a
     /// tier without records. A missing home still validates clean.

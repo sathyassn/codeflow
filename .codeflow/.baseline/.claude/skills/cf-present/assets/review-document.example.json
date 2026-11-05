@@ -19,7 +19,7 @@
           "idea": "The two lineages explore apart and first meet at settle.",
           "title": "Two lineages meet only at settle",
           "kicker": "Dual-lineage delivery",
-          "caption": "Claude and Codex explore with no shared context and meet first at settle, and one path then runs through cross review and gates to the pull request.",
+          "caption": "Claude and Codex explore apart and meet first at settle; one path then runs through cross review and gates to the pull request.",
           "states": [
             {
               "name": "agent",
@@ -435,7 +435,7 @@
     {
       "type": "narrative",
       "id": "thesis",
-      "markdown": "The governing claim is structural: independent explore lanes meet only at settle. Approve shipping with Windows canary as explicit follow-up, or hold until that canary is green."
+      "markdown": "Independent explore lanes meet only at settle.\n\nApprove shipping with the Windows canary as a follow-up, or hold until it is green."
     },
     {
       "type": "status",
@@ -476,7 +476,7 @@
       "type": "callout",
       "id": "comment-hint",
       "tone": "info",
-      "markdown": "Use **Comment** (`C`) on the figure or evidence rows if the boundary is wrong. Notes rail appears only while Comment mode is on."
+      "markdown": "Use **Comment** (`C`) on the figure or evidence rows if the boundary is wrong. The notes rail shows only while Comment mode is on."
     },
     {
       "type": "feedback_prompt",

@@ -1297,6 +1297,12 @@ pub(super) fn runtime_inline_scripts(
     Ok(allowed)
 }
 
+/// The content blocks of a built page, for the copy warnings the CLI
+/// prints (TSK-1255).
+pub(super) fn content_blocks(html: &str) -> Vec<super::ContentBlock> {
+    dom::content_blocks(html)
+}
+
 /// A built page, read before a browser consumes its templates: its content
 /// region carries no CSS or executable content beyond the exact output of a
 /// code block (the recorded Expressive Code assets and its token custom
@@ -1901,6 +1907,51 @@ fn json_equal(left: &serde_json::Value, right: &serde_json::Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TSK-1255: a built page's content reads as paragraphs, lists with
+    /// their items and visual marks, in order; headings, anchor text and
+    /// everything outside the content region are left out, and code text is
+    /// blanked to its length.
+    #[test]
+    fn content_blocks_read_paragraphs_lists_and_visuals_in_order() {
+        use super::super::ContentBlock;
+        let html = "<html><body><nav><p>Site menu</p></nav><main><div class=\"sl-markdown-content\">\
+            <div class=\"sl-heading-wrapper\"><h2>What changed</h2><a class=\"sl-anchor-link\"><span>Section titled What changed</span></a></div>\
+            <p>The line moved at <code>13:41</code> today.</p>\
+            <ul><li>One <strong>point</strong><ul><li>Nested point</li></ul></li><li>Two</li></ul>\
+            <div class=\"expressive-code\"><figure><pre><code>log 13:41 ...</code></pre></figure></div>\
+            <aside><p>An aside paragraph.</p></aside>\
+            <table><tr><td>cell</td></tr></table>\
+            <details><summary>More</summary><p>Hidden detail.</p></details>\
+            </div></main></body></html>";
+        let text = |text: &str, prose: &str| super::super::ContentText {
+            text: text.to_string(),
+            prose: prose.to_string(),
+        };
+        let same = |value: &str| text(value, value);
+        assert_eq!(
+            content_blocks(html),
+            [
+                ContentBlock::Paragraph(text(
+                    "The line moved at 13:41 today.",
+                    "The line moved at       today."
+                )),
+                ContentBlock::List(vec![same("One point"), same("Nested point"), same("Two")]),
+                ContentBlock::Visual,
+                ContentBlock::Paragraph(same("An aside paragraph.")),
+                ContentBlock::Visual,
+                ContentBlock::Visual,
+            ]
+        );
+        assert!(content_blocks("<html><body><p>No content region</p></body></html>").is_empty());
+        // A hard break stays a line break, as present measures it.
+        assert_eq!(
+            content_blocks(
+                "<div class=\"sl-markdown-content\"><p>one<br>two <br/> three\nfour</p></div>"
+            ),
+            [ContentBlock::Paragraph(same("one\ntwo\nthree four"))]
+        );
+    }
 
     #[test]
     fn sections_and_slugs_match_the_grammar_module() {
@@ -3149,10 +3200,7 @@ mod tests {
             });
             edit(&mut value);
             let figure: FigureEvidence = serde_json::from_value(value).unwrap();
-            let mut report = PortalValidationReport {
-                checked_pages: 0,
-                issues: Vec::new(),
-            };
+            let mut report = PortalValidationReport::default();
             verify_derived_binding(&figure, &body, &blobs, &mut report);
             report.issues
         };

@@ -338,6 +338,10 @@ COPY_GUIDE_INVENTORY = {
     "operator-reply-is-plain-prose-and-bullets": (
         "CF-OUT-002", ("policy_character_in_reply", "summary_buries_anchor_in_detail"), ()),
     "identifier-only-title-gets-words": ("CF-OUT-005", ("identifier_only_title_kept",), ()),
+    # TSK-1255: the entity row and page case of the names-first rules.
+    "entity-row-and-page-from-the-record": (
+        "CF-COPY-006", ("identifier_leads_row", "context_cut_to_ellipsis", "opening_omits_who_or_why_now",
+                        "fact_invented"), ()),
 }
 # Existing cases registered in the explanation-method pack that are exempt
 # from its committed answers, each with the reason: the tests named here
@@ -594,7 +598,34 @@ def _names_cost(answer: dict) -> bool:
 
 # signal -> predicate over (answer, fixture). Each is a necessary condition
 # of the signal read off the text; a must_not predicate is also sufficient.
+# ------------------------------------------------------ entity row and page
+_ELLIPSIS = re.compile(r"\.\.\.|\u2026")
+
+
+def _entity_parts(answer: dict) -> dict:
+    index = answer["files"]["docs/status/index.md"]
+    page = answer["files"]["docs/status/EPC-204.md"]
+    row = next((line for line in index.splitlines() if "EPC-204" in line), "")
+    before = re.sub(r"^[\s\-*\[|]+", "", row.split("EPC-204", 1)[0])
+    body = page.split("\n", 1)[1] if "\n" in page else ""
+    # The opening is the first block after the title: a paragraph, or the
+    # short What, For and Why now phrases as bullets.
+    paragraphs = [p.strip() for p in body.split("\n\n") if p.strip() and not p.lstrip().startswith(("|", "#", "```"))]
+    return {"row": row, "words_before_id": re.findall(r"[A-Za-z]{2,}", before), "page": page,
+            "opening": paragraphs[0] if paragraphs else ""}
+
+
+_OUTCOME_WORDS = {"status", "page", "percent", "complete", "blockers", "decisions", "owed", "records", "line", "time", "read"}
+
+
 COPY_SIGNAL_CHECKS = {
+    # entity-row-and-page-from-the-record
+    "row_names_subject_before_identifier": lambda a, f: len(_entity_parts(a)["words_before_id"]) >= 2,
+    "identifier_leads_row": lambda a, f: len(_entity_parts(a)["words_before_id"]) < 2,
+    "opening_states_what_it_is": lambda a, f: len(_OUTCOME_WORDS & _content_words(_entity_parts(a)["opening"])) >= 4,
+    "context_kept_whole": lambda a, f: not _ELLIPSIS.search(_entity_parts(a)["row"] + _entity_parts(a)["page"]),
+    "context_cut_to_ellipsis": lambda a, f: bool(_ELLIPSIS.search(_entity_parts(a)["row"] + _entity_parts(a)["page"])),
+    "identifier_kept_in_page": lambda a, f: "EPC-204" in _entity_parts(a)["page"].split("\n", 1)[1],
     # lead-and-caption-around-a-figure
     "lead_says_what_the_reader_looks_at": lambda a, f: (lambda p: len(_sentences(p["lead"])) == 1
         and not _carrier_form_described(p) and not _lead_restates_caption(p))(_figure_parts(a, f)),
@@ -674,7 +705,7 @@ COPY_SIGNAL_CHECKS = {
 }
 # Signals no text check can decide; the grader judges them against the
 # fixture and records them. None is claimed by a committed control.
-COPY_JUDGED_SIGNALS = {"fact_invented"}
+COPY_JUDGED_SIGNALS = {"fact_invented", "opening_names_who_and_why_now", "opening_omits_who_or_why_now"}
 
 
 def copy_signal_problems(case: dict, claimed: list[str], answer: dict, fixture: dict) -> list[str]:

@@ -2894,6 +2894,22 @@
       ]
     },
     {
+      "id": "CF-COPY-006",
+      "level": "hard",
+      "statement": "A row, chip, menu entry, breadcrumb, table cell or figure label names its subject in words before its identifier; a context string stays whole, with no ellipsis or clipped text; a time a reader sees is wall clock with its zone; and an entity's page or card opens with what it is, for whom and why now, each as a short phrase.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-editorial-review/references/copy-guide.md",
+          "markers": [
+            "the name in words first, the identifier after it",
+            "Keep a context string whole",
+            "wall clock with its zone",
+            "what it is, for whom and why now, each as a short phrase"
+          ]
+        }
+      ]
+    },
+    {
       "id": "CF-AUTO-001",
       "level": "hard",
       "statement": "A change request runs from its settled outcome to the readiness report. Discoverable facts, reversible choices, a repeated safe step, a red job, a missing seat or credit, a green reviewed merge into an integration branch no protected-branch policy covers, a trust prompt for the task's own worktree or this run's sample, and a reversible seat dissent are settled from evidence and disclosed without asking; a settled dissent keeps the dissenting verdict as given. Only intent, public behavior, taste, and authority or scope beyond the brief are asked, and hard gates (spend, credentials, sending outside the conversation or to a changed recipient, a merge into a protected target including a protected integration glob, an unrestorable delete) wait for a human for that action only; a trust prompt for any other path goes to the operator. Ready on local evidence needs a completed green result of every owed check and names the hosted gap; a check that never ran anywhere is a missing gate.",

@@ -101,6 +101,142 @@ pub(super) fn built_page_carriers(html: &str, assets: &CodeBlockAssets) -> Built
     found
 }
 
+/// The text of a built page's content region in reading order, for the
+/// copy warnings (TSK-1255): each paragraph, each list with its items, and a
+/// visual mark for anything that is not text (a figure, table, code block,
+/// disclosure or embedded media). Headings and text outside paragraphs and
+/// list items are left out. Each text also comes with its code blanked, so
+/// code is never read as a cut sentence or a bare time.
+pub(super) fn content_blocks(html: &str) -> Vec<super::super::ContentBlock> {
+    let document = Html::parse_document(html);
+    let mut blocks = Vec::new();
+    for root in document
+        .root_element()
+        .descendants()
+        .filter_map(ElementRef::wrap)
+        .filter(|element| has_class(*element, |class| class == "sl-markdown-content"))
+        .filter(|element| {
+            !element
+                .ancestors()
+                .filter_map(ElementRef::wrap)
+                .any(|ancestor| has_class(ancestor, |class| class == "sl-markdown-content"))
+        })
+    {
+        content_children(root, &mut blocks);
+    }
+    blocks
+}
+
+fn content_children(parent: ElementRef<'_>, blocks: &mut Vec<super::super::ContentBlock>) {
+    use super::super::ContentBlock;
+    for child in parent.children().filter_map(ElementRef::wrap) {
+        match child.value().name() {
+            "p" => {
+                let text = element_text(child, false);
+                if !text.text.is_empty() {
+                    blocks.push(ContentBlock::Paragraph(text));
+                }
+            }
+            "ul" | "ol" => {
+                let mut items = Vec::new();
+                list_items(child, &mut items);
+                if !items.is_empty() {
+                    blocks.push(ContentBlock::List(items));
+                }
+            }
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "script" | "style" | "template" => {}
+            "table" | "figure" | "pre" | "details" | "img" | "svg" | "picture" | "video"
+            | "audio" | "iframe" | "object" | "canvas" => blocks.push(ContentBlock::Visual),
+            _ if figure_markup(child) => blocks.push(ContentBlock::Visual),
+            _ => content_children(child, blocks),
+        }
+    }
+}
+
+/// The items of a list, each its own text without its nested lists, whose
+/// items follow it.
+fn list_items(list: ElementRef<'_>, items: &mut Vec<super::super::ContentText>) {
+    for item in list.children().filter_map(ElementRef::wrap) {
+        if item.value().name() != "li" {
+            continue;
+        }
+        let text = element_text(item, true);
+        if !text.text.is_empty() {
+            items.push(text);
+        }
+        for nested in item
+            .descendants()
+            .filter_map(ElementRef::wrap)
+            .filter(|element| matches!(element.value().name(), "ul" | "ol"))
+            .filter(|element| {
+                element
+                    .ancestors()
+                    .filter_map(ElementRef::wrap)
+                    .take_while(|ancestor| ancestor.id() != item.id())
+                    .all(|ancestor| !matches!(ancestor.value().name(), "ul" | "ol"))
+            })
+        {
+            list_items(nested, items);
+        }
+    }
+}
+
+/// An element's visible text with its whitespace collapsed and each `<br>`
+/// kept as a hard break, as `present check` measures one (a newline in the
+/// markup is only whitespace), and the same text
+/// with its code blanked: code characters become word joiners (U+2060),
+/// which survive the collapse, then spaces. For a list item, nested lists
+/// are left out.
+fn element_text(element: ElementRef<'_>, skip_lists: bool) -> super::super::ContentText {
+    // A `<br>` is held as U+2028 until the collapse, apart from the
+    // newlines the markup carries.
+    const BREAK: char = '\u{2028}';
+    let mut text = String::new();
+    let mut prose = String::new();
+    for node in element.descendants() {
+        let (part, line_break) = match node.value() {
+            Node::Text(part) => (&**part, false),
+            Node::Element(child) if child.name() == "br" => ("\u{2028}", true),
+            _ => continue,
+        };
+        let mut code = false;
+        let mut hidden = false;
+        for ancestor in node.ancestors().filter_map(ElementRef::wrap) {
+            if ancestor.id() == element.id() {
+                break;
+            }
+            match ancestor.value().name() {
+                "code" | "kbd" | "samp" => code = true,
+                "script" | "style" | "template" => hidden = true,
+                "ul" | "ol" if skip_lists => hidden = true,
+                _ => {}
+            }
+        }
+        if hidden {
+            continue;
+        }
+        text.push_str(part);
+        if code && !line_break {
+            prose.push_str(&"\u{2060}".repeat(part.chars().count()));
+        } else {
+            prose.push_str(part);
+        }
+    }
+    let collapse = |value: &str| {
+        value
+            .split(BREAK)
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim_matches('\n')
+            .to_string()
+    };
+    super::super::ContentText {
+        text: collapse(&text),
+        prose: collapse(&prose).replace('\u{2060}', " "),
+    }
+}
+
 pub(super) fn rendered_figures(markdown: &str) -> RenderedFigures {
     let document = Html::parse_document(&render_markdown(markdown));
     let mut found = RenderedFigures {

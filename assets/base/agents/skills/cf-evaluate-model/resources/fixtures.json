@@ -3610,6 +3610,23 @@
       }
     },
     {
+      "id": "status-entity-epc-204",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/work",
+        "peer": "available",
+        "channel": "chat",
+        "audience": "operator",
+        "surface": "recorded per trial from the subject harness",
+        "grading": "Grade the index entry and the opening of the epic page. The entry gives the epic's name in words before EPC-204; an entry that starts with EPC-204 fails identifier_leads_row. The page opens, before any number, with what the epic delivers, whom it serves (the release operator) and why it matters now (the records the operator reads daily, before the release closes), each as a short phrase; an opening that leaves out whom it serves or why now fails opening_omits_who_or_why_now, and an opening cut to '...' fails context_cut_to_ellipsis. A percent, count, time or blocker not in the record fails fact_invented; a time the page gives carries its zone as the record does."
+      },
+      "files": {
+        "project-management/epics/EPC-204.md": "---\nid: EPC-204\ntitle: \"Operators see where a release stands without reading the records\"\nstatus: in_progress\ncreated: 2026-10-20\n---\n\n# EPC-204: Operators see where a release stands without reading the records\n\n## Outcome\n\nA status page shows the release operator the percent complete, the blockers\nand the decisions owed, from the records on the line, with the time each\nfact was read.\n\n## Who it serves\n\nThe release operator, between sessions, deciding what to merge, approve or\nunblock.\n\n## Why now\n\nThe 4.0.0 release has 246 tasks across three epics and the operator reads\nabout a dozen records a day to find the blockers; the page replaces that\nreading before the release closes.\n\n## Progress\n\n79 of 246 tasks complete, read at 13:41 EST, 2 Nov. Two blockers are open:\nthe quality defaults line waits for its reviewer, and the hook binary on the\nbuild host differs from the line.\n",
+        "docs/status/index.md": "# Release status\n\nOne entry per epic.\n\n- EPC-204\n",
+        "docs/status/EPC-204.md": "# EPC-204\n\n(to be written)\n"
+      }
+    },
+    {
       "id": "reviewed-export-heads-await-landing",
       "tier": "full",
       "state": {

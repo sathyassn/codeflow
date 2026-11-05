@@ -1,0 +1,12 @@
+{
+  "schema_version": 2,
+  "title": "The 3.2.0 milestone fixes",
+  "summary": "Epic EPC-022",
+  "blocks": [
+    {"type": "narrative", "id": "p1", "markdown": "## What it is\n\nThe epic gathers every defect and guidance gap the operator raised during the 3.1.1 evaluation.\n\nIt runs from the present export frame sizing to the copy limits on generated pages.\n\nEvery fix lands on one integration line.\n\nThe release notes then describe the milestone as a whole.\n\nThe epic owns the capability pages and the status prototype.\n\nEach landing gets a cross-lineage review.\n\nThe Visual and docs Coordinator holds the epic and routes each task.\n\nThe Director holds the milestone decision and the operator merges into main."},
+    {"type": "callout", "id": "c1", "tone": "info", "title": "Owner", "markdown": "The Visual and docs Coordinator holds the epic and routes each task to a builder lane."},
+    {"type": "callout", "id": "c2", "tone": "info", "title": "State", "markdown": "Open, with 14 tasks landed and 9 in review; the first planning PR was approved at 18:15 EST, 2 Nov."},
+    {"type": "callout", "id": "c3", "tone": "info", "title": "Why now", "markdown": "The operator rejected the status prototype twice on 2 Nov; pages keep coming out as walls until the skills carry a mechanism."},
+    {"type": "callout", "id": "c4", "tone": "info", "title": "Source", "markdown": "The epic record on the integration line, read at 13:41 EST, 2 Nov."}
+  ]
+}

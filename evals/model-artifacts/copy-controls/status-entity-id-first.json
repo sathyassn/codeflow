@@ -1,0 +1,6 @@
+{
+  "files": {
+    "docs/status/index.md": "# Release status\n\nOne entry per epic.\n\n- EPC-204: Operators see where a release stands without reading the...\n",
+    "docs/status/EPC-204.md": "# Operators see where a release stands without reading the records\n\n- What: a status page with the percent complete, the blockers and the decisions owed, read from the records on the line\n- For: the release operator, between sessions, deciding what to merge, approve or unblock\n- Why now: 246 tasks across three epics; about a dozen records read a day; the page replaces that reading before the release closes\n\nEpic EPC-204, in progress.\n\n## Progress\n\n79 of 246 tasks complete, read at 13:41 EST, 2 Nov.\n\n## Blockers\n\n- The quality defaults line waits for its reviewer.\n- The hook binary on the build host differs from the line.\n"
+  }
+}

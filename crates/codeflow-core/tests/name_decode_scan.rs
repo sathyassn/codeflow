@@ -5517,6 +5517,78 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
+    // TSK-1255: Collapses a built portal paragraph's visible text for the TSK-1255 copy warnings; display text, never a shell or git name.
+    (
+        "crates/codeflow-core/src/validate/portal/figures/dom.rs",
+        "element_text",
+        "split_whitespace",
+        1,
+        "prose",
+    ),
+    // TSK-1255: Drops leading and trailing hard breaks from that collapsed portal text for the copy warnings.
+    (
+        "crates/codeflow-core/src/validate/portal/figures/dom.rs",
+        "element_text",
+        "trim_matches",
+        1,
+        "prose",
+    ),
+    // TSK-1255: Measures each line of a text block against the copy character budget.
+    (
+        "crates/codeflow-present/src/copy_rules.rs",
+        "budget_chars",
+        "trim",
+        1,
+        "prose",
+    ),
+    // TSK-1255: Reads the characters around an ellipsis in reader-visible prose to tell a cut sentence from a range.
+    (
+        "crates/codeflow-present/src/copy_rules.rs",
+        "cut_ellipsis",
+        "is_whitespace",
+        2,
+        "prose",
+    ),
+    // TSK-1255: Collapses the visible text of an HTML stage block into one run for the copy warnings.
+    (
+        "crates/codeflow-present/src/copy_rules.rs",
+        "html_text_runs::flush",
+        "split_whitespace",
+        1,
+        "prose",
+    ),
+    // TSK-1255: Trims the visible text of Markdown blocks into runs for the copy warnings.
+    (
+        "crates/codeflow-present/src/copy_rules.rs",
+        "markdown_runs",
+        "trim",
+        3,
+        "prose",
+    ),
+    // TSK-1255: Reads the words around a number pair in prose to tell a ratio or duration from a clock time.
+    (
+        "crates/codeflow-present/src/copy_rules.rs",
+        "not_a_clock",
+        "split_whitespace",
+        2,
+        "prose",
+    ),
+    // TSK-1255: Strips punctuation from those neighbouring prose words before the comparison.
+    (
+        "crates/codeflow-present/src/copy_rules.rs",
+        "not_a_clock",
+        "trim_matches",
+        1,
+        "prose",
+    ),
+    // TSK-1255: Takes the first whole words of a text block for a copy warning's message.
+    (
+        "crates/codeflow-present/src/copy_rules.rs",
+        "opening",
+        "split_whitespace",
+        1,
+        "prose",
+    ),
     // Reads presentation code/diff text lines to construct the human selection text model.
     (
         "crates/codeflow-present/src/document.rs",

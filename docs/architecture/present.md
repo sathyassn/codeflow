@@ -130,7 +130,7 @@ A note on an older revision is placed on the current one in this order
 | 5. Document | the block is gone: `orphaned`, shown unpositioned; a whole-document note holds while the document does |
 | Entity checks | on submit the service refuses a note with `unknown_entity`, `label_mismatch`, `digest_mismatch` or `crop_outside_entity`, and stores its own label |
 | Ledgers | review notes are in `events.jsonl`; answers, replies, reopens and tombstones append to `responses.jsonl` |
-| `present check` | each line carries a `severity`: a `fault` fails the check with exit 9; a `warning` (`framing`, `entities`, `version`) never does, and `open` and `update` print the warnings on stderr and proceed |
+| `present check` | each line carries a `severity`: a `fault` fails the check with exit 9; a `warning` (`framing`, `entities`, `version`, and the copy warnings `copy-density`, `copy-run`, `copy-ellipsis` and `copy-time-zone`) never does, and `open` and `update` print the warnings on stderr and proceed |
 | Agent-side `resolve` | requires the event's current delivered version and appends addressed or dismissed state; stale or cross-session updates fail closed |
 | Text selection | retains the selected occurrence and revalidates live ranges before pinning |
 | Comment capture | toolbar capture survives focus changes, and leaving Comment releases it; iframe figures use native hit-testing while commenting and regain their pointer interaction afterwards |
@@ -165,6 +165,26 @@ its rules, and this section is their current home:
   `none` subtree, are not counted), and again for an element with
   `role="img"` that contains an entity; one `version` line when a schema 1
   document drew either. A missing `description` is never warned about.
+  The copy warnings (TSK-1255, `src/copy_rules.rs`) apply the copy guide's
+  "Page limits". `copy-density` names a visible text block over a
+  136-character budget, which approximates two desktop lines at the 68ch
+  reading measure and is not a rendered line count, or an HTML stage with
+  more than 320 characters of text. `copy-run` names more than three text
+  blocks in a row with no figure, table or status rows between them.
+  `copy-ellipsis` names text that may be cut to "...", outside quotations
+  and numeric ranges. `copy-time-zone` names a clock time or range without
+  a known zone name, a numeric offset or `Z`; ratios and durations are not
+  times. An attached "-HH:MM" that is a valid offset is read as one
+  ("08:15-05:00"), so a bare hyphenated range ("09:00-10:00") draws no
+  warning; a spaced or worded range ("09:00 - 10:00", "09:00 to 10:00")
+  without a zone does. In an HTML stage, the inline
+  text of one block is read together, and separate blocks and SVG labels
+  apart. Code blocks and code spans are exempt, and collapsed detail is
+  exempt from the length limits. `codeflow validate --portal` runs the same
+  rules over the paragraphs and list items of each built portal page except
+  derived lookup pages, and prints one line a page (count by rule, longest
+  block) and a total before any integrity error; `--copy-detail` lists each
+  block.
   `present open` and `present update` print the warnings on stderr and
   proceed.
 

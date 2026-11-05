@@ -77,7 +77,7 @@
           <li><span aria-current="page">How a change lands</span></li>
         </ol></nav>
         <h1 class="cf-title">How a change lands</h1>
-        <p class="cf-prov"><span class="cf-prov-part">Source <a href="#/source/AGENTS.md" data-cf-source>AGENTS.md</a> at <a href="#/source/AGENTS.md@02908d5f3a1c" data-cf-source>02908d5f3a1c</a></span><span class="cf-prov-part">generated 2026-09-22 14:10</span><span class="cf-prov-part cf-fresh"><span class="cf-shape cf-shape--dot" aria-hidden="true"></span>fresh</span></p>
+        <p class="cf-prov"><span class="cf-prov-part">Source <a href="#/source/AGENTS.md" data-cf-source>AGENTS.md</a> at <a href="#/source/AGENTS.md@02908d5f3a1c" data-cf-source>02908d5f3a1c</a></span><span class="cf-prov-part">generated 2026-09-22 14:10 UTC</span><span class="cf-prov-part cf-fresh"><span class="cf-shape cf-shape--dot" aria-hidden="true"></span>fresh</span></p>
 
         <div class="cf-tabs" role="tablist" aria-label="Altitude">
           <button class="cf-tab" type="button" role="tab" id="cf-tab-concept" data-layer="concept" data-label="Concept" aria-selected="true" aria-controls="cf-panel-concept" tabindex="0">Concept</button>
@@ -149,7 +149,7 @@
     <li data-state="human" data-cf-anchor="legend-human" data-cf-anchor-label="legend, human decision"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle class="cf-m-human" cx="14" cy="8" r="6"/></svg>Human decision</li>
     <li data-state="stop" data-cf-anchor="legend-stop" data-cf-anchor-label="legend, gate that stops travel"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><line class="cf-m-stop" x1="14" y1="1" x2="14" y2="15"/></svg>Gate that stops travel</li>
   </ul>
-  <figcaption class="cf-fig-caption">One task lands as a pull request; a body of work lands task by task on an integration branch, and both end at a human merge behind green checks.</figcaption>
+  <figcaption class="cf-fig-caption">One task lands as a pull request and a body of work lands task by task; both end at a human merge behind green checks.</figcaption>
   <details class="cf-fig-details">
     <summary>Details</summary>
     <p class="cf-fig-description">Four columns: branch, review, gate, land. Path A runs from a task branch to a pull request, to required checks, to a human merge, all travelled. Path B runs from a task in an epic to codeflow integrate, where agents merge, to the integration branch, then along a path not yet travelled to the same human merge. A gate that stops travel sits in the gate column on both paths.</p>
@@ -236,7 +236,7 @@
     <li data-state="act"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle class="cf-m-act" cx="14" cy="8" r="6.5"/></svg>Plane acts here</li>
     <li data-state="done"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-done" d="M3 13L25 3"/></svg>One change</li>
   </ul>
-  <figcaption class="cf-fig-caption">Local planes give fast feedback and can be edited; only the remote plane at merge is a boundary. Hooks are the git hooks, Guard is the session git-guard, Remote is remote branch protection.</figcaption>
+  <figcaption class="cf-fig-caption">Local planes give fast feedback and can be edited; only the remote plane at merge is a boundary.</figcaption>
   <details class="cf-fig-details">
     <summary>Details</summary>
     <p class="cf-fig-description">A shared axis runs edit, commit, push, pull request, merge. Git hooks cover commit and push and act at commit. The session git-guard covers edit to push and acts at push. CI covers push and pull request and acts at the pull request. Remote branch protection covers pull request and merge, acts at merge, and is the only plane that is remote and required. One change crosses all four planes in that order.</p>
@@ -367,7 +367,7 @@
 <li data-state="na"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect class="cf-m-na" x="6.8" y="0.8" width="14.4" height="14.4" rx="2"/></svg>Not applicable</li>
 <li data-state="nc"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect class="cf-m-nc" x="7" y="1" width="14" height="14" rx="2"/><path class="cf-m-nc-cross" d="M8.224 2.224L19.776 13.776M19.776 2.224L8.224 13.776"/></svg>Not claimed</li>
 </ul>
-<figcaption class="cf-fig-caption">Every rule has at least one plane; the secret scan is the one rule every plane enforces. Hooks and Guard are the local planes; Remote is branch protection.</figcaption>
+<figcaption class="cf-fig-caption">Every rule has at least one plane, and the secret scan is the one rule every plane enforces.</figcaption>
 <details class="cf-fig-details">
 <summary>Details</summary>
 <p class="cf-fig-description">A grid of seven rules against four planes. Conventional subject: git hooks covered, session git-guard partial, CI covered, remote branch protection not applicable. Body bullets only: git hooks covered, session git-guard partial, CI covered, remote branch protection not applicable. No AI attribution: git hooks covered, session git-guard covered, CI covered, remote branch protection not applicable. Secret scan: git hooks covered, session git-guard covered, CI covered, remote branch protection covered. Protected branch push: git hooks covered, session git-guard covered, CI not applicable, remote branch protection covered. Breaking change footer: git hooks partial, session git-guard not run, CI covered, remote branch protection not applicable. Ticket reference: git hooks covered, session git-guard not applicable, CI partial, remote branch protection not claimed.</p>

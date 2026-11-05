@@ -317,12 +317,17 @@ a portal form; in present an `html` block keeps only the two uses above.
 ## Language and review quality
 
 - Lead with the outcome, decision, or question; add context at the depth needed
-  to assess it.
+  to assess it. A view of one entity (an epic, task, capability or issue)
+  opens with what it is, for whom and why now, each as a short phrase,
+  before its numbers.
 - Separate verified, inferred, pending, and not-run claims. Link evidence by
   exact identifiers or bounded text, not fabricated certainty.
 - Write titles, labels, leads and captions by the copy guide
   (`cf-editorial-review/references/copy-guide.md`); avoid a wall of repeated
   cards.
+- Hold each block to the copy guide's "Page limits"; `present check` warns
+  on a block over the 136-character budget, more than three text blocks in
+  a row, an ellipsis that may cut text short and a time without a zone.
 - Adapt terminology and depth to demonstrated context without pretending to
   know the reader personally.
 - Apply the consuming project's documented voice when it exists; otherwise

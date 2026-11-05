@@ -8903,6 +8903,41 @@
       }
     },
     {
+      "id": "entity-row-and-page-from-the-record",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "status-entity-epc-204",
+      "requirements": [
+        "CF-COPY-006"
+      ],
+      "prompt": "docs/status/index.md has an entry for EPC-204 with nothing but its id, and docs/status/EPC-204.md is a stub. Write both from project-management/epics/EPC-204.md so the operator can read them next week.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "row_names_subject_before_identifier",
+          "opening_states_what_it_is",
+          "opening_names_who_and_why_now",
+          "context_kept_whole",
+          "identifier_kept_in_page"
+        ],
+        "references": [
+          "project-management/epics/EPC-204.md",
+          "docs/status/index.md",
+          "docs/status/EPC-204.md"
+        ],
+        "must_not": [
+          "identifier_leads_row",
+          "context_cut_to_ellipsis",
+          "opening_omits_who_or_why_now",
+          "fact_invented"
+        ]
+      }
+    },
+    {
       "id": "ready-pull-requests-share-one-landing-candidate",
       "kind": "regression",
       "category": "project-management",

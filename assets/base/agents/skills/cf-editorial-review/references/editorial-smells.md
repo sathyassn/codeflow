@@ -51,6 +51,15 @@ needed, such as a quoted title or a numeric range in data.
 - A reply or summary runs as a paragraph wall: one block of many sentences
   where a few anchoring lines and then bullets or a table would carry the
   facts.
+- A present or portal page breaks the copy guide's "Page limits": a text
+  block runs past the 136-character budget outside a disclosure, four or
+  more text blocks follow each other with no figure, table or status rows
+  between them, a bullet carries several points, a number has no unit, or
+  text in styled boxes stands where a figure would show the flow,
+  comparison or status.
+- A row, chip, menu entry, crumb or figure label leads with its identifier;
+  a context string is cut to "..."; a time a reader sees has no zone; an
+  entity view opens with numbers before what it is, for whom and why now.
 - New prose uses an em or en dash where a comma, colon, full stop or hyphen
   serves. A quoted title or a numeric range in data keeps its dash.
 - Headings, bold text, tables, or callouts compete for attention instead of
@@ -116,6 +125,7 @@ rewrite; the rewrite keeps the fact and drops the performance.
 | Ceremonial framing | "It is worth noting that the tests pass." | "The tests pass." |
 | Dash as drama | a pause marked with U+2014 before the point | a comma, a colon, or a new sentence |
 | Paragraph wall | eight sentences in one block carrying three facts | two sentences, then a three-row table |
+| Boxed prose | three cards of two sentences each where the steps happen in order | a flow figure with a one-line lead above it |
 | Buried anchor | four sentences of mechanism before the reader learns what changed | one line on the result and where it stands, then one bullet per detail |
 
 The shape alone is not the smell. A list of three facts, a negation that

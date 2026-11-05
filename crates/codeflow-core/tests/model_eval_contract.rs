@@ -4344,7 +4344,7 @@ type CopyGuideEntry = (
     &'static [&'static str],
 );
 
-const COPY_GUIDE_INVENTORY: [CopyGuideEntry; 9] = [
+const COPY_GUIDE_INVENTORY: [CopyGuideEntry; 10] = [
     (
         "lead-and-caption-around-a-figure",
         "CF-COPY-001",
@@ -4493,6 +4493,28 @@ const COPY_GUIDE_INVENTORY: [CopyGuideEntry; 9] = [
         "identifier_only_title_kept",
         false,
         &[],
+    ),
+    // TSK-1255: the names-first, whole-context and entity-opening rules.
+    (
+        "entity-row-and-page-from-the-record",
+        "CF-COPY-006",
+        "identifier_leads_row",
+        true,
+        &[
+            "identifier",
+            "identifiers",
+            "name",
+            "names",
+            "ellipsis",
+            "truncate",
+            "truncated",
+            "clipped",
+            "whole",
+            "audience",
+            "zone",
+            "wall-clock",
+            "opening",
+        ],
     ),
 ];
 
@@ -4644,7 +4666,7 @@ type CopyGuideAllowance = (
     &'static [(&'static str, &'static str)],
 );
 
-const COPY_GUIDE_FIXTURE_ALLOWANCE: [CopyGuideAllowance; 6] = [
+const COPY_GUIDE_FIXTURE_ALLOWANCE: [CopyGuideAllowance; 7] = [
     (
         "guide-release-flow-figure",
         "docs/figures/release-flow.json",
@@ -4692,6 +4714,11 @@ const COPY_GUIDE_FIXTURE_ALLOWANCE: [CopyGuideAllowance; 6] = [
             ("context", "ADR section heading the shape requires"),
             ("consequences", "ADR section heading the shape requires"),
         ],
+    ),
+    (
+        "status-entity-epc-204",
+        "project-management/epics/EPC-204.md",
+        &[("title", "epic frontmatter key")],
     ),
 ];
 
@@ -4769,7 +4796,7 @@ fn copy_guide_requirements_are_hard_and_owned_by_the_guide() {
         .iter()
         .filter(|entry| entry["id"].as_str().expect("id").starts_with("CF-COPY-"))
         .collect();
-    assert_eq!(owned.len(), 5, "one requirement per graded copy guide case");
+    assert_eq!(owned.len(), 6, "one requirement per graded copy guide case");
     for entry in &owned {
         assert_eq!(entry["level"], "hard", "{} must be hard", entry["id"]);
         assert!(

@@ -104,7 +104,12 @@ Keep navigation predictable. Write the pages plainly: simple,
 straightforward and clear, no mannered prose (see
 `.codeflow/rules/writing.md`), with descriptive titles and short prose and
 bullets by default. Follow the copy guide
-(`cf-editorial-review/references/copy-guide.md`) and documented voice.
+(`cf-editorial-review/references/copy-guide.md`) and documented voice, and
+hold every page to its "Page limits": at most 136 characters per text
+block outside a disclosure, at most three text blocks in a row, one point
+per bullet, a figure as the main view of any flow, comparison or status, a
+unit on every number and names before identifiers. `codeflow validate
+--portal` warns on a built page that breaks them.
 
 ### Visual craft (utility presentation system, mandatory)
 

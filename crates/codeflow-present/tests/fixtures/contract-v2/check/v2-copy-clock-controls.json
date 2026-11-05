@@ -1,0 +1,205 @@
+{
+  "schema_version": 2,
+  "title": "Clock controls",
+  "summary": "Each control says whether a clock time names its zone.",
+  "blocks": [
+    {
+      "type": "narrative",
+      "id": "zoned-offset-below",
+      "markdown": "Read at 01:00-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk1",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-below-date",
+      "markdown": "Read on 2026-11-02 01:00-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk2",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-below-seconds",
+      "markdown": "Read at 01:00:30-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk3",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-equal",
+      "markdown": "Read at 05:00-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk4",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-equal-date",
+      "markdown": "Read on 2026-11-02 05:00-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk5",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-equal-seconds",
+      "markdown": "Read at 05:00:30-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk6",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-above",
+      "markdown": "Read at 08:15-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk7",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-above-date",
+      "markdown": "Read on 2026-11-02 08:15-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk8",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-above-seconds",
+      "markdown": "Read at 08:15:30-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk9",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-iso",
+      "markdown": "Read at 2026-11-02T08:15-05:00 today."
+    },
+    {
+      "type": "code",
+      "id": "brk10",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "zoned-offset-compact",
+      "markdown": "Read at 08:15-0500 today."
+    },
+    {
+      "type": "code",
+      "id": "brk11",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "quiet-hyphen-range",
+      "markdown": "Meet 09:00-10:00 daily."
+    },
+    {
+      "type": "code",
+      "id": "brk12",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "bare-range-to",
+      "markdown": "Meet 09:00 to 10:00 daily."
+    },
+    {
+      "type": "code",
+      "id": "brk13",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "bare-range-spaced",
+      "markdown": "Meet 09:00 - 10:00 daily."
+    },
+    {
+      "type": "code",
+      "id": "brk14",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "narrative",
+      "id": "bare-range-past-offset",
+      "markdown": "Meet 09:00-17:00 daily."
+    },
+    {
+      "type": "code",
+      "id": "brk15",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "html",
+      "id": "zoned-inline",
+      "title": "Inline zone",
+      "caption": "Bold time.",
+      "html": "<div><p>Read at <strong>13:41</strong> EST</p></div>"
+    },
+    {
+      "type": "code",
+      "id": "brk16",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "html",
+      "id": "bare-labels",
+      "title": "Separate labels",
+      "caption": "Two boxes.",
+      "html": "<div><div>Read 13:41</div><div>EST</div></div>"
+    },
+    {
+      "type": "code",
+      "id": "brk17",
+      "language": "text",
+      "code": "x"
+    },
+    {
+      "type": "html",
+      "id": "bare-svg-labels",
+      "title": "Separate figure labels",
+      "caption": "Two labels.",
+      "html": "<svg viewBox='0 0 200 40' aria-label='Labels'><text x='5' y='20'>13:41</text><text x='80' y='20'>EST</text></svg>"
+    }
+  ]
+}

@@ -3508,14 +3508,25 @@ fn tsk259_check_open_and_update_warn_on_a_v1_stage_without_refusing_it() {
             .filter(|line| line["rule"] == rule && line["severity"] == "warning")
             .count()
     };
-    assert_eq!(lines.len(), 13, "{stdout}");
+    // The document's long framing paragraphs also draw copy warnings
+    // (TSK-1255); the stage warnings stay thirteen.
+    let copy = lines
+        .iter()
+        .filter(|line| {
+            line["rule"]
+                .as_str()
+                .is_some_and(|rule| rule.starts_with("copy-"))
+        })
+        .count();
+    assert!(copy > 0, "{stdout}");
+    assert_eq!(lines.len() - copy, 13, "{stdout}");
     assert_eq!(rules(&lines, "framing"), 6, "{stdout}");
     assert_eq!(rules(&lines, "entities"), 6, "{stdout}");
     assert_eq!(rules(&lines, "version"), 1, "{stdout}");
     let summary: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
     assert_eq!(
         summary,
-        serde_json::json!({"faults": 0, "valid": true, "warnings": 13})
+        serde_json::json!({"faults": 0, "valid": true, "warnings": lines.len()})
     );
 
     // open prints the same lines on stderr and still hands off on stdout.
@@ -3563,6 +3574,73 @@ fn tsk259_check_open_and_update_warn_on_a_v1_stage_without_refusing_it() {
         require_success(&prose).trim(),
         r#"{"faults":0,"valid":true,"warnings":0}"#
     );
+    close_and_clear(&fixture, &id);
+}
+
+/// TSK-1255: the copy limits reach the author at `check`, `open` and
+/// `update` as warnings: a block over the character budget, cut context and
+/// a time without a zone. The check still exits 0, open still hands off and
+/// update still publishes the revision.
+#[test]
+fn tsk1255_check_open_and_update_print_the_copy_warnings_without_refusing() {
+    let fixture = setup_project();
+    let document = fixture.project.join("copy.json");
+    fs::copy(
+        repository_file(
+            "crates/codeflow-present/tests/fixtures/contract-v2/check/v2-copy-over-the-limits.json",
+        ),
+        &document,
+    )
+    .unwrap();
+    let output = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "check", "--file", document.to_str().unwrap()],
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines = check_lines(&stdout);
+    let rules: Vec<_> = lines
+        .iter()
+        .map(|line| {
+            (
+                line["rule"].as_str().unwrap(),
+                line["severity"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rules,
+        [
+            ("copy-time-zone", "warning"),
+            ("copy-density", "warning"),
+            ("copy-density", "warning"),
+            ("copy-ellipsis", "warning"),
+        ],
+        "{stdout}"
+    );
+    let opened = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "open", document.to_str().unwrap(), "--no-launch"],
+    );
+    let stdout = require_success(&opened);
+    let id = stdout.split_whitespace().nth(1).unwrap().to_string();
+    let stderr = String::from_utf8(opened.stderr).unwrap();
+    assert_eq!(check_lines(&stderr), lines, "{stderr}");
+    let mut revised: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&document).unwrap()).unwrap();
+    revised["title"] = "Where the release stands now".into();
+    let revision = fixture.project.join("copy-2.json");
+    fs::write(&revision, serde_json::to_vec(&revised).unwrap()).unwrap();
+    let updated = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "update", &id, revision.to_str().unwrap()],
+    );
+    require_success(&updated);
+    let stderr = String::from_utf8(updated.stderr).unwrap();
+    assert_eq!(check_lines(&stderr), lines, "{stderr}");
     close_and_clear(&fixture, &id);
 }
 

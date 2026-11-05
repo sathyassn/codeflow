@@ -107,6 +107,18 @@ reference lists the patterns under "Meaning taken".
   references, never as the heading or the lead of a bullet.
 - **Titles name the subject in words.** An identifier or bare acronym is
   never the whole title; it goes in the body.
+- **Names before identifiers.** In a row, chip, menu entry, breadcrumb,
+  table cell or figure label, the name in words comes first and the
+  identifier after it, as a tag or in parentheses.
+- **Context is never cut.** A sentence that gives context is whole: no
+  "...", ellipsis or clipped text. Wrap it, or put the rest behind a
+  disclosure.
+- **Times are wall clock with a zone.** Every time a reader sees names the
+  clock time and its zone ("16:12 EST, 2 Nov"); a relative time ("40
+  minutes ago") may accompany it, never replace it.
+- **Entity views open with what, for whom and why now.** A page or card
+  for an epic, task, capability or issue opens with what it is, for whom
+  and why now, each as a short phrase, before its numbers.
 - **Status names live-checked facts.** Each changeable fact a report or
   handoff states (a seat, a check, a PR, a line, a task's status, another
   agent's progress) is checked live for that report, or marked unverified

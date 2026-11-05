@@ -81,11 +81,23 @@ perl -CSD -ne 'print "$ARGV\n" if /\x{2013}|\x{2014}/' *
 Every string on a page follows these rules; the copy guide
 (`cf-editorial-review/references/copy-guide.md`) states them in full:
 
-- Visuals first: a lead sentence above each figure, the acting sentences below.
-- Short plain sentences; bullets or a table where they carry facts better
-  than prose.
+- Visuals first: a figure is the main view of any flow, comparison or
+  status, with a lead sentence above it and the acting sentences below.
+- Boxed text is not a figure: text in styled boxes, cards or callouts stays
+  text, and the page leans visual, elegant and balanced.
+- Short blocks: short plain sentences, at most 136 characters per text
+  block outside collapsed detail (about two desktop lines), at most three
+  text blocks in a row, one point per bullet and a unit on every number.
 - No em or en dash; use a comma, colon, full stop or hyphen.
-- Titles name the subject in words, never a bare identifier.
+- Names first: a title is never a bare identifier, and a row, chip, menu
+  entry, crumb, cell or figure label names its subject in words, with the
+  identifier after it.
+- Context whole: no "...", ellipsis or clipped text; a long string wraps or
+  goes behind a disclosure.
+- Times are wall clock with a zone ("16:12 EST, 2 Nov"); a relative time
+  only accompanies it.
+- An entity view opens with what it is, for whom and why now, each as a
+  short phrase.
 - Sentence case, except the uppercase mono kicker.
 - No slogans, no "not X but Y" turns, no rhetorical triplets.
 

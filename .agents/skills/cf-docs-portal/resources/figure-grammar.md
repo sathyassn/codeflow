@@ -67,12 +67,13 @@ no box of text.
 ## 3. Altitude contract
 
 Figures lead at every altitude. Concept owns what the subject is, who it is for
-and what it is not. The other altitudes answer their own question and do not
-repeat Concept's.
+and what it is not. A view of one entity opens the same way, with what it is,
+for whom and why now as short phrases, whatever its altitude. The other
+altitudes answer their own question and do not repeat Concept's.
 
 | Altitude | Reader question | Families that answer it | Prose role |
 |---|---|---|---|
-| Concept | what is it, who is it for, what is it not | structure for what it is and its boundary; flow for what it does; extent for its edge, what it is not | one lead sentence above the figure; two to four plain sentences below |
+| Concept | what is it, who is it for, what is it not | structure for what it is and its boundary; flow for what it does; extent for its edge, what it is not | one lead sentence above the figure; two to four plain sentences below, each block within the 136-character budget |
 | Architecture | how do the parts relate and where are the boundaries | structure, layering, derivation, graph | one lead sentence; the acting sentences below; bullets where they scan better |
 | Technical | what exactly holds, in what order, and how far | sequence, state, coverage, extent | minimal; tables and evidence blocks carry the lookup |
 | How-to section | what do I do, in what order, and what tells me it worked | sequence, state or extent | one lead sentence, the steps as a list, the figure between them |

@@ -109,6 +109,29 @@ struct DistArtifactInventory {
 pub struct PortalValidationReport {
     pub checked_pages: usize,
     pub issues: Vec<String>,
+    /// The content text of each built page, by its built path, in reading
+    /// order, for the copy warnings (TSK-1255). Derived lookup pages, which
+    /// the binary generates, are left out. It never makes the report unclean.
+    pub page_text: Vec<(String, Vec<ContentBlock>)>,
+}
+
+/// One unit of a built page's content in reading order: a paragraph, a list
+/// with its items, or anything that is not text (a figure, table, code
+/// block, disclosure or embedded media).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContentBlock {
+    Paragraph(ContentText),
+    List(Vec<ContentText>),
+    Visual,
+}
+
+/// A paragraph's or list item's text as the page shows it, and the same
+/// text with its code blanked to spaces, for the checks that must not read
+/// code as prose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentText {
+    pub text: String,
+    pub prose: String,
 }
 impl PortalValidationReport {
     #[must_use]
@@ -231,6 +254,14 @@ struct Page {
     lookup: Option<figures::Lookup>,
     #[serde(default)]
     altitude_words: Option<figures::AltitudeWords>,
+}
+
+/// Whether a built page's copy is the author's to fix. A derived lookup
+/// page (the skill catalog, the policy reference, the capability registry)
+/// is generated from its source, so its copy warnings would name text no
+/// author edits. The class is checked against the configuration elsewhere.
+fn copy_checked(page: &Page) -> bool {
+    page.class.as_deref() != Some("derived-lookup")
 }
 
 #[derive(Clone)]
@@ -1123,6 +1154,11 @@ pub fn validate_portal_with(
                     continue;
                 }
             };
+            if copy_checked(page) {
+                report
+                    .page_text
+                    .push((artifact.path.clone(), figures::content_blocks(html)));
+            }
             let search_marker = format!(
                 "data-pagefind-body data-codeflow-search-root=\"{}\"",
                 page.route
@@ -4289,6 +4325,25 @@ mod tests {
             source_region: None,
             lookup: None,
             altitude_words: None,
+        }
+    }
+
+    /// TSK-1255: generated lookup pages are left out of the copy warnings;
+    /// every other class, and a page with no class, is read.
+    #[test]
+    fn copy_warnings_skip_derived_lookup_pages() {
+        let mut generated = page("docs/reference/policy.md");
+        generated.class = Some("derived-lookup".into());
+        assert!(!copy_checked(&generated));
+        for class in [
+            None,
+            Some("explanatory"),
+            Some("illustrated"),
+            Some("pass-through"),
+        ] {
+            let mut authored = page("docs/guide.md");
+            authored.class = class.map(Into::into);
+            assert!(copy_checked(&authored), "{class:?}");
         }
     }
 
