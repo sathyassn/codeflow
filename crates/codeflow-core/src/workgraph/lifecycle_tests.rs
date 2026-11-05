@@ -263,7 +263,9 @@ fn every_task_verb_matches_the_same_hand_edit() {
         };
         set_status(&root, RecordKind::Task, "TSK-001", &reopen).map(drop)
     });
-    assert!(reopened.contains("acceptance_superseded:\n  reason: \"regression found\"\n  reviewed:"));
+    assert!(
+        reopened.contains("acceptance_superseded:\n  reason: \"regression found\"\n  reviewed:")
+    );
     let cancelled = verb_and_hand_agree(&repo, TASK_PATH, || {
         let cancel = StatusChange {
             reason: Some("replaced".into()),

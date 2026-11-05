@@ -281,10 +281,10 @@ fn bind_completion_of(
         .map_err(|error| VerbError::Refused(vec![error.to_string()]))?
         .map(|resolved| resolved.target)
         .ok_or_else(|| {
-                    VerbError::Refused(vec![
-                        "cannot resolve the task target for reopen criteria".into()
-                    ])
-                })?;
+            VerbError::Refused(vec![
+                "cannot resolve the task target for reopen criteria".into()
+            ])
+        })?;
         let frozen = super::acceptance::reopened_criteria(
             &repo,
             &target,

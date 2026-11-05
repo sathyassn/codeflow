@@ -3057,13 +3057,19 @@ fn tsk416_a_claim_cuts_from_the_fetched_tip_or_refuses_a_differing_local_line() 
         "{}",
         text(&out)
     );
-    assert_eq!(git(root, &["rev-parse", &claimed(root, "TSK-003")]), fetched);
+    assert_eq!(
+        git(root, &["rev-parse", &claimed(root, "TSK-003")]),
+        fetched
+    );
     assert_eq!(git(root, &["rev-parse", line]), base);
 
     // Ahead: a local commit the fetched line lacks refuses the claim, from
     // a checkout where the record is visible, so its bare target is read.
     git(root, &["switch", "-q", "-C", line, &fetched]);
-    git(root, &["commit", "-q", "--allow-empty", "-m", "chore: unpushed"]);
+    git(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "chore: unpushed"],
+    );
     let ahead = git(root, &["rev-parse", "HEAD"]);
     let out = cli(root, &["work", "claim", "TSK-005"], None);
     assert!(!out.status.success(), "{}", text(&out));
@@ -3097,7 +3103,10 @@ fn tsk416_a_push_beside_a_stale_local_main_passes_the_pre_push_hook() {
     git(root, &["commit", "-qm", "chore: add the policy"]);
     let _remote = with_origin(root);
     let stale = git(root, &["rev-parse", "HEAD"]);
-    git(root, &["commit", "-q", "--allow-empty", "-m", "chore: advance"]);
+    git(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "chore: advance"],
+    );
     git(root, &["push", "-q", "origin", "main"]);
     let fetched = git(root, &["rev-parse", "HEAD"]);
     git(root, &["reset", "-q", "--hard", &stale]);
@@ -3172,7 +3181,10 @@ fn tsk416_a_copy_behind_the_pin_is_accepted_and_an_ahead_or_diverged_one_refused
     let on = format!("TSK-001@{pin}");
     let child = "task/TSK-002-work-tsk-002";
     for (local, remote) in [(&before, &pin), (&pin, &before)] {
-        git(root, &["update-ref", &format!("refs/heads/{branch}"), local]);
+        git(
+            root,
+            &["update-ref", &format!("refs/heads/{branch}"), local],
+        );
         git(root, &["update-ref", &copy, remote]);
         let out = cli(
             root,
@@ -3182,15 +3194,14 @@ fn tsk416_a_copy_behind_the_pin_is_accepted_and_an_ahead_or_diverged_one_refused
         succeeds(&out);
         assert_eq!(git(root, &["rev-parse", child]), pin);
         git(root, &["switch", "-q", child]);
-        git(root, &["commit", "-q", "--allow-empty", "-m", "feat: successor"]);
+        git(
+            root,
+            &["commit", "-q", "--allow-empty", "-m", "feat: successor"],
+        );
         let head = git(root, &["rev-parse", "HEAD"]);
         git(root, &["switch", "-q", "main"]);
         let push = push_check(root, child, &head, bin.path());
-        assert!(
-            !text(&push).contains("several tips"),
-            "{}",
-            text(&push)
-        );
+        assert!(!text(&push).contains("several tips"), "{}", text(&push));
         assert!(
             text(&push).contains("stacks on TSK-001's reviewed head"),
             "{}",
@@ -3200,10 +3211,16 @@ fn tsk416_a_copy_behind_the_pin_is_accepted_and_an_ahead_or_diverged_one_refused
     }
     git(root, &["update-ref", &format!("refs/heads/{branch}"), &pin]);
     git(root, &["switch", "-q", "--detach", &pin]);
-    git(root, &["commit", "-q", "--allow-empty", "-m", "feat: after"]);
+    git(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "feat: after"],
+    );
     let after = git(root, &["rev-parse", "HEAD"]);
     git(root, &["switch", "-q", "--detach", &before]);
-    git(root, &["commit", "-q", "--allow-empty", "-m", "feat: aside"]);
+    git(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "feat: aside"],
+    );
     let aside = git(root, &["rev-parse", "HEAD"]);
     git(root, &["switch", "-q", "main"]);
     for (other, shape) in [(&after, "is ahead of"), (&aside, "has diverged from")] {

@@ -542,9 +542,17 @@ fn provider_failure(stderr: &str) -> String {
         || lower.contains("could not resolve to a pullrequest")
     {
         "no pull request has this branch as its head"
-    } else if ["auth", "401", "403", "credential", "token", "logged in", "login"]
-        .iter()
-        .any(|word| lower.contains(word))
+    } else if [
+        "auth",
+        "401",
+        "403",
+        "credential",
+        "token",
+        "logged in",
+        "login",
+    ]
+    .iter()
+    .any(|word| lower.contains(word))
     {
         "the provider could not authenticate; check `gh auth status`"
     } else if [

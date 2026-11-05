@@ -7131,7 +7131,14 @@ fn tsk416_completion_accepts_a_waiver_on_origin_main_beside_a_stale_local_main()
         git(root, &["switch", "-q", "main"]);
         git(
             root,
-            &["merge", "-q", "--no-ff", "-m", "Merge plan", "plan/narrow-ac-1"],
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                "Merge plan",
+                "plan/narrow-ac-1",
+            ],
         );
         let merge = head(root);
         git(root, &["push", "-q", "origin", "main"]);
@@ -7191,12 +7198,22 @@ fn tsk416_a_reopen_completes_beside_a_local_main_behind_or_ahead() {
         );
         complete(root, "TSK-001", &landed_criteria, &first);
         git(root, &["switch", "-q", "main"]);
-        git(root, &["merge", "-q", "--no-ff", "-m", "Merge TSK-001", BRANCH]);
+        git(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "Merge TSK-001", BRANCH],
+        );
         let landed = head(root);
         git(root, &["push", "-q", "origin", "main"]);
         git(root, &["switch", "-q", "-c", "fix/TSK-001-again", &landed]);
         let reopen = codeflow()
-            .args(["task", "status", "TSK-001", "todo", "--reason", "fix: a regression: found # here"])
+            .args([
+                "task",
+                "status",
+                "TSK-001",
+                "todo",
+                "--reason",
+                "fix: a regression: found # here",
+            ])
             .current_dir(root)
             .output()
             .unwrap();
@@ -7228,7 +7245,11 @@ fn tsk416_a_reopen_completes_beside_a_local_main_behind_or_ahead() {
             )),
             pinned,
         );
-        assert_eq!(result.0, 0, "ahead: {ahead}, pinned: {pinned}: {}", result.1);
+        assert_eq!(
+            result.0, 0,
+            "ahead: {ahead}, pinned: {pinned}: {}",
+            result.1
+        );
     }
 }
 
@@ -7253,11 +7274,21 @@ fn tsk416_a_reopen_completes_beside_a_stale_local_holding_the_old_completion() {
         );
         complete(root, "TSK-001", OWN_JOURNEY, &first);
         git(root, &["switch", "-q", "main"]);
-        git(root, &["merge", "-q", "--no-ff", "-m", "Merge TSK-001", BRANCH]);
+        git(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "Merge TSK-001", BRANCH],
+        );
         let landed = head(root);
         git(root, &["push", "-q", "origin", "main"]);
         let reopen = codeflow()
-            .args(["task", "status", "TSK-001", "todo", "--reason", "a regression"])
+            .args([
+                "task",
+                "status",
+                "TSK-001",
+                "todo",
+                "--reason",
+                "a regression",
+            ])
             .current_dir(root)
             .output()
             .unwrap();
@@ -7287,7 +7318,9 @@ fn tsk416_a_reopen_completes_beside_a_stale_local_holding_the_old_completion() {
             true,
         );
         assert_eq!(result.0, 0, "{}", result.1);
-        assert!(std::fs::read_to_string(&path).unwrap().contains(&amended[..10]));
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains(&amended[..10]));
         commit(root, "docs(records): complete TSK-001 again");
         let judged = ci_on(root, "origin/main", "fix/TSK-001-again", "Task: TSK-001");
         assert_eq!(judged.0, 0, "{}", judged.1);

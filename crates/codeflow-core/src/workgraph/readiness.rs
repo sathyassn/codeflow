@@ -3321,7 +3321,11 @@ mod tests {
         assert!(!claimed.pushed);
         // Nothing is fetched, so the local branch decides and is named in
         // full (TSK-416 AC-3).
-        assert!(claimed.from.starts_with("refs/heads/main@"), "{}", claimed.from);
+        assert!(
+            claimed.from.starts_with("refs/heads/main@"),
+            "{}",
+            claimed.from
+        );
     }
 
     #[test]
@@ -4062,7 +4066,11 @@ mod tests {
         let backlog = backlog(root).unwrap();
         assert_eq!(entry(&backlog, "TSK-001").state, State::Ready);
         let claimed = claim(root, "TSK-001").unwrap();
-        assert!(claimed.from.starts_with("upstream/main@"), "{}", claimed.from);
+        assert!(
+            claimed.from.starts_with("upstream/main@"),
+            "{}",
+            claimed.from
+        );
         let published = run(origin.path(), &["branch", "--list"]);
         assert!(published.contains(&claimed.branch), "{published}");
         start_from(root, &claimed.branch).unwrap();

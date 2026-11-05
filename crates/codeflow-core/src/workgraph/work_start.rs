@@ -349,7 +349,9 @@ pub fn resolve_work_target(
         Ok(resolved) => Ok(resolved.map(|resolved| resolved.target)),
         // The local branch, by its exact ref: a bare name now reads the
         // fetched ref first, so it would not name the branch kept here.
-        Err(WorkStartError::DivergedTarget { local, .. }) => Ok(Some(format!("refs/heads/{local}"))),
+        Err(WorkStartError::DivergedTarget { local, .. }) => {
+            Ok(Some(format!("refs/heads/{local}")))
+        }
         Err(error) => Err(error),
     }
 }
@@ -5440,7 +5442,10 @@ mod tests {
         assert_eq!(resolved.target, "refs/heads/main");
         let repo = Repository::open(dir.path()).unwrap();
         assert_eq!(
-            target_reference(&repo, &resolved.target).unwrap().unwrap().id(),
+            target_reference(&repo, &resolved.target)
+                .unwrap()
+                .unwrap()
+                .id(),
             repo.find_reference("refs/remotes/upstream/main")
                 .unwrap()
                 .peel_to_commit()
@@ -5584,7 +5589,10 @@ mod tests {
             message.contains("git worktree add --detach <path> refs/remotes/origin/main"),
             "{message}"
         );
-        assert!(!message.contains("rebase") && !message.contains("reset"), "{message}");
+        assert!(
+            !message.contains("rebase") && !message.contains("reset"),
+            "{message}"
+        );
         // The unchecked resolver keeps its old answer, the local branch, by
         // its exact ref, for non-anchoring callers.
         assert_eq!(
@@ -6078,7 +6086,9 @@ permission_preset = "strict"
         // local branch is never read there; anchoring work still compares
         // the local branch with it and refuses.
         assert_eq!(
-            target_reference(&repo, "main").unwrap().map(|commit| commit.id()),
+            target_reference(&repo, "main")
+                .unwrap()
+                .map(|commit| commit.id()),
             Some(oid)
         );
         assert!(target_reference(&repo, "refs/heads/main").is_err());
@@ -6309,7 +6319,11 @@ mod stale_copy_tests {
         assert_eq!(name, "refs/remotes/origin/main");
         assert_eq!(tip.id().to_string(), fetched);
         assert_eq!(
-            target_reference(&repo, "main").unwrap().unwrap().id().to_string(),
+            target_reference(&repo, "main")
+                .unwrap()
+                .unwrap()
+                .id()
+                .to_string(),
             fetched
         );
         // Only when nothing of that name is fetched does the local branch decide.
@@ -6327,7 +6341,10 @@ mod stale_copy_tests {
         let upstream = git(root, &["rev-parse", "HEAD"]);
         let fork = commit(root, "fork");
         git(root, &["update-ref", "refs/remotes/origin/main", &fork]);
-        git(root, &["update-ref", "refs/remotes/upstream/main", &upstream]);
+        git(
+            root,
+            &["update-ref", "refs/remotes/upstream/main", &upstream],
+        );
         git(root, &["update-ref", "refs/heads/main", &upstream]);
         git(root, &["config", "remote.upstream.url", "/nowhere"]);
         git(
@@ -6413,7 +6430,11 @@ mod stale_copy_tests {
         git(root, &["update-ref", "refs/heads/task/TSK-001-work", local]);
         git(
             root,
-            &["update-ref", "refs/remotes/origin/task/TSK-001-work", remote],
+            &[
+                "update-ref",
+                "refs/remotes/origin/task/TSK-001-work",
+                remote,
+            ],
         );
     }
 

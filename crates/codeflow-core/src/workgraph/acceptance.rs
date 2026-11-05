@@ -6501,7 +6501,10 @@ mod judged_tip_tests {
         );
         git(root, &["update-ref", "refs/heads/main", &broken]);
         let error = tips(root).unwrap_err();
-        assert!(error.contains("cannot read the ancestry of refs/heads/main"), "{error}");
+        assert!(
+            error.contains("cannot read the ancestry of refs/heads/main"),
+            "{error}"
+        );
         assert!(error.contains(&broken), "{error}");
     }
 }
