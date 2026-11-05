@@ -1773,8 +1773,15 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     assert!(REGISTRY.contains("\npermissions:\n  contents: read\n"));
     assert!(!REGISTRY.contains("secrets.") && !REGISTRY.contains(": write"));
     assert!(POLICY.contains("\npermissions:\n  contents: read\n"));
+    // TSK-1177: the one secret is the authority App's key, read only by the
+    // authority job, never by the enforcing job.
+    assert_eq!(POLICY.matches("secrets.").count(), 1);
     assert!(
-        !POLICY.contains("secrets."),
+        job(POLICY, "authority").contains("APP_KEY: ${{ secrets.CODEFLOW_AUTHORITY_APP_KEY }}"),
+        "the authority job holds the App key"
+    );
+    assert!(
+        !job(POLICY, "commit-lint").contains("secrets."),
         "no secret reaches the enforcing job"
     );
     assert!(!POLICY.contains(": write"), "the token stays read-only");
