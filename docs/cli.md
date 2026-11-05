@@ -197,7 +197,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--line-tip <LINE>` | Judge the head as the next tip of this integration line, as a landing candidate is: every commit on the head's first-parent chain from the line's fetched tip (`origin/<LINE>`) must be a merge or a direct commit a landed `line_adoptions` entry names, the rule the pre-push hook applies to a push to the line (`work.epic_line`). Without it, a run with no pull request and no push context whose base is the fetched tip of exactly one epic line cannot tell how the head reaches the line and refuses when the head would add a direct commit; pass `--into <LINE>` or the body for a pull request head that lands by merge. |
 | `codeflow scan` | | Run the hosted secret scan and dependency audit locally over base..head |
 | | `--base <REF>` | The trusted base: a pull request's target, such as `origin/main`. Required. |
-| | `--head <REF>` | The head of the range (default: HEAD). Default `HEAD`. |
+| | `--head <REF>` | The head of the range. Default `HEAD`. |
 | | `--only <ONLY>` | Run only one scan. One of `secrets`, `deps`. |
 | `codeflow policy explain` | | Print the complete policy.json key schema: every key's type, default, valid values, and purpose |
 | `codeflow policy show` | | Print the effective policy: each key's current value, its source (project file or built-in default), and any invalid values |
