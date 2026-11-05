@@ -1,0 +1,11 @@
+id = "EPC-046"
+uid = "a3afdf8c-d040-4a54-9b58-9808ccdc9608"
+kind = "EPC"
+title = "Windows and coverage runs are complete and cheap"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:08:15Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
