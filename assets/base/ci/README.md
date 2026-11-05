@@ -276,8 +276,11 @@ Limits:
   key. Check your linter's release notes before upgrading it.
 - Concurrency groups are shared across the repository, so any workflow that
   names the same group can cancel a run of this check by using
-  `cancel-in-progress: true`; that fails closed, since a cancelled check
-  never passes, and requiring approval to run workflows from outside
+  `cancel-in-progress: true`. Cancelling a running job, or the run for a new
+  head, fails closed, since a cancelled check never passes. A pending run
+  cancelled before its job starts may leave no check at all, so an earlier
+  pass on the same head can stand for a body that run never judged. Requiring
+  approval to run workflows from outside
   collaborators (the repository's Actions settings) limits who can start such
   a workflow.
 
