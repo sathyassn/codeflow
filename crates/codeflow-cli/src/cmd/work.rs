@@ -303,6 +303,12 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
                 "work claim: {task_id} -> {} from {}",
                 claim.branch, claim.from
             );
+            if !claim.omitted_words.is_empty() {
+                println!(
+                    "  {}",
+                    codeflow_core::workgraph::light_paths::omitted_words_note(&claim.omitted_words)
+                );
+            }
             for information in &claim.informational_branches {
                 println!("  {}", codeflow_core::git::display_output(information));
             }

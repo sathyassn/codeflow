@@ -1581,6 +1581,8 @@ pub struct Claim {
     pub pushed: bool,
     /// Unrelated remote branches visible in the last-fetched refs.
     pub informational_branches: Vec<String>,
+    /// Title words left out of the name (`git.branch_name_omit_words`).
+    pub omitted_words: Vec<String>,
 }
 
 /// `git <args>` with its output as exact bytes.
@@ -2047,7 +2049,9 @@ pub fn claim_on(
     let title = records
         .get(task_id)
         .map_or("", |record| record.title.as_str());
-    let branch = format!("task/{task_id}-{}", super::light_paths::slug(title));
+    let policy = crate::hooks::policy::Policy::load(repo_root)?;
+    let named = super::light_paths::branch_slug(title, &policy.git.branch_name_omit_words);
+    let branch = format!("task/{task_id}-{}", named.slug);
     if let Some(current) = &renamed {
         rename_standalone_branch(repo_root, current, &branch, tip)?;
     } else {
@@ -2075,6 +2079,7 @@ pub fn claim_on(
         from: format!("{}@{}", shown(&selected.source), &tip.to_string()[..9]),
         pushed: has_origin,
         informational_branches: information,
+        omitted_words: named.omitted,
     })
 }
 

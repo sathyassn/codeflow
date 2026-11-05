@@ -221,6 +221,88 @@ fn claim_renames_branch_holding_new_standalone_record() {
     succeeds(&cli(root, &["work", "start", "TSK-003"], None));
 }
 
+/// Commit a ready task with this title on the fixture's `main`.
+fn titled_task(root: &Path, id: &str, title: &str) {
+    write(
+        root,
+        &format!("project-management/tasks/{id}.md"),
+        &record(id, "[]").replace(&format!("title: work {id}"), &format!("title: {title}")),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: plan a task"]);
+}
+
+/// The name that a sandbox left unreadable on 2026-11-03: the claim leaves
+/// the word out and says so, then the task starts on the shortened branch.
+#[test]
+fn claim_leaves_a_sandbox_denied_word_out_of_the_branch_name_and_says_so() {
+    let dir = fixture();
+    let root = dir.path();
+    titled_task(
+        root,
+        "TSK-003",
+        "Deleting a configured secret store is refused",
+    );
+    let out = cli(root, &["work", "claim", "TSK-003"], None);
+    succeeds(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("task/TSK-003-deleting-a-configured-store-is-refused"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("left \"secret\" out of the branch name"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("git.branch_name_omit_words"), "{stdout}");
+    git(
+        root,
+        &[
+            "switch",
+            "-q",
+            "task/TSK-003-deleting-a-configured-store-is-refused",
+        ],
+    );
+    succeeds(&cli(root, &["work", "start", "TSK-003"], None));
+}
+
+/// A title with no listed word gets its full name and no note.
+#[test]
+fn claim_says_nothing_when_it_left_nothing_out() {
+    let dir = fixture();
+    let root = dir.path();
+    titled_task(root, "TSK-003", "A credential token store");
+    let out = cli(root, &["work", "claim", "TSK-003"], None);
+    succeeds(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("task/TSK-003-a-credential-token-store"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("out of the branch name"), "{stdout}");
+}
+
+/// The list belongs to the project: its own words replace the default.
+#[test]
+fn claim_follows_the_project_word_list() {
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        ".codeflow/policy.json",
+        r#"{"git":{"branch_name_omit_words":["vault"]}}"#,
+    );
+    titled_task(root, "TSK-003", "Rotate the secret vault");
+    let out = cli(root, &["work", "claim", "TSK-003"], None);
+    succeeds(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("task/TSK-003-rotate-the-secret"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("left \"vault\" out"), "{stdout}");
+}
+
 #[test]
 #[cfg(unix)]
 fn review_lookup_binds_repository_and_bounds_descendant_stdout() {

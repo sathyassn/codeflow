@@ -4186,14 +4186,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // A failed open returns None, and classify_cleanup maps an unknown working state to RetainUnproven.
-    (
-        "crates/codeflow-core/src/status.rs",
-        "repository_dirty",
-        "obtain-absent:Repository::open",
-        1,
-        "unproven",
-    ),
     // A non-string schema_version becomes unsupported version Err; the empty placeholder is never an accepted default. run_gate propagates UnsupportedSchemaVersion as TestingError.
     (
         "crates/codeflow-core/src/testing/config/mod.rs",
@@ -7015,6 +7007,8 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/git/unreadable.rs", "read_regular_file", "is_file", 1, "Type check on symlink_metadata, which already succeeded; a non-file is not opened so a FIFO cannot block the scan, and it is reported as readable because only a refused stat or open counts (TSK-1315)."),
+    ("crates/codeflow-core/src/git/unreadable.rs", "walk", "is_dir", 1, "Type check on a read_dir entry only chooses to descend; a non-directory entry is still read, so no file is skipped as absent (TSK-1315)."),
     ("crates/codeflow-core/src/hooks/gitleaks.rs", "private::open_folder", "is_dir", 1, "Type check on the descriptor opened without following a link; anything but a directory this user owns with mode 0700 refuses, which fails the scan as incomplete (TSK-412)."),
     ("crates/codeflow-core/src/hooks/gitleaks.rs", "Engine::locate", "is_file", 1,"A PATH folder whose gitleaks is not a file is skipped; when no folder has one the engine is Missing, a git.secret_scan_engine finding that refuses at block, and a found file still runs only after its checksum matches the pin (TSK-412)."),
     ("crates/codeflow-core/src/hooks/sandbox_state.rs", "read_text", "is_file", 2, "Type checks on obtained metadata, before and after opening; any non-file is unreadable, a strict-rule trigger, so a FIFO, device or directory never reads as an absent layer (TSK-397)."),
