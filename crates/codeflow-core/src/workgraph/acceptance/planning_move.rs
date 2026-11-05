@@ -258,8 +258,8 @@ fn target_changes(
 /// The admitted edit from `before` to `after`, or which part of the record
 /// it changed beyond it.
 fn shape(before: &str, after: &str, scope: Scope) -> Result<Move, String> {
-    let old: Vec<&str> = before.lines().collect();
-    let new: Vec<&str> = after.lines().collect();
+    let old = record_lines(before);
+    let new = record_lines(after);
     let (old_end, new_end) = (frontmatter_len(&old), frontmatter_len(&new));
     if old_end == 0 || new_end == 0 {
         return Err("the front matter cannot be read".into());
@@ -372,8 +372,8 @@ fn added_lines(
         if scanned.kind != LineKind::Text
             || scanned.visible != *line
             || scanned.heading.is_some()
-            || line.trim().is_empty()
-            || line.trim_start().starts_with('#')
+            || line.trim_matches([' ', '\t']).is_empty()
+            || line.trim_start_matches([' ', '\t']).starts_with('#')
         {
             return Err(format!(
                 "the line `{line}` added in {section} changes how the record parses"
@@ -403,14 +403,31 @@ fn is_epic_line(line: &str) -> bool {
 
 /// The key a front matter line sets, for messages.
 fn field_name(line: &str) -> &str {
-    line.split_once(':').map_or(line, |(key, _)| key).trim()
+    line.split_once(':')
+        .map_or(line, |(key, _)| key)
+        .trim_matches([' ', '\t'])
 }
 
-/// The parsed front matter fields and the body of a record.
+/// The record's lines as [`reviewed_part`] splits them: at LF, with one
+/// trailing CR removed from each line and no empty line after a final LF.
+fn record_lines(text: &str) -> Vec<&str> {
+    let text = text.strip_suffix('\n').unwrap_or(text);
+    if text.is_empty() {
+        return Vec::new();
+    }
+    text.split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect()
+}
+
+/// The parsed front matter fields and the body of a record. A body that
+/// is not UTF-8 is an error, never decoded lossily.
 fn front_matter(content: &str) -> Result<(HashMap<String, serde_yaml::Value>, String), String> {
-    crate::validate::parse_frontmatter(content.as_bytes())
-        .map(|(data, body)| (data, String::from_utf8_lossy(&body).into_owned()))
-        .map_err(|error| format!("the front matter cannot be read: {error}"))
+    let (data, body) = crate::validate::parse_frontmatter(content.as_bytes())
+        .map_err(|error| format!("the front matter cannot be read: {error}"))?;
+    let body =
+        String::from_utf8(body).map_err(|error| format!("the body cannot be read: {error}"))?;
+    Ok((data, body))
 }
 
 /// The lines of the level-two section `heading`, when the record has it.
