@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "status": "adopted",
+  "rationale": "The operator chose issue 334's time-box bands and clock as CodeFlow's starting model (2026-11-01); each planned task carries a band as a stop rule beside scenario forecasts.",
+  "method_version": "codeflow-agentic-2",
+  "root": "project-management/estimates",
+  "re_offer_when": "The delivery boundary, the review route or the planning authority changes, or the first epic closed under the profile shows the bands do not fit."
+}
