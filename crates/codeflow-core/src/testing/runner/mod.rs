@@ -1673,12 +1673,21 @@ mod tests {
         assert_eq!(result.exit_code, 1);
     }
 
+    /// The work outlasts the base timeout and ends well inside the ceiling.
+    /// Windows `PowerShell` can take about 3 s to start on a loaded hosted
+    /// runner, so there the base is 3 s (ceiling 12 s) and the work 3.6 s.
     #[test]
     fn a_heavy_target_keeps_progressing_past_the_base_timeout() {
-        let command = if cfg!(windows) {
-            "1..6 | ForEach-Object { Write-Output 'PASS work'; Start-Sleep -Milliseconds 300 }"
+        let (command, base) = if cfg!(windows) {
+            (
+                "1..12 | ForEach-Object { Write-Output 'PASS work'; Start-Sleep -Milliseconds 300 }",
+                3,
+            )
         } else {
-            "for i in 1 2 3 4 5 6; do echo 'PASS work'; sleep 0.3; done"
+            (
+                "for i in 1 2 3 4 5 6; do echo 'PASS work'; sleep 0.3; done",
+                1,
+            )
         };
         let mut target = make_target("reduced-workers", command);
         if cfg!(windows) {
@@ -1688,7 +1697,7 @@ mod tests {
         target.workers = Some(4);
         target.env.insert("CARGO_BUILD_JOBS".into(), "1".into());
         target.env.insert("NEXTEST_TEST_THREADS".into(), "1".into());
-        target.timeout_seconds = Some(1);
+        target.timeout_seconds = Some(base);
         let dir = tempfile::tempdir().unwrap();
         let result = run_target(&target, "full", dir.path()).unwrap();
         assert_eq!(result.exit_code, 0, "active work was killed: {result:?}");
