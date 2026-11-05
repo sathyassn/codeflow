@@ -546,6 +546,8 @@ Heavy runs share the host by capacity and start with fewer jobs past its
 budget; only a `host_exclusive` target runs alone
 ([details](troubleshooting.md#heavy-work-shares-the-host)).
 
+Heavy-target deadlines: [test gate reference](test-gate.md#technical).
+
 - A gate that runs cargo warns about a `CARGO_TARGET_DIR` outside the
   worktree, and each target prints a start line on stderr as it begins.
 - A killed gate's slot stays busy while its target runs. On Windows the

@@ -336,9 +336,28 @@ version for an unparsable one.
 A `git.test_gate_on_push` failure names each failed target and its cause:
 an exit code, a timeout with its limit, a termination signal on Unix, or a
 runner error. Run `codeflow test --mode quick` to reproduce the failure,
-then fix the named target before pushing again. A timeout uses that target's
-`timeout_seconds` value in `.codeflow/test-config.json`, or 600 seconds when
-it is omitted. Check why the command is slow before increasing the limit.
+then fix the named target before pushing again. Light targets use the fixed
+`timeout_seconds` value in `.codeflow/test-config.json`, default 600 seconds.
+Heavy targets use a ceiling four times that base and a separate
+`stall_timeout_seconds` window, default 300 seconds. New output or increasing
+scoped CPU counts as activity. A silent computing test can exceed the stall
+window while a silent idle target stalls when accounting is complete.
+
+`early stall unavailable` means the run uses the ceiling. Linux needs existing
+writable cgroup v2 delegation and placement before workload execution for
+early stalls; no delegation is set up automatically. An unexpected population
+transition, an unpopulated group with a live child, changed launch-child
+membership or unreadable accounting selects the ceiling. macOS is ceiling-only in 4.0.0. The monitoring reason is
+retained in the summary and run report. Five-minute progress lines show tests
+done or unknown and CPU state without extending the deadline. Check this
+evidence before increasing a limit.
+
+`stalled: no progress for N s (workers W of M)` and `timed out at the ceiling
+after S s` both fail, with exit 124. Dependents name the prerequisite's cause.
+Cleanup has a grace, `cleanup_grace_seconds`, default five seconds; the gate
+kills a supervised group still running at half of it. An open descendant pipe or unconfirmed
+termination cannot turn a timeout into a pass. The run report retains
+`termination_unconfirmed` for the allocation/lease consumer (TSK-1279).
 
 If all target commands pass but tracked files change during the gate, the
 block names those files. Review and commit the intended generated changes,
