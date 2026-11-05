@@ -1,19 +1,22 @@
+import { settings, type Theme } from "./tokens.ts";
 import { normalizeSkin, normalizeTypeface } from "./appearance-values";
 
 (() => {
-  const themes = new Set(["graphite", "slate", "sage"]);
-  const modes = new Set(["system", "light", "dark"]);
+  const themes = new Set<string>(Object.keys(settings.themes));
+  const modes = new Set<string>(settings.modes);
   const typefaces = new Set(["archivo", "inter", "plex"]);
-  const scales = new Set(["compact", "default", "large"]);
+  const scales = new Set<string>(settings.sizes);
   let storedTheme: string | null = null;
   let storedMode: string | null = null;
   let storedTypeface: string | null = null;
   let storedScale: string | null = null;
+  let storedAccent: string | null = null;
   try {
     storedTheme = normalizeSkin(localStorage.getItem("cf-present-theme"));
     storedMode = localStorage.getItem("cf-present-mode");
     storedTypeface = normalizeTypeface(localStorage.getItem("cf-present-typeface"));
     storedScale = localStorage.getItem("cf-present-scale");
+    storedAccent = localStorage.getItem("cf-present-accent");
   } catch {
     // Defaults below remain usable when storage is unavailable.
   }
@@ -29,6 +32,8 @@ import { normalizeSkin, normalizeTypeface } from "./appearance-values";
       : mode;
   const root = document.documentElement;
   root.dataset.cfTheme = theme;
+  const choices: readonly string[] = settings.themes[theme as Theme];
+  root.dataset.cfAccent = storedAccent && choices.includes(storedAccent) ? storedAccent : settings.defaultAccent;
   root.dataset.cfMode = mode;
   root.dataset.cfModeResolved = resolved;
   root.dataset.cfTypeface = typeface;
