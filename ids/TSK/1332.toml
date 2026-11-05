@@ -1,0 +1,11 @@
+id = "TSK-1332"
+uid = "763e85a5-496d-4d73-ac1f-873b1ccd99ac"
+kind = "TSK"
+title = "Workers, seats and attempts are recorded in the coordination ledger"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:06:05Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
