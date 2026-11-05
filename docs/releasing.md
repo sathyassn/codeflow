@@ -125,7 +125,12 @@ Local-artifact authority job:
   - `codeflow gates` is the one verdict over the gate's parallel parts, its
     coverage shards and their report, which applies the line floor.
   - `windows` is the one verdict over the Windows build, checks, test
-    partitions and journeys.
+    partitions and journeys. It is computed from each job's result and names
+    every job that is not green. A pull request into an integration line that
+    touches nothing the partitions compile or read takes the reduced tier,
+    which skips the build, the partitions and their journey job; pushes, runs
+    on a schedule or by hand, pull requests into main and any change the tier
+    step cannot read take the full tier (TSK-1321).
   - On a push to main or to an integration line whose merge commit has
     exactly the tree of a pull request head whose `codeflow-ci` run passed
     every job, both verdicts pass by naming that run and the gate and

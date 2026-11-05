@@ -358,6 +358,17 @@ class GateContracts(unittest.TestCase):
         self.assertFalse(profiles['essential']['fail-fast'])
         self.assertEqual(profiles['essential']['junit']['path'], 'junit.xml')
         self.assertNotIn('default-filter', profiles['essential'])
+        # TSK-1321 AC-6: the per-test bound is for the hosted Windows partitions
+        # only; the local gates' slow tests keep running while active (TSK-1278).
+        hosted = profiles['windows-hosted']
+        self.assertEqual(hosted['slow-timeout'], {'period': '120s', 'terminate-after': 5})
+        self.assertNotIn('slow-timeout', profiles['codeflow'])
+        self.assertNotIn('slow-timeout', profiles['essential'])
+        self.assertEqual(hosted['overrides'], profiles['codeflow']['overrides'])
+        self.assertFalse(hosted['fail-fast'])
+        self.assertEqual(hosted['junit']['path'], 'junit.xml')
+        self.assertNotIn('default-filter', hosted)
+        self.assertNotIn('inherits', hosted)
         for name in ('read-benchmark', 'prose-exhaustive'):
             self.assertEqual(set(targets[name]['modes']), {'full'})
 

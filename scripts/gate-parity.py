@@ -86,17 +86,19 @@ def local_rust_commands(cfg: dict, notes: list[str] | None = None) -> set[str]:
 # TSK-203: the Windows suite runs in nextest partitions. TSK-265: one job
 # builds the suite into a nextest archive and each partition runs that
 # archive. TSK-1321: each runs `--partition hash:<n>/<count>`, which gives
-# every test exactly one partition by the hash of its name. The archived run
-# stands for the whole suite only when the archive is built from the whole
-# workspace with the same profile, and the matrix runs every partition from 1
-# to the run's count exactly once. The Windows journeys job checks each run's
-# results against the archive's test list (scripts/partition-check.py).
+# every test exactly one partition by the hash of its name, under the
+# windows-hosted profile, which adds the per-test bound to the codeflow
+# profile's settings. The archived run stands for the whole suite only when the
+# archive is built from the whole workspace with the codeflow profile, and the
+# matrix runs every partition from 1 to the run's count exactly once. The
+# Windows journeys job checks each run's results against the archive's test
+# list (scripts/partition-check.py).
 # TSK-1242: the reduced tier's journey run is a named subset, never the suite,
 # so it is pinned by TIER_JOURNEYS_JOB and owes no local parity.
 ARCHIVE = re.compile(r"^cargo nextest archive --workspace --profile codeflow --archive-file (\S+)$")
 ARCHIVED_RUN = re.compile(
     r"^cargo nextest run --archive-file (\S+) --workspace-remap \. --extract-to \. --extract-overwrite "
-    r"--no-fail-fast --profile codeflow --partition hash:\$\{\{ matrix\.partition \}\}/([1-9][0-9]*)$")
+    r"--no-fail-fast --profile windows-hosted --partition hash:\$\{\{ matrix\.partition \}\}/([1-9][0-9]*)$")
 TIER_RUN = ('cargo nextest run --workspace --no-fail-fast --profile codeflow '
             '-E "$(python -B scripts/journey-gate.py --nextest-filter --skip-benchmark)"')
 

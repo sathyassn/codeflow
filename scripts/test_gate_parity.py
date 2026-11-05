@@ -376,7 +376,7 @@ class GateBinaryControls(unittest.TestCase):
 
 
 ARCHIVED_RUN = ('cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . '
-                '--extract-overwrite --no-fail-fast --profile codeflow --partition hash:${{ matrix.partition }}/16')
+                '--extract-overwrite --no-fail-fast --profile windows-hosted --partition hash:${{ matrix.partition }}/16')
 ARCHIVE = "cargo nextest archive --workspace --profile codeflow --archive-file target/windows-tests.tar.zst"
 
 
@@ -431,6 +431,8 @@ class WindowsPartitionControls(unittest.TestCase):
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--archive-file target/windows-tests.tar.zst",
                                                              "--archive-file target/other.tar.zst")),
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--no-fail-fast ", "")),
+                         # The codeflow profile has no per-test bound (AC-6).
+                         (ARCHIVED_RUN, ARCHIVED_RUN.replace("--profile windows-hosted", "--profile codeflow")),
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--partition hash:", "--partition count:")),
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--partition hash:${{ matrix.partition }}/16",
                                                              "--partition hash:1/16"))):
