@@ -1,0 +1,11 @@
+id = "EPC-042"
+uid = "3e5ef16d-718b-43b2-b5c3-d4ab125291e1"
+kind = "EPC"
+title = "Present tokens, type and brand"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-05T03:05:00Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
