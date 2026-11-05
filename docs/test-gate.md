@@ -41,7 +41,9 @@ that folder to `~/.codeflow/gate-runs/<repo>/<run id>/`. The record,
 `name`, `state` (`passed`, `failed`, `stalled`, `timed_out`,
 `cleanup_incomplete`, `not_run`, `skipped_in_ci` or `skipped`) and
 `duration_ms`; its `results` hold each run target's exit code and captured
-output. Targets outside an `--only` selection are not listed. The managed
+output. A gate that fails before a target runs adds a `(gate)` entry with
+its error and lists each scheduled target as `not_run` with that error.
+Targets outside an `--only` selection are not listed. The managed
 GitHub workflow uploads the record as an artifact after every gate, pass
 or fail, so a hosted run's results can be read through the GitHub API. Every one of these
 writes, and the gate's lock files, walks from a held handle of a trusted

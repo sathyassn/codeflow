@@ -274,7 +274,10 @@ jq '.outcomes' */run.json
 The record holds whatever the targets print, and anyone who can read the
 repository's Actions runs can download it, as they can read the job log. A
 target that prints a credential puts it in the record, where GitHub's log
-masking does not reach.
+masking does not reach. Classify such a variable as `sensitive` in the
+target's `evidence.environment` in `.codeflow/test-config.json`; the gate
+then redacts its value from the captured output before the record is
+written.
 
 ## Project setup hook
 
