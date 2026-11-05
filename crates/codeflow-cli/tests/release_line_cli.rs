@@ -4835,9 +4835,9 @@ fn http_origin(bare: &Path, mode: Origin, requests: Requests) -> String {
                 );
             };
             match &mode {
-                Origin::RedirectTo(base) => {
+                Origin::RedirectTo(elsewhere) => {
                     let _ = stream.write_all(
-                        format!("HTTP/1.1 302 Found\r\nLocation: {base}{target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(),
+                        format!("HTTP/1.1 302 Found\r\nLocation: {elsewhere}{target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(),
                     );
                     continue;
                 }
@@ -4855,56 +4855,67 @@ fn http_origin(bare: &Path, mode: Origin, requests: Requests) -> String {
                 }
                 Origin::Requires(_) => {}
             }
-            let (path, query) = target.split_once('?').unwrap_or((&target, ""));
-            let rest = path.strip_prefix("/owner/private.git").unwrap_or(path);
-            let mut cgi = Command::new("git");
-            cgi.arg("http-backend")
-                .env_clear()
-                .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .env("GIT_CONFIG_NOSYSTEM", "1")
-                .env("GIT_HTTP_EXPORT_ALL", "1")
-                .env("REQUEST_METHOD", &method)
-                .env("PATH_TRANSLATED", format!("{}{rest}", bare.display()))
-                .env("QUERY_STRING", query)
-                .env("REMOTE_ADDR", "127.0.0.1")
-                .env("CONTENT_LENGTH", body.len().to_string())
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped());
-            for (name, variable) in [
-                ("content-type", "CONTENT_TYPE"),
-                ("content-encoding", "HTTP_CONTENT_ENCODING"),
-                ("git-protocol", "HTTP_GIT_PROTOCOL"),
-            ] {
-                if let Some(value) = header(name) {
-                    cgi.env(variable, value);
-                }
-            }
-            let mut child = cgi.spawn().unwrap();
-            child.stdin.take().unwrap().write_all(&body).unwrap();
-            let out = child.wait_with_output().unwrap().stdout;
-            let split = out
-                .windows(4)
-                .position(|w| w == b"\r\n\r\n")
-                .map_or((out.len(), 0), |at| (at, 4));
-            let cgi_head = String::from_utf8_lossy(&out[..split.0]).into_owned();
-            let mut status = "200 OK".to_string();
-            let mut response = String::new();
-            for line in cgi_head.lines() {
-                if let Some(value) = line.strip_prefix("Status:") {
-                    status = value.trim().to_string();
-                } else if !line.is_empty() {
-                    response.push_str(line);
-                    response.push_str("\r\n");
-                }
-            }
-            let _ = stream.write_all(
-                format!("HTTP/1.1 {status}\r\n{response}Connection: close\r\n\r\n").as_bytes(),
-            );
-            let _ = stream.write_all(&out[split.0 + split.1..]);
+            serve_backend(&mut stream, &bare, &method, &target, &header, &body);
         }
     });
     format!("http://127.0.0.1:{port}")
+}
+
+/// Answer one request by running `git http-backend` on `bare` as CGI.
+fn serve_backend(
+    stream: &mut std::net::TcpStream,
+    bare: &Path,
+    method: &str,
+    target: &str,
+    header: &dyn Fn(&str) -> Option<String>,
+    body: &[u8],
+) {
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let rest = path.strip_prefix("/owner/private.git").unwrap_or(path);
+    let mut cgi = Command::new("git");
+    cgi.arg("http-backend")
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_HTTP_EXPORT_ALL", "1")
+        .env("REQUEST_METHOD", method)
+        .env("PATH_TRANSLATED", format!("{}{rest}", bare.display()))
+        .env("QUERY_STRING", query)
+        .env("REMOTE_ADDR", "127.0.0.1")
+        .env("CONTENT_LENGTH", body.len().to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
+    for (name, variable) in [
+        ("content-type", "CONTENT_TYPE"),
+        ("content-encoding", "HTTP_CONTENT_ENCODING"),
+        ("git-protocol", "HTTP_GIT_PROTOCOL"),
+    ] {
+        if let Some(value) = header(name) {
+            cgi.env(variable, value);
+        }
+    }
+    let mut child = cgi.spawn().unwrap();
+    child.stdin.take().unwrap().write_all(body).unwrap();
+    let out = child.wait_with_output().unwrap().stdout;
+    let split = out
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map_or((out.len(), 0), |at| (at, 4));
+    let cgi_head = String::from_utf8_lossy(&out[..split.0]).into_owned();
+    let mut status = "200 OK".to_string();
+    let mut response = String::new();
+    for line in cgi_head.lines() {
+        if let Some(value) = line.strip_prefix("Status:") {
+            status = value.trim().to_string();
+        } else if !line.is_empty() {
+            response.push_str(line);
+            response.push_str("\r\n");
+        }
+    }
+    let _ = stream
+        .write_all(format!("HTTP/1.1 {status}\r\n{response}Connection: close\r\n\r\n").as_bytes());
+    let _ = stream.write_all(&out[split.0 + split.1..]);
 }
 
 /// Every request in `requests` that carried an `Authorization` header.

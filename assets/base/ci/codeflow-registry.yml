@@ -162,7 +162,7 @@ jobs:
           set -euo pipefail
           # The checkout keeps no credential (persist-credentials: false), so
           # a private repository's fetch carries the run's read-only token
-          # for this step only: through git's configuration environment,
+          # for this step only: through git's GIT_CONFIG_* variables,
           # scoped to this repository's URL, masked, never written to git
           # config or a file, and gone when the step ends.
           basic=$(printf 'x-access-token:%s' "$FETCH_TOKEN" | base64 | tr -d '\n')
