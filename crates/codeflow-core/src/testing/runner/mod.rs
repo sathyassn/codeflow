@@ -8,11 +8,22 @@ use std::io::Read;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(all(test, not(windows)))]
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use crate::testing::config::{CommandShell, Tag, TargetConfig};
 use crate::testing::error::TestingError;
+
+#[cfg(target_os = "linux")]
+mod cgroup;
+pub mod deadline;
+mod output;
+mod process;
+use deadline::{Supervision, TargetStatus, WorkerGrant};
+#[cfg(all(test, unix))]
+pub(crate) use process::complete_bookkeeping_before as finish_cleanup_before;
 
 #[cfg(unix)]
 mod group_watch;
@@ -64,6 +75,8 @@ const OUTPUT_CAPTURE_LIMIT: usize = 1024 * 1024;
 /// Result of running a single target's test command.
 #[derive(Debug, Clone)]
 pub struct TargetRunResult {
+    pub supervision: Option<Supervision>,
+    pub termination_unconfirmed: bool,
     pub target_name: String,
     pub exit_code: i32,
     /// Failure detail when no ordinary process exit code explains the result.
@@ -79,6 +92,22 @@ pub struct TargetRunResult {
     pub evidence: Option<serde_json::Value>,
 }
 
+impl TargetRunResult {
+    #[must_use]
+    pub fn status(&self) -> TargetStatus {
+        let status = deadline::result_status(
+            self.exit_code,
+            self.error.as_deref(),
+            self.supervision.as_ref(),
+        );
+        if self.termination_unconfirmed && status == TargetStatus::Passed {
+            TargetStatus::CleanupIncomplete
+        } else {
+            status
+        }
+    }
+}
+
 /// Run a single target's command for the specified mode.
 ///
 /// # Errors
@@ -90,6 +119,38 @@ pub fn run_target(
     mode: &str,
     project_dir: &Path,
 ) -> Result<TargetRunResult, TestingError> {
+    run_target_with_workers(target, mode, project_dir, None)
+}
+
+fn run_target_with_workers(
+    target: &TargetConfig,
+    mode: &str,
+    project_dir: &Path,
+    workers: Option<WorkerGrant>,
+) -> Result<TargetRunResult, TestingError> {
+    for (key, value) in [
+        ("timeout_seconds", target.timeout_seconds),
+        ("stall_timeout_seconds", target.stall_timeout_seconds),
+    ] {
+        if value.is_some_and(|v| v == 0 || v > deadline::MAX_TIMEOUT_SECONDS) {
+            return Err(TestingError::ConfigInvalid {
+                path: project_dir.join(".codeflow/test-config.json"),
+                message: format!("{key} must be in 1..={}", deadline::MAX_TIMEOUT_SECONDS),
+            });
+        }
+    }
+    if target
+        .cleanup_grace_seconds
+        .is_some_and(|v| v == 0 || v > deadline::MAX_CLEANUP_GRACE_SECONDS)
+    {
+        return Err(TestingError::ConfigInvalid {
+            path: project_dir.join(".codeflow/test-config.json"),
+            message: format!(
+                "cleanup_grace_seconds must be in 1..={}",
+                deadline::MAX_CLEANUP_GRACE_SECONDS
+            ),
+        });
+    }
     let mode_cmd = target
         .modes
         .get(mode)
@@ -104,39 +165,49 @@ pub fn run_target(
     let timeout = Duration::from_secs(timeout_secs);
 
     let start = Instant::now();
-    let outcome = spawn_command(target, &mode_cmd.command, &cwd, timeout)?;
+    let outcome = spawn_command(target, &mode_cmd.command, &cwd, timeout, workers)?;
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     let report_path = target.report.as_ref().map(|r| cwd.join(&r.path));
     let coverage_path = target.coverage.as_ref().map(|c| cwd.join(&c.path));
 
-    // On timeout the target FAILS loudly: force a non-zero exit code and append
-    // a message naming the timeout and the `timeout_seconds` config field, while
-    // preserving whatever partial output was captured before the kill.
-    let (exit_code, stderr) = if outcome.timed_out {
-        (
-            TIMEOUT_EXIT_CODE,
-            format!(
-                "{}\n[codeflow test] TIMEOUT: target '{}' exceeded its {timeout_secs}s wall-clock \
-                 limit and was killed. Raise the `timeout_seconds` field for this target if the \
-                 command legitimately needs longer.\n",
-                outcome.stderr,
-                crate::git::display_text(&target.name),
-            ),
-        )
-    } else {
-        (outcome.exit_code, outcome.stderr)
-    };
-
-    let error = if outcome.timed_out {
-        Some(format!("timeout after {timeout_secs}s"))
+    let mut stderr = outcome.stderr;
+    if let Some(reason) = &outcome.supervision.early_stall_unavailable {
+        let _ = writeln!(stderr, "[codeflow test] early stall unavailable: {reason}");
+    }
+    let error = if matches!(
+        outcome.supervision.status,
+        TargetStatus::Stalled | TargetStatus::TimedOut | TargetStatus::CleanupIncomplete
+    ) {
+        let detail = outcome.supervision.detail();
+        let _ = writeln!(stderr, "[codeflow test] {detail}");
+        if matches!(
+            outcome.supervision.status,
+            TargetStatus::Stalled | TargetStatus::TimedOut
+        ) {
+            let name = crate::git::display_text(&target.name);
+            if outcome.supervision.heavy {
+                let _ = writeln!(stderr,
+                    "[codeflow test] target '{name}': check activity before changing stall_timeout_seconds or timeout_seconds (the ceiling is {}x timeout_seconds)",
+                    deadline::HEAVY_TIMEOUT_MULTIPLIER);
+            } else {
+                let _ = writeln!(stderr,
+                    "[codeflow test] target '{name}': check activity before increasing timeout_seconds");
+            }
+        }
+        Some(detail)
     } else {
         outcome
             .signal
             .map(|signal| format!("killed by signal {signal}"))
     };
-
+    for detail in &outcome.supervision.cleanup_details {
+        let _ = writeln!(stderr, "[codeflow test] cleanup: {detail}");
+    }
+    let exit_code = outcome.exit_code;
     Ok(TargetRunResult {
+        supervision: Some(outcome.supervision),
+        termination_unconfirmed: outcome.termination_unconfirmed,
         error,
         evidence: None,
         target_name: target.name.clone(),
@@ -415,7 +486,7 @@ pub fn run_dependency_targets_with_admission(
     let (tx, rx) = channel();
     let mut pending: BTreeSet<usize> = (0..targets.len()).collect();
     let mut running = BTreeSet::new();
-    let mut completed = BTreeMap::<String, bool>::new();
+    let mut completed = BTreeMap::<String, TargetStatus>::new();
     let mut results = BTreeMap::new();
     let mut exclusive_running = false;
     while !pending.is_empty() || !running.is_empty() {
@@ -427,19 +498,22 @@ pub fn run_dependency_targets_with_admission(
         }
         for index in candidates {
             let target = &targets[index];
-            let prerequisite_failed = target
+            let prerequisite_failure = target
                 .requires
                 .iter()
-                .any(|r| completed.get(r) == Some(&false));
-            if prerequisite_failed || (execution.fail_fast && completed.values().any(|ok| !ok)) {
-                let reason = if prerequisite_failed {
-                    "not run: prerequisite failed"
-                } else {
-                    "not run: fail_fast"
-                };
+                .filter_map(|name| completed.get(name).copied())
+                .find(|status| *status != TargetStatus::Passed);
+            if prerequisite_failure.is_some()
+                || (execution.fail_fast && completed.values().any(|s| *s != TargetStatus::Passed))
+            {
+                let reason =
+                    prerequisite_failure.map_or("not run: fail_fast", TargetStatus::prerequisite);
                 progress!("[codeflow test] {}: {reason}", target.name);
                 let result = not_run(target, reason);
-                completed.insert(target.name.clone(), false);
+                completed.insert(
+                    target.name.clone(),
+                    prerequisite_failure.unwrap_or(TargetStatus::Failed),
+                );
                 results.insert(index, Ok(result));
                 pending.remove(&index);
                 continue;
@@ -449,7 +523,7 @@ pub fn run_dependency_targets_with_admission(
                 || !target
                     .requires
                     .iter()
-                    .all(|r| completed.get(r) == Some(&true))
+                    .all(|r| completed.get(r) == Some(&TargetStatus::Passed))
             {
                 continue;
             }
@@ -498,7 +572,7 @@ pub fn run_dependency_targets_with_admission(
                         let reason = format!("not run: heavy target refused: {message}");
                         progress!("[codeflow test] {}: {reason}", target.name);
                         results.insert(index, Ok(not_run(target, &reason)));
-                        completed.insert(target.name.clone(), false);
+                        completed.insert(target.name.clone(), TargetStatus::Failed);
                         pending.remove(&index);
                         continue;
                     }
@@ -518,7 +592,7 @@ pub fn run_dependency_targets_with_admission(
                         let reason = format!("not run: host-exclusive target refused: {message}");
                         progress!("[codeflow test] {}: {reason}", target.name);
                         results.insert(index, Ok(not_run(target, &reason)));
-                        completed.insert(target.name.clone(), false);
+                        completed.insert(target.name.clone(), TargetStatus::Failed);
                         pending.remove(&index);
                         continue;
                     }
@@ -528,6 +602,7 @@ pub fn run_dependency_targets_with_admission(
             let free_workers =
                 budget.map(|budget| budget.saturating_sub(allocations.values().sum()));
             let mut target = target.clone();
+            let mut worker_grant = None;
             // Heavy targets always take a share of the host-bounded budget. A
             // budget below what the run would otherwise use (its
             // `worker_budget`, else every core) also sizes each target not
@@ -546,7 +621,7 @@ pub fn run_dependency_targets_with_admission(
                                 && targets[i]
                                     .requires
                                     .iter()
-                                    .all(|r| completed.get(r) == Some(&true))
+                                    .all(|r| completed.get(r) == Some(&TargetStatus::Passed))
                         })
                         .count();
                     let shares = if target.exclusive || target.host_exclusive {
@@ -560,6 +635,10 @@ pub fn run_dependency_targets_with_admission(
                         .workers
                         .map_or_else(|| (free / shares).max(1), |width| width.min(free).max(1));
                     allocations.insert(index, workers);
+                    worker_grant = Some(WorkerGrant {
+                        granted: workers,
+                        full: target.workers.unwrap_or(unbounded),
+                    });
                     for key in ["CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"] {
                         target.env.insert(key.into(), workers.to_string());
                     }
@@ -589,7 +668,15 @@ pub fn run_dependency_targets_with_admission(
             std::thread::spawn(move || {
                 announce_start(&target, &mode);
                 let result = std::panic::catch_unwind(|| {
-                    run_owed_target(&target, &mode, &root, &baseline, &run_dir, &declarations)
+                    run_owed_target(
+                        &target,
+                        &mode,
+                        &root,
+                        &baseline,
+                        &run_dir,
+                        &declarations,
+                        worker_grant,
+                    )
                 })
                 .unwrap_or_else(|_| {
                     Err(TestingError::ParallelExecutionError {
@@ -641,13 +728,15 @@ pub fn run_dependency_targets_with_admission(
         if host_hold.as_ref().is_some_and(|(held, _)| *held == index) {
             host_hold = None;
         }
-        let passed = result.as_ref().is_ok_and(|r| r.exit_code == 0);
+        let status = result
+            .as_ref()
+            .map_or(TargetStatus::Failed, TargetRunResult::status);
         progress!(
             "[codeflow test] completed target '{}': {}",
             targets[index].name,
-            if passed { "passed" } else { "FAILED" }
+            status.label()
         );
-        completed.insert(targets[index].name.clone(), passed);
+        completed.insert(targets[index].name.clone(), status);
         let result = result.unwrap_or_else(|error| runner_failure(&targets[index], &error));
         results.insert(index, Ok(result));
     }
@@ -672,7 +761,11 @@ fn runner_failure(target: &TargetConfig, error: &TestingError) -> TargetRunResul
 }
 
 fn not_run(target: &TargetConfig, reason: &str) -> TargetRunResult {
+    let mut info = deadline::Deadline::new(Duration::ZERO, false, 0, None).info;
+    info.status = TargetStatus::NotRun;
     TargetRunResult {
+        supervision: Some(info),
+        termination_unconfirmed: false,
         evidence: None,
         target_name: target.name.clone(),
         exit_code: -1,
@@ -697,6 +790,7 @@ fn run_owed_target(
     baseline: &std::collections::BTreeMap<String, String>,
     run_dir: &Path,
     declarations: &[TargetConfig],
+    worker_grant: Option<WorkerGrant>,
 ) -> Result<TargetRunResult, TestingError> {
     // Paths a target names are reached through the anchored walk, never
     // following a link or junction at any component (TSK-1044).
@@ -728,9 +822,10 @@ fn run_owed_target(
     let home = crate::registry::codeflow_home();
     let before = super::evidence::observe(root, declared, declarations, home.as_deref());
     let git_tree = super::evidence::git_tree(root);
-    let mut result = run_target(target, mode, root).map_err(|error| {
-        super::delivery::invalid(root, super::evidence::redact(declared, &error.to_string()))
-    })?;
+    let mut result =
+        run_target_with_workers(target, mode, root, worker_grant).map_err(|error| {
+            super::delivery::invalid(root, super::evidence::redact(declared, &error.to_string()))
+        })?;
     let after = super::evidence::observe(root, declared, declarations, home.as_deref());
     result.evidence = Some(serde_json::to_value(super::evidence::Execution {
         name: target.name.clone(),
@@ -826,6 +921,32 @@ fn run_owed_target(
     }
     result.stdout = super::evidence::redact(declared, &result.stdout);
     result.stderr = super::evidence::redact(declared, &result.stderr);
+    if let Some(info) = &mut result.supervision {
+        info.cleanup_details = info
+            .cleanup_details
+            .iter()
+            .map(|s| super::evidence::redact(declared, s))
+            .collect();
+        info.cgroup = info
+            .cgroup
+            .as_ref()
+            .map(|s| super::evidence::redact(declared, s));
+        info.early_stall_unavailable = info
+            .early_stall_unavailable
+            .as_ref()
+            .map(|s| super::evidence::redact(declared, s));
+    }
+    let summary = serde_json::json!({
+        "target": result.target_name, "status": result.status(),
+        "exit_code": result.exit_code, "duration_ms": result.duration_ms,
+        "termination_unconfirmed": result.termination_unconfirmed,
+        "supervision": result.supervision,
+    });
+    tree.write(
+        &format!("{saved_at}/result.json"),
+        &serde_json::to_vec_pretty(&summary)?,
+    )
+    .map_err(|error| super::delivery::evidence_refused(tree.path(), &saved_at, &error))?;
     for (name, text) in [
         ("stdout.log", &result.stdout),
         ("stderr.log", &result.stderr),
@@ -1046,7 +1167,8 @@ struct CommandOutcome {
     signal: Option<i32>,
     stdout: String,
     stderr: String,
-    timed_out: bool,
+    supervision: Supervision,
+    termination_unconfirmed: bool,
     stdout_truncated: bool,
     stderr_truncated: bool,
 }
@@ -1056,12 +1178,26 @@ fn spawn_command(
     command: &str,
     cwd: &Path,
     timeout: Duration,
+    workers: Option<WorkerGrant>,
 ) -> Result<CommandOutcome, TestingError> {
     let cmd = build_command(command, cwd, &target.env, &target.name, target.shell)?;
+    let mut limits = deadline::Deadline::new(
+        timeout,
+        target.heavy == Some(true) || target.host_exclusive,
+        target
+            .stall_timeout_seconds
+            .unwrap_or(deadline::DEFAULT_STALL_SECONDS),
+        workers,
+    );
+    limits.cleanup_grace = Duration::from_secs(
+        target
+            .cleanup_grace_seconds
+            .unwrap_or(deadline::DEFAULT_CLEANUP_GRACE_SECONDS),
+    );
     spawn_prepared(
         cmd,
         &target.name,
-        timeout,
+        limits,
         super::evidence::redacted_values(target).is_empty(),
         target.heavy == Some(true) || target.host_exclusive,
         false,
@@ -1108,15 +1244,20 @@ pub fn run_reserved_command(
         progress!("[codeflow reserve] workers: jobs={workers}, nextest={workers}, rust-tests=1, oracle={oracle}");
     }
     let start = Instant::now();
-    let result = spawn_prepared(command, "reserve", timeout, true, true, hand_over)?;
+    let result = spawn_prepared(
+        command,
+        "reserve",
+        deadline::Deadline::new(timeout, false, deadline::DEFAULT_STALL_SECONDS, None),
+        true,
+        true,
+        hand_over,
+    )?;
     Ok(TargetRunResult {
+        supervision: Some(result.supervision),
+        termination_unconfirmed: result.termination_unconfirmed,
         target_name: "reserve".into(),
         error: None,
-        exit_code: if result.timed_out {
-            TIMEOUT_EXIT_CODE
-        } else {
-            result.exit_code
-        },
+        exit_code: result.exit_code,
         stdout: result.stdout,
         stderr: result.stderr,
         stdout_truncated: result.stdout_truncated,
@@ -1166,7 +1307,6 @@ fn this_binary_if_same(program: &std::ffi::OsStr, cwd: &Path) -> Option<std::pat
 
 // The two merged gate changes (TSK-331 admission, TSK-411 failure detail)
 // meet here; one flow keeps each outcome next to the step that causes it.
-#[allow(clippy::too_many_lines)]
 /// Make `descriptors` survive the exec of `cmd`'s program, in the child
 /// only: this process's copies stay close-on-exec, so no other command
 /// inherits them. A descriptor whose flag cannot be cleared fails the spawn,
@@ -1189,28 +1329,6 @@ fn inherit_descriptors(cmd: &mut Command, descriptors: Vec<std::os::fd::RawFd>) 
             }
             Ok(())
         });
-    }
-}
-
-/// Give the target its own process tree: on Unix its own process group, so
-/// a timeout can kill the WHOLE tree. `sh -c` may fork the real command as a
-/// grandchild that inherits the pipe write-ends; killing only `sh` then
-/// leaves the reader threads blocked until the orphan exits (observed on
-/// Linux CI: a timed-out `sleep 30` held the gate for the full 30s). The
-/// trade: a terminal Ctrl-C no longer reaches the test child automatically,
-/// which is acceptable, since the deadline reaps the whole group either way.
-/// On Windows the target starts suspended so it joins its job object before
-/// it can start a child of its own (TSK-142 AC-3).
-fn isolate_tree(cmd: &mut Command) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(target_job::CREATE_SUSPENDED);
     }
 }
 
@@ -1251,134 +1369,21 @@ fn spawn_inheriting_fences(
 }
 
 fn spawn_prepared(
-    mut cmd: Command,
+    cmd: Command,
     target_name: &str,
-    timeout: Duration,
+    deadline: deadline::Deadline,
     emit_progress: bool,
     supervised: bool,
     hand_over: bool,
 ) -> Result<CommandOutcome, TestingError> {
-    // Pipe output so it can be captured while we poll for the timeout. Reader
-    // threads drain the pipes concurrently — without them a chatty command
-    // could fill the pipe buffer and deadlock while we sit in try_wait().
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    let spawn_err = |e: std::io::Error| TestingError::CommandSpawnError {
-        target: target_name.to_string(),
-        message: format!("{e}"),
-    };
-
-    isolate_tree(&mut cmd);
-
-    #[cfg(unix)]
-    let mut watcher = if supervised {
-        Some(group_watch::GroupWatch::prepare(&mut cmd, hand_over).map_err(spawn_err)?)
-    } else {
-        None
-    };
-    let mut child = spawn_inheriting_fences(&mut cmd, hand_over).map_err(spawn_err)?;
-    #[cfg(unix)]
-    if let Some(watcher) = &mut watcher {
-        watcher.spawned();
-    }
-    // The target's process group (its pid, set above) outlives this process
-    // if the gate is killed; the full-gate lock stays held while it runs.
-    #[cfg(unix)]
-    if let Err(error) = crate::testing::gate_guard::target_group_started(child.id()) {
-        progress!("[codeflow test] warning: {error}");
-    }
-    // On Windows the target's tree ends with this process instead: the job
-    // is closed when the gate exits or is killed, so the lock never frees
-    // while a target of the gate runs.
-    #[cfg(windows)]
-    let target_job = adopt_or_stop(target_job::TargetJob::adopt(&child), target_name, || {
-        let _ = child.kill();
-        let _ = child.wait();
-    })?;
-
-    if supervised {
-        if target_name == "reserve" {
-            progress!("[codeflow reserve] started process {}", child.id());
-        } else {
-            progress!(
-                "[codeflow test] supervising heavy target '{target_name}' in process group {}",
-                child.id()
-            );
-        }
-    }
-    let stdout_reader = child.stdout.take().map(|pipe| {
-        spawn_reader_with_progress(pipe, emit_progress.then(|| target_name.to_string()))
-    });
-    let stderr_reader = child.stderr.take().map(|pipe| {
-        spawn_reader_with_progress(pipe, emit_progress.then(|| target_name.to_string()))
-    });
-
-    let start = Instant::now();
-    let mut timed_out = false;
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(spawn_err)? {
-            break status;
-        }
-        if start.elapsed() >= timeout {
-            // Deadline hit: kill the whole process group (not just `sh`) so
-            // grandchildren die too and the reader threads' pipes close —
-            // otherwise an orphan holding a pipe write-end blocks read_to_end
-            // below for its full runtime. `--` keeps the negative (group) pid
-            // from parsing as a flag; best-effort, with child.kill() as the
-            // direct-child backstop.
-            #[cfg(unix)]
-            {
-                let _ = Command::new("kill")
-                    .args(["-KILL", "--", &format!("-{}", child.id())])
-                    .status();
-            }
-            #[cfg(windows)]
-            {
-                // The job ends the whole tree at once. The direct-child
-                // kill below is the last backstop.
-                target_job.terminate();
-                let _ = Command::new("taskkill")
-                    .args(["/PID", &child.id().to_string(), "/T", "/F"])
-                    .status();
-            }
-            let _ = child.kill();
-            timed_out = true;
-            break child.wait().map_err(spawn_err)?;
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    };
-
-    // Reap any background descendants before draining pipes they may still hold.
-    #[cfg(unix)]
-    drop(watcher);
-    #[cfg(windows)]
-    if supervised {
-        target_job.terminate();
-    }
-    let stdout = join_reader(stdout_reader);
-    let stderr = join_reader(stderr_reader);
-    #[cfg(unix)]
-    if let Err(error) = crate::testing::gate_guard::target_group_finished(child.id()) {
-        progress!("[codeflow test] warning: {error}");
-    }
-
-    #[cfg(unix)]
-    let signal = {
-        use std::os::unix::process::ExitStatusExt;
-        status.signal()
-    };
-    #[cfg(not(unix))]
-    let signal = None;
-
-    Ok(CommandOutcome {
-        signal,
-        exit_code: status.code().unwrap_or(-1),
-        stdout: render_capture(&stdout),
-        stderr: render_capture(&stderr),
-        timed_out,
-        stdout_truncated: stdout.truncated,
-        stderr_truncated: stderr.truncated,
-    })
+    process::run(
+        cmd,
+        target_name,
+        deadline,
+        emit_progress,
+        supervised,
+        hand_over,
+    )
 }
 
 fn build_command(
@@ -1462,76 +1467,6 @@ fn effective_shell(shell: CommandShell, windows: bool) -> CommandShell {
         CommandShell::Auto if windows => CommandShell::Cmd,
         CommandShell::Auto => CommandShell::Sh,
         explicit => explicit,
-    }
-}
-
-struct CapturedOutput {
-    bytes: Vec<u8>,
-    truncated: bool,
-}
-
-/// Spawn a thread that drains a child pipe to EOF while retaining a bounded
-/// tail. Draining continues after the cap so the child cannot block on a full
-/// pipe.
-fn spawn_reader_with_progress<R: Read + Send + 'static>(
-    mut pipe: R,
-    name: Option<String>,
-) -> std::thread::JoinHandle<CapturedOutput> {
-    std::thread::spawn(move || {
-        let mut retained = Vec::with_capacity(OUTPUT_CAPTURE_LIMIT);
-        let mut chunk = [0_u8; 8192];
-        let mut truncated = false;
-        loop {
-            let Ok(read) = pipe.read(&mut chunk) else {
-                break;
-            };
-            if let Some(name) = &name {
-                for line in String::from_utf8_lossy(&chunk[..read]).lines() {
-                    if line.contains("Starting")
-                        || line.contains("Summary")
-                        || line.starts_with("journey gate:")
-                        || line.contains(" PASS ")
-                        || line.contains(" FAIL ")
-                    {
-                        // A target's own output, one line (TSK-388).
-                        progress!("[codeflow test] {name}: {line}");
-                    }
-                }
-            }
-            if read == 0 {
-                break;
-            }
-            retained.extend_from_slice(&chunk[..read]);
-            if retained.len() > OUTPUT_CAPTURE_LIMIT {
-                let excess = retained.len() - OUTPUT_CAPTURE_LIMIT;
-                retained.drain(..excess);
-                truncated = true;
-            }
-        }
-        CapturedOutput {
-            bytes: retained,
-            truncated,
-        }
-    })
-}
-
-/// Join a reader thread, yielding its captured bytes (empty if absent or the
-/// thread panicked — capture is best-effort and never masks the run result).
-fn join_reader(handle: Option<std::thread::JoinHandle<CapturedOutput>>) -> CapturedOutput {
-    handle
-        .and_then(|h| h.join().ok())
-        .unwrap_or(CapturedOutput {
-            bytes: Vec::new(),
-            truncated: false,
-        })
-}
-
-fn render_capture(capture: &CapturedOutput) -> String {
-    let content = String::from_utf8_lossy(&capture.bytes);
-    if capture.truncated {
-        format!("[codeflow test] output truncated; retained last {OUTPUT_CAPTURE_LIMIT} bytes\n{content}")
-    } else {
-        content.into_owned()
     }
 }
 
@@ -1671,6 +1606,8 @@ mod tests {
             ci_skip: None,
             ci_skip_reason: None,
             timeout_seconds: None,
+            stall_timeout_seconds: None,
+            cleanup_grace_seconds: None,
             structural: None,
             tags: Vec::new(),
             test_files: Vec::new(),
@@ -1734,6 +1671,360 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = run_target(&target, "full", dir.path()).unwrap();
         assert_eq!(result.exit_code, 1);
+    }
+
+    #[test]
+    fn a_heavy_target_keeps_progressing_past_the_base_timeout() {
+        let command = if cfg!(windows) {
+            "1..6 | ForEach-Object { Write-Output 'PASS work'; Start-Sleep -Milliseconds 300 }"
+        } else {
+            "for i in 1 2 3 4 5 6; do echo 'PASS work'; sleep 0.3; done"
+        };
+        let mut target = make_target("reduced-workers", command);
+        if cfg!(windows) {
+            target.shell = CommandShell::Powershell;
+        }
+        target.heavy = Some(true);
+        target.workers = Some(4);
+        target.env.insert("CARGO_BUILD_JOBS".into(), "1".into());
+        target.env.insert("NEXTEST_TEST_THREADS".into(), "1".into());
+        target.timeout_seconds = Some(1);
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_target(&target, "full", dir.path()).unwrap();
+        assert_eq!(result.exit_code, 0, "active work was killed: {result:?}");
+    }
+
+    #[test]
+    fn an_active_heavy_target_still_reaches_its_ceiling() {
+        let command = if cfg!(windows) {
+            "while ($true) { Write-Output busy; Start-Sleep -Milliseconds 100 }"
+        } else {
+            "while :; do echo busy; sleep 0.1; done"
+        };
+        let mut target = make_target("ceiling", command);
+        if cfg!(windows) {
+            target.shell = CommandShell::Powershell;
+        }
+        target.heavy = Some(true);
+        target.timeout_seconds = Some(1);
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_target(&target, "full", dir.path()).unwrap();
+        assert_eq!(result.status(), TargetStatus::TimedOut);
+        assert_eq!(result.exit_code, TIMEOUT_EXIT_CODE);
+        assert!(result.stderr.contains("timed out at the ceiling after 4 s"));
+        assert!(result.stderr.contains("target 'ceiling'"));
+        assert!(result.stderr.contains("stall_timeout_seconds"));
+        assert!(result.stderr.contains("timeout_seconds"));
+        assert!(!result.termination_unconfirmed, "{result:?}");
+    }
+
+    #[test]
+    fn cpu_work_without_output_can_outlast_the_stall_window() {
+        let command = if cfg!(windows) {
+            "$end = [DateTime]::UtcNow.AddSeconds(2); while ([DateTime]::UtcNow -lt $end) { $x = 13 * 17 }"
+        } else {
+            "python3 -c 'import time; end=time.monotonic()+2; exec(\"while time.monotonic()<end: pass\")'"
+        };
+        let mut target = make_target("computing", command);
+        if cfg!(windows) {
+            target.shell = CommandShell::Powershell;
+        }
+        target.heavy = Some(true);
+        target.timeout_seconds = Some(2);
+        target.stall_timeout_seconds = Some(1);
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_target(&target, "full", dir.path()).unwrap();
+        assert_eq!(result.status(), TargetStatus::Passed, "{result:?}");
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            result
+                .supervision
+                .unwrap()
+                .early_stall_unavailable
+                .as_deref(),
+            Some("macOS complete descendant accounting unavailable")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_silent_idle_job_stalls_with_complete_accounting() {
+        let mut target = make_target("idle-job", "Start-Sleep -Seconds 30");
+        target.shell = CommandShell::Powershell;
+        target.heavy = Some(true);
+        target.timeout_seconds = Some(10);
+        target.stall_timeout_seconds = Some(1);
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_target(&target, "full", dir.path()).unwrap();
+        assert_eq!(result.status(), TargetStatus::Stalled, "{result:?}");
+        assert_eq!(result.exit_code, TIMEOUT_EXIT_CODE);
+        assert!(result.stderr.contains("stalled: no progress for 1 s"));
+        assert!(result.stderr.contains("target 'idle-job'"));
+        assert!(result.stderr.contains("stall_timeout_seconds"));
+        assert!(result.stderr.contains("timeout_seconds"));
+    }
+
+    /// The watcher closes every descriptor up to the limit before it waits. At
+    /// a limit of 1048576 on a loaded host that outlasted the cleanup grace,
+    /// so a heavy target that exited 0 reported incomplete cleanup.
+    #[cfg(unix)]
+    #[test]
+    fn a_slow_watcher_does_not_fail_a_target_that_exited_zero() {
+        let mut target = make_target("slow-watcher", "exit 0");
+        target.heavy = Some(true);
+        target.timeout_seconds = Some(60);
+        let dir = tempfile::tempdir().unwrap();
+        group_watch::SLOW_WATCHER_START.with(|delay| delay.set(60));
+        let result = run_target(&target, "full", dir.path());
+        group_watch::SLOW_WATCHER_START.with(|delay| delay.set(0));
+        let result = result.unwrap();
+        assert_eq!(result.status(), TargetStatus::Passed, "{result:?}");
+        assert_eq!(result.exit_code, 0, "{result:?}");
+        assert!(!result.termination_unconfirmed, "{result:?}");
+    }
+
+    /// The configured grace, not the default, decides when the group is ended.
+    #[cfg(unix)]
+    #[test]
+    fn a_configured_cleanup_grace_reaches_the_supervisor() {
+        let mut target = make_target("short-grace", "exit 0");
+        target.heavy = Some(true);
+        target.timeout_seconds = Some(60);
+        target.cleanup_grace_seconds = Some(1);
+        let dir = tempfile::tempdir().unwrap();
+        group_watch::SLOW_WATCHER_START.with(|delay| delay.set(60));
+        let result = run_target(&target, "full", dir.path());
+        group_watch::SLOW_WATCHER_START.with(|delay| delay.set(0));
+        let result = result.unwrap();
+        assert_eq!(result.status(), TargetStatus::Passed, "{result:?}");
+        target.cleanup_grace_seconds = Some(0);
+        assert!(run_target(&target, "full", dir.path()).is_err());
+    }
+
+    #[test]
+    fn timeout_cause_survives_dependent_skips_and_saved_report() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let mut target = make_target("first", "sleep 20");
+        if cfg!(windows) {
+            target.shell = CommandShell::Powershell;
+            target.modes.get_mut("full").unwrap().command = "Start-Sleep -Seconds 20".into();
+        }
+        target.timeout_seconds = Some(1);
+        target.heavy = Some(true);
+        let mut second = make_target("second", "exit 0");
+        second.requires = vec!["first".into()];
+        let mut third = make_target("third", "exit 0");
+        third.requires = vec!["second".into()];
+        let targets = vec![target, second, third];
+        let run = dir.path().join("target/codeflow-gate/run");
+        std::fs::create_dir_all(&run).unwrap();
+        let execution = super::super::config::ExecutionConfig {
+            parallel: false,
+            fail_fast: false,
+            worker_budget: Some(4),
+            host_jobs: Some(1),
+            ..Default::default()
+        };
+        let results =
+            run_dependency_targets(&targets, "full", dir.path(), &execution, &run, &targets);
+        let first = results[0].as_ref().unwrap();
+        assert_eq!(first.status(), TargetStatus::TimedOut, "{first:?}");
+        for result in &results[1..] {
+            let result = result.as_ref().unwrap();
+            assert_eq!(result.status(), TargetStatus::NotRun);
+            assert_eq!(
+                result.error.as_deref(),
+                Some("not run: prerequisite timed out")
+            );
+        }
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(run.join("first/result.json")).unwrap()).unwrap();
+        assert_eq!(report["status"], "timed_out");
+        assert_eq!(report["exit_code"], 124);
+        assert_eq!(report["termination_unconfirmed"], false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_escaped_descendant_cannot_hold_output_collection_forever() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut target = make_target("escaped-pipe", "python3 -c 'import os,time; p=os.fork(); os._exit(0) if p else None; os.setsid(); open(\"escaped.pid\",\"w\").write(str(os.getpid())); time.sleep(60)'");
+        target.timeout_seconds = Some(1);
+        let started = Instant::now();
+        let result = run_target(&target, "full", dir.path());
+        // End the deliberately escaped fixture regardless of the assertions below.
+        let pid = std::fs::read_to_string(dir.path().join("escaped.pid"))
+            .unwrap()
+            .parse::<i32>()
+            .unwrap();
+        assert!(pid > 1);
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+        let result = result.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert_eq!(result.status(), TargetStatus::TimedOut);
+        assert!(result.termination_unconfirmed);
+        assert!(result
+            .supervision
+            .unwrap()
+            .cleanup_details
+            .iter()
+            .any(|s| s.contains("drain deadline")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn observed_migration_cannot_pass_with_an_escaped_closed_pipe_descendant() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("escaped.pid");
+        let script = r#"
+import os,time
+pid=os.fork()
+if pid:
+ while not os.path.exists("escaped.pid"): time.sleep(.01)
+ time.sleep(2.2)
+else:
+ os.setsid()
+ fd=os.open(os.devnull, os.O_RDWR)
+ for output in (0,1,2): os.dup2(fd,output)
+ if fd>2: os.close(fd)
+ with open("escaped.pid","w") as out: out.write(str(os.getpid()))
+ time.sleep(60)
+"#;
+        let mut command = Command::new("python3");
+        command.arg("-c").arg(script).current_dir(dir.path());
+        let observed_pid = pid_file.clone();
+        // Inject only the accounting observation boundary. The detached child,
+        // closed pipes, direct-child exit and watcher cleanup are real.
+        let mut migration_reported = false;
+        let result = process::run_observed(
+            command,
+            "escaped-closed-pipes",
+            deadline::Deadline::new(Duration::from_secs(5), true, 1, None),
+            false,
+            true,
+            false,
+            Some(move |_| {
+                if !observed_pid.exists() {
+                    return None;
+                }
+                if migration_reported {
+                    return Some(process::CpuObservation {
+                        cpu: Ok(10),
+                        membership_uncertain: false,
+                    });
+                }
+                migration_reported = true;
+                Some(process::CpuObservation {
+                    cpu: Err(
+                        "cgroup population changed outside the runner while child remained live"
+                            .into(),
+                    ),
+                    membership_uncertain: true,
+                })
+            }),
+        );
+        let pid = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .parse::<i32>()
+            .unwrap();
+        assert!(pid > 1);
+        let survived = unsafe { libc::kill(pid, 0) } == 0;
+        // Always stop the escaped fixture before assertions can fail.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+        let result = result.unwrap();
+        assert!(
+            survived,
+            "the escaped descendant must outlive scoped cleanup"
+        );
+        assert!(
+            result.termination_unconfirmed,
+            "a closed pipe cannot prove termination"
+        );
+        assert_ne!(result.exit_code, 0);
+        assert_eq!(result.supervision.status, TargetStatus::CleanupIncomplete);
+        assert!(result
+            .supervision
+            .cleanup_details
+            .iter()
+            .any(|s| s.contains("membership")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_exit_between_wait_and_membership_sample_is_not_an_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("child.pid");
+        let release_file = dir.path().join("exit-now");
+        let script = r#"
+import os,time
+with open("child.pid.pending","w") as out: out.write(str(os.getpid()))
+os.replace("child.pid.pending", "child.pid")
+while not os.path.exists("exit-now"): time.sleep(.01)
+os._exit(0)
+"#;
+        let mut command = Command::new("python3");
+        command.arg("-c").arg(script).current_dir(dir.path());
+        let result = process::run_observed(
+            command,
+            "exit-during-membership-sample",
+            deadline::Deadline::new(Duration::from_secs(5), true, 1, None),
+            false,
+            true,
+            false,
+            Some(move |_| {
+                if !pid_file.exists() {
+                    return None;
+                }
+                let pid = std::fs::read_to_string(&pid_file)
+                    .unwrap()
+                    .parse::<libc::id_t>()
+                    .unwrap();
+                assert!(pid > 1);
+                std::fs::write(&release_file, "exit").unwrap();
+                // Observe real child exit without reaping it. The controller's
+                // second try_wait must do that after this simulated sample.
+                let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
+                loop {
+                    let waited = unsafe {
+                        libc::waitid(
+                            libc::P_PID,
+                            pid,
+                            info.as_mut_ptr(),
+                            libc::WEXITED | libc::WNOWAIT,
+                        )
+                    };
+                    if waited == 0 {
+                        break;
+                    }
+                    let error = std::io::Error::last_os_error();
+                    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted, "{error}");
+                }
+                Some(process::CpuObservation {
+                    cpu: Err("cgroup became unpopulated while child remained live".into()),
+                    membership_uncertain: true,
+                })
+            }),
+        )
+        .unwrap();
+        assert_eq!(result.exit_code, 0, "{:?}", result.supervision);
+        assert_eq!(result.supervision.status, TargetStatus::Passed);
+        assert!(!result.termination_unconfirmed);
+        assert!(!result
+            .supervision
+            .cleanup_details
+            .iter()
+            .any(|detail| detail.contains("membership")));
+        assert!(!result
+            .supervision
+            .early_stall_unavailable
+            .as_deref()
+            .unwrap_or("")
+            .contains("unpopulated"));
     }
 
     /// A target whose command hangs past its `timeout_seconds` is killed and

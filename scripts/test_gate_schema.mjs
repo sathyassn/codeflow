@@ -29,6 +29,19 @@ test('both schemas accept legacy and prerequisite fields and reject unknown fiel
     const config = structuredClone(newConfig);
     config.execution.max_parallel = 0;
     assert.equal(validate(config), false, 'max_parallel is positive');
+    for (const key of ['timeout_seconds', 'stall_timeout_seconds']) {
+      for (const [value, accepted] of [[1, true], [4611686018427386, true],
+        [0, false], [-1, false], [1.5, false], ['300', false], [4611686018427387, false]]) {
+        const timed = structuredClone(oldConfig);
+        timed.targets[0][key] = value;
+        assert.equal(validate(timed), accepted, `${key}=${value}: ${JSON.stringify(validate.errors)}`);
+      }
+    }
+    for (const [value, accepted] of [[1, true], [3600, true], [0, false], [-1, false], [1.5, false], ['5', false], [3601, false]]) {
+      const timed = structuredClone(oldConfig);
+      timed.targets[0].cleanup_grace_seconds = value;
+      assert.equal(validate(timed), accepted, `cleanup_grace_seconds=${value}: ${JSON.stringify(validate.errors)}`);
+    }
   }
   assert.ok(schemas[0] === schemas[1], 'source and installed schemas are byte-identical');
 });

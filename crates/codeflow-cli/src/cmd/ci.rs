@@ -632,6 +632,15 @@ pub fn run(args: &CiArgs) -> i32 {
             _ => None,
         },
         release: std::cell::OnceCell::new(),
+        // The destination lookup's limits come from the policy that judges
+        // the range, read at its authority; with no authority, from the
+        // local policy authority or the shipped defaults, never the working
+        // copy the range can write (TSK-1301).
+        limits: if authority.is_some() {
+            codeflow_core::git::remote_query::QueryLimits::from_git(configured)
+        } else {
+            codeflow_core::git::remote_query::QueryLimits::from_authority_or_default(&root)
+        },
     };
     // Resolve the shared scope before either dependent check. An unreadable
     // destination refuses once; records and acceptance cannot judge it.
@@ -1317,7 +1326,8 @@ fn target_tip(
 ) -> Result<String, NoTarget> {
     if let (Some(url), Some(listed)) = (names.destination, names.advertisement) {
         let destination = codeflow_core::workgraph::release_line::from_advertisement(url, listed)
-            .map_err(NoTarget::read)?;
+            .map_err(NoTarget::read)?
+            .with_limits(names.limits);
         let branch = match handed {
             Some(handed) => named_branch(handed).unwrap_or_else(|| handed.to_string()),
             None => match &destination.default {
@@ -2667,6 +2677,8 @@ pub(super) struct Names<'a> {
     /// a tip whose first-parent line a clean merge after a review may come
     /// from (TSK-220).
     pub candidate: Option<&'a str>,
+    /// The timeout and attempts for asking the destination (TSK-1301).
+    pub limits: codeflow_core::git::remote_query::QueryLimits,
     /// The release scope, asked once per run and shared by the checks.
     release: std::cell::OnceCell<
         Result<

@@ -2,6 +2,9 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[cfg(unix)]
+use codeflow_core::workgraph::work_start::REVIEW_LOOKUP_TIMEOUT;
+
 fn git(root: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .args(args)
@@ -263,6 +266,199 @@ fn review_lookup_binds_repository_and_bounds_descendant_stdout() {
         started.elapsed() < std::time::Duration::from_secs(7),
         "lookup exceeded its deadline"
     );
+}
+
+// These fixtures call the real CLI; only the hosted review transport is fake.
+#[cfg(unix)]
+fn pinned_review_fixture(level: &str) -> (tempfile::TempDir, tempfile::TempDir, String) {
+    let dir = fixture();
+    let root = dir.path();
+    let bin = tempfile::tempdir().unwrap();
+    write(
+        root,
+        ".codeflow/policy.json",
+        &format!(r#"{{"git": {{"work_planning": "{level}"}}}}"#),
+    );
+    git(root, &["add", ".codeflow/policy.json"]);
+    git(root, &["commit", "-qm", "chore: set planning policy"]);
+    let branch = "task/TSK-001-work";
+    git(
+        root,
+        &[
+            "config",
+            "remote.review.url",
+            "https://github.com/owner/project.git",
+        ],
+    );
+    git(
+        root,
+        &["config", &format!("branch.{branch}.remote"), "review"],
+    );
+    git(root, &["switch", "-qc", branch]);
+    let pin = git(root, &["rev-parse", "HEAD"]);
+    review_tool(bin.path(), branch, &pin, true);
+    git(root, &["switch", "-q", "main"]);
+    (dir, bin, pin)
+}
+
+#[test]
+#[cfg(unix)]
+fn a_slow_review_provider_allows_pinned_claim_and_start() {
+    for level in ["block", "warn"] {
+        slow_review_provider(level);
+    }
+}
+
+#[cfg(unix)]
+fn slow_review_provider(level: &str) {
+    use std::time::{Duration, Instant};
+    let (dir, bin, pin) = pinned_review_fixture(level);
+    let root = dir.path();
+    let script = bin.path().join("gh");
+    let original = std::fs::read_to_string(&script).unwrap();
+    // Six seconds exceeds the old five-second limit. Count invocations so
+    // a retry cannot silently turn this successful slow call into two calls.
+    std::fs::write(
+        &script,
+        original.replace("cat <<", "echo call >> \"$0.calls\"\nsleep 6\ncat <<"),
+    )
+    .unwrap();
+    let on = format!("TSK-001@{pin}");
+    for command in ["claim", "start"] {
+        let started = Instant::now();
+        succeeds(&cli(
+            root,
+            &["work", command, "TSK-002", "--on", &on],
+            Some(bin.path()),
+        ));
+        let elapsed = started.elapsed();
+        assert!(elapsed >= Duration::from_secs(6), "{elapsed:?}");
+        // Five seconds of scheduling/cleanup tolerance beyond the product
+        // deadline; this is a test ceiling, not a longer provider deadline.
+        assert!(elapsed < Duration::from_secs(20), "{elapsed:?}");
+        if command == "claim" {
+            git(root, &["switch", "-q", "task/TSK-002-work-tsk-002"]);
+            assert_eq!(git(root, &["rev-parse", "HEAD"]), pin);
+        }
+    }
+    assert_eq!(
+        std::fs::read_to_string(bin.path().join("gh.calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        2,
+        "each lookup must make only one attempt"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn failed_review_providers_refuse_pins_without_mutating_the_branch() {
+    for level in ["block", "warn"] {
+        failed_review_providers(level);
+    }
+}
+
+#[cfg(unix)]
+fn failed_review_providers(level: &str) {
+    use std::time::{Duration, Instant};
+    let (dir, bin, pin) = pinned_review_fixture(level);
+    let root = dir.path();
+    let script = bin.path().join("gh");
+    let on = format!("TSK-001@{pin}");
+    let child = "task/TSK-002-work-tsk-002";
+    let timeout_reason = format!(
+        "provider timed out after {} seconds",
+        REVIEW_LOOKUP_TIMEOUT.as_secs()
+    );
+    for (provider, reason, hangs) in [
+        ("exit 1", "provider failed", false),
+        (
+            "printf 'not json'",
+            "cannot parse predecessor review",
+            false,
+        ),
+        (
+            "dd if=/dev/zero bs=1048577 count=1 2>/dev/null",
+            "cannot verify review for this pin: review response too large",
+            false,
+        ),
+        ("sleep 60", timeout_reason.as_str(), true),
+    ] {
+        std::fs::write(&script, format!("#!/bin/sh\n{provider}\n")).unwrap();
+        for command in ["claim", "start"] {
+            if command == "start" {
+                git(root, &["switch", "-qc", child, &pin]);
+            }
+            let before = git(root, &["rev-parse", "HEAD"]);
+            let branch = git(root, &["branch", "--show-current"]);
+            let started = Instant::now();
+            let out = cli(
+                root,
+                &["work", command, "TSK-002", "--on", &on],
+                Some(bin.path()),
+            );
+            let elapsed = started.elapsed();
+            assert!(!out.status.success(), "{command} admitted {provider}");
+            let error = String::from_utf8_lossy(&out.stderr);
+            assert!(error.contains(reason), "{command}: {error}");
+            if hangs {
+                assert!(elapsed >= REVIEW_LOOKUP_TIMEOUT, "{elapsed:?}");
+                // Include startup, Git checks and cleanup on a loaded host.
+                assert!(elapsed < Duration::from_secs(30), "{elapsed:?}");
+            } else {
+                assert!(elapsed < Duration::from_secs(20), "{elapsed:?}");
+            }
+            assert_eq!(git(root, &["rev-parse", "HEAD"]), before);
+            assert_eq!(git(root, &["branch", "--show-current"]), branch);
+            if command == "claim" {
+                assert!(git(root, &["branch", "--list", child]).is_empty());
+            } else {
+                git(root, &["switch", "-q", "main"]);
+                git(root, &["branch", "-D", child]);
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn an_unverifiable_pin_refuses_warn_start() {
+    let (dir, bin, pin) = pinned_review_fixture("warn");
+    let root = dir.path();
+    git(root, &["switch", "-qc", "task/TSK-002-work-tsk-002", &pin]);
+    std::fs::write(bin.path().join("gh"), "#!/bin/sh\nexit 1\n").unwrap();
+    let out = cli(
+        root,
+        &[
+            "work",
+            "start",
+            "TSK-002",
+            "--on",
+            &format!("TSK-001@{pin}"),
+        ],
+        Some(bin.path()),
+    );
+    let error = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{error}");
+    assert!(error.contains("provider failed"), "{error}");
+    assert!(!error.contains("continuing"), "{error}");
+}
+
+#[test]
+#[cfg(unix)]
+fn ordinary_planning_findings_keep_their_policy_level() {
+    for level in ["block", "warn"] {
+        let (dir, _, _) = pinned_review_fixture(level);
+        let out = cli(dir.path(), &["work", "start", "TSK-002"], None);
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(i32::from(level == "block")),
+            "{error}"
+        );
+        assert_eq!(error.contains("continuing"), level == "warn", "{error}");
+    }
 }
 
 #[test]
