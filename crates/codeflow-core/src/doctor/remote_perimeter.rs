@@ -112,7 +112,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         Ok((required, _)) => required,
         Err(why) => return note(why.clone()),
     };
-    let gh = |args: &[&str]| opts.do_exec_bounded("gh", args, GH_TIMEOUT);
+    let gh = |args: &[&str]| opts.do_read_bounded("gh", args, GH_TIMEOUT);
     let parse = |text: &str| serde_json::from_str::<Value>(text).unwrap_or(Value::Null);
 
     let repo = match gh(&["api", &format!("repos/{nwo}")]) {
@@ -1054,7 +1054,7 @@ fn bypass_of(opts: &Options, nwo: &str, source: &Source) -> Bypass {
     let Some(id) = source.ruleset_id else {
         return Bypass::Unknown(format!("{} bypass list not readable", source.label));
     };
-    match opts.do_exec_bounded(
+    match opts.do_read_bounded(
         "gh",
         &["api", &format!("repos/{nwo}/rulesets/{id}")],
         GH_TIMEOUT,

@@ -418,6 +418,25 @@ fn public_repository_doctor(policies: &str, secrets: &str) -> std::process::Outp
         env!("CARGO_MANIFEST_DIR"),
         "/../../assets/base/ci/codeflow-policy.yml"
     );
+    let shipped_ci = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/base/ci/codeflow-ci.yml"
+    );
+    // Both answers are longer than a version probe keeps, as on a real
+    // default branch: the shipped CI workflow already is, and the policy
+    // workflow is padded so that doctor must read its `on:` from the front.
+    let workflows = tempfile::tempdir().unwrap();
+    let policy_workflow = workflows.path().join("codeflow-policy.yml");
+    let mut padded = fs::read_to_string(shipped).unwrap();
+    padded.push_str(&"# a long workflow\n".repeat(8192));
+    fs::write(&policy_workflow, padded).unwrap();
+    let policy_workflow = policy_workflow.display();
+    // The ruleset requires exactly the default checks, whatever they name.
+    let required = codeflow_core::hooks::policy::DEFAULT_REQUIRED_CHECKS
+        .iter()
+        .map(|name| format!(r#"{{"context":"{name}","integration_id":15368}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
     let home = tempfile::tempdir().unwrap();
     let repo = tempfile::tempdir().unwrap();
     init_repo(repo.path(), "public");
@@ -439,11 +458,12 @@ fn public_repository_doctor(policies: &str, secrets: &str) -> std::process::Outp
             r#"#!/bin/sh
 case "$*" in
   "api repos/o/r") printf '%s' '{{"default_branch":"main","visibility":"public","name":"r","id":1,"owner":{{"login":"o","type":"User"}}}}' ;;
-  "api repos/o/r/rules/branches/main?per_page=100&page=1") printf '%s' '[{{"type":"required_status_checks","parameters":{{"strict_required_status_checks_policy":true,"required_status_checks":[{{"context":"codeflow gates","integration_id":15368}},{{"context":"secret scan","integration_id":15368}},{{"context":"security review","integration_id":15368}},{{"context":"trusted: commit standards","integration_id":15368}}]}},"ruleset_id":7}}]' ;;
+  "api repos/o/r/rules/branches/main?per_page=100&page=1") printf '%s' '[{{"type":"required_status_checks","parameters":{{"strict_required_status_checks_policy":true,"required_status_checks":[{required}]}},"ruleset_id":7}}]' ;;
   "api repos/o/r/rulesets/7") printf '%s' '{{"id":7,"bypass_actors":[]}}' ;;
   "api repos/o/r/rulesets?per_page=100&page=1") printf '%s' '[]' ;;
-  "api repos/o/r/contents/.github/workflows?ref=main") printf '%s' '[{{"path":".github/workflows/codeflow-policy.yml","type":"file"}}]' ;;
-  "api -H Accept: application/vnd.github.raw repos/o/r/contents/.github/workflows/codeflow-policy.yml?ref=main") cat '{shipped}' ;;
+  "api repos/o/r/contents/.github/workflows?ref=main") printf '%s' '[{{"path":".github/workflows/codeflow-ci.yml","type":"file"}},{{"path":".github/workflows/codeflow-policy.yml","type":"file"}}]' ;;
+  "api -H Accept: application/vnd.github.raw repos/o/r/contents/.github/workflows/codeflow-ci.yml?ref=main") cat '{shipped_ci}' ;;
+  "api -H Accept: application/vnd.github.raw repos/o/r/contents/.github/workflows/codeflow-policy.yml?ref=main") cat '{policy_workflow}' ;;
   "api repos/o/r/actions/policies?per_page=100&page=1") {policies} ;;
   "api repos/o/r/actions/policies/11322") printf '%s' '{{"id":11322,"name":"codeflow policy check","source_type":"Repository","source":"o/r","enforcement":"active","conditions":{{"workflow_path":{{"exclude":[],"include":[".github/workflows/codeflow-policy.yml"]}}}},"rules":[{{"type":"restrict_action_events","parameters":{{"allowed_events":["pull_request_target"]}}}}]}}' ;;
   "api repos/o/r/actions/secrets?per_page=100&page=1") printf '%s' '{secrets}' ;;
