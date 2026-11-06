@@ -119,10 +119,16 @@ pub(super) fn run_observed(
             deadline.info.cleanup_details.push(error);
         }
     }
+    // On Windows the target's tree ends with this process. With no fence
+    // held, the job closes when the gate exits or is killed. The OS gives no
+    // order between that and freeing the gate's own locks, so while this
+    // process holds a fence a watcher outside the job holds it too, with a
+    // copy of the job handle; it ends the job and frees the fence only once
+    // the job is empty (TSK-1318).
     // A job failure ends the still-suspended child before its command runs
     // and fails the spawn (TSK-142 AC-3), as it did before supervision.
     #[cfg(windows)]
-    let job = Some(super::adopt_or_stop(
+    let mut job = Some(super::adopt_or_stop(
         super::target_job::TargetJob::adopt(&child),
         target_name,
         || {
@@ -327,8 +333,10 @@ pub(super) fn run_observed(
                 // A watcher closes every descriptor up to the limit before it
                 // reads the lifetime pipe. At a large limit on a loaded host
                 // that can outlast the grace. Halfway through, end the group
-                // here instead. The watcher is still a member while it has not
-                // finished, so the group id cannot belong to anything else.
+                // here instead. While the watcher has not finished, the group
+                // id is reserved: by the watcher until it leaves the group,
+                // then by its sentinel until the watcher has killed the group
+                // (TSK-1318). Past that kill this signal is redundant.
                 if !watcher_finished && !group_signalled && now.saturating_sub(stopped) >= grace / 2
                 {
                     group_signalled = true;
@@ -352,12 +360,13 @@ pub(super) fn run_observed(
             {
                 termination_confirmed = status.is_some() && watcher_finished;
             }
+            // The watcher's exit counts too, so the clean path leaves no fence
+            // behind. A watcher still running at the grace keeps its fences and
+            // the target is reported unconfirmed (TSK-1318).
             #[cfg(windows)]
             {
                 termination_confirmed = status.is_some()
-                    && job
-                        .as_ref()
-                        .is_none_or(|job| job.accounting().is_ok_and(|(_, active)| active == 0));
+                    && job.as_mut().is_none_or(super::target_job::TargetJob::ended);
             }
             #[cfg(target_os = "linux")]
             if let Some(group) = &cgroup {

@@ -11,6 +11,7 @@ import { validateWindowsQualificationConfinement } from "./windows-qualification
 import { assertNoPolicyViolations, recordPolicyViolationsOutsidePage } from "./csp-violations.mjs";
 import { codeflowBinary } from "./codeflow-binary.mjs";
 import { closeWaitMs } from "./browser-close-bound.mjs";
+import { writeFileAtomic } from "./atomic-write.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../../..");
@@ -320,6 +321,7 @@ try {
   context = await launchBrowser(browserProfileV2);
   recordBrowserVersion(context);
   observeContext(context, requests, responses, consoleErrors, observerTasks);
+  const stageMeasurements = trackStageMeasurements(context);
   const browserProcessesV2 = await waitForProfileProcess(browserProfileV2);
   // Sandboxed scriptless frames refuse the trace snapshot streamer. The .state
   // probe at 4804477cc found 40 of 43 blocked events followed captureSnapshot.
@@ -359,9 +361,14 @@ try {
   await exportPage.close();
 
   // A stored diagram revision (TSK-087): the served page and a new export show
-  // the conversion notice and each escaped source, and draw nothing.
+  // the conversion notice and each escaped source, and draw nothing. The
+  // revised page measures its export stages against the stored revision, so
+  // the rewrite waits until that is done (TSK-1365): a measurement read
+  // during the rewrite answers 500 on a partial file, and one read after it
+  // answers 400 for the retired revision.
+  await waitForStageMeasuring(revisedPage, stageMeasurements);
   const revisionPath = await findRevisionFile(runRoot, sessionId, 2);
-  await writeFile(revisionPath, `${JSON.stringify({ ...retiredRevision, revision: 2 }, null, 2)}\n`, { mode: 0o600 });
+  await writeFileAtomic(revisionPath, `${JSON.stringify({ ...retiredRevision, revision: 2 }, null, 2)}\n`, { mode: 0o600 });
   const retiredRequestStart = requests.length;
   await revisedPage.reload({ waitUntil: "load" });
   await assertRetiredPage(revisedPage, "served retired revision");
@@ -783,6 +790,60 @@ function observeContext(
   });
   observedContext.on("page", observePage);
   for (const observedPage of observedContext.pages()) observePage(observedPage);
+}
+
+// Each stage-measure POST in the context: those still in flight, and those
+// that answered 400 or above or failed in transit.
+function trackStageMeasurements(observedContext) {
+  const tracker = { pending: new Set(), failures: [] };
+  const isMeasure = (request) => (
+    request.method() === "POST" && new URL(request.url()).pathname === "/app/api/stages/measure"
+  );
+  observedContext.on("request", (request) => {
+    if (isMeasure(request)) tracker.pending.add(request);
+  });
+  observedContext.on("response", (response) => {
+    if (isMeasure(response.request()) && response.status() >= 400) {
+      tracker.failures.push(`${response.status()} ${response.statusText()}`);
+    }
+  });
+  observedContext.on("requestfinished", (request) => tracker.pending.delete(request));
+  observedContext.on("requestfailed", (request) => {
+    if (!isMeasure(request)) return;
+    tracker.pending.delete(request);
+    tracker.failures.push(`failed ${request.failure()?.errorText ?? "unknown failure"}`);
+  });
+  return tracker;
+}
+
+// Wait until the page reports its stage measuring done, then assert that no
+// measure request is still in flight and none failed. The page sets the
+// attribute after its last response; the bounded drain lets that response's
+// finished event reach this process.
+async function waitForStageMeasuring(page, tracker) {
+  if (!await page.locator("#cf-stage-measuring").count()) {
+    throw new Error("The revised page carries no stage measuring template; the rewrite would not be checked against it");
+  }
+  const timeout = timeoutWithinQualification(60_000, "stage measuring");
+  const handle = await page.waitForFunction(
+    () => document.documentElement.dataset.cfStagesMeasured,
+    undefined,
+    { timeout },
+  );
+  const measured = await handle.jsonValue();
+  if (measured !== "true") {
+    throw new Error(
+      `The revised page reported data-cf-stages-measured="${measured}"; measure responses: ${JSON.stringify(tracker.failures)}`,
+    );
+  }
+  const drainDeadline = Date.now() + 5_000;
+  while (tracker.pending.size && Date.now() < drainDeadline) await delay(25);
+  if (tracker.pending.size) {
+    throw new Error(`${tracker.pending.size} stage-measure request(s) still in flight after the page reported measuring done`);
+  }
+  if (tracker.failures.length) {
+    throw new Error(`Stage-measure requests failed before the revision rewrite: ${tracker.failures.join(", ")}`);
+  }
 }
 
 async function closeBrowser(openContext, profile, knownProcesses) {
