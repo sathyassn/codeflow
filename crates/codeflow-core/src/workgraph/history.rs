@@ -48,13 +48,24 @@ impl Drop for Judgment {
         if self.owner {
             JUDGMENT.with(|memo| *memo.borrow_mut() = None);
             super::acceptance::clear_import_cache();
+            super::acceptance::clear_presence_cache();
+            super::status_steps::clear_memo();
         }
     }
+}
+
+/// Whether a read-only judgment scope is open on this thread: the record
+/// reads that memoize by object id keep their answers only inside one
+/// (TSK-1306).
+pub(super) fn in_judgment() -> bool {
+    JUDGMENT.with(|memo| memo.borrow().is_some())
 }
 
 /// Discard a snapshot after an object fetch may have updated shallow metadata.
 pub(super) fn refresh(repo: &Repository) {
     super::acceptance::clear_import_cache();
+    super::acceptance::clear_presence_cache();
+    super::status_steps::clear_memo();
     JUDGMENT.with(|memo| {
         if let Some(memo) = memo.borrow_mut().as_mut() {
             memo.remove(repo.path());

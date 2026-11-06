@@ -259,7 +259,7 @@ pub(crate) struct Record {
 }
 
 /// The three durable record kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RecordKind {
     Epic,
     Spec,
