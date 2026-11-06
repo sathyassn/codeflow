@@ -190,6 +190,12 @@ fn init_writes(
                 .and_then(|state| state.release_rules)
                 .unwrap_or(1),
         ),
+        // A new scaffold refuses files over the default size limit; a
+        // project initialized before keeps the kind it had (TSK-323).
+        file_size_rule: previous.as_ref().map_or_else(
+            || Some("refuse".to_string()),
+            |state| state.file_size_rule.clone(),
+        ),
     };
     state.store(root)?;
     // The Outcome section's adoption marker (TSK-435): a fresh project lists
@@ -245,6 +251,15 @@ fn init_writes(
             &mut report,
             &mut written,
         )?;
+    }
+    // An existing repository commits the starter ADR in its adoption range,
+    // where the id registry judges it as a new record: reserve its number
+    // now, as `new` would (TSK-338). A fresh repository's scaffold commit
+    // is its history's start, which a later seed reads.
+    if !fresh_repo && written.iter().any(|path| path == super::INITIAL_STACK_ADR) {
+        if let Some(note) = super::reserve_initial_stack_adr(root) {
+            report.notes.push(note);
+        }
     }
 
     installed.scaffold_version.clone_from(&opts.binary_version);
@@ -368,6 +383,14 @@ fn init_writes(
         );
     }
 
+    report.notes.push(shown!(
+        "capability coverage: {}",
+        crate::capability::coverage::report(root)
+    ));
+    if let Some(offer) = crate::capability::bootstrap::offer(root) {
+        report.notes.push(Shown::fixed(offer));
+    }
+
     Ok(report)
 }
 
@@ -408,6 +431,8 @@ pub(crate) fn build_context(
     ctx.set("TIER", tier.as_str());
     ctx.set("SCAFFOLD_VERSION", version);
     ctx.set("DATE", today_utc());
+    // A starter record's hidden identity, written once as `new` writes one.
+    ctx.set("RECORD_UID", crate::ids::new_uid());
     ctx.set(
         "WORKSPACE_ROOT_BRANCH",
         crate::root_checkout::WORKSPACE_ROOT_BRANCH,

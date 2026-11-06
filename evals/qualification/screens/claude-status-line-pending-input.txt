@@ -1,0 +1,15 @@
+sathya@BlackSwan-mPro repository % claude --model claude-sonnet-5-5 --effort high --permission-mode auto
+ ▐▛███▛█   Claude Code v2.1.314
+▝▜██████▀  Sonnet 5.5 with high effort · Claude Ultra
+ ▝▝   ▝▝   /private/tmp/claude-501/tsk1033-qual-r1-subjects/23ffd6b5f5626acee092/repository
+
+▎ Your Ultra plan includes $200 a month in API credits to power your apps and agents. Claim them at
+▎ https://clau.de/api-credits
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Make the change in CHANGE.md with its tests, then say which files you changed.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Sonnet 5.5 (claude-sonnet-5-5) | v2.1.314 | default | repository (feat/escalate-failed-jobs) | ctx:0k/1000k (0%)
+  ⏵⏵ auto mode on (shift+tab to cycle)
+                                                                                                 ctrl+g to edit in Nvim

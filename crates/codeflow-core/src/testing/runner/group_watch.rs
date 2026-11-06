@@ -13,7 +13,10 @@ pub(super) struct GroupWatch {
 }
 
 impl GroupWatch {
-    pub(super) fn prepare(command: &mut Command) -> io::Result<Self> {
+    /// With `hand_over`, the command itself also keeps the lock copies
+    /// across exec and finds their numbers in `RESERVED_LOCKS_ENV`, so a
+    /// nested `codeflow` run can use the reservation (TSK-1128).
+    pub(super) fn prepare(command: &mut Command, hand_over: bool) -> io::Result<Self> {
         // SAFETY: sysconf reads the descriptor limit and changes no process state.
         let limit = i32::try_from(unsafe { libc::sysconf(libc::_SC_OPEN_MAX) })
             .ok()
@@ -23,6 +26,13 @@ impl GroupWatch {
         let (controller, child_end) = UnixStream::pair()?;
         let locks = crate::testing::gate_guard::inherited_gate_locks()?;
         let lock_descriptors: Vec<_> = locks.iter().map(AsRawFd::as_raw_fd).collect();
+        if hand_over && !lock_descriptors.is_empty() {
+            let names: Vec<_> = lock_descriptors.iter().map(ToString::to_string).collect();
+            command.env(
+                crate::testing::gate_guard::RESERVED_LOCKS_ENV,
+                names.join(","),
+            );
+        }
         let writer = controller.as_raw_fd();
         let reader = child_end.as_raw_fd();
         // SAFETY: the closure uses only async-signal-safe libc operations and
@@ -77,6 +87,18 @@ impl GroupWatch {
                 }
                 libc::close(reader);
                 libc::close(writer);
+                if hand_over {
+                    // Only this command keeps the copies across exec; the
+                    // receiving `codeflow` makes them close-on-exec again.
+                    for &fd in &lock_descriptors {
+                        let flags = libc::fcntl(fd, libc::F_GETFD);
+                        if flags < 0
+                            || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) != 0
+                        {
+                            return Err(io::Error::last_os_error());
+                        }
+                    }
+                }
                 Ok(())
             });
         }

@@ -19,7 +19,7 @@ use super::{
     deserialize_bounded_sequence, git_batch_blobs, markdown_body, normalize_markdown_source,
     safe_path_text, strict_url_route, valid_sha256, Evidence, Page, PortalValidationReport,
 };
-use crate::capability::parse_capabilities;
+use crate::capability::{load_capability_catalog_from_tree, parse_capabilities};
 use crate::scaffold::sha256_hex;
 use crate::strict_json::parse_strict_json;
 
@@ -499,6 +499,7 @@ fn class_for<'a>(entries: &'a [PageClassEntry], source_path: &str) -> Option<&'a
 
 /// Everything the figure verifier needs from the rest of the validation run.
 pub(super) struct FigureContext<'a> {
+    pub has_capability_records: bool,
     pub repository: &'a Path,
     pub page_classes: &'a [PageClassEntry],
     pub bindings: &'a [FigureBinding],
@@ -1356,7 +1357,21 @@ fn verify_lookup(
         .and_then(|bytes| std::str::from_utf8(bytes).ok());
     let rows = match derive {
         Some("capability-registry") if page.source_path == CAPABILITY_REGISTRY => {
-            text.map(|text| parse_capabilities(text).0.len())
+            if context.has_capability_records {
+                match load_capability_catalog_from_tree(context.repository, &page.built_from_commit)
+                {
+                    Ok(catalog) => Some(catalog.records.len()),
+                    Err(error) => {
+                        report.issues.push(format!(
+                            "{route} capability catalog cannot be read: {error}"
+                        ));
+                        return;
+                    }
+                }
+            } else {
+                // Keep the legacy check on its already-read source snapshot.
+                text.map(|text| parse_capabilities(text).0.len())
+            }
         }
         Some(generated @ (super::lookups::SKILL_CATALOG | super::lookups::POLICY_REFERENCE)) => {
             let Some(inputs) = context.lookup_inputs else {
@@ -1746,11 +1761,7 @@ fn panel_of_anchor(body: &str, anchor: &str) -> Option<String> {
 fn source_body(text: &str) -> String {
     let normalized = normalize_markdown_source(text);
     let normalized = normalized.strip_prefix('\u{feff}').unwrap_or(&normalized);
-    normalized
-        .strip_prefix("---\n")
-        .and_then(|rest| rest.find("\n---\n").map(|end| &rest[end + 5..]))
-        .unwrap_or(normalized)
-        .to_string()
+    markdown_body(normalized).to_string()
 }
 
 fn slug_heading(raw: &str) -> String {

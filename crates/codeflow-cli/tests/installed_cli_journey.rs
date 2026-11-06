@@ -451,6 +451,8 @@ fn history_overlay_is_refused_by_installed_hook_work_start_and_ci() {
     let url = remote.to_str().unwrap();
     git(&root, &["remote", "add", "origin", url]);
     git(&root, &["fetch", "origin"]);
+    // Git before 2.48 records no remote HEAD on fetch (ADR-0091).
+    git(&root, &["remote", "set-head", "origin", "-a"]);
     ok(
         &codeflow(&root, &["ids", "seed"]),
         "seed destination registry",

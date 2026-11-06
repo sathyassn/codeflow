@@ -91,6 +91,18 @@ impl fmt::Display for PolicyLevel {
     }
 }
 
+/// Which engine the commit-time secret scan runs beside the built-in
+/// patterns (TSK-412).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SecretScanEngine {
+    /// The built-in patterns only.
+    Builtin,
+    /// The built-in patterns, then the gitleaks binary the managed CI scan
+    /// pins (`hooks::gitleaks`).
+    Gitleaks,
+}
+
 /// Whether the managed CI secret scan accepts inline allows on held commits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -351,6 +363,8 @@ pub struct GitPolicy {
     /// Generic release declaration syntax, consistency and breaking commit floor.
     /// Defaults to warn; off/allow disables this independent check.
     pub pr_release_impact: PolicyLevel,
+    /// Opt-in catalog/declaration agreement; absent and off perform no tree work.
+    pub pr_capability_impact: PolicyLevel,
     /// The shape of the PR body's Summary section, which `codeflow ci`
     /// checks on a provided body: one prose paragraph that anchors the
     /// reader, then a list or table, then at most one closing paragraph
@@ -431,9 +445,26 @@ pub struct GitPolicy {
     pub branch_naming: PolicyLevel,
     pub branch_prefixes: Vec<String>,
     pub secret_scan: PolicyLevel,
+    /// The commit-time secret scan's engine (TSK-412): `builtin` (default)
+    /// runs the built-in patterns; `gitleaks` also runs the pinned gitleaks
+    /// binary, at the `secret_scan` level.
+    pub secret_scan_engine: SecretScanEngine,
     pub path_policy: PolicyLevel,
     pub blocked_names: Vec<super::path_policy::BlockedName>,
     pub protected_paths: Vec<super::path_policy::ProtectedPath>,
+    /// New or changed files the authority's `.gitignore` files exclude
+    /// (TSK-323): `{level, allow: [{path, reason}]}`. Absent means level
+    /// `warn` and no allowance. The shipped policy file does not list it,
+    /// so an older binary never meets the key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignored_files: Option<super::path_policy::IgnoredFiles>,
+    /// An explicit file size limit (TSK-323): `{limit, except_under}`.
+    /// Absent, files over 1 MiB warn and over 10 MiB are refused in a new
+    /// scaffold and reported elsewhere; set, it opts in and replaces the
+    /// default. The shipped policy file does not list it, so an older
+    /// binary never meets the key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_file_bytes: Option<super::path_policy::MaxFileBytes>,
     /// Managed CI only: read from the trusted commit, default `trusted`.
     pub secret_scan_inline_allow: SecretScanInlineAllow,
     /// Unresolved conflict markers on the lines a change adds to a text
@@ -576,6 +607,7 @@ impl Default for GitPolicy {
             policy_characters: PolicyLevel::Warn,
             pr_sections: PolicyLevel::Block,
             pr_release_impact: PolicyLevel::Warn,
+            pr_capability_impact: PolicyLevel::Off,
             pr_summary: PolicyLevel::Block,
             pr_breaking_level: "major".into(),
             pr_required_sections: DEFAULT_PR_REQUIRED_SECTIONS.map(String::from).to_vec(),
@@ -595,9 +627,12 @@ impl Default for GitPolicy {
                 .map(ToString::to_string)
                 .collect(),
             secret_scan: PolicyLevel::Block,
+            secret_scan_engine: SecretScanEngine::Builtin,
             path_policy: PolicyLevel::Block,
             blocked_names: super::path_policy::default_names(),
             protected_paths: Vec::new(),
+            ignored_files: None,
+            max_file_bytes: None,
             secret_scan_inline_allow: SecretScanInlineAllow::Trusted,
             conflict_markers: PolicyLevel::Block,
             test_gate_on_push: PolicyLevel::Block,
@@ -800,6 +835,31 @@ pub struct SecuritySection {
     /// Unsupported legacy entries; accepted values have no effect.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_retry_allow: Option<Vec<serde_json::Value>>,
+    /// Which text rule the exec guard applies (TSK-397): `strict`, the
+    /// default, adds the strict rule to every shell call; `relaxed`, the
+    /// operator's choice, applies the line's rule and verifies nothing.
+    #[serde(skip_serializing_if = "TextGuard::is_strict")]
+    pub text_guard: TextGuard,
+}
+
+/// The `security.text_guard` values.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TextGuard {
+    /// The strict rule applies to every shell call.
+    #[default]
+    Strict,
+    /// The line's rule, by the operator's choice; honoured only from the
+    /// remote-tracking refs as last fetched.
+    Relaxed,
+}
+
+impl TextGuard {
+    /// Whether this is the default, `strict`.
+    #[must_use]
+    pub fn is_strict(&self) -> bool {
+        *self == Self::Strict
+    }
 }
 
 impl Default for SecuritySection {
@@ -816,6 +876,7 @@ impl Default for SecuritySection {
             workflow_pushes: None,
             sandbox_retry: None,
             sandbox_retry_allow: None,
+            text_guard: TextGuard::Strict,
         }
     }
 }
@@ -1013,6 +1074,7 @@ impl GitPolicy {
         self.policy_characters = PolicyLevel::Off;
         self.pr_sections = PolicyLevel::Off;
         self.pr_release_impact = PolicyLevel::Off;
+        self.pr_capability_impact = PolicyLevel::Off;
         self.pr_summary = PolicyLevel::Off;
         self.branch_naming = PolicyLevel::Off;
         self.conflict_markers = PolicyLevel::Off;
@@ -1042,16 +1104,26 @@ pub fn policy_armed(root: &Path) -> Result<bool, String> {
     }
 }
 
+/// The largest policy or project settings file read, in the working copy or
+/// as a committed blob (TSK-397 security review SEC01-3).
+pub(crate) const SETTINGS_READ_LIMIT: u64 = 4 * 1024 * 1024;
+
 /// Read an optional configuration file. Only proven absence selects a default;
-/// existing entries and unresolved ancestors remain unreadable inputs.
+/// existing entries and unresolved ancestors remain unreadable inputs. The
+/// read is bounded and never waits: a fifo, directory, device or file over
+/// [`SETTINGS_READ_LIMIT`] is unreadable, which the guards refuse.
 /// # Errors
 /// The file cannot be read as text.
 pub(crate) fn optional_text(path: &Path) -> Result<Option<String>, String> {
-    let unreadable = |error| format!("cannot read {}: {error}", path.display());
+    let unreadable = |error: std::io::Error| format!("cannot read {}: {error}", path.display());
     if crate::absence::proven_absent(path).map_err(unreadable)? {
         return Ok(None);
     }
-    std::fs::read_to_string(path).map(Some).map_err(unreadable)
+    let bytes = crate::bounded_file::read_bounded_following(path, SETTINGS_READ_LIMIT)
+        .map_err(unreadable)?;
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| format!("cannot read {}: not UTF-8", path.display()))
 }
 
 /// Parse optional project settings without hiding obtaining errors.

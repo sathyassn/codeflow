@@ -422,8 +422,10 @@ fn git_guard(stdin: &str) -> i32 {
             if codeflow_core::hooks::ref_authority::recovery_fetch(command, &cwd) {
                 return 0;
             }
-            eprintln!("codeflow git-guard: {error}", error = shown(&error));
-            return 2;
+            if unresolved_read_only(command, &cwd, &error) {
+                return 0;
+            }
+            return authority_refusal(&error);
         }
     };
     let policy = &authority.policy;
@@ -492,6 +494,33 @@ fn git_guard(stdin: &str) -> i32 {
         &authority.source,
     );
     super::render_outcome("git-guard", &root, &report.violations, &report.notes, 2)
+}
+
+/// Read-only git passes while the policy authority cannot be resolved
+/// (TSK-1104); the unresolved state is disclosed and nothing else is let by.
+fn unresolved_read_only(command: &str, cwd: &std::path::Path, error: &str) -> bool {
+    if !codeflow_core::hooks::ref_authority::read_only_git_runs_nothing(command, cwd) {
+        return false;
+    }
+    eprintln!(
+        "codeflow: policy authority unresolved, so only read-only git passes: {error}",
+        error = shown(&error)
+    );
+    true
+}
+
+/// What both guards add to an authority refusal.
+const READ_ONLY_STAYS: &str =
+    "read-only git (status, log, diff, show, rev-parse and the like) stays allowed meanwhile when it runs no configured program";
+
+/// The git-guard refusal for an unresolved policy authority: the error, and
+/// the read-only git that stays allowed.
+fn authority_refusal(error: &str) -> i32 {
+    eprintln!(
+        "codeflow git-guard: {error}; {READ_ONLY_STAYS}",
+        error = shown(&error)
+    );
+    2
 }
 
 /// A git-guard refusal for an input it cannot read: the error, escaped.
@@ -659,7 +688,14 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             if codeflow_core::hooks::ref_authority::recovery_fetch(command, &cwd) {
                 return 0;
             }
-            let _ = term_writeln!(err, "codeflow hook: {error}", error = shown(&error));
+            if unresolved_read_only(command, &cwd, &error) {
+                return 0;
+            }
+            let _ = term_writeln!(
+                err,
+                "codeflow hook: {error}; {READ_ONLY_STAYS}",
+                error = shown(&error)
+            );
             return 2;
         }
     };
@@ -672,15 +708,68 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         let _ = term_writeln!(err, "codeflow hook: cannot read SHELL as UTF-8");
         return 2;
     };
-    let violations = exec_guard::evaluate_in(
+    // Which text rule judges this call (TSK-397): strict unless the policy
+    // of the call's repository and of the session's project both choose
+    // `relaxed` at the protected remote-tracking refs; a retry flag and
+    // native Windows keep it strict.
+    let host = codeflow_core::hooks::sandbox_state::Host::for_hook(&cwd, &root);
+    let mut policy_reasons = Vec::new();
+    policy_reasons.extend(codeflow_core::hooks::sandbox_state::policy_reason(
+        &authority,
+        "the project policy",
+    ));
+    if let Some(session) = host.session.as_deref() {
+        if let Some(reason) = session_policy_reason(session, &root) {
+            policy_reasons.push(reason);
+        }
+    }
+    let outcome = codeflow_core::hooks::sandbox_state::outcome(
+        &host,
+        payload.tool_input.sandbox_retry(),
+        &policy_reasons,
+    );
+    let violations = exec_guard::evaluate_ruled(
         command,
         exec_guard::shell_is_posix(&payload.tool_name, shell.as_deref(), cfg!(unix)),
         &policy.security,
         policy.git.hook_integrity,
         &cwd,
         &root,
+        &outcome,
     );
     exec_guard_answer(out, err, stdin, &violations, &authority.source, Some(&root))
+}
+
+/// Why the session project's policy keeps a call made from `root` strict:
+/// it does not choose `relaxed` at its protected remote-tracking refs, or it
+/// cannot be read. `None` when the session project is the call's
+/// repository, whose policy the caller already read, or when it chooses
+/// `relaxed` there.
+fn session_policy_reason(session: &std::path::Path, root: &std::path::Path) -> Option<String> {
+    let session_root = match super::project_root(session) {
+        Ok(session_root) => session_root,
+        Err(error) => {
+            return Some(format!(
+            "the session project `{}` cannot be read ({}), so its `security.text_guard` is unknown",
+            session.display(),
+            shown(&error)
+        ))
+        }
+    };
+    if session_root == root {
+        return None;
+    }
+    match codeflow_core::hooks::landed_policy::load(&session_root) {
+        Ok(authority) => codeflow_core::hooks::sandbox_state::policy_reason(
+            &authority,
+            "the session project's policy",
+        ),
+        Err(error) => Some(format!(
+            "the session project's policy at `{}` cannot be read ({}), so its `security.text_guard` is unknown",
+            session_root.display(),
+            shown(&error)
+        )),
+    }
 }
 
 fn edit_guard(stdin: &str) -> i32 {

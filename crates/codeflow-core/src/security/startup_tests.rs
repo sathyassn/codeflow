@@ -515,6 +515,73 @@ fn unresolved_targets_fail_closed_near_the_class() {
     }
 }
 
+/// Issue 342 (TSK-397): a directory change writes nothing, so its own
+/// unresolved operand is never judged as a startup-file write, even from
+/// `/` or the home. A relative write after it is still judged.
+#[test]
+fn a_directory_change_is_not_a_write() {
+    let f = Fixture::new();
+    for command in ["cd ~ && cd \"$p\"", "cd / && pushd \"$p\"", "cd H && popd"] {
+        let found = f.judge(command);
+        assert!(!refused(&found), "{command}: {found:?}");
+    }
+    for command in [
+        "cd ~ && cd \"$p\" && echo x >> .zshrc",
+        "cd \"$p\" && echo x >> ~/.zshrc",
+        // Security review SF-7: through an exec-style launcher or as a path,
+        // `cd` is the first `cd` file on `PATH`, which may write anything.
+        "env cd ~/.zshrc",
+        "timeout 5 cd ~/.zshrc",
+        "exec cd ~/.zshrc",
+        "/usr/bin/cd ~/.zshrc",
+    ] {
+        // A line with any other command keeps the normal write judgment,
+        // so the `cd` operand itself may be the reason (Codex round 7).
+        assert!(refused(&f.judge(command)), "{command}");
+    }
+    // Codex review round 6: an external `cd`, or a line that can rebind
+    // the name, keeps the write judgment of the `cd` operand itself.
+    for command in [
+        "cd ~ && command cd \"$p\"",
+        "cd ~ && chdir \"$p\"",
+        "enable -n cd; cd ~ && cd \"$p\"",
+        "disable cd; cd ~ && cd \"$p\"",
+        "cd() { :; }; cd ~ && cd \"$p\"",
+        "alias cd=x; cd ~ && cd \"$p\"",
+    ] {
+        assert!(refused(&f.judge(command)), "{command}");
+    }
+    // Codex review round 6, its exact forms run from the home: only the
+    // shell's own `cd` is exempt.
+    for (command, refuse) in [
+        ("cd \"$p\"", false),
+        ("pushd \"$p\"", false),
+        ("command cd \"$p\"", true),
+        ("chdir \"$p\"", true),
+        ("enable -n cd; cd \"$p\"", true),
+        ("disable cd; cd \"$p\"", true),
+        // Codex review round 7 and security review SR3-1: a quoted, escaped
+        // or expanded rebinding, or a function table entry.
+        ("\"enable\" -n cd; cd \"$p\"", true),
+        ("\\enable -n cd; cd \"$p\"", true),
+        ("en'able' -n cd; cd \"$p\"", true),
+        ("a=enable; \"$a\" -n cd; cd \"$p\"", true),
+        ("\"disable\" cd; cd \"$p\"", true),
+        ("functions[cd]='/x/cd \"$@\"'; cd \"$p\"", true),
+        // The exemption covers only a line of bare directory builtins, so
+        // a loop around `cd "$p"` is judged as a write again.
+        ("for p in /a /b; do cd \"$p\" && pwd -P; done", true),
+        // Security review SR2-3: the unresolved operand through a launcher
+        // or a path keeps the write judgment too.
+        ("env cd \"$p\"", true),
+        ("exec cd \"$p\"", true),
+        ("/usr/bin/cd \"$p\"", true),
+    ] {
+        let found = f.judge_in(command, &f.home, &f.startup_env());
+        assert_eq!(refused(&found), refuse, "{command}: {found:?}");
+    }
+}
+
 /// Placing programs refuse in or into the home, `/etc` or a startup
 /// directory, and pass elsewhere.
 #[test]

@@ -1590,7 +1590,7 @@ const TEMPLATE_ALTERNATIVES: [&str; 3] = [
 /// A value that says nothing: empty of letters and digits, a whole
 /// `<placeholder>`, or a placeholder word (`PLACEHOLDERS` in
 /// `scripts/release.py`).
-fn placeholder(value: &str) -> bool {
+pub(super) fn placeholder(value: &str) -> bool {
     let value = guidance(value);
     let whole_placeholder = value.starts_with('<')
         && value.ends_with('>')
@@ -1608,6 +1608,49 @@ fn substantive(value: &str) -> bool {
     !placeholder(value)
         && normalized != "see breaking change"
         && !TEMPLATE_ALTERNATIVES.contains(&normalized.as_str())
+}
+
+/// Bound the body before this rule invokes the Markdown parser.
+pub(super) const CAPABILITY_MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
+
+/// Visible own-section declaration lines, excluding examples, comments and subsections.
+pub(super) fn capability_lines(body: &str) -> Result<Vec<String>, String> {
+    const MAX_LINE_BYTES: usize = 4096;
+    const MAX_LINES: usize = 10_000;
+    if body.len() > CAPABILITY_MAX_BODY_BYTES {
+        return Err(format!(
+            "capability declaration body exceeds {CAPABILITY_MAX_BODY_BYTES} bytes"
+        ));
+    }
+    let parsed = sections(body);
+    let matched: Vec<_> = parsed
+        .iter()
+        .filter(|s| s.matches("Capability impact"))
+        .collect();
+    let [section] = matched.as_slice() else {
+        return Err("PR body needs exactly one ## Capability impact section".into());
+    };
+    if section.depth != HeadingLevel::H2 {
+        return Err("Capability impact must be a level-two heading".into());
+    }
+    let content = section.content();
+    let end = sections(content)
+        .first()
+        .map_or(content.len(), |s| s.heading_start);
+    let visible = field_text(&content[..end]);
+    let mut lines = Vec::new();
+    for line in visible.lines().map(str::trim).filter(|s| !s.is_empty()) {
+        if line.len() > MAX_LINE_BYTES {
+            return Err(format!(
+                "capability declaration line exceeds {MAX_LINE_BYTES} bytes"
+            ));
+        }
+        if lines.len() == MAX_LINES {
+            return Err(format!("capability declaration exceeds {MAX_LINES} lines"));
+        }
+        lines.push(line.to_owned());
+    }
+    Ok(lines)
 }
 
 #[cfg(test)]

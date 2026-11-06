@@ -70,7 +70,13 @@ fn write_policy(root: &Path, policy: &Value) {
     .unwrap();
 }
 
+/// Judge `body` with the working copy's policy landed on `main`, the base
+/// these fixtures name (TSK-1077: the base's policy judges, and a base
+/// without one is judged by the shipped defaults).
 fn assert_clean(root: &Path, body: &str) {
+    if root.join(".codeflow").join("policy.json").is_file() {
+        land_policy(root);
+    }
     let output = ci_with_body(root, body);
     assert_eq!(
         output.status.code(),
@@ -274,6 +280,7 @@ fn updates_preserve_explicit_release_defaults_off_warn_and_pre_one_mapping() {
         update(dir.path(), &source());
         assert_eq!(read_policy(dir.path()), policy);
         let invalid = BODY.replace("Impact: patch", "Impact: huge");
+        land_policy(dir.path());
         let result = ci_with_body(dir.path(), &invalid);
         assert_eq!(result.status.code(), Some(i32::from(setting == "block")));
         assert_eq!(
@@ -340,6 +347,7 @@ fn real_commit_range_floors_release_impact_at_project_breaking_level() {
             dir.path(),
             &json!({"git": {"pr_release_impact": "block", "pr_breaking_level": "minor"}}),
         );
+        land_policy(dir.path());
         let output = ci_with_body(dir.path(), BODY);
         assert_eq!(output.status.code(), Some(1));
         assert!(String::from_utf8_lossy(&output.stderr)
@@ -653,6 +661,7 @@ fn release_impact_depends_on_base_or_breaking_commit() {
     policy["git"]["pr_release_impact"] = json!("block");
     policy["git"]["protected_branches"] = json!(["main", "release/*"]);
     write_policy(dir.path(), &policy);
+    land_policy(dir.path());
     git(dir.path(), &["branch", "integration/line", "main"]);
     let body = BODY.split("## Release impact").next().unwrap();
     git(dir.path(), &["branch", "integration/main", "main"]);
@@ -794,6 +803,8 @@ fn mapped_release_heading_is_optional_on_line_but_validated_when_present() {
         "pr_section_mapping":{"state":"accepted","headings":{"Release impact":"Release notes"},"decided":"2026-09-29"}
     }});
     write_policy(dir.path(), &policy);
+    land_policy(dir.path());
+    git(dir.path(), &["branch", "-f", "integration/line", "main"]);
     let run = |body: &str, base: &str| {
         run_in(
             dir.path(),

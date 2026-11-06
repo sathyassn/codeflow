@@ -108,6 +108,11 @@ fn codeflow_command(dir: &Path, args: &[&str]) -> Command {
         .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE");
+    // The fixtures play a human; a marker the test run inherits from an
+    // agent session would apply the agent-only rules.
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        command.env_remove(name);
+    }
     command
 }
 
@@ -124,7 +129,11 @@ fn git_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
-    Command::new("git")
+    let mut command = Command::new("git");
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        command.env_remove(name);
+    }
+    command
         .args(args)
         .current_dir(dir)
         .env("PATH", path)
@@ -446,7 +455,7 @@ fn minimal_floor_blocks_a_non_conventional_commit() {
         bad_msg.contains("commit_format"),
         "commit-msg block did not name the commit_format rule:\n{bad_msg}"
     );
-    let good = root.join("good-msg.txt");
+    let good = root.join(".git/COMMIT_EDITMSG");
     std::fs::write(&good, "feat: add a real feature\n").unwrap();
     assert!(
         codeflow(&root, &["git-hook", "commit-msg", good.to_str().unwrap()])
@@ -548,6 +557,13 @@ fn push_set_blocks_a_bad_push_at_every_tier() {
             "seed the destination",
         );
         git_ok(&root, &["fetch", "-q", "origin"], "fetch the destination");
+        // Git before 2.48 records no remote HEAD on fetch, and the default
+        // branch is the only policy authority (ADR-0091).
+        git_ok(
+            &root,
+            &["remote", "set-head", "origin", &start],
+            "remote set-head",
+        );
 
         // `init` already committed the scaffold; add one reviewed change.
         let good = ["-m", "chore: add a base file"];
@@ -625,6 +641,13 @@ fn human_override_lands_protected_commits_and_pushes_but_nothing_destructive() {
         out.status.success(),
         "human bootstrap push refused:\n{}",
         stderr(&out)
+    );
+    // TSK-1077: a push records no remote HEAD, and the default branch it
+    // names is the only policy authority, so the operator records it once.
+    git_ok(
+        &root,
+        &["remote", "set-head", "origin", &main],
+        "remote set-head",
     );
 
     // A commit on the protected branch: refused without, made with it.
@@ -756,7 +779,7 @@ fn minimal_floor_blocks_a_story_body_commit() {
     );
 
     // The same change with a bullet body passes.
-    let bullets = root.join("bullet-msg.txt");
+    let bullets = root.join(".git/COMMIT_EDITMSG");
     std::fs::write(&bullets, "feat: add a thing\n\n- wire the new path\n").unwrap();
     assert!(
         codeflow(
@@ -811,7 +834,7 @@ fn minimal_floor_is_strict_then_opt_in_for_trailers() {
     init(&root, "--minimal");
 
     // Direct hook invocation: a Refs footer BLOCKS at the shipped strict default.
-    let msg = root.join("trailer-msg.txt");
+    let msg = root.join(".git/COMMIT_EDITMSG");
     std::fs::write(&msg, "feat: add a thing\n\n- wire it\n\nRefs: PROJ-142\n").unwrap();
     let blocked = codeflow(&root, &["git-hook", "commit-msg", msg.to_str().unwrap()]);
     let text = format!(
@@ -1105,6 +1128,16 @@ fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
             for command in guard_forms::PROJECT_DELETIONS {
                 let out = run_wired(&root, &hook, command);
                 let stderr = String::from_utf8_lossy(&out.stderr);
+                // TSK-397: the strict text rule, the default, may refuse a
+                // word filled in at run time; the relaxed rule's decisions
+                // are proven by the `text_guard_invariant` replay.
+                if out.status.code() == Some(2)
+                    && stderr.matches("policy rule ").count() == 1
+                    && stderr.contains("policy rule security.text_guard (block)")
+                    && stderr.contains("the strict text rule cannot verify the run-time argument")
+                {
+                    continue;
+                }
                 assert_eq!(
                     out.status.code(),
                     Some(0),

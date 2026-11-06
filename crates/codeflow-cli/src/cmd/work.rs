@@ -23,13 +23,14 @@ pub struct WorkArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum WorkCommand {
-    /// List ready tasks first, then waiting and blocked ones with their
-    /// reasons, from the refs as last fetched. Checks review evidence for stack hints.
+    /// List ready tasks first, then landed (work merged), waiting and blocked
+    /// ones with their reasons, from the refs as last fetched. Checks review
+    /// evidence for stack hints.
     Next {
         /// Only tasks of this epic.
         #[arg(long, value_name = "EPC-NNN")]
         epic: Option<String>,
-        /// Print the same facts as JSON.
+        /// Print the same facts as JSON, each task with its `state`; a landed task adds `landed_branches` and `suggested_command`.
         #[arg(long)]
         json: bool,
     },
@@ -169,7 +170,13 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
         return 0;
     }
     println!("{}", backlog.snapshot_line());
-    let listed = [State::Ready, State::Waiting, State::Blocked, State::Invalid];
+    let listed = [
+        State::Ready,
+        State::Landed,
+        State::Waiting,
+        State::Blocked,
+        State::Invalid,
+    ];
     if listed
         .iter()
         .all(|state| backlog.in_state(*state).next().is_none())
@@ -209,6 +216,12 @@ fn entry_line(entry: &Entry) -> String {
         // The backlog holds claim branches in display form already.
         line.push_str(&entry.branches.join(", "));
     }
+    if !entry.landed_branches.is_empty() {
+        line.push_str("\n         landed branch: ");
+        line.push_str(&entry.landed_branches.join(", "));
+        line.push_str("\n         next: ");
+        line.push_str(&readiness::landed_status_command(&entry.task_id));
+    }
     for branch in &entry.informational_branches {
         line.push_str("\n         ");
         line.push_str(&codeflow_core::git::display_output(branch));
@@ -234,6 +247,11 @@ fn next_json(backlog: &Backlog) -> serde_json::Value {
             "reason": entry.reason,
             // The names git stores; `display_json` escapes them on output.
             "branches": entry.branch_names,
+            // Set on a `landed` task: the branches whose work reached the
+            // target and the command that settles the record (TSK-1038).
+            "landed_branches": entry.landed_branch_names,
+            "suggested_command": (entry.state == State::Landed)
+                .then(|| readiness::landed_status_command(&entry.task_id)),
             "informational_branches": entry.informational_branches,
         })).collect::<Vec<_>>(),
         "conflicts": backlog

@@ -10,7 +10,7 @@ use crate::workgraph::history;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::capability::{parse_capabilities, CapabilityEntry};
+use crate::capability::{inspect_capability_catalog, CapabilityEntry};
 use crate::git::GitName;
 use crate::models::{Epic, EpicFilter, Task, TaskFilter, TaskStatus};
 use crate::workgraph::readiness::{self, Backlog, State};
@@ -124,8 +124,10 @@ pub struct StatusView {
     /// Derived task states from the readiness core (SPC-013 R-27); `None`
     /// when durable work tracking is off or the refs cannot be read.
     pub derived: Option<Backlog>,
-    /// `None` when `docs/capabilities.md` is absent.
+    /// `None` when both the legacy file and catalog folder are absent.
     pub capabilities: Option<Vec<CapabilityEntry>>,
+    /// Inventory and declared evidence, counted separately.
+    pub capability_coverage: String,
     /// Per-capability delivery rollup. `None` when either the registry or the
     /// project-management tier is absent (the view needs both links).
     pub delivery: Option<Vec<CapabilityDelivery>>,
@@ -191,7 +193,7 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
         },
         _ => None,
     };
-    let capabilities = collect_capabilities(repo_root, &mut notes);
+    let (capabilities, capability_coverage) = collect_capabilities(repo_root, &mut notes);
     let delivery = collect_delivery(repo_root, capabilities.as_deref());
     let completed = work
         .as_ref()
@@ -207,6 +209,7 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
         work,
         derived,
         capabilities,
+        capability_coverage,
         delivery,
         feedback: crate::feedback::open_summary(repo_root),
         estimates,
@@ -533,20 +536,35 @@ fn collect_work(repo_root: &Path, notes: &mut Vec<String>) -> Option<WorkSummary
     Some(summary)
 }
 
-fn collect_capabilities(repo_root: &Path, notes: &mut Vec<String>) -> Option<Vec<CapabilityEntry>> {
-    let path = repo_root.join("docs/capabilities.md");
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        notes.push("docs/capabilities.md absent — capability registry not present".to_string());
-        return None;
+fn collect_capabilities(
+    repo_root: &Path,
+    notes: &mut Vec<String>,
+) -> (Option<Vec<CapabilityEntry>>, String) {
+    let (catalog, issues) = inspect_capability_catalog(repo_root);
+    let valid = issues.is_empty();
+    let coverage = if valid {
+        crate::capability::coverage::line(&catalog)
+    } else {
+        "coverage unavailable: invalid catalog".to_string()
     };
-    let (entries, issues) = parse_capabilities(&content);
-    for issue in issues {
-        notes.push(format!(
-            "docs/capabilities.md:{}: {}",
-            issue.line, issue.message
-        ));
+    notes.extend(issues.into_iter().map(|issue| issue.to_string()));
+    if !catalog.present && valid {
+        notes.push(
+            "docs/capabilities.md and folder records absent; capability catalog not present"
+                .to_string(),
+        );
+        return (None, coverage);
     }
-    Some(entries)
+    (
+        Some(
+            catalog
+                .records
+                .into_iter()
+                .map(|record| record.entry)
+                .collect(),
+        ),
+        coverage,
+    )
 }
 
 /// Roll up capability delivery from the existing links: each capability's
@@ -716,6 +734,10 @@ fn render_status_text(view: &StatusView, capabilities_table: bool) -> crate::git
         }
     }
 
+    if view.capabilities.is_some() {
+        let _ = writeln!(out, "capability coverage: {}", view.capability_coverage);
+    }
+
     if let Some(line) = &view.estimates {
         let _ = writeln!(out, "{line}");
     }
@@ -776,6 +798,16 @@ fn render_derived(out: &mut crate::git::TextBlock, backlog: &Backlog) {
             "  ready: {} {}",
             entry.task_id,
             crate::git::display_message(&entry.title)
+        );
+    }
+    for entry in backlog.in_state(State::Landed) {
+        let _ = writeln!(
+            out,
+            "  landed task: {} {} ({}; run `{}`)",
+            entry.task_id,
+            crate::git::display_message(&entry.title),
+            shown_branches(&entry.landed_branches),
+            readiness::landed_status_command(&entry.task_id)
         );
     }
     // A Blocker or an invalid record outranks a claim; the branch stays shown.

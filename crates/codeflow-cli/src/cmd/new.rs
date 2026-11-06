@@ -250,7 +250,6 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
             return 2;
         }
     };
-    let pm = root.join("project-management");
     let template = match load_template("base/pm/epic.md.tmpl") {
         Ok(template) => template,
         Err(error) => {
@@ -258,21 +257,12 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
             return 1;
         }
     };
-    let Some(mut issuer) = Issuer::new(
-        &root,
-        Kind::Epc,
-        title,
-        serde_json::json!({ "kind": "epic", "title": title }),
-    ) else {
-        return 1;
-    };
-    let result = if issuer.registry {
-        allocate::create_epic_with(&pm, &template, title, &mut |target| issuer.allocate(target))
-    } else {
-        allocate::create_epic(&pm, &template, title)
-    };
-    let Some(rec) = issuer.settle(result) else {
-        return 1;
+    let rec = match create_epic_record(&root, &template, title) {
+        Ok(record) => record,
+        Err(error) => {
+            eprintln!("error: {}", super::shown(&error));
+            return 1;
+        }
     };
     report(&rec);
     if !integration {
@@ -437,37 +427,20 @@ fn new_task(
             return 1;
         }
     };
-    let request = serde_json::json!({
-        "kind": "task",
-        "epic": epic,
-        "standalone_reason": standalone_reason,
-        "into": integration_target,
-        "title": title,
-    });
-    let Some(mut issuer) = Issuer::new(&root, Kind::Tsk, title, request) else {
-        return 1;
-    };
-    let result = if issuer.registry {
-        allocate::create_task_with(
-            &pm,
-            &template,
-            epic,
-            standalone_reason,
-            integration_target,
-            title,
-            &mut |target| issuer.allocate(target),
-        )
-    } else {
-        allocate::create_task(
-            &pm,
-            &template,
-            epic,
-            standalone_reason,
-            integration_target,
-            title,
-        )
-    };
-    issuer.finish(result)
+    match create_task_record(
+        &root,
+        &template,
+        epic,
+        standalone_reason,
+        integration_target,
+        title,
+    ) {
+        Ok(record) => report(&record),
+        Err(error) => {
+            eprintln!("error: {}", super::shown(&error));
+            1
+        }
+    }
 }
 
 /// `task new --resume TSK-NNN` (SPC-013 R-18): write the record of a
@@ -924,7 +897,7 @@ fn report(rec: &NewRecord) -> i32 {
 /// `project-management/templates/<kind>.md` when it is usable, otherwise the
 /// embedded one, with a warning that names why the project's was not used.
 /// Any other embedded template is returned as shipped.
-fn load_template(asset: &str) -> Result<String, String> {
+pub(crate) fn load_template(asset: &str) -> Result<String, String> {
     let bytes = EmbeddedAssets
         .read(asset)
         .map_err(|error| format!("cannot read template {asset}: {error}"))?
@@ -947,4 +920,58 @@ fn load_template(asset: &str) -> Result<String, String> {
         eprintln!("warning: {reason}", reason = crate::cmd::shown(&reason));
     }
     Ok(text)
+}
+
+/// Shared allocation path for `epic new` and capability bootstrap.
+pub(crate) fn create_epic_record(
+    root: &Path,
+    template: &str,
+    title: &str,
+) -> Result<NewRecord, String> {
+    let pm = root.join("project-management");
+    let mut issuer = Issuer::new(
+        root,
+        Kind::Epc,
+        title,
+        serde_json::json!({"kind": "epic", "title": title}),
+    )
+    .ok_or("cannot initialize epic allocation")?;
+    let result = if issuer.registry {
+        allocate::create_epic_with(&pm, template, title, &mut |target| issuer.allocate(target))
+    } else {
+        allocate::create_epic(&pm, template, title)
+    };
+    issuer
+        .settle(result)
+        .ok_or_else(|| "epic allocation failed; see registry diagnostic".into())
+}
+
+/// Shared allocation path for `task new` and capability bootstrap.
+pub(crate) fn create_task_record(
+    root: &Path,
+    template: &str,
+    epic: Option<&str>,
+    reason: Option<&str>,
+    target: Option<&str>,
+    title: &str,
+) -> Result<NewRecord, String> {
+    let pm = root.join("project-management");
+    let mut issuer = Issuer::new(
+        root,
+        Kind::Tsk,
+        title,
+        serde_json::json!({"kind": "task", "epic": epic,
+            "standalone_reason": reason, "into": target, "title": title}),
+    )
+    .ok_or("cannot initialize task allocation")?;
+    let result = if issuer.registry {
+        allocate::create_task_with(&pm, template, epic, reason, target, title, &mut |target| {
+            issuer.allocate(target)
+        })
+    } else {
+        allocate::create_task(&pm, template, epic, reason, target, title)
+    };
+    issuer
+        .settle(result)
+        .ok_or_else(|| "task allocation failed; see registry diagnostic".into())
 }

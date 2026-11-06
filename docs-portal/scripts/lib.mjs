@@ -101,12 +101,14 @@ export async function findRepositoryRoot(start) {
 
 export function parseMarkdown(text, sourcePath) {
   text = normalizeMarkdown(text);
-  if (!text.startsWith("---\n")) return { frontmatter: {}, body: text };
-  const end = text.indexOf("\n---\n", 4);
-  if (end < 0) throw new Error(`${sourcePath}: unclosed YAML frontmatter`);
-  const frontmatter = YAML.parse(text.slice(4, end)) ?? {};
+  const opening = /^---[ \t]*\n/.exec(text);
+  if (opening === null) return { frontmatter: {}, body: text };
+  const rest = text.slice(opening[0].length);
+  const closing = /^---[ \t]*(?:\n|$)/m.exec(rest);
+  if (closing === null) throw new Error(`${sourcePath}: unclosed YAML frontmatter`);
+  const frontmatter = YAML.parse(rest.slice(0, closing.index)) ?? {};
   if (typeof frontmatter !== "object" || Array.isArray(frontmatter)) throw new Error(`${sourcePath}: frontmatter must be a mapping`);
-  return { frontmatter, body: text.slice(end + 5) };
+  return { frontmatter, body: rest.slice(closing.index + closing[0].length) };
 }
 
 export function normalizeMarkdown(text) {
@@ -299,7 +301,7 @@ export function renderStageFences(markdown, context = "cf-stage") {
 // YAML block per capability. The guide renders those blocks as structure: a
 // generated summary table at the top of the page and a compact definition
 // table where each fence stood, never a raw code block a reader must parse.
-const CAPABILITY_FIELD_LIMIT = 16;
+const CAPABILITY_FIELD_LIMIT = 32;
 const CAPABILITY_VALUE_LIMIT = 1024;
 
 export function capabilityFenceRecords(markdown, sourcePath = "capability registry") {
@@ -340,13 +342,20 @@ function capabilityRecord(node, sourcePath) {
   if (node.type !== "code" || !/^ya?ml$/i.test(node.lang ?? "")) return null;
   let parsed;
   try { parsed = YAML.parse(node.value); } catch { return null; }
+  return capabilityFrontmatterRecord(parsed, sourcePath);
+}
+
+// Presentation projection only; the Rust catalog loader owns schema validation.
+export function capabilityFrontmatterRecord(parsed, sourcePath) {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const id = parsed.id;
   if (typeof id !== "string" || !/^CAP-\d{3,}$/.test(id)) return null;
   const entries = Object.entries(parsed);
   if (entries.length > CAPABILITY_FIELD_LIMIT) throw new Error(`${sourcePath}: capability ${id} declares more than ${CAPABILITY_FIELD_LIMIT} fields`);
   const fields = entries.map(([field, value]) => [field, capabilityValueText(value)]);
-  if (fields.some(([field, value]) => field.length > 64 || value.length > CAPABILITY_VALUE_LIMIT)) {
+  // The limit applies per value and per list item, as the Rust loader's does.
+  const values = entries.flatMap(([, value]) => (Array.isArray(value) ? value : [value]).map(capabilityValueText));
+  if (fields.some(([field]) => field.length > 64) || values.some((value) => value.length > CAPABILITY_VALUE_LIMIT)) {
     throw new Error(`${sourcePath}: capability ${id} declares a field beyond the rendered bounds`);
   }
   return { id, fields, lookup: new Map(fields) };

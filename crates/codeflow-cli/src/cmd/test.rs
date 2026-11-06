@@ -20,7 +20,8 @@ pub struct TestArgs {
     /// Full (default) and essential hold the shared heavy-work lock for the run.
     /// Undeclared quick targets use `execution.quick_default_class` (light by default).
     /// Quick runs light targets beside gates; heavy targets wait up to
-    /// `execution.heavy_wait_seconds` (default zero), then refuse if still held.
+    /// `--wait-seconds` or `execution.heavy_wait_seconds` (default zero), then
+    /// refuse if still held. Under `codeflow reserve` they use its lock (Unix).
     /// With no quick targets, quick uses essential targets, heavy unless declared light.
     /// Both the `CodeFlow` home and git common directory use `full-gate.lock`, also
     /// excluding full gates from 3.1. Essential gates from 3.1 take no lock.
@@ -28,21 +29,25 @@ pub struct TestArgs {
     #[arg(long, default_value = "full", value_parser = ["full", "quick", "essential"])]
     pub mode: String,
 
+    /// Seconds heavy quick targets wait for the shared heavy-work lock,
+    /// replacing `execution.heavy_wait_seconds`. Full and essential refuse
+    /// at once as before.
+    #[arg(long, value_name = "SECONDS")]
+    pub wait_seconds: Option<u64>,
+
     /// Read recorded lock holders and their start times without running targets.
     /// Records are snapshots; admission still checks the OS lock and live target groups.
-    #[arg(long, conflicts_with_all = ["mode", "strict", "since", "all", "only", "config"])]
+    #[arg(long, conflicts_with_all = ["mode", "strict", "since", "all", "only", "config", "wait_seconds"])]
     pub lock_status: bool,
 
-    /// Exit non-zero when no targets executed or candidate evidence skipped a target.
+    /// Exit non-zero when no targets executed or a requested target was skipped.
     /// Explicit --only and mode exclusions are not skips.
     /// Use for scripted callers that require execution evidence.
     #[arg(long)]
     pub strict: bool,
 
-    /// Compare the entire candidate delta with a recorded green base.
-    /// Without --since, full mode executes every target.
-    /// Default: the merge base of HEAD and the task's declared integration target.
-    /// An unproven base conservatively runs every target.
+    /// Accepted and narrows nothing: no local run record earns selection
+    /// credit (ADR-0089), so every eligible target runs.
     #[arg(long, conflicts_with = "all")]
     pub since: Option<String>,
 
@@ -149,6 +154,7 @@ pub fn run(args: &TestArgs) -> i32 {
             all: args.all,
             only: args.only.clone(),
             config: args.config.clone(),
+            heavy_wait_seconds: args.wait_seconds,
         },
     ) {
         Ok(GateOutcome::NoTargets { reason }) => nothing_ran(args, &reason),

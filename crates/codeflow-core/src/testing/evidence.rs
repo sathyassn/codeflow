@@ -149,7 +149,7 @@ fn identity(
                 || root.join(output),
                 |relative| delivery::target_dir(root).join(relative),
             );
-            let bytes = regular_bytes(&path)
+            let bytes = regular_bytes(root, &path)
                 .map_err(|_| format!("missing or unreadable producer output for {name}"))?;
             outputs.insert(output.clone(), delivery::digest(&bytes));
         }
@@ -182,13 +182,18 @@ fn declared_inputs(root: &Path, patterns: &[String]) -> Result<BTreeMap<String, 
         if entry.mode == 0o160_000 {
             return Err("submodule input requires execution".into());
         }
-        let bytes = files
-            .read(path, u64::MAX)
+        // The bytes and the mode come from one handle the anchored walk
+        // opened, never through a link (TSK-1044).
+        let mut file = files
+            .open_regular(path)
+            .map_err(|_| "deleted, linked or unreadable input")?;
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut bytes)
             .map_err(|_| "deleted, linked or unreadable input")?;
         #[cfg(unix)]
         let mode = {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::metadata(root.join(path))
+            file.metadata()
                 .map_err(|_| "cannot inspect input mode")?
                 .permissions()
                 .mode()
@@ -229,18 +234,24 @@ fn declared_inputs(root: &Path, patterns: &[String]) -> Result<BTreeMap<String, 
     Ok(inputs)
 }
 
-fn regular_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
-    // Links may read outside the audited input set; no equality credit for them.
-    let metadata = std::fs::symlink_metadata(path)?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(std::io::Error::other("not a regular file"));
-    }
-    let bytes = std::fs::read(path)?;
+/// A producer output's mode and bytes, read from one handle the anchored
+/// walk opened: a link or junction at any component is refused (TSK-1044).
+fn regular_bytes(root: &Path, path: &Path) -> std::io::Result<Vec<u8>> {
+    let (anchor, output) =
+        delivery::target_anchor(root).map_err(|error| std::io::Error::other(error.to_string()))?;
+    let (tree, relative) = delivery::locate(root, &anchor, &output, path)?;
+    let mut file = tree.open_regular(&relative)?;
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut bytes)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         Ok([
-            metadata.permissions().mode().to_le_bytes().as_slice(),
+            file.metadata()?
+                .permissions()
+                .mode()
+                .to_le_bytes()
+                .as_slice(),
             &bytes,
         ]
         .concat())
@@ -500,26 +511,6 @@ pub(super) fn redact(target: &TargetConfig, text: &str) -> String {
         text = text.replace(&value, "[redacted]");
     }
     text
-}
-
-pub(super) fn mismatch(before: &Identity, now: &Identity) -> Option<&'static str> {
-    if before.tools != now.tools {
-        Some("tool identity changed")
-    } else if before.platform != now.platform {
-        Some("platform changed")
-    } else if before.architecture != now.architecture {
-        Some("architecture changed")
-    } else if before.environment != now.environment {
-        Some("declared environment changed")
-    } else if before.membership != now.membership {
-        Some("test membership changed")
-    } else if before.producers != now.producers {
-        Some("producer output changed")
-    } else if before.inputs != now.inputs {
-        Some("declared inputs changed")
-    } else {
-        None
-    }
 }
 
 /// Values inserted by the runner have no stable selection identity.

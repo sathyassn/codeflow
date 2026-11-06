@@ -18,6 +18,17 @@
 //! host omits a bypass list without write access), it says so in a note
 //! rather than passing or warning. A schema error on another key is named
 //! beside the answer. Only a 404 means no classic protection.
+//!
+//! It also judges the perimeter `codeflow remote protect` writes (TSK-1080):
+//! it **fails** while the bypass list of "codeflow authority checks" (B) or
+//! "codeflow line checks" (C) is not empty, since that is a recovery window
+//! left open; with `--profile` it compares the owned rulesets with the
+//! profile; and it reports classic protection that does not bind
+//! administrators, a non-strict or pull-request-free rule on the
+//! integration lines, an `authority:` check pinned to GitHub Actions, an
+//! authority environment that admits more than the default branch or that
+//! a second job references, and a foreign ruleset that requires a name no
+//! workflow on the default branch produces.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -26,6 +37,13 @@ use serde_json::Value;
 
 use super::{CheckResult, Options, Status};
 use crate::remedy;
+use crate::remote::{
+    self, Profile, Targeting, AUTHORITY_PREFIX, DEFAULT_LINES, GITHUB_ACTIONS_APP_ID,
+    POLICY_WORKFLOW, RULESET_AUTHORITY_CHECKS, RULESET_AUTHORITY_UPDATES, RULESET_LINE_CHECKS,
+};
+
+/// The environment that alone holds the authority App's key.
+const AUTHORITY_ENVIRONMENT: &str = "codeflow-authority";
 
 const NAME: &str = "remote-perimeter";
 
@@ -116,10 +134,67 @@ pub(super) fn check(opts: &Options) -> CheckResult {
 
     let sources = sources(&rules, classic.as_ref());
     let problems = problems(opts, &nwo, &branch, &sources, required, &mut bypass_unread);
-    let mut unread: Vec<String> = classic_unread.iter().cloned().collect();
+    let profile = match opts.remote_profile.as_deref().map(Profile::parse) {
+        None => None,
+        Some(Ok(profile)) => Some(profile),
+        Some(Err(why)) => return note(why),
+    };
+    let extra = perimeter(&gh, &nwo, &branch, classic.as_ref(), profile, &problems);
+    let base = base_answer(
+        &nwo,
+        &branch,
+        &sources,
+        &problems,
+        classic_unread.as_ref(),
+        &bypass_unread,
+    );
+
+    let mut message = match &base {
+        Answer::Pass(m) | Answer::Warn(m) | Answer::Note(m) => m.clone(),
+    };
+    for part in extra.warns.iter().chain(&extra.unread) {
+        message = format!("{message}; {part}");
+    }
+    if !extra.fails.is_empty() {
+        return result(
+            Status::Fail,
+            format!("{nwo}: {}; {message}", extra.fails.join("; ")),
+        );
+    }
+    let warn = || {
+        result(
+            Status::Warn(remedy::DOCTOR_REMOTE_PERIMETER.with(&[("branch", &branch)])),
+            message.clone(),
+        )
+    };
+    match base {
+        Answer::Warn(_) => warn(),
+        _ if !extra.warns.is_empty() => warn(),
+        Answer::Note(_) => note(message.clone()),
+        Answer::Pass(_) if !extra.unread.is_empty() => note(message.clone()),
+        Answer::Pass(_) => result(Status::Pass, message.clone()),
+    }
+}
+
+/// The answer from the default branch's required checks alone.
+enum Answer {
+    Pass(String),
+    Warn(String),
+    Note(String),
+}
+
+fn base_answer(
+    nwo: &str,
+    branch: &str,
+    sources: &[Source],
+    problems: &[String],
+    classic_unread: Option<&String>,
+    bypass_unread: &[String],
+) -> Answer {
+    let mut unread: Vec<String> = classic_unread.into_iter().cloned().collect();
     unread.extend(bypass_unread.iter().cloned());
 
-    if let (Some(why), false) = (&classic_unread, problems.is_empty()) {
+    if let (Some(why), false) = (classic_unread, problems.is_empty()) {
         // Classic protection can add checks, the up-to-date rule or an
         // administrator binding, so what the rulesets lack alone is not a
         // gap doctor can report.
@@ -128,14 +203,14 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         } else {
             format!("; {}", bypass_unread.join("; "))
         };
-        return note(format!(
+        return Answer::Note(format!(
             "doctor cannot judge {nwo} {branch}: {why}, and the rulesets alone do not require every name in git.required_checks on an up-to-date branch for everyone{rest}"
         ));
     }
     if problems.is_empty() && !bypass_unread.is_empty() {
         // The rules look right, but a bypass list that cannot be read could
         // hold an actor who skips them, so this is not a pass.
-        return note(format!(
+        return Answer::Note(format!(
             "{nwo} {branch} requires up-to-date checks, but doctor cannot confirm nobody can bypass them: {}",
             unread.join("; ")
         ));
@@ -152,19 +227,500 @@ pub(super) fn check(opts: &Options) -> CheckResult {
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
-        result(
-            Status::Pass,
-            format!(
-                "{nwo} {branch} requires {} on an up-to-date branch, including every name in git.required_checks{unread}",
-                checks.join(", ")
-            ),
-        )
+        Answer::Pass(format!(
+            "{nwo} {branch} requires {} on an up-to-date branch, including every name in git.required_checks{unread}",
+            checks.join(", ")
+        ))
     } else {
-        result(
-            Status::Warn(remedy::DOCTOR_REMOTE_PERIMETER.with(&[("branch", &branch)])),
-            format!("{nwo}: {}{unread}", problems.join("; ")),
-        )
+        Answer::Warn(format!("{nwo}: {}{unread}", problems.join("; ")))
     }
+}
+
+/// What the perimeter `remote protect` writes adds to the answer: failures
+/// (an open recovery window), warnings and what could not be read.
+#[derive(Default)]
+struct Perimeter {
+    fails: Vec<String>,
+    warns: Vec<String>,
+    unread: Vec<String>,
+}
+
+/// Judge the owned rulesets, the line rules, the authority environment and
+/// the rulesets that require names nothing produces.
+fn perimeter(
+    gh: &dyn Fn(&[&str]) -> Result<String, String>,
+    nwo: &str,
+    branch: &str,
+    classic: Option<&Value>,
+    profile: Option<Profile>,
+    problems: &[String],
+) -> Perimeter {
+    let mut out = Perimeter::default();
+    if classic
+        .and_then(|c| c.pointer("/enforce_admins/enabled"))
+        .and_then(Value::as_bool)
+        == Some(false)
+        && !problems.iter().any(|p| p.contains("enforce_admins is off"))
+    {
+        out.warns.push(format!(
+            "classic branch protection on {branch} does not bind administrators (enforce_admins is off)"
+        ));
+    }
+    let rulesets = match all_rulesets(gh, nwo) {
+        Ok(rulesets) => rulesets,
+        Err(why) => {
+            out.unread.push(why);
+            return out;
+        }
+    };
+    let named = |name: &str| rulesets.iter().find(|r| r["name"] == name);
+
+    open_windows(&rulesets, &mut out);
+
+    if let Some(profile) = profile {
+        profile_gaps(&rulesets, profile, &mut out);
+    }
+
+    // The line pattern is C's, else the default.
+    let lines = named(RULESET_LINE_CHECKS)
+        .and_then(|c| c.pointer("/conditions/ref_name/include/0"))
+        .and_then(Value::as_str)
+        .and_then(|include| include.strip_prefix("refs/heads/"))
+        .unwrap_or(DEFAULT_LINES)
+        .to_string();
+    line_rules(&rulesets, &lines, profile.is_some(), &mut out);
+
+    loose_authority_pins(&rulesets, &mut out);
+    declared_findings(gh, nwo, branch, &rulesets, &mut out);
+    out
+}
+
+/// An open recovery window: any ruleset named as B or C names a bypass
+/// actor. Every ruleset of the name is judged, since GitHub does not keep
+/// names unique; two of one name fail, because `remote protect` refuses to
+/// write either and one could hold a list the other hides.
+fn open_windows(rulesets: &[Value], out: &mut Perimeter) {
+    for name in [RULESET_AUTHORITY_CHECKS, RULESET_LINE_CHECKS] {
+        let named: Vec<&Value> = rulesets.iter().filter(|r| r["name"] == name).collect();
+        if named.len() > 1 {
+            out.fails.push(format!(
+                "{} rulesets are named '{name}' ({}), so `codeflow remote protect` writes neither; keep one on the host, then run it",
+                named.len(),
+                named
+                    .iter()
+                    .map(|r| remote::ruleset_label(r))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        for ruleset in named {
+            let label = remote::ruleset_label(ruleset);
+            match ruleset.get("bypass_actors").and_then(Value::as_array) {
+                Some(actors) if !actors.is_empty() => out.fails.push(format!(
+                    "ruleset {label} lets {} bypass it, so a recovery window is open since {}; close it: codeflow remote protect",
+                    remote::actors_text(actors),
+                    ruleset
+                        .get("updated_at")
+                        .and_then(Value::as_str)
+                        .unwrap_or("an unknown time")
+                )),
+                Some(_) => {}
+                None => out
+                    .unread
+                    .push(format!("ruleset {label} bypass list not readable")),
+            }
+        }
+    }
+}
+
+/// An `authority:` name accepted from GitHub Actions or from anyone.
+fn loose_authority_pins(rulesets: &[Value], out: &mut Perimeter) {
+    for ruleset in rulesets.iter().filter(|r| r["enforcement"] == "active") {
+        let loose: Vec<&str> = status_checks(ruleset)
+            .filter(|check| {
+                check["context"]
+                    .as_str()
+                    .is_some_and(|c| c.starts_with(AUTHORITY_PREFIX))
+                    && check["integration_id"]
+                        .as_u64()
+                        .is_none_or(|app| app == GITHUB_ACTIONS_APP_ID)
+            })
+            .filter_map(|check| check["context"].as_str())
+            .collect();
+        if !loose.is_empty() {
+            out.warns.push(format!(
+                "ruleset {} accepts {} from GitHub Actions or any source, which any workflow can produce; pin it to the authority App on the host, since `codeflow remote protect` pins only a name its own rulesets leave unpinned and never changes a pin",
+                remote::ruleset_label(ruleset),
+                loose.join(", ")
+            ));
+        }
+    }
+}
+
+/// What the authority environment and the default branch's workflows
+/// show: a second reference to the environment, and a foreign ruleset that
+/// requires a name nothing produces.
+fn declared_findings(
+    gh: &dyn Fn(&[&str]) -> Result<String, String>,
+    nwo: &str,
+    branch: &str,
+    rulesets: &[Value],
+    out: &mut Perimeter,
+) {
+    let environment = authority_environment(gh, nwo, branch, out);
+    match remote::read_declared(gh, nwo, branch) {
+        Err(why) => out.unread.push(why),
+        Ok(declared) => {
+            if environment {
+                let references: Vec<String> = declared
+                    .environments
+                    .iter()
+                    .filter(|(_, _, env)| env == AUTHORITY_ENVIRONMENT || env.contains("${{"))
+                    .map(|(file, job, _)| format!("{file} job {job}"))
+                    .collect();
+                let outside = declared.environments.iter().any(|(file, _, env)| {
+                    (env == AUTHORITY_ENVIRONMENT || env.contains("${{")) && file != POLICY_WORKFLOW
+                });
+                if references.len() > 1 || outside {
+                    out.warns.push(format!(
+                        "the environment {AUTHORITY_ENVIRONMENT} must be referenced only by the authority job in {POLICY_WORKFLOW}, but on {branch} it is referenced by {}",
+                        references.join(", ")
+                    ));
+                }
+            }
+            for ruleset in rulesets.iter().filter(|r| {
+                r["enforcement"] == "active"
+                    && !r["name"].as_str().is_some_and(|name| {
+                        [
+                            RULESET_AUTHORITY_UPDATES,
+                            RULESET_AUTHORITY_CHECKS,
+                            RULESET_LINE_CHECKS,
+                        ]
+                        .contains(&name)
+                    })
+            }) {
+                let dead: Vec<&str> = status_checks(ruleset)
+                    .filter_map(|check| check["context"].as_str())
+                    .filter(|name| !declared.produces(name))
+                    .collect();
+                if !dead.is_empty() {
+                    out.warns.push(format!(
+                        "ruleset {} requires {}, which no workflow on {branch} produces, so every pull request it covers is blocked; run `codeflow remote protect`, then retire that ruleset on the host",
+                        remote::ruleset_label(ruleset),
+                        dead.join(", ")
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Every branch ruleset of the repository, read in full, or why not.
+fn all_rulesets(
+    gh: &dyn Fn(&[&str]) -> Result<String, String>,
+    nwo: &str,
+) -> Result<Vec<Value>, String> {
+    let unread = |error: &str| {
+        format!(
+            "the rulesets of {nwo} are not readable ({})",
+            super::first_line(error)
+        )
+    };
+    let mut rulesets = Vec::new();
+    for page in 1.. {
+        let text = gh(&[
+            "api",
+            &format!("repos/{nwo}/rulesets?per_page={RULES_PAGE_SIZE}&page={page}"),
+        ])
+        .map_err(|e| unread(&e))?;
+        let Ok(Value::Array(rows)) = serde_json::from_str::<Value>(&text) else {
+            return Err(unread(&format!("page {page} is not a JSON list")));
+        };
+        for row in &rows {
+            let ours = row["target"] == "branch"
+                && row
+                    .get("source_type")
+                    .and_then(Value::as_str)
+                    .is_none_or(|source| source == "Repository");
+            let Some(id) = row.get("id").and_then(Value::as_u64).filter(|_| ours) else {
+                continue;
+            };
+            let text =
+                gh(&["api", &format!("repos/{nwo}/rulesets/{id}")]).map_err(|e| unread(&e))?;
+            let full: Value = serde_json::from_str(&text)
+                .map_err(|_| unread(&format!("ruleset {id} is not JSON")))?;
+            rulesets.push(full);
+        }
+        if rows.len() < RULES_PAGE_SIZE {
+            break;
+        }
+    }
+    Ok(rulesets)
+}
+
+/// The check objects of a ruleset's `required_status_checks` rules.
+fn status_checks(ruleset: &Value) -> impl Iterator<Item = &Value> {
+    rules_of(ruleset, "required_status_checks")
+        .filter_map(|rule| rule["parameters"]["required_status_checks"].as_array())
+        .flatten()
+}
+
+fn rules_of<'a>(ruleset: &'a Value, kind: &'a str) -> impl Iterator<Item = &'a Value> {
+    ruleset["rules"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(move |rule| rule["type"] == kind)
+}
+
+/// How the owned rulesets differ from `profile`.
+fn profile_gaps(rulesets: &[Value], profile: Profile, out: &mut Perimeter) {
+    let mut gaps = Vec::new();
+    for name in [
+        RULESET_AUTHORITY_UPDATES,
+        RULESET_AUTHORITY_CHECKS,
+        RULESET_LINE_CHECKS,
+    ] {
+        let named: Vec<&Value> = rulesets.iter().filter(|r| r["name"] == name).collect();
+        if named.is_empty() {
+            gaps.push(format!("ruleset '{name}' is missing"));
+            continue;
+        }
+        if named.len() > 1 {
+            gaps.push(format!("{} rulesets are named '{name}'", named.len()));
+        }
+        for ruleset in named {
+            let label = remote::ruleset_label(ruleset);
+            let mut lacks = Vec::new();
+            if ruleset["enforcement"] != "active" {
+                lacks.push("it is not active".to_string());
+            }
+            let include = ruleset
+                .pointer("/conditions/ref_name/include")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if name != RULESET_LINE_CHECKS && !include.contains(&Value::from("~DEFAULT_BRANCH")) {
+                lacks.push("it does not target ~DEFAULT_BRANCH".to_string());
+            }
+            if name == RULESET_AUTHORITY_UPDATES {
+                lacks.extend(update_gaps(ruleset, profile, out));
+            } else {
+                lacks.extend(checks_gaps(ruleset, name, profile));
+            }
+            if !lacks.is_empty() {
+                gaps.push(format!("ruleset {label}: {}", lacks.join(", ")));
+            }
+        }
+    }
+    if !gaps.is_empty() {
+        out.warns.push(format!(
+            "the owned rulesets differ from the {} profile ({}); `codeflow remote protect --profile {}` adds a missing ruleset or rule, raises approvals, makes checks strict, activates and retargets; A's bypass list, an `update` rule on B or C, a changed pin and a duplicate name are edited on the host",
+            profile.as_str(),
+            gaps.join("; "),
+            profile.as_str()
+        ));
+    }
+}
+
+/// How ruleset A differs from `profile`.
+fn update_gaps(ruleset: &Value, profile: Profile, out: &mut Perimeter) -> Vec<String> {
+    let mut lacks = Vec::new();
+    match rules_of(ruleset, "update").next() {
+        None => lacks.push("it has no update rule".to_string()),
+        // The host leaves the parameter out when it is off, so only an
+        // explicit `true` lets fetch and merge through.
+        Some(rule) if rule["parameters"]["update_allows_fetch_and_merge"] == true => {
+            lacks.push("its update rule allows fetch and merge".to_string());
+        }
+        Some(_) => {}
+    }
+    match ruleset.get("bypass_actors").and_then(Value::as_array) {
+        None => out.unread.push(format!(
+            "ruleset {} bypass list not readable",
+            remote::ruleset_label(ruleset)
+        )),
+        Some(actors) => {
+            let (id, role) = profile.update_role();
+            let exact = actors.len() == 1
+                && actors[0]["actor_type"] == "RepositoryRole"
+                && actors[0]["actor_id"] == id
+                && actors[0]["bypass_mode"] == "always";
+            if !exact {
+                lacks.push(format!(
+                    "its bypass list is {} where {} expects the {role} role (RepositoryRole {id}) alone",
+                    if actors.is_empty() {
+                        "empty".to_string()
+                    } else {
+                        remote::actors_text(actors)
+                    },
+                    profile.as_str()
+                ));
+            }
+        }
+    }
+    lacks
+}
+
+/// How ruleset B or C differs from `profile`.
+fn checks_gaps(ruleset: &Value, name: &str, profile: Profile) -> Vec<String> {
+    let mut lacks = Vec::new();
+    let approvals = if name == RULESET_AUTHORITY_CHECKS {
+        profile.approvals()
+    } else {
+        0
+    };
+    match rules_of(ruleset, "pull_request").next() {
+        None => lacks.push("it requires no pull request".to_string()),
+        Some(rule) => {
+            let p = &rule["parameters"];
+            if p["required_approving_review_count"].as_u64().unwrap_or(0) < approvals {
+                lacks.push(format!("it requires fewer than {approvals} approval(s)"));
+            }
+            if name == RULESET_AUTHORITY_CHECKS
+                && profile == Profile::IndependentReview
+                && (p["dismiss_stale_reviews_on_push"] != true
+                    || p["require_last_push_approval"] != true)
+            {
+                lacks.push(
+                    "it does not dismiss stale approvals and require the last push approved"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    let checks: Vec<&Value> = status_checks(ruleset).collect();
+    if checks.is_empty() {
+        lacks.push("it requires no status checks".to_string());
+    } else if rules_of(ruleset, "required_status_checks")
+        .any(|rule| rule["parameters"]["strict_required_status_checks_policy"] != true)
+    {
+        lacks.push("its checks are not strict".to_string());
+    }
+    let unpinned: Vec<&str> = checks
+        .iter()
+        .filter(|check| check["integration_id"].as_u64().is_none())
+        .filter_map(|check| check["context"].as_str())
+        .collect();
+    if !unpinned.is_empty() {
+        lacks.push(format!(
+            "it accepts {} from any source",
+            unpinned.join(", ")
+        ));
+    }
+    for kind in ["non_fast_forward", "deletion"] {
+        if rules_of(ruleset, kind).next().is_none() {
+            lacks.push(format!("it has no {kind} rule"));
+        }
+    }
+    if rules_of(ruleset, "update").next().is_some() {
+        lacks.push("it carries an update rule".to_string());
+    }
+    lacks
+}
+
+/// The rules on the integration lines: a non-strict check rule, and no
+/// rule that requires a pull request.
+fn line_rules(rulesets: &[Value], lines: &str, asked: bool, out: &mut Perimeter) {
+    let mut targeting = Vec::new();
+    for ruleset in rulesets.iter().filter(|r| r["enforcement"] == "active") {
+        match remote::ruleset_targets(ruleset, lines, None) {
+            Targeting::Targets => targeting.push(ruleset),
+            Targeting::Misses => {}
+            Targeting::Unexplained(why) => out
+                .unread
+                .push(format!("ruleset {}: {why}", remote::ruleset_label(ruleset))),
+        }
+    }
+    for ruleset in &targeting {
+        if rules_of(ruleset, "required_status_checks")
+            .any(|rule| rule["parameters"]["strict_required_status_checks_policy"] != true)
+        {
+            out.warns.push(format!(
+                "ruleset {} requires checks on {lines} but not that a branch be up to date, so a line pull request can merge on checks that ran against an older line",
+                remote::ruleset_label(ruleset)
+            ));
+        }
+    }
+    if (asked || !targeting.is_empty())
+        && !targeting
+            .iter()
+            .any(|ruleset| rules_of(ruleset, "pull_request").next().is_some())
+    {
+        out.warns.push(format!(
+            "no active ruleset requires a pull request on {lines}, so a push can move a line without any check"
+        ));
+    }
+}
+
+/// Whether the authority environment exists, warning when its branch rule
+/// admits more than the default branch.
+fn authority_environment(
+    gh: &dyn Fn(&[&str]) -> Result<String, String>,
+    nwo: &str,
+    branch: &str,
+    out: &mut Perimeter,
+) -> bool {
+    let unread = |error: &str| {
+        format!(
+            "the environment {AUTHORITY_ENVIRONMENT} is not readable ({})",
+            super::first_line(error)
+        )
+    };
+    let environment = match gh(&[
+        "api",
+        &format!("repos/{nwo}/environments/{AUTHORITY_ENVIRONMENT}"),
+    ]) {
+        Ok(text) => serde_json::from_str::<Value>(&text).unwrap_or(Value::Null),
+        Err(error) if error.contains("404") || error.contains("Not Found") => return false,
+        Err(error) => {
+            out.unread.push(unread(&error));
+            return true;
+        }
+    };
+    let admits = |what: String| {
+        format!(
+            "the environment {AUTHORITY_ENVIRONMENT} admits {what}, so code from a branch other than {branch} can read the authority key; set its deployment branches to {branch} alone"
+        )
+    };
+    let policy = &environment["deployment_branch_policy"];
+    if policy.is_null() {
+        out.warns.push(admits("every branch".to_string()));
+    } else if policy["protected_branches"] == true {
+        out.warns.push(admits("every protected branch".to_string()));
+    } else if policy["custom_branch_policies"] == true {
+        match gh(&[
+            "api",
+            &format!("repos/{nwo}/environments/{AUTHORITY_ENVIRONMENT}/deployment-branch-policies"),
+        ]) {
+            Err(error) => out.unread.push(unread(&error)),
+            Ok(text) => {
+                let policies: Vec<(String, String)> = serde_json::from_str::<Value>(&text)
+                    .unwrap_or(Value::Null)["branch_policies"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|p| {
+                        (
+                            p["name"].as_str().unwrap_or("?").to_string(),
+                            p["type"].as_str().unwrap_or("?").to_string(),
+                        )
+                    })
+                    .collect();
+                if policies != [(branch.to_string(), "branch".to_string())] {
+                    out.warns.push(admits(format!(
+                        "the patterns {}",
+                        policies
+                            .iter()
+                            .map(|(name, kind)| format!("{name} ({kind})"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )));
+                }
+            }
+        }
+    }
+    true
 }
 
 /// The `git.required_checks` list to judge, with a suffix naming the
@@ -625,6 +1181,15 @@ mod tests {
                 "error" => Err("gh: Resource not accessible (HTTP 403)".into()),
                 actors => Ok(format!(r#"{{"id":7,"bypass_actors":{actors}}}"#)),
             },
+            // No repository ruleset beyond those `rules` names, no
+            // authority environment and no workflow folder.
+            ["api", url] if url.starts_with("repos/o/r/rulesets?") => Ok("[]".into()),
+            ["api", "repos/o/r/environments/codeflow-authority"] => {
+                Err("gh: Not Found (HTTP 404)".into())
+            }
+            ["api", url] if url.starts_with("repos/o/r/contents/") => {
+                Err("gh: Not Found (HTTP 404)".into())
+            }
             other => Err(format!("unexpected gh call {other:?}")),
         }
     }
@@ -805,15 +1370,14 @@ mod tests {
 
     #[test]
     fn strict_checks_that_cover_the_policy_pass() {
-        // The live shape of this repository's main once strict is on:
-        // ruleset checks, and classic protection without checks or admin
-        // enforcement, which carries no checks and so is not judged.
+        // Ruleset checks, and classic protection without checks that binds
+        // administrators.
         fn exec(_: &str, args: &[&str]) -> Result<String, String> {
             host(
                 args,
                 &ruleset(true),
                 Some(
-                    r#"{"required_status_checks":null,"enforce_admins":{"enabled":false},"required_conversation_resolution":{"enabled":true}}"#,
+                    r#"{"required_status_checks":null,"enforce_admins":{"enabled":true},"required_conversation_resolution":{"enabled":true}}"#,
                 ),
                 "[]",
             )
@@ -825,6 +1389,31 @@ mod tests {
             result.message.contains("o/r main requires"),
             "{}",
             result.message
+        );
+    }
+
+    /// TSK-1080 AC-3: classic protection that does not bind administrators
+    /// is reported even when it carries no checks (this repository's live
+    /// `main` on 2026-10-29).
+    #[test]
+    fn classic_protection_that_does_not_bind_administrators_warns() {
+        fn exec(_: &str, args: &[&str]) -> Result<String, String> {
+            host(
+                args,
+                &ruleset(true),
+                Some(
+                    r#"{"required_status_checks":null,"enforce_admins":{"enabled":false},"required_conversation_resolution":{"enabled":true}}"#,
+                ),
+                "[]",
+            )
+        }
+        let dir = project();
+        let text = warn_text(&check(&opts(dir.path(), exec)));
+        assert!(
+            text.contains(
+                "classic branch protection on main does not bind administrators (enforce_admins is off)"
+            ),
+            "{text}"
         );
     }
 
@@ -1164,5 +1753,530 @@ mod tests {
         ] {
             assert_eq!(parse_github_url(url), None, "{url}");
         }
+    }
+
+    // -------------------------------------------------------------------
+    // The perimeter `remote protect` writes (TSK-1080 AC-3), on a recorded
+    // host held per test thread.
+    // -------------------------------------------------------------------
+
+    #[derive(Clone, Default)]
+    struct World {
+        rulesets: Vec<Value>,
+        classic: Option<String>,
+        environment: Option<Value>,
+        branch_policies: Option<Value>,
+        workflows: Vec<(&'static str, String)>,
+    }
+
+    thread_local! {
+        static WORLD: std::cell::RefCell<World> = std::cell::RefCell::new(World::default());
+    }
+
+    fn world_exec(_: &str, args: &[&str]) -> Result<String, String> {
+        WORLD.with(|world| {
+            let world = world.borrow();
+            let not_found = || Err("gh: Not Found (HTTP 404)".to_string());
+            match args {
+                ["api", "repos/o/r"] => Ok(r#"{"default_branch":"main"}"#.into()),
+                ["api", url] if url.starts_with("repos/o/r/rules/branches/main") => {
+                    if !url.ends_with("&page=1") {
+                        return Ok("[]".into());
+                    }
+                    let rules: Vec<Value> = world
+                        .rulesets
+                        .iter()
+                        .filter(|r| {
+                            r["enforcement"] == "active"
+                                && r["conditions"]["ref_name"]["include"]
+                                    .as_array()
+                                    .unwrap()
+                                    .contains(&Value::from("~DEFAULT_BRANCH"))
+                        })
+                        .flat_map(|r| {
+                            r["rules"].as_array().unwrap().iter().map(move |rule| {
+                                let mut rule = rule.clone();
+                                rule["ruleset_id"] = r["id"].clone();
+                                rule
+                            })
+                        })
+                        .collect();
+                    Ok(Value::Array(rules).to_string())
+                }
+                ["api", "repos/o/r/branches/main/protection"] => {
+                    world.classic.clone().map_or_else(not_found, Ok)
+                }
+                ["api", url] if url.starts_with("repos/o/r/rulesets?") => Ok(Value::Array(
+                    world
+                        .rulesets
+                        .iter()
+                        .map(|r| {
+                            serde_json::json!({
+                                "id": r["id"], "name": r["name"], "target": "branch",
+                                "source_type": "Repository"
+                            })
+                        })
+                        .collect(),
+                )
+                .to_string()),
+                ["api", url] if url.starts_with("repos/o/r/rulesets/") => {
+                    let id: u64 = url["repos/o/r/rulesets/".len()..].parse().unwrap();
+                    world
+                        .rulesets
+                        .iter()
+                        .find(|r| r["id"] == id)
+                        .map_or_else(not_found, |r| Ok(r.to_string()))
+                }
+                ["api", "repos/o/r/environments/codeflow-authority"] => world
+                    .environment
+                    .as_ref()
+                    .map_or_else(not_found, |e| Ok(e.to_string())),
+                ["api", "repos/o/r/environments/codeflow-authority/deployment-branch-policies"] => {
+                    world
+                        .branch_policies
+                        .as_ref()
+                        .map_or_else(not_found, |p| Ok(p.to_string()))
+                }
+                ["api", "repos/o/r/contents/.github/workflows?ref=main"] => {
+                    if world.workflows.is_empty() {
+                        return not_found();
+                    }
+                    Ok(Value::Array(
+                        world
+                            .workflows
+                            .iter()
+                            .map(|(path, _)| serde_json::json!({ "path": path, "type": "file" }))
+                            .collect(),
+                    )
+                    .to_string())
+                }
+                ["api", "-H", _, url] => world
+                    .workflows
+                    .iter()
+                    .find(|(path, _)| *url == format!("repos/o/r/contents/{path}?ref=main"))
+                    .map_or_else(not_found, |(_, text)| Ok(text.clone())),
+                other => Err(format!("unexpected gh call {other:?}")),
+            }
+        })
+    }
+
+    const POLICY_WORKFLOW_TEXT: &str = r#"
+on: pull_request_target
+jobs:
+  commit-standards:
+    name: 'trusted: commit standards'
+  secret-scan:
+    name: 'trusted: secret scan'
+  authority:
+    environment: codeflow-authority
+    steps:
+      - run: "create 'authority: commit standards' 'authority: secret scan'"
+"#;
+
+    const CI_WORKFLOW_TEXT: &str = "
+on: pull_request
+jobs:
+  gates:
+    name: codeflow gates
+";
+
+    const CI_WORKFLOW_PATH: &str = ".github/workflows/codeflow-ci.yml";
+
+    fn checks(names: &[(&str, u64)]) -> Value {
+        Value::Array(
+            names
+                .iter()
+                .map(|(name, app)| serde_json::json!({ "context": name, "integration_id": app }))
+                .collect(),
+        )
+    }
+
+    /// One owned ruleset with a pull request and strict checks.
+    fn checked(id: u64, name: &str, include: &str, checks: &Value) -> Value {
+        serde_json::json!({
+            "id": id, "name": name, "target": "branch", "enforcement": "active",
+            "updated_at": "2026-10-30T10:00:00Z",
+            "conditions": { "ref_name": { "include": [include], "exclude": [] } },
+            "bypass_actors": [],
+            "rules": [
+                { "type": "pull_request", "parameters": { "required_approving_review_count": 0,
+                  "dismiss_stale_reviews_on_push": false, "require_code_owner_review": false,
+                  "require_last_push_approval": false, "required_review_thread_resolution": false } },
+                { "type": "required_status_checks", "parameters": {
+                  "strict_required_status_checks_policy": true, "do_not_enforce_on_create": false,
+                  "required_status_checks": checks } },
+                { "type": "non_fast_forward" },
+                { "type": "deletion" }
+            ]
+        })
+    }
+
+    /// A, B and C as `remote protect` writes them for the solo profile in
+    /// Mode B, and the workflows that declare their names.
+    fn protected_world() -> World {
+        let trusted = checks(&[
+            ("trusted: commit standards", 15368),
+            ("trusted: secret scan", 15368),
+            ("codeflow gates", 15368),
+        ]);
+        World {
+            rulesets: vec![
+                serde_json::json!({
+                    "id": 1, "name": "codeflow authority updates", "target": "branch",
+                    "enforcement": "active",
+                    "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+                    "bypass_actors": [{ "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }],
+                    // As the host answers it: the parameter is left out
+                    // when it is off (scratch repository, 2026-10-30).
+                    "rules": [{ "type": "update" }]
+                }),
+                checked(2, "codeflow authority checks", "~DEFAULT_BRANCH", &trusted),
+                checked(
+                    3,
+                    "codeflow line checks",
+                    "refs/heads/integration/**",
+                    &trusted,
+                ),
+            ],
+            workflows: vec![
+                (POLICY_WORKFLOW, POLICY_WORKFLOW_TEXT.to_string()),
+                (CI_WORKFLOW_PATH, CI_WORKFLOW_TEXT.to_string()),
+            ],
+            ..World::default()
+        }
+    }
+
+    fn judge(world: World, profile: Option<&str>) -> CheckResult {
+        WORLD.with(|w| *w.borrow_mut() = world);
+        let dir = project();
+        write_policy(
+            dir.path(),
+            r#"{"git":{"required_checks":["codeflow gates"]}}"#,
+        );
+        let mut options = opts(dir.path(), world_exec);
+        options.remote_profile = profile.map(str::to_string);
+        check(&options)
+    }
+
+    fn ruleset_mut<'a>(world: &'a mut World, name: &str) -> &'a mut Value {
+        world
+            .rulesets
+            .iter_mut()
+            .find(|r| r["name"] == name)
+            .unwrap()
+    }
+
+    #[test]
+    fn the_rulesets_protect_writes_pass_for_their_profile() {
+        let result = judge(protected_world(), Some("solo-administrator"));
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
+        // The host answers A's update rule without its parameter when it is
+        // off; only an explicit `true` is a gap.
+        let mut world = protected_world();
+        ruleset_mut(&mut world, "codeflow authority updates")["rules"] = serde_json::json!([
+            { "type": "update", "parameters": { "update_allows_fetch_and_merge": true } }
+        ]);
+        let result = judge(world, Some("solo-administrator"));
+        assert!(
+            matches!(result.status, Status::Warn(_)),
+            "{}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains("its update rule allows fetch and merge"),
+            "{}",
+            result.message
+        );
+    }
+
+    /// AC-3: a non-empty bypass list on B or C fails, naming the actors and
+    /// the close; the close (an empty list) turns it green.
+    #[test]
+    fn an_open_recovery_window_fails_until_it_is_closed() {
+        for name in ["codeflow authority checks", "codeflow line checks"] {
+            let mut world = protected_world();
+            ruleset_mut(&mut world, name)["bypass_actors"] = serde_json::json!([
+                { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }
+            ]);
+            for profile in [None, Some("solo-administrator")] {
+                let result = judge(world.clone(), profile);
+                assert_eq!(result.status, Status::Fail, "{name}: {}", result.message);
+                for expected in [
+                    name,
+                    "lets RepositoryRole 5 (always) bypass it",
+                    "recovery window is open since 2026-10-30T10:00:00Z",
+                    "close it: codeflow remote protect",
+                ] {
+                    assert!(
+                        result.message.contains(expected),
+                        "{expected}: {}",
+                        result.message
+                    );
+                }
+            }
+            ruleset_mut(&mut world, name)["bypass_actors"] = serde_json::json!([]);
+            let result = judge(world, Some("solo-administrator"));
+            assert_eq!(result.status, Status::Pass, "{}", result.message);
+        }
+        // A bypass list that cannot be read stays unknown: never a pass.
+        let mut world = protected_world();
+        ruleset_mut(&mut world, "codeflow line checks")
+            .as_object_mut()
+            .unwrap()
+            .remove("bypass_actors");
+        let result = judge(world, None);
+        assert!(
+            matches!(result.status, Status::Note(_)),
+            "{:?}: {}",
+            result.status,
+            result.message
+        );
+        assert!(
+            result.message.contains("bypass list not readable"),
+            "{}",
+            result.message
+        );
+    }
+
+    /// Security review round 1 (major): a second ruleset with B's or C's
+    /// name and a bypass actor fails, whether the first of that name is
+    /// bound, disabled or aimed at another ref; two rulesets of the name
+    /// fail even with empty lists, since `remote protect` refuses to write
+    /// either.
+    #[test]
+    fn every_ruleset_with_an_owned_name_is_judged() {
+        for name in ["codeflow authority checks", "codeflow line checks"] {
+            for first in ["bound", "disabled", "retargeted"] {
+                let mut world = protected_world();
+                match first {
+                    "disabled" => ruleset_mut(&mut world, name)["enforcement"] = "disabled".into(),
+                    "retargeted" => {
+                        ruleset_mut(&mut world, name)["conditions"]["ref_name"]["include"] =
+                            serde_json::json!(["refs/heads/elsewhere"]);
+                    }
+                    _ => {}
+                }
+                let mut second = ruleset_mut(&mut world, name).clone();
+                second["id"] = 40.into();
+                second["enforcement"] = "active".into();
+                second["bypass_actors"] = serde_json::json!([
+                    { "actor_id": 9, "actor_type": "Team", "bypass_mode": "always" }
+                ]);
+                world.rulesets.push(second);
+                let result = judge(world, Some("solo-administrator"));
+                assert_eq!(
+                    result.status,
+                    Status::Fail,
+                    "{name} {first}: {}",
+                    result.message
+                );
+                assert!(
+                    result.message.contains("lets Team 9 (always) bypass it"),
+                    "{name} {first}: {}",
+                    result.message
+                );
+            }
+            let mut world = protected_world();
+            let mut twin = ruleset_mut(&mut world, name).clone();
+            twin["id"] = 41.into();
+            world.rulesets.push(twin);
+            let result = judge(world, None);
+            assert_eq!(
+                result.status,
+                Status::Fail,
+                "{name} twin: {}",
+                result.message
+            );
+            assert!(
+                result
+                    .message
+                    .contains(&format!("2 rulesets are named '{name}'")),
+                "{name} twin: {}",
+                result.message
+            );
+        }
+    }
+
+    /// AC-3: a non-strict check rule on the lines (this repository's
+    /// 25435656 on 2026-10-29) warns.
+    #[test]
+    fn a_non_strict_line_rule_warns() {
+        let mut world = protected_world();
+        world.rulesets.push(serde_json::json!({
+            "id": 25_435_656, "name": "integration lines", "target": "branch", "enforcement": "active",
+            "conditions": { "ref_name": { "include": ["refs/heads/integration/**"], "exclude": [] } },
+            "bypass_actors": [],
+            "rules": [
+                { "type": "required_status_checks", "parameters": {
+                  "strict_required_status_checks_policy": false,
+                  "required_status_checks": checks(&[("codeflow gates", 15368)]) } },
+                { "type": "non_fast_forward" }, { "type": "deletion" }
+            ]
+        }));
+        let text = warn_text(&judge(world, None));
+        assert!(
+            text.contains("ruleset 'integration lines' (25435656) requires checks on integration/** but not that a branch be up to date"),
+            "{text}"
+        );
+    }
+
+    /// AC-3: a line pattern no ruleset puts a pull request on warns.
+    #[test]
+    fn a_line_pattern_without_a_pull_request_rule_warns() {
+        let mut world = protected_world();
+        world
+            .rulesets
+            .retain(|r| r["name"] != "codeflow line checks");
+        world.rulesets.push(serde_json::json!({
+            "id": 9, "name": "line deletion", "target": "branch", "enforcement": "active",
+            "conditions": { "ref_name": { "include": ["refs/heads/integration/**"], "exclude": [] } },
+            "bypass_actors": [], "rules": [{ "type": "deletion" }]
+        }));
+        let text = warn_text(&judge(world, None));
+        assert!(
+            text.contains("no active ruleset requires a pull request on integration/**"),
+            "{text}"
+        );
+    }
+
+    /// AC-3: an `authority:` name accepted from GitHub Actions warns.
+    #[test]
+    fn an_authority_name_pinned_to_github_actions_warns() {
+        let mut world = protected_world();
+        ruleset_mut(&mut world, "codeflow authority checks")["rules"][1]["parameters"]
+            ["required_status_checks"] = checks(&[
+            ("authority: commit standards", 15368),
+            ("authority: secret scan", 4242),
+            ("codeflow gates", 15368),
+        ]);
+        let text = warn_text(&judge(world, None));
+        assert!(
+            text.contains("accepts authority: commit standards from GitHub Actions or any source"),
+            "{text}"
+        );
+        assert!(!text.contains("authority: secret scan from"), "{text}");
+    }
+
+    /// AC-3: an authority environment that admits more than the default
+    /// branch warns; one that admits `main` alone does not.
+    #[test]
+    fn an_environment_that_admits_more_than_the_default_branch_warns() {
+        let custom =
+            serde_json::json!({ "protected_branches": false, "custom_branch_policies": true });
+        for (policy, branches, expected) in [
+            (Value::Null, None, Some("admits every branch")),
+            (
+                serde_json::json!({ "protected_branches": true, "custom_branch_policies": false }),
+                None,
+                Some("admits every protected branch"),
+            ),
+            (
+                custom.clone(),
+                Some(serde_json::json!({ "branch_policies": [
+                    { "name": "main", "type": "branch" },
+                    { "name": "integration/*", "type": "branch" }
+                ] })),
+                Some("admits the patterns main (branch), integration/* (branch)"),
+            ),
+            (
+                custom,
+                Some(
+                    serde_json::json!({ "branch_policies": [{ "name": "main", "type": "branch" }] }),
+                ),
+                None,
+            ),
+        ] {
+            let mut world = protected_world();
+            world.environment = Some(serde_json::json!({
+                "name": "codeflow-authority", "deployment_branch_policy": policy
+            }));
+            world.branch_policies = branches;
+            let result = judge(world, None);
+            match expected {
+                Some(expected) => {
+                    let text = warn_text(&result);
+                    assert!(text.contains(expected), "{expected}: {text}");
+                }
+                None => assert_eq!(result.status, Status::Pass, "{}", result.message),
+            }
+        }
+    }
+
+    /// AC-3: a second job, or a job in another workflow, that references
+    /// the authority environment warns.
+    #[test]
+    fn a_second_job_referencing_the_environment_warns() {
+        let mut world = protected_world();
+        world.environment = Some(serde_json::json!({
+            "name": "codeflow-authority",
+            "deployment_branch_policy": { "protected_branches": false, "custom_branch_policies": true }
+        }));
+        world.branch_policies =
+            Some(serde_json::json!({ "branch_policies": [{ "name": "main", "type": "branch" }] }));
+        world.workflows.push((
+            ".github/workflows/publish.yml",
+            "jobs:\n  publish:\n    environment:\n      name: codeflow-authority\n".to_string(),
+        ));
+        let text = warn_text(&judge(world, None));
+        assert!(
+            text.contains("referenced by .github/workflows/codeflow-policy.yml job authority, .github/workflows/publish.yml job publish"),
+            "{text}"
+        );
+    }
+
+    /// AC-3: a foreign ruleset that requires names no workflow on the
+    /// default branch produces (this repository's 24379074 once the old
+    /// names are gone) warns with the route.
+    #[test]
+    fn a_foreign_ruleset_requiring_a_name_nothing_produces_warns() {
+        let mut world = protected_world();
+        world.rulesets.push(serde_json::json!({
+            "id": 24_379_074, "name": "main required checks", "target": "branch", "enforcement": "active",
+            "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+            "bypass_actors": [],
+            "rules": [{ "type": "required_status_checks", "parameters": {
+                "strict_required_status_checks_policy": true,
+                "required_status_checks": checks(&[
+                    ("codeflow gates", 15368), ("commit standards", 15368), ("secret scan", 15368)
+                ]) } }]
+        }));
+        let text = warn_text(&judge(world, None));
+        assert!(
+            text.contains("ruleset 'main required checks' (24379074) requires commit standards, secret scan, which no workflow on main produces"),
+            "{text}"
+        );
+        assert!(
+            text.contains("then retire that ruleset on the host"),
+            "{text}"
+        );
+    }
+
+    /// AC-3: with `--profile`, the owned rulesets are compared with it.
+    #[test]
+    fn the_owned_rulesets_are_compared_with_the_profile() {
+        let text = warn_text(&judge(protected_world(), Some("independent-review")));
+        for expected in [
+            "differ from the independent-review profile",
+            "expects the maintain role (RepositoryRole 2) alone",
+            "requires fewer than 1 approval(s)",
+            "does not dismiss stale approvals",
+            "codeflow remote protect --profile independent-review",
+        ] {
+            assert!(text.contains(expected), "{expected}: {text}");
+        }
+        let mut world = protected_world();
+        world
+            .rulesets
+            .retain(|r| r["name"] != "codeflow authority updates");
+        let text = warn_text(&judge(world.clone(), Some("solo-administrator")));
+        assert!(
+            text.contains("ruleset 'codeflow authority updates' is missing"),
+            "{text}"
+        );
+        // Without a profile, a missing ruleset is not judged.
+        let result = judge(world, None);
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
     }
 }

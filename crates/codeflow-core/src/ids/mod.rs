@@ -31,7 +31,9 @@ pub mod order;
 pub mod seed;
 pub mod state;
 
-pub use entry::{is_uid, new_uid, record_id_from_path, Entry, Kind, RegId};
+pub use entry::{
+    capability_uid_from_blob, is_uid, new_uid, record_id_from_path, Entry, Kind, RegId,
+};
 pub use git::Git;
 pub use ledger::Ledger;
 pub use order::{compare_id_bytes, compare_id_paths, compare_ids, sorted_by_id};

@@ -334,6 +334,8 @@ impl Adopted {
             &["remote", "add", "origin", remote.to_str().unwrap()],
         );
         git(&root, &["fetch", "-q", "origin"]);
+        // Git before 2.48 records no remote HEAD on fetch (ADR-0091).
+        git(&root, &["remote", "set-head", "origin", "-a"]);
         Self { _dir: dir, root }
     }
 

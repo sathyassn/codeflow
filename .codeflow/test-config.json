@@ -56,7 +56,7 @@
       "scripts/test_gate_portal_windows.py"
     ],
     "worker_budget": 9,
-    "heavy_wait_seconds": 0
+    "heavy_wait_seconds": 1800
   },
   "defaults": {
     "coverage": []
@@ -491,7 +491,7 @@
           "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"(cd docs-portal && node scripts/workflow.mjs verify)\""
         },
         "full": {
-          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"node --test docs-portal/tests/adapter.test.mjs scripts/test_portal_workflow.mjs scripts/test_gate_schema.mjs && (cd docs-portal && node scripts/workflow.mjs verify) && $CODEFLOW_BIN validate --portal docs-portal\""
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"node --test docs-portal/tests/adapter.test.mjs scripts/test_portal_workflow.mjs scripts/test_gate_schema.mjs scripts/test_capability_catalog.mjs && (cd docs-portal && node scripts/workflow.mjs verify) && $CODEFLOW_BIN validate --portal docs-portal\""
         }
       },
       "timeout_seconds": 300,

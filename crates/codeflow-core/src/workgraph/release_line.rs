@@ -7,8 +7,10 @@
 //! - **Scope** comes from the branch name. A branch is a release branch when
 //!   its name matches `git.release_branch_pattern` in the policy at the
 //!   default target's tip at the destination ([`BUILTIN_PATTERN`] when the
-//!   key is absent), and a range is a release range when its head or its
-//!   target is one. The default target and epic lines never are.
+//!   key is absent, or when no commit of the default target's history has
+//!   ever carried a policy: an initial adoption), and a range is a release
+//!   range when its head or its target is one. The default target and epic
+//!   lines never are.
 //! - **Imports.** A merge whose non-first parents all lie on the
 //!   first-parent chain of a verified epic line, or of the default target,
 //!   as the destination advertises them, is an import. A path it brings is
@@ -313,9 +315,12 @@ impl Scope {
 /// # Errors
 ///
 /// Returns why the default target's policy cannot be read: its tip is not
-/// here and cannot be fetched, or the policy there is unreadable or names
-/// an invalid pattern. The check fails closed; it never falls back to the
-/// ordinary rules.
+/// here and cannot be fetched, the policy there is unreadable or names an
+/// invalid pattern, or it is missing and the target's history either once
+/// carried one (a removed policy) or cannot be read in full (a shallow,
+/// overlaid or incomplete clone). The check fails closed; it never falls
+/// back to the ordinary rules. Only a target whose whole readable history
+/// never carried a policy uses the built-in pattern without one.
 pub fn scope(
     repo_root: &Path,
     destination: &Destination,
@@ -336,10 +341,16 @@ pub fn scope(
             })?;
             let short = &tip.to_string()[..9];
             match pattern {
-                Some(pattern) => (pattern, format!("{shown} at {short}")),
-                None => (
+                Pattern::Set(pattern) => (pattern, format!("{shown} at {short}")),
+                Pattern::Unset => (
                     BUILTIN_PATTERN.to_string(),
                     format!("built in (no release_branch_pattern at {shown} {short})"),
+                ),
+                Pattern::InitialAdoption => (
+                    BUILTIN_PATTERN.to_string(),
+                    format!(
+                        "built in (initial adoption: no commit of {shown} up to {short} has carried {POLICY_PATH})"
+                    ),
                 ),
             }
         }
@@ -445,29 +456,58 @@ pub fn pull_request_merge(repo_root: &Path, base: &str, head: &str) -> Result<Oi
     .map_err(error)
 }
 
-/// The release pattern the policy at `tip` sets: `None` when the policy
-/// file has no such key. A missing policy file is an error, since an
-/// existing default target without one cannot name its release branches.
-fn pattern_at(repo: &Repository, tip: Oid, default: &str) -> Result<Option<String>, String> {
+/// Where the policy lives in a tree.
+const POLICY_PATH: &str = ".codeflow/policy.json";
+
+/// What the policy at the default target's tip says of release branches.
+#[derive(Debug, PartialEq, Eq)]
+enum Pattern {
+    /// `git.release_branch_pattern` names this pattern.
+    Set(String),
+    /// The policy file has no such key: the built-in pattern applies.
+    Unset,
+    /// No commit the default target's history reaches has ever carried a
+    /// policy file, so the project is adopting `CodeFlow` now: the built-in
+    /// pattern applies, as for a destination with no default target yet
+    /// (TSK-338).
+    InitialAdoption,
+}
+
+/// The release pattern the policy at `tip` sets. A policy file without the
+/// key selects the built-in pattern. A missing policy file selects it only
+/// when the default target's history proves it never had one (initial
+/// adoption); a policy that was removed, or history that cannot prove
+/// either, is an error, since an established target without its policy
+/// cannot name its release branches.
+fn pattern_at(repo: &Repository, tip: Oid, default: &str) -> Result<Pattern, String> {
     let tree = repo
         .find_commit(tip)
         .and_then(|commit| commit.tree())
         .map_err(|error| error.message().to_string())?;
-    // Only a destination with no default target yet may use the built-in
-    // pattern without a policy (R-120); an existing target whose policy
-    // file is missing cannot say what its release branches are, so that is
-    // an error. A policy file without the key selects the built-in pattern.
-    let entry = tree
-        .get_path(Path::new(".codeflow/policy.json"))
-        .map_err(|_| ".codeflow/policy.json is missing".to_string())?;
+    let entry = match tree.get_path(Path::new(POLICY_PATH)) {
+        Ok(entry) => entry,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            return match policy_in_history(repo, tip) {
+                Ok(None) => Ok(Pattern::InitialAdoption),
+                Ok(Some(carried)) => Err(format!(
+                    "{POLICY_PATH} is missing, and {} in its history carried one, so the policy was removed; restore it on the default target through a reviewed pull request",
+                    short(carried)
+                )),
+                Err(why) => Err(format!(
+                    "{POLICY_PATH} is missing, and whether its history ever carried one cannot be proven, so it is not judged an initial adoption: {why}"
+                )),
+            };
+        }
+        Err(error) => return Err(format!("{POLICY_PATH} cannot be read: {}", error.message())),
+    };
     let blob = repo
         .find_blob(entry.id())
-        .map_err(|error| format!(".codeflow/policy.json cannot be read: {}", error.message()))?;
+        .map_err(|error| format!("{POLICY_PATH} cannot be read: {}", error.message()))?;
     let value: serde_json::Value = serde_json::from_slice(blob.content())
-        .map_err(|error| format!(".codeflow/policy.json is not valid JSON: {error}"))?;
+        .map_err(|error| format!("{POLICY_PATH} is not valid JSON: {error}"))?;
     let git = value.get("git");
     let Some(raw) = git.and_then(|git| git.get("release_branch_pattern")) else {
-        return Ok(None);
+        return Ok(Pattern::Unset);
     };
     let pattern = raw
         .as_str()
@@ -498,8 +538,55 @@ fn pattern_at(repo: &Repository, tip: Oid, default: &str) -> Result<Option<Strin
             // The policy at the default target is remote content (TSK-388).
             display_text(&pattern)
         )),
-        None => Ok(Some(pattern)),
+        None => Ok(Pattern::Set(pattern)),
     }
+}
+
+/// A commit reachable from `tip` whose tree carries [`POLICY_PATH`] as any
+/// entry, or `None` when no reachable commit does. Every ancestor is read,
+/// not only the first-parent chain, through the guarded history reader
+/// (TSK-287): a graft or replace ref, a shallow boundary the walk reaches,
+/// or a commit or tree this clone lacks is an error, never an absence.
+fn policy_in_history(repo: &Repository, tip: Oid) -> Result<Option<Oid>, String> {
+    let error = |error: git2::Error| error.message().to_string();
+    let mut walk = history::revwalk(repo).map_err(error)?;
+    walk.push(tip).map_err(error)?;
+    // `.codeflow` trees already read, by id: most commits share one.
+    let mut seen: HashMap<Oid, bool> = HashMap::new();
+    for commit in walk {
+        let commit = commit.map_err(error)?;
+        let tree = repo
+            .find_commit(commit)
+            .and_then(|found| found.tree())
+            .map_err(|why| format!("{} cannot be read: {}", short(commit), why.message()))?;
+        let Some(dir) = tree.get_name(".codeflow") else {
+            continue;
+        };
+        if dir.kind() != Some(git2::ObjectType::Tree) {
+            continue;
+        }
+        let carries = if let Some(carries) = seen.get(&dir.id()) {
+            *carries
+        } else {
+            let carries = repo
+                .find_tree(dir.id())
+                .map_err(|why| {
+                    format!(
+                        "the .codeflow tree of {} cannot be read: {}",
+                        short(commit),
+                        why.message()
+                    )
+                })?
+                .get_name("policy.json")
+                .is_some();
+            seen.insert(dir.id(), carries);
+            carries
+        };
+        if carries {
+            return Ok(Some(commit));
+        }
+    }
+    Ok(None)
 }
 
 /// The tip the destination advertises for `branch`, made available here:

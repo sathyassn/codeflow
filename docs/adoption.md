@@ -11,8 +11,8 @@ much working method comes with it.
   programs whose work outlives sessions.
 - No tier changes how strictly the floor is enforced, and no tier installs remote branch protection.
   Remote rules need the host's permissions and are your decision; `codeflow
-  remote protect` applies them when you choose to. It requires the checks in
-  `git.required_checks` on a branch that is up to date with its base,
+  remote protect` applies them when you choose to, as rulesets it owns. It
+  requires the checks on a branch that is up to date with its base,
   because a check tests the merge with the base as it was when the run
   started: two pull requests each green on an older base can merge and leave
   the branch red. `codeflow doctor --check remote-perimeter` reads the live
@@ -167,6 +167,8 @@ the project accepts.
    ```sh
    git remote add origin <url>
    CODEFLOW_HUMAN_OVERRIDE=1 git push -u origin main
+   # the hooks read policy only from the default branch (ADR-0091)
+   git remote set-head origin main
    ```
 
 8. Start the first feature on a `feat/*` branch in a worktree and land it by
@@ -188,6 +190,8 @@ the project accepts.
 |---|---|
 | The scaffold commit on a new repository | The one sanctioned commit before the gates guard the repository, so the first PR meets no policy wall. The secret scan is never relaxed, even for that commit |
 | Hooks in `.git/hooks`, such as those `pre-commit install` writes | Git stops running them once `init` sets `core.hooksPath`. The report names each one and moves nothing. You choose to move the check into CI or a supported hook manager, or to call it from a project-owned hooks folder, set as `core.hooksPath`, that also calls the CodeFlow shims. `update` and `codeflow doctor` repeat the report while `core.hooksPath` names CodeFlow's hooks and the files stay |
+| An existing default branch that has never carried a policy, such as a hosted repository's "Initial commit" | The adoption branch is pushed through the hooks and its task completes in its own PR, with no hook skip and no direct push to the default branch. Until the policy lands there, release branches are named by the built-in pattern `integration/release-*`, as for a remote with no default branch yet. This holds only when no commit in the default branch's history has carried `.codeflow/policy.json`. A policy that was there and was removed still refuses the push: restore it through a reviewed PR. A clone that cannot prove the absence, because it is shallow, grafted, replaced or missing objects, also refuses: fetch the full history (`git fetch --unshallow`) |
+| The starter ADR in an existing repository | `init` writes `docs/decisions/ADR-0001-stack-choice.md` with its `uid` and reserves ADR-0001 in the local id registry without contacting the remote. The first push publishes the reservation, so the adoption PR adds a record the registry already binds and needs no `codeflow ids admit` step. If the reservation cannot be made, the init report names that step |
 | Update-ignore settings and `/cf-customize` | Update-ignore settings do not choose paths for the first scaffold, and `/cf-customize` runs after init without resolving collisions for you |
 | Unrelated files in a CodeFlow record home | They can make `validate --docs` report a collision even when durable-work tracking is inactive. Resolve the conflict |
 | Moving up later | Re-run `init` at `--standard`, then `--full`, when the work needs more method. Each step is additive and idempotent. |
@@ -404,6 +408,7 @@ a checkout of that commit, so the target's policy judges the change.
 | Project setup hook | A project that needs its own toolchain commits `.codeflow/ci-setup.sh`. The gates job and the shared script source it under `set -eu` just before `codeflow test --strict`, so its exports reach the gate and a failing command fails the job. `codeflow update` never writes it. It is project code with the gate's authority |
 | Secret scan range | A pull request scans only its own commits and a push only its pushed range, so a finding already in the base no longer fails every pull request. A weekly schedule and manual dispatch scan the full history, as do a branch-creating push and a push whose previous tip is gone; each run prints what it read. Exemptions come only from the trusted commit. To adopt: run `codeflow update`, review the merged workflow, land it on the default branch (the only place the schedule runs) and check the scheduled run appears |
 | Security review levels | The `security review` job reads `git.security_review`, `git.dep_audit` and the `osv-scanner.toml` suppressions from the trusted commit (the pull request's base, or the pushed commit), so a pull request cannot lower them; osv-scanner runs with `--no-ignore`. A missing file, key or unknown value fails the job, so add a missing key by hand and land it before the 3.1.0 workflow; `codeflow update` does not restore a deleted key. `codeflow ci` names a change that lowers either key or edits the setup hook |
+| Project exception hook | A project that records dependency-audit exceptions in its own reviewed register commits `.codeflow/audit-exceptions.sh`, so the managed step needs no local edit. When the audit finds advisories and the trusted commit holds the hook, the step exports the trusted commit's files to a folder outside the checkout, runs the hook there with `bash` and passes only when the hook accepts every finding. Inputs: `CODEFLOW_AUDIT_FINDINGS`, a file with one finding per line (advisory id, package, version, ecosystem, lockfile, aliases, tab separated), plus `CODEFLOW_TRUSTED_SHA` and `CODEFLOW_TRUSTED_ROOT`. Exit contract: print the accepted findings unchanged, one per line; a failing exit or a line that is no finding accepts nothing, and a scan that logged any error, such as a lockfile it could not read, never reaches the hook. The hook and the register it reads come from the trusted commit, so a pull request cannot accept its own findings; the failure advice names the hook when it exists, and without it the `osv-scanner.toml` route is as before. Details: `assets/base/ci/README.md` |
 | `codeflow doctor --check ci-perimeter` | Names the check CI applies on the target (pinned digests or `sha256.sum` alone), a table it would refuse, a table the checkout changes, and the setup hook with its first command |
 
 Details: `assets/base/ci/README.md`.

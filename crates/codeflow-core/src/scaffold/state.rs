@@ -50,6 +50,12 @@ pub struct ProjectState {
     /// and `update` never write a table.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release_rules: Option<i64>,
+    /// The project kind for the file size rule (TSK-323): `"refuse"`,
+    /// written by a fresh `init` of the release that brings the rule and
+    /// never by `update`. Read at the policy authority: present, the default
+    /// limit refuses; absent, size findings are report lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_size_rule: Option<String>,
 }
 
 impl ProjectState {
@@ -1582,6 +1588,7 @@ mod tests {
             permission_preset: "default".to_string(),
             product_one_liner: "demo".to_string(),
             release_rules: None,
+            file_size_rule: None,
         };
         state.store(root).unwrap();
 
@@ -1787,6 +1794,7 @@ mod tests {
             permission_preset: "default".to_string(),
             product_one_liner: "demo".to_string(),
             release_rules: None,
+            file_size_rule: None,
         };
         state.store(root).unwrap();
         let path = ProjectState::path(root);
@@ -1860,6 +1868,7 @@ mod tests {
             permission_preset: "default".to_string(),
             product_one_liner: String::new(),
             release_rules: None,
+            file_size_rule: None,
         };
         let error = state.store(dir.path()).unwrap_err().to_string();
         // The error names the file by its native path.
@@ -2429,6 +2438,7 @@ mod tests {
             permission_preset: "default".to_string(),
             product_one_liner: "demo".to_string(),
             release_rules: None,
+            file_size_rule: None,
         };
         let records: [(&str, Store); 3] = [
             (

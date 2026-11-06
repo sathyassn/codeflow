@@ -1,0 +1,19 @@
+---
+id: CAP-101
+uid: 3b9e7c2a-51d4-4f0e-9a6b-0c2d8e417f55
+name: catalog
+summary: Read capability records from a checkout or tree.
+area: engine
+status: shipped
+stage: stable
+kind: functional
+unknown: value
+audience: [internal, agent]
+verified_by: ["test: crates/codeflow-core/tests/capability_catalog.rs"]
+group: records
+tags: [rust]
+---
+
+## Concept
+
+The catalog describes the product.

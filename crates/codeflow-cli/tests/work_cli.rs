@@ -841,6 +841,9 @@ fn with_origin(root: &Path) -> tempfile::TempDir {
         &["remote", "add", "origin", remote.path().to_str().unwrap()],
     );
     git(root, &["push", "-q", "-u", "origin", "main"]);
+    // A clone records the remote's default branch, the policy authority
+    // the guards read (TSK-1077); a push alone does not.
+    git(root, &["remote", "set-head", "origin", "main"]);
     remote
 }
 
@@ -1343,6 +1346,12 @@ fn tsk381_an_unpushed_branch_cannot_land_a_research_pin() {
         assert_eq!(
             out.status.code(),
             Some(if aliases { 2 } else { 0 }),
+            "{name}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // The refusal is the alias one, never an unresolved authority.
+        assert!(
+            !String::from_utf8_lossy(&out.stderr).contains("policy authority"),
             "{name}: {}",
             String::from_utf8_lossy(&out.stderr)
         );

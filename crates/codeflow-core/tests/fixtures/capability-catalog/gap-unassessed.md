@@ -1,0 +1,18 @@
+---
+id: CAP-101
+uid: 3b9e7c2a-51d4-4f0e-9a6b-0c2d8e417f55
+name: catalog
+summary: Read capability records from a checkout or tree.
+area: engine
+status: shipped
+stage: unassessed
+kind: functional
+audience: [internal, agent]
+verified_by: ["gap: test: tests pending"]
+group: records
+tags: [rust]
+---
+
+## Concept
+
+The catalog describes the product.

@@ -179,12 +179,63 @@ fn branch_rule_text(name: Option<&GitName>) -> String {
     })
 }
 
+/// Refuse a repository whose `config` or `config.worktree`, in the git
+/// directory or the common directory it names, exists as anything but a
+/// regular file of bounded size. libgit2 reads those files with a blocking
+/// read, so a fifo would hold the caller with no answer. A file a config
+/// `include` names is read by libgit2 and is not checked here.
+fn config_files_readable(git_dir: &Path) -> Result<(), String> {
+    const LIMIT: u64 = super::policy::SETTINGS_READ_LIMIT;
+    let mut dirs = vec![git_dir.to_path_buf()];
+    let common = git_dir.join("commondir");
+    if !crate::absence::proven_absent(&common)
+        .map_err(|error| format!("cannot inspect {}: {error}", common.display()))?
+    {
+        let bytes = crate::bounded_file::read_bounded_following(&common, 4096)
+            .map_err(|error| format!("cannot read {}: {error}", common.display()))?;
+        let text = String::from_utf8(bytes)
+            .map_err(|_| format!("cannot read {}: not UTF-8", common.display()))?;
+        let line = text.strip_suffix('\n').unwrap_or(&text);
+        dirs.push(git_dir.join(line.strip_suffix('\r').unwrap_or(line)));
+    }
+    for dir in dirs {
+        for name in ["config", "config.worktree"] {
+            let path = dir.join(name);
+            match std::fs::metadata(&path) {
+                Ok(meta) if !meta.is_file() => {
+                    return Err(format!(
+                        "repository configuration {} is not a regular file",
+                        path.display()
+                    ))
+                }
+                Ok(meta) if meta.len() > LIMIT => {
+                    return Err(format!(
+                        "repository configuration {} is larger than {LIMIT} bytes",
+                        path.display()
+                    ))
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("cannot inspect {}: {error}", path.display())),
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Open the repository at or above `start`; only a proven non-repository is absent.
 ///
 /// # Errors
 /// Discovery fails, including an existing repository marker with malformed metadata.
 pub fn open(start: &Path) -> Result<Option<Repository>, String> {
-    match Repository::discover(crate::portable_path::without_verbatim(start.to_path_buf())) {
+    let start_path = crate::portable_path::without_verbatim(start.to_path_buf());
+    // libgit2 opens the repository's configuration with a blocking read, so
+    // a fifo there would hold the hook: check the files first (TSK-397
+    // security review SEC01-3).
+    if let Ok(git_dir) = Repository::discover_path(&start_path, std::iter::empty::<&Path>()) {
+        config_files_readable(&git_dir)?;
+    }
+    match Repository::discover(start_path) {
         Ok(repo) => {
             // Derive repository claims from the physical metadata. On Windows,
             // opening a directory symlink can otherwise report its alias as

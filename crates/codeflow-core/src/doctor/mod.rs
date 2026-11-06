@@ -28,6 +28,7 @@ mod git_config;
 mod grok_hooks;
 mod guard_timeouts;
 mod remote_perimeter;
+mod sandbox;
 mod startup_files;
 
 pub use codex_profile::{
@@ -165,6 +166,10 @@ pub struct Options {
     /// `GROK_HOME`, `GROK_FOLDER_TRUST`); `None` reads the process
     /// environment.
     pub env_var: Option<EnvVarFn>,
+    /// The branch-protection profile `remote-perimeter` compares the owned
+    /// rulesets with (`solo-administrator` or `independent-review`);
+    /// `None` compares none, and the security floor is judged either way.
+    pub remote_profile: Option<String>,
 }
 
 impl Options {
@@ -298,10 +303,12 @@ const CHECK_NAMES: &[&str] = &[
     "grok",
     "guard-timeouts",
     "startup-files",
+    "sandbox",
     "git-config-includes",
     "config",
     "permissions",
     "policy-source",
+    "secret-engine",
     "network",
     "delegates",
     "model-bindings",
@@ -316,6 +323,7 @@ const CHECK_NAMES: &[&str] = &[
     "test-config",
     "id-registry",
     "adopter-fit",
+    "capabilities",
 ];
 
 /// Return the ordered list of all available check names.
@@ -332,11 +340,13 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     let mut m: HashMap<&'static str, CheckFn> = HashMap::new();
     m.insert("hooks", check_hooks);
     m.insert("policy-source", check_policy_source);
+    m.insert("secret-engine", check_secret_engine);
     m.insert("claude", check_claude);
     m.insert("codex", check_codex);
     m.insert("grok", check_grok);
     m.insert("guard-timeouts", guard_timeouts::check);
     m.insert("startup-files", startup_files::check);
+    m.insert("sandbox", sandbox::check);
     m.insert("git-config-includes", git_config::check);
     m.insert("config", check_config);
     m.insert("permissions", check_permissions);
@@ -354,7 +364,30 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("test-config", check_test_config);
     m.insert("id-registry", check_id_registry);
     m.insert("adopter-fit", check_adopter_fit);
+    m.insert("capabilities", check_capabilities);
     m
+}
+
+fn check_capabilities(opts: &Options) -> CheckResult {
+    let start = std::time::Instant::now();
+    let root = Path::new(&opts.project_dir);
+    let (status, message) = match crate::capability::load_capability_catalog(root) {
+        Ok(catalog) => {
+            let mut message = crate::capability::coverage::line(&catalog);
+            if let Some(offer) = crate::capability::bootstrap::offer_for(&catalog) {
+                message.push_str("; ");
+                message.push_str(offer);
+            }
+            (Status::Pass, message)
+        }
+        Err(error) => (Status::Fail, format!("coverage unavailable: {error}")),
+    };
+    CheckResult {
+        name: "capabilities".to_string(),
+        status,
+        message,
+        duration: start.elapsed(),
+    }
 }
 
 /// Run all checks concurrently and return results in canonical order.
@@ -2329,11 +2362,9 @@ fn check_permissions(opts: &Options) -> CheckResult {
     let in_codex = opts
         .env("CODEX_SANDBOX")
         .is_some_and(|value| !value.is_empty());
-    let by_design = if in_codex {
-        codex_evidence_by_design(opts.codeflow_home.as_deref(), &mut unwritable)
-    } else {
-        String::new()
-    };
+    let by_design = evidence_seat(opts, in_codex).map_or_else(String::new, |seat| {
+        evidence_by_design(opts.codeflow_home.as_deref(), &mut unwritable, seat)
+    });
     if !unwritable.is_empty() {
         let paths: Vec<String> = unwritable
             .iter()
@@ -2378,13 +2409,26 @@ fn check_permissions(opts: &Options) -> CheckResult {
     }
 }
 
-/// No Codex seat writes the gate evidence folder (TSK-337 AC-5): full gates
-/// and their evidence stay with the primary. So inside a Codex sandbox an
-/// unwritable evidence folder under `home` is taken out of `unwritable` and
-/// reported instead, as this note; nothing when it was writable.
-fn codex_evidence_by_design(
+/// The sandbox this runs in where the evidence folder is unwritable by
+/// design: a Codex seat, else the Claude Code sandbox; `None` outside both.
+fn evidence_seat(opts: &Options, in_codex: bool) -> Option<&'static str> {
+    if in_codex {
+        Some("a Codex seat")
+    } else {
+        sandboxed(opts).then_some("the Claude Code sandbox")
+    }
+}
+
+/// No Codex seat (TSK-337 AC-5) and no sandboxed Claude session (TSK-1044
+/// AC-4) writes the gate evidence folder: full gates and their evidence
+/// stay with the primary, run outside the sandbox. So inside either sandbox
+/// an unwritable evidence folder under `home` is taken out of `unwritable`
+/// and reported instead, as this note naming `seat`; nothing when it was
+/// writable.
+fn evidence_by_design(
     home: Option<&Path>,
     unwritable: &mut Vec<(PathBuf, std::io::Error)>,
+    seat: &str,
 ) -> String {
     let Some(evidence) = home.map(|home| home.join(crate::testing::gate_guard::HOME_EVIDENCE_DIR))
     else {
@@ -2395,7 +2439,7 @@ fn codex_evidence_by_design(
     }
     unwritable.retain(|(dir, _)| *dir != evidence);
     format!(
-        "; `{}` is not writable in a Codex seat, by design: full gates and their evidence stay with the primary",
+        "; `{}` is not writable in {seat}, by design: full gates and their evidence stay with the primary, run outside the sandbox",
         crate::git::display_path(&evidence)
     )
 }
@@ -3227,6 +3271,12 @@ fn check_adopter_fit(opts: &Options) -> CheckResult {
         level.level, level.origin
     )];
     let mut status = Status::Pass;
+    if !policy.git.pr_capability_impact.is_active()
+        && crate::capability::load_capability_catalog(&root)
+            .is_ok_and(|catalog| !catalog.records.is_empty())
+    {
+        parts.push("catalog present, but git.pr_capability_impact is off or absent; capability declarations are not checked".into());
+    }
     if let Err(error) = &raw {
         status = Status::Warn(
             remedy::DOCTOR_POLICY_DECISION
@@ -4271,6 +4321,87 @@ fn check_policy_source(opts: &Options) -> CheckResult {
     }
 }
 
+/// The commit-time secret scan's engine (TSK-412): with
+/// `git.secret_scan_engine: gitleaks`, the folders searched, the binary
+/// found with its checksum and version, and the pin expected. It runs the
+/// binary, to read its version, only when its checksum is the pinned one.
+/// Unusable is a failure at `block` and a warning at `warn`, as the hook
+/// judges it.
+fn check_secret_engine(opts: &Options) -> CheckResult {
+    use crate::hooks::gitleaks::Engine;
+    use crate::hooks::policy::{Policy, SecretScanEngine};
+    let start = Instant::now();
+    let result = |status, message| CheckResult {
+        name: "secret-engine".into(),
+        status,
+        message,
+        duration: start.elapsed(),
+    };
+    let policy = match Policy::load_effective(Path::new(&opts.project_dir)) {
+        Ok((policy, _)) => policy.git,
+        Err(error) => return result(Status::Fail, format!("cannot read policy: {error}")),
+    };
+    if policy.secret_scan_engine == SecretScanEngine::Builtin {
+        return result(
+            Status::Pass,
+            "the staged secret scan runs the built-in patterns only (git.secret_scan_engine is builtin)".into(),
+        );
+    }
+    if !policy.secret_scan.is_active() {
+        return result(
+            Status::Pass,
+            format!(
+                "git.secret_scan is {}, so the staged scan and its gitleaks engine do not run",
+                policy.secret_scan
+            ),
+        );
+    }
+    let engine = Engine::with_path(opts.env("PATH").as_deref());
+    let searched = if engine.search.is_empty() {
+        "searched no folder (PATH has no absolute entry)".to_string()
+    } else {
+        format!(
+            "searched {}",
+            engine
+                .search
+                .iter()
+                .map(|dir| crate::git::display_path(dir))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let pin = engine.expected.describe();
+    match engine.verify() {
+        Ok(verified) => result(
+            Status::Pass,
+            format!(
+                "gitleaks {} at {} with sha256 {}; the pin is {pin}; {searched}",
+                engine.expected.version,
+                crate::git::display_path(&verified.path),
+                verified.sha256
+            ),
+        ),
+        Err(unusable) => {
+            let message = format!("{}; the pin is {pin}; {searched}", unusable.describe());
+            if policy.secret_scan == crate::hooks::PolicyLevel::Block {
+                result(Status::Fail, message)
+            } else {
+                let archive = engine
+                    .expected
+                    .archive
+                    .clone()
+                    .unwrap_or_else(|| "none is pinned for this platform".to_string());
+                result(
+                    Status::Warn(
+                        crate::remedy::SECRET_ENGINE_UNAVAILABLE.with(&[("archive", &archive)]),
+                    ),
+                    message,
+                )
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// The step a warning names, or "" for any other status.
@@ -4332,7 +4463,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 24);
+        assert_eq!(check_names().len(), 27);
     }
 
     #[test]
@@ -6279,6 +6410,7 @@ mod tests {
             permission_preset: "acceptEdits".into(),
             product_one_liner: "x".into(),
             release_rules: None,
+            file_size_rule: None,
         }
         .store(dir.path())
         .unwrap();
@@ -6575,11 +6707,21 @@ mod tests {
         let Status::Warn(remedy) = &result.status else {
             panic!("{:?} {}", result.status, result.message);
         };
-        for dir in [blocked.join("locks"), blocked.join("gate-runs")] {
-            let shown = dir.display().to_string();
-            assert!(result.message.contains(&shown), "{}", result.message);
-            assert!(remedy.to_string().contains(&shown), "{remedy}");
-        }
+        let locks = blocked.join("locks").display().to_string();
+        assert!(result.message.contains(&locks), "{}", result.message);
+        assert!(remedy.to_string().contains(&locks), "{remedy}");
+        // TSK-1044 AC-4: no shipped preset grants the evidence folder, so
+        // in the Claude sandbox it is unwritable by design and never asked
+        // for in the remedy.
+        let evidence = blocked.join("gate-runs").display().to_string();
+        assert!(!remedy.to_string().contains(&evidence), "{remedy}");
+        assert!(
+            result
+                .message
+                .contains("not writable in the Claude Code sandbox, by design"),
+            "{}",
+            result.message
+        );
         assert!(result.message.contains(SANDBOX_NOTE), "{}", result.message);
         assert!(remedy.to_string().contains("allowWrite"), "{remedy}");
     }

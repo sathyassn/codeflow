@@ -2427,11 +2427,15 @@ fn a_fresh_standard_project_prints_steps_that_clear_each_finding() {
 }
 
 /// Let the destination take `chore/seed` as `target` by fetching, so no
-/// client hook runs on the protected branch, and refresh `origin`.
+/// client hook runs on the protected branch, refresh `origin` and record
+/// `target` as its default branch.
 fn seed(root: &Path, dest: &Path, target: &str) {
     let refspec = format!("chore/seed:{target}");
     git_stdout(dest, &["fetch", "-q", root.to_str().unwrap(), &refspec]);
     git_with_binary(root, &["fetch", "-q", "origin"]);
+    // Git before 2.48 does not record origin/HEAD on fetch, and the policy
+    // authority is the remote default branch alone (ADR-0091).
+    git_with_binary(root, &["remote", "set-head", "origin", target]);
 }
 
 fn stderr_text(out: &Output) -> String {

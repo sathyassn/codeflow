@@ -172,9 +172,11 @@ fn the_base_policy_also_lets_through_what_it_allows() {
     assert!(!said.contains("git.commit_body"), "{said}");
 }
 
+/// TSK-1077 AC-5: the adoption change itself, where the base proves the
+/// policy file absent, is judged by the shipped defaults. Before, the
+/// working copy the range wrote judged it, so a looser policy passed.
 #[test]
-fn a_base_without_a_policy_keeps_the_working_copy() {
-    // The adoption change itself: the target has no policy yet.
+fn a_base_without_a_policy_is_judged_by_the_shipped_defaults() {
     let dir = fixture(None);
     let root = dir.path();
     write(root, POLICY, LOOSER);
@@ -183,10 +185,12 @@ fn a_base_without_a_policy_keeps_the_working_copy() {
     commit(root, FOUR_BULLETS);
     let out = ci(root);
     let said = said(&out);
-    assert_eq!(out.status.code(), Some(0), "{said}");
-    assert!(!said.contains("git.commit_body"), "{said}");
+    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert!(said.contains("git.commit_body"), "{said}");
     assert!(
-        said.contains("codeflow ci: verifying against .codeflow/policy.json\n"),
+        said.contains(
+            "codeflow ci: verifying against the shipped defaults, since .codeflow/policy.json is absent at base "
+        ),
         "{said}"
     );
 }

@@ -150,6 +150,8 @@ enum Command {
     GitHook(cmd::git_hook::GitHookArgs),
     /// Print the session-start digest (pointers, not content).
     Orient,
+    /// Create capability catalog records with shared registry identities.
+    Capability(cmd::capability::CapabilityArgs),
     /// Run the test gate (configured targets or runtime stack detection).
     Test(cmd::test::TestArgs),
 
@@ -428,6 +430,9 @@ fn main() -> std::process::ExitCode {
 }
 
 fn run() -> anyhow::Result<()> {
+    // Lock descriptors an enclosing `codeflow reserve` handed over become
+    // close-on-exec before any thread or child starts (TSK-1128).
+    codeflow_core::testing::gate_guard::adopt_reserved_locks();
     // A hook git fires during this command runs this binary (SPC-013 R-85):
     // the path goes only into git children's environment, so an inherited
     // value is dropped here and no other child ever sees one.
@@ -495,6 +500,7 @@ fn run() -> anyhow::Result<()> {
         Command::Hook(args) => std::process::exit(cmd::hook::run(&args)),
         Command::Delegate(args) => std::process::exit(cmd::delegate::run(&args)),
         Command::GitHook(args) => std::process::exit(cmd::git_hook::run(&args)),
+        Command::Capability(args) => std::process::exit(cmd::capability::run(&args)),
         Command::Orient => std::process::exit(cmd::orient::run()),
         Command::Test(args) => std::process::exit(cmd::test::run(&args)),
         Command::Reserve(args) => std::process::exit(cmd::reserve::run(&args)),

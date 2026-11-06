@@ -333,6 +333,9 @@ catalog! {
     /// References into an absent capability registry.
     DOCS_CAPABILITIES_UNCHECKED = Step::Edit("docs/capabilities.md"),
         "add each capability named to docs/capabilities.md, or remove the references to it";
+    /// A legacy capability catalog whose evidence has no types yet.
+    CAPABILITY_EVIDENCE_UNTYPED = Step::Edit("docs/capabilities.md"),
+        "in docs/capabilities.md, give each verified_by entry a kind: test: <path>[::<name>], journey: <path>[::<name>], record: docs/verification/<path> or gap: <proof>: <reason>";
     /// A task branch whose planning is not anchored on the target.
     WORK_START_RECONCILE = Step::Codeflow("codeflow work start"),
         "reconcile the target branch, then run `codeflow work start {id}`";
@@ -434,7 +437,7 @@ catalog! {
         "land work via PR (gh pr create → merge on evidenced-green checks) or `codeflow integrate <branch> --into <target>`";
     /// Deleting a protected branch.
     PROTECTED_DELETE = Step::Edit(".codeflow/policy.json"),
-        "protected branches are never deleted; if it is truly intended, first remove the entry from git.protected_branches in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+        "protected branches are never deleted; if it is truly intended, first remove the entry from git.protected_branches in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";
     /// Rewriting protected history.
     PROTECTED_REWRITE = Step::Git("git revert"),
         "undo it with `git revert` instead, and rebase feature branches in their own worktree; protected history is append-only";
@@ -446,7 +449,7 @@ catalog! {
         "push without force after `git pull --rebase`; the project restricts force-pushes with git.force_push_unprotected in `.codeflow/policy.json`";
     /// A `gh pr merge` into a protected base.
     PR_MERGE_PROTECTED = Step::Edit(".codeflow/policy.json"),
-        "PR merges into protected branches are performed by a human (GitHub UI / their own terminal) or explicitly sanctioned by git.pr_merge_to_protected in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+        "PR merges into protected branches are performed by a human (GitHub UI / their own terminal) or explicitly sanctioned by git.pr_merge_to_protected in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";
     /// A branch name outside the prefixes.
     BRANCH_NAME = Step::Git("git branch"),
         "rename it with `git branch -m <prefix>/<kebab-name>`, with a sanctioned prefix: {prefixes}";
@@ -554,6 +557,9 @@ catalog! {
     /// A Release impact section that does not declare the release.
     PR_RELEASE_IMPACT = Step::Codeflow("codeflow ci"),
         "declare Impact, Breaking, Rationale and Migration under Release impact using the project's breaking level; `codeflow ci --pr-body-file <body.md>` checks the new text";
+    /// A capability declaration that cannot be verified against catalog data.
+    PR_CAPABILITY_IMPACT = Step::Codeflow("codeflow ci"),
+        "supply one ## Capability impact section with '- Added CAP-NNN <name>: <context>', Changed or Improved entries (Improved says 'entry unchanged'), or '- None: <reason>'; bootstrap an empty catalog with valid records and matching Added entries; deprecate capabilities instead of deleting them; rerun `codeflow ci --pr-body-file <body.md>`";
 
     // `codeflow ci` itself.
 
@@ -599,6 +605,10 @@ catalog! {
     /// A possible secret staged.
     SECRET_STAGED = Step::Git("git restore"),
         "remove the secret from the staged content, or unstage it with `git restore --staged <file>`; rotate it if it was ever committed";
+    /// The gitleaks engine of the staged secret scan cannot run the pinned
+    /// binary (TSK-412).
+    SECRET_ENGINE_UNAVAILABLE = Step::Codeflow("codeflow doctor"),
+        "download the pinned gitleaks release build ({archive}) over the network from https://github.com/gitleaks/gitleaks/releases, check it against that release's checksums file and put its gitleaks binary on PATH; `codeflow doctor --check secret-engine` then reports it pinned";
 
     // The push set.
 
@@ -666,7 +676,7 @@ catalog! {
         "{step} (an approval inside that harness), then `codeflow doctor --check {check}` confirms it";
     /// Directories a full gate writes that this process cannot write.
     DOCTOR_GATE_DIRS = Step::Edit(".claude/settings.json"),
-        "make {paths} writable for the process that runs the full gate: inside the Claude Code sandbox the operator adds them to `sandbox.filesystem.allowWrite` in `.claude/settings.json` (the shipped presets allow `~/.codeflow/locks` and `~/.codeflow/gate-runs`, and `codeflow update` adds them), or runs `codeflow test --mode full` outside the sandbox; then `codeflow doctor --check permissions` confirms it";
+        "make {paths} writable for the process that runs the full gate: inside the Claude Code sandbox the operator adds a lock folder to `sandbox.filesystem.allowWrite` in `.claude/settings.json` (the shipped presets allow `~/.codeflow/locks`, and `codeflow update` adds it); the evidence folder `~/.codeflow/gate-runs` is never granted to a session, so the primary runs `codeflow test --mode full` outside the sandbox, in the operator's terminal or as an approved unsandboxed run; then `codeflow doctor --check permissions` confirms it";
     /// Gate directories a Codex seat cannot write (TSK-337).
     DOCTOR_GATE_DIRS_CODEX = Step::Codeflow("codeflow doctor --preflight"),
         "this runs in a Codex sandbox, which cannot write {paths}. A review seat's `cf-guard` profile grants none of them, by design, so run `codeflow reserve` and quick-mode heavy targets in a builder seat; full gates stay with the primary. The operator, or the session that launched the seat, relaunches the builder seat with the Codex builder launch in cf-model-orchestrator's `resources/routing/transport.md`, from the main checkout root: its override grants `~/.codeflow/locks` and its `cf-builder` profile writes the common `.git`. Outside the seat, `codeflow doctor --preflight` checks that launch, and `codeflow doctor --check permissions` in the relaunched seat confirms it";
@@ -765,6 +775,9 @@ catalog! {
     /// Harness settings without the shell startup class (TSK-242).
     DOCTOR_STARTUP_PRESETS = Step::Codeflow("codeflow update"),
         "run `codeflow update` so .claude/settings.json and .codex/config.toml carry the shell startup class, resolving any `.new` file it writes";
+    /// The text rule the exec guard applies (TSK-397, H-6).
+    DOCTOR_TEXT_RULE_UNSEEN = Step::Edit(".codeflow/policy.json"),
+        "nothing is needed for the strict rule; to relax it, the operator sets `security.text_guard` to `relaxed` in .codeflow/policy.json and lands it on every protected ref the hook reads, accepting that no sandbox is verified";
     /// Git include paths that need operator inspection.
     DOCTOR_GIT_CONFIG_INCLUDES = Step::Git("git config"),
         "The operator inspects git config --show-origin --includes --list and secures or removes its include paths; rerun codeflow doctor --check git-config-includes after repair.";
@@ -843,11 +856,11 @@ catalog! {
 
     /// An action reserved for the operator, including a secret-store read.
     OUTWARD_ACTION = Step::Edit(".codeflow/policy.json"),
-        "the operator runs this action personally in a separate terminal; prepare and inspect its inputs here, without retrying another spelling; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+        "the operator runs this action personally in a separate terminal; prepare and inspect its inputs here, without retrying another spelling; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";
 
     /// A recursive read or glob whose complete selected paths cannot be inspected.
     SECRET_SELECTION = Step::Edit(".codeflow/policy.json"),
-        "narrow the search roots or file selection to paths the guard can inspect within its metadata budget, without including secret stores; the operator runs an intended secret read personally in a separate terminal; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+        "narrow the search roots or file selection to paths the guard can inspect within its metadata budget, without including secret stores; the operator runs an intended secret read personally in a separate terminal; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";
 
     /// A branch push that would include tags because of effective Git config.
     PUSH_WITHOUT_FOLLOW_TAGS = Step::Git("git push"),
@@ -855,13 +868,13 @@ catalog! {
 
     /// A privilege escalation proposed from a session.
     PRIVILEGE_ESCALATION = Step::Edit(".codeflow/policy.json"),
-        "privilege escalation needs applicable operator authority: an operator runs it outside the session; {enforcement}; text that only quotes a launcher word is not refused when the whole line is `echo`, `printf` (a `%s`-only format), `grep` and `cat` with single-quoted words, document-file redirects and a quoted heredoc delimiter (`cat <<'EOF' > notes.md`), so write such text that way or with the editor tool and pass the file by path; the effective harness may show no permission prompt (security.privilege_escalation in `.codeflow/policy.json`); session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+        "privilege escalation needs applicable operator authority: an operator runs it outside the session; {enforcement}; text that only quotes a launcher word is not refused when the whole line is `echo`, `printf` (a `%s`-only format), `grep` and `cat` with single-quoted words, document-file redirects and a quoted heredoc delimiter (`cat <<'EOF' > notes.md`), so write such text that way or with the editor tool and pass the file by path; the effective harness may show no permission prompt (security.privilege_escalation in `.codeflow/policy.json`); session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn policy_relaxation_routes_require_every_named_source() {
+    fn policy_relaxation_routes_name_the_default_branch() {
         for remedy in [
             &super::PROTECTED_DELETE,
             &super::PR_MERGE_PROTECTED,
@@ -870,17 +883,14 @@ mod tests {
             &super::PRIVILEGE_ESCALATION,
         ] {
             assert!(
-                remedy
-                    .text
-                    .contains("on every branch named as a policy source"),
+                remedy.text.contains("on the default branch and fetches it"),
                 "{}: {}",
                 remedy.name,
                 remedy.text
             );
-            assert!(remedy.text.contains("fetches"));
-            assert!(remedy
-                .text
-                .contains("HEAD while no remote-tracking refs exist"));
+            assert!(remedy.text.contains(
+                "HEAD where the repository has no remote or its remote advertises no refs"
+            ));
         }
     }
 

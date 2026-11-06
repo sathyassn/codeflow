@@ -340,7 +340,7 @@ fn source_file(root: &Path, abs: PathBuf, kind: &'static str) -> SourceFile {
 }
 
 /// Enumerate all indexable source files for a repo.
-fn collect_sources(root: &Path) -> std::io::Result<Vec<SourceFile>> {
+fn collect_sources(root: &Path, notes: &mut Vec<String>) -> std::io::Result<Vec<SourceFile>> {
     let mut sources = Vec::new();
 
     if let Some(state) = runtime_state_dir(root)? {
@@ -386,6 +386,18 @@ fn collect_sources(root: &Path) -> std::io::Result<Vec<SourceFile>> {
     let caps = root.join("docs/capabilities.md");
     if caps.try_exists()? {
         sources.push(source_file(root, caps, "capability"));
+    }
+
+    let (catalog, issues) = crate::capability::inspect_capability_catalog(root);
+    notes.extend(
+        issues
+            .into_iter()
+            .map(|issue| format!("capability catalog: {issue}")),
+    );
+    for record in catalog.records {
+        if record.uid.is_some() {
+            sources.push(source_file(root, root.join(record.file), "capability"));
+        }
     }
 
     // Product WHYs: the human-owned charter of purpose/scope/non-goals plus the
@@ -498,7 +510,7 @@ fn sync_repo(
     notes: &mut Vec<String>,
 ) -> Result<(), RecallError> {
     let repo_key = encode_path(&target.root);
-    let sources = collect_sources(&target.root)?;
+    let sources = collect_sources(&target.root, notes)?;
 
     // Stale cursor cleanup: drop rows for files that no longer exist.
     let current: HashSet<&str> = sources.iter().map(|s| s.rel.as_str()).collect();
@@ -818,6 +830,39 @@ mod tests {
             Some("\"why\" OR \"sqlite\" OR \"fts5\"")
         );
         assert_eq!(build_match_expr("?!').("), None);
+    }
+
+    #[test]
+    fn folder_capabilities_are_individual_recall_sources() {
+        let repo = tempfile::tempdir().unwrap();
+        make_repo(repo.path());
+        fs::create_dir_all(repo.path().join(".codeflow")).unwrap();
+        fs::write(
+            repo.path().join(".codeflow/project.toml"),
+            "areas = ['engine']\n",
+        )
+        .unwrap();
+        fs::create_dir_all(repo.path().join("docs/capabilities")).unwrap();
+        let relative = "docs/capabilities/CAP-001-search.md";
+        fs::write(repo.path().join(relative), "---\nid: CAP-001\nuid: 12345678-1234-4234-8234-123456789abc\nname: search\nsummary: Search the catalog\nstatus: planned\nkind: functional\naudience: [agent]\narea: engine\n---\n\nSearchable promise.\n").unwrap();
+        let sources = collect_sources(repo.path(), &mut Vec::new()).unwrap();
+        let capabilities: Vec<_> = sources
+            .iter()
+            .filter(|source| source.kind == "capability")
+            .collect();
+        assert_eq!(capabilities.len(), 1);
+        assert_eq!(capabilities[0].abs, repo.path().join(relative));
+        fs::write(
+            repo.path().join("docs/capabilities/CAP-002-invalid.md"),
+            "---\nunknown: value\n---\n",
+        )
+        .unwrap();
+        let mut notes = Vec::new();
+        let sources = collect_sources(repo.path(), &mut notes).unwrap();
+        assert!(sources
+            .iter()
+            .any(|source| source.abs == repo.path().join(relative)));
+        assert!(notes.iter().any(|note| note.contains("CAP-002-invalid.md")));
     }
 
     #[test]
@@ -1231,6 +1276,6 @@ mod r16_obtaining_regressions {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("docs")).unwrap();
         std::fs::write(dir.path().join("docs/plan"), "not a directory").unwrap();
-        assert!(super::collect_sources(dir.path()).is_err());
+        assert!(super::collect_sources(dir.path(), &mut Vec::new()).is_err());
     }
 }

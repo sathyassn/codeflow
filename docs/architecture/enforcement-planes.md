@@ -138,29 +138,27 @@ The handlers are wired per harness.
 | Grok Build | `.grok/hooks/codeflow.json`, with edit-guard | ADR-0008 analog; project hooks load only after `/hooks-trust` or `--trust` |
 | Headless `codex exec`, `grok -p` | none | project PreToolUse hooks do not run, so those invocations are not work-session lanes and rely on the git-hook plane |
 
-**Policy authority.** Agent sessions are judged by the landed policy.
+**Policy authority.** Agent sessions are judged by the landed policy: the
+default branch at one commit, and nothing else (ADR-0091).
 
 - The guards read `.codeflow/policy.json` and project settings from the
-  configured remote's default branch and the declared target, taking the
-  stricter level key by key. A local checkout, commit, rebase or stash cannot
+  commit `refs/remotes/<remote>/HEAD` names, a tracking branch of that
+  remote. No line or task record adds anything, and local commits cannot
   relax them.
-- When the remote HEAD is not set, as after `git init`, `git remote add` and
-  `git push -u`, every existing `main` and `master` tracking ref contributes
-  and the stricter wins. A fetch that adds one cannot weaken them.
-- A custom default branch needs the operator's
-  `git remote set-head <remote> --auto`, which `doctor` names. A dangling
-  remote HEAD refuses.
-- The guards read `HEAD` only when there is no remote or the remote has no
-  tracking refs yet, and the working copy only on an unborn `HEAD`. Every
-  refusal and `doctor` name the source.
+- An unset remote HEAD, or one naming anything but a tracking branch,
+  refuses; `main` or `master` is never guessed.
+- An empty tracking namespace refuses unless the remote, when asked,
+  advertises no refs: initialization, judged by `HEAD`. No remote is local
+  only, judged the same way. A proven absence of the policy file selects
+  the shipped defaults. `doctor` names the source and its commit.
 - These cannot replace that authority: ref plumbing on `refs/remotes`, fetch or
   pull into an explicit tracking destination or from another source, remote
   identity changes, writes to transport configuration, the global Git config
   files and the common Git directory's refs and config.
 - Fetch, pull and remote update compare each selected remote's effective URL
   with its configured URL.
-- Once a tracking ref exists, missing authority refuses the call and names
-  `git fetch`, or the operator's `git remote set-head <remote> --auto`.
+- Missing authority refuses the call and names `git fetch`, or the
+  operator's `git remote set-head <remote> -a`.
 - `doctor` and orient report the source and any local policy drift. They do not
   detect earlier movement of a tracking ref.
 

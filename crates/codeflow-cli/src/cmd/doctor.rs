@@ -27,6 +27,12 @@ pub struct DoctorArgs {
     /// sandbox` under the builder launch.
     #[arg(long, hide = true, conflicts_with_all = ["check", "list", "preflight"])]
     pub builder_write_probe: bool,
+    /// With `--check remote-perimeter`: compare the rulesets `codeflow
+    /// remote protect` owns with this profile (solo-administrator or
+    /// independent-review). A non-empty bypass list on the authority or
+    /// line checks fails with or without it.
+    #[arg(long, value_parser = ["solo-administrator", "independent-review"])]
+    pub profile: Option<String>,
 }
 
 /// Run doctor checks; exit 0 when healthy (warnings allowed), 1 on failures.
@@ -97,6 +103,7 @@ pub fn run(args: &DoctorArgs) -> i32 {
         }),
         // Only reported beside where PATH resolves codeflow; never run.
         codeflow_exe: std::env::current_exe().ok(),
+        remote_profile: args.profile.clone(),
         ..Options::default()
     };
     run_with(args, &opts, &mut std::io::stdout())
@@ -616,6 +623,7 @@ mod tests {
             list,
             preflight: false,
             builder_write_probe: false,
+            profile: None,
         }
     }
 
@@ -661,6 +669,7 @@ mod tests {
             qualification_dir: None,
             harness_home: Some(dir.path().join("home")),
             env_var: Some(|_| None),
+            remote_profile: None,
         };
         (dir, opts)
     }

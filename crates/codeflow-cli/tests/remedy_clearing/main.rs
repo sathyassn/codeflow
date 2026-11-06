@@ -101,6 +101,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCS_ADRS_UNCHECKED", Runs),
     ("FEEDBACK_INDEX_STALE", Runs),
     ("DOCS_CAPABILITIES_UNCHECKED", Runs),
+    ("CAPABILITY_EVIDENCE_UNTYPED", Runs),
     ("WORK_START_RECONCILE", Runs),
     ("WORK_START_MERGE_PLANNING", Runs),
     ("WORK_CLASSIFICATION", Runs),
@@ -165,6 +166,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("PR_BODY_LENGTH", Runs),
     ("PR_SUMMARY_SHAPE", Runs),
     ("PR_RELEASE_IMPACT", Runs),
+    ("PR_CAPABILITY_IMPACT", Runs),
     ("CI_BASE_UNRESOLVED", Runs),
     ("CI_BASE_REFUSED", Runs),
     ("CI_BASE_TARGET_DIFFER", Runs),
@@ -178,6 +180,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("ENV_FILE_STAGED", Runs),
     ("SECRET_SCAN_INCOMPLETE", Runs),
     ("SECRET_STAGED", Runs),
+    ("SECRET_ENGINE_UNAVAILABLE", Excluded(Network)),
     ("PUSH_SET_CI", Runs),
     ("PUSH_SET_BY_HAND", Runs),
     ("PUSH_RANGE_UNRESOLVED", Runs),
@@ -237,6 +240,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_STARTUP_RELOCATED", Excluded(HumanAuthority)),
     // The operator decides which configuration inputs to repair or remove.
     ("DOCTOR_GIT_CONFIG_INCLUDES", Excluded(HumanAuthority)),
+    // Settings the guard cannot read are the operator's to confirm.
+    ("DOCTOR_TEXT_RULE_UNSEEN", Excluded(HumanAuthority)),
     ("GUARD_UNCLASSIFIABLE", Runs),
     ("GUARD_UNRESOLVED", Runs),
     ("GUARD_ALIAS", Runs),
@@ -598,6 +603,8 @@ fn with_destination(root: &Path) -> PathBuf {
     );
     git(root, &["remote", "add", "origin", dest.to_str().unwrap()]);
     git(root, &["fetch", "-q", "origin"]);
+    // TSK-1077: record the policy authority on every git version.
+    git(root, &["remote", "set-head", "origin", &target]);
     git(
         root,
         &["switch", "-q", "-c", "feat/x", &format!("origin/{target}")],
@@ -1009,6 +1016,46 @@ fn clears_pr_release_impact() {
         &BODY.replace("- Migration: none\n", ""),
         BODY,
         "non-empty migration field",
+    );
+}
+
+#[test]
+fn clears_pr_capability_impact() {
+    let dir = ci_repo(r#"{"git":{"pr_capability_impact":"block"}}"#);
+    let root = dir.path();
+    write(root, ".codeflow/project.toml", "schema_version = 1\ntier = 'minimal'\nscaffold_version = '4.0.0'\nstack = 'rust'\nareas = ['engine']\npolicy_armed = true\ngit_hooks = 'unwired'\npermission_preset = 'safe'\n");
+    write(root, "docs/capabilities/vocabulary.yaml", "inventory: incomplete\ngroups: [{name: records, about: Records}]\ntags: [{name: rust, about: Rust}]\n");
+    write(
+        root,
+        "docs/capabilities/CAP-101-catalog.md",
+        include_str!("../../../codeflow-core/tests/fixtures/capability-catalog/valid.md"),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: add catalog"]);
+    let bodies = tempfile::tempdir().unwrap();
+    let body = bodies.path().join("body.md");
+    std::fs::write(
+        &body,
+        "## Capability impact\n\n- None: Internal cleanup preserves behaviour.\n",
+    )
+    .unwrap();
+    let before = ci(root, &["--pr-body-file", body.to_str().unwrap()]);
+    let printed = block(&before, "None cannot accompany capability changes");
+    assert_prints_row(printed, "PR_CAPABILITY_IMPACT");
+    let step = printed_command(printed, "PR_CAPABILITY_IMPACT", None);
+    std::fs::write(&body, "## Capability impact\n\n- Added CAP-101 catalog: Readers can inspect their capabilities.\n").unwrap();
+    let filled = step.replace("<body.md>", body.to_str().unwrap());
+    let parts = words(&filled);
+    let after = text(
+        &command(exe().to_str().unwrap(), root)
+            .args(&parts[1..])
+            .args(["--base", "main", "--head", "HEAD", "--branch", "feat/x"])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        after.contains("declaration agrees with catalog delta"),
+        "{after}"
     );
 }
 
@@ -1540,7 +1587,7 @@ fn clears_docs_layer_absent() {
     std::fs::remove_file(root.join("docs/capabilities.md")).unwrap();
     prove(
         "DOCS_LAYER_ABSENT",
-        "docs/capabilities.md absent",
+        "docs/capabilities.md and folder records absent; capability checks skipped",
         || validate(&root),
         |printed| {
             let step = printed_command(printed, "DOCS_LAYER_ABSENT", None);
@@ -1673,6 +1720,35 @@ fn clears_docs_capabilities_unchecked() {
                     "{registry}{}",
                     CAPABILITY.replace("epics: []", "epics: [EPC-001]")
                 ),
+            );
+        },
+    );
+}
+
+#[test]
+fn clears_capability_evidence_untyped() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let registry = read(&root, "docs/capabilities.md");
+    let entry = |tag: &str| {
+        format!(
+            "{registry}{}",
+            CAPABILITY
+                .replace("status: building", "status: shipped")
+                .replace("verified_by: []", &format!("verified_by: [{tag}]"))
+        )
+    };
+    write(&root, "docs/capabilities.md", &entry("flow-tag"));
+    prove(
+        "CAPABILITY_EVIDENCE_UNTYPED",
+        "verified_by entries are not resolved until they are typed",
+        || validate(&root),
+        |printed| {
+            assert!(printed.contains("docs/capabilities.md"), "{printed}");
+            write(
+                &root,
+                "docs/capabilities.md",
+                &entry("'gap: test: not written yet'"),
             );
         },
     );

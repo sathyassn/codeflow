@@ -1,13 +1,13 @@
 //! Referential-integrity lint over the doc graph (`validate --docs`).
 //!
 //! Charter §5 maintenance matrix: malformed records and dangling graph IDs
-//! fail loud in CI and at pre-push. `verified_by` must be nonempty for shipped
-//! capabilities; the validator does not infer whether a named test tag exists.
-//! Checks:
+//! fail loud in CI and at pre-push. Checks:
 //!
 //! * capability `epics[]` resolve to `project-management/epics/` files
 //! * capability `adrs[]` resolve to `docs/decisions/` ADR files
 //! * capability status legal; shipped capabilities have nonempty `verified_by`
+//! * capability `verified_by` entries resolve to a test identity, a verification
+//!   record or a declared gap; a legacy catalog with no typed entry warns instead
 //! * ADR `status` legal (`proposed|accepted|superseded`); superseded ADRs
 //!   carry `superseded_by`
 //! * capability `epics[]` and epic `capabilities[]` links are reciprocal;
@@ -24,7 +24,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::capability::{parse_capabilities, CAPABILITY_STATUS_VALUES};
+use crate::capability::{
+    inspect_capability_catalog, is_typed_evidence, parse_evidence, resolve_evidence,
+    CapabilityCatalog,
+};
 use crate::validate::{get_string_field, parse_frontmatter};
 use crate::workgraph::{is_valid_epic_format_id, is_valid_spec_format_id, is_valid_task_format_id};
 
@@ -126,12 +129,14 @@ struct TaskGraphIndex {
 pub fn lint_docs(repo_root: &Path) -> DocsLintReport {
     let mut report = DocsLintReport::default();
 
-    let graph = build_graph(repo_root, &mut report);
+    let catalog = catalog_for_docs(repo_root, &mut report);
+    let graph = build_graph_with_catalog(repo_root, &catalog, &mut report);
 
-    lint_capabilities(repo_root, &graph, &mut report);
+    lint_capabilities(&catalog, &graph, &mut report);
+    lint_capability_evidence(repo_root, &catalog, &mut report);
     lint_adrs(repo_root, &mut report);
     lint_epics(repo_root, &graph, &mut report);
-    lint_capability_epic_reciprocity(repo_root, &mut report);
+    lint_capability_epic_reciprocity_with_catalog(repo_root, &catalog, &mut report);
     lint_tasks(repo_root, &graph, &mut report);
     lint_feedback(repo_root, &mut report);
     lint_ledger_citations(repo_root, &mut report);
@@ -246,22 +251,24 @@ fn directory_present(path: &Path, report: &mut DocsLintReport) -> bool {
     true
 }
 
-fn lint_capability_epic_reciprocity(repo_root: &Path, report: &mut DocsLintReport) {
-    let capabilities_path = repo_root.join("docs/capabilities.md");
-    if !input_present(&capabilities_path, report) {
-        return;
-    }
-    let content = match std::fs::read_to_string(&capabilities_path) {
-        Ok(content) => content,
-        Err(error) => {
-            cannot_read(report, &capabilities_path, error);
-            return;
-        }
-    };
-    let (entries, _) = parse_capabilities(&content);
-    let capability_epics: BTreeMap<String, (BTreeSet<String>, usize)> = entries
-        .into_iter()
-        .map(|entry| (entry.id, (entry.epics.into_iter().collect(), entry.line)))
+fn lint_capability_epic_reciprocity_with_catalog(
+    repo_root: &Path,
+    catalog: &CapabilityCatalog,
+    report: &mut DocsLintReport,
+) {
+    let capability_epics: BTreeMap<String, (BTreeSet<String>, usize, PathBuf)> = catalog
+        .records
+        .iter()
+        .map(|r| {
+            (
+                r.entry.id.clone(),
+                (
+                    r.entry.epics.iter().cloned().collect(),
+                    r.entry.line,
+                    r.file.clone(),
+                ),
+            )
+        })
         .collect();
     let mut epic_capabilities = BTreeMap::<String, (BTreeSet<String>, PathBuf)>::new();
     for path in inventory_files(
@@ -302,12 +309,12 @@ fn lint_capability_epic_reciprocity(repo_root: &Path, report: &mut DocsLintRepor
         );
     }
 
-    for (capability, (epics, line)) in &capability_epics {
+    for (capability, (epics, line, file)) in &capability_epics {
         for epic in epics {
             if let Some((backlinks, _)) = epic_capabilities.get(epic) {
                 if !backlinks.contains(capability) {
                     report.issues.push(DocsLintIssue {
-                        file: PathBuf::from("docs/capabilities.md"),
+                        file: file.clone(),
                         line: *line,
                         message: format!(
                             "{capability} links {epic}, but that epic does not link back in capabilities[]"
@@ -319,7 +326,7 @@ fn lint_capability_epic_reciprocity(repo_root: &Path, report: &mut DocsLintRepor
     }
     for (epic, (capabilities, path)) in epic_capabilities {
         for capability in capabilities {
-            if let Some((backlinks, _)) = capability_epics.get(&capability) {
+            if let Some((backlinks, _, _)) = capability_epics.get(&capability) {
                 if !backlinks.contains(&epic) {
                     report.issues.push(DocsLintIssue {
                         file: path.clone(),
@@ -334,24 +341,42 @@ fn lint_capability_epic_reciprocity(repo_root: &Path, report: &mut DocsLintRepor
     }
 }
 
+fn catalog_for_docs(root: &Path, report: &mut DocsLintReport) -> CapabilityCatalog {
+    let (catalog, issues) = inspect_capability_catalog(root);
+    report
+        .issues
+        .extend(issues.into_iter().map(|error| DocsLintIssue {
+            file: error.file.into(),
+            line: error.line,
+            message: error.message,
+        }));
+    catalog
+}
+
+// Only the unix-only `r22_regressions` tests call these helpers.
+#[cfg(all(test, unix))]
+fn lint_capability_epic_reciprocity(root: &Path, report: &mut DocsLintReport) {
+    let catalog = catalog_for_docs(root, report);
+    lint_capability_epic_reciprocity_with_catalog(root, &catalog, report);
+}
+
+#[cfg(all(test, unix))]
 fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
-    // Capability ids.
-    let caps_path = repo_root.join("docs/capabilities.md");
-    let capabilities = if input_present(&caps_path, report) {
-        match std::fs::read_to_string(&caps_path) {
-            Ok(content) => {
-                let (entries, _) = parse_capabilities(&content);
-                Some(entries.into_iter().map(|entry| entry.id).collect())
-            }
-            Err(error) => {
-                cannot_read(report, &caps_path, error);
-                None
-            }
-        }
+    let catalog = catalog_for_docs(repo_root, report);
+    build_graph_with_catalog(repo_root, &catalog, report)
+}
+
+fn build_graph_with_catalog(
+    repo_root: &Path,
+    catalog: &CapabilityCatalog,
+    report: &mut DocsLintReport,
+) -> DocGraph {
+    let capabilities = if catalog.present {
+        Some(catalog.records.iter().map(|r| r.entry.id.clone()).collect())
     } else {
         if tier_installs_docs(repo_root) {
             report.notes.push(crate::remedy::Finding::new(
-                "docs/capabilities.md absent; capability checks skipped",
+                "docs/capabilities.md and folder records absent; capability checks skipped",
                 crate::remedy::DOCS_LAYER_ABSENT.with(&[("path", CAPABILITIES_LAYER)]),
             ));
         }
@@ -437,56 +462,10 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
     }
 }
 
-fn lint_capabilities(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
-    let rel = PathBuf::from("docs/capabilities.md");
-    let Ok(content) = std::fs::read_to_string(repo_root.join(&rel)) else {
-        return; // absence already noted
-    };
-
-    let (entries, parse_issues) = parse_capabilities(&content);
-    for issue in parse_issues {
-        report.issues.push(DocsLintIssue {
-            file: rel.clone(),
-            line: issue.line,
-            message: issue.message,
-        });
-    }
-
-    let mut seen_capabilities = BTreeSet::new();
-    for entry in entries {
-        if !seen_capabilities.insert(entry.id.clone()) {
-            report.issues.push(DocsLintIssue {
-                file: rel.clone(),
-                line: entry.line,
-                message: format!("{}: duplicate capability id", entry.id),
-            });
-        }
-        // Status legality.
-        if !CAPABILITY_STATUS_VALUES.contains(&entry.status.as_str()) {
-            report.issues.push(DocsLintIssue {
-                file: rel.clone(),
-                line: entry.line,
-                message: format!(
-                    "{}: status \"{}\" is not one of: {}",
-                    entry.id,
-                    entry.status,
-                    CAPABILITY_STATUS_VALUES.join(", ")
-                ),
-            });
-        }
-
-        // Shipped capabilities must carry verification evidence.
-        if entry.status == "shipped" && entry.verified_by.iter().all(|t| t.trim().is_empty()) {
-            report.issues.push(DocsLintIssue {
-                file: rel.clone(),
-                line: entry.line,
-                message: format!(
-                    "{}: shipped capability has empty verified_by — name the test tags that prove it",
-                    entry.id
-                ),
-            });
-        }
-
+fn lint_capabilities(catalog: &CapabilityCatalog, graph: &DocGraph, report: &mut DocsLintReport) {
+    for record in &catalog.records {
+        let entry = &record.entry;
+        let rel = &record.file;
         // epics[] resolve to project-management epic files.
         if graph.epics.is_none() {
             for epic_ref in &entry.epics {
@@ -528,6 +507,72 @@ fn lint_capabilities(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintRe
                 }
             }
         }
+    }
+}
+
+/// Resolve every `verified_by` entry. A record's grammar was already checked by
+/// the loader, which reported any refusal, so only its references are new here.
+///
+/// A legacy fence file written before entries were typed keeps validating,
+/// with a warning, until it holds its first typed entry. From then on every
+/// fence entry must be typed, so a free-form tag cannot pass unresolved.
+fn lint_capability_evidence(root: &Path, catalog: &CapabilityCatalog, report: &mut DocsLintReport) {
+    let entries = || {
+        catalog
+            .records
+            .iter()
+            .flat_map(|record| record.entry.verified_by.iter().map(move |v| (record, v)))
+    };
+    if entries().next().is_none() {
+        return;
+    }
+    let tree = match crate::contained::Tree::open(root) {
+        Ok(tree) => tree,
+        Err(error) => {
+            cannot_read(report, root, error);
+            return;
+        }
+    };
+    // Without a readable index, a denied read refuses the entry.
+    let index = match crate::hooks::repo::open(root) {
+        Ok(Some(repo)) => repo.index().ok(),
+        Ok(None) | Err(_) => None,
+    };
+    let legacy_typed =
+        entries().any(|(record, value)| record.uid.is_none() && is_typed_evidence(value));
+    let mut untyped = BTreeSet::new();
+    for (record, value) in entries() {
+        let id = &record.entry.id;
+        let legacy = record.uid.is_none();
+        if legacy && !legacy_typed {
+            untyped.insert(id.as_str());
+            continue;
+        }
+        let reason = if legacy && !is_typed_evidence(value) {
+            Some("this file has typed entries, so every entry needs a kind: test, journey, record or gap".to_string())
+        } else {
+            match parse_evidence(value) {
+                Ok(evidence) => resolve_evidence(&tree, index.as_ref(), &evidence).err(),
+                Err(_) if !legacy => None,
+                Err(reason) => Some(reason),
+            }
+        };
+        if let Some(reason) = reason {
+            report.issues.push(DocsLintIssue {
+                file: record.file.clone(),
+                line: record.entry.line,
+                message: format!("{id}: verified_by entry {value:?}: {reason}"),
+            });
+        }
+    }
+    if !untyped.is_empty() {
+        report.warnings.push(crate::remedy::Finding::new(
+            format!(
+                "verified_by entries are not resolved until they are typed, in: {}",
+                untyped.into_iter().collect::<Vec<_>>().join(", ")
+            ),
+            crate::remedy::CAPABILITY_EVIDENCE_UNTYPED.remedy(),
+        ));
     }
 }
 
@@ -633,7 +678,7 @@ fn lint_epics(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
                         file: rel.clone(),
                         line: find_line(&content, &cap_ref).unwrap_or(1),
                         message: format!(
-                            "epic references capability {cap_ref} which is not in docs/capabilities.md"
+                            "epic references capability {cap_ref} which is not in the capability catalog"
                         ),
                     });
                 }
@@ -1237,7 +1282,7 @@ mod tests {
         assert!(report
             .issues
             .iter()
-            .any(|issue| issue.message == "CAP-001: duplicate capability id"));
+            .any(|issue| issue.message.contains("duplicate CAP-001")));
     }
 
     /// TSK-422 AC-8: a task, epic or ADR record that cites a coordination
@@ -2142,7 +2187,8 @@ mod r22_regressions {
                 report
                     .issues
                     .iter()
-                    .any(|issue| issue.file.ends_with("capabilities.md")),
+                    .any(|issue| issue.file == Path::new("docs/capabilities")
+                        && issue.message.contains("docs is a symbolic link")),
                 "{report:?}"
             );
         }

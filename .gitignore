@@ -36,6 +36,9 @@ lcov.info
 # linked worktree checkouts (not git's .git/worktrees/ metadata)
 .worktrees/
 
+# checkout-local capability bootstrap lock
+.codeflow/capability-bootstrap.lock
+
 # crash-recovery/locking state for opt-in portal reconciliation
 .codeflow/.docs-portal.lock
 .codeflow/.docs-portal-transaction/

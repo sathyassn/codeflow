@@ -1263,6 +1263,8 @@ fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
         &["remote", "add", "origin", &origin.to_string_lossy()],
     );
     git(&root, &["fetch", "-q", "origin"]);
+    // Git before 2.48 records no remote HEAD on fetch (ADR-0091).
+    git(&root, &["remote", "set-head", "origin", "-a"]);
     let unpinned = status(
         &root,
         "task",

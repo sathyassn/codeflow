@@ -12,8 +12,44 @@ use std::process::{Command, Output, Stdio};
 #[path = "hooks_cli/checkout_identity.rs"]
 mod checkout_identity;
 
+#[path = "hooks_cli/host_isolation.rs"]
+mod host_isolation;
+use host_isolation::{git_command, isolate_clone, isolate_git};
+
 #[path = "hooks_cli/target_repository.rs"]
 mod target_repository;
+
+#[path = "hooks_cli/text_rule.rs"]
+mod text_rule;
+
+/// TSK-397: under the strict text rule, the default this suite runs in,
+/// once a line's directory is unknown, the exec guard refuses a word filled in at
+/// run time given to any program; git-guard does not judge it.
+fn run_time_word_refusal(out: &Output) -> bool {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    out.status.code() == Some(2)
+        && stderr.matches("policy rule ").count() == 1
+        && stderr.contains("policy rule security.text_guard (block)")
+        && stderr.contains("cannot verify the run-time argument")
+}
+
+/// TSK-397: a control the line's rules allow. Under the strict text rule,
+/// the default this suite runs in, the exec guard may refuse it with the
+/// strict rule's own finding only; a refusal by any of the line's rules adds
+/// a finding of its own, so the control still fails if the line refuses it.
+fn line_allows(out: &Output) -> bool {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    out.status.code() == Some(0)
+        || out.status.code() == Some(2)
+            && stderr.matches("policy rule ").count() == 1
+            && stderr.contains("policy rule security.text_guard (block)")
+}
+
+/// TSK-397: a refusal by one of the line's rules, so a control the line
+/// must refuse is not satisfied by the strict text rule's own finding.
+fn line_refuses(out: &Output) -> bool {
+    out.status.code() == Some(2) && !line_allows(out)
+}
 
 #[cfg(unix)]
 struct RestorePermissions {
@@ -54,16 +90,16 @@ fn codeflow() -> Command {
     isolated_codeflow(Command::new(env!("CARGO_BIN_EXE_codeflow")))
 }
 
+/// Isolate a command from the developer's environment: its Codeflow home,
+/// and every Git setting, variable and file of the host (`isolate_git`).
 fn isolated_codeflow(mut cmd: Command) -> Command {
-    // Isolate from the developer's environment.
+    // Its exec-guard expectations are the strict rule's, the default; the
+    // relaxed rule's decisions are proven by the `text_guard_invariant`
+    // replay.
+    isolate_git(&mut cmd);
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
-        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE");
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE");
     cmd
 }
 
@@ -103,14 +139,9 @@ fn task_branch_ci(dir: &Path, branch: &str, valid_body: bool) -> Output {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = git_command()
         .args(args)
         .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .output()
         .expect("git runs");
     assert!(
@@ -2353,7 +2384,23 @@ fn assignment_prefixes_do_not_hide_git_paths_containing_equals() {
     }
 }
 
+/// TSK-397: the exec guard's strict rule refuses these lines the closing
+/// rule allows, in the tightened outcome this suite runs in; no program,
+/// `echo`, `printf` and `cd` included, is exempt by name (design D, C15-2).
+const CLOSING_RULE_RUN_TIME_COSTS: &[&str] = &[
+    "export PATH=$PATH:/x; git status",
+    "git log -1 \"$((1+1))\"",
+    "export FOO=$(pwd); git push origin task/x",
+    "export PATH=$PATH:/x",
+    ": ${FOO:=bar}",
+    "V=1; echo $V",
+    "cd \"$HOME/src/x\" && git push origin task/x",
+    "printf '%s' \"${HOME}\"; git push origin task/x",
+    "echo \"${HOME:-/x}\"",
+];
+
 #[test]
+#[allow(clippy::too_many_lines)] // One fixture keeps each refusal beside the read it must not catch.
 fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/config");
@@ -2439,6 +2486,15 @@ fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() 
                         .current_dir(dir.path()),
                     &guard_payload(command, dir.path()),
                 );
+                if hook == "exec-guard"
+                    && expected == 0
+                    && CLOSING_RULE_RUN_TIME_COSTS.contains(command)
+                {
+                    if !run_time_word_refusal(&out) {
+                        failures.push(format!("{hook}: {command}: {out:?}"));
+                    }
+                    continue;
+                }
                 let diagnostic = String::from_utf8_lossy(&out.stderr);
                 if out.status.code() != Some(expected)
                     || (command.contains("arr=(1 2); git") && !diagnostic.contains("arr"))
@@ -2574,6 +2630,12 @@ fn unresolved_configuration_writes_refuse_in_both_guards() {
                 codeflow().args(["hook", hook]).current_dir(dir.path()),
                 &guard_payload(command, dir.path()),
             );
+            // TSK-397: a run-time word given to `export` or `echo` in the
+            // tightened outcome this suite runs in.
+            if hook == "exec-guard" {
+                assert!(run_time_word_refusal(&out), "{command}: {out:?}");
+                continue;
+            }
             assert_eq!(
                 out.status.code(),
                 Some(0),
@@ -2756,6 +2818,15 @@ fn exec_guard_unwraps_bundled_shell_flags_without_blocking_project_cleanup() {
         assert_eq!(out.status.code(), Some(2), "should block: {command}");
     }
 
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "exec-guard"])
+            .current_dir(dir.path()),
+        &guard_payload("rm -rf ./build", dir.path()),
+    );
+    assert!(out.status.success(), "should allow: rm -rf ./build");
+    // TSK-397: `rm` given a run-time word is judged by the directory check,
+    // never as a dangerous deletion.
     for command in ["rm -rf ~/code/app/target", "rm -rf $HOME/code/app/build"] {
         let out = run_with_stdin(
             codeflow()
@@ -2763,7 +2834,11 @@ fn exec_guard_unwraps_bundled_shell_flags_without_blocking_project_cleanup() {
                 .current_dir(dir.path()),
             &guard_payload(command, dir.path()),
         );
-        assert!(out.status.success(), "should allow: {command}");
+        assert!(run_time_word_refusal(&out), "{command}: {out:?}");
+        assert!(
+            !String::from_utf8_lossy(&out.stderr).contains("security.dangerous_commands"),
+            "{command}"
+        );
     }
 }
 
@@ -3248,14 +3323,9 @@ fn exec_guard_honours_no_system_directory_as_tmpdir() {
 
 /// Run git in `dir` with the hook environment, returning its output.
 fn git_out(dir: &Path, args: &[&str]) -> Output {
-    Command::new("git")
+    git_command()
         .args(args)
         .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .output()
@@ -3637,7 +3707,8 @@ fn commit_msg_blocks_attribution_and_malformed_subject() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
 
-    let msg = dir.path().join("MSG");
+    // Git's own message file: commit-msg refuses any other (TSK-412).
+    let msg = dir.path().join(".git/COMMIT_EDITMSG");
     std::fs::write(
         &msg,
         "feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
@@ -3676,7 +3747,8 @@ fn commit_msg_blocks_attribution_and_malformed_subject() {
 fn commit_msg_requires_a_blank_line_after_the_subject() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
-    let msg = dir.path().join("MSG");
+    // Git's own message file: commit-msg refuses any other (TSK-412).
+    let msg = dir.path().join(".git/COMMIT_EDITMSG");
     let run = |text: &str| {
         std::fs::write(&msg, text).unwrap();
         run_with_stdin(
@@ -3716,7 +3788,8 @@ fn commit_msg_blocks_on_invalid_policy_value() {
         dir.path(),
         r#"{"schema_version":1,"git":{"commit_ticket_required":"worn"}}"#,
     );
-    let msg = dir.path().join("MSG");
+    // Git's own message file: commit-msg refuses any other (TSK-412).
+    let msg = dir.path().join(".git/COMMIT_EDITMSG");
     std::fs::write(&msg, "feat: x\n").unwrap();
     let out = run_with_stdin(
         codeflow()
@@ -3758,7 +3831,8 @@ fn commit_msg_warn_level_proceeds() {
         r#"{"schema_version":1,"git":{"commit_format":"warn"}}"#,
     );
 
-    let msg = dir.path().join("MSG");
+    // Git's own message file: commit-msg refuses any other (TSK-412).
+    let msg = dir.path().join(".git/COMMIT_EDITMSG");
     std::fs::write(&msg, "freestyle subject\n").unwrap();
     let out = run_with_stdin(
         codeflow()
@@ -3800,7 +3874,7 @@ fn pre_push_blocks_protected_and_honors_glob_extension() {
     // Feature branch with sanctioned prefix passes (test gate note allowed).
     // The push set runs `codeflow ci` on the pushed range, so the local sha
     // must be a real commit, as it always is under git.
-    let head = std::process::Command::new("git")
+    let head = git_command()
         .args(["rev-parse", "HEAD"])
         .current_dir(dir.path())
         .output()
@@ -3896,14 +3970,9 @@ fn real_wired_reference_transaction_closes_ff_merge_gap() {
     wire_reference_transaction_hook(dir.path());
 
     // ff-merge onto protected main is now refused at the git layer.
-    let ff = Command::new("git")
+    let ff = git_command()
         .args(["merge", "--ff-only", "feat/ff"])
         .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .output()
@@ -3915,14 +3984,9 @@ fn real_wired_reference_transaction_closes_ff_merge_gap() {
     assert!(String::from_utf8_lossy(&ff.stderr).contains("git.local_ref_protection"));
 
     // A human's CODEFLOW_HUMAN_OVERRIDE=1 lets the same ff-merge through.
-    let ff_human = Command::new("git")
+    let ff_human = git_command()
         .args(["merge", "--ff-only", "feat/ff"])
         .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env("CODEFLOW_HUMAN_OVERRIDE", "1")
         .output()
         .unwrap();
@@ -4028,10 +4092,12 @@ fn real_wired_reference_transaction_allows_git_pull_sync() {
 
     let workroot = tempfile::tempdir().unwrap();
     let work = workroot.path().join("repo");
-    let clone = codeflow_fixture::clone(workroot.path(), origin.path(), &work)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .output();
+    let clone = isolate_clone(codeflow_fixture::clone(
+        workroot.path(),
+        origin.path(),
+        &work,
+    ))
+    .output();
     assert!(
         clone.status.success(),
         "clone: {}",
@@ -4063,14 +4129,9 @@ fn real_wired_reference_transaction_allows_git_pull_sync() {
 
     // `git pull --ff-only`: the fetch updates refs/remotes/origin/main, then the
     // fast-forward moves refs/heads/main onto exactly that head — allowed.
-    let pull = Command::new("git")
+    let pull = git_command()
         .args(["pull", "--ff-only", "origin", "main"])
         .current_dir(&work)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .output()
@@ -4111,14 +4172,9 @@ fn real_wired_reference_transaction_blocks_reset_hard_and_branch_delete_on_prote
     }
 
     let git_run = |args: &[&str]| {
-        Command::new("git")
+        git_command()
             .args(args)
             .current_dir(dir.path())
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
             .env_remove("CODEFLOW_INTEGRATE_TOKEN")
             .env_remove("CODEFLOW_HUMAN_OVERRIDE")
             .output()
@@ -4145,14 +4201,9 @@ fn real_wired_reference_transaction_blocks_reset_hard_and_branch_delete_on_prote
 #[test]
 fn real_wired_reference_transaction_fails_closed_when_reftable_cannot_be_evaluated() {
     let dir = tempfile::tempdir().unwrap();
-    let init = Command::new("git")
+    let init = git_command()
         .args(["init", "--ref-format=reftable", "-b", "main"])
         .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .output()
         .unwrap();
     if !init.status.success() {
@@ -4174,27 +4225,17 @@ fn real_wired_reference_transaction_fails_closed_when_reftable_cannot_be_evaluat
     std::fs::write(dir.path().join("base.txt"), "base\n").unwrap();
     git(dir.path(), &["add", "."]);
     git(dir.path(), &["commit", "-m", "chore: init"]);
-    let original = Command::new("git")
+    let original = git_command()
         .args(["rev-parse", "refs/heads/main"])
         .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .output()
         .unwrap();
     assert!(original.status.success());
     wire_reference_transaction_hook(dir.path());
 
-    let delete = Command::new("git")
+    let delete = git_command()
         .args(["update-ref", "-d", "refs/heads/main"])
         .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .output()
@@ -4218,14 +4259,9 @@ fn real_wired_reference_transaction_fails_closed_when_reftable_cannot_be_evaluat
         );
     }
 
-    let retained = Command::new("git")
+    let retained = git_command()
         .args(["rev-parse", "refs/heads/main"])
         .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .output()
         .unwrap();
     assert!(
@@ -4260,14 +4296,9 @@ fn real_wired_hook_blocks_commit_via_git() {
 
     std::fs::write(dir.path().join("f.txt"), "x\n").unwrap();
     git(dir.path(), &["add", "f.txt"]);
-    let out = Command::new("git")
+    let out = git_command()
         .args(["commit", "-m", "feat: should be blocked"])
         .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .output()
         .unwrap();
@@ -4344,16 +4375,11 @@ fn wired_commit(dir: &Path, args: &[&str], editor: Option<&Path>) -> Output {
 /// untranslated cut signature.
 #[cfg(unix)]
 fn run_wired_git(dir: &Path, args: &[&str], editor: Option<&Path>) -> Output {
-    let mut cmd = Command::new("git");
+    let mut cmd = git_command();
     cmd.args(args)
         .current_dir(dir)
         .env("LC_ALL", "C")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("CODEFLOW_HOME", isolated_home())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE");
     match editor {
@@ -4378,7 +4404,7 @@ fn assert_committed(dir: &Path, out: &Output, case: &str) -> String {
         "{case}: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let log = Command::new("git")
+    let log = git_command()
         .args(["log", "-1", "--format=%B"])
         .current_dir(dir)
         .output()
@@ -5393,7 +5419,7 @@ fn task_home_inventory_limit_blocks_ci_not_the_commit() {
 const ZERO_SHA: &str = "0000000000000000000000000000000000000000";
 
 fn rev(dir: &Path, rev: &str) -> String {
-    let out = Command::new("git")
+    let out = git_command()
         .args(["rev-parse", rev])
         .current_dir(dir)
         .output()
@@ -5415,7 +5441,7 @@ fn answering_destination(dir: &Path, name: &str) {
 }
 
 fn push_url(dir: &Path, remote: &str) -> String {
-    Command::new("git")
+    git_command()
         .args(["remote", "get-url", "--push", remote])
         .current_dir(dir)
         .output()
@@ -5702,8 +5728,12 @@ fn push_set_by_path_reports_an_unresolved_range_without_borrowing_history() {
     let path = bare.path().to_str().unwrap();
     let (code, err) = push_hook(dir.path(), path, &[("feat/x", &head)]);
     assert_eq!(code, Some(0), "{err}");
+    // TSK-1077: a destination that advertises no branches, named by path
+    // with no tracking namespace, is initialization: no check runs.
     assert!(
-        err.contains("`codeflow ci` did not run for 'feat/x': range unresolved"),
+        err.contains(
+            "initialization: the destination advertises no branches, so 'feat/x' creates its first"
+        ),
         "{err}"
     );
     assert!(
@@ -5822,38 +5852,48 @@ fn task_on_moved_line(bare: &Path, local: &Path, own: &[(&str, &str)]) -> String
     old
 }
 
+/// TSK-1077: `stable` holds no policy file, so the shipped defaults judge
+/// through the same authority path as a landed policy. The line bounds the
+/// other checks; the commit checks run from the default branch's tip, as
+/// TSK-212 review round five set for every branch, so the line's legacy
+/// commits are judged too. The working-copy fallback that once checked
+/// only the own commits here is removed.
 #[test]
-fn push_set_checks_only_the_own_commits_of_a_branch_rebased_onto_a_moved_line() {
+fn push_set_rebased_onto_a_moved_line_checks_the_line_s_commits_from_the_default() {
     // TSK-115: a task branch rebased onto its moved integration line and
     // force-pushed. The line's new commit is on the destination through the
-    // line's own ref, so only the task's commit is checked.
+    // line's own ref, so the other checks cover only the task's commit.
     let (bare, local) = stable_destination("chore: legacy base");
     let old = task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
     git(local.path(), &["rebase", "-q", "dest/integration/line"]);
     let rebased = rev(local.path(), "HEAD");
     let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &rebased, &old);
-    assert_eq!(code, Some(0), "{err}");
     assert!(
         err.contains("'task/t' rewrites the destination's")
             && err.contains("checks 1 commit(s), leaving out history"),
         "{err}"
     );
-    assert!(!err.contains("Legacy line subject two."), "{err}");
+    assert!(
+        err.contains("with the shipped defaults, since stable"),
+        "{err}"
+    );
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Legacy line subject two."), "{err}");
 
-    // A bad own commit in the rebased branch still blocks.
+    // A bad own commit in the rebased branch blocks as well.
     let bad = commit_file(local.path(), "s.txt", "s\n", "Not conventional.");
     let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &bad, &old);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("Not conventional."), "{err}");
-    assert!(!err.contains("Legacy line subject two."), "{err}");
 }
 
 #[test]
-fn push_set_checks_only_the_own_commits_of_a_branch_that_merged_the_line_twice() {
+fn push_set_merged_the_line_twice_checks_the_line_s_commits_from_the_default() {
     // TSK-165: a pushed task branch merges its moved line, the line moves
     // again, and the branch merges it once more before the next push. Both
-    // line tips border the range; the older one's successors are history the
-    // destination holds through the line, so they are never checked again.
+    // line tips border the other checks' range. TSK-1077: the commit checks
+    // run from the default branch's tip (see the rebase case above), so the
+    // line's legacy commits are judged.
     let (bare, local) = stable_destination("chore: legacy base");
     let old = task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
     let merge = |message: &str| {
@@ -5883,22 +5923,22 @@ fn push_set_checks_only_the_own_commits_of_a_branch_that_merged_the_line_twice()
     merge("chore: take the line again");
     let head = commit_file(local.path(), "u.txt", "u\n", "feat: add u");
     let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &head, &old);
-    assert_eq!(code, Some(0), "{err}");
-    assert!(!err.contains("Legacy line subject"), "{err}");
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Legacy line subject three."), "{err}");
 
-    // A bad own commit after the second merge still blocks.
+    // A bad own commit after the second merge blocks as well.
     let bad = commit_file(local.path(), "s.txt", "s\n", "Not conventional.");
     let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &bad, &old);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("Not conventional."), "{err}");
-    assert!(!err.contains("Legacy line subject"), "{err}");
 }
 
 #[test]
 fn push_set_blocks_a_rewrite_that_drops_a_commit_and_adds_a_bad_one() {
     // The rewrite drops the branch's second commit, adds a bad one and moves
     // onto the line's new tip. The dropped commit's history does not hide
-    // the bad one, and the line's commit is not checked again.
+    // the bad one. TSK-1077: the commit checks run from the default branch's
+    // tip (see the rebase case above), so the line's commit is judged too.
     let (bare, local) = stable_destination("chore: legacy base");
     let old = task_on_moved_line(
         bare.path(),
@@ -5920,7 +5960,7 @@ fn push_set_blocks_a_rewrite_that_drops_a_commit_and_adds_a_bad_one() {
     let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &bad, &old);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("Not conventional."), "{err}");
-    assert!(!err.contains("Legacy line subject two."), "{err}");
+    assert!(err.contains("Legacy line subject two."), "{err}");
     assert!(
         err.contains("checks 2 commit(s), leaving out history"),
         "{err}"
@@ -6003,16 +6043,18 @@ fn integration_line(bare: &Path, local: &Path) -> String {
 }
 
 #[test]
-fn push_set_checks_only_the_own_commits_of_a_new_branch_off_a_line() {
-    // A new branch cut from an integration line is bounded by what the
-    // destination advertises now, not by its protected branches alone: the
-    // line's legacy commit is not checked again, a bad own commit is.
+fn push_set_new_branch_off_a_line_checks_the_line_s_commits_from_the_default() {
+    // A new branch cut from an integration line: the line bounds the other
+    // checks, and TSK-1077 runs the commit checks from the default branch's
+    // tip (see the rebase case above), so the line's legacy commit is
+    // judged as well as a bad own commit.
     let (bare, local) = stable_destination("chore: legacy base");
     integration_line(bare.path(), local.path());
     git(local.path(), &["checkout", "-q", "-b", "feat/new", "line"]);
     let good = commit_file(local.path(), "n.txt", "n\n", "feat: add new work");
     let (code, err) = push_hook(local.path(), "dest", &[("feat/new", &good)]);
-    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Legacy line subject."), "{err}");
     assert!(!err.contains("did not run for 'feat/new'"), "{err}");
     assert!(!err.contains("ls-remote"), "{err}");
 
@@ -6020,7 +6062,6 @@ fn push_set_checks_only_the_own_commits_of_a_new_branch_off_a_line() {
     let (code, err) = push_hook(local.path(), "dest", &[("feat/new", &bad)]);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("Not conventional."), "{err}");
-    assert!(!err.contains("Legacy line subject."), "{err}");
 }
 
 /// A valid task record on the advertised line, before the task's own work.
@@ -6438,10 +6479,8 @@ fn push_set_fetches_nothing_in_a_partial_clone() {
     receive(bare.path(), source.path(), "main:main");
     let url = format!("file://{}", bare.path().display());
     let clone = tempfile::tempdir().unwrap();
-    codeflow_fixture::clone(clone.path(), &url, ".")
+    isolate_clone(codeflow_fixture::clone(clone.path(), &url, "."))
         .filter("blob:none")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .run();
     git(clone.path(), &["config", "user.email", "t@example.com"]);
     git(clone.path(), &["config", "user.name", "t"]);
@@ -6452,7 +6491,7 @@ fn push_set_fetches_nothing_in_a_partial_clone() {
     git(clone.path(), &["checkout", "-q", "-b", "feat/own"]);
     let head = commit_file(clone.path(), "own.txt", "own\n", "feat: add own");
     let objects = || {
-        let out = Command::new("git")
+        let out = git_command()
             .args([
                 "cat-file",
                 "--batch-all-objects",
@@ -6500,8 +6539,10 @@ fn push_set_blocks_an_unrelated_base_and_notes_an_unresolved_one() {
     let head = rev(lone.path(), "HEAD");
     let (code, err) = push_hook(lone.path(), "origin", &[("feat/lone", &head)]);
     assert_eq!(code, Some(0), "{err}");
+    // TSK-1077: the destination advertises no branches and this clone
+    // tracks none, so the push is initialization and no check runs.
     assert!(
-        err.contains("`codeflow ci` did not run for 'feat/lone': range unresolved"),
+        err.contains("initialization: the destination advertises no branches, so 'feat/lone' creates its first"),
         "{err}"
     );
 
@@ -6536,7 +6577,7 @@ fn hook_shims_refuse_when_the_binary_is_older() {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/git-hooks");
     for stage in ["pre-commit", "commit-msg", "pre-push", "pre-merge-commit"] {
         let run = |bin: &Path| {
-            Command::new("sh")
+            isolated_codeflow(Command::new("sh"))
                 .arg(shims.join(stage))
                 .arg("ARG")
                 .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
@@ -6885,7 +6926,8 @@ fn commit_msg_on_a_watched_path_notes_the_release_impact_fields() {
     std::fs::create_dir_all(dir.path().join("api")).unwrap();
     std::fs::write(dir.path().join("api/v1.rs"), "pub fn f() {}\n").unwrap();
     git(dir.path(), &["add", "api/v1.rs"]);
-    let msg = dir.path().join("MSG");
+    // Git's own message file: commit-msg refuses any other (TSK-412).
+    let msg = dir.path().join(".git/COMMIT_EDITMSG");
     std::fs::write(&msg, "feat: add the v1 api\n").unwrap();
     let out = codeflow()
         .args(["git-hook", "commit-msg", msg.to_str().unwrap()])
@@ -7211,11 +7253,9 @@ fn path_with(first: &[&Path]) -> std::ffi::OsString {
 /// Run `binary` with PATH set to `path` and the test's isolation.
 #[cfg(unix)]
 fn codeflow_at(binary: &Path, dir: &Path, path: &std::ffi::OsStr, args: &[&str]) -> Output {
-    let mut cmd = Command::new(binary);
+    let mut cmd = isolated_codeflow(Command::new(binary));
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env("PATH", path)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "Hooks")
         .env("GIT_AUTHOR_EMAIL", "hooks@example.test")
         .env("GIT_COMMITTER_NAME", "Hooks")
@@ -7223,9 +7263,6 @@ fn codeflow_at(binary: &Path, dir: &Path, path: &std::ffi::OsStr, args: &[&str])
         .env_remove("CODEFLOW_HOOK_BINARY")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .args(args)
         .current_dir(dir);
     cmd.output().unwrap()
@@ -7234,21 +7271,16 @@ fn codeflow_at(binary: &Path, dir: &Path, path: &std::ffi::OsStr, args: &[&str])
 /// Git with PATH set to `path`, outside any codeflow command.
 #[cfg(unix)]
 fn git_at(dir: &Path, path: &std::ffi::OsStr, args: &[&str]) -> Output {
-    Command::new("git")
+    git_command()
         .args(args)
         .current_dir(dir)
         .env("PATH", path)
         .env("CODEFLOW_HOME", isolated_home())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "Hooks")
         .env("GIT_AUTHOR_EMAIL", "hooks@example.test")
         .env("GIT_COMMITTER_NAME", "Hooks")
         .env("GIT_COMMITTER_EMAIL", "hooks@example.test")
         .env_remove("CODEFLOW_HOOK_BINARY")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .output()
         .unwrap()
 }
@@ -7374,12 +7406,10 @@ fn a_hook_runs_the_calling_binary_and_never_another_codeflow() {
 
     // A poisoned inherited value names the refusing stub.
     let path = path_with(&[&other_build]);
-    let mut cmd = Command::new(exe);
+    let mut cmd = isolated_codeflow(Command::new(exe));
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env("PATH", &path)
         .env("CODEFLOW_HOOK_BINARY", refusing.join("codeflow"))
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "Hooks")
         .env("GIT_AUTHOR_EMAIL", "hooks@example.test")
         .env("GIT_COMMITTER_NAME", "Hooks")
@@ -7450,14 +7480,12 @@ fn a_missing_or_non_executable_designated_binary_fails_the_hook() {
     let not_executable = dir.path().join("codeflow-not-executable");
     std::fs::write(&not_executable, "#!/bin/sh\nexit 0\n").unwrap();
     for designated in [dir.path().join("missing/codeflow"), not_executable] {
-        let out = Command::new("git")
+        let out = git_command()
             .args(["push", "-q", "origin", REGISTRY_LINE])
             .current_dir(&root)
             .env("PATH", &plain)
             .env("CODEFLOW_HOME", isolated_home())
             .env("CODEFLOW_HOOK_BINARY", &designated)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .output()
             .unwrap();
         assert!(
@@ -7516,22 +7544,17 @@ fn with_installed_hooks(program: &str, dir: &Path, args: &[&str]) -> Output {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .unwrap();
-    Command::new(program)
+    isolated_codeflow(Command::new(program))
         .args(args)
         .current_dir(dir)
         .env("PATH", path)
         .env("CODEFLOW_HOME", isolated_home())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@example.com")
         .env("GIT_COMMITTER_NAME", "t")
         .env("GIT_COMMITTER_EMAIL", "t@example.com")
         .env("GIT_EDITOR", "true")
         .env_remove("CODEFLOW_HOOK_BINARY")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .env_remove("CODEFLOW_PR_BODY")
@@ -7860,7 +7883,7 @@ fn installed_hook_refuses_a_secret_in_the_index_git_commits() {
 
 /// Run `codeflow <args>` purely for its help output, with no repo context.
 fn help_text(args: &[&str]) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+    let output = codeflow()
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("run codeflow {args:?}: {e}"));
@@ -8621,7 +8644,7 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "find . -name '*.py' -exec python3 -m py_compile {} +",
         "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
         "python3 tool.py -v -n3 -o out.json",
-        "cd src && python3 app.py settings.json",
+        "cd ./src && python3 app.py notes.txt",
         "find . -name '*.rs' -execdir python3 lint.py {} +",
         "find src -execdir python3 lint.py notes.txt \\;",
         "cd .codex && python3 -c 'print(1)'",
@@ -8965,10 +8988,47 @@ fn exec_guard_contract_3(dir: &Path, command: &str) -> Output {
     )
 }
 
+#[test]
+fn exec_guard_keeps_the_starting_directory_after_cd() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temp.path()).unwrap();
+    enforced_repo(&root);
+    std::fs::create_dir(root.join("src")).unwrap();
+    for (line, allowed) in [
+        ("cd src && python3 tool.py ..", false),
+        ("cd src && python3 tool.py ../.claude/settings.json", false),
+        ("cd src; python3 tool.py ..", false),
+        ("cd src || python3 tool.py ..", false),
+        ("(cd src) && python3 tool.py ..", false),
+        (
+            "cd src && - && python3 tool.py .claude/settings.json",
+            false,
+        ),
+        (
+            "CDPATH+=.claude && cd src && python3 tool.py ../settings.json",
+            false,
+        ),
+        ("cd ./src && python3 tool.py settings.json", false),
+        ("popd && python3 tool.py settings.json", false),
+        ("cd && python3 tool.py settings.json", false),
+    ] {
+        let output = exec_guard_contract_3(&root, line);
+        if allowed {
+            assert!(
+                output.status.success(),
+                "{line}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        } else {
+            assert!(interpreter_argument_refused(&output), "{line}: {output:?}");
+        }
+    }
+}
+
 fn interpreter_argument_refused(output: &Output) -> bool {
     let err = String::from_utf8_lossy(&output.stderr);
     output.status.code() == Some(2)
-        && err.contains("git.hook_integrity")
+        && (err.contains("git.hook_integrity") || err.contains("security.text_guard"))
         && err.contains("interpreter")
         && !err.contains("interpreter code")
 }
@@ -9037,7 +9097,7 @@ fn guards_preserve_discovered_checkout_when_registration_is_rewritten() {
             _ => std::fs::write(&registration, format!("{}\n", decoy.join(".git").display()))
                 .unwrap(),
         }
-        let output = Command::new("git")
+        let output = git_command()
             .current_dir(&linked)
             .args(["rev-parse", "--show-toplevel"])
             .output()
@@ -9093,6 +9153,12 @@ fn push_tree_review_epic_integration_from_ahead_plan_worktree() {
         dir.path(),
         "HEAD:refs/heads/main",
     );
+    // TSK-1077: the clone records the destination's default branch, the
+    // only policy authority, as a fetch on git 2.48 or later does. Both
+    // update refs, so they run the installed reference-transaction hook and
+    // need this build on PATH, as every other git step here does.
+    ok("git", dir.path(), &["fetch", "-q", "origin"]);
+    ok("git", dir.path(), &["remote", "set-head", "origin", "-a"]);
     let plan = dir.path().join(".worktrees/plan-probe");
     ok(
         "git",
@@ -9329,22 +9395,56 @@ fn guards_read_a_search_pattern_as_text() {
         // A preprocessor over a root that holds nothing protected.
         "rg --pre pdftotext needle docs/".to_string(),
     ];
+    // TSK-397 design D: this suite runs in the tightened outcome, whose
+    // strict rule exempts no program by name, so a run-time word given to
+    // any search tool keeps its words judged. Those forms refuse as the
+    // strict rule's accepted cost; the baseline keeps the line's decisions.
+    let mut cost = Vec::new();
     for form in ["'/CHANGELOG.md$'", "'^/etc/.*'", "\"$HOME/x\""] {
+        let run_time = form.starts_with('"');
         for tool in ["rg", "grep", "egrep", "fgrep", "git grep", "ag"] {
-            allowed.push(format!("{tool} {form} docs"));
+            let positional = format!("{tool} {form} docs");
+            if run_time {
+                cost.push(positional);
+            } else {
+                allowed.push(positional);
+            }
             // `ag` has no `-e`, and `git grep` no `--regexp`.
             if tool != "ag" {
-                allowed.push(format!("{tool} -e {form} docs"));
+                let valued = format!("{tool} -e {form} docs");
+                if run_time {
+                    cost.push(valued);
+                } else {
+                    allowed.push(valued);
+                }
             }
             if !matches!(tool, "ag" | "git grep") {
-                allowed.push(format!("{tool} --regexp {form} docs"));
+                let long = format!("{tool} --regexp {form} docs");
+                if run_time {
+                    cost.push(long);
+                } else {
+                    allowed.push(long);
+                }
             }
             if tool != "git grep" {
-                allowed.push(format!("rg --files | xargs {tool} {form}"));
+                let appended = format!("rg --files | xargs {tool} {form}");
+                if run_time {
+                    cost.push(appended);
+                } else {
+                    allowed.push(appended);
+                }
             }
         }
     }
     let mut wrong = Vec::new();
+    for command in &cost {
+        let out = run("exec-guard", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        // The strict rule's own refusal takes `security.text_guard`.
+        if out.status.code() != Some(2) || !err.contains("security.text_guard") {
+            wrong.push(format!("exec-guard should refuse: {command}: {err}"));
+        }
+    }
     for command in &allowed {
         for hook in ["exec-guard", "git-guard"] {
             let out = run(hook, command);
@@ -9442,21 +9542,15 @@ fn guards_read_a_search_pattern_as_text() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// TSK-398 Codex review F1: when the destination advertises no tips, the
-/// pre-push range falls back to the protected tracking refs. A local branch
-/// or tag whose full name is the absent `refs/remotes/origin/main` never
-/// answers for it, so the malformed commit is still refused.
+/// TSK-398 review F1: a local branch or tag whose full name is the absent
+/// `refs/remotes/origin/main` never answers for it. TSK-1077: when the
+/// destination advertises no tips and the clone still tracks some, no
+/// fallback runs at all; the push is refused with the fetch route.
 #[test]
 fn pre_push_fallback_never_reads_a_fake_full_tracking_ref() {
     const ZERO: &str = "0000000000000000000000000000000000000000";
     let read = |dir: &Path, args: &[&str]| {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output()
-            .unwrap();
+        let out = git_command().args(args).current_dir(dir).output().unwrap();
         assert!(out.status.success(), "git {args:?}");
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
@@ -9467,15 +9561,10 @@ fn pre_push_fallback_never_reads_a_fake_full_tracking_ref() {
         init_repo(&seed, "master");
         let origin = tmp.path().join("origin.git");
         let clone = tmp.path().join("work");
-        codeflow_fixture::clone(tmp.path(), &seed, &origin)
+        isolate_clone(codeflow_fixture::clone(tmp.path(), &seed, &origin))
             .bare()
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .run();
-        codeflow_fixture::clone(tmp.path(), &origin, &clone)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .run();
+        isolate_clone(codeflow_fixture::clone(tmp.path(), &origin, &clone)).run();
         git(&clone, &["config", "user.email", "t@example.com"]);
         git(&clone, &["config", "user.name", "t"]);
         git(&clone, &["switch", "-q", "-c", "fix/review"]);
@@ -9495,11 +9584,15 @@ fn pre_push_fallback_never_reads_a_fake_full_tracking_ref() {
                 &format!("refs/heads/fix/review {malformed} refs/heads/fix/review {ZERO}\n"),
             )
         };
+        // TSK-1077: the destination advertises no branches while the clone
+        // still tracks one, so the push is refused with the fetch route,
+        // before any range or fallback is read.
+        let refused = "run git fetch --prune origin";
         let clean = push();
         let text = String::from_utf8_lossy(&clean.stderr).to_string()
             + &String::from_utf8_lossy(&clean.stdout);
         assert_eq!(clean.status.code(), Some(1), "{shadow} clean: {text}");
-        assert!(text.contains("git.commit_format"), "{shadow} clean: {text}");
+        assert!(text.contains(refused), "{shadow} clean: {text}");
         if shadow == "branch" {
             git(&clone, &["branch", "refs/remotes/origin/main", &malformed]);
         } else {
@@ -9509,8 +9602,74 @@ fn pre_push_fallback_never_reads_a_fake_full_tracking_ref() {
         let text = String::from_utf8_lossy(&shadowed.stderr).to_string()
             + &String::from_utf8_lossy(&shadowed.stdout);
         assert_eq!(shadowed.status.code(), Some(1), "{shadow}: {text}");
-        assert!(text.contains("git.commit_format"), "{shadow}: {text}");
+        assert!(text.contains(refused), "{shadow}: {text}");
     }
+}
+
+/// TSK-1077 review round 01 F2, end to end: a clone whose fetch mapping
+/// stores the default branch outside `refs/remotes/origin/` still holds a
+/// stale tracking ref when the destination stops advertising branches. The
+/// push is refused with the fetch route, never labelled initialization.
+#[test]
+fn pre_push_refuses_a_stale_ref_under_an_exact_fetch_mapping() {
+    const ZERO: &str = "0000000000000000000000000000000000000000";
+    let tmp = tempfile::tempdir().unwrap();
+    let seed = tmp.path().join("seed");
+    std::fs::create_dir(&seed).unwrap();
+    init_repo(&seed, "master");
+    let origin = tmp.path().join("origin.git");
+    let clone = tmp.path().join("work");
+    isolate_clone(codeflow_fixture::clone(tmp.path(), &seed, &origin))
+        .bare()
+        .run();
+    isolate_clone(codeflow_fixture::clone(tmp.path(), &origin, &clone)).run();
+    git(&clone, &["config", "user.email", "t@example.com"]);
+    git(&clone, &["config", "user.name", "t"]);
+    git(
+        &clone,
+        &[
+            "config",
+            "--replace-all",
+            "remote.origin.fetch",
+            "+refs/heads/master:refs/mirror/master",
+        ],
+    );
+    git(&clone, &["fetch", "-q", "origin"]);
+    git(
+        &clone,
+        &["update-ref", "--no-deref", "-d", "refs/remotes/origin/HEAD"],
+    );
+    git(&clone, &["update-ref", "-d", "refs/remotes/origin/master"]);
+    git(&clone, &["switch", "-q", "-c", "fix/review"]);
+    std::fs::write(clone.join("review.txt"), "review\n").unwrap();
+    git(&clone, &["add", "."]);
+    git(&clone, &["commit", "-q", "-m", "fix: add review"]);
+    let head = String::from_utf8_lossy(
+        &git_command()
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&clone)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
+    // The destination no longer advertises a branch; refs/mirror/master is
+    // the clone's only, stale, record of it.
+    git(&origin, &["update-ref", "-d", "refs/heads/master"]);
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-push", "origin"])
+            .arg(&origin)
+            .current_dir(&clone),
+        &format!("refs/heads/fix/review {head} refs/heads/fix/review {ZERO}\n"),
+    );
+    let text =
+        String::from_utf8_lossy(&out.stderr).to_string() + &String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("refs/mirror/master"), "{text}");
+    assert!(text.contains("run git fetch --prune origin"), "{text}");
+    assert!(!text.contains("initialization:"), "{text}");
 }
 
 #[cfg(unix)]
@@ -9740,13 +9899,16 @@ fn shell_expansions_preserve_checkout_protection() {
         "W=.worktrees/w || W=src; python3 tool.py $W",
         "PWD=$PWD/.worktrees/w; cd docs && python3 tool.py $OLDPWD",
         "D=.worktrees/w; if false; then D=src; else python3 tool.py $D; fi",
+        // TSK-397: `true` may be a shell function that changes directory, so
+        // the directory is unknown after it, and no variable is trusted then.
+        "D=src; if true; then python3 tool.py $D/app.py; fi",
+        "if true; then python3 tool.py $PWD/src/app.py; fi",
     ] {
         cases.push(("exec-guard", line.into(), true));
     }
     for line in [
         r#"for f in src/*.py; do python3 lint.py "$f"; done"#,
-        "D=src; if true; then python3 tool.py $D/app.py; fi",
-        "if true; then python3 tool.py $PWD/src/app.py; fi",
+        "D=src; python3 tool.py $D/app.py",
     ] {
         cases.push(("exec-guard", line.into(), false));
     }
@@ -9796,7 +9958,9 @@ fn shell_expansions_preserve_checkout_protection() {
                 output.status.code()
             );
             if output.status.code() != Some(expected)
-                || (refuse && !stderr.contains("git.hook_integrity"))
+                || (refuse
+                    && !stderr.contains("git.hook_integrity")
+                    && !stderr.contains("security.text_guard"))
             {
                 wrong.push(format!("{guard}: expected {expected}: {line}: {stderr}"));
             }
@@ -10434,6 +10598,13 @@ fn shell_expansions_round_four_review_matrix() {
         std::fs::write(root.join(file), "print(1)\n").unwrap();
     }
     let mut failures = Vec::new();
+    // Accepted cost (TSK-397): `eval "echo $PWD"`,
+    // `eval -- "rm -rf $PWD/build"` and `eval - 'rm -rf $PWD/build'` refuse
+    // under exec-guard. `eval` parses its text again, expanding `$PWD`
+    // there, so a directory name holding `;` could run code, and the guard
+    // cannot follow the directory on such a line. Under TSK-397's one rule
+    // (operator decision, 2026-10-27), `rm`, `ln`, `source` and a shell's
+    // `-c` given a run-time word refuse there too.
     for (matrix, source) in [
         (
             "ordinary",
@@ -10652,8 +10823,8 @@ fn review_guard_cases(finding: u8) {
             );
             let code = output.status.code();
             if !matches!(code, Some(0 | 2))
-                || (!refuse && code != Some(0))
-                || (refuse && guard == owner && code != Some(2))
+                || (!refuse && !line_allows(&output))
+                || (refuse && guard == owner && line_allows(&output))
             {
                 wrong.push(format!(
                     "F{finding}: {guard}: expected refuse={refuse}, owner={owner}: {line:?}: {output:?}"
@@ -10802,11 +10973,11 @@ fn guard_classification_cases(ac: u8) {
                 "{guard}: {output:?}"
             );
             if guard == guard_cases::refusing_guard(ac, line) {
-                refused = output.status.code() == Some(2);
+                refused = !line_allows(&output);
             }
             if !refuse {
                 assert!(
-                    output.status.success(),
+                    line_allows(&output),
                     "ordinary command refused by {guard}: {line}: {output:?}"
                 );
             }
@@ -11132,4 +11303,917 @@ fn a_guard_stalled_on_a_fifo_include_refuses_at_its_deadline() {
             "{guard} answered in {took:?}, before its deadline: {stderr}"
         );
     }
+}
+
+// TSK-412: the staged secret scan's gitleaks engine and the automatic merge.
+
+/// A fixture key the built-in AWS pattern matches, built at run time so
+/// this file adds no line the scan would refuse.
+#[cfg(unix)]
+fn fixture_key() -> String {
+    format!("AKIA{}", "Q3ZWJ2X5LMN8RT4V")
+}
+
+/// Write Git's own commit message file for `dir` and return its path, as
+/// Git passes it to `commit-msg` for a plain commit.
+fn commit_editmsg(dir: &Path, message: &str) -> std::path::PathBuf {
+    let out = git_out(dir, &["rev-parse", "--git-path", "COMMIT_EDITMSG"]);
+    let path = dir.join(String::from_utf8_lossy(&out.stdout).trim());
+    std::fs::write(&path, message).unwrap();
+    path
+}
+
+/// A folder holding only a `gitleaks` file that is not the pinned binary.
+/// It writes `ran` beside itself if anything runs it.
+#[cfg(unix)]
+fn unpinned_gitleaks() -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = tempfile::tempdir().unwrap();
+    let script = bin.path().join("gitleaks");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ntouch '{}'\necho 8.30.1\n",
+            bin.path().join("ran").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+/// Run the pre-commit stage with `PATH` set to `bin` and the system folders,
+/// which hold git and no gitleaks.
+#[cfg(unix)]
+fn pre_commit_with_path(dir: &Path, bin: &Path) -> Output {
+    codeflow()
+        .args(["git-hook", "pre-commit"])
+        .current_dir(dir)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .output()
+        .unwrap()
+}
+
+#[cfg(unix)]
+fn engine_policy(level: &str) -> String {
+    format!(
+        r#"{{"schema_version":1,"git":{{"secret_scan":"{level}","secret_scan_engine":"gitleaks","root_checkout_commits":"off"}}}}"#
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn gitleaks_engine_refuses_at_block_when_the_binary_is_missing_or_unpinned() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_policy(dir.path(), &engine_policy("block"));
+    std::fs::write(dir.path().join("ok.txt"), "nothing sensitive\n").unwrap();
+    git(dir.path(), &["add", "ok.txt"]);
+
+    let empty = tempfile::tempdir().unwrap();
+    let out = pre_commit_with_path(dir.path(), empty.path());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("git.secret_scan_engine"), "{stderr}");
+    assert!(stderr.contains("gitleaks is not on PATH"), "{stderr}");
+    assert!(stderr.contains("gitleaks 8.30.1"), "{stderr}");
+    assert!(
+        stderr.contains("codeflow doctor --check secret-engine"),
+        "{stderr}"
+    );
+
+    let fake = unpinned_gitleaks();
+    let out = pre_commit_with_path(dir.path(), fake.path());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("is not the pinned binary"), "{stderr}");
+    assert!(stderr.contains("gitleaks 8.30.1"), "{stderr}");
+    assert!(
+        !fake.path().join("ran").exists(),
+        "a binary that is not the pinned one must never run"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn gitleaks_engine_warns_at_warn_and_the_builtin_scan_still_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_policy(dir.path(), &engine_policy("warn"));
+    std::fs::write(dir.path().join("leak.txt"), format!("{}\n", fixture_key())).unwrap();
+    git(dir.path(), &["add", "leak.txt"]);
+
+    let empty = tempfile::tempdir().unwrap();
+    let fake = unpinned_gitleaks();
+    for bin in [empty.path(), fake.path()] {
+        let out = pre_commit_with_path(dir.path(), bin);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{stderr}");
+        assert_eq!(
+            stderr.matches("git.secret_scan_engine").count(),
+            1,
+            "one warning for the engine: {stderr}"
+        );
+        assert!(
+            stderr.contains("possible secret (AWS access key id) staged at leak.txt:1"),
+            "{stderr}"
+        );
+    }
+    assert!(!fake.path().join("ran").exists());
+}
+
+/// AC-5: the secret scan and its gitleaks runner make no network request.
+/// The hook's policy-authority step (TSK-1077) is the one step that may ask
+/// the configured remote, once, when the remote has no tracking ref, and it
+/// refuses fail closed when the remote cannot be asked. With a tracking ref
+/// the hook never contacts the remote, so the scan is reached and refuses
+/// on its own finding although the remote URL cannot be reached.
+#[cfg(unix)]
+#[test]
+fn gitleaks_scan_makes_no_network_call_and_authority_refuses_when_the_remote_cannot_be_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_policy(dir.path(), &engine_policy("block"));
+    std::fs::write(dir.path().join("ok.txt"), "nothing sensitive\n").unwrap();
+    git(dir.path(), &["add", "ok.txt"]);
+    // Port 9 refuses at once; nothing listens there.
+    git(
+        dir.path(),
+        &["remote", "add", "origin", "http://127.0.0.1:9/none.git"],
+    );
+    let empty = tempfile::tempdir().unwrap();
+
+    // No tracking ref: the authority step asks the remote, cannot, refuses.
+    let out = pre_commit_with_path(dir.path(), empty.path());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("git.path_policy"), "{stderr}");
+    assert!(stderr.contains("could not be asked"), "{stderr}");
+    assert!(stderr.contains("git fetch origin"), "{stderr}");
+    // The scan still runs beside the refused authority step.
+    assert!(stderr.contains("git.secret_scan_engine"), "{stderr}");
+
+    // A tracking ref (what git fetch leaves): no remote contact, so the
+    // only refusal left is the engine's own, for the missing binary.
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+    );
+    git(
+        dir.path(),
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    let out = pre_commit_with_path(dir.path(), empty.path());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("git.secret_scan_engine"), "{stderr}");
+    assert!(stderr.contains("gitleaks is not on PATH"), "{stderr}");
+    assert!(!stderr.contains("could not be asked"), "{stderr}");
+    assert!(!stderr.contains("git.path_policy"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_reports_where_it_looked_for_gitleaks_and_the_pin() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let fake = unpinned_gitleaks();
+    let doctor = |dir: &Path| {
+        codeflow()
+            .args(["doctor", "--check", "secret-engine"])
+            .current_dir(dir)
+            .env("PATH", format!("{}:/usr/bin:/bin", fake.path().display()))
+            .output()
+            .unwrap()
+    };
+
+    let out = doctor(dir.path());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stdout}");
+    assert!(stdout.contains("builtin"), "{stdout}");
+
+    write_policy(dir.path(), &engine_policy("block"));
+    let out = doctor(dir.path());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{stdout}");
+    let found = codeflow_core::hooks::gitleaks::file_sha256(&fake.path().join("gitleaks")).unwrap();
+    for expected in [
+        "FAIL  secret-engine",
+        &format!("searched {}, /usr/bin, /bin", fake.path().display()),
+        &format!("sha256 {found}"),
+        "gitleaks 8.30.1 for",
+        "binary sha256",
+    ] {
+        assert!(stdout.contains(expected), "{expected}: {stdout}");
+    }
+    assert!(!fake.path().join("ran").exists(), "doctor never runs it");
+
+    write_policy(dir.path(), &engine_policy("warn"));
+    let out = doctor(dir.path());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stdout}");
+    assert!(stdout.contains("warn  secret-engine"), "{stdout}");
+}
+
+/// Wire the pre-commit and commit-msg hooks to this binary under the
+/// built-in engine.
+#[cfg(unix)]
+fn wire_scan_hooks(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let hooks = dir.join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    for stage in ["pre-commit", "commit-msg"] {
+        let hook = hooks.join(stage);
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\nexec '{}' git-hook {stage} \"$@\"\n",
+                env!("CARGO_BIN_EXE_codeflow")
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+/// Two branches from one base that change `planted.txt` differently, so a
+/// merge needs its merge driver: `feat/x` (checked out) and `feat/side`.
+/// The `plant` driver writes `content` as the merge result.
+#[cfg(unix)]
+fn merge_fixture(dir: &Path, content: &str) {
+    init_repo(dir, "feat/x");
+    std::fs::write(dir.join("planted.txt"), "base\n").unwrap();
+    std::fs::write(dir.join(".gitattributes"), "planted.txt merge=plant\n").unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "chore: base"]);
+    git(dir, &["checkout", "-q", "-b", "feat/side"]);
+    std::fs::write(dir.join("planted.txt"), "side\n").unwrap();
+    git(dir, &["commit", "-q", "-am", "feat: side"]);
+    git(dir, &["checkout", "-q", "feat/x"]);
+    std::fs::write(dir.join("planted.txt"), "main\n").unwrap();
+    git(dir, &["commit", "-q", "-am", "feat: main"]);
+    let result = dir.join("merge-result.txt");
+    std::fs::write(&result, content).unwrap();
+    git(
+        dir,
+        &[
+            "config",
+            "merge.plant.driver",
+            &format!("cp '{}' %A", result.display()),
+        ],
+    );
+    wire_scan_hooks(dir);
+}
+
+#[cfg(unix)]
+fn secret_refusals(out: &Output) -> usize {
+    String::from_utf8_lossy(&out.stderr)
+        .matches("possible secret")
+        .count()
+}
+
+#[cfg(unix)]
+#[test]
+fn an_automatic_merge_is_scanned_in_commit_msg() {
+    // A merge driver writes a key neither clean parent holds; Git runs no
+    // pre-commit for the automatic merge, so commit-msg scans it.
+    let dir = tempfile::tempdir().unwrap();
+    merge_fixture(dir.path(), &format!("token {}\n", fixture_key()));
+    let out = run_wired_git(dir.path(), &["merge", "--no-edit", "feat/side"], None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("possible secret (AWS access key id) staged at planted.txt:1"),
+        "{stderr}"
+    );
+    assert_eq!(secret_refusals(&out), 1, "{stderr}");
+    git(dir.path(), &["merge", "--abort"]);
+
+    // Control: the same merge whose result holds no key lands.
+    std::fs::write(dir.path().join("merge-result.txt"), "merged\n").unwrap();
+    let out = run_wired_git(dir.path(), &["merge", "--no-edit", "feat/side"], None);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_automatic_merge_in_a_linked_worktree_is_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    merge_fixture(dir.path(), &format!("token {}\n", fixture_key()));
+    git(dir.path(), &["checkout", "-q", "--detach"]);
+    let tree = dir.path().join("linked");
+    git(
+        dir.path(),
+        &["worktree", "add", "-q", tree.to_str().unwrap(), "feat/x"],
+    );
+    let out = run_wired_git(&tree, &["merge", "--no-edit", "feat/side"], None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("planted.txt:1"), "{stderr}");
+    assert_eq!(secret_refusals(&out), 1, "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn plain_and_hand_concluded_commits_are_scanned_once_in_pre_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    merge_fixture(dir.path(), "unused\n");
+    git(dir.path(), &["config", "--unset", "merge.plant.driver"]);
+    std::fs::write(dir.path().join(".gitattributes"), "").unwrap();
+    git(dir.path(), &["commit", "-q", "-am", "chore: plain merges"]);
+
+    // A plain commit with a key: pre-commit refuses, once.
+    std::fs::write(dir.path().join("leak.txt"), format!("{}\n", fixture_key())).unwrap();
+    git(dir.path(), &["add", "leak.txt"]);
+    let out = run_wired_git(dir.path(), &["commit", "-m", "feat: leak"], None);
+    assert!(!out.status.success());
+    assert_eq!(
+        secret_refusals(&out),
+        1,
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(dir.path(), &["rm", "-q", "--cached", "leak.txt"]);
+    std::fs::remove_file(dir.path().join("leak.txt")).unwrap();
+
+    // A clean plain commit lands.
+    std::fs::write(dir.path().join("ok.txt"), "fine\n").unwrap();
+    git(dir.path(), &["add", "ok.txt"]);
+    let out = run_wired_git(dir.path(), &["commit", "-m", "feat: fine"], None);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // A conflicted merge concluded by hand with a key: pre-commit refuses
+    // it and commit-msg does not scan it again.
+    let out = run_wired_git(dir.path(), &["merge", "--no-edit", "feat/side"], None);
+    assert!(!out.status.success(), "the merge conflicts");
+    std::fs::write(
+        dir.path().join("planted.txt"),
+        format!("{}\n", fixture_key()),
+    )
+    .unwrap();
+    git(dir.path(), &["add", "planted.txt"]);
+    let out = run_wired_git(dir.path(), &["commit", "--no-edit"], None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert_eq!(secret_refusals(&out), 1, "{stderr}");
+
+    // Concluded clean, it lands.
+    std::fs::write(dir.path().join("planted.txt"), "resolved\n").unwrap();
+    git(dir.path(), &["add", "planted.txt"]);
+    let out = run_wired_git(dir.path(), &["commit", "--no-edit"], None);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn commit_msg_refuses_a_message_file_git_does_not_use() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let msg = dir.path().join("elsewhere.txt");
+    std::fs::write(&msg, "feat: fine\n").unwrap();
+    let out = codeflow()
+        .args(["git-hook", "commit-msg", msg.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("neither MERGE_MSG nor COMMIT_EDITMSG"),
+        "{stderr}"
+    );
+
+    let msg = commit_editmsg(dir.path(), "feat: fine\n");
+    let out = codeflow()
+        .args(["git-hook", "commit-msg", msg.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// The official pinned binary (`CODEFLOW_TEST_GITLEAKS_DIR`; without it the
+/// test checks nothing) through the CLI's hook stages (`codeflow git-hook`,
+/// called directly), with command configuration a caller passes down
+/// turning rename or copy detection back on. A file committed under a name gitleaks' parser cannot read is
+/// renamed to a safe name with a secret-shaped line added; pre-commit and
+/// the automatic-merge scan in commit-msg both refuse it.
+#[cfg(unix)]
+#[test]
+fn caller_configuration_cannot_hide_a_rename_from_gitleaks() {
+    let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+        eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+        return;
+    };
+    let path = std::env::join_paths(std::iter::once(std::path::PathBuf::from(&bin)).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    let hash_line = "  \"src/auth/token.rs\": \"2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881\"\n";
+    let notes = "a line of the legacy notes\n".repeat(100);
+    for setting in ["'diff.renames=copies'", "'diff.renames=true'"] {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_policy(dir.path(), &engine_policy("block"));
+        std::fs::create_dir_all(dir.path().join("before")).unwrap();
+        std::fs::write(dir.path().join("before/trailing\\"), &notes).unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-q", "-m", "chore: legacy name"]);
+        std::fs::create_dir_all(dir.path().join("after")).unwrap();
+        git(
+            dir.path(),
+            &["mv", "before/trailing\\", "after/renamed.json"],
+        );
+        std::fs::write(
+            dir.path().join("after/renamed.json"),
+            format!("{notes}{hash_line}"),
+        )
+        .unwrap();
+        git(dir.path(), &["add", "after/renamed.json"]);
+        std::fs::write(dir.path().join(".git/MERGE_MSG"), "chore: merge side\n").unwrap();
+        // The automatic-merge route first: no path check of its own reads
+        // the old name, so only the scan stands between it and the commit.
+        for stage in [
+            &["git-hook", "commit-msg", ".git/MERGE_MSG"][..],
+            &["git-hook", "pre-commit"][..],
+        ] {
+            let out = codeflow()
+                .args(stage)
+                .current_dir(dir.path())
+                .env("PATH", &path)
+                .env("GIT_CONFIG_PARAMETERS", setting)
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(1), "{setting} {stage:?}: {stderr}");
+            assert!(
+                stderr.contains(
+                    "possible secret (gitleaks rule generic-api-key) staged at after/renamed.json:101"
+                ),
+                "{setting} {stage:?}: {stderr}"
+            );
+        }
+    }
+}
+
+/// The first `git` on `PATH`, as an absolute path.
+#[cfg(unix)]
+fn real_git_path() -> std::path::PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git on PATH")
+}
+
+/// A repository with a promisor remote whose `.gitattributes` blob is
+/// promised and absent, and one new staged file. Its remote's upload-pack is
+/// a wrapper that leaves `fetched` behind, so an upload-pack start is seen;
+/// the tests also read the Git Trace2 events of the hook process tree and
+/// assert no process started with a fetch or transport name (`fetch_events`).
+/// Returns the folder that keeps it, the repository and the marker.
+#[cfg(unix)]
+fn promisor_repository_missing_blobs() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf)
+{
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let upstream = root.path().join("upstream");
+    std::fs::create_dir_all(&upstream).unwrap();
+    init_repo(&upstream, "feat/x");
+    std::fs::write(upstream.join(".gitattributes"), "*.txt text\n").unwrap();
+    std::fs::write(upstream.join("a.txt"), "first\n").unwrap();
+    git(&upstream, &["add", "."]);
+    git(&upstream, &["commit", "-q", "-m", "chore: attributes"]);
+    git(&upstream, &["config", "uploadpack.allowFilter", "true"]);
+    git(
+        &upstream,
+        &["config", "uploadpack.allowAnySHA1InWant", "true"],
+    );
+    let work = root.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    git(&work, &["init", "-q", "-b", "feat/x"]);
+    git(&work, &["config", "user.email", "t@example.com"]);
+    git(&work, &["config", "user.name", "t"]);
+    git(
+        &work,
+        &[
+            "remote",
+            "add",
+            "origin",
+            &format!("file://{}", upstream.display()),
+        ],
+    );
+    git(&work, &["config", "remote.origin.promisor", "true"]);
+    git(&work, &["config", "extensions.partialClone", "origin"]);
+    git(
+        &work,
+        &["fetch", "-q", "--filter=blob:none", "origin", "feat/x"],
+    );
+    git(&work, &["update-ref", "refs/heads/feat/x", "FETCH_HEAD"]);
+    git(
+        &work,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/feat/x",
+        ],
+    );
+    let fetched = root.path().join("fetched");
+    let upload = root.path().join("upload-pack-wrapper");
+    std::fs::write(
+        &upload,
+        format!(
+            "#!/bin/sh\ntouch '{}'\nexec '{}' upload-pack \"$@\"\n",
+            fetched.display(),
+            real_git_path().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&upload, std::fs::Permissions::from_mode(0o755)).unwrap();
+    git(
+        &work,
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            upload.to_str().unwrap(),
+        ],
+    );
+    git(&work, &["read-tree", "HEAD"]);
+    std::fs::write(work.join("new.txt"), "added line\n").unwrap();
+    // Staged without attributes: `git add` would read the promised
+    // `.gitattributes` blob and fetch it before the test starts.
+    let stored = git_command()
+        .args(["hash-object", "-w", "--no-filters", "new.txt"])
+        .current_dir(&work)
+        .output()
+        .unwrap();
+    let sha = String::from_utf8(stored.stdout).unwrap().trim().to_string();
+    git(
+        &work,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{sha},new.txt"),
+        ],
+    );
+    assert!(!fetched.exists(), "the fixture itself must not fetch");
+    write_policy(
+        &work,
+        r#"{"schema_version":1,"git":{"secret_scan":"block","conflict_markers":"block","root_checkout_commits":"off"}}"#,
+    );
+    (root, work, fetched)
+}
+
+/// A `git` ahead of the real one on `PATH` that logs its arguments, reports
+/// `version` when given one, and fails the promisor-setting query when
+/// `fail_config` is set. Everything else goes to the real git.
+#[cfg(unix)]
+fn git_wrapper(folder: &Path, version: Option<&str>, fail_config: bool) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = folder.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = folder.join("git-calls.log");
+    let version_case = version.map_or(String::new(), |found| {
+        format!("  version) echo 'git version {found}'; exit 0;;\n")
+    });
+    let config_case = if fail_config {
+        "  config\\ --get-regexp*) echo 'config unreadable' >&2; exit 128;;\n"
+    } else {
+        ""
+    };
+    std::fs::write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\n{{ echo \"CALL $*\"; env | grep -E '^GIT_CONFIG_(PARAMETERS|COUNT|KEY_|VALUE_)' | sed 's/^/ENV /'; }} >> '{}'\ncase \"$*\" in\n{version_case}{config_case}esac\nexec '{}' \"$@\"\n",
+            log.display(),
+            real_git_path().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+/// Run the pre-commit or the merge (commit-msg) hook entry point in the
+/// repository, with the wrapper first on `PATH`.
+#[cfg(unix)]
+fn promisor_hook(
+    work: &Path,
+    wrapper: &Path,
+    merge: bool,
+    redirect_config: bool,
+    env: &[(&str, &str)],
+) -> Output {
+    let mut command = codeflow();
+    command
+        .envs(env.iter().copied())
+        .env("GIT_TRACE2_EVENT", trace_path(wrapper))
+        .current_dir(work)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                wrapper.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
+    if merge {
+        let head = std::fs::read_to_string(work.join(".git/refs/heads/feat/x")).unwrap();
+        std::fs::write(work.join(".git/MERGE_HEAD"), head).unwrap();
+        std::fs::write(work.join(".git/MERGE_MSG"), "Merge branch 'side'\n").unwrap();
+        command.args(["git-hook", "commit-msg", ".git/MERGE_MSG"]);
+    } else {
+        command.args(["git-hook", "pre-commit"]);
+    }
+    if redirect_config {
+        command.env("GIT_CONFIG", "/dev/null");
+    }
+    command.output().unwrap()
+}
+
+/// R15-1 across the supported Git range, through the hook entry points on
+/// the pre-commit route (attribute lookup) and the merge route (staged
+/// listing): a repository with a promisor remote on a Git before 2.46, a
+/// redirected configuration file and an unreadable promisor setting all
+/// refuse before any object is read, and no fetch or transport process
+/// starts. A Git that is new enough is not refused by the decision.
+#[cfg(unix)]
+#[test]
+fn promisor_repositories_are_refused_before_an_object_read_on_both_routes() {
+    for merge in [false, true] {
+        let route = if merge { "merge" } else { "pre-commit" };
+        for (case, version, fail_config, redirect) in [
+            ("git 2.45", Some("2.45.2"), false, false),
+            (
+                "git 2.45, redirected config file",
+                Some("2.45.2"),
+                false,
+                true,
+            ),
+            ("unreadable setting", None, true, false),
+        ] {
+            let (keep, work, fetched) = promisor_repository_missing_blobs();
+            let wrapper = git_wrapper(keep.path(), version, fail_config);
+            let out = promisor_hook(&work, &wrapper, merge, redirect, &[]);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(!out.status.success(), "{route} {case}: {stderr}");
+            let expected = if fail_config {
+                "cannot tell whether this repository fetches missing objects"
+            } else {
+                "upgrade git to 2.46 or later"
+            };
+            assert!(stderr.contains(expected), "{route} {case}: {stderr}");
+            assert!(
+                !fetched.exists(),
+                "{route} {case}: a fetch or transport process started; git calls:\n{}\n{stderr}",
+                std::fs::read_to_string(keep.path().join("git-calls.log")).unwrap_or_default()
+            );
+            assert_eq!(
+                fetch_events(keep.path()),
+                Vec::<String>::new(),
+                "{route} {case}: Trace2 saw a fetch or transport start"
+            );
+        }
+
+        // Git 2.46 passes the decision; the listing then reads no blob and
+        // never renames, and nothing is fetched.
+        let (keep, work, fetched) = promisor_repository_missing_blobs();
+        let wrapper = git_wrapper(keep.path(), Some("2.46.0"), false);
+        let out = promisor_hook(&work, &wrapper, merge, false, &[]);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("upgrade git to 2.46 or later"),
+            "{route}: {stderr}"
+        );
+        assert!(
+            !fetched.exists(),
+            "{route}: a fetch or transport process started"
+        );
+        assert_eq!(
+            fetch_events(keep.path()),
+            Vec::<String>::new(),
+            "{route}: Trace2 saw a fetch or transport start"
+        );
+        if merge {
+            let log = std::fs::read_to_string(keep.path().join("git-calls.log")).unwrap();
+            assert!(
+                log.lines()
+                    .any(|line| line.contains("--name-only") && line.contains("--no-renames")),
+                "{log}"
+            );
+        }
+    }
+}
+
+/// Where the Git Trace2 events of one fixture's hook process tree go.
+#[cfg(unix)]
+fn trace_path(wrapper: &Path) -> std::path::PathBuf {
+    wrapper.parent().unwrap().join("trace2.json")
+}
+
+/// The process starts in the fixture's Trace2 events as `(started, fetches)`:
+/// how many processes started, and the command lines of those that name a
+/// fetch or transport (`fetch`, `fetch-pack`, `upload-pack`, a `remote-*`
+/// helper, or the fixture's upload-pack wrapper).
+#[cfg(unix)]
+fn trace_starts(folder: &Path) -> (usize, Vec<String>) {
+    trace_starts_from(folder, false)
+}
+
+/// Like `trace_starts`; with `from_hook` it counts only the events after Git
+/// started the `pre-commit` hook, so Git's own work before the hook (which
+/// codeflow does not control) is left out.
+#[cfg(unix)]
+fn trace_starts_from(folder: &Path, from_hook: bool) -> (usize, Vec<String>) {
+    let text = std::fs::read_to_string(folder.join("trace2.json")).unwrap_or_default();
+    let (mut started, mut fetches) = (0, Vec::new());
+    let mut in_scope = !from_hook;
+    for line in text.lines() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if event["event"].as_str() == Some("child_start")
+            && event["hook_name"].as_str() == Some("pre-commit")
+        {
+            in_scope = true;
+        }
+        if !in_scope {
+            continue;
+        }
+        if !matches!(event["event"].as_str(), Some("start" | "child_start")) {
+            continue;
+        }
+        started += 1;
+        let argv: Vec<&str> = event["argv"]
+            .as_array()
+            .map(|all| all.iter().filter_map(serde_json::Value::as_str).collect())
+            .unwrap_or_default();
+        let transport = argv.iter().any(|word| {
+            matches!(*word, "fetch" | "fetch-pack" | "upload-pack")
+                || word.starts_with("remote-")
+                || word.ends_with("upload-pack-wrapper")
+        });
+        if transport {
+            fetches.push(argv.join(" "));
+        }
+    }
+    (started, fetches)
+}
+
+/// The fetch or transport starts in the fixture's Trace2 events.
+#[cfg(unix)]
+fn fetch_events(folder: &Path) -> Vec<String> {
+    trace_starts(folder).1
+}
+
+/// The blocks of the wrapper's log for the calls whose arguments contain
+/// `word`: each is the call line and the configuration variables it saw.
+#[cfg(unix)]
+fn logged_calls(folder: &Path, word: &str) -> Vec<String> {
+    std::fs::read_to_string(folder.join("git-calls.log"))
+        .unwrap_or_default()
+        .split("CALL ")
+        .filter(|block| block.lines().next().is_some_and(|call| call.contains(word)))
+        .map(str::to_string)
+        .collect()
+}
+
+/// R15-1 sibling: a promisor designation that comes only from inherited
+/// command-line or numbered configuration is absent from the capability
+/// decision (which removes caller settings), so the attribute reader must
+/// not see it either. On a Git before 2.46 the reader would otherwise treat a
+/// missing attributes blob as fetchable.
+#[cfg(unix)]
+#[test]
+fn inherited_promisor_settings_never_reach_the_attribute_reader() {
+    let command_line = [(
+        "GIT_CONFIG_PARAMETERS",
+        "'extensions.partialclone=origin' 'remote.origin.promisor=true'",
+    )];
+    let numbered = [
+        ("GIT_CONFIG_COUNT", "2"),
+        ("GIT_CONFIG_KEY_0", "extensions.partialclone"),
+        ("GIT_CONFIG_VALUE_0", "origin"),
+        ("GIT_CONFIG_KEY_1", "remote.origin.promisor"),
+        ("GIT_CONFIG_VALUE_1", "true"),
+    ];
+    for (form, env) in [
+        ("command line", &command_line[..]),
+        ("numbered", &numbered[..]),
+    ] {
+        let (keep, work, fetched) = promisor_repository_missing_blobs();
+        // The repository's own configuration has no promisor designation.
+        git(&work, &["config", "--unset", "remote.origin.promisor"]);
+        git(&work, &["config", "--unset", "extensions.partialClone"]);
+        let wrapper = git_wrapper(keep.path(), Some("2.45.2"), false);
+        let out = promisor_hook(&work, &wrapper, false, false, env);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let reads = logged_calls(keep.path(), "check-attr");
+        assert!(!reads.is_empty(), "{form}: no attribute read ran: {stderr}");
+        for read in &reads {
+            for leaked in ["promisor", "partialclone", "=origin"] {
+                assert!(
+                    !read.contains(leaked),
+                    "{form}: the attribute reader inherited {leaked}:\n{read}"
+                );
+            }
+        }
+        assert!(!fetched.exists(), "{form}: upload-pack started");
+        assert_eq!(fetch_events(keep.path()), Vec::<String>::new(), "{form}");
+    }
+}
+
+/// The installed shim: hooks wired into the fixture, then `git commit`
+/// itself. Git runs the shim, the shim runs codeflow, and a promisor
+/// repository on a Git before 2.46 is refused before any object read, with
+/// no fetch or transport start in Trace2 and no commit made.
+#[cfg(unix)]
+#[test]
+fn installed_hooks_refuse_a_promisor_commit_on_an_old_git() {
+    let (keep, work, _fetched) = promisor_repository_missing_blobs();
+    wire_scan_hooks(&work);
+    let before = git_command()
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&work)
+        .output()
+        .unwrap()
+        .stdout;
+    let wrapper = git_wrapper(keep.path(), Some("2.45.2"), false);
+    // Git puts its own exec path first on a hook's PATH, ahead of any
+    // wrapper folder, so the wrapper must be the `git` of a copy of the exec
+    // path: every helper linked from the real one, `git` the wrapper.
+    let exec = keep.path().join("exec");
+    std::fs::create_dir_all(&exec).unwrap();
+    let real_exec = git_command().arg("--exec-path").output().unwrap().stdout;
+    let real_exec = std::path::PathBuf::from(String::from_utf8(real_exec).unwrap().trim());
+    for entry in std::fs::read_dir(&real_exec).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name() != "git" {
+            std::os::unix::fs::symlink(entry.path(), exec.join(entry.file_name())).unwrap();
+        }
+    }
+    std::fs::copy(wrapper.join("git"), exec.join("git")).unwrap();
+    let out = git_command()
+        .args(["commit", "-m", "feat: add a staged file"])
+        .current_dir(&work)
+        .env("GIT_EXEC_PATH", &exec)
+        .env("LC_ALL", "C")
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("GIT_TRACE2_EVENT", trace_path(&wrapper))
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                wrapper.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "the commit was not refused:\nstdout: {}\nstderr: {stderr}\ngit calls:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        std::fs::read_to_string(keep.path().join("git-calls.log")).unwrap_or_default()
+    );
+    assert!(stderr.contains("codeflow pre-commit"), "{stderr}");
+    assert!(stderr.contains("upgrade git to 2.46 or later"), "{stderr}");
+    let after = git_command()
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&work)
+        .output()
+        .unwrap()
+        .stdout;
+    assert_eq!(before, after, "no commit was made");
+    // `git commit` itself reads the promised objects (and fetches them)
+    // before it starts the hook; that is Git's own work, outside codeflow, so
+    // the marker file cannot tell the two apart. Only the processes started
+    // from the hook onward are codeflow's, and those are observed.
+    let (started, transports) = trace_starts_from(keep.path(), true);
+    assert!(
+        started > 0,
+        "Trace2 saw no process after the hook started: the observation is blind"
+    );
+    assert_eq!(transports, Vec::<String>::new());
 }

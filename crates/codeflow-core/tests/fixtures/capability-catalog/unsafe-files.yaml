@@ -1,0 +1,6 @@
+# Modes are materialized as Git tree entries on every platform; Unix tests also exercise checkout modes.
+- {case: symlink, mode: 120000, path: docs/capabilities/CAP-101-catalog.md, content: ../../outside.md}
+- {case: executable, mode: 100755, path: docs/capabilities/CAP-101-catalog.md, content: valid.md}
+- {case: nested, mode: 100644, path: docs/capabilities/nested/CAP-101-catalog.md, content: valid.md}
+- {case: absolute, path: /docs/capabilities/CAP-101-catalog.md}
+- {case: traversal, path: docs/capabilities/../CAP-101-catalog.md}

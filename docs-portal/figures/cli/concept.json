@@ -5,10 +5,10 @@
     "family": "structure",
     "binding": "authored",
     "question": "What can the binary do, and which commands are never typed by hand?",
-    "idea": "Twenty-nine subcommands sit in six jobs, and three of them are run for you by the settings presets, the git hooks and CI.",
+    "idea": "Thirty subcommands sit in six jobs, and three of them are run for you by the settings presets, the git hooks and CI.",
     "title": "The command surface, by job",
     "kicker": "Command reference",
-    "caption": "You type twenty-six of the commands; hook, git-hook and ci are called by the wiring that init installs.",
+    "caption": "You type twenty-seven of the commands; hook, git-hook and ci are called by the wiring that init installs.",
     "states": [
       {
         "name": "typed",
@@ -214,6 +214,23 @@
           "style": "mono",
           "for": [
             "g0c8"
+          ]
+        },
+        {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 376,
+          "cy": 47,
+          "r": 7,
+          "id": "g0c9"
+        },
+        {
+          "text": "capability",
+          "x": 392,
+          "y": 52,
+          "style": "mono",
+          "for": [
+            "g0c9"
           ]
         },
         {
@@ -796,6 +813,23 @@
           ]
         },
         {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 226,
+          "cy": 103,
+          "r": 7,
+          "id": "g0c9"
+        },
+        {
+          "text": "capability",
+          "x": 240,
+          "y": 108,
+          "style": "mono",
+          "for": [
+            "g0c9"
+          ]
+        },
+        {
           "deco": "rule",
           "shape": "line",
           "x1": 8,
@@ -1216,7 +1250,7 @@
       "rows": [
         [
           "Scaffold",
-          "`init`, `update`, `epic`, `spec`, `task`, `adr`, `ids`, `estimate`, `feedback`",
+          "`init`, `update`, `epic`, `spec`, `task`, `adr`, `ids`, `estimate`, `feedback`, `capability`",
           "none"
         ],
         [
