@@ -3155,7 +3155,7 @@
         {
           "path": "AGENTS.md",
           "markers": [
-            "the landing-class checks (one full gate for code) and one hosted run on the exact candidate"
+            "the landing-class gate and one hosted run on the exact candidate"
           ]
         }
       ]

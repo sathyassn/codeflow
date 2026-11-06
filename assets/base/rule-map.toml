@@ -472,7 +472,7 @@ key = "land"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "land a batch on the integration line"
-action = "one candidate per line at a time, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; the landing-class checks (one full gate for code) and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
+action = "one candidate per line, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; the landing-class gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
 see = [{ target = "cf-method", section = "Managing a body of work", must_open = true, reason = "landing modes and drift control" }]
 
 [[moment]]
@@ -480,7 +480,7 @@ key = "land"
 group = "delivery"
 tiers = ["minimal"]
 when = "land a batch on the integration line"
-action = "one candidate per line at a time, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; the landing-class checks (one full gate for code) and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
+action = "one candidate per line, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; the landing-class gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
 see = [{ target = ".codeflow/rules/git-rules.md", section = "Bodies of work" }]
 
 [[moment]]
