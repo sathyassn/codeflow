@@ -25,6 +25,7 @@ SPEC.loader.exec_module(parity)
 WORKFLOW = (ROOT / ".github" / "workflows" / "codeflow-ci.yml").read_text(encoding="utf-8")
 JOBS = parity.workflow_jobs(WORKFLOW)
 LINE_JOBS = parity.workflow_jobs((ROOT / ".github" / "workflows" / "codeflow-line-pr.yml").read_text(encoding="utf-8"))
+PUSH_JOBS = parity.workflow_jobs((ROOT / ".github" / "workflows" / "codeflow-line-push.yml").read_text(encoding="utf-8"))
 
 
 def step(job: str, name: str, jobs: dict[str, str] = JOBS) -> tuple[dict[str, str], str]:
@@ -54,6 +55,7 @@ def step(job: str, name: str, jobs: dict[str, str] = JOBS) -> tuple[dict[str, st
 VERDICT_ENV, VERDICT_SCRIPT = step("windows-verdict", "Every Windows job passed")
 GATES_ENV, GATES_SCRIPT = step("gates-verdict", "Every part of the full gate passed")
 LINE_ENV, LINE_SCRIPT = step("gates-line-verdict", "Every short check passed", LINE_JOBS)
+PUSH_ENV, PUSH_SCRIPT = step("gates-verdict", "Every Linux job passed", PUSH_JOBS)
 BASH = shutil.which("bash")
 
 
@@ -222,6 +224,26 @@ class LineVerdictTests(BashVerdict):
                     code, out = self.verdict({**self.PASSED, key: state})
                     self.assertEqual(code, 1, out)
                     self.assertNotIn("This is not full gate evidence", out)
+
+
+class LinePushVerdictTests(BashVerdict):
+    """`codeflow gates` on a line push passes only when every Linux job passed."""
+
+    SCRIPT = PUSH_SCRIPT
+    PASSED = {"BUILD": "success", "PARTS": "success", "SHARDS": "success", "REPORT": "success"}
+
+    def test_every_job_passing_passes(self):
+        code, out = self.verdict(self.PASSED)
+        self.assertEqual(code, 0, out)
+        self.assertIn("the full Linux gate passed", out)
+
+    def test_any_other_result_fails(self):
+        for key in self.PASSED:
+            for state in ("skipped", "failure", "cancelled", ""):
+                with self.subTest(key=key, state=state):
+                    code, out = self.verdict({**self.PASSED, key: state})
+                    self.assertEqual(code, 1, out)
+                    self.assertNotIn("the full Linux gate passed", out)
 
 
 if __name__ == "__main__":

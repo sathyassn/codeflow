@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Where each job of .github/workflows/codeflow-ci.yml, of the line workflow
-(codeflow-line-pr.yml) and of the daily run (windows-daily-run.yml) runs
-(TSK-1321).
+"""Where each job of .github/workflows/codeflow-ci.yml, of the line workflows
+(codeflow-line-pr.yml, codeflow-line-push.yml) and of the daily run
+(windows-daily-run.yml) runs (TSK-1321).
 
 Suite placement is an operator decision (2026-11-05, "A plus Linux off line
-PRs"). The placement ADR (ADR-0097, "CI suite placement by event") and the
+PRs", and 2026-11-06 15:34 for line pushes). The placement ADR (ADR-0097, "CI suite placement by event") and the
 maintainer page (docs/releasing.md, "Where CI suites run") each hold it as one
 table, by event and suite. These tests read every workflow's triggers and
 every job's `if:` and `needs:` from the workflows themselves and evaluate them
@@ -19,8 +19,8 @@ as GitHub does for each kind of run. They fail when:
 - a table, row, column or cell cannot be read, a job is in no suite, or a
   suite has no job (fail closed);
 - a pull request into an integration line starts a job named for a required
-  check of main, skipped or not, since GitHub counts a skipped required check
-  as a success.
+  check of main, skipped or not, or a line push leaves a `windows` row, since
+  GitHub counts a skipped required check as a success.
 
 So a job added, removed or moved needs a visible edit to PLACEMENT, and a
 placement change needs the doc and ADR tables changed with it, which takes a
@@ -68,41 +68,51 @@ RUNS = {
 # checks: the Linux build and gate parts, the secret scan and the security
 # review (its commit standards and release impact run in codeflow-policy.yml
 # and codeflow-release.yml). A draft runs only the secret scan and security
-# review. Linux coverage and every Windows job run on line pushes, pull
-# requests into main, the weekly and manual runs. The two required verdicts
-# never run on a line pull request, so they cannot pass there with their
-# suites not selected. The daily column is the daily run, on main and each
+# review. A line push starts only the line push workflow: full Linux and no
+# Windows. Every Windows job runs on pull requests into main, pushes to main,
+# the weekly and manual runs and the daily run. The two required verdicts never
+# run on a line pull request, so they cannot pass there with their suites not
+# selected. The daily column is the daily run, on main and each
 # active line at the commit the dispatcher resolved: the Linux build and gate
 # parts, the Linux coverage shards with their report and every Windows job,
 # which is never merge evidence. Each row names its jobs' workflow: ci for
-# codeflow-ci.yml, line for the line workflow, daily for the daily runner.
+# codeflow-ci.yml, line and push for the line workflows, daily for the daily
+# runner.
 PLACEMENT = """\
 job                       workflow  line PR  draft line PR  main PR  draft main PR  other PR  line push  main push  weekly  manual  daily
-ubuntu-image              ci        -        -              -        -              -         yes        yes        -       -       -
-windows-image             ci        -        -              -        -              -         yes        yes        -       -       -
-reuse                     ci        -        -              -        -              -         yes        yes        -       -       -
+ubuntu-image              ci        -        -              -        -              -         -          yes        -       -       -
+windows-image             ci        -        -              -        -              -         -          yes        -       -       -
+reuse                     ci        -        -              -        -              -         -          yes        -       -       -
 provenance                ci        -        -              yes      yes            yes       -          -          -       -       -
-gates-build               ci        -        -              yes      -              -         yes        yes        yes     yes     -
-gates                     ci        -        -              yes      -              -         yes        yes        yes     yes     -
+gates-build               ci        -        -              yes      -              -         -          yes        yes     yes     -
+gates                     ci        -        -              yes      -              -         -          yes        yes     yes     -
 gates-release             ci        -        -              yes      -              -         -          yes        yes     yes     -
-gates-coverage            ci        -        -              yes      -              -         yes        yes        yes     yes     -
-gates-coverage-report     ci        -        -              yes      -              -         yes        yes        yes     yes     -
-gates-verdict             ci        -        -              yes      -              yes       yes        yes        yes     yes     -
-windows-build             ci        -        -              yes      -              -         yes        yes        yes     yes     -
-windows-tests             ci        -        -              yes      -              -         yes        yes        yes     yes     -
-windows                   ci        -        -              yes      -              -         yes        yes        yes     yes     -
-windows-release-journey   ci        -        -              yes      -              -         yes        yes        yes     yes     -
-windows-journeys          ci        -        -              yes      -              -         yes        yes        yes     yes     -
-windows-verdict           ci        -        -              yes      -              yes       yes        yes        yes     yes     -
-secret-scan               ci        -        -              yes      yes            yes       yes        yes        yes     yes     -
-gitleaks-canary           ci        -        -              yes      yes            yes       yes        yes        yes     yes     -
-security-review           ci        -        -              yes      yes            yes       yes        yes        yes     yes     -
+gates-coverage            ci        -        -              yes      -              -         -          yes        yes     yes     -
+gates-coverage-report     ci        -        -              yes      -              -         -          yes        yes     yes     -
+gates-verdict             ci        -        -              yes      -              yes       -          yes        yes     yes     -
+windows-build             ci        -        -              yes      -              -         -          yes        yes     yes     -
+windows-tests             ci        -        -              yes      -              -         -          yes        yes     yes     -
+windows                   ci        -        -              yes      -              -         -          yes        yes     yes     -
+windows-release-journey   ci        -        -              yes      -              -         -          yes        yes     yes     -
+windows-journeys          ci        -        -              yes      -              -         -          yes        yes     yes     -
+windows-verdict           ci        -        -              yes      -              yes       -          yes        yes     yes     -
+secret-scan               ci        -        -              yes      yes            yes       -          yes        yes     yes     -
+gitleaks-canary           ci        -        -              yes      yes            yes       -          yes        yes     yes     -
+security-review           ci        -        -              yes      yes            yes       -          yes        yes     yes     -
 gates-build               line      yes      -              -        -              -         -          -          -       -       -
 gates                     line      yes      -              -        -              -         -          -          -       -       -
 gates-line-verdict        line      yes      -              -        -              -         -          -          -       -       -
 secret-scan               line      yes      yes            -        -              -         -          -          -       -       -
 gitleaks-canary           line      yes      yes            -        -              -         -          -          -       -       -
 security-review           line      yes      yes            -        -              -         -          -          -       -       -
+gates-build               push      -        -              -        -              -         yes        -          -       -       -
+gates                     push      -        -              -        -              -         yes        -          -       -       -
+gates-coverage            push      -        -              -        -              -         yes        -          -       -       -
+gates-coverage-report     push      -        -              -        -              -         yes        -          -       -       -
+gates-verdict             push      -        -              -        -              -         yes        -          -       -       -
+secret-scan               push      -        -              -        -              -         yes        -          -       -       -
+gitleaks-canary           push      -        -              -        -              -         yes        -          -       -       -
+security-review           push      -        -              -        -              -         yes        -          -       -       -
 gates-build               daily     -        -              -        -              -         -          -          -       -       yes
 gates                     daily     -        -              -        -              -         -          -          -       -       yes
 gates-coverage            daily     -        -              -        -              -         -          -          -       -       yes
@@ -113,7 +123,8 @@ windows                   daily     -        -              -        -          
 windows-release-journey   daily     -        -              -        -              -         -          -          -       -       yes
 windows-journeys          daily     -        -              -        -              -         -          -          -       -       yes
 """
-WORKFLOW_FILES = {"ci": "codeflow-ci.yml", "line": "codeflow-line-pr.yml", "daily": "windows-daily-run.yml"}
+WORKFLOW_FILES = {"ci": "codeflow-ci.yml", "line": "codeflow-line-pr.yml", "push": "codeflow-line-push.yml",
+                  "daily": "windows-daily-run.yml"}
 
 # The short checks a line pull request keeps in the other workflows: commit
 # standards and the policy check, and release impact. Their only job
@@ -146,8 +157,8 @@ def workflow_text(name: str) -> str:
 
 def started_by(kind: str) -> set[str]:
     """The workflows a kind of run can start: the daily run only the daily
-    runner, any other ci and the line workflow, by their triggers."""
-    return {"daily"} if RUNS[kind].get("workflow") == WORKFLOW_FILES["daily"] else {"ci", "line"}
+    runner, any other ci and the line workflows, by their triggers."""
+    return {"daily"} if RUNS[kind].get("workflow") == WORKFLOW_FILES["daily"] else {"ci", "line", "push"}
 
 
 DISPATCHER = WORKFLOWS / "windows-daily.yml"
@@ -398,10 +409,22 @@ class PlacementTests(unittest.TestCase):
                                      f"{name} {job} {'runs' if runs else 'does not run'} on a {kind}; its row says "
                                      f"{'yes' if kind in kinds else '-'}")
 
-    def test_the_daily_run_runs_the_line_push_s_suites_without_the_short_checks(self):
-        push, daily = ran_by("line push")["ci"], ran_by("daily")["daily"]
+    def test_the_daily_run_runs_the_full_suites_without_the_short_checks_or_release_gates(self):
+        weekly, daily = ran_by("weekly")["ci"], ran_by("daily")["daily"]
         # The image, reuse and verdict jobs serve a run itself and test nothing.
-        self.assertEqual(push - NOT_A_SUITE - set().union(*SHORT_JOBS.values()), daily)
+        self.assertEqual(weekly - NOT_A_SUITE - set().union(*SHORT_JOBS.values()) - {"gates-release"}, daily)
+
+    def test_a_line_push_runs_full_linux_and_leaves_no_windows_row(self):
+        # A job whose `if:` is false still leaves a skipped row at the tip, which
+        # is the head of the pull request into main, so this reads every job of
+        # every workflow the push starts.
+        texts = {name: workflow_text(name) for name in WORKFLOW_FILES}
+        started = [name for name in sorted(started_by("line push")) if triggered(texts[name], RUNS["line push"])]
+        self.assertEqual(started, ["push"])
+        published = {re.search(r"^ {4}name:\s*(.+?)\s*$", text, re.M).group(1)
+                     for text in parity.workflow_jobs(texts["push"]).values()}
+        self.assertEqual({name for name in published if name.startswith("windows")}, set())
+        self.assertEqual(ran_by("line push")["push"], set(parity.workflow_jobs(texts["push"])), "no job can skip")
 
     def test_a_line_pull_request_runs_only_the_short_checks(self):
         ran = ran_by("line PR")
@@ -414,7 +437,7 @@ class PlacementTests(unittest.TestCase):
         # every job of every workflow the run starts, not only those that run.
         texts = {name: workflow_text(name) for name in WORKFLOW_FILES}
         for kind in ("line PR", "draft line PR"):
-            started = [name for name in started_by(kind) if triggered(texts[name], RUNS[kind])]
+            started = [name for name in sorted(started_by(kind)) if triggered(texts[name], RUNS[kind])]
             self.assertEqual(started, ["line"], kind)
             for name in started:
                 published = {re.search(r"^ {4}name:\s*(.+?)\s*$", text, re.M).group(1)
@@ -446,7 +469,7 @@ class PlacementTests(unittest.TestCase):
         self.assertTrue(triggered(workflow_text("ci"), {**RUNS["main PR"], "base": ""}))
 
     def test_every_other_event_starts_the_full_workflow(self):
-        for kind in ("line push", "main push", "weekly", "manual"):
+        for kind in ("main push", "weekly", "manual"):
             with self.subTest(run=kind):
                 self.assertTrue(triggered(workflow_text("ci"), RUNS[kind]))
                 self.assertFalse(triggered(workflow_text("line"), RUNS[kind]))
@@ -699,11 +722,11 @@ class DocParityTests(unittest.TestCase):
         self.assertFails(self.problems(no_link), "links 0 ADRs")
 
     def test_a_narrowed_trigger_fails(self):
-        ci = self.texts["ci"]
-        narrowed = ci.replace('    branches: [main, master, "integration/**"]', "    branches: [main, master]", 1)
-        self.assertNotEqual(narrowed, ci)
-        self.assertFails(self.problems(texts={**self.texts, "ci": narrowed}),
-                         "Push to an integration line", "Windows partitions", "do not run")
+        push = self.texts["push"]
+        narrowed = push.replace('    branches: ["integration/**"]', '    branches: ["integration/x"]', 1)
+        self.assertNotEqual(narrowed, push)
+        self.assertFails(self.problems(texts={**self.texts, "push": narrowed}),
+                         "Push to an integration line", "Linux coverage", "do not run")
         dispatcher = DISPATCHER.read_text(encoding="utf-8")
         unscheduled = dispatcher.replace("  schedule:\n", "  repository_dispatch:\n", 1)
         self.assertNotEqual(unscheduled, dispatcher)
@@ -719,8 +742,10 @@ class DocParityTests(unittest.TestCase):
 
 
 class AdmissionTests(unittest.TestCase):
-    """AC-14: `commit standards` judges a line pull request by the workflow it
-    ran. The step runs here against a stand-in `gh` and `python3`."""
+    """AC-14: `commit standards` admits a line pull request on the line verdict
+    when the base line has the line workflow, and only the sync of main into a
+    line that has not. Anything else keeps both verdicts. The step runs here
+    against a stand-in `gh` and `python3`."""
 
     @classmethod
     def setUpClass(cls):
@@ -744,21 +769,32 @@ class AdmissionTests(unittest.TestCase):
                 tool.write_text("#!/bin/sh\n" + body, encoding="utf-8")
                 tool.chmod(0o755)
             env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "CALLS": str(calls), "REPOSITORY": "o/r", "HEAD_SHA": "a" * 40,
-                   "PR_NUMBER": "7", "DRAFT": "false", "BASE_REF": base}
+                   "PR_NUMBER": "7", "DRAFT": "false", "BASE_REF": base, "BASE_SHA": "b" * 40,
+                   "DEFAULT_BRANCH": "main"}
             done = subprocess.run(["/bin/sh", "-eu", "-c", self.script], env=env, capture_output=True, text=True,
                                   cwd=folder)
             return done.returncode, done.stdout + done.stderr, (calls.read_text(encoding="utf-8").splitlines()
                                                                 if calls.exists() else None)
 
-    FOUND = 'echo .github/workflows/codeflow-line-pr.yml\n'
-    ABSENT = 'echo "gh: Not Found (HTTP 404)" >&2\nexit 1\n'
-    BROKEN = 'echo "gh: Server Error (HTTP 502)" >&2\nexit 1\n'
+    LINE = "integration/EPC-022-fixes"
+    ABSENT = 'echo "gh: Not Found (HTTP 404)" >&2; exit 1'
+    BROKEN = 'echo "gh: Server Error (HTTP 502)" >&2; exit 1'
     UNCALLED = 'echo "gh must not be called" >&2\nexit 9\n'
+
+    def gh(self, base=ABSENT, main="echo blob1", head="echo blob1", behind="echo 0"):
+        """A stand-in `gh`: each read of the line workflow, by its ref, and the comparison."""
+        return (f'case "$*" in\n  *compare/*) {behind} ;;\n  *ref={"b" * 40}*) {base} ;;\n'
+                f'  *ref=main*) {main} ;;\n  *ref={"a" * 40}*) {head} ;;\n  *) exit 9 ;;\nesac\n')
 
     def assertFullVerdicts(self, argv):
         self.assertEqual(argv[argv.index("--workflow") + 1], ".github/workflows/codeflow-ci.yml")
         self.assertEqual([argv[at + 1] for at, word in enumerate(argv) if word == "--require"],
                          ["codeflow gates", "windows"])
+
+    def assertLineVerdict(self, argv):
+        self.assertEqual(argv[argv.index("--workflow") + 1], ".github/workflows/codeflow-line-pr.yml")
+        self.assertEqual([argv[at + 1] for at, word in enumerate(argv) if word == "--require"],
+                         ["codeflow gates (line)"])
 
     def test_a_pull_request_into_main_needs_both_required_verdicts(self):
         for base in ("main", "master", "feature/x", "integration/", "integration", ""):
@@ -767,24 +803,40 @@ class AdmissionTests(unittest.TestCase):
                 self.assertEqual(code, 0, out)
                 self.assertFullVerdicts(argv)
 
-    def test_a_line_pull_request_that_ran_the_line_workflow_needs_its_verdict(self):
-        code, out, argv = self.admit("integration/EPC-022-fixes", self.FOUND)
-        self.assertEqual(code, 0, out)
-        self.assertEqual(argv[argv.index("--workflow") + 1], ".github/workflows/codeflow-line-pr.yml")
-        self.assertEqual([argv[at + 1] for at, word in enumerate(argv) if word == "--require"],
-                         ["codeflow gates (line)"])
+    def test_a_synced_line_needs_the_line_verdict_whatever_the_head_holds(self):
+        for head in ("echo blob1", "echo other", self.ABSENT):
+            with self.subTest(head=head):
+                code, out, argv = self.admit(self.LINE, self.gh(base="echo blob1", head=head))
+                self.assertEqual(code, 0, out)
+                self.assertLineVerdict(argv)
 
-    def test_a_line_without_the_line_workflow_keeps_both_required_verdicts(self):
-        # A line that has not yet taken main, and every adopter's line.
-        code, out, argv = self.admit("integration/EPC-022-fixes", self.ABSENT)
+    def test_an_unsynced_line_keeps_both_required_verdicts(self):
+        # The head cannot choose the lighter admission: not by adding the file,
+        # by changing it, or by copying main's file without containing main.
+        for label, gh in (("no line workflow anywhere", self.gh(main=self.ABSENT, head=self.ABSENT)),
+                          ("not on main, as for an adopter", self.gh(main=self.ABSENT, head="echo blob1")),
+                          ("head without the file", self.gh(head=self.ABSENT)),
+                          ("head with another file", self.gh(head="echo blob2")),
+                          ("head with main's file, behind main", self.gh(behind="echo 3")),
+                          ("an empty comparison", self.gh(behind="true"))):
+            with self.subTest(label):
+                code, out, argv = self.admit(self.LINE, gh)
+                self.assertEqual(code, 0, out)
+                self.assertFullVerdicts(argv)
+
+    def test_the_pull_request_that_syncs_main_needs_the_line_verdict(self):
+        # Its merge commit has the new trigger, so codeflow-ci.yml cannot start.
+        code, out, argv = self.admit(self.LINE, self.gh())
         self.assertEqual(code, 0, out)
-        self.assertFullVerdicts(argv)
+        self.assertLineVerdict(argv)
 
     def test_an_unreadable_answer_refuses_admission(self):
-        code, out, argv = self.admit("integration/EPC-022-fixes", self.BROKEN)
-        self.assertEqual(code, 1, out)
-        self.assertIsNone(argv)
-        self.assertIn("HTTP 502", out)
+        for label, gh in (("base", self.gh(base=self.BROKEN)), ("main", self.gh(main=self.BROKEN)),
+                          ("head", self.gh(head=self.BROKEN)), ("comparison", self.gh(behind=self.BROKEN))):
+            with self.subTest(label):
+                code, out, argv = self.admit(self.LINE, gh)
+                self.assertEqual(code, 1, out)
+                self.assertIsNone(argv)
 
 
 class OtherWorkflowTests(unittest.TestCase):

@@ -512,11 +512,23 @@ WINDOWS_VERDICT_JOB = """\
 # which no ruleset on main requires, so a retargeted pull request has no green
 # result of a required name to carry. Its build, gate parts, secret scan,
 # canary and security review are codeflow-ci.yml's jobs, held equal here.
+#
+# A push to a line runs the full Linux suites and no Windows job (the operator's
+# decision of 2026-11-06). The `windows` job of codeflow-ci.yml would leave a
+# row at the line's tip, which is also the head of the pull request into main,
+# so codeflow-ci.yml does not start for a line push either.
+# codeflow-line-push.yml starts instead. Its `codeflow gates` runs on every push
+# and passes only when every Linux job passed; it has no job named `windows`.
 LINE_WORKFLOW = ROOT / ".github" / "workflows" / "codeflow-line-pr.yml"
+LINE_PUSH_WORKFLOW = ROOT / ".github" / "workflows" / "codeflow-line-push.yml"
 CI_PULL_REQUEST_TRIGGER = """\
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     branches-ignore: ["integration/**"]
+"""
+CI_PUSH_TRIGGER = """\
+  push:
+    branches: [main, master]
 """
 LINE_TRIGGER = """\
 on:
@@ -557,6 +569,49 @@ LINE_VERDICT_JOB = """\
 """
 
 
+LINE_PUSH_TRIGGER = """\
+on:
+  push:
+    branches: ["integration/**"]
+
+"""
+LINE_PUSH_JOB_NAMES = {"gates-build": "codeflow build", "gates": "codeflow gates (${{ matrix.part }})",
+                       "gates-coverage": "codeflow gates (coverage ${{ matrix.shard }} of 3)",
+                       "gates-coverage-report": "codeflow gates (coverage report)",
+                       "gates-verdict": "codeflow gates", "secret-scan": "secret scan",
+                       "gitleaks-canary": "gitleaks allowlist canary", "security-review": "security review"}
+# Each gate job's `if:` and `needs:` on a line push: no reuse decision, no bases.
+LINE_PUSH_GATE_JOBS = {
+    "gates-build": ("${{ !cancelled() }}", None),
+    "gates": ("${{ !cancelled() }}", "gates-build"),
+    "gates-coverage": ("${{ !cancelled() }}", None),
+    "gates-coverage-report": ("always() && needs.gates-coverage.result != 'skipped'", "gates-coverage"),
+}
+LINE_PUSH_VERDICT_JOB = """\
+    if: ${{ always() }}
+    name: codeflow gates
+    needs: [gates-build, gates, gates-coverage, gates-coverage-report]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every Linux job passed
+        shell: bash
+        env:
+          BUILD: ${{ needs.gates-build.result }}
+          PARTS: ${{ needs.gates.result }}
+          SHARDS: ${{ needs.gates-coverage.result }}
+          REPORT: ${{ needs.gates-coverage-report.result }}
+        run: |
+          if [ "$BUILD $PARTS $SHARDS $REPORT" != "success success success success" ]; then
+            echo "::error::the Linux gate concluded build=${BUILD} parts=${PARTS} coverage shards=${SHARDS} coverage report=${REPORT}; see the codeflow gates jobs"
+            exit 1
+          fi
+          line="the full Linux gate passed at ${GITHUB_SHA}. Windows runs on the pull request into main and on the daily run."
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+"""
+
+
 def job_body(text: str) -> list[str]:
     """A job's lines apart from its `if:` and `needs:`."""
     return [line for line in norm_job(text) if not line.startswith(("    if:", "    needs:"))]
@@ -577,10 +632,7 @@ def line_placement_problems(workflow: str, line: str | None) -> list[str]:
         problems.append("codeflow-line-pr.yml must start only for a pull request into an integration line; its "
                         "trigger must be exactly:\n" + LINE_TRIGGER)
     jobs, full = workflow_jobs(line), workflow_jobs(workflow)
-    names = {}
-    for job, text in jobs.items():
-        name = re.search(r"^ {4}name:\s*(.+?)\s*$", text, re.M)
-        names[job] = name.group(1) if name else ""
+    names = job_names(jobs)
     if names != LINE_JOB_NAMES:
         problems.append(f"codeflow-line-pr.yml must publish exactly {LINE_JOB_NAMES}; it publishes {names}")
     for job in LINE_COPIED_JOBS:
@@ -596,6 +648,58 @@ def line_placement_problems(workflow: str, line: str | None) -> list[str]:
     if norm_job(jobs.get("gates-line-verdict", "")) != norm_job(LINE_VERDICT_JOB):
         problems.append(f"`{LINE_VERDICT}` must be exactly this, so it passes only when the build and every part "
                         "passed:\n" + LINE_VERDICT_JOB)
+    return problems
+
+
+def concurrency_block(workflow: str) -> str:
+    found = re.search(r"(?ms)^concurrency:\n.*?(?=^\S|\Z)", workflow)
+    return found.group(0).strip() if found else ""
+
+
+def job_names(jobs: dict[str, str]) -> dict[str, str]:
+    names = {}
+    for job, text in jobs.items():
+        name = re.search(r"^ {4}name:\s*(.+?)\s*$", text, re.M)
+        names[job] = name.group(1) if name else ""
+    return names
+
+
+def line_push_problems(workflow: str, push: str | None) -> list[str]:
+    """A line push starts the line push workflow and not this one, so it leaves
+    no `windows` row, and that workflow runs this one's Linux jobs."""
+    problems = []
+    if CI_PUSH_TRIGGER not in workflow:
+        problems.append("codeflow-ci.yml must not start for a push to an integration line; its trigger must be "
+                        "exactly:\n" + CI_PUSH_TRIGGER)
+    if push is None:
+        return [*problems, "codeflow-line-push.yml is missing: a push to an integration line would run nothing"]
+    if LINE_PUSH_TRIGGER not in push:
+        problems.append("codeflow-line-push.yml must start only for a push to an integration line; its trigger "
+                        "must be exactly:\n" + LINE_PUSH_TRIGGER)
+    if concurrency_block(push) != concurrency_block(workflow):
+        problems.append("codeflow-line-push.yml must have codeflow-ci.yml's `concurrency` block, so a newer push "
+                        "to a line cancels the older push run (TSK-1313)")
+    jobs, full = workflow_jobs(push), workflow_jobs(workflow)
+    if job_names(jobs) != LINE_PUSH_JOB_NAMES:
+        problems.append(f"codeflow-line-push.yml must publish exactly {LINE_PUSH_JOB_NAMES}; it publishes "
+                        f"{job_names(jobs)}")
+    for job in LINE_COPIED_JOBS:
+        if norm_job(jobs.get(job, "")) != norm_job(full.get(job, "")):
+            problems.append(f"`{job}` must be the same job in codeflow-line-push.yml and codeflow-ci.yml")
+    for job, (condition, needs) in LINE_PUSH_GATE_JOBS.items():
+        text = jobs.get(job, "")
+        if job_body(text) != job_body(full.get(job, "")):
+            problems.append(f"`{job}` must be the same job in codeflow-line-push.yml and codeflow-ci.yml, apart "
+                            "from its `if:` and `needs:`")
+        found = re.search(r"^ {4}if:\s*(.+?)\s*$", text, re.M)
+        if not found or found.group(1) != condition:
+            problems.append(f"`{job}` in codeflow-line-push.yml must run under exactly `{condition}`")
+        wanted = re.search(r"^ {4}needs:\s*(.+?)\s*$", text, re.M)
+        if (wanted.group(1) if wanted else None) != needs:
+            problems.append(f"`{job}` in codeflow-line-push.yml must have `needs: {needs}`")
+    if norm_job(jobs.get("gates-verdict", "")) != norm_job(LINE_PUSH_VERDICT_JOB):
+        problems.append("`codeflow gates` in codeflow-line-push.yml must be exactly this, so it runs on every push "
+                        "and passes only when every Linux job passed:\n" + LINE_PUSH_VERDICT_JOB)
     return problems
 
 
@@ -1446,7 +1550,8 @@ def main() -> int:
             + gate_part_problems(cfg, workflow) + shared_install_problems(cfg)
             + all_timeout_problems() + all_pin_problems() + dist_problems() + playwright_problems(workflow)
             + windows_verdict_problems(workflow)
-            + line_placement_problems(workflow, repository_text(LINE_WORKFLOW) if LINE_WORKFLOW.exists() else None))
+            + line_placement_problems(workflow, repository_text(LINE_WORKFLOW) if LINE_WORKFLOW.exists() else None)
+            + line_push_problems(workflow, repository_text(LINE_PUSH_WORKFLOW) if LINE_PUSH_WORKFLOW.exists() else None))
     for problem in pins:
         print(f"GATE PARITY DRIFT: {problem}", file=sys.stderr)
     status = rust_parity()

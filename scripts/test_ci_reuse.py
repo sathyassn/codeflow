@@ -702,6 +702,18 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn("'codeflow gates' of run 77 concluded skipped", reason)
         self.assertIn("mark the pull request ready", reason)
 
+    def test_a_draft_s_skipped_line_verdict_refuses(self):
+        # A line pull request is admitted on the line workflow's run, under the
+        # same rule: a draft's skipped verdict never admits.
+        path = ".github/workflows/codeflow-line-pr.yml"
+        name = "codeflow gates (line)"
+        api = FakeApi(runs=[run(path=path)], jobs={77: [job(name, "skipped"), job("secret scan")]})
+        with self.assertRaises(reuse.Skip) as caught:
+            reuse.admit(HEAD, path, {name}, api, 95)
+        self.assertIn(f"{name!r} of run 77 concluded skipped", str(caught.exception))
+        api = FakeApi(runs=[run(path=path)], jobs={77: [job(name)]})
+        self.assertEqual(reuse.admit(HEAD, path, {name}, api, 95), 77)
+
     def test_no_ready_run_refuses_and_may_be_waited_for(self):
         self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run of #95 exists",
                       self.refused(FakeApi(runs=[]), pending=True))

@@ -1181,27 +1181,120 @@ def step_script(job, step):
     return "\n".join(script)
 
 
-class TierWiringTests(unittest.TestCase):
-    """Which jobs read the tier. scripts/test_windows_tier.py runs the tier and
-    verdict steps themselves."""
+class PlacementWiringTests(unittest.TestCase):
+    """How the moved jobs read their conditions. scripts/test_ci_placement.py holds
+    where each runs."""
 
-    def test_only_a_pull_request_chooses_a_tier(self):
-        job = jobs(workflow("codeflow-ci"))["windows-tier"]
-        self.assertIn("if: github.event_name == 'pull_request'", job)
-
-    def test_the_tier_moves_coverage_and_every_windows_job_and_a_push_keeps_them(self):
+    def test_no_job_reads_a_tier_and_the_later_jobs_follow_the_first(self):
         ci = jobs(workflow("codeflow-ci"))
+        self.assertNotIn("windows-tier", ci)
         for moved in ("gates-coverage", "windows-build", "windows", "windows-release-journey"):
             with self.subTest(job=moved):
-                self.assertIn("!cancelled() && needs.windows-tier.outputs.tier != 'reduced'", ci[moved])
-                self.assertIn("needs: [reuse, windows-tier]", ci[moved])
+                self.assertIn("needs: reuse", ci[moved])
+                self.assertNotIn("tier", ci[moved])
         self.assertIn("needs.gates-coverage.result != 'skipped'", ci["gates-coverage-report"])
         self.assertIn("needs.windows-build.result == 'success'", ci["windows-tests"])
         self.assertIn("needs.windows-tests.result != 'skipped'", ci["windows-journeys"])
-        self.assertNotIn("windows-tier-journeys", ci)
 
     def test_the_daily_runner_has_no_tier(self):
         self.assertNotIn("tier", workflow("windows-daily-run").lower())
+
+
+class FullRunCreditTests(unittest.TestCase):
+    """A green full run of the exact tip skips the daily run. Anything less does not."""
+
+    NOW = datetime(2026, 11, 7, tzinfo=timezone.utc)
+    SINCE = NOW - timedelta(days=7)
+    LINE = "refs/heads/integration/EPC-1-x"
+    ROW = {"ref": LINE, "sha": SHA}
+    MAIN_FULL = daily.runner_hash("the full workflow\n")
+
+    def full(self, **changes):
+        return {"id": 9, "path": daily.FULL_PATH, "event": "pull_request", "head_sha": SHA,
+                "head_branch": "integration/EPC-1-x", "status": "completed", "conclusion": "success",
+                "created_at": "2026-11-06T00:00:00Z", **changes}
+
+    def api(self, runs, rows=None):
+        rows = [{"name": name, "conclusion": "success"} for name in daily.FULL_JOB_NAMES] if rows is None else rows
+
+        def answer(path):
+            if "codeflow-ci.yml/runs" in path:
+                self.assertIn(f"head_sha={SHA}", path)
+                return {"workflow_runs": runs}
+            if "windows-daily-run.yml/runs" in path:
+                return {"workflow_runs": []}
+            return {"jobs": rows}
+        return answer
+
+    def setUp(self):
+        patched = mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "o/n"})
+        patched.start()
+        self.addCleanup(patched.stop)
+
+    def credit(self, runs, rows=None, text="the full workflow\n"):
+        return daily.full_run_credit(self.ROW, self.SINCE, self.api(runs, rows), lambda sha, path: text, self.MAIN_FULL)
+
+    def test_every_job_green_at_the_exact_tip_is_credited(self):
+        for event in ("pull_request", "push"):
+            with self.subTest(event=event):
+                self.assertEqual(self.credit([self.full(event=event)])["run_id"], 9)
+
+    def test_a_run_that_differs_in_any_recorded_field_is_not_credited(self):
+        for change in ({"head_sha": "b" * 40}, {"head_branch": "integration/other"}, {"conclusion": "failure"},
+                       {"status": "in_progress"}, {"path": ".github/workflows/codeflow-line-push.yml"},
+                       {"event": "workflow_dispatch"}, {"created_at": "2026-10-01T00:00:00Z"}):
+            with self.subTest(change=change):
+                self.assertIsNone(self.credit([self.full(**change)]))
+
+    def test_a_skipped_or_missing_job_is_not_credited(self):
+        # A run that reused a verdict skipped its jobs; a line push has no Windows job.
+        names = sorted(daily.FULL_JOB_NAMES)
+        for name in names:
+            for rows in ([{"name": n, "conclusion": "skipped" if n == name else "success"} for n in names],
+                         [{"name": n, "conclusion": "success"} for n in names if n != name]):
+                with self.subTest(name=name):
+                    self.assertIsNone(self.credit([self.full()], rows))
+
+    def test_a_line_s_own_workflow_file_is_not_credited(self):
+        for text in ("a line's edit\n", "", None):
+            with self.subTest(text=text):
+                self.assertIsNone(self.credit([self.full()], text=text))
+
+    def test_a_full_run_skips_the_line_and_the_verdict_stands_on_it(self):
+        read = lambda sha, path: "the full workflow\n" if path == daily.FULL_PATH else RUNNER_TEXT
+        matrix, skipped = daily.skip_proven({"include": [self.ROW]}, 7, self.api([self.full()]), read, RUNNER_HASH,
+                                            self.NOW, main_full=self.MAIN_FULL)
+        self.assertEqual(matrix["include"], [])
+        self.assertEqual(skipped, [{**self.ROW, "run_id": 9, "full_run": True}])
+        report = daily.coverage_line({"full_run": True})
+        self.assertIn("coverage report job", report)
+
+    def verdict(self, runs):
+        dispatcher = {"id": 5, "path": daily.DISPATCHER_PATH, "head_branch": "main", "event": "schedule",
+                      "status": "completed", "created_at": "2026-11-06T06:23:00Z"}
+        answer = self.api(runs)
+
+        def api(path):
+            return {"workflow_runs": [dispatcher]} if "windows-daily.yml/runs" in path else answer(path)
+
+        request = {"include": [], "skipped": [{**self.ROW, "run_id": 9, "full_run": True}], "left_out": [],
+                   "max_age_days": 7, "runner_sha256": RUNNER_HASH, "full_sha256": self.MAIN_FULL}
+        return daily.read_evidence(api, lambda run_id: request, lambda sha, path: "the full workflow\n",
+                                   datetime(2026, 11, 6, 12, tzinfo=timezone.utc))
+
+    def test_the_verdict_checks_a_full_run_again(self):
+        self.assertEqual(self.verdict([self.full()])["result"], "success")
+        result = self.verdict([])
+        self.assertEqual(result["result"], "failure")
+        self.assertIn("no longer stands", daily.verdict_report(result))
+
+    def test_no_age_or_no_main_copy_means_no_skip(self):
+        read = lambda sha, path: "the full workflow\n"
+        for age, main_full in ((0, self.MAIN_FULL), (7, None)):
+            with self.subTest(age=age):
+                matrix, skipped = daily.skip_proven({"include": [self.ROW]}, age, self.api([self.full()]), read,
+                                                    RUNNER_HASH, self.NOW, main_full=main_full)
+                self.assertEqual((matrix["include"], skipped), ([self.ROW], []))
 
 
 if __name__ == "__main__":

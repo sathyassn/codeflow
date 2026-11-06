@@ -195,8 +195,8 @@ class GateContracts(unittest.TestCase):
             'an inserted exit 0': workflow.replace(guard, '          if result("windows-tests") == "failure":\n'
                                                           '              sys.exit(0)\n' + guard),
             'reuse without a named run': workflow.replace(
-                'if result("reuse") == "success" and re.fullmatch(r"[0-9]+", reused):',
-                'if result("reuse") == "success":'),
+                'mode = "reuse" if result("reuse") == "success" and re.fullmatch(r"[0-9]+", reused) else "full"',
+                'mode = "reuse" if result("reuse") == "success" else "full"'),
             'a dropped job result': workflow.replace(
                 'jobs = sorted(job for job in needs if job != "reuse")',
                 'jobs = sorted(job for job in needs if job not in ("reuse", "windows-release-journey"))'),
@@ -306,7 +306,8 @@ class GateContracts(unittest.TestCase):
         self.assertIn("        if: github.event_name == 'pull_request_target'\n", step)
         self.assertIn('python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER"', step)
         self.assertIn('          PR_NUMBER: ${{ github.event.pull_request.number }}\n', step)
-        self.assertIn('--workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows', step)
+        self.assertIn('workflow=.github/workflows/codeflow-ci.yml\n          set -- --require "codeflow gates" --require windows\n', step)
+        self.assertIn('--workflow "$workflow" "$@" --wait "$wait"', step)
         self.assertIn('          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n', step)
         self.assertIn('          if [ "$DRAFT" = true ]; then wait=0; fi\n', step)
         wait = int(re.search(r'^          wait=(\d+)$', step, re.M).group(1))

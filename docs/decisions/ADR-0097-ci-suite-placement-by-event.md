@@ -52,13 +52,13 @@ Changing where a suite runs is an operator decision. Agents and
 Coordinators never rule on it; they bring the evidence and a
 recommendation to the operator.
 
-Placement as decided on 2026-11-05:
+Placement as decided on 2026-11-05, with the 2026-11-06 line-push row:
 
 | Event | Short checks | Linux build and lint | Linux tests | Linux coverage | Windows checks and journeys | Windows partitions | Release gates |
 |---|---|---|---|---|---|---|---|
 | Draft pull request, any base | secret scan and security review only; commit standards passes only on a ready run | no | no | no | no | no | no |
 | Pull request into an integration line | yes | yes | no | no | no | no | no |
-| Push to an integration line | secret scan and security review | yes | yes | yes | yes | yes | no |
+| Push to an integration line | secret scan and security review | yes | yes | yes | no | no | no |
 | Pull request into `main` | yes | yes | yes | yes | yes | yes | yes |
 | Push to `main` | secret scan and security review | yes, or the merged pull request's reused verdict | yes, or reused | yes, or reused | yes, or reused | yes, or reused | yes, or reused |
 | Daily run, `main` and each active line | no | yes | yes | yes | yes | yes | no |
@@ -155,6 +155,14 @@ numbers move.
   weekly runs keep the full Linux and Windows suites" (`RELEASE-PLAN.md`,
   entry "2026-11-05 15:57: Operator decision on CI placement").
 
+- 2026-11-06, 15:34. Operator, relayed by the Director: "agreed with
+  youre latest recommendation". The record reads: "A push to a line, one
+  per batch, runs full Linux and no Windows. A PR into main runs full
+  Windows once and reuses Linux from the line push on the same tree" and
+  "Rule: a tree that has passed a suite does not run it again, on a line or
+  on main" (`RELEASE-PLAN.md`, entry "2026-11-06 15:34: Operator decision
+  on CI placement"). For line pushes this replaces the 2026-11-05 entry.
+
 ## Architecture impact
 
 None. The maintainer page for this placement is the "Where CI suites run"
@@ -175,3 +183,15 @@ operator's decision 3 in that result. After the PR 631 review of
 2026-11-06 (Grok, finding 1), the Consequences bullet on line-push reuse
 gives the real reason a line push runs the full suites: the pull request
 ran the reduced Windows tier, which `scripts/ci-reuse.py` refuses as proof.
+
+## Note, 2026-11-06, line pushes
+
+The operator's 15:34 decision moves every Windows job off line pushes, and
+the table's line-push row now says so. Where the Decision and Consequences
+above say line pushes keep the Windows suites, this Note and that row
+replace them. A line push starts `codeflow-line-push.yml`, because a job in
+`codeflow-ci.yml` whose `if:` is false would leave a `windows` row at the
+line's tip, which is also the head of the pull request into `main`. Until
+TSK-1026 AC-15 lands, a pull request into `main` runs full Linux too. The
+`integration/**` ruleset change is decided, and the operator applies it in
+two steps.

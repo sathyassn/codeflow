@@ -27,6 +27,7 @@ SPEC.loader.exec_module(parity)
 CONFIG = json.loads(parity.CONFIG.read_text(encoding="utf-8"))
 WORKFLOW = parity.WORKFLOW.read_text(encoding="utf-8")
 LINE = (ROOT / ".github" / "workflows" / "codeflow-line-pr.yml").read_text(encoding="utf-8")
+LINE_PUSH = parity.LINE_PUSH_WORKFLOW.read_text(encoding="utf-8")
 CI = parity.ci_rust_job_commands(WORKFLOW)
 PORTAL = "docs-portal"
 PRESENT = "present-browser"
@@ -719,8 +720,8 @@ class HostedEventParityControls(unittest.TestCase):
     """Ready integration pull requests must keep both verdict contracts intact."""
 
     READY = ("github.event_name == 'pull_request' && !github.event.pull_request.draft && "
-             "(contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || "
-             "startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || "
+             "contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || "
+             "github.event_name == 'push' || "
              "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'")
 
     def test_both_verdicts_run_for_every_event_but_a_draft(self):
@@ -792,6 +793,31 @@ class LinePlacementControls(unittest.TestCase):
 
     def test_the_workflows_are_the_pinned_forms(self):
         self.assertEqual(self.problems(), [])
+
+    def test_the_line_push_workflow_is_the_pinned_form(self):
+        self.assertEqual(parity.line_push_problems(WORKFLOW, LINE_PUSH), [])
+
+    def test_a_line_push_that_could_leave_a_windows_row_is_refused(self):
+        trigger = "    branches: [main, master]\n"
+        started = WORKFLOW.replace(trigger, '    branches: [main, master, "integration/**"]\n', 1)
+        self.assertNotEqual(started, WORKFLOW)
+        self.assertTrue(any("must not start for a push" in p for p in parity.line_push_problems(started, LINE_PUSH)))
+        job = "\n  windows-verdict:\n    name: windows\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n"
+        problems = parity.line_push_problems(WORKFLOW, LINE_PUSH + job)
+        self.assertTrue(any("must publish exactly" in p for p in problems), problems)
+
+    def test_a_line_push_verdict_or_job_that_can_skip_is_refused(self):
+        for label, old, new, words in (
+                ("verdict", "    if: ${{ always() }}\n", "    if: ${{ github.ref == 'x' }}\n", "must be exactly this"),
+                ("a job", "    if: ${{ !cancelled() }}\n", "    if: ${{ github.ref == 'x' }}\n", "must run under exactly"),
+                ("a trigger", '    branches: ["integration/**"]', '    branches: ["integration/a"]', "must start only"),
+                ("concurrency", "cancel-in-progress: ${{", "cancel-in-progress: ${{ false && ", "`concurrency` block")):
+            with self.subTest(label):
+                changed = LINE_PUSH.replace(old, new, 1)
+                self.assertNotEqual(changed, LINE_PUSH)
+                problems = parity.line_push_problems(WORKFLOW, changed)
+                self.assertTrue(any(words in p for p in problems), problems)
+        self.assertTrue(any("is missing" in p for p in parity.line_push_problems(WORKFLOW, None)))
 
     def test_codeflow_ci_starting_for_a_line_pull_request_is_refused(self):
         ignore = '    branches-ignore: ["integration/**"]\n'
@@ -1189,7 +1215,8 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
     or ships, not only codeflow-ci.yml."""
 
     OWN = {
-        ".github/workflows/codeflow-ci.yml", ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-ci.yml", ".github/workflows/codeflow-line-pr.yml",
+        ".github/workflows/codeflow-line-push.yml", ".github/workflows/codeflow-policy.yml",
         ".github/workflows/codeflow-registry.yml", ".github/workflows/codeflow-release.yml",
         ".github/workflows/portal-pages.yml", ".github/workflows/release.yml",
         ".github/workflows/release-main-recheck.yml", ".github/workflows/release-plan-authority.yml",
