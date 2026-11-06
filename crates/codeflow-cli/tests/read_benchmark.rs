@@ -19,24 +19,27 @@
 //! `1.5 × baseline peak × (record_bytes now / record_bytes at baseline) + 16 MiB`.
 //! Only the input scales the budget, and the 16 MiB does not scale. A run
 //! fails when its peak is over that budget: a peak may grow up to 1.5 times
-//! as fast as its input, as it could before the input grew, and growth past
-//! that fails. The same peak is held to a smaller budget on a smaller input.
-//! A command whose memory grows more slowly than its input gains headroom
-//! as the input grows; re-recording the baseline removes that. A baseline
-//! without `record_bytes` fails the check.
+//! as fast as its input, and growth past that fails. The same peak is held
+//! to a smaller budget on a smaller input. A command whose memory grows more
+//! slowly than its input gains headroom as the input grows, so when the
+//! templates grow a lot, the peaks are recorded again at the new input
+//! rather than left to scale. A baseline without a positive `record_bytes`
+//! fails the check.
 //!
-//! Both baselines were recorded before the field existed, so their
-//! `record_bytes` was derived afterwards from the commit each was recorded
-//! at (TSK-1357), with
-//! `record_bytes_replay_for_the_cli_in_codeflow_bench_cli`: given the CLI
-//! built at that commit in `CODEFLOW_BENCH_CLI`, it has that CLI write the
-//! epic and task templates and applies this fixture's record
-//! transformations to all 10 epics and 10,000 tasks. Templates from before
-//! the `## Outcome` section have nothing for the Outcome step to fill, so
-//! the replay builds the records the baseline's own fixture built. The
-//! Linux baseline was recorded at 9f4316cae (2026-10-01, 26,676,877 bytes);
-//! the macOS baseline at e945b5ac3 (2026-09-28, 41,042,447 bytes), whose
-//! task template was larger, and 9f4316cae only renamed it.
+//! The peaks were recorded again on 2026-11-05 at an input of 48,541,777
+//! record bytes (TSK-1357). The Linux peaks come from one hosted run of the
+//! benchmark, run 42132133846 at 02e7bd904. The macOS peaks come from one
+//! local run at 0a4c91672. Both commits write the same records. The git
+//! process counts and latency ratios are those of the first recordings and
+//! did not change. Before that, both baselines dated from before the
+//! templates grew: Linux from 9f4316cae (2026-10-01, 26,676,877 bytes) and
+//! macOS from e945b5ac3 (2026-09-28, 41,042,447 bytes).
+//! `record_bytes_replay_for_the_cli_in_codeflow_bench_cli` derived those
+//! figures. Given the CLI built at a commit in `CODEFLOW_BENCH_CLI`, it has
+//! that CLI write the epic and task templates and applies this fixture's
+//! record transformations to all 10 epics and 10,000 tasks. Templates from
+//! before the `## Outcome` section have nothing for the Outcome step to fill,
+//! so the replay builds the records that commit's own fixture built.
 //!
 //! The ratio travels across machines, not across operating systems: the
 //! calibration is a few short git processes, and starting a process costs
@@ -772,7 +775,9 @@ fn a_wait_status_names_its_exit_code_or_signal() {
 fn peak_budget_kib(peak_was: u64, record_bytes_now: u64, record_bytes_was: u64) -> u64 {
     let scaled = u128::from(peak_was) * 3 * u128::from(record_bytes_now)
         / (2 * u128::from(record_bytes_was));
-    u64::try_from(scaled).unwrap_or(u64::MAX) + 16 * 1024
+    u64::try_from(scaled)
+        .unwrap_or(u64::MAX)
+        .saturating_add(16 * 1024)
 }
 
 /// The budgets a run is held to, from the recorded baseline: no more git
@@ -894,6 +899,29 @@ fn the_budget_check_flags_a_run_over_its_baseline() {
     assert_eq!(
         over_budget(&no_input, input, &recorded),
         ["inventory: no baseline record_bytes"]
+    );
+    // A recorded size of zero cannot scale anything and fails closed too.
+    let mut zero_input = baseline.clone();
+    zero_input["inventory"]["record_bytes"] = serde_json::json!(0);
+    assert_eq!(
+        over_budget(&zero_input, input, &recorded),
+        ["inventory: no baseline record_bytes"]
+    );
+    // Without the input size, the latency and git-process budgets still hold.
+    let mut slow = recorded.clone();
+    slow.get_mut(&command).unwrap()["latency_ratio"] =
+        serde_json::json!(was["latency_ratio"].as_f64().unwrap() * 2.5);
+    slow.get_mut(&command).unwrap()["git_processes"] =
+        serde_json::json!(was["git_processes"].as_u64().unwrap() + 1);
+    let over = over_budget(&no_input, input, &slow);
+    assert!(
+        over.len() == 3
+            && over[0] == "inventory: no baseline record_bytes"
+            && over[1].starts_with("work next: ")
+            && over[1].contains("git processes")
+            && over[2].starts_with("work next: ")
+            && over[2].contains("latency ratio"),
+        "{over:?}"
     );
 }
 
