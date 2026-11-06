@@ -2881,6 +2881,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "framing:git-commit-message-lines",
     ),
+    // TSK-1350: the merge ticket rule finds a merge commit's subject as commit_msg_from does; no ref/path identity is derived from this text.
+    (
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "merge_ticket_violation",
+        "lines",
+        1,
+        "framing:git-commit-message-lines",
+    ),
     // TSK-412: `gitleaks version` output trimmed, then compared whole with the pinned ASCII version; any other output refuses.
     (
         "crates/codeflow-core/src/hooks/gitleaks.rs",
@@ -2908,6 +2916,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/hooks/git_hook.rs",
         "commit_msg_from",
+        "trim",
+        1,
+        "grammar:git-commit-message",
+    ),
+    // TSK-1350: the merge commit's subject is found as in commit_msg_from; no ref/path identity is derived from this text.
+    (
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "merge_ticket_violation",
         "trim",
         1,
         "grammar:git-commit-message",
@@ -3314,7 +3330,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Owns physical text-line framing for this complete message/document reader. Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
-        "check_commit_ticket",
+        "check_ticket_trailers",
         "lines",
         1,
         "framing:conventional-commits-lines",
@@ -3322,7 +3338,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
-        "check_commit_ticket",
+        "check_ticket_trailers",
         "trim_end",
         1,
         "grammar:conventional-commits",
@@ -6498,7 +6514,7 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
     (
         "conventional-commits-lines",
         "crates/codeflow-core/src/hooks/standards.rs",
-        "check_commit_ticket",
+        "check_ticket_trailers",
     ),
     (
         "conventional-commits-lines",
@@ -6539,6 +6555,11 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "git-commit-message-lines",
         "crates/codeflow-core/src/hooks/git_hook.rs",
         "commit_msg_with_files",
+    ),
+    (
+        "git-commit-message-lines",
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "merge_ticket_violation",
     ),
     (
         "git-commit-message-lines",
