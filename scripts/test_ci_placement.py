@@ -743,9 +743,11 @@ class DocParityTests(unittest.TestCase):
 
 class AdmissionTests(unittest.TestCase):
     """AC-14: `commit standards` admits a line pull request on the line verdict
-    when the base line has the line workflow, and only the sync of main into a
-    line that has not. Anything else keeps both verdicts. The step runs here
-    against a stand-in `gh` and `python3`."""
+    when the base line has the line workflow, and only the exact sync of main
+    into a line that has not. Anything else keeps both verdicts. The step runs in
+    a real repository, with a stand-in `gh` and `python3` and the real `git`."""
+
+    LINE_FILE = ".github/workflows/codeflow-line-pr.yml"
 
     @classmethod
     def setUpClass(cls):
@@ -760,83 +762,177 @@ class AdmissionTests(unittest.TestCase):
             script.append(line[10:])
         cls.script = "\n".join(script) + "\n"
 
-    def admit(self, base, gh):
-        with tempfile.TemporaryDirectory() as folder:
-            bin_dir = Path(folder)
-            calls = bin_dir / "calls"
-            for name, body in (("gh", gh), ("python3", 'printf "%s\\n" "$@" > "$CALLS"\n')):
-                tool = bin_dir / name
-                tool.write_text("#!/bin/sh\n" + body, encoding="utf-8")
-                tool.chmod(0o755)
-            env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "CALLS": str(calls), "REPOSITORY": "o/r", "HEAD_SHA": "a" * 40,
-                   "PR_NUMBER": "7", "DRAFT": "false", "BASE_REF": base, "BASE_SHA": "b" * 40,
-                   "DEFAULT_BRANCH": "main"}
-            done = subprocess.run(["/bin/sh", "-eu", "-c", self.script], env=env, capture_output=True, text=True,
-                                  cwd=folder)
-            return done.returncode, done.stdout + done.stderr, (calls.read_text(encoding="utf-8").splitlines()
-                                                                if calls.exists() else None)
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.repo = Path(folder.name) / "repo"
+        self.bin = Path(folder.name) / "bin"
+        self.repo.mkdir()
+        self.bin.mkdir()
+        self.git("init", "-q", "-b", "main")
+        self.write("shared.txt", "one\ntwo\nthree\n")
+        self.commit("start")
+        self.git("switch", "-q", "-c", "integration/x")
+        self.write("line.txt", "line work\n")
+        self.line = self.commit("line work")
+        self.git("switch", "-q", "main")
+        self.write(self.LINE_FILE, "the line workflow\n")
+        self.main = self.commit("the placement")
 
-    LINE = "integration/EPC-022-fixes"
-    ABSENT = 'echo "gh: Not Found (HTTP 404)" >&2; exit 1'
-    BROKEN = 'echo "gh: Server Error (HTTP 502)" >&2; exit 1'
-    UNCALLED = 'echo "gh must not be called" >&2\nexit 9\n'
+    def git(self, *args):
+        done = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args], cwd=self.repo,
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout.strip()
 
-    def gh(self, base=ABSENT, main="echo blob1", head="echo blob1", behind="echo 0"):
-        """A stand-in `gh`: each read of the line workflow, by its ref, and the comparison."""
-        return (f'case "$*" in\n  *compare/*) {behind} ;;\n  *ref={"b" * 40}*) {base} ;;\n'
-                f'  *ref=main*) {main} ;;\n  *ref={"a" * 40}*) {head} ;;\n  *) exit 9 ;;\nesac\n')
+    def write(self, name, text):
+        path = self.repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
 
-    def assertFullVerdicts(self, argv):
+    def commit(self, message):
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def branch(self, name="sync", start=None):
+        self.git("switch", "-q", "-c", name, start or self.line)
+
+    def sync(self):
+        """The exact sync: main merged into the line, nothing added."""
+        self.branch()
+        self.git("merge", "-q", "--no-edit", self.main)
+        return self.git("rev-parse", "HEAD")
+
+    def gh(self, pull=None, tip=None, compare="echo ahead"):
+        """A stand-in `gh`: the live base, main's tip and their comparison."""
+        return (f'case "$*" in\n  *compare/*) {compare} ;;\n  *pulls/7*) {pull or "echo " + self.line} ;;\n'
+                f'  *commits/main*) {tip or "echo " + self.main} ;;\n  *) exit 9 ;;\nesac\n')
+
+    def admit(self, head, gh=None, base="integration/x", git=None, ready=True):
+        self.git("switch", "-q", "--detach", self.main)
+        self.git("update-ref", "refs/codeflow/pr-base", self.line)
+        self.git("update-ref", "refs/codeflow/pr-head", head)
+        calls = self.bin / "calls"
+        calls.unlink(missing_ok=True)
+        tools = {"gh": gh or self.gh(), "python3": 'printf "%s\\n" "$@" > "$CALLS"\n'}
+        real = subprocess.run(["which", "git"], capture_output=True, text=True).stdout.strip()
+        if git:
+            tools["git"] = git.replace("REAL", real)
+        for name, body in tools.items():
+            tool = self.bin / name
+            tool.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+            tool.chmod(0o755)
+        env = {"PATH": f"{self.bin}:{Path(real).parent}:/usr/bin:/bin", "CALLS": str(calls), "REPOSITORY": "o/r",
+               "HEAD_SHA": head, "PR_NUMBER": "7", "DRAFT": "false" if ready else "true", "BASE_REF": base,
+               "BASE_SHA": self.line, "DEFAULT_BRANCH": "main", "GITHUB_SHA": self.main}
+        done = subprocess.run(["/bin/sh", "-eu", "-c", self.script], env=env, capture_output=True, text=True,
+                              cwd=self.repo)
+        (self.bin / "git").unlink(missing_ok=True)
+        return done.returncode, done.stdout + done.stderr, (calls.read_text(encoding="utf-8").splitlines()
+                                                            if calls.exists() else None)
+
+    def assertBoth(self, result):
+        code, out, argv = result
+        self.assertEqual(code, 0, out)
         self.assertEqual(argv[argv.index("--workflow") + 1], ".github/workflows/codeflow-ci.yml")
         self.assertEqual([argv[at + 1] for at, word in enumerate(argv) if word == "--require"],
                          ["codeflow gates", "windows"])
 
-    def assertLineVerdict(self, argv):
-        self.assertEqual(argv[argv.index("--workflow") + 1], ".github/workflows/codeflow-line-pr.yml")
+    def assertLine(self, result):
+        code, out, argv = result
+        self.assertEqual(code, 0, out)
+        self.assertEqual(argv[argv.index("--workflow") + 1], self.LINE_FILE)
         self.assertEqual([argv[at + 1] for at, word in enumerate(argv) if word == "--require"],
                          ["codeflow gates (line)"])
 
     def test_a_pull_request_into_main_needs_both_required_verdicts(self):
+        head = self.sync()
         for base in ("main", "master", "feature/x", "integration/", "integration", ""):
             with self.subTest(base=base):
-                code, out, argv = self.admit(base, self.UNCALLED)
-                self.assertEqual(code, 0, out)
-                self.assertFullVerdicts(argv)
+                self.assertBoth(self.admit(head, 'echo "gh must not be called" >&2\nexit 9\n', base=base))
 
-    def test_a_synced_line_needs_the_line_verdict_whatever_the_head_holds(self):
-        for head in ("echo blob1", "echo other", self.ABSENT):
-            with self.subTest(head=head):
-                code, out, argv = self.admit(self.LINE, self.gh(base="echo blob1", head=head))
-                self.assertEqual(code, 0, out)
-                self.assertLineVerdict(argv)
+    def test_a_real_sync_needs_the_line_verdict(self):
+        self.assertLine(self.admit(self.sync()))
 
-    def test_an_unsynced_line_keeps_both_required_verdicts(self):
-        # The head cannot choose the lighter admission: not by adding the file,
-        # by changing it, or by copying main's file without containing main.
-        for label, gh in (("no line workflow anywhere", self.gh(main=self.ABSENT, head=self.ABSENT)),
-                          ("not on main, as for an adopter", self.gh(main=self.ABSENT, head="echo blob1")),
-                          ("head without the file", self.gh(head=self.ABSENT)),
-                          ("head with another file", self.gh(head="echo blob2")),
-                          ("head with main's file, behind main", self.gh(behind="echo 3")),
-                          ("an empty comparison", self.gh(behind="true"))):
+    def test_a_sync_of_an_ancestor_of_main_s_tip_needs_the_line_verdict(self):
+        self.assertLine(self.admit(self.sync(), self.gh(tip=f"echo {'c' * 40}")))
+
+    def test_a_main_commit_that_is_not_on_main_keeps_both_verdicts(self):
+        for relation in ("diverged", "behind", "identical", "true"):
+            with self.subTest(relation=relation):
+                self.assertBoth(self.admit(self.sync() if relation == "diverged" else self.git("rev-parse", "sync"),
+                                           self.gh(tip=f"echo {'c' * 40}", compare=f"echo {relation}")))
+
+    def test_a_sync_plus_one_commit_keeps_both_verdicts(self):
+        self.sync()
+        self.write("extra.txt", "added\n")
+        self.assertBoth(self.admit(self.commit("one more")))
+
+    def test_a_task_branch_with_main_merged_in_keeps_both_verdicts(self):
+        self.branch("task")
+        self.write("task.txt", "task work\n")
+        self.commit("task work")
+        self.git("merge", "-q", "--no-edit", self.main)
+        self.assertBoth(self.admit(self.git("rev-parse", "HEAD")))
+
+    def test_a_hand_resolved_sync_keeps_both_verdicts(self):
+        self.git("switch", "-q", "integration/x")
+        self.write("shared.txt", "one\nLINE\nthree\n")
+        self.line = self.commit("line side")
+        self.git("switch", "-q", "main")
+        self.write("shared.txt", "one\nMAIN\nthree\n")
+        self.main = self.commit("main side")
+        self.branch()
+        merged = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "merge", "-q", self.main],
+                                cwd=self.repo, capture_output=True, text=True)
+        self.assertNotEqual(merged.returncode, 0)
+        self.write("shared.txt", "one\nBOTH\nthree\n")
+        self.assertBoth(self.admit(self.commit("resolved")))
+
+    def test_an_ordinary_pull_request_into_an_unsynced_line_keeps_both_verdicts(self):
+        self.branch("task")
+        self.write("task.txt", "task work\n")
+        self.assertBoth(self.admit(self.commit("task work")))
+
+    def test_a_head_that_adds_main_s_file_without_main_keeps_both_verdicts(self):
+        self.branch("task")
+        self.write(self.LINE_FILE, "the line workflow\n")
+        self.assertBoth(self.admit(self.commit("copy the file")))
+
+    def test_an_adopter_with_no_line_workflow_on_main_keeps_both_verdicts(self):
+        head = self.sync()
+        self.git("switch", "-q", "main")
+        self.git("rm", "-q", self.LINE_FILE)
+        self.main = self.commit("no file")
+        self.assertBoth(self.admit(head))
+
+    def test_a_read_or_merge_that_fails_keeps_both_verdicts(self):
+        head = self.sync()
+        stale = f"echo {'d' * 40}"
+        failed = 'echo "gh: Server Error (HTTP 502)" >&2; exit 1'
+        for label, gh in (("a moved base", self.gh(pull=stale)), ("the base read", self.gh(pull=failed)),
+                          ("the tip read", self.gh(tip=failed)),
+                          ("the comparison", self.gh(tip=f"echo {'c' * 40}", compare=failed))):
             with self.subTest(label):
-                code, out, argv = self.admit(self.LINE, gh)
-                self.assertEqual(code, 0, out)
-                self.assertFullVerdicts(argv)
+                self.assertBoth(self.admit(head, gh))
+        broken = 'if [ "$1" = merge-tree ]; then exit 2; fi\nexec REAL "$@"\n'
+        self.assertBoth(self.admit(head, git=broken))
 
-    def test_the_pull_request_that_syncs_main_needs_the_line_verdict(self):
-        # Its merge commit has the new trigger, so codeflow-ci.yml cannot start.
-        code, out, argv = self.admit(self.LINE, self.gh())
+    def test_once_the_line_has_the_placement_the_exception_is_off(self):
+        # The base commit decides: every pull request is on the line verdict,
+        # with no call to GitHub and whatever the head holds.
+        self.git("switch", "-q", "integration/x")
+        self.write(self.LINE_FILE, "the line workflow\n")
+        self.line = self.commit("synced")
+        self.branch("task")
+        self.git("rm", "-q", self.LINE_FILE)
+        self.assertLine(self.admit(self.commit("drop it"), 'echo "gh must not be called" >&2\nexit 9\n'))
+
+    def test_a_draft_does_not_wait(self):
+        code, out, argv = self.admit(self.sync(), ready=False)
         self.assertEqual(code, 0, out)
-        self.assertLineVerdict(argv)
-
-    def test_an_unreadable_answer_refuses_admission(self):
-        for label, gh in (("base", self.gh(base=self.BROKEN)), ("main", self.gh(main=self.BROKEN)),
-                          ("head", self.gh(head=self.BROKEN)), ("comparison", self.gh(behind=self.BROKEN))):
-            with self.subTest(label):
-                code, out, argv = self.admit(self.LINE, gh)
-                self.assertEqual(code, 1, out)
-                self.assertIsNone(argv)
+        self.assertEqual(argv[argv.index("--wait") + 1], "0")
 
 
 class OtherWorkflowTests(unittest.TestCase):

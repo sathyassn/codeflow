@@ -282,7 +282,8 @@ The workflows apply the table as follows:
   and `checks` parts, the secret scan and the security review, and reports
   `codeflow gates (line)`. `commit standards` admits it on that verdict when
   the base line has that workflow. A line without it keeps both required
-  verdicts, except the pull request that syncs all of `main` into it.
+  verdicts, with one transitional exception: the exact sync of `main`, whose
+  tree is the clean merge of the line and `main` with nothing added.
 - A line push starts `codeflow-line-push.yml` and never `codeflow-ci.yml`, so
   it leaves no `windows` row, skipped or otherwise, at the line's tip. That
   workflow runs the Linux build, the `present` and `checks` parts, the three
