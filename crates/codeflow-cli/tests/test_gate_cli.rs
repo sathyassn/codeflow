@@ -1130,6 +1130,10 @@ fn a_cargo_target_dir_outside_the_worktree_warns_and_runs() {
             "the gate still ran: {err}"
         );
     }
+    // The gate keeps its evidence in the build-output folder the variable
+    // names, never the project's own `target` (TSK-1044, TSK-1369).
+    assert!(elsewhere.path().join("codeflow-gate").is_dir());
+    assert!(!dir.path().join("target/codeflow-gate").exists());
 
     let inside = command(dir.path(), home.path(), &["test"])
         .env("CARGO_TARGET_DIR", dir.path().join("target"))
