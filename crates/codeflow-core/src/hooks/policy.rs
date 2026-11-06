@@ -39,7 +39,7 @@ pub const DEFAULT_REQUIRED_CHECKS: &[&str] = &[
     "codeflow gates",
     "secret scan",
     "security review",
-    "trusted: commit standards",
+    "commit standards",
 ];
 
 /// The words a generated branch name leaves out unless a project sets its own
