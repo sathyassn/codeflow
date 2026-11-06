@@ -1235,32 +1235,123 @@ and reports B and C as not applied.
 
 ### Mode A setup (operator)
 
-Steps 1 to 5 can be done at any time and change nothing until the policy
-workflow uses them. Step 6 runs after TSK-336 is on the default branch, in
-one session. Step 7 has no ordering dependency.
+A repository administrator sets up Mode A with one command and two clicks
+per App (TSK-1348). The command can run at any time: what it creates changes
+nothing until the policy workflow uses it. Step 6 runs after TSK-336 is on
+the default branch, in one session.
 
-1. Settings, Developer settings, GitHub Apps, New GitHub App: a name such as
-   `codeflow-authority-<repo>`, no webhook, repository permission Checks
-   read and write only, "Only on this account".
-2. Install the App on this repository only; note the App id.
-3. Generate one private key on the App and download it.
-4. Repository Settings, Environments, New environment `codeflow-authority`;
-   deployment branches and tags: selected branches and tags, the default
-   branch only.
-5. In that environment, add the secret `CODEFLOW_AUTHORITY_APP_KEY` (the key
-   file's contents) and the variable `CODEFLOW_AUTHORITY_APP_ID`.
-6. Run `codeflow remote protect --check-app <id> --lines "integration/**"`
-   as the administrator; retire the foreign rulesets; run `codeflow doctor
-   --check remote-perimeter` and stop only when it is green with no
-   recovery window open.
-7. Create the agent principal: a non-administrator App installation or bot
-   account with Contents and Pull requests write and Actions read, and no
-   Workflows, Commit statuses, Checks, Administration, Environments or
-   secrets access. Install it, point every seat's `gh` and git at it, and
-   remove the operator's login from the seats' credential stores.
+1. As the administrator, under your own `gh auth login` (never an agent's
+   token), run `codeflow remote setup-apps` in the repository. Before it
+   writes anything it refuses a GitHub App token and an account that is not
+   the repository's administrator. Its first write, the environment, needs
+   Administration write, so a token without it is refused there, before any
+   App exists.
+2. The command creates the environment `codeflow-authority` with deployment
+   from selected branches, and one branch policy, the default branch. An
+   existing environment keeps its reviewers, self-review rule and wait
+   timer. The command refuses to go on while the environment also admits
+   another branch.
+3. Click one, for the authority App: the command prints a local address.
+   Open it, and the page sends the App's manifest to GitHub: a personal
+   account's `https://github.com/settings/apps/new`, or an organization's
+   `https://github.com/organizations/<org>/settings/apps/new`. Check the
+   name (`codeflow-authority-<repo>` by default, `--authority-name` to
+   change it) and the permission, Checks write only, then click "Create
+   GitHub App". GitHub returns to the command, which converts the code,
+   checks that the App has the name, owner and permissions asked for, stores
+   its key as the environment secret `CODEFLOW_AUTHORITY_APP_KEY` and its id
+   as the environment variable `CODEFLOW_AUTHORITY_APP_ID`.
+4. Click two: open the printed `https://github.com/apps/<slug>/installations/new`,
+   choose "Only select repositories", pick this repository and click
+   "Install".
+5. Steps 3 and 4 again for the agent App (`codeflow-agent-<repo>`,
+   `--agent-name`): Contents and Pull requests write, and no
+   Administration, Workflows, Environments, Deployments, Commit statuses or
+   Checks permission. Its key goes to the administrator's operating system
+   credential store, never to a file, the repository or an environment
+   variable (below). `--no-agent` skips it.
+6. Run `codeflow remote protect --check-app <authority App id> --lines
+   "integration/**"` as the administrator; retire the foreign rulesets; run
+   `codeflow doctor --check remote-perimeter` and stop only when it is green
+   with no recovery window open.
+7. Point the agent sessions at the agent App (below), and remove the
+   administrator's login from the sessions' credential stores.
 
-On GitHub Free, environment secrets exist only in public repositories; a
-private repository on Free uses Mode B.
+Every write is printed with what undoes it: a `gh` command for the
+environment, its branch policy, the secret and the variable, a `security`
+or `secret-tool` command for the stored key, and, for each App, its
+settings page, where "Delete GitHub App" is a web step. A second run creates
+nothing already set up. When `codeflow` cannot listen on a local port, or
+the browser cannot open the local page, `--paste` writes the page to a file
+and reads back the address GitHub opens, which holds the code.
+
+Two steps stay in the browser, because GitHub has no API for them:
+registering an App from a manifest, and installing it. Whether an
+environment's administrator bypass can be turned off by API is being
+checked on a scratch repository (TSK-1348 Findings); until then, a
+repository that wants it off does it in Settings, Environments,
+`codeflow-authority`, "Allow administrators to bypass configured protection
+rules".
+
+**How a session uses the agent App.** `codeflow remote agent-token` reads
+the agent App's key from the credential store, signs the App's token with
+`openssl` reading the key from standard input, and asks GitHub for an
+installation token scoped to this repository, valid for one hour. It prints
+only that token. The key never reaches a file or a process argument list,
+and the command's errors are cleaned of the key.
+
+- `gh`: `GH_TOKEN="$(codeflow remote agent-token)" gh pr create ...`.
+- `git push`: name the command as the credential helper for this push only,
+  `git -c credential.helper= -c 'credential.helper=!codeflow remote
+  agent-token --git-credential' push`. It answers `get` with the user
+  `x-access-token` and the token.
+- The key's custody rests on the session's sandbox: a sandboxed session
+  must not reach the credential store, and only `codeflow remote
+  agent-token` runs outside the sandbox. On macOS the key is a login
+  keychain item (service `codeflow-agent-app`, account `owner/name`); on
+  Linux a Secret Service entry through `secret-tool`. Windows has no
+  supported store yet, so there the command refuses the agent App before
+  creating it and `--no-agent` sets up the authority App alone.
+
+**Attribution.** Commits keep their human author and committer under any
+token: git writes them from the local configuration, and pushing does not
+change them. The setup changes no git identity, commit template or trailer
+setting, and adds no AI attribution (`git.ai_attribution` is unchanged).
+GitHub records the agent App as `<slug>[bot]` on what it does through its
+token:
+
+| Action under the agent App's token | GitHub shows |
+|---|---|
+| A pull request it opens | author `<slug>[bot]` |
+| A merge it makes | merged by `<slug>[bot]` |
+| A merge commit GitHub makes for that merge | author `<slug>[bot]`; accepted by the operator on 2026-11-05; not yet observed, until TSK-1177's AC-3 fixture records it |
+| A push | the pusher is not yet observed (TSK-1348 AC-1, on the scratch repository) |
+| A commit made locally and pushed | the human author and committer |
+
+**Why a separate identity.** Rulesets, environments and Actions actor rules
+can tell agents from the human only when agents act under an identity of
+their own, such as this App. A personal access token, fine-grained or not,
+acts as the human. Reading ruleset bypass lists and Actions policies needs
+Administration write, so `codeflow doctor --check remote-perimeter` run
+under the agent App's token reports them as unknown, never as a pass.
+
+**Personal accounts and organizations.**
+
+- The App is created at `https://github.com/settings/apps/new` for a
+  personal account and at
+  `https://github.com/organizations/<org>/settings/apps/new` for an
+  organization, which needs a member allowed to create the organization's
+  Apps.
+- An organization may require an owner to approve an App's installation.
+  Whether it does is being checked (TSK-1348 Findings); where it does, the
+  "Install" click becomes a request the owner approves.
+- A personal repository has no `OrganizationAdmin` bypass actor.
+- An organization's own rulesets and Actions policies also apply to the
+  repository (`includes_parents`), and `remote protect` leaves them as they
+  are.
+- On GitHub Free, environment secrets exist only in public repositories,
+  so a private repository on Free uses Mode B: the setup's environment
+  write fails there, and the command says so.
 
 ### Recovery window
 

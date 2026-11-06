@@ -805,8 +805,10 @@ const RETIRED_FILES: [&str; 6] = [
 
 /// Directory prefixes under `assets/base` whose files are embedded and
 /// consumed by the binary at runtime, never scaffolded per-file:
-/// `codeflow test setup` reads the testing templates and schema directly.
-const UNSHIPPED_PREFIXES: [&str; 1] = ["testing/"];
+/// `codeflow test setup` reads the testing templates and schema directly,
+/// and `codeflow remote setup-apps` sends the GitHub App manifests to
+/// GitHub (TSK-1348).
+const UNSHIPPED_PREFIXES: [&str; 2] = ["testing/", "ci/apps/"];
 
 /// MANIFEST-COMPLETENESS: every artifact authored into `assets/base` must be
 /// referenced as a manifest `src`, or it silently never ships. This is the

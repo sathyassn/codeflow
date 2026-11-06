@@ -55,7 +55,19 @@ use serde_json::{json, Value};
 
 use crate::hooks::policy::DEFAULT_REQUIRED_CHECKS;
 
+pub mod agent_key;
+pub mod apps;
 mod fnmatch;
+
+/// `owner/name` of the repository's `origin` remote when it is on
+/// github.com; `None` when there is no such remote.
+///
+/// # Errors
+///
+/// When the repository or its `origin` cannot be read.
+pub fn github_origin(root: &Path) -> Result<Option<String>, String> {
+    crate::doctor::github_origin(root)
+}
 
 /// The GitHub App id of GitHub Actions. Ruleset status checks pin it, so a
 /// required check passes only when GitHub Actions reported it, as the
@@ -1483,9 +1495,7 @@ impl GithubProvider {
     ///
     /// Returns `Err(String)` when `gh` is not installed/locatable.
     pub fn discover(repo_dir: &Path) -> Result<Self, String> {
-        let gh = which::which("gh")
-            .map_err(|e| format!("gh CLI not found ({e}); install GitHub CLI or use --dry-run"))?;
-        Ok(Self::with_gh(gh, repo_dir))
+        Ok(Self::with_transport(gh_transport(repo_dir)?))
     }
 
     /// Construct with an explicit `gh` binary (test seam for PATH shims).
@@ -1668,6 +1678,20 @@ impl GithubProvider {
             format!("{pattern}: not applied — {err}")
         }
     }
+}
+
+/// The `gh` on PATH, run in `repo_dir`.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when `gh` is not installed/locatable.
+pub fn gh_transport(repo_dir: &Path) -> Result<GhTransport, String> {
+    let gh = which::which("gh")
+        .map_err(|e| format!("gh CLI not found ({e}); install GitHub CLI or use --dry-run"))?;
+    let repo_dir = repo_dir.to_path_buf();
+    Ok(Box::new(move |args, input| {
+        run_gh(&gh, &repo_dir, args, input)
+    }))
 }
 
 /// Run `gh` with args, optionally piping `input` to stdin. Returns stdout

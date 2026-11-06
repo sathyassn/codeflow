@@ -285,6 +285,11 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
   the default branch, and pull requests with strict, pinned checks guard it,
   the integration lines and each other protected branch. It never weakens a
   rule and reports what the plan cannot apply.
+- `codeflow remote setup-apps` creates the authority App, its environment
+  restricted to the default branch with the App's key and id, and the agent
+  App, with one command and two clicks per App; `codeflow remote
+  agent-token` gives agent sessions an hour-long token of the agent App
+  without exposing its key.
 - `codeflow doctor` runs twenty-six health checks on the repository and the
   tools around it, including the default branch's host rules.
 

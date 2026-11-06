@@ -1087,7 +1087,7 @@ fn origin_or_why(root: &Path) -> Result<String, String> {
 /// OS text rule (issue 79): only a proven missing repository or `origin` is
 /// none. An unreadable repository or an `origin` URL that is not UTF-8 is
 /// named, never read as no remote.
-fn github_origin(root: &Path) -> Result<Option<String>, String> {
+pub(crate) fn github_origin(root: &Path) -> Result<Option<String>, String> {
     let Some(repo) = crate::hooks::repo::open(root)? else {
         return Ok(None);
     };
