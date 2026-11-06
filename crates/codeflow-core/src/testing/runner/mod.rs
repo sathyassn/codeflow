@@ -28,12 +28,18 @@ pub(crate) use process::complete_bookkeeping_before as finish_cleanup_before;
 #[cfg(unix)]
 mod group_watch;
 #[cfg(windows)]
+mod job_watch;
+#[cfg(windows)]
 mod target_job;
+
+#[cfg(windows)]
+pub use job_watch::{designate as designate_fence_watcher, serve as serve_fence_watch};
 
 #[cfg(any(windows, test))]
 #[derive(Debug)]
 enum AdoptError {
     Job(std::io::Error),
+    Watch(std::io::Error),
     Resume(std::io::Error),
 }
 
@@ -47,6 +53,7 @@ fn adopt_or_stop<T>(
         end_child();
         let (step, source) = match error {
             AdoptError::Job(source) => ("join its kill-on-close job", source),
+            AdoptError::Watch(source) => ("start the fence watcher for", source),
             AdoptError::Resume(source) => ("resume", source),
         };
         TestingError::CommandSpawnError {
@@ -1539,6 +1546,7 @@ mod tests {
         assert_eq!(stopped, 0);
         for error in [
             AdoptError::Job(std::io::Error::from_raw_os_error(5)),
+            AdoptError::Watch(std::io::Error::from_raw_os_error(2)),
             AdoptError::Resume(std::io::Error::from_raw_os_error(6)),
         ] {
             let result: Result<u8, _> = Err(error);
@@ -1547,7 +1555,7 @@ mod tests {
             assert!(text.contains("sample"), "{text}");
             assert!(text.contains("os error"), "{text}");
         }
-        assert_eq!(stopped, 2);
+        assert_eq!(stopped, 3);
     }
     /// A lease another run holds past the waiting target's timeout makes
     /// the wait end with the target's bound named, never an unbounded wait.
@@ -1727,23 +1735,91 @@ mod tests {
         assert!(!result.termination_unconfirmed, "{result:?}");
     }
 
+    /// The environment variable that makes [`cpu_spin_stand_in`] spin, in
+    /// milliseconds. Without it the stand-in returns at once.
+    #[cfg(windows)]
+    const CPU_SPIN_MS_VAR: &str = "CODEFLOW_TEST_CPU_SPIN_MS";
+
+    /// The line [`cpu_spin_stand_in`] prints once it has spun.
+    #[cfg(windows)]
+    const CPU_SPIN_DONE: &str = "cpu spin stand-in spun for";
+
+    /// Not a test on its own: the CPU-busy target that
+    /// [`cpu_work_without_output_can_outlast_the_stall_window`] starts on
+    /// Windows. It spins without output for the time [`CPU_SPIN_MS_VAR`]
+    /// names, then prints [`CPU_SPIN_DONE`]. It returns at once, printing
+    /// nothing, when that variable is unset, as in a normal test run.
+    #[cfg(windows)]
+    #[test]
+    fn cpu_spin_stand_in() {
+        let Some(millis) = std::env::var(CPU_SPIN_MS_VAR)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+        else {
+            return;
+        };
+        let end = std::time::Instant::now() + Duration::from_millis(millis);
+        let mut x = 0_u64;
+        while std::time::Instant::now() < end {
+            x = std::hint::black_box(x.wrapping_mul(13).wrapping_add(17));
+        }
+        println!("{CPU_SPIN_DONE} {millis} ms");
+    }
+
+    /// The stand-in really ran and spun: a filter that matches nothing, or
+    /// a variable that does not reach the child, exits 0 at once and fails
+    /// here.
+    #[cfg(windows)]
+    fn assert_cpu_spin_ran(result: &TargetRunResult, millis: u64) {
+        assert!(
+            result
+                .stdout
+                .contains(&format!("{CPU_SPIN_DONE} {millis} ms")),
+            "the stand-in did not spin: {result:?}"
+        );
+        // Not the per-test `... ok` line: with one test thread and
+        // `--nocapture`, the spin line prints inside it.
+        assert!(
+            result.stdout.contains("test result: ok. 1 passed"),
+            "{result:?}"
+        );
+        assert!(result.duration_ms >= millis, "{result:?}");
+    }
+
+    /// CPU use refreshes the stall window. On Windows the CPU work runs in
+    /// this test binary through `cmd.exe` (TSK-1318 AC-8): Windows
+    /// `PowerShell` can sit for a second or more with no CPU while it starts
+    /// or exits on a busy runner, which a one-second window rightly reports
+    /// as a stall.
     #[test]
     fn cpu_work_without_output_can_outlast_the_stall_window() {
-        let command = if cfg!(windows) {
-            "$end = [DateTime]::UtcNow.AddSeconds(2); while ([DateTime]::UtcNow -lt $end) { $x = 13 * 17 }"
-        } else {
-            "python3 -c 'import time; end=time.monotonic()+2; exec(\"while time.monotonic()<end: pass\")'"
+        #[cfg(windows)]
+        let mut target = {
+            let command = format!(
+                "\"{}\" --exact testing::runner::tests::cpu_spin_stand_in --nocapture",
+                std::env::current_exe().unwrap().display()
+            );
+            let mut target = make_target("computing", &command);
+            target.shell = CommandShell::Cmd;
+            // Three windows of silent CPU work, inside the 8 s ceiling.
+            target.env.insert(CPU_SPIN_MS_VAR.into(), "3000".into());
+            target
         };
-        let mut target = make_target("computing", command);
-        if cfg!(windows) {
-            target.shell = CommandShell::Powershell;
-        }
+        #[cfg(windows)]
+        let spin_ms = 3000;
+        #[cfg(not(windows))]
+        let mut target = make_target(
+            "computing",
+            "python3 -c 'import time; end=time.monotonic()+2; exec(\"while time.monotonic()<end: pass\")'",
+        );
         target.heavy = Some(true);
         target.timeout_seconds = Some(2);
         target.stall_timeout_seconds = Some(1);
         let dir = tempfile::tempdir().unwrap();
         let result = run_target(&target, "full", dir.path()).unwrap();
         assert_eq!(result.status(), TargetStatus::Passed, "{result:?}");
+        #[cfg(windows)]
+        assert_cpu_spin_ran(&result, spin_ms);
         #[cfg(target_os = "macos")]
         assert_eq!(
             result
@@ -2925,8 +3001,8 @@ os._exit(0)
     }
 
     /// TSK-142 AC-3: when a gate is killed on Windows, its running target's
-    /// whole tree ends with it, so the OS never frees the gate lock while a
-    /// target of that gate still runs. The gate is this test binary run as
+    /// whole tree ends with it. This helper holds no fence, so it starts no
+    /// fence watcher (TSK-1318). The gate is this test binary run as
     /// [`windows_gate_helper`]; the recorded pid is the target's grandchild
     /// (`cmd.exe` runs `powershell`), so the check covers the tree.
     ///
@@ -3003,6 +3079,131 @@ os._exit(0)
             .spawn()
             .unwrap();
         GateGuard::new(gate)
+    }
+
+    /// TSK-1318: a gate that holds a fence and cannot start its target's
+    /// fence watcher refuses the target, naming the watcher, and the
+    /// target's command never runs.
+    #[cfg(windows)]
+    #[test]
+    fn a_watcher_that_cannot_start_stops_the_target_before_its_command_runs() {
+        let home = tempfile::tempdir().unwrap();
+        let locks = home.path().join("locks");
+        std::fs::create_dir_all(&locks).unwrap();
+        let _admitted = crate::testing::gate_guard::acquire_gate_lock(
+            std::slice::from_ref(&locks),
+            home.path(),
+            "full",
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        job_watch::watcher_for_test(Some(home.path().join("no-such-watcher.exe")));
+        let target = make_target("unwatched", "echo ran > marker.txt");
+        let result = run_target(&target, "full", dir.path());
+        job_watch::watcher_for_test(None);
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("unwatched"), "{message}");
+        assert!(message.contains("fence watcher"), "{message}");
+        assert!(
+            !dir.path().join("marker.txt").exists(),
+            "the command never ran"
+        );
+    }
+
+    /// Not a test on its own: the fence watcher that
+    /// [`a_watcher_that_never_exits_cannot_hang_the_gate_or_pass_the_target`]
+    /// starts. Without the watcher's arguments it returns at once.
+    #[cfg(windows)]
+    #[test]
+    fn fence_watcher_stand_in() {
+        job_watch::run_stand_in_for_test();
+    }
+
+    /// TSK-1318: a watcher still running past the target's cleanup grace, as
+    /// when a process in the job cannot end, leaves the gate bounded. The
+    /// target is unconfirmed, a target that requires it does not run, and
+    /// the watcher keeps the fence after the gate's own hold ends.
+    #[cfg(windows)]
+    #[test]
+    fn a_watcher_that_never_exits_cannot_hang_the_gate_or_pass_the_target() {
+        let home = tempfile::tempdir().unwrap();
+        let locks = home.path().join("locks");
+        std::fs::create_dir_all(&locks).unwrap();
+        let admitted = crate::testing::gate_guard::acquire_gate_lock(
+            std::slice::from_ref(&locks),
+            home.path(),
+            "full",
+        )
+        .unwrap();
+        let fences = crate::testing::gate_guard::watched_fence_paths();
+        assert!(!fences.is_empty(), "the full gate holds a fence");
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let run = dir.path().join("target/codeflow-gate/run");
+        std::fs::create_dir_all(&run).unwrap();
+        let mut first = make_target("first", "echo ran> first.txt");
+        first.cleanup_grace_seconds = Some(1);
+        let mut second = make_target("second", "echo ran> second.txt");
+        second.requires = vec!["first".into()];
+        let targets = vec![first, second];
+        let execution = super::super::config::ExecutionConfig {
+            parallel: false,
+            fail_fast: false,
+            worker_budget: Some(4),
+            host_jobs: Some(1),
+            ..Default::default()
+        };
+        job_watch::stand_in_for_test(Some((
+            std::env::current_exe().unwrap(),
+            vec![
+                "--exact".into(),
+                "testing::runner::tests::fence_watcher_stand_in".into(),
+                "--nocapture".into(),
+            ],
+        )));
+        let (sent, received) = std::sync::mpsc::channel();
+        let project = dir.path().to_path_buf();
+        // On its own thread, so an unbounded wait fails here and does not
+        // hang the test.
+        std::thread::spawn(move || {
+            let _ = sent.send(run_dependency_targets(
+                &targets, "full", &project, &execution, &run, &targets,
+            ));
+        });
+        let results = received
+            .recv_timeout(Duration::from_secs(120))
+            .expect("the gate returned though its watcher never exits");
+        job_watch::stand_in_for_test(None);
+        let first = results[0].as_ref().unwrap();
+        assert!(dir.path().join("first.txt").exists(), "{first:?}");
+        assert!(first.termination_unconfirmed, "{first:?}");
+        assert_ne!(first.exit_code, 0, "{first:?}");
+        assert_eq!(first.status(), TargetStatus::CleanupIncomplete, "{first:?}");
+        assert!(
+            first
+                .supervision
+                .as_ref()
+                .unwrap()
+                .cleanup_details
+                .iter()
+                .any(|detail| detail == "process-tree termination unconfirmed"),
+            "{first:?}"
+        );
+        let second = results[1].as_ref().unwrap();
+        assert_eq!(second.status(), TargetStatus::NotRun, "{second:?}");
+        assert_eq!(
+            second.error.as_deref(),
+            Some("not run: prerequisite cleanup incomplete")
+        );
+        assert!(!dir.path().join("second.txt").exists());
+        drop(admitted);
+        for fence in &fences {
+            assert!(
+                !crate::testing::gate_guard::fence_is_free_for_test(fence),
+                "the watcher left running keeps {}",
+                fence.display()
+            );
+        }
     }
 
     #[cfg(windows)]

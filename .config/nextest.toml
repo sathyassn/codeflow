@@ -14,6 +14,11 @@ path = "junit.xml"
 filter = 'package(codeflow-present) | binary(present_cli) | binary(init_e2e) | test(process_group) | binary(test_gate_cli)'
 test-group = "serial"
 
+# TSK-1318: this test prints the timing TSK-1317 needs, also when it passes.
+[[profile.codeflow.overrides]]
+filter = 'test(=a_killed_gates_target_tree_ends_before_older_binaries_get_in)'
+success-output = "immediate"
+
 # Essential uses the full gate's isolation and serial group without coverage.
 # Keep its overrides equal to profile.codeflow; doctests run after nextest.
 [profile.essential]
@@ -26,6 +31,10 @@ path = "junit.xml"
 [[profile.essential.overrides]]
 filter = 'package(codeflow-present) | binary(present_cli) | binary(init_e2e) | test(process_group) | binary(test_gate_cli)'
 test-group = "serial"
+
+[[profile.essential.overrides]]
+filter = 'test(=a_killed_gates_target_tree_ends_before_older_binaries_get_in)'
+success-output = "immediate"
 
 # The hosted Windows test partitions run under this profile (TSK-1321). A test
 # still running after 6 periods of 120 s (12 minutes) is ended and reported as
@@ -46,3 +55,7 @@ path = "junit.xml"
 [[profile.windows-hosted.overrides]]
 filter = 'package(codeflow-present) | binary(present_cli) | binary(init_e2e) | test(process_group) | binary(test_gate_cli)'
 test-group = "serial"
+
+[[profile.windows-hosted.overrides]]
+filter = 'test(=a_killed_gates_target_tree_ends_before_older_binaries_get_in)'
+success-output = "immediate"
