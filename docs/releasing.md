@@ -274,7 +274,7 @@ The workflows apply the table as follows:
   `codeflow-ci.yml:250`, `:273`, `:284-292`) and the two coverage shards
   and their report (`:584`, `:592`, `:667`). The reduced Windows tier
   (`REDUCED_TIER`, `:755-789`) skips the Windows test build, the twelve
-  partitions and `windows-journeys` (`:812`, `:877`), and still runs the
+  partitions and `windows-journeys` (`:812`, `:877`, `:1010`), and still runs the
   Windows checks, the release journey and `windows-tier-journeys` (`:946`,
   `:993`, `:1064`). The `windows` verdict accepts exactly that result
   (`:1132-1138`).
