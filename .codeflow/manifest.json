@@ -1877,7 +1877,7 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "90150e46b11288a0047d25de3b24afc3f764a5263514af143b4769993f97444a",
+      "sha256": "e1e4d8c2c501eae55aa3ab8dcb4895ae81e6c8f84f8deb903f56edb2406f3e51",
       "exec": false
     },
     "CLAUDE.md": {

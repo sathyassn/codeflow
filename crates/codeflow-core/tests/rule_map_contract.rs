@@ -131,6 +131,11 @@ const REFERENCES: &[&str] = &[
     ".codeflow/rules/writing.md",
 ];
 
+/// Rule files shipped after the legacy layout that the map does not point
+/// at from every tier. The legacy manifest leaves them out with the
+/// references, so a legacy project starts with no `.codeflow/rules/`.
+const LATER_RULES: &[&str] = &[".codeflow/rules/capabilities.md"];
+
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -806,7 +811,7 @@ fn legacy_source() -> Legacy {
         "src = \"AGENTS.md.tmpl\"\ndest = \"AGENTS.md\"\nownership = \"managed-region\"\nregion = \"markdown\"\ntiers = [\"standard\"]",
         "src = \"AGENTS.md.tmpl\"\ndest = \"AGENTS.md\"\nownership = \"managed-region\"\nregion = \"markdown\"\ntiers = [\"standard\", \"full\"]",
     );
-    for reference in REFERENCES {
+    for reference in REFERENCES.iter().chain(LATER_RULES) {
         let name = reference.trim_start_matches(".codeflow/rules/");
         // A reference that names the workspace branch renders it from the
         // template context (TSK-165), so its entry may carry `template`.
