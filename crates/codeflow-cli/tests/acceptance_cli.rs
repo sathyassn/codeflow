@@ -1085,6 +1085,66 @@ fn a_late_completion_binds_to_the_landing_merge() {
     }
 }
 
+/// TSK-1309 AC-9: the line's policy, which judges the pull request, names
+/// a `lane/` work prefix the checkout's policy lacks. A task branch that
+/// hand-resolves its sync of the line after an earlier task landed keeps
+/// its own reviewed head, because its task is read with the judged
+/// policy's prefixes.
+#[test]
+fn the_judged_policy_prefix_names_the_branch_task_for_landing_credit() {
+    let prefixes = r#", "branch_prefixes": ["feat/", "fix/", "docs/", "chore/", "plan/", "task/", "lane/", "integration/"]"#;
+    let dir = line_repo_with(&["TSK-001", "TSK-002"], prefixes);
+    let root = dir.path();
+    let branch = "lane/TSK-002-two";
+    git(root, &["switch", "-C", branch, LINE]);
+    write(root, "src/lib.rs", "pub fn two() {}\n");
+    commit(root, "feat: start two");
+    git(root, &["switch", "-C", "task/TSK-001-one", LINE]);
+    write(root, "src/lib.rs", "pub fn one() {}\n");
+    commit(root, "feat: build one");
+    land(root, "task/TSK-001-one");
+    git(root, &["switch", branch]);
+    // Both sides changed `src/lib.rs`, so the sync's resolution is the
+    // task's own work, which only the branch's own review can credit.
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-X",
+            "ours",
+            "-m",
+            "chore: sync the line",
+            LINE,
+        ],
+    );
+    write(root, "src/two.rs", "// reviewed two\n");
+    let reviewed = commit(root, "feat: finish two");
+    write_done(root, "TSK-002", "complete", &reviewed);
+    commit(root, "docs(records): complete TSK-002");
+    // The checkout's own policy lacks `lane/`; the edit is not committed.
+    let path = [".codeflow", "policy.json"].join("/");
+    let policy = std::fs::read_to_string(root.join(&path)).unwrap();
+    write(root, &path, &policy.replace(r#", "lane/""#, ""));
+    let result = ci_on(root, LINE, branch, "Task: TSK-002");
+    assert_passes(&result, "the judged policy's prefix credits the branch");
+    assert!(
+        result.1.contains(SCOPE),
+        "the acceptance check ran: {}",
+        result.1
+    );
+    assert!(
+        !result.1.contains("src/lib.rs"),
+        "the branch's reviewed head must credit its own work: {}",
+        result.1
+    );
+    assert!(
+        !result.1.contains("work.acceptance_binding"),
+        "no landing-credit refusal: {}",
+        result.1
+    );
+}
+
 fn write_adoption(root: &Path, commit: &str) {
     write(
         root,
@@ -3349,12 +3409,13 @@ fn a_recompletion_keeps_a_criterion_amended_on_the_target() {
 
     git(root, &["switch", "-c", "fix/implementation", LINE]);
     write(root, "src/work.rs", "// fixed after review\n");
-    commit(root, "fix: change reviewed work");
+    let fixed = commit(root, "fix: change reviewed work");
     land(root, "fix/implementation");
 
+    // The re-completion reviews the fix itself, so the line into `main`
+    // finds the fix's landing covered by a reviewed head (TSK-1309).
     git(root, &["switch", "-c", "plan/loosen", LINE]);
-    let fresh = head(root);
-    let closeout = format!("{archived}{}", valid_block(&fresh));
+    let closeout = format!("{archived}{}", valid_block(&fixed));
     write(
         root,
         &record_path("TSK-001"),
