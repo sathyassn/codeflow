@@ -42,6 +42,7 @@ pub mod guidance;
 pub mod landed_policy;
 pub mod limits;
 pub mod orient;
+pub mod osv;
 pub mod path_policy;
 pub mod policy;
 pub mod policy_schema;
@@ -488,6 +489,13 @@ mod tests {
                 // not one; a plain string field (such as `direct_changes`)
                 // takes it.
                 if serde_json::from_value::<PolicyLevel>((*value).clone()).is_err() {
+                    return false;
+                }
+                // An `off | on` switch (such as `scan_on_push`) also
+                // defaults to `off`; a level field takes every level.
+                let mut every = defaults.clone();
+                every[key.as_str()] = "warn".into();
+                if serde_json::from_value::<policy::GitPolicy>(every).is_err() {
                     return false;
                 }
                 let mut probe = defaults.clone();

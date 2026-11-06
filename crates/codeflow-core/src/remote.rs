@@ -53,7 +53,9 @@ use std::process::{Command, Stdio};
 
 use serde_json::{json, Value};
 
-use crate::hooks::policy::DEFAULT_REQUIRED_CHECKS;
+use crate::hooks::policy::{COMMIT_STANDARDS_CHECK, DEFAULT_REQUIRED_CHECKS, SECRET_SCAN_CHECK};
+
+pub use crate::hooks::policy::TRUSTED_VERDICTS;
 
 mod fnmatch;
 
@@ -77,15 +79,6 @@ pub const DEFAULT_LINES: &str = "integration/**";
 /// and C require.
 pub const POLICY_WORKFLOW: &str = ".github/workflows/codeflow-policy.yml";
 
-/// The policy verdict job names the policy workflow runs from the default
-/// branch's file for every pull request, on `pull_request_target`. A name
-/// is trusted because it is on this list and the policy workflow declares
-/// it, never because of how it is spelled: the rulesets require
-/// `commit standards` without a prefix (operator decision, 2026-11-06), and
-/// a job of a listed name anywhere else fails the verdict job's producer
-/// refusal step.
-pub const TRUSTED_VERDICTS: &[&str] = &["commit standards", "trusted: release impact"];
-
 /// The prefix `trusted: release impact` still carries. It only shapes the
 /// Mode A name, as the workflow's `ltrimstr("trusted: ")` does; it never
 /// decides whether a name is trusted.
@@ -101,9 +94,9 @@ pub fn is_trusted_verdict(name: &str) -> bool {
 }
 
 /// The `authority:` check run name the GitHub App creates in Mode A for a
-/// trusted verdict: `commit standards` becomes `authority: commit
-/// standards`, and `trusted: release impact` becomes `authority: release
-/// impact`, as the policy workflow writes them.
+/// trusted verdict: `secret scan` becomes `authority: secret scan`, and
+/// `trusted: release impact` becomes `authority: release impact`, as the
+/// policy workflow writes them.
 #[must_use]
 pub fn authority_name(verdict: &str) -> String {
     let bare = verdict.strip_prefix(TRUSTED_PREFIX).unwrap_or(verdict);
@@ -113,26 +106,16 @@ pub fn authority_name(verdict: &str) -> String {
 /// What Mode B does not do, said wherever Mode B is named (TSK-1177 F1).
 /// Its refusal step reads the producers once, when each verdict job ends,
 /// and GitHub takes the newest check run of a name, so a workflow that runs
-/// later can still satisfy a `trusted:` name pinned to GitHub Actions.
-pub const MODE_B_LIMIT: &str = "Mode B is a lower tier: it does not close forgery by a later producer, since a workflow that runs after the verdict job can still produce a trusted: check; only Mode A, the App authority, closes it";
+/// later can still satisfy a trusted verdict name pinned to GitHub Actions.
+pub const MODE_B_LIMIT: &str = "Mode B is a lower tier: it does not close forgery by a later producer, since a workflow that runs after the verdict job can still produce a trusted verdict check; only Mode A, the App authority, closes it";
 
-/// The trusted verdicts B and C cannot do without: the names the rulesets
-/// require that the trusted workflow produces. `trusted: release impact`
-/// joins them where the workflow declares it. `secret scan` is required by
-/// the default branch's ruleset but is still a head-built job, so it is not
-/// a trusted verdict and is not listed here (TSK-1176, TSK-1366).
-const REQUIRED_TRUSTED: &[&str] = &["commit standards"];
+/// The trusted verdicts B and C cannot do without; `trusted: release
+/// impact` joins them where the workflow declares it.
+const REQUIRED_TRUSTED: &[&str] = &[COMMIT_STANDARDS_CHECK, SECRET_SCAN_CHECK];
 
 /// The test verdicts of head code B requires, each where a workflow on the
 /// default branch declares it; `codeflow gates` is required outright.
-/// `secret scan` is here, among the head-built verdicts, until a trusted
-/// scan replaces it (TSK-1366).
-const DEFAULT_BRANCH_TEST_VERDICTS: &[&str] = &[
-    "codeflow gates",
-    "secret scan",
-    "security review",
-    "windows",
-];
+const DEFAULT_BRANCH_TEST_VERDICTS: &[&str] = &["codeflow gates", "security review", "windows"];
 
 /// The test verdicts C requires, each where a workflow on the default
 /// branch declares it; `codeflow gates` is required outright.
@@ -2372,18 +2355,22 @@ printf '{}'
             .contains("solo-administrator"));
     }
 
-    /// TSK-1368: a name is trusted by the explicit list, never by its
-    /// spelling, and its Mode A name drops only the `trusted: ` prefix.
+    /// TSK-1176, TSK-1368: a name is trusted by the explicit table, never by
+    /// its spelling, the required names keep their plain form, and the Mode A
+    /// name drops only the `trusted: ` prefix.
     #[test]
-    fn trusted_verdicts_are_an_explicit_set() {
+    fn trusted_verdicts_are_an_explicit_table() {
         assert!(is_trusted_verdict("commit standards"));
+        assert!(is_trusted_verdict("secret scan"));
         assert!(is_trusted_verdict("trusted: release impact"));
         for name in [
-            "trusted: commit check",
+            "trusted: commit standards",
             "trusted: secret scan",
-            "secret scan",
-            "release impact",
+            "trusted: other",
             "Commit standards",
+            "Secret scan",
+            "release impact",
+            "history scan",
         ] {
             assert!(!is_trusted_verdict(name), "{name}");
         }
@@ -2391,10 +2378,15 @@ printf '{}'
             authority_name("commit standards"),
             "authority: commit standards"
         );
+        assert_eq!(authority_name("secret scan"), "authority: secret scan");
         assert_eq!(
             authority_name("trusted: release impact"),
             "authority: release impact"
         );
+        assert!(REQUIRED_TRUSTED.contains(&"secret scan"));
+        assert!(DEFAULT_REQUIRED_CHECKS.contains(&"secret scan"));
+        // A head-built scan name cannot also be a test verdict of B.
+        assert!(!DEFAULT_BRANCH_TEST_VERDICTS.contains(&"secret scan"));
         let declared = Declared {
             policy_workflow: true,
             policy_text: POLICY_WITH_TRUSTED.to_string(),
@@ -2402,7 +2394,7 @@ printf '{}'
         };
         assert_eq!(
             declared.trusted_names(),
-            ["commit standards", "trusted: release impact"]
+            ["commit standards", "secret scan", "trusted: release impact"]
         );
         let prefixed = Declared {
             policy_workflow: true,
@@ -2422,7 +2414,7 @@ jobs:
     name: 'commit standards'
     runs-on: ubuntu-24.04
   scan:
-    name: 'trusted: secret scan'
+    name: 'secret scan'
   gates:
     runs-on: ubuntu-24.04
   matrix:
@@ -2441,7 +2433,7 @@ jobs:
                 "commit standards",
                 "gates",
                 "other",
-                "trusted: secret scan"
+                "secret scan",
             ]
         );
         assert_eq!(
@@ -2653,7 +2645,8 @@ esac
         assert_eq!(writes.len(), 1, "{writes:?}");
         assert_eq!(writes[0].0, "PUT repos/o/r/rulesets/900");
         // The six live checks stay, now strict, and already hold the
-        // policy's `commit standards`; its two missing rules are added.
+        // policy's `commit standards` and `secret scan`, so a trusted producer
+        // needs no ruleset change (TSK-1176); its two missing rules are added.
         let body = &writes[0].1;
         let kinds: Vec<&str> = body["rules"]
             .as_array()
@@ -2763,6 +2756,9 @@ jobs:
   commit-standards:
     name: 'commit standards'
     runs-on: ubuntu-24.04
+  secret-scan:
+    name: 'secret scan'
+    runs-on: ubuntu-24.04
   release-impact:
     name: 'trusted: release impact'
     runs-on: ubuntu-24.04
@@ -2770,7 +2766,7 @@ jobs:
     environment: codeflow-authority
     runs-on: ubuntu-24.04
     steps:
-      - run: "create 'authority: commit standards' 'authority: release impact'"
+      - run: "create 'authority: commit standards' 'authority: secret scan' 'authority: release impact'"
 "#;
 
     /// A policy workflow whose jobs are only spelled like trusted verdicts:
@@ -3068,17 +3064,18 @@ jobs:
             let policy = match app {
                 Some(app) => pins(&[
                     ("authority: commit standards", app),
+                    ("authority: secret scan", app),
                     ("authority: release impact", app),
                 ]),
                 None => pins(&[
                     ("commit standards", 15368),
+                    ("secret scan", 15368),
                     ("trusted: release impact", 15368),
                 ]),
             };
             let mut expected = policy;
             expected.extend(pins(&[
                 ("codeflow gates", 15368),
-                ("secret scan", 15368),
                 ("security review", 15368),
                 ("windows", 15368),
             ]));
@@ -3104,6 +3101,7 @@ jobs:
                 check_pins(&c),
                 pins(&[
                     ("commit standards", 15368),
+                    ("secret scan", 15368),
                     ("trusted: release impact", 15368),
                     ("codeflow gates", 15368),
                     ("windows", 15368),
@@ -3136,7 +3134,7 @@ jobs:
                     (POLICY_WORKFLOW, POLICY_PREFIXED),
                     (".github/workflows/codeflow-ci.yml", CI_WORKFLOW),
                 ],
-                "does not declare commit standards;",
+                "does not declare commit standards, secret scan;",
             ),
             (
                 vec![(".github/workflows/codeflow-ci.yml", CI_WORKFLOW)],

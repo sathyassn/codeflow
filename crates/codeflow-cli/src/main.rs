@@ -162,6 +162,8 @@ enum Command {
     /// Verify a commit range + branch name against policy — the portable,
     /// binary-sourced CI check (auto-detects the CI platform's range).
     Ci(cmd::ci::CiArgs),
+    /// Run the hosted secret scan and dependency audit locally over base..head.
+    Scan(cmd::scan::ScanArgs),
     /// Generated status view: branch, worktrees, in-flight work, capabilities.
     Status(cmd::status::StatusArgs),
     /// Land a branch locally after gating a rebase or merge candidate.
@@ -211,6 +213,7 @@ fn touches_registry(command: &Command) -> bool {
         Command::Hook(_)
             | Command::GitHook(_)
             | Command::Ci(_)
+            | Command::Scan(_)
             | Command::Validate(_)
             | Command::Work(_)
             | Command::Estimate(_)
@@ -512,6 +515,7 @@ fn run() -> anyhow::Result<()> {
         Command::Portal(args) => std::process::exit(cmd::portal::run(&args, &assets)),
         Command::Validate(args) => std::process::exit(cmd::validate::run(&args)),
         Command::Ci(args) => std::process::exit(cmd::ci::run(&args)),
+        Command::Scan(args) => std::process::exit(cmd::scan::run(&args)),
         Command::Status(args) => std::process::exit(cmd::status::run(&args)),
         Command::Integrate(args) => std::process::exit(cmd::integrate::run(&args)),
         Command::Models(args) => std::process::exit(cmd::models::run(&args)),

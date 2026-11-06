@@ -242,3 +242,21 @@ the pull request into `main` that removes the job cannot satisfy a
 `release impact` requirement either. Until then the head-built job's weaker
 trust stays on that name. The rest of the enablement order is unchanged.
 The accepted text above is unchanged.
+
+## Note, 2026-11-06: required checks keep plain names
+
+Operator decision, 2026-11-06 12:15. A required check keeps its plain name
+with no `trusted:` prefix, and only the trusted workflow produces it. Any
+head-run producer of that name is removed in the same change. This changes
+the Mode B text above for the scan: the verdict job is `secret scan`, not
+`trusted: secret scan`, and that name keeps a producer, the default branch's
+job (TSK-1176). A name is trusted by the explicit table
+`hooks::policy::TRUSTED_VERDICTS`, never by a prefix. `trusted: release
+impact` keeps its prefix until TSK-1178 renames it.
+
+GitHub runs `pull_request_target` from the default branch, whatever the pull
+request's base (changelog of 2025-11-07; run 42255054674 here). So a producer
+lands on the default branch before any ruleset or consumer expects it, and a
+pull request cannot supply its own new trusted producer. The pull request
+that replaces a required head-run job has no check of that name, so it needs
+a separate decision at merge.

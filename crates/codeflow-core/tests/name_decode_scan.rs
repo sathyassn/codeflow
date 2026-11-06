@@ -365,6 +365,22 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:secret-scan-lines",
     ),
+    // TSK-1176: a gitleaks configuration from the base, decoded as the hosted job decodes it (UTF-8 with replacement) only to find its `[extend] path`; gitleaks itself reads the bytes, and a path the decode changed names no file the base holds, which refuses.
+    (
+        "codeflow-core/src/hooks/gitleaks/range.rs",
+        "write_inputs",
+        "from_utf8_lossy",
+        2,
+        "format-contract",
+    ),
+    // TSK-1176: osv-scanner's output, shown to a person and searched only for its own phrase "error during extraction"; the verdict comes from its exit code.
+    (
+        "codeflow-core/src/hooks/osv.rs",
+        "audit",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // The first line gitleaks wrote to stderr at the error level, escaped and shown in the incomplete-scan message; any output has already failed the scan and nothing is decided from its text (TSK-412).
     (
         "codeflow-core/src/hooks/gitleaks.rs",
@@ -2872,6 +2888,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "lines",
         1,
         "framing:git-commit-message-lines",
+    ),
+    // TSK-1176: a gitleaks configuration that parses as neither TOML nor JSON has no `[extend] path` to copy; gitleaks then fails to load it, which fails the scan.
+    (
+        "crates/codeflow-core/src/hooks/gitleaks/range.rs",
+        "extended",
+        "obtain-absent:from_str",
+        2,
+        "format-contract",
     ),
     // TSK-412: `gitleaks version` output trimmed, then compared whole with the pinned ASCII version; any other output refuses.
     (
@@ -7018,6 +7042,11 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/git/unreadable.rs", "read_regular_file", "is_file", 1, "Type check on symlink_metadata, which already succeeded; a non-file is not opened so a FIFO cannot block the scan, and it is reported as readable because only a refused stat or open counts (TSK-1315)."),
     ("crates/codeflow-core/src/git/unreadable.rs", "walk", "is_dir", 1, "Type check on a read_dir entry only chooses to descend; a non-directory entry is still read, so no file is skipped as absent (TSK-1315)."),
     ("crates/codeflow-core/src/hooks/gitleaks.rs", "private::open_folder", "is_dir", 1, "Type check on the descriptor opened without following a link; anything but a directory this user owns with mode 0700 refuses, which fails the scan as incomplete (TSK-412)."),
+    ("crates/codeflow-core/src/hooks/gitleaks/range.rs", "real_git", "is_file", 1, "A PATH folder whose git is not a file is skipped; with none the range scan refuses, which fails closed at block (TSK-1176)."),
+    ("crates/codeflow-core/src/hooks/gitleaks/range.rs", "write_inputs", "is_file", 1, "An absolute [extend] path outside the checkout that is not a file ends the copied chain, as the hosted job's isfile check does; gitleaks then reads that path itself and fails to load a missing file (TSK-1176)."),
+    ("crates/codeflow-core/src/hooks/osv.rs", "Scanner::locate", "is_file", 1, "A PATH folder whose osv-scanner is not a file is skipped; with none the audit reports it missing, which refuses at block, and a found file runs only after its checksum matches the pin (TSK-1176)."),
+    ("crates/codeflow-core/src/hooks/osv.rs", "base_suppressions", "exists", 1, "A base suppression whose folder the head's tree holds as a file refuses, as the hosted step does; an absent folder is created (TSK-1176)."),
+    ("crates/codeflow-core/src/hooks/osv.rs", "base_suppressions", "is_dir", 1, "Paired with exists: anything but a folder at a suppression's folder refuses the audit (TSK-1176)."),
     ("crates/codeflow-core/src/hooks/gitleaks.rs", "Engine::locate", "is_file", 1,"A PATH folder whose gitleaks is not a file is skipped; when no folder has one the engine is Missing, a git.secret_scan_engine finding that refuses at block, and a found file still runs only after its checksum matches the pin (TSK-412)."),
     ("crates/codeflow-core/src/hooks/sandbox_state.rs", "read_text", "is_file", 2, "Type checks on obtained metadata, before and after opening; any non-file is unreadable, a strict-rule trigger, so a FIFO, device or directory never reads as an absent layer (TSK-397)."),
     ("crates/codeflow-core/src/hooks/sandbox_state.rs", "claude_layers", "ErrorKind::NotFound", 1, "Only native NotFound on read_dir of the managed settings drop-in directory means it adds no layer (TSK-397); every other error is reported by doctor's state-root check, which then fails."),

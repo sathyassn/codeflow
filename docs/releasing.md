@@ -121,7 +121,7 @@ Local-artifact authority job:
   exceeds GitHub's 125,000-character release body.
 - It checks the latest exact-source GitHub Actions main-push results of
   `codeflow-ci` and `codeflow-release` (`publication_workflows`) for
-  `release state`, `codeflow gates`, `windows`, secret scan and security review.
+  `release state`, `codeflow gates`, `windows`, `history scan` and security review.
   - `codeflow gates` is the one verdict over the gate's parallel parts, its
     coverage shards and their report, which applies the line floor.
   - `windows` is the one verdict over the Windows build, checks, test

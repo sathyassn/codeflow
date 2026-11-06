@@ -92,6 +92,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "production constant naming the gitleaks release page, not a test remote",
     ),
     (
+        "codeflow-core/src/hooks/osv.rs",
+        "github.com",
+        "production constant naming the osv-scanner release page, not a test remote",
+    ),
+    (
         "codeflow-core/src/scaffold/release_pin.rs",
         "github.com",
         "production constant naming the release download base, not a test remote",
