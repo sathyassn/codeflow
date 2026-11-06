@@ -54,6 +54,44 @@ def load_journeys() -> list[dict]:
         return tomllib.load(handle)["journey"]
 
 
+# The task statuses the record parser accepts (`models/status.rs` TaskStatus).
+STATUSES = {"todo", "blocked", "in_progress", "complete", "cancelled"}
+STATUS_KEY = re.compile(r"^status[ \t]*:(.*)$")
+DOUBLE_QUOTED = re.compile(r'"([^"\\]*)"(?:[ \t]+#.*)?')
+SINGLE_QUOTED = re.compile(r"'((?:[^']|'')*)'(?:[ \t]+#.*)?")
+
+
+def record_status(text: str) -> tuple[str | None, str | None]:
+    """The front matter's `status`, read as the YAML scalar the record parser
+    reads, so a quoted `"complete"` counts as complete. Returns (status, None),
+    or (None, reason) for anything it cannot read: no front matter, no or a
+    repeated `status` key, an escape or tag, or a value outside STATUSES."""
+    lines = text.splitlines()
+    if not lines or lines[0].rstrip() != "---":
+        return None, "no front matter"
+    try:
+        end = next(i for i in range(1, len(lines)) if lines[i].rstrip() == "---")
+    except StopIteration:
+        return None, "front matter is not closed"
+    found = [m.group(1) for m in (STATUS_KEY.match(line) for line in lines[1:end]) if m]
+    if not found:
+        return None, "no status line"
+    if len(found) > 1:
+        return None, "more than one status line"
+    raw = found[0].strip()
+    if raw.startswith('"'):
+        match = DOUBLE_QUOTED.fullmatch(raw)
+        value = match.group(1) if match else None
+    elif raw.startswith("'"):
+        match = SINGLE_QUOTED.fullmatch(raw)
+        value = match.group(1).replace("''", "'") if match else None
+    else:
+        value = re.split(r"[ \t]+#", raw, maxsplit=1)[0].strip()
+    if value not in STATUSES:
+        return None, f"unreadable status {raw!r}"
+    return value, None
+
+
 def pending_problems(journeys: list[dict], root: Path) -> list[str]:
     """Problems with pending journeys, judged against the task records."""
     problems: list[str] = []
@@ -67,11 +105,10 @@ def pending_problems(journeys: list[dict], root: Path) -> list[str]:
         except OSError as error:
             problems.append(f"{journey['text']}: pending on {task}, whose record cannot be read: {error}")
             continue
-        status = next(
-            (line[len("status:"):].split("#")[0].strip() for line in text.splitlines() if line.startswith("status:")),
-            None,
-        )
-        if status == "complete":
+        status, error = record_status(text)
+        if error:
+            problems.append(f"{journey['text']}: pending on {task}, whose status cannot be read: {error}")
+        elif status == "complete":
             problems.append(f"{journey['text']}: pending on {task}, which is complete; name its tests")
         if journey.get("control") or journey.get("fault"):
             problems.append(f"{journey['text']}: a pending journey names no tests")
