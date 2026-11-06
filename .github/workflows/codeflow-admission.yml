@@ -2,7 +2,7 @@
 # codeflow-ci run completes (TSK-1239). This repository's own workflow; the
 # consumer scaffold has no admission mechanism.
 #
-# The required check `trusted: commit standards` (codeflow-policy.yml)
+# The required check `commit standards` (codeflow-policy.yml)
 # judges once and never waits for codeflow-ci, so while that run is pending
 # it refuses and holds no runner. When the run completes, `workflow_run`
 # starts this workflow from the default branch, and it re-runs the commit
@@ -96,4 +96,4 @@ jobs:
         run: |
           python3 -I scripts/policy-admission.py rerun --repo "$REPOSITORY" --run "$RUN_ID" --head "$HEAD_SHA" \
             --workflow .github/workflows/codeflow-ci.yml --policy-workflow .github/workflows/codeflow-policy.yml \
-            --job "trusted: commit standards"
+            --job "commit standards"

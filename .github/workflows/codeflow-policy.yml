@@ -48,7 +48,7 @@
 # That workflow joins this concurrency group (`codeflow-policy-pr-<n>`) with
 # the same `queue: max`, so it starts only after a policy run in progress
 # ends, and the re-run it requests waits behind it. It writes no check: the
-# native job here stays the only producer of `trusted: commit standards`.
+# native job here stays the only producer of `commit standards`.
 #
 # The event pins the head and the base commit: the job fetches both as data
 # and refuses a head that is not the event's. Only the body comes from the
