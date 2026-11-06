@@ -29,6 +29,7 @@ mod id_registry;
 mod judging;
 mod line_tip;
 pub(crate) mod pr_body;
+mod timing;
 mod work_records;
 mod workflow_change;
 
@@ -52,6 +53,7 @@ use pr_body::find_section;
 use crate::embedded::EmbeddedAssets;
 
 #[derive(Debug, Args)]
+#[allow(clippy::struct_excessive_bools)] // independent command-line switches
 pub struct CiArgs {
     /// Base ref of the range (exclusive). When omitted: CI base metadata,
     /// `CODEFLOW_DEFAULT_BRANCH`, then --into or the branch's declared target, then policy
@@ -191,6 +193,18 @@ pub struct CiArgs {
     /// a landing candidate, and the hook itself judges a push to a line.
     #[arg(long, value_name = "REF", hide = true)]
     pub pushed_ref: Option<String>,
+
+    /// Print how long each check took, on stderr after the verdict, one
+    /// line per check and then the total. The times only report; they
+    /// change no verdict.
+    #[arg(long)]
+    pub timings: bool,
+
+    /// Write each check's time to this file, one `<check>\t<microseconds>`
+    /// line each: the pre-push hook names the slowest checks when a push
+    /// goes over its budget (TSK-1306).
+    #[arg(long, value_name = "FILE", hide = true)]
+    pub timings_out: Option<PathBuf>,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -351,8 +365,20 @@ fn ci_environment(
     Ok(values)
 }
 
-#[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
 pub fn run(args: &CiArgs) -> i32 {
+    let mut timings = timing::Timings::start();
+    let code = run_timed(args, &mut timings);
+    if args.timings {
+        timings.print();
+    }
+    if let Some(out) = &args.timings_out {
+        timings.write(out);
+    }
+    code
+}
+
+#[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
+fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     let _judgment = codeflow_core::workgraph::history::judgment();
     if args.read_release_impact {
         return read_release_impact();
@@ -533,6 +559,7 @@ pub fn run(args: &CiArgs) -> i32 {
         || (base_candidates.clone(), range_source.clone()),
         |from| (vec![from], "--commits-from".to_string()),
     );
+    timings.lap("setup");
     let range = evaluate_commit_range(&root, &commit_bases, &head, &commit_source, git);
     tagged.extend(range.violations);
     if range.ran {
@@ -545,6 +572,7 @@ pub fn run(args: &CiArgs) -> i32 {
         Some(false) => skipped.push("added-lines"),
         None => {}
     }
+    timings.lap("commit");
     conflict_markers::dispatch(
         &root,
         git,
@@ -556,7 +584,9 @@ pub fn run(args: &CiArgs) -> i32 {
     // What this change does to the workflows is base..head; the wider
     // commit range `--commits-from` selects (pre-push) also holds commits
     // the target already carries, whose workflow edits are not this one's.
+    timings.lap("conflict-markers");
     workflow_change::dispatch(&root, base_sha.as_deref(), &head, &mut tagged, &mut ran);
+    timings.lap("workflow-change");
 
     match codeflow_core::hooks::path_policy::PathPolicy::from_git(configured).and_then(|paths| {
         let size_and_ignore = judging::content_rules(&root, authority.as_ref())?;
@@ -595,6 +625,7 @@ pub fn run(args: &CiArgs) -> i32 {
             ),
         }),
     }
+    timings.lap("path-policy");
 
     let destination = match args.destination.clone() {
         Some(destination) => Some(destination),
@@ -660,6 +691,7 @@ pub fn run(args: &CiArgs) -> i32 {
             false
         }
     };
+    timings.lap("release-scope");
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
     let target_tip = target_tip(
@@ -670,6 +702,7 @@ pub fn run(args: &CiArgs) -> i32 {
         &environment,
     );
     target_containment_warning(&root, &line_target, &head, &target_tip, &names, &mut tagged);
+    timings.lap("target-tip");
     if scope_ready {
         record_checks(
             &root,
@@ -691,6 +724,7 @@ pub fn run(args: &CiArgs) -> i32 {
             &target_tip,
             &mut tagged,
             &mut ran,
+            timings,
         );
     }
 
@@ -712,6 +746,7 @@ pub fn run(args: &CiArgs) -> i32 {
         }
         ran.push("branch-naming");
     }
+    timings.lap("branch-naming");
 
     // --- pull request classification (TSK-104) -----------------------------
     // Every product pull request has one class; tracked work runs the
@@ -734,6 +769,7 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut tagged,
         &mut ran,
     );
+    timings.lap("line-tip");
     // A push of a task branch stacked on reviewed predecessor heads (SPC-013
     // R-42, issue #69); a pull request check keeps the landing rule.
     let stacked = if pr_body.is_none() && !pr_context {
@@ -775,6 +811,7 @@ pub fn run(args: &CiArgs) -> i32 {
             Some(change_class::classify(Some(&inventory), &project))
         }
     };
+    timings.lap("change-class");
     let work_class = if scope_ready {
         work_checks(
             &root,
@@ -788,6 +825,7 @@ pub fn run(args: &CiArgs) -> i32 {
             &stacked,
             &mut tagged,
             &mut ran,
+            timings,
         )
     } else {
         None
@@ -806,6 +844,7 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut tagged,
         &mut ran,
     );
+    timings.lap("own-branch-preflight");
     // The visible workgraph is checked once for tracked work, whether the
     // task comes from the branch or from the `Task:` line (TSK-133).
     if own_task
@@ -816,6 +855,7 @@ pub fn run(args: &CiArgs) -> i32 {
     {
         visible_graph_check(&root, level, &mut tagged, &mut ran);
     }
+    timings.lap("visible-graph");
 
     // --- PR-body check ----------------------------------------------------
     // A Bitbucket PR without a body channel was warned about when resolving
@@ -874,6 +914,7 @@ pub fn run(args: &CiArgs) -> i32 {
         );
         ran.push("PR-body");
     }
+    timings.lap("PR-body");
 
     settle_watched_paths(&mut tagged, pr_body.as_deref());
     if let Some(running) = args.run_level {
@@ -1005,6 +1046,7 @@ fn work_checks<'a>(
     stacked: &[ReviewedPin],
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&'a str>,
+    timings: &mut timing::Timings,
 ) -> Option<classification::Class> {
     let base = match resolve_base(root, base_candidates) {
         Ok(value) => value,
@@ -1085,6 +1127,7 @@ fn work_checks<'a>(
         );
         None
     };
+    timings.lap("classification");
     acceptance::dispatch(
         root,
         git,
@@ -1098,6 +1141,7 @@ fn work_checks<'a>(
         tagged,
         ran,
     );
+    timings.lap("acceptance");
     tagged.extend(tracked_review(
         root,
         git,
@@ -1106,6 +1150,7 @@ fn work_checks<'a>(
         range_parts.as_ref(),
         head,
     ));
+    timings.lap("review-row");
     class
 }
 
@@ -1235,6 +1280,7 @@ fn record_checks(
     target_tip: &Result<String, NoTarget>,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
+    timings: &mut timing::Timings,
 ) {
     // On a release range, the records it brings are judged where each was
     // introduced on its line (SPC-013 R-120).
@@ -1283,6 +1329,7 @@ fn record_checks(
     } else {
         None
     };
+    timings.lap("record-range");
     work_records::dispatch(
         root,
         base_candidates,
@@ -1294,7 +1341,9 @@ fn record_checks(
         tagged,
         ran,
     );
+    timings.lap("work-records");
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
+    timings.lap("id-registry");
 }
 
 /// The tip of `target`, the branch the range lands on, which the Outcome

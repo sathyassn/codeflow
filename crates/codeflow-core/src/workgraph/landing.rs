@@ -248,6 +248,9 @@ pub(super) struct RecordStore<'r> {
     held: HashMap<(Oid, String, Option<String>), Held>,
     /// Per task identity, whether each blob may spell it ([`may_spell`]).
     spells: HashMap<(String, Option<String>), HashMap<Oid, bool>>,
+    /// Whether each task file's version shows a completion, by blob: the
+    /// status and body it is read from are the blob's own text (TSK-1306).
+    completions: HashMap<Oid, bool>,
     /// Why no history read here is complete, when it is not.
     overlay: Option<String>,
     /// The commits a shallow clone's history is cut at.
@@ -283,6 +286,7 @@ impl<'r> RecordStore<'r> {
             read: HashMap::new(),
             held: HashMap::new(),
             spells: HashMap::new(),
+            completions: HashMap::new(),
             overlay,
             boundary,
             introduced: HashMap::new(),
@@ -494,11 +498,12 @@ impl<'r> RecordStore<'r> {
             if let Some(doubt) = two_uids(task, &uids) {
                 found.doubt.get_or_insert(doubt);
             }
-            if held
-                .records
-                .iter()
-                .any(|(_, record)| super::acceptance::shows_completion(record))
-            {
+            let completions = &mut self.completions;
+            if held.records.iter().any(|(blob, record)| {
+                *completions
+                    .entry(*blob)
+                    .or_insert_with(|| super::acceptance::shows_completion(record))
+            }) {
                 found.witness = Some(commit);
                 return found;
             }

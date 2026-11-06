@@ -254,6 +254,19 @@ where
     declared_limit(crate::git::remote_query::FETCH_TIMEOUT_KEY, deserializer)
 }
 
+/// The push set budget's policy key ([`super::limits::PUSH_BUDGET`]).
+pub const PUSH_BUDGET_KEY: &str = match super::limits::PUSH_BUDGET.key {
+    Some(key) => key,
+    None => panic!("the push budget is set by a policy key"),
+};
+
+fn push_budget_seconds<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    declared_limit(PUSH_BUDGET_KEY, deserializer)
+}
+
 /// The `git` section of `.codeflow/policy.json` (charter §6.1, verbatim
 /// schema). Defaults carry the v1 strictness decision (D16).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -350,6 +363,13 @@ pub struct GitPolicy {
     /// [`DEFAULT_FETCH_TIMEOUT_SECONDS`](crate::git::remote_query::DEFAULT_FETCH_TIMEOUT_SECONDS).
     #[serde(deserialize_with = "remote_fetch_timeout_seconds")]
     pub remote_fetch_timeout_seconds: u64,
+    /// Seconds the pre-push set may take before the hook reports the
+    /// overrun and its slowest checks (TSK-1306). It only reports; a push
+    /// over it still lands when its checks pass. An integer of at least 1
+    /// with no policy ceiling; default
+    /// [`PUSH_BUDGET`](super::limits::PUSH_BUDGET).
+    #[serde(deserialize_with = "push_budget_seconds")]
+    pub push_budget_seconds: u64,
     /// The status check names a protected branch requires before merging,
     /// on a branch that is up to date with its base (`codeflow remote
     /// protect`, `codeflow doctor --check remote-perimeter`). Default
@@ -664,6 +684,7 @@ impl Default for GitPolicy {
             remote_query_timeout_seconds: crate::git::remote_query::DEFAULT_TIMEOUT_SECONDS,
             remote_query_attempts: crate::git::remote_query::DEFAULT_ATTEMPTS,
             remote_fetch_timeout_seconds: crate::git::remote_query::DEFAULT_FETCH_TIMEOUT_SECONDS,
+            push_budget_seconds: super::limits::PUSH_BUDGET.default,
             required_checks: DEFAULT_REQUIRED_CHECKS
                 .iter()
                 .map(ToString::to_string)

@@ -28,7 +28,10 @@
 //! cannot be recovered and is not claimed. This proves transition legality
 //! only, never review or authorship.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::rc::Rc;
 
 use git2::{Oid, Repository};
 
@@ -203,6 +206,79 @@ pub fn step_allowed(kind: RecordKind, from: Option<&str>, to: &str) -> Result<()
 /// What a record file states: its id and status, or why it does not parse.
 type Parsed = Result<(String, String), String>;
 
+/// The record files of one kind at one commit, read once for a whole
+/// read-only judgment (TSK-1306). Every record a range judges walks the
+/// same commits, and each walk asks which file holds its id at each one;
+/// reading and parsing every record file once per commit, instead of once
+/// per record and commit, gives each walk the answer it read before.
+#[derive(Default)]
+struct CommitIndex {
+    /// Each id the files state, with the files stating it, in tree order.
+    holders: HashMap<String, Vec<(Oid, String)>>,
+    /// For each file stem, the first file named for it that does not
+    /// parse: its place in tree order, its path and the parse error.
+    unparsable: HashMap<String, (usize, String, String)>,
+    /// The first file whose blob cannot be read, with its place in tree
+    /// order; reading stopped there, as the walk did.
+    stop: Option<(usize, Unreadable)>,
+}
+
+impl CommitIndex {
+    /// The file holding `id` at `commit`, with the refusals the walk gave
+    /// when it read the files one by one: a file named for the id that does
+    /// not parse, a blob it could not read before that, or two files
+    /// stating the id. Whichever the tree order meets first wins.
+    fn holder(&self, id: &str, commit: Oid) -> Result<Option<(Oid, String)>, Unreadable> {
+        if let Some((at, path, error)) = self.unparsable.get(id) {
+            if self.stop.as_ref().is_none_or(|(stop, _)| at < stop) {
+                return Err(Unreadable::new(
+                    Cause::Unparsable,
+                    format!("{path} at {}: {error}", short(commit)),
+                ));
+            }
+        }
+        if let Some((_, unreadable)) = &self.stop {
+            return Err(unreadable.clone());
+        }
+        let holders = self.holders.get(id).map_or(&[][..], Vec::as_slice);
+        if holders.len() > 1 {
+            let paths = holders
+                .iter()
+                .map(|(_, path)| path.as_str())
+                .collect::<Vec<_>>();
+            return Err(Unreadable::new(
+                Cause::Unparsable,
+                format!(
+                    "{id} is held by more than one record file at {}: {}",
+                    short(commit),
+                    paths.join(", ")
+                ),
+            ));
+        }
+        Ok(holders.first().cloned())
+    }
+}
+
+type MemoKey = (PathBuf, RecordKind, Oid);
+
+thread_local! {
+    /// Commit indexes by repository, kind and commit, kept while a
+    /// judgment scope is open. An index that stopped at an unreadable blob
+    /// is never kept, so a later read tries the object store again.
+    static INDEXES: RefCell<HashMap<MemoKey, Rc<CommitIndex>>> = RefCell::new(HashMap::new());
+    /// What each record blob states, by repository, kind and blob, kept
+    /// while a judgment scope is open. A blob names its bytes, and the id
+    /// and status a record states do not depend on its path.
+    static PARSES: RefCell<HashMap<MemoKey, Parsed>> = RefCell::new(HashMap::new());
+}
+
+/// Forget every kept index and parse: the judgment scope closed, or an
+/// object fetch may have changed what the store holds.
+pub(super) fn clear_memo() {
+    INDEXES.with(|memo| memo.borrow_mut().clear());
+    PARSES.with(|memo| memo.borrow_mut().clear());
+}
+
 /// One tree entry: its name, object id and kind.
 type Entry = (String, Oid, Option<git2::ObjectType>);
 
@@ -326,21 +402,68 @@ impl<'r> Walker<'r> {
         Ok(files)
     }
 
-    /// What the record blob at `path` states, read once per blob.
+    /// What the record blob at `path` states, read once per blob, and once
+    /// per judgment where a judgment scope is open.
     fn parse(&mut self, blob: Oid, path: &str) -> Result<Parsed, Unreadable> {
         if let Some(parsed) = self.parsed.get(&blob) {
             return Ok(parsed.clone());
         }
-        let found = self
-            .repo
-            .find_blob(blob)
-            .map_err(|error| Unreadable::new(Cause::MissingObject, error.message()))?;
-        let parsed = std::str::from_utf8(found.content())
-            .map_err(|error| error.to_string())
-            .and_then(|text| RecordView::parse(self.kind, path, text))
-            .map(|record| (record.id, record.status));
+        let key = (self.repo.path().to_path_buf(), self.kind, blob);
+        let kept = history::in_judgment();
+        let hit = kept
+            .then(|| PARSES.with(|memo| memo.borrow().get(&key).cloned()))
+            .flatten();
+        let parsed = if let Some(hit) = hit {
+            hit
+        } else {
+            let found = self
+                .repo
+                .find_blob(blob)
+                .map_err(|error| Unreadable::new(Cause::MissingObject, error.message()))?;
+            let parsed = std::str::from_utf8(found.content())
+                .map_err(|error| error.to_string())
+                .and_then(|text| RecordView::parse(self.kind, path, text))
+                .map(|record| (record.id, record.status));
+            if kept {
+                PARSES.with(|memo| memo.borrow_mut().insert(key, parsed.clone()));
+            }
+            parsed
+        };
         self.parsed.insert(blob, parsed.clone());
         Ok(parsed)
+    }
+
+    /// The record files of this kind at `commit`, indexed by the id each
+    /// states (see [`CommitIndex`]), shared by every walk of the judgment.
+    fn index(&mut self, commit: Oid) -> Result<Rc<CommitIndex>, Unreadable> {
+        let key = (self.repo.path().to_path_buf(), self.kind, commit);
+        let kept = history::in_judgment();
+        if kept {
+            if let Some(hit) = INDEXES.with(|memo| memo.borrow().get(&key).cloned()) {
+                return Ok(hit);
+            }
+        }
+        let mut index = CommitIndex::default();
+        for (place, (blob, path)) in self.record_files(commit)?.into_iter().enumerate() {
+            match self.parse(blob, &path) {
+                Err(unreadable) => {
+                    index.stop = Some((place, unreadable));
+                    break;
+                }
+                Ok(Ok((id, _))) => index.holders.entry(id).or_default().push((blob, path)),
+                Ok(Err(error)) => {
+                    if let Some(stem) = path.rsplit('/').next().and_then(markdown_stem) {
+                        let stem = stem.to_string();
+                        index.unparsable.entry(stem).or_insert((place, path, error));
+                    }
+                }
+            }
+        }
+        let index = Rc::new(index);
+        if kept && index.stop.is_none() {
+            INDEXES.with(|memo| memo.borrow_mut().insert(key, Rc::clone(&index)));
+        }
+        Ok(index)
     }
 
     /// The record file holding the id at `commit`: a file at a record path
@@ -352,42 +475,7 @@ impl<'r> Walker<'r> {
         if let Some(found) = self.found.get(&commit) {
             return Ok(found.clone());
         }
-        let mut holders = Vec::new();
-        for (blob, path) in self.record_files(commit)? {
-            match self.parse(blob, &path)? {
-                Ok((id, _)) if id == self.id => holders.push((blob, path)),
-                Ok(_) => {}
-                Err(error) => {
-                    let named = path
-                        .rsplit('/')
-                        .next()
-                        .and_then(markdown_stem)
-                        .is_some_and(|stem| stem == self.id);
-                    if named {
-                        return Err(Unreadable::new(
-                            Cause::Unparsable,
-                            format!("{path} at {}: {error}", short(commit)),
-                        ));
-                    }
-                }
-            }
-        }
-        if holders.len() > 1 {
-            let paths = holders
-                .iter()
-                .map(|(_, path)| path.as_str())
-                .collect::<Vec<_>>();
-            return Err(Unreadable::new(
-                Cause::Unparsable,
-                format!(
-                    "{} is held by more than one record file at {}: {}",
-                    self.id,
-                    short(commit),
-                    paths.join(", ")
-                ),
-            ));
-        }
-        let found = holders.pop();
+        let found = self.index(commit)?.holder(&self.id, commit)?;
         self.found.insert(commit, found.clone());
         Ok(found)
     }
@@ -1046,5 +1134,75 @@ mod tests {
             }),
             "{judged:?}"
         );
+    }
+
+    /// TSK-1306 AC-3: inside a judgment scope, where every walk shares the
+    /// commit indexes and parses, each record's steps are exactly those the
+    /// walk gives with nothing shared: a legal chain, an illegal step, an id
+    /// two files state, a file named for an id that does not parse, and an
+    /// id that appears inside the range.
+    #[test]
+    fn shared_indexes_give_every_record_the_steps_it_had_alone() {
+        let (dir, _) = repo("todo");
+        let root = dir.path();
+        let write = |rel: &str, text: &str| {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        let other = |id: &str, status: &str| record(status).replace("TSK-001", id);
+        write(
+            "project-management/tasks/TSK-002.md",
+            &other("TSK-002", "blocked"),
+        );
+        write(
+            "project-management/tasks/TSK-003.md",
+            &other("TSK-003", "todo"),
+        );
+        write(
+            "project-management/tasks/TSK-004.md",
+            &other("TSK-004", "todo"),
+        );
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-qm", "chore: more"]);
+        let base = Oid::from_str(&git(root, &["rev-parse", "HEAD"])).unwrap();
+        at(root, "blocked");
+        write(
+            "project-management/tasks/TSK-002.md",
+            &other("TSK-002", "complete"),
+        );
+        write(
+            "project-management/tasks/TSK-003.md",
+            "---\nid: [broken\n---\n",
+        );
+        write(
+            "project-management/tasks/TSK-004.md",
+            &other("TSK-004", "blocked"),
+        );
+        write(
+            "project-management/epics/EPC-001/tasks/TSK-004.md",
+            &other("TSK-004", "blocked"),
+        );
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-qm", "chore: change"]);
+        let head = at(root, "todo");
+        let repo = Repository::open(root).unwrap();
+        let ids = ["TSK-001", "TSK-002", "TSK-003", "TSK-004", "TSK-005"];
+        let alone: Vec<String> = ids
+            .iter()
+            .map(|id| format!("{:?}", judge(&repo, base, head, RecordKind::Task, id)))
+            .collect();
+        assert!(alone[1].contains("blocked -> complete"), "{alone:?}");
+        assert!(alone[2].contains("TSK-003.md at"), "{alone:?}");
+        assert!(alone[3].contains("more than one record file"), "{alone:?}");
+        let _scope = history::judgment();
+        for _ in 0..2 {
+            let shared: Vec<String> = ids
+                .iter()
+                .map(|id| format!("{:?}", judge(&repo, base, head, RecordKind::Task, id)))
+                .collect();
+            assert_eq!(shared, alone);
+        }
+        assert!(INDEXES.with(|memo| !memo.borrow().is_empty()));
     }
 }
