@@ -115,8 +115,9 @@ pub enum RemoteCommand {
         #[arg(long, value_name = "OWNER/NAME")]
         repo: Option<String>,
 
-        /// Answer as a git credential helper: `get` prints the token as the
-        /// password of `x-access-token`; other operations print nothing.
+        /// Answer as a git credential helper: `get` for `https://github.com`
+        /// prints the token as the password of `x-access-token`; another
+        /// host or operation prints nothing.
         #[arg(long, value_name = "OPERATION")]
         git_credential: Option<String>,
     },

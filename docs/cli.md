@@ -203,6 +203,14 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--profile <PROFILE>` | Who reviews and who moves the default branch: solo-administrator (no approval; only the administrator role updates the default branch) or independent-review (one approval, stale approvals dismissed, the last push approved by someone else; only the maintain role updates it). One of `solo-administrator`, `independent-review`. Default `solo-administrator`. |
 | | `--check-app <APP_ID>` | The id of the GitHub App that creates the authority: checks (Mode A). Without it, the trusted: checks are pinned to GitHub Actions (Mode B). |
 | | `--lines <PATTERN>` | The integration-line branch pattern "codeflow line checks" targets. Default `integration/**`. |
+| `codeflow remote setup-apps` | | Create the two GitHub Apps of `CodeFlow` for this repository: the authority App (Checks write only), with the environment `codeflow-authority` restricted to the default branch holding its key secret `CODEFLOW_AUTHORITY_APP_KEY` and id variable `CODEFLOW_AUTHORITY_APP_ID`, and the agent App (Contents and Pull requests write only), whose key is kept in this computer's credential store |
+| | `--authority-name <NAME>` | The authority App's name (default `codeflow-authority-<repo>`); GitHub App names are unique across GitHub, at most 34 characters. |
+| | `--agent-name <NAME>` | The agent App's name (default `codeflow-agent-<repo>`). |
+| | `--no-agent` | Set up the authority App only. |
+| | `--paste` | Write each App's page to a file and read back the address GitHub opens, instead of serving the page on a local port. |
+| `codeflow remote agent-token` | | Print a GitHub installation token of this repository's agent App, valid for one hour, for `GH_TOKEN` or `git push`. The App's key is read from this computer's credential store and never printed |
+| | `--repo <OWNER/NAME>` | The repository, `owner/name` (default: the `origin` remote). |
+| | `--git-credential <OPERATION>` | Answer as a git credential helper: `get` for `https://github.com` prints the token as the password of `x-access-token`; another host or operation prints nothing. |
 
 ### Verify
 
