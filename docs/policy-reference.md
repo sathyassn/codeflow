@@ -1250,7 +1250,9 @@ one session. Step 7 has no ordering dependency.
    deployment branches and tags: selected branches and tags, the default
    branch only.
 5. In that environment, add the secret `CODEFLOW_AUTHORITY_APP_KEY` (the key
-   file's contents) and the variable `CODEFLOW_AUTHORITY_APP_ID`.
+   file's contents) and the variable `CODEFLOW_AUTHORITY_APP_ID`. Store the
+   key nowhere else: doctor fails on a secret of that name at repository or
+   organization level or in another environment.
 6. Run `codeflow remote protect --check-app <id> --lines "integration/**"`
    as the administrator; retire the foreign rulesets; run `codeflow doctor
    --check remote-perimeter` and stop only when it is green with no
@@ -1263,6 +1265,27 @@ one session. Step 7 has no ordering dependency.
 
 On GitHub Free, environment secrets exist only in public repositories; a
 private repository on Free uses Mode B.
+
+### The Actions event policy on public repositories
+
+The trusted verdicts and the `authority:` checks come from
+`codeflow-policy.yml`, which runs only on `pull_request_target`, always from
+the default branch's copy of the file. From 2026-12-02 GitHub blocks
+that event in public repositories unless an Actions event policy allows it,
+so a public repository needs one policy that targets that workflow alone and
+allows the events it runs on (TSK-1347). The command and the reasons for its
+shape are in `assets/base/ci/README.md` "Public GitHub repositories". This
+repository's policy is 11322, applied by the operator on 2026-11-05.
+
+The policy keeps the existing trust design: the event still runs the
+default branch's workflow, which reads the head only as git data
+(ADR-0091). On a public repository whose policy workflow runs on
+`pull_request_target`, `codeflow remote protect` creates the policy, named
+`codeflow policy check`, when none of that name exists. It never changes
+an existing policy of that name, so it neither widens nor narrows its
+events or targets. Reading and creating policies needs an administrator's
+token; under any other token the run reports the policy as not written and
+adds it to the manual checklist.
 
 ### Recovery window
 
@@ -1297,19 +1320,37 @@ writes B's empty bypass list back. The same route applies to C for a line.
 to its required-checks answer:
 
 - **Fail:** any ruleset named as B or C lists a bypass actor, or two
-  rulesets share B's or C's name (`remote protect` writes neither).
+  rulesets share B's or C's name (`remote protect` writes neither); the
+  `codeflow-authority` environment admits more than the default branch
+  (no deployment branch rule, protected branches, or patterns other than
+  the default branch alone); an Actions secret named
+  `CODEFLOW_AUTHORITY_APP_KEY` is set at repository level, among the
+  organization secrets shared with the repository, or in any environment
+  other than `codeflow-authority`. Each of these lets head-branch code read
+  the App's key and post `authority:` checks under its id. Doctor reads
+  secret names only, so the key stored under another name is beyond it.
 - **Warn:** with `--profile`, the owned rulesets differ from it or one is
   missing; classic protection on the default branch has `enforce_admins`
   off; a required-checks rule on the line pattern is not strict; no active
   ruleset requires a pull request on the line pattern (judged with
   `--profile`, or when some ruleset targets the lines); an `authority:`
-  check is unpinned or pinned to GitHub Actions; the `codeflow-authority`
-  environment admits more than the default branch; a job other than the
+  check is unpinned or pinned to GitHub Actions; a job other than the
   authority job in the policy workflow references that environment; a
   ruleset other than A, B and C requires a name no workflow on the default
-  branch declares.
-- **Note, never a pass:** a bypass list, ruleset, environment or workflow
-  that cannot be read.
+  branch declares; on a public repository, a workflow on the default branch
+  runs on `pull_request_target` and no active Actions event policy allows
+  that event for it (the warning carries the policy to create), a policy
+  that targets it leaves out an event it runs on, or an allowing policy
+  also covers other workflows (its workflow targets are anything but that
+  one path: none, `~ALL`, a wildcard, or another path).
+- **Note, never a pass:** a bypass list, ruleset, environment, environment
+  list, secret list or workflow that cannot be read (secret lists need an
+  administrator's token, and an answer over 16 MiB counts as unread, never
+  as its first or last part); the repository's visibility, or on a public
+  repository an Actions event policy list or policy that cannot be read
+  (reported as "unreadable: needs an administrator's token" when the host
+  refuses it), or an organization policy that selects repositories by
+  property or that the list names no source for.
 
 The line pattern is C's when C exists, else `integration/**`.
 

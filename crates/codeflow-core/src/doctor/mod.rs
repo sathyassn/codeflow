@@ -242,6 +242,21 @@ impl Options {
         }
     }
 
+    /// [`Self::do_exec_bounded`] for an answer doctor judges: the whole of
+    /// it, or an error, never a shortened answer (TSK-1347).
+    fn do_read_bounded(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<String, String> {
+        if let Some(f) = self.exec_command {
+            f(cmd, args)
+        } else {
+            run_complete_command(cmd, args, timeout, HOST_ANSWER_BYTES)
+        }
+    }
+
     fn do_exec_stdin(&self, cmd: &str, args: &[&str], stdin: &str) -> Result<String, String> {
         if let Some(f) = self.exec_command_stdin {
             f(cmd, args, stdin)
@@ -293,6 +308,9 @@ const CI_PLACEHOLDER_MARKS: [&str; 2] = [
 const MAX_SETTINGS_BYTES: u64 = 16 * 1024 * 1024;
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const VERSION_PROBE_OUTPUT_BYTES: usize = 64 * 1024;
+/// The most of a host's answer doctor reads. A workflow file is often longer
+/// than a version probe keeps: the shipped `codeflow-ci.yml` is.
+const HOST_ANSWER_BYTES: usize = 16 * 1024 * 1024;
 const VERSION_PROBE_POLL: Duration = Duration::from_millis(10);
 
 /// Ordered list of all check names.
@@ -1988,7 +2006,7 @@ fn probe_version<'a>(probe_id: &str, observed: &'a str) -> Option<&'a str> {
 }
 
 struct ProbeCapture {
-    /// The last [`VERSION_PROBE_OUTPUT_BYTES`] bytes read.
+    /// The last bytes read, up to the capture's limit.
     bytes: Vec<u8>,
     /// How many earlier bytes were dropped to keep that bound.
     dropped: usize,
@@ -2007,9 +2025,28 @@ struct CaptureLoss {
 }
 
 /// Run `cmd` bounded by `timeout`: its stdout when it succeeds, else its
-/// stderr.
+/// stderr. Only the last [`VERSION_PROBE_OUTPUT_BYTES`] of stdout are kept, so
+/// this is for a probe that reads a version; an answer doctor judges goes
+/// through [`run_complete_command`].
 fn run_bounded_command(cmd: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
     let run = run_captured(cmd, args, timeout, None, None)?;
+    if run.code == Some(0) {
+        Ok(run.stdout)
+    } else {
+        Err(run.stderr)
+    }
+}
+
+/// Run `cmd` bounded by `timeout`: all of its stdout, up to `limit` bytes,
+/// when it succeeds, else its stderr. Output over `limit` is an error, so a
+/// long answer is never judged from its tail (TSK-1347).
+fn run_complete_command(
+    cmd: &str,
+    args: &[&str],
+    timeout: Duration,
+    limit: usize,
+) -> Result<String, String> {
+    let run = run_captured_up_to(cmd, args, timeout, None, None, limit)?;
     if run.code == Some(0) {
         Ok(run.stdout)
     } else {
@@ -2027,12 +2064,12 @@ fn run_captured(
     stdin: Option<&str>,
     cwd: Option<&Path>,
 ) -> Result<CapturedRun, String> {
-    run_captured_with(cmd, args, timeout, stdin, cwd).map(|(run, _)| run)
+    run_captured_with(cmd, args, timeout, stdin, cwd, VERSION_PROBE_OUTPUT_BYTES)
+        .map(|(run, _)| run)
 }
 
-/// [`run_captured_with`] for a caller that judges the whole output
-/// (TSK-1003): output over the bound, a read error or stdout that is not
-/// UTF-8 is an error, never a shortened or altered answer.
+/// [`run_captured_up_to`] with the bound of a version or canary probe
+/// (TSK-1003).
 fn run_captured_complete(
     cmd: &str,
     args: &[&str],
@@ -2040,14 +2077,28 @@ fn run_captured_complete(
     stdin: Option<&str>,
     cwd: Option<&Path>,
 ) -> Result<CapturedRun, String> {
-    let (run, loss) = run_captured_with(cmd, args, timeout, stdin, cwd)?;
+    run_captured_up_to(cmd, args, timeout, stdin, cwd, VERSION_PROBE_OUTPUT_BYTES)
+}
+
+/// [`run_captured_with`] for a caller that judges the whole output: output
+/// over `limit`, a read error or stdout that is not UTF-8 is an error, never
+/// a shortened or altered answer.
+fn run_captured_up_to(
+    cmd: &str,
+    args: &[&str],
+    timeout: Duration,
+    stdin: Option<&str>,
+    cwd: Option<&Path>,
+    limit: usize,
+) -> Result<CapturedRun, String> {
+    let (run, loss) = run_captured_with(cmd, args, timeout, stdin, cwd, limit)?;
     if let Some(error) = loss.error {
         return Err(format!("its output could not be read completely: {error}"));
     }
     if loss.stdout_dropped > 0 || loss.stderr_dropped > 0 {
         return Err(format!(
             "it printed more than {} KiB on a stream, so its output was not judged",
-            VERSION_PROBE_OUTPUT_BYTES / 1024
+            limit / 1024
         ));
     }
     if !loss.stdout_utf8 {
@@ -2057,15 +2108,16 @@ fn run_captured_complete(
 }
 
 /// Run `cmd`, killing its process tree after `timeout`, and capture how it
-/// ended. With `stdin` the child reads that text (otherwise it inherits
-/// doctor's stdin); with `cwd` it runs there. `Err` means it did not start
-/// or did not finish in time.
+/// ended, keeping the last `limit` bytes of each stream. With `stdin` the
+/// child reads that text (otherwise it inherits doctor's stdin); with `cwd`
+/// it runs there. `Err` means it did not start or did not finish in time.
 fn run_captured_with(
     cmd: &str,
     args: &[&str],
     timeout: Duration,
     stdin: Option<&str>,
     cwd: Option<&Path>,
+    limit: usize,
 ) -> Result<(CapturedRun, CaptureLoss), String> {
     let mut command = crate::git::process(cmd);
     command
@@ -2098,8 +2150,14 @@ fn run_captured_with(
         // No input: the child inherits doctor's stdin, as documented above.
         None => (command.spawn().map_err(|error| error.to_string())?, None),
     };
-    let stdout = child.stdout.take().map(spawn_probe_reader);
-    let stderr = child.stderr.take().map(spawn_probe_reader);
+    let stdout = child
+        .stdout
+        .take()
+        .map(|pipe| spawn_probe_reader(pipe, limit));
+    let stderr = child
+        .stderr
+        .take()
+        .map(|pipe| spawn_probe_reader(pipe, limit));
     let started = Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
@@ -2186,10 +2244,11 @@ fn terminate_process_tree(child: &mut std::process::Child) {
 
 fn spawn_probe_reader<R: Read + Send + 'static>(
     mut pipe: R,
+    limit: usize,
 ) -> std::sync::mpsc::Receiver<ProbeCapture> {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mut retained = Vec::with_capacity(VERSION_PROBE_OUTPUT_BYTES);
+        let mut retained = Vec::with_capacity(limit.min(VERSION_PROBE_OUTPUT_BYTES));
         let mut dropped = 0;
         let mut error = None;
         let mut chunk = [0_u8; 8192];
@@ -2206,8 +2265,8 @@ fn spawn_probe_reader<R: Read + Send + 'static>(
                 break;
             }
             retained.extend_from_slice(&chunk[..read]);
-            if retained.len() > VERSION_PROBE_OUTPUT_BYTES {
-                let excess = retained.len() - VERSION_PROBE_OUTPUT_BYTES;
+            if retained.len() > limit {
+                let excess = retained.len() - limit;
                 retained.drain(..excess);
                 dropped += excess;
             }
@@ -4816,6 +4875,36 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("timed out after 50 ms"));
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    /// TSK-1347: an answer doctor judges is whole or an error. A long
+    /// answer keeps its front, and one over the limit never comes back as
+    /// its tail, which could parse as a workflow with no `on:`.
+    #[cfg(unix)]
+    #[test]
+    fn a_judged_answer_is_whole_or_refused() {
+        let print = |bytes: usize| format!("printf start; head -c {bytes} /dev/zero | tr '\\0' x");
+        let timeout = Duration::from_secs(30);
+        let past_a_probe = VERSION_PROBE_OUTPUT_BYTES * 2;
+        let answer = run_complete_command(
+            "sh",
+            &["-c", &print(past_a_probe)],
+            timeout,
+            HOST_ANSWER_BYTES,
+        )
+        .unwrap();
+        assert!(answer.starts_with("start"), "{}", &answer[..16]);
+        assert_eq!(answer.len(), past_a_probe + "start".len());
+
+        let error = run_complete_command("sh", &["-c", &print(4096)], timeout, 2048).unwrap_err();
+        assert!(error.contains("more than 2 KiB"), "{error}");
+        // Callers read "404" in an error as a missing resource, and this
+        // error names the limit in KiB.
+        assert!(!(HOST_ANSWER_BYTES / 1024).to_string().contains("404"));
+
+        let error = run_complete_command("sh", &["-c", "echo refused >&2; exit 1"], timeout, 2048)
+            .unwrap_err();
+        assert!(error.contains("refused"), "{error}");
     }
 
     #[test]

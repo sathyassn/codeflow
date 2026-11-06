@@ -325,6 +325,173 @@ esac
     );
 }
 
+/// TSK-1347: on a public repository whose default branch runs the shipped
+/// policy workflow on `pull_request_target`, doctor reads the Actions event
+/// policies through `gh`: the live policy of `sathyassn/codeflow` passes, no
+/// policy warns with the fix, and a token that cannot read them gets a
+/// note, never a pass. The authority key as a repository secret fails
+/// doctor (AC-9).
+#[cfg(unix)]
+#[test]
+fn doctor_judges_the_actions_event_policy_of_a_public_repository() {
+    let cases = [
+        (
+            "allowed",
+            r#"printf '%s' '{"total_count":1,"policies":[{"id":11322,"name":"codeflow policy check","source_type":"Repository","source":"o/r","enforcement":"active"}]}'"#,
+            "ok    remote-perimeter: o/r main requires",
+        ),
+        (
+            "blocked",
+            r#"printf '%s' '{"total_count":0,"policies":[]}'"#,
+            "no Actions event policy allows pull_request_target for .github/workflows/codeflow-policy.yml",
+        ),
+        (
+            "unreadable",
+            "echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1",
+            "note  remote-perimeter: o/r main requires",
+        ),
+        // AC-9: the policy allows the event, but the authority key is a
+        // repository secret, so doctor fails.
+        (
+            "keyed",
+            r#"printf '%s' '{"total_count":1,"policies":[{"id":11322,"name":"codeflow policy check","source_type":"Repository","source":"o/r","enforcement":"active"}]}'"#,
+            "FAIL  remote-perimeter: o/r: an Actions secret named CODEFLOW_AUTHORITY_APP_KEY is set in the repository o/r",
+        ),
+    ];
+    for (case, policies, expected) in cases {
+        let secrets = if case == "keyed" {
+            r#"{"total_count":1,"secrets":[{"name":"CODEFLOW_AUTHORITY_APP_KEY"}]}"#
+        } else {
+            r#"{"total_count":0,"secrets":[]}"#
+        };
+        let out = public_repository_doctor(policies, secrets);
+        let text = stdout(&out);
+        // Only a failure fails doctor; a warning or a note never does.
+        assert_eq!(
+            out.status.success(),
+            case != "keyed",
+            "{case}: exit {:?}: {text}",
+            out.status
+        );
+        assert!(text.contains(expected), "{case}: {text}");
+        match case {
+            "blocked" => {
+                assert!(
+                    text.contains("warn  remote-perimeter: o/r main requires"),
+                    "{case}: {text}"
+                );
+                // The clearing step is the event policy, never the
+                // up-to-date rule the branch already has.
+                assert!(
+                    text.contains("create or narrow the Actions event policy the finding names"),
+                    "{case}: {text}"
+                );
+                assert!(
+                    !text.contains("Require branches to be up to date"),
+                    "{case}: {text}"
+                );
+            }
+            "unreadable" => {
+                assert!(
+                    text.contains("the Actions event policies of o/r are unreadable: needs an administrator's token"),
+                    "{case}: {text}"
+                );
+                assert!(
+                    text.contains("read the Actions event policies in the host rules"),
+                    "{case}: {text}"
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `codeflow doctor --check remote-perimeter` in a public repository `o/r`
+/// whose default branch carries the shipped policy workflow, through a
+/// `gh` shim that answers the policy list with the shell command
+/// `policies` and the repository secret list with `secrets`.
+#[cfg(unix)]
+fn public_repository_doctor(policies: &str, secrets: &str) -> std::process::Output {
+    use std::os::unix::fs::PermissionsExt;
+
+    let shipped = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/base/ci/codeflow-policy.yml"
+    );
+    let shipped_ci = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/base/ci/codeflow-ci.yml"
+    );
+    // Both answers are longer than a version probe keeps, as on a real
+    // default branch: the shipped CI workflow already is, and the policy
+    // workflow is padded so that doctor must read its `on:` from the front.
+    let workflows = tempfile::tempdir().unwrap();
+    let policy_workflow = workflows.path().join("codeflow-policy.yml");
+    let mut padded = fs::read_to_string(shipped).unwrap();
+    padded.push_str(&"# a long workflow\n".repeat(8192));
+    fs::write(&policy_workflow, padded).unwrap();
+    let policy_workflow = policy_workflow.display();
+    // The ruleset requires exactly the default checks, whatever they name.
+    let required = codeflow_core::hooks::policy::DEFAULT_REQUIRED_CHECKS
+        .iter()
+        .map(|name| format!(r#"{{"context":"{name}","integration_id":15368}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "public");
+    let git = repo.path().join(".git");
+    fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    fs::create_dir_all(git.join("objects")).unwrap();
+    fs::create_dir_all(git.join("refs/heads")).unwrap();
+    fs::write(
+        git.join("config"),
+        "[core]\n\trepositoryformatversion = 0\n\tbare = false\n[remote \"origin\"]\n\turl = https://github.com/o/r.git\n",
+    )
+    .unwrap();
+
+    let shims = tempfile::tempdir().unwrap();
+    let gh = shims.path().join("gh");
+    fs::write(
+        &gh,
+        format!(
+            r#"#!/bin/sh
+case "$*" in
+  "api repos/o/r") printf '%s' '{{"default_branch":"main","visibility":"public","name":"r","id":1,"owner":{{"login":"o","type":"User"}}}}' ;;
+  "api repos/o/r/rules/branches/main?per_page=100&page=1") printf '%s' '[{{"type":"required_status_checks","parameters":{{"strict_required_status_checks_policy":true,"required_status_checks":[{required}]}},"ruleset_id":7}}]' ;;
+  "api repos/o/r/rulesets/7") printf '%s' '{{"id":7,"bypass_actors":[]}}' ;;
+  "api repos/o/r/rulesets?per_page=100&page=1") printf '%s' '[]' ;;
+  "api repos/o/r/contents/.github/workflows?ref=main") printf '%s' '[{{"path":".github/workflows/codeflow-ci.yml","type":"file"}},{{"path":".github/workflows/codeflow-policy.yml","type":"file"}}]' ;;
+  "api -H Accept: application/vnd.github.raw repos/o/r/contents/.github/workflows/codeflow-ci.yml?ref=main") cat '{shipped_ci}' ;;
+  "api -H Accept: application/vnd.github.raw repos/o/r/contents/.github/workflows/codeflow-policy.yml?ref=main") cat '{policy_workflow}' ;;
+  "api repos/o/r/actions/policies?per_page=100&page=1") {policies} ;;
+  "api repos/o/r/actions/policies/11322") printf '%s' '{{"id":11322,"name":"codeflow policy check","source_type":"Repository","source":"o/r","enforcement":"active","conditions":{{"workflow_path":{{"exclude":[],"include":[".github/workflows/codeflow-policy.yml"]}}}},"rules":[{{"type":"restrict_action_events","parameters":{{"allowed_events":["pull_request_target"]}}}}]}}' ;;
+  "api repos/o/r/actions/secrets?per_page=100&page=1") printf '%s' '{secrets}' ;;
+  "api repos/o/r/environments?per_page=100&page=1") printf '%s' '{{"total_count":0,"environments":[]}}' ;;
+  *) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
+esac
+"#
+            ),
+        )
+        .unwrap();
+    let mut perms = fs::metadata(&gh).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&gh, perms).unwrap();
+    let path = format!(
+        "{}:{}",
+        shims.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    codeflow()
+        .args(["doctor", "--check", "remote-perimeter"])
+        .current_dir(repo.path())
+        .env("CODEFLOW_HOME", home.path())
+        .env("PATH", path)
+        .output()
+        .unwrap()
+}
+
 /// Round 23: `remote protect` finds its project as main does, the nearest
 /// directory initialized for `CodeFlow`, never the git work tree root, so a
 /// project nested inside another repository protects its own branches.

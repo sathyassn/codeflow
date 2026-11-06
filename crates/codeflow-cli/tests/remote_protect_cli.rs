@@ -182,8 +182,8 @@ const FOREIGN: &str = r#"{"id":24379074,"name":"main required checks","target":"
 
 /// A `gh` that answers from `<host>`: `list` holds one ruleset summary per
 /// line, `rs-<id>.json` each full ruleset, `wf/` the default branch's
-/// workflows; every write is logged to `writes`, stored, and answered as
-/// stored.
+/// workflows, `policies` the Actions event policy list; every write is
+/// logged to `writes`, stored, and answered as stored.
 #[cfg(unix)]
 fn recorded_host(dir: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
@@ -193,6 +193,7 @@ fn recorded_host(dir: &Path) -> PathBuf {
     std::fs::write(host.join("wf/policy.yml"), POLICY).unwrap();
     std::fs::write(host.join("wf/ci.yml"), CI).unwrap();
     std::fs::write(host.join("rs-24379074.json"), FOREIGN).unwrap();
+    std::fs::write(host.join("policies"), r#"{"total_count":0,"policies":[]}"#).unwrap();
     std::fs::write(
         host.join("list"),
         "{\"id\":24379074,\"name\":\"main required checks\",\"target\":\"branch\",\"source_type\":\"Repository\"}\n",
@@ -221,6 +222,11 @@ case "$*" in
     id="${{4##*/}}"; body=$(cat); printf 'PUT %s\n' "$id" >> "$h/writes"
     printf '%s' "$body" | sed "s/^{{/{{\"id\":$id,/" > "$h/rs-$id.json"
     cat "$h/rs-$id.json" ;;
+  "api repos/o/r/actions/policies?"*) cat "$h/policies" ;;
+  "api -X POST repos/o/r/actions/policies --input -")
+    cat > "$h/policy-body"; printf 'POST policy\n' >> "$h/writes"
+    printf '{{"total_count":1,"policies":[{{"id":11322,"name":"codeflow policy check"}}]}}' > "$h/policies"
+    printf '{{"id":11322,"name":"codeflow policy check"}}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 "#
@@ -232,7 +238,8 @@ esac
 }
 
 /// AC-2 and AC-6 at the command line: the first run creates A, B and C
-/// beside the foreign ruleset; the second writes nothing; the foreign
+/// beside the foreign ruleset, and the Actions event policy of this public
+/// repository (TSK-1347 AC-8); the second writes nothing; the foreign
 /// ruleset is byte for byte what it was.
 #[cfg(unix)]
 #[test]
@@ -250,11 +257,22 @@ fn two_runs_write_the_owned_rulesets_once_and_never_the_foreign_one() {
         "created ruleset 'codeflow authority checks' (1002) on ~DEFAULT_BRANCH",
         "created ruleset 'codeflow line checks' (1003) on refs/heads/integration/**",
         "strict checks: trusted: commit standards (app 15368), trusted: secret scan (app 15368), codeflow gates (app 15368), windows (app 15368)",
+        "created Actions event policy 'codeflow policy check' (11322) for .github/workflows/codeflow-policy.yml alone, allowing pull_request_target",
     ] {
         assert!(report.contains(name), "{name}: {report}");
     }
     let writes = std::fs::read_to_string(host.join("writes")).unwrap();
-    assert_eq!(writes, "POST 1001\nPOST 1002\nPOST 1003\n");
+    assert_eq!(writes, "POST 1001\nPOST 1002\nPOST 1003\nPOST policy\n");
+    let policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(host.join("policy-body")).unwrap()).unwrap();
+    assert_eq!(
+        policy["conditions"]["workflow_path"]["include"],
+        serde_json::json!([".github/workflows/codeflow-policy.yml"])
+    );
+    assert_eq!(
+        policy["rules"][0]["parameters"]["allowed_events"],
+        serde_json::json!(["pull_request_target"])
+    );
 
     let second = codeflow(dir.path(), Some(&bin), &["remote", "protect"]);
     let report = text(&second);
@@ -264,6 +282,10 @@ fn two_runs_write_the_owned_rulesets_once_and_never_the_foreign_one() {
             .matches("already as intended, nothing written")
             .count(),
         3,
+        "{report}"
+    );
+    assert!(
+        report.contains("'codeflow policy check' (11322) exists and was left as it is"),
         "{report}"
     );
     assert_eq!(
