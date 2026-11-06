@@ -3164,24 +3164,36 @@ jobs:
         );
     }
 
-    /// TSK-1347 AC-8: a policy with the name is left as it is, however
-    /// wide, so nothing is widened or narrowed by `remote protect`; two of
-    /// the name, or a list it cannot read, write nothing and say so.
+    /// TSK-1347 AC-8: a policy with the name is left as it is, whether it
+    /// matches what `remote protect` would write or differs from it (here
+    /// wider, for every workflow and one more event), so nothing is widened
+    /// or narrowed; two of the name, or a list it cannot read, write
+    /// nothing and say so.
     #[test]
     fn remote_protect_never_changes_an_event_policy() {
-        let existing =
-            json!({ "id": 77, "name": "codeflow policy check", "enforcement": "active" });
-        let host = standard_with(|fake| fake.policies = RefCell::new(vec![existing.clone()]));
-        let report = apply_authority(&host, solo());
-        assert!(host.policy_writes.borrow().is_empty());
-        assert_eq!(report.status, ProtectStatus::Applied);
-        assert!(
-            report.lines.iter().any(|line| line.starts_with(
-                "Actions event policy 'codeflow policy check' (77) exists and was left as it is"
-            )),
-            "{:?}",
-            report.lines
-        );
+        let mut matching = event_policy_body(POLICY_WORKFLOW, &[GATED_EVENT.to_string()]);
+        matching["id"] = json!(77);
+        let mut different = matching.clone();
+        different["conditions"]["workflow_path"]["include"] = json!(["~ALL"]);
+        different["rules"][0]["parameters"]["allowed_events"] =
+            json!([GATED_EVENT, "pull_request"]);
+        for existing in [&matching, &different] {
+            let host = standard_with(|fake| fake.policies = RefCell::new(vec![existing.clone()]));
+            let report = apply_authority(&host, solo());
+            assert!(host.policy_writes.borrow().is_empty(), "{existing}");
+            assert_eq!(*host.policies.borrow(), [existing.clone()]);
+            assert_eq!(report.status, ProtectStatus::Applied);
+            assert!(
+                report.lines.iter().any(|line| {
+                    line.starts_with(
+                    "Actions event policy 'codeflow policy check' (77) exists and was left as it is"
+                )
+                }),
+                "{existing}: {:?}",
+                report.lines
+            );
+        }
+        let existing = matching;
 
         let host = standard_with(|fake| {
             fake.policies = RefCell::new(vec![
