@@ -1349,9 +1349,17 @@ fn binding_source(
     ) {
         Landed::NoMerge => Err(direct),
         Landed::Span { merge, head } => {
-            if let Some(problem) =
-                reviewed_span_problem(repo, task, Landing::Commit(head), reviewed, Stacking::Never)
-            {
+            let problem = match blob_at(repo, reviewed, &task.path)? {
+                Some(_) => reviewed_span_problem(
+                    repo,
+                    task,
+                    Landing::Commit(head),
+                    reviewed,
+                    Stacking::Never,
+                ),
+                None => landed_record_problem(repo, task, landing, reviewed, merge, head),
+            };
+            if let Some(problem) = problem {
                 return Err(format!("the landing merge {merge} brings {head}, and {problem}; review the result that landed"));
             }
             Ok(CompletionProof {
@@ -1363,6 +1371,58 @@ fn binding_source(
         Landed::Refused(problem) => Err(problem),
         Landed::NotALanding(why) => Err(format!("{direct} ({why})")),
     }
+}
+
+/// A record planned on the receiving line may supply the scope missing
+/// from the reviewed head, but only after `task_landing` proved transport.
+fn landed_record_problem(
+    repo: &Repository,
+    task: &RecordView,
+    landing: Landing<'_>,
+    reviewed: Oid,
+    merge: Oid,
+    head: Oid,
+) -> Option<String> {
+    let check = || -> Result<(), String> {
+        let planned = blob_at(repo, merge, &task.path)?
+            .ok_or_else(|| {
+                format!(
+                    "{} is missing at completion: neither the reviewed commit {reviewed} nor the landing merge has it, so the line never planned it",
+                    task.path
+                )
+            })?;
+        let parent = first_parent(repo, merge)?.ok_or("the landing merge has no first parent")?;
+        if blob_at(repo, parent, &task.path)?.as_deref() != Some(planned.as_str()) {
+            return Err(format!(
+                "{} at the landing merge differs from its first parent; its scope was not planned on the receiving line",
+                task.path
+            ));
+        }
+        let completed = match landing {
+            Landing::Commit(at) => blob_at(repo, at, &task.path)?
+                .ok_or_else(|| format!("{} is missing at completion {at}", task.path))?,
+            Landing::Worktree { .. } => task.content.clone(),
+        };
+        if reviewed_part(&planned) != reviewed_part(&completed) {
+            // The caller adds the one instruction to review what landed.
+            return Err(
+                "the record changed outside its status and Closeout after the landing merge".into(),
+            );
+        }
+        // The record may be absent at both ends. Do not let that skip the
+        // comparison of the reviewed work with the second parent that landed.
+        if let Some(change) = later_path_change(repo, &task.path, reviewed, head) {
+            return Err(match change {
+                LaterChange::Paths { count, first } => format!(
+                    "{count} {} changed between the reviewed commit {reviewed} and {head}, first: {first}",
+                    if count == 1 { "path" } else { "paths" }
+                ),
+                LaterChange::Other(problem) => problem,
+            });
+        }
+        Ok(())
+    };
+    check().err()
 }
 
 /// Whether a reviewed span may stack clean merges of the target.
@@ -2110,6 +2170,26 @@ fn later_change_judged(
     reviewed: Oid,
     head: Oid,
 ) -> Option<LaterChange> {
+    if let Some(change) = later_path_change(repo, path, reviewed, head) {
+        return Some(change);
+    }
+    let Ok(Some(then)) = blob_at(repo, reviewed, path) else {
+        return Some(LaterChange::Other(format!(
+            "{path} is not in the reviewed commit, so its scope was never reviewed; it appeared"
+        )));
+    };
+    (reviewed_part(&then) != reviewed_part(completed)).then(|| {
+        LaterChange::Other("the record changed outside its status and Closeout".to_string())
+    })
+}
+
+/// Changes outside the task record, even when that record is absent.
+fn later_path_change(
+    repo: &Repository,
+    path: &str,
+    reviewed: Oid,
+    head: Oid,
+) -> Option<LaterChange> {
     let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree()).ok();
     let (Some(before), Some(after)) = (tree(reviewed), tree(head)) else {
         return Some(LaterChange::Other("the trees cannot be read".to_string()));
@@ -2128,14 +2208,7 @@ fn later_change_judged(
             first: first.clone(),
         });
     }
-    let Ok(Some(then)) = blob_at(repo, reviewed, path) else {
-        return Some(LaterChange::Other(format!(
-            "{path} is not in the reviewed commit, so its scope was never reviewed; it appeared"
-        )));
-    };
-    (reviewed_part(&then) != reviewed_part(completed)).then(|| {
-        LaterChange::Other("the record changed outside its status and Closeout".to_string())
-    })
+    None
 }
 
 /// The tip of the line `task` belongs to: its declared integration target
@@ -6308,6 +6381,283 @@ mod tests {
                 &run.criteria(),
             )
         }
+    }
+
+    #[derive(Clone, Copy)]
+    enum LineRecordCase {
+        Planned,
+        TaskAddedRecord,
+        RecordOnlySpan,
+        MissingAtMerge,
+        UnreviewedSpan,
+        ChangedMerge,
+    }
+
+    impl AdoptionFixture {
+        fn line_record(case: LineRecordCase) -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            git(dir.path(), &["init", "-q", "-b", "main"]);
+            git(dir.path(), &["config", "user.email", "t@example.com"]);
+            git(dir.path(), &["config", "user.name", "t"]);
+            let mut f = Self {
+                dir,
+                base: Oid::ZERO_SHA1,
+                reviewed: Oid::ZERO_SHA1,
+                span: Oid::ZERO_SHA1,
+                merge: Oid::ZERO_SHA1,
+            };
+            f.write(ADOPTION_EPIC, "---\nid: EPC-001\nstatus: planning\n---\n");
+            f.base = f.commit();
+            git(f.dir.path(), &["branch", ADOPTION_LINE]);
+            git(f.dir.path(), &["switch", "-qc", "task/TSK-001-work"]);
+            f.write("src/work.rs", "// reviewed work\n");
+            f.reviewed = f.commit();
+            let record = format!("---\nid: TSK-001\nstatus: in_progress\nintegration_target: {ADOPTION_LINE}\n---\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n\n## Closeout\n\nPending.\n");
+            match case {
+                LineRecordCase::TaskAddedRecord | LineRecordCase::RecordOnlySpan => {
+                    f.write(ADOPTION_TASK, &record);
+                    f.commit();
+                }
+                LineRecordCase::UnreviewedSpan => {
+                    f.write("src/unreviewed.rs", "// never reviewed\n");
+                    f.commit();
+                }
+                _ => {}
+            }
+            f.span = f.head();
+            git(f.dir.path(), &["switch", "-q", ADOPTION_LINE]);
+            if !matches!(
+                case,
+                LineRecordCase::TaskAddedRecord | LineRecordCase::MissingAtMerge
+            ) {
+                f.write(ADOPTION_TASK, &record);
+                f.commit();
+            }
+            git(
+                f.dir.path(),
+                &[
+                    "merge",
+                    "-q",
+                    "--no-ff",
+                    "-m",
+                    "land task",
+                    "task/TSK-001-work",
+                ],
+            );
+            if matches!(case, LineRecordCase::ChangedMerge) {
+                f.write("src/merge-only.rs", "// added by the merge\n");
+                git(f.dir.path(), &["add", "-A"]);
+                git(f.dir.path(), &["commit", "--amend", "--no-edit", "-q"]);
+            }
+            f.merge = f.head();
+            // Two later clean landings change paths outside the task record.
+            for (branch, path) in [
+                ("task/later-one", "src/one.rs"),
+                ("task/later-two", "src/two.rs"),
+            ] {
+                git(f.dir.path(), &["switch", "-qc", branch]);
+                f.write(path, "// later work\n");
+                f.commit();
+                git(f.dir.path(), &["switch", "-q", ADOPTION_LINE]);
+                git(
+                    f.dir.path(),
+                    &["merge", "-q", "--no-ff", "-m", "later landing", branch],
+                );
+            }
+            git(f.dir.path(), &["switch", "-qc", "task/complete"]);
+            if matches!(case, LineRecordCase::MissingAtMerge) {
+                f.write(ADOPTION_TASK, &record);
+            }
+            f
+        }
+
+        fn line_record_source(
+            &self,
+            transport: Transport,
+            trusted: bool,
+            worktree: bool,
+        ) -> Result<CompletionProof, String> {
+            let repo = Repository::open(self.dir.path()).unwrap();
+            let task =
+                RecordView::parse(RecordKind::Task, ADOPTION_TASK, &self.read(ADOPTION_TASK))
+                    .unwrap();
+            let run = RunBases::new(if trusted {
+                vec![self.base, self.merge]
+            } else {
+                vec![self.base]
+            });
+            let changed = worktree_changes(&repo).unwrap();
+            let landing = if worktree {
+                Landing::Worktree {
+                    head: self.head(),
+                    changed: &changed,
+                }
+            } else {
+                Landing::Commit(self.head())
+            };
+            binding_source(
+                &repo,
+                &task,
+                landing,
+                self.reviewed,
+                Carried::Transport(transport),
+                &run.stacking(),
+                Some(self.base),
+                None,
+            )
+        }
+    }
+
+    #[test]
+    fn line_planned_record_binds_at_reviewed_head_after_later_landings() {
+        let f = AdoptionFixture::line_record(LineRecordCase::Planned);
+        let tail = f.complete();
+        let bound = f.bind();
+        assert!(bound.findings.is_empty(), "{:?}", bound.findings);
+        assert_eq!(
+            bound.proof,
+            Some(CompletionProof {
+                reviewed: f.reviewed,
+                landing_merge: Some(f.merge),
+                span_head: f.span,
+                completion_tail: tail,
+            })
+        );
+    }
+
+    #[test]
+    fn line_planned_record_allows_a_record_only_descendant_span() {
+        let f = AdoptionFixture::line_record(LineRecordCase::RecordOnlySpan);
+        f.complete();
+        let bound = f.bind();
+        assert!(bound.findings.is_empty(), "{:?}", bound.findings);
+        let proof = bound.proof.unwrap();
+        assert_eq!(proof.reviewed, f.reviewed);
+        assert_eq!(proof.span_head, f.span);
+        assert_ne!(proof.reviewed, proof.span_head);
+    }
+
+    #[test]
+    fn line_planned_record_checks_worktree_completion_scope() {
+        let f = AdoptionFixture::line_record(LineRecordCase::Planned);
+        let record = f
+            .read(ADOPTION_TASK)
+            .replace("status: in_progress", "status: complete");
+        f.write(ADOPTION_TASK, &record);
+        assert!(f
+            .line_record_source(Transport::TaskLanding, true, true)
+            .is_ok());
+        f.write(
+            ADOPTION_TASK,
+            &record.replace("shall work", "shall do something else"),
+        );
+        let problem = f
+            .line_record_source(Transport::TaskLanding, true, true)
+            .unwrap_err();
+        assert!(
+            problem.contains("outside its status and Closeout"),
+            "{problem}"
+        );
+    }
+
+    fn line_record_refusal(case: LineRecordCase, expected: &str) {
+        let f = AdoptionFixture::line_record(case);
+        f.complete();
+        let problem = f
+            .line_record_source(Transport::TaskLanding, true, false)
+            .unwrap_err();
+        assert!(problem.contains(expected), "{problem}");
+    }
+
+    #[test]
+    fn line_record_refuses_a_record_added_by_the_task() {
+        line_record_refusal(
+            LineRecordCase::TaskAddedRecord,
+            "differs from its first parent",
+        );
+    }
+
+    #[test]
+    fn line_record_refuses_a_changed_landing_merge() {
+        line_record_refusal(LineRecordCase::ChangedMerge, "not the clean re-merge");
+    }
+
+    #[test]
+    fn line_record_refuses_an_untrusted_receiving_line() {
+        let f = AdoptionFixture::line_record(LineRecordCase::Planned);
+        f.complete();
+        let problem = f
+            .line_record_source(Transport::TaskLanding, false, false)
+            .unwrap_err();
+        assert!(
+            problem.contains("not on the first-parent line of a target this run trusts"),
+            "{problem}"
+        );
+    }
+
+    #[test]
+    fn line_record_refuses_changed_completion_scope() {
+        let f = AdoptionFixture::line_record(LineRecordCase::Planned);
+        f.write(
+            ADOPTION_TASK,
+            &f.read(ADOPTION_TASK)
+                .replace("shall work", "shall do something else"),
+        );
+        f.complete();
+        let problem = f
+            .line_record_source(Transport::TaskLanding, true, false)
+            .unwrap_err();
+        assert!(
+            problem.contains("outside its status and Closeout"),
+            "{problem}"
+        );
+        assert_eq!(problem.matches("review the result").count(), 1, "{problem}");
+    }
+
+    #[test]
+    fn line_record_refuses_unreviewed_span_even_without_a_record_at_either_end() {
+        let f = AdoptionFixture::line_record(LineRecordCase::UnreviewedSpan);
+        let repo = Repository::open(f.dir.path()).unwrap();
+        assert!(blob_at(&repo, f.reviewed, ADOPTION_TASK).unwrap().is_none());
+        assert!(blob_at(&repo, f.span, ADOPTION_TASK).unwrap().is_none());
+        assert_ne!(f.reviewed, f.span);
+        f.complete();
+        let problem = f
+            .line_record_source(Transport::TaskLanding, true, false)
+            .unwrap_err();
+        assert!(problem.contains("src/unreviewed.rs"), "{problem}");
+    }
+
+    #[test]
+    fn line_record_refuses_a_record_missing_at_the_landing_merge() {
+        let f = AdoptionFixture::line_record(LineRecordCase::MissingAtMerge);
+        f.complete();
+        let problem = f
+            .line_record_source(Transport::TaskLanding, true, false)
+            .unwrap_err();
+        assert!(problem.contains("is missing at completion"), "{problem}");
+        assert!(
+            problem.contains(&format!("the reviewed commit {}", f.reviewed)),
+            "{problem}"
+        );
+        assert!(
+            !problem.contains(&format!("completion {}", f.merge)),
+            "{problem}"
+        );
+    }
+
+    #[test]
+    fn direct_binding_at_landing_merge_still_refuses_later_product_changes() {
+        let mut f = AdoptionFixture::line_record(LineRecordCase::Planned);
+        f.reviewed = f.merge;
+        f.complete();
+        let problem = f
+            .line_record_source(Transport::TaskLanding, true, false)
+            .unwrap_err();
+        assert!(
+            problem.contains("changed between the reviewed commit"),
+            "{problem}"
+        );
     }
 
     #[test]
