@@ -592,6 +592,15 @@ jobs:
         shard: [1, 2]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      # The shard's lowest free disk is recorded from here to the end of the
+      # job, and the last step fails a shard that came within 10 GiB of a full
+      # disk, before a link step runs out of space (TSK-1157; job 125339596386
+      # ran out). Free disk only when that margin is thin.
+      - name: Watch the free disk
+        shell: bash
+        run: |
+          df -h / "$GITHUB_WORKSPACE"
+          nohup python3 -B scripts/disk-margin.py watch --out "$RUNNER_TEMP/disk-low.json" --path "$GITHUB_WORKSPACE" > /dev/null 2>&1 &
       - name: Install the differential shells
         run: sudo apt-get update && sudo apt-get install -y bash zsh dash
       - name: Install Rust (rust-toolchain.toml)
@@ -660,6 +669,13 @@ jobs:
             target/nextest/codeflow/tests.json
           if-no-files-found: ignore
           retention-days: 7
+      # Fails under the 10 GiB margin, or when the watch left no record.
+      - name: Lowest free disk of this shard
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          df -h / "$GITHUB_WORKSPACE"
+          python3 -B scripts/disk-margin.py report --low "$RUNNER_TEMP/disk-low.json" --min-free-gib 10 --path "$GITHUB_WORKSPACE" --size target/llvm-cov-target
 
   # It runs when a shard fails, so the journeys and the partition check
   # still report; it only reads the shards' files.

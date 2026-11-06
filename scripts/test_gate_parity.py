@@ -920,6 +920,42 @@ class CoverageShardControls(unittest.TestCase):
         problems = parity.gate_part_problems(CONFIG, workflow)
         self.assertTrue(any("which the coverage jobs run" in p for p in problems), problems)
 
+    def test_each_shard_records_its_lowest_free_disk_and_fails_under_the_margin(self):
+        """TSK-1157 AC-11 to AC-13: the watch starts right after checkout,
+        before anything is built, and the margin check is the shard's last
+        step and runs unless the job is cancelled, so a shard that came
+        within the margin of a full disk fails the verdict."""
+        shard_job = parity.coverage_jobs(CONFIG, "x", 2)[0]
+        steps = re.findall(r"^      - (?:name: |uses: )(.+)$", shard_job, re.M)
+        self.assertEqual(steps[1], "Watch the free disk")
+        self.assertEqual(steps[-1], "Lowest free disk of this shard")
+        watch = shard_job[shard_job.index("      - name: Watch the free disk\n"):
+                          shard_job.index("      - name: Install the differential shells\n")]
+        report = shard_job[shard_job.index("      - name: Lowest free disk of this shard\n"):]
+        self.assertIn("disk-margin.py watch --out \"$RUNNER_TEMP/disk-low.json\"", watch)
+        self.assertIn("        if: ${{ !cancelled() }}\n", report)
+        self.assertIn("disk-margin.py report --low \"$RUNNER_TEMP/disk-low.json\" --min-free-gib 10 ", report)
+        # The committed workflow with the two steps added is exactly the pin;
+        # without either one, or with a lower margin, it is refused.
+        anchor = "      - name: Install the differential shells\n"
+        start = WORKFLOW.index("  gates-coverage:\n")
+        end = WORKFLOW.index("  gates-coverage-report:\n")
+        job = WORKFLOW[start:end]
+        if "Watch the free disk" not in job:
+            tail = "          retention-days: 7\n"
+            job = job.replace(anchor, watch + anchor, 1)
+            job = job[:job.rindex(tail) + len(tail)] + report + job[job.rindex(tail) + len(tail):]
+        patched = WORKFLOW[:start] + job + WORKFLOW[end:]
+        self.assertEqual(self.problems(patched), [])
+        for label, changed in (("no watch", patched.replace(watch, "", 1)),
+                               ("no margin check", patched.replace(report, "", 1)),
+                               ("a lower margin", patched.replace("--min-free-gib 10 ", "--min-free-gib 1 ", 1)),
+                               ("a forgiven check", patched.replace(
+                                   "--size target/llvm-cov-target\n", "--size target/llvm-cov-target || true\n", 1))):
+            with self.subTest(label):
+                self.assertNotEqual(changed, patched)
+                self.assert_problem(self.EXACT, changed)
+
     def test_without_the_coverage_jobs_their_targets_go_unrun(self):
         start = WORKFLOW.index("  gates-coverage:\n")
         end = WORKFLOW.index("  gates-verdict:\n")
