@@ -524,12 +524,32 @@ fn bucket_of(catalog: &Value, lineage: &str) -> String {
 }
 
 /// The cross-family review participants of the managed catalog: plan
-/// challenge, unit review and body review.
-const CROSS_FAMILY_REVIEWS: [(&str, &str); 3] = [
+/// challenge, unit review, body review and executability review.
+const CROSS_FAMILY_REVIEWS: [(&str, &str); 4] = [
     ("independent-plan", "engineering-primary"),
     ("unit-review", "independent"),
     ("body-review", "engineering-primary"),
+    ("design-and-editorial-review", "executability"),
 ];
+
+const REDUCED_ASSURANCE: &str = "reduced assurance: no other-family seat is available";
+
+fn open_gap<'a>(result: &'a Value, id: &str) -> &'a Value {
+    result["open"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["participant"] == id)
+        .unwrap_or_else(|| panic!("{id} is not open: {result}"))
+}
+
+fn filled<'a>(result: &'a Value, id: &str) -> Option<&'a Value> {
+    result["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["participant"] == id)
+}
 
 fn participant<'a>(result: &'a Value, id: &str) -> &'a Value {
     result["participants"]
@@ -670,6 +690,86 @@ fn no_other_family_leaves_each_cross_family_review_open_with_reduced_assurance()
                 .all(|p| p["participant"] != id),
             "{duty}: {result}"
         );
+    }
+}
+
+/// TSK-1370 review finding: the default builder's family never reviews its
+/// own work, even though that family's seat is the first preference.
+#[test]
+fn a_codex_author_never_fills_a_cross_family_review() {
+    let catalog = managed();
+    let repo = Repo::new(&catalog);
+    for (duty, id) in CROSS_FAMILY_REVIEWS {
+        let result = repo.resolved(duty, "claude-code", "codex", &[], true);
+        let chosen = participant(&result, id);
+        assert_ne!(chosen["lineage"], "codex", "{duty}: {result}");
+        assert_eq!(chosen["reduced_assurance"], false, "{duty}");
+        let remaining = chosen["remaining_alternatives"].to_string();
+        let codex = seat_of_lineage(&catalog, "codex");
+        assert!(
+            !remaining.contains(codex["id"].as_str().unwrap()),
+            "{duty}: {chosen}"
+        );
+    }
+}
+
+#[test]
+fn a_grok_author_without_codex_never_fills_a_cross_family_review() {
+    let catalog = managed();
+    let repo = Repo::new(&catalog);
+    let no_codex = bucket_of(&catalog, "codex");
+    for (duty, id) in CROSS_FAMILY_REVIEWS {
+        let output = repo.run(duty, "claude-code", "grok", &["--exclude", &no_codex]);
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        if let Some(chosen) = filled(&result, id) {
+            assert_ne!(chosen["lineage"], "grok", "{duty}: {result}");
+        } else {
+            // Grok is the only name left, and Claude is still eligible, so
+            // this is an open seat, not reduced assurance.
+            let gap = open_gap(&result, id);
+            assert!(
+                !gap["reasons"].to_string().contains(REDUCED_ASSURANCE),
+                "{duty}: {gap}"
+            );
+        }
+    }
+    let result = repo.resolved(
+        "body-review",
+        "claude-code",
+        "grok",
+        &["--exclude", &no_codex],
+        false,
+    );
+    open_gap(&result, "engineering-primary");
+
+    // With Claude gone too, nothing outside the author's family remains.
+    let no_claude = bucket_of(&catalog, "claude");
+    let result = repo.resolved(
+        "unit-review",
+        "claude-code",
+        "grok",
+        &["--exclude", &no_codex, "--exclude", &no_claude],
+        false,
+    );
+    let gap = open_gap(&result, "independent");
+    assert!(
+        gap["reasons"].to_string().contains(REDUCED_ASSURANCE),
+        "{gap}"
+    );
+}
+
+#[test]
+fn no_author_asks_for_the_lineage_and_never_claims_reduced_assurance() {
+    let catalog = managed();
+    let repo = Repo::new(&catalog);
+    for (duty, id) in CROSS_FAMILY_REVIEWS {
+        let result = repo.resolved(duty, "claude-code", "none", &[], false);
+        let reasons = open_gap(&result, id)["reasons"].to_string();
+        assert!(
+            reasons.contains("author lineage required"),
+            "{duty}: {reasons}"
+        );
+        assert!(!reasons.contains(REDUCED_ASSURANCE), "{duty}: {reasons}");
     }
 }
 

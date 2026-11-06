@@ -412,7 +412,7 @@
               "effort": "high"
             }
           ],
-          "relation": "any",
+          "relation": "opposite-author",
           "label": "required"
         }
       ],
@@ -704,7 +704,7 @@
               "effort": "high"
             }
           ],
-          "relation": "any",
+          "relation": "opposite-author",
           "label": "required"
         },
         {
@@ -823,9 +823,17 @@
               },
               "harness": null,
               "effort": "high"
+            },
+            {
+              "target": {
+                "kind": "seat",
+                "id": "grok-primary"
+              },
+              "harness": null,
+              "effort": "high"
             }
           ],
-          "relation": "any",
+          "relation": "opposite-author",
           "label": "required"
         }
       ],

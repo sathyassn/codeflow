@@ -346,10 +346,11 @@ fn unit_review_owes_codex_for_claude(catalog: &Catalog) -> Result<(), String> {
     Ok(())
 }
 
-/// The combined body is reviewed by both standing seats.
+/// A Claude-authored body is reviewed by both standing seats; the engineering
+/// reviewer is relative to the author.
 fn body_review_owes_both_standing_seats(catalog: &Catalog) -> Result<(), String> {
     for host in hosts(catalog) {
-        let result = resolve(catalog, "body-review", host, None);
+        let result = resolve(catalog, "body-review", host, Some("claude"));
         let seats: BTreeSet<_> = result
             .participants
             .iter()

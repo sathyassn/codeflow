@@ -1,6 +1,6 @@
 ---
 name: cf-plan
-description: Turn a brief into a clear, evidence-grounded plan and materialize the agreed epic, spec, task, or ADR records. Use when clarifying, planning, or allocating epics, specs, tasks, or ADRs after independent Claude+Codex discovery. Use when the operator asks to plan work, write a spec, or break work into tasks. Do not use to implement, merge, or re-interview ground both seats already settled; still ask live operator-owned questions. Routed work (decided by touched paths; when unsure, route) goes through cf-model-orchestrator first.
+description: Turn a brief into a clear, evidence-grounded plan and materialize the agreed epic, spec, task, or ADR records. Use when clarifying, planning, or allocating epics, specs, tasks, or ADRs after independent Claude+Codex discovery. Use when the operator asks to plan work, write a spec, or break work into tasks. Do not use to implement, merge, or re-interview ground the settled plan already covers; still ask live operator-owned questions. Routed work (decided by touched paths; when unsure, route) goes through cf-model-orchestrator first.
 ---
 
 # cf-plan: plan work, do not build it

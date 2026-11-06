@@ -49,7 +49,7 @@ asks for just that.
 - **Research/analysis:** independent discovery, evidence comparison, settled
   findings, then stop without edits.
 - **Plan/design:** independent discovery, the Claude-drafted plan challenged
-  by Codex, one approval of its shape, then stop without implementation.
+  by Codex, or another family when Codex is unavailable, one approval of its shape, then stop without implementation.
 - **Implementation:** routed execution and verification, primary acceptance,
   author-relative review, and integrated Claude judgment.
 - **Review/verification:** independent inspection and integrated verdict;
@@ -108,12 +108,15 @@ asks for just that.
   is unavailable, another family's seat (Grok in the current catalog) takes
   the challenge or review as a recorded reassignment, within that family's
   limits (a Grok seat never builds or designs, ADR-0075 D3; a review seat
-  is not a builder). For `independent-plan`, `unit-review` and
-  `body-review`, `codeflow models resolve` prints the eligible other-family
-  seats in preference order, Codex first, then Grok; take the first one a
-  live probe finds available. Reduced assurance means no other family was
-  available, so only the same-family fallback ran; resolve then reports the
-  review open with that reason.
+  is not a builder). For `independent-plan`, `unit-review`, `body-review`
+  and `design-and-editorial-review`, `codeflow models resolve --author
+  <lineage>` prints the eligible seats outside the author's family in
+  preference order, Codex first, then Grok; take the first one a live probe
+  finds available. Without `--author` the review stays open with a reason
+  that the author lineage is required, which says nothing about seats.
+  Reduced assurance means no other family was available, so only the
+  same-family fallback ran; resolve then reports the review open with that
+  reason. `computer-use-qa` is the one exception; design routing says why.
 - **The Claude judgment primary owns integrated Claude judgment.** The directly
   invoked model qualified for `claude-judgment-primary` reviews the settled
   design and integrated diff, reruns relevant tests, and owns the final quality

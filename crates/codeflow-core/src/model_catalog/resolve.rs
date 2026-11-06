@@ -166,15 +166,21 @@ impl Resolution {
 /// The review participants any model family other than the author's can
 /// fill, in the catalog's preference order (operator decision 2026-11-06).
 /// Reduced assurance on them means no other-family seat is available.
-pub const CROSS_FAMILY_REVIEWS: [(&str, &str); 3] = [
+pub const CROSS_FAMILY_REVIEWS: [(&str, &str); 4] = [
     ("independent-plan", "engineering-primary"),
     ("unit-review", "independent"),
     ("body-review", "engineering-primary"),
+    ("design-and-editorial-review", "executability"),
 ];
 
 /// The open reason when no other-family seat can fill a cross-family review.
 pub const NO_OTHER_FAMILY: &str = "reduced assurance: no other-family seat is available; \
     only the same-family fallback review runs";
+
+/// The open reason when a cross-family review names no author: "other" has
+/// no meaning yet, so this says nothing about which seats are available.
+pub const AUTHOR_LINEAGE_REQUIRED: &str = "author lineage required: a cross-family review is \
+    resolved against the author's family; pass --author";
 
 fn cross_family_review(duty: &str, participant: &str) -> bool {
     CROSS_FAMILY_REVIEWS.contains(&(duty, participant))
@@ -680,7 +686,13 @@ impl Catalog {
                     .push("no eligible version at the adopted effort".into());
             }
             if cross_family_review(request.duty, &participant.id) {
-                candidates.reasons.push(NO_OTHER_FAMILY.into());
+                if request.author_lineage.is_none()
+                    && matches!(participant.relation, LineageRelation::OppositeAuthor)
+                {
+                    candidates.reasons.push(AUTHOR_LINEAGE_REQUIRED.into());
+                } else if !self.other_family_available(participant, request) {
+                    candidates.reasons.push(NO_OTHER_FAMILY.into());
+                }
             }
             if request.duty == "design" {
                 candidates.reasons.push(DESIGN_OVERRIDE_PATH.into());
@@ -694,6 +706,45 @@ impl Catalog {
                 reasons: candidates.reasons,
             });
         }
+    }
+
+    /// Whether any seat outside the author's family has an eligible version,
+    /// listed on this participant or not.
+    fn other_family_available(
+        &self,
+        participant: &Participant,
+        request: &ResolveRequest<'_>,
+    ) -> bool {
+        let eligible = |seat: &Seat, line: &ProductLine, family: &Family| {
+            line.versions.iter().any(|version| {
+                family.harnesses.iter().any(|harness| {
+                    participant.alternatives.iter().any(|alternative| {
+                        self.eligible(&EligibilityRequest {
+                            duty: request.duty,
+                            line: &line.id,
+                            version: &version.id,
+                            seat: Some(&seat.id),
+                            harness,
+                            effort: alternative.effort,
+                            exclusions: request.exclusions,
+                            observed_ids: request.observed_ids,
+                        })
+                        .is_ok()
+                    })
+                })
+            })
+        };
+        self.seats.iter().any(|seat| {
+            seat.lines
+                .iter()
+                .filter_map(|id| self.line(id))
+                .any(|line| {
+                    self.family(&line.family).is_some_and(|family| {
+                        request.author_lineage != Some(family.lineage.as_str())
+                            && eligible(seat, line, family)
+                    })
+                })
+        })
     }
 
     fn collect_alternative(

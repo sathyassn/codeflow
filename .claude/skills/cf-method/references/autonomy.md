@@ -147,8 +147,8 @@ Record the approved rule in its existing home: standing extra-family
 reviews in `standing_reviews` in `.codeflow/model-selection.json`, an
 applicable policy or existing config key for a setting, otherwise one line
 in the project-owned `AGENTS.md` section. Follow that home's validation and
-commit rules. Run `codeflow models resolve` for the review duty and touched
-areas before review and PR handoff, and include every standing review it
+commit rules. Run `codeflow models resolve --author <lineage>` for the review
+duty and touched areas before review and PR handoff, and include every standing review it
 owes. This records an approved rule; a new standing authority remains a
 proposal until the operator approves it, with its protection and cost stated.
 
