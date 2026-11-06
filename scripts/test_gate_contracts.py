@@ -276,7 +276,7 @@ class GateContracts(unittest.TestCase):
         workflow = read('.github/workflows/codeflow-policy.yml')
         self.assertIn('pull_request_target:', workflow)
         self.assertIn('github.event.pull_request.base.sha', workflow)
-        self.assertEqual(workflow.count('cargo build --release'), 2, 'trusted: commit standards and release impact')
+        self.assertEqual(workflow.count('cargo build --release'), 2, 'commit standards and trusted: release impact')
         self.assertIn('codeflow ids check --base', workflow)
         self.assertIn('codeflow ci --base', workflow)
         self.assert_policy_queues_every_pull_request_run(workflow, admission=True)
