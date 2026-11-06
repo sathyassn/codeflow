@@ -429,6 +429,28 @@ class ProvenanceTests(unittest.TestCase):
             self.assertNotIn(never, names)
 
 
+class VerdictFormTests(unittest.TestCase):
+    """A verdict runs unless the run was cancelled. A report job that reads a
+    reused job's result opens the same way and is still skipped with it."""
+
+    WORKFLOW = (
+        "jobs:\n"
+        "  gates:\n    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (x) }}\n    name: part\n"
+        "  report:\n    if: ${{ !cancelled() && needs.gates.result != 'skipped' && (x) }}\n    name: report\n"
+        "    needs: gates\n"
+        "  verdict:\n    if: ${{ !cancelled() && !(github.event_name == 'pull_request') }}\n    name: verdict\n"
+        "    needs: [gates, report]\n"
+        "  old:\n    if: ${{ always() && !(github.event_name == 'pull_request') }}\n    name: old\n"
+        "    needs: gates\n")
+
+    def test_both_verdict_forms_are_verdicts_and_a_report_job_is_not(self):
+        self.assertEqual(reuse.verdict_jobs(self.WORKFLOW), {"verdict", "old"})
+
+    def test_a_report_job_is_reused_and_a_verdict_is_not(self):
+        names = [pattern.pattern for pattern in reuse.reused_jobs(self.WORKFLOW)]
+        self.assertEqual(sorted(names), ["part", "report"])
+
+
 class ImageBindingTests(unittest.TestCase):
     """TSK-359: each job the push skips must have run on the push's image."""
 
