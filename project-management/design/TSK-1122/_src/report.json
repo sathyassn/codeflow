@@ -1,0 +1,690 @@
+{
+  "_about": "Prose facts the prototype shows beside the counts of facts.json: streams, lanes, blockers, decisions, decided items and the since list. Each entry names its source (file and line, or command) and the time it was read. Nothing here is a number the page computes; counts come from facts.json only.",
+  "readAt": "2026-11-02 12:26 EST",
+  "deliverable": "CodeFlow 4.0.0: every task of its three epics lands on the integration line with its review, the line passes one full gate and the journey on the installed candidate, and one pull request from the line into main is ready for the operator to merge.",
+  "deliverableSource": "EPC-022.md Summary, the 'Done means' sentence (line 30 to 34 on the line)",
+  "basis": "One percent basis everywhere: complete tasks over all tasks of EPC-022, EPC-024 and EPC-025 on the integration line, cancelled tasks excluded. A task is on main only when its own record on origin/main says complete; otherwise it is complete on the line only. A task is in a pull request when an open pull request against the line names it in its branch name.",
+  "streams": [
+    {
+      "id": "visual-docs",
+      "title": "Visual and docs direction",
+      "owner": "Visual and docs Coordinator",
+      "step": 4,
+      "steps": 6,
+      "done": [
+        "Page 5 passed cross-lineage review and the Director's check (15:15 EST, 1 Nov)",
+        "d1 to d4 at 12:07 EST, 2 Nov: one design, three tabs per topic, deep green, plum and violet",
+        "d5 to d8 at 12:07 EST, 2 Nov: the new status design (provisional), warn only, rebuild the report, product site in 4.0.0"
+      ],
+      "now": [
+        "This prototype (TSK-1122), for the operator's walk-through",
+        "Page 5 decided version building in design/publish5c",
+        "Samples republished at 2M7DfUPL4s2BPbH51t42AE"
+      ],
+      "next": [
+        "d7: the Director rebuilds the published status report in the new design",
+        "One token source (TSK-1162) builds after the page 5 answers, one cargo run at a time"
+      ],
+      "source": "coordination/coordinators/visual-docs/TRACKER.md:137 to 160 (12:07 and 12:25 entries)"
+    },
+    {
+      "id": "planning",
+      "title": "Estimation and planning (issue 334)",
+      "owner": "Planning Coordinator",
+      "step": 4,
+      "steps": 5,
+      "done": [
+        "PR 471 landed (breakdown cleanups)",
+        "PR 508 landed at dd1913165, 11:37 EST, 2 Nov: estimation cut, the split of TSK-336, issue 502",
+        "Proposal revision 4 confirmed by five Codex passes (10:57 EST, 1 Nov)"
+      ],
+      "now": [
+        "The next planning PR, plan/epc-022-next-planning: the d8 tasks, the d2 and d6 amendments",
+        "No PR number yet"
+      ],
+      "next": [
+        "Pages 2 and 3 revised at the same links after the coherence review",
+        "Re-banding of the open backlog"
+      ],
+      "source": "coordination/coordinators/planning/TRACKER.md:1838 to 1856; visual-docs/TRACKER.md:147; gh pr list merged today (PR 508)"
+    },
+    {
+      "id": "capabilities",
+      "title": "Capabilities catalog",
+      "owner": "Capabilities Coordinator",
+      "step": 4,
+      "steps": 5,
+      "done": [
+        "Page 1 decided about 12:30 EST, 1 Nov: the per-PR capability check, tier scope B",
+        "Planning PR 473 (the capabilities catalog epic, EPC-026, 15 tasks) merged into the EPC-022 line today"
+      ],
+      "now": [
+        "The capabilities catalog epic (EPC-026) has its own line at 6d9473e4b; PR 507 merged into it today"
+      ],
+      "next": [
+        "The presentation part waits for the visual direction (this prototype and TSK-1162)"
+      ],
+      "source": "coordination/coordinators/capabilities/TRACKER.md:836 to 858; gh pr list merged today (473, 507); codeflow work next snapshot line (EPC-026 tip)"
+    },
+    {
+      "id": "parallel",
+      "title": "Parallel build, test and landing",
+      "owner": "Parallel Coordinator",
+      "step": 3,
+      "steps": 5,
+      "done": [
+        "d9 to d12 at 12:07 EST, 2 Nov: loopback binding for Codex builder seats, a second Codex account to prove live",
+        "d10 and d11: the PR 466 edit is the operator's; option b for two planned tasks not on the line yet (TSK-1165 with TSK-1170)",
+        "Ten pull requests merged today, nine into the line"
+      ],
+      "now": [
+        "Codex builder seat gates (TSK-1156), security round 2: two material fixes plus the d12 loopback binding",
+        "The quick gate explanation (TSK-1039): draft PR 518 at da8703aea waits for its named hosted slot",
+        "Seat account profiles (TSK-431), round 4: scan evidence and a boundary-test nit"
+      ],
+      "next": [
+        "Landings in the Director's order: planning edge cut, hosted CI planning, then a planned task not on the line yet (TSK-1164)",
+        "Then PRs 482 to 486, then PR 518",
+        "The line-to-main PR once 482, 484, the parallel and hosted CI tasks land"
+      ],
+      "source": "coordination/coordinators/parallel/TRACKER.md:6 to 60 (12:26 sweep)"
+    }
+  ],
+  "lanes": [
+    {
+      "coordinator": "Parallel",
+      "lane": "Builder, Codex builder seat gates (TSK-1156)",
+      "who": "native Claude builder",
+      "what": "security round 2 fixes: append open follows symlinks and FIFOs; lint misses git config remote.*.url; d12 loopback binding",
+      "state": "building",
+      "expected": "report by about 13:30 EST, 2 Nov",
+      "source": "parallel/TRACKER.md:19 to 23, 48",
+      "stateShort": "building"
+    },
+    {
+      "coordinator": "Parallel",
+      "lane": "Builder, the quick gate explanation (TSK-1039)",
+      "who": "native Claude builder",
+      "what": "draft PR 518 into EPC-022 at da8703aea; round 3 confirmed at dab6c851e; quick 7 of 7",
+      "state": "waits for its named hosted slot after PRs 482 to 486",
+      "expected": "after 482 to 486 land",
+      "source": "parallel/TRACKER.md:24 to 27",
+      "stateShort": "waiting"
+    },
+    {
+      "coordinator": "Parallel",
+      "lane": "Builder, seat account profiles (TSK-431)",
+      "who": "native Claude builder",
+      "what": "round 4 at 8d2e4fb33: scan evidence (secret scan, gitleaks, osv-scanner) and a boundary-test nit; AC-4 needs the second Codex account live",
+      "state": "building; the live journey waits on the operator's sign-in",
+      "expected": "round 5 by about 13:15 EST, 2 Nov",
+      "source": "parallel/TRACKER.md:28 to 33, 48",
+      "stateShort": "waiting"
+    },
+    {
+      "coordinator": "Parallel",
+      "lane": "Codex review seats",
+      "who": "Codex GPT-6 Astra, two interactive Herdr seats",
+      "what": "TSK-431 round 5 and TSK-1156 security round 3 (with the harness-autonomy check)",
+      "state": "done, waiting for the builders",
+      "expected": "on the builders' pushes",
+      "source": "parallel/TRACKER.md:40 to 42",
+      "stateShort": "waiting",
+      "seatIds": "pV9, pVC"
+    },
+    {
+      "coordinator": "Visual and docs",
+      "lane": "Design seat, this prototype (TSK-1122)",
+      "who": "Claude Fable 5.1, native subagent",
+      "what": "clickable prototype on real data, AC-1 findings, the TSK-1120 and TSK-1098 amendments",
+      "state": "building",
+      "expected": "ready for the walk-through today",
+      "source": "this task's brief (the Director, 12:2x)",
+      "stateShort": "building"
+    },
+    {
+      "coordinator": "Visual and docs",
+      "lane": "Builder, one token source (TSK-1162)",
+      "who": "Claude worker",
+      "what": "the token source and colour floors; go at 12:08 EST, 2 Nov after the page 5 answers",
+      "state": "building, one cargo run at a time through reserve",
+      "expected": "not stated",
+      "source": "visual-docs/TRACKER.md:145",
+      "stateShort": "building",
+      "seatIds": "w12:p37"
+    },
+    {
+      "coordinator": "Visual and docs",
+      "lane": "Builder, the export stage frames (TSK-1101)",
+      "who": "Claude worker",
+      "what": "primary checks failed at about 12:05 EST, 2 Nov (export-stages-browser-check.mjs:101, stages off by about 8 px); fix, push, rerun, then the Fable review",
+      "state": "fixing",
+      "expected": "not stated",
+      "source": "visual-docs/TRACKER.md:131 to 136",
+      "stateShort": "fixing"
+    },
+    {
+      "coordinator": "Visual and docs",
+      "lane": "Page 5 decided version",
+      "who": "Sonnet subagent",
+      "what": "design/publish5c: dead links to a placeholder, lede says accepted direction, no split sentences; then a new artifact",
+      "state": "building",
+      "expected": "then republish and a browser check",
+      "source": "visual-docs/TRACKER.md:149, 154 to 160",
+      "stateShort": "building"
+    },
+    {
+      "coordinator": "Planning",
+      "lane": "Next planning PR",
+      "who": "Planning Coordinator",
+      "what": "plan/epc-022-next-planning: the d8 tasks (product site, product docs mode, brand design system) and the d2 and d6 amendments",
+      "state": "in preparation; no PR number yet",
+      "expected": "not stated",
+      "source": "visual-docs/TRACKER.md:147; RELEASE-PLAN.md:64",
+      "stateShort": "preparing"
+    },
+    {
+      "coordinator": "Capabilities",
+      "lane": "Design seat and Codex seat",
+      "who": "Fable subagent; Codex GPT-6 Astra",
+      "what": "design note done (five revisions); the presentation part waits for the visual direction",
+      "state": "idle until the direction lands",
+      "expected": "after TSK-1122 and TSK-1162",
+      "source": "capabilities/TRACKER.md:899 to 911",
+      "stateShort": "idle"
+    }
+  ],
+  "blockers": [
+    {
+      "id": "b1",
+      "title": "The live journey of seat account profiles (TSK-431) needs your second Codex account",
+      "who": "you",
+      "rec": "run `mkdir -p ~/.codex-second`, `CODEX_HOME=~/.codex-second codex login`, and create `codeflow/.codeflow/local/accounts.toml` in the root checkout; the Parallel Coordinator then starts the seat for AC-4.",
+      "why": "decision d9 (12:07 EST, 2 Nov) asks for the second account to be proven live, and no agent can sign in for you; checked 12:26 EST, 2 Nov: no `~/.codex-second`, no file.",
+      "alt": "accept AC-4 on the builder's recorded dry run instead, which records reduced assurance on the account-profile feature.",
+      "state": "open since 12:11 EST, 2 Nov",
+      "source": "parallel/TRACKER.md:8 to 9, 50 to 52"
+    },
+    {
+      "id": "b2",
+      "title": "PR 466's test edit is the operator's to make",
+      "who": "you",
+      "rec": "apply the paste-ready edit the Parallel Coordinator sent the Director (the `expected` value, not line 340 itself), then the PR re-runs.",
+      "why": "decision d10 (12:07 EST, 2 Nov): the operator edits PR 466's test; the edit was prepared and sent at about 12:11 EST, 2 Nov.",
+      "alt": "let a builder make the same edit on the branch, which the decision ruled out.",
+      "state": "open since 12:07 EST, 2 Nov",
+      "source": "parallel/TRACKER.md:34, 50"
+    },
+    {
+      "id": "b3",
+      "title": "The quality defaults line (EPC-024) is still at e283948c6 and none of its tasks has started",
+      "who": "the primary",
+      "rec": "merge the 4.0.0 line (EPC-022) into the quality defaults line (EPC-024), with the line repair spec (SPC-015) and the Windows killed-gate test fix (TSK-1062), so the 21 tasks can start from a current tip.",
+      "why": "the tip has not moved since the refused fast-forward of 2026-10-31; the merge is the primary's, not a Coordinator's (parallel tracker 12:26 EST, 2 Nov).",
+      "alt": "retire the quality defaults line (EPC-024) and re-cut it from the 4.0.0 tip in one planning PR (the recommendation of the 1 Nov report, its decision 2).",
+      "state": "unchanged since 2026-10-31",
+      "source": "parallel/TRACKER.md:9, 31 to 32; codeflow work next snapshot line (tip e283948c6)"
+    },
+    {
+      "id": "b4",
+      "title": "The installed hook binary was built from other hook and policy sources than the line",
+      "who": "you",
+      "rec": "install the line's own build as the hook binary, or put the worktree's own build first on PATH for the lane, until 4.0.0 publishes. Not setting CODEFLOW_HOOK_BINARY is a relayed instruction from the Director (2 Nov), recorded here as relayed, not as a rule of the operating contract.",
+      "why": "every commit in this worktree printed `codeflow judge: warning: built from different hook or policy sources; rebuild before trusting this judgment` (12:33 EST, 2 Nov): the installed binary was built from other hook or policy sources than this worktree. The warning says only that; what each lane's gate judgment rests on is a separate question.",
+      "alt": "keep 3.1.0 and put the worktree build first on PATH lane by lane, which repeats the workaround in every brief.",
+      "state": "unchanged since 2026-11-01",
+      "source": "the commit-msg hook output in this worktree, 12:33 EST, 2 Nov; previous report blocker b4"
+    }
+  ],
+  "decided": [
+    {
+      "when": "11:37 EST, 2 Nov",
+      "what": "PR 508 landed at dd1913165: the estimation cut, the split of TSK-336 and the issue 502 amendment",
+      "source": "gh pr list merged today"
+    },
+    {
+      "when": "12:07 EST, 2 Nov",
+      "what": "d1 one design everywhere; d2 three tabs per topic",
+      "source": "visual-docs/TRACKER.md:141"
+    },
+    {
+      "when": "12:07 EST, 2 Nov",
+      "what": "d3 deep green accent; d4 plum for Graphite and Sage, violet for Slate",
+      "source": "visual-docs/TRACKER.md:141"
+    },
+    {
+      "when": "12:07 EST, 2 Nov",
+      "what": "d5 the new status design is TSK-1122's direction, provisionally; d6 a layout miss only warns",
+      "source": "visual-docs/TRACKER.md:142"
+    },
+    {
+      "when": "12:07 EST, 2 Nov",
+      "what": "d7 rebuild the status report now; d8 product site, product docs mode and brand design system in 4.0.0",
+      "source": "visual-docs/TRACKER.md:142 to 143"
+    },
+    {
+      "when": "12:07 EST, 2 Nov",
+      "what": "d9 a second Codex account proven live; d10 the PR 466 edit is the operator's",
+      "source": "parallel/TRACKER.md:50"
+    },
+    {
+      "when": "12:07 EST, 2 Nov",
+      "what": "d11 option b (TSK-1165 with TSK-1170, both planned, not on the line yet)",
+      "source": "RELEASE-PLAN.md:64"
+    },
+    {
+      "when": "12:07 EST, 2 Nov",
+      "what": "d12 loopback binding for Codex builder seats, cross-lineage reviewed",
+      "source": "RELEASE-PLAN.md:64"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "tree",
+      "title": "The view tree: outcomes first, then the cross-cutting views",
+      "context": "The side menu's first area opens on the Overview and lists the three outcomes (one per epic); each opens to its themes (the epic's amendment sections) and each theme to its tasks. Epics, Lanes, Blockers, What changed, Evidence, Decisions, Script and Report kinds cut across.",
+      "options": [
+        {
+          "value": "approve",
+          "label": "Approve the tree as shown",
+          "cost": "none; the dashboard shell (TSK-1120) and the status document (TSK-1098) take it as written in their amendments",
+          "recommended": true
+        },
+        {
+          "value": "flatten",
+          "label": "Drop the theme level: outcome opens straight to its tasks",
+          "cost": "one record change; the 220 tasks of the 4.0.0 milestone fixes (EPC-022) become one list under its outcome"
+        },
+        {
+          "value": "other",
+          "label": "Another order or grouping; say which",
+          "cost": "one more prototype round with renders"
+        }
+      ],
+      "reasoning": "The theme level is the grouping the status facts command (TSK-1095 AC-15) already defines (the record section that introduced the task), so it costs nothing to compute and it keeps the 220-task list readable."
+    },
+    {
+      "id": "tabs",
+      "title": "Tabs inside an outcome: Progress, Order, Issues",
+      "context": "Decision d2 chose three tabs per topic. The prototype shows Progress (percent, partition and themes), Order (the tasks in dependency order with their next-step reasons) and Issues (blocked, waiting and open pull requests for that epic).",
+      "options": [
+        {
+          "value": "keep",
+          "label": "Keep these three tabs",
+          "cost": "none",
+          "recommended": true
+        },
+        {
+          "value": "rename",
+          "label": "Keep three tabs under other names; say which",
+          "cost": "a wording change in the status document task (TSK-1098 AC-10)"
+        }
+      ],
+      "reasoning": "The three tabs answer the brief's questions 6, 3 and 4 inside one outcome without leaving it."
+    },
+    {
+      "id": "strip",
+      "title": "The task context strip: which facts lead",
+      "context": "A task view opens with a strip of labelled facts: outcome, location, lane, state, window, last moved, pull request (the status document, TSK-1098 AC-10). The prototype draws outcome, theme, location, state, record last changed and pull request; lane and window read `not recorded` until the status facts command (TSK-1095) lands them.",
+      "options": [
+        {
+          "value": "keep",
+          "label": "Keep the strip as drawn; `not recorded` stays visible",
+          "cost": "none",
+          "recommended": true
+        },
+        {
+          "value": "hide",
+          "label": "Hide a fact the facts do not carry",
+          "cost": "a reader cannot tell a missing fact from an omitted one"
+        }
+      ],
+      "reasoning": "The status facts command (TSK-1095 AC-15) says `not recorded`, never invented and never blank; the strip shows the rule."
+    },
+    {
+      "id": "marks",
+      "title": "Change marks since the previous report",
+      "context": "Numbers that moved since the report of 14:31 EST, 1 Nov carry a small delta beside them, and the menu dots the views with a change. Revision in place (TSK-1121) computes these from the previous revision of the same topic.",
+      "options": [
+        {
+          "value": "keep",
+          "label": "Keep the delta beside the number and the dot in the menu",
+          "cost": "none",
+          "recommended": true
+        },
+        {
+          "value": "list",
+          "label": "Only the What changed view, no inline marks",
+          "cost": "a reader must leave the view to know what moved"
+        }
+      ],
+      "reasoning": "An inline delta is the smallest mark that answers question 5 where the reader already is."
+    }
+  ],
+  "actionsOwed": [
+    {
+      "what": "Second Codex account sign-in and accounts.toml (seat account profiles, TSK-431 AC-4)",
+      "since": "12:11 EST, 2 Nov",
+      "source": "parallel/TRACKER.md:50 to 52"
+    },
+    {
+      "what": "PR 466 test edit (decision d10)",
+      "since": "12:07 EST, 2 Nov",
+      "source": "parallel/TRACKER.md:34"
+    },
+    {
+      "what": "Walk through this prototype and approve it or name changes (TSK-1122 AC-3)",
+      "since": "when this page reaches you",
+      "source": "TSK-1122.md AC-3"
+    }
+  ],
+  "answersFile": "coordination/decisions/2026-11-02-tsk-1122-walkthrough.md",
+  "recheck": "echo '1 of 5: the three build tasks are still todo on the line'\nfor t in TSK-1120 TSK-1121 TSK-1098; do printf '%s ' \"$t\"; git -C \"$W/codeflow\" show origin/integration/EPC-022-the-3-2-0-milestone-fixes:project-management/tasks/$t.md | grep -m1 '^status:'; done\necho '2 of 5: open pull requests against the line and their merge state'\ngh pr list -R sathyassn/codeflow --state open --base integration/EPC-022-the-3-2-0-milestone-fixes --json number,isDraft,mergeable,title --jq '.[]|\"\\(.number) \\(.mergeable) draft=\\(.isDraft) \\(.title)\"'\necho '3 of 5: the line against main'\ngh api repos/sathyassn/codeflow/compare/main...integration/EPC-022-the-3-2-0-milestone-fixes --jq '{ahead_by,behind_by}'\necho '4 of 5: the installed binary and the EPC-024 tip'\ncodeflow --version\ngit -C \"$W/codeflow\" rev-parse --short=9 origin/integration/EPC-024-quality-defaults-local-scan-parity-and-seat-capa\necho '5 of 5: rebuild this prototype from a fresh read (writes only under its own folder)'\necho \"node $W/codeflow/.worktrees/tsk-1122/project-management/design/TSK-1122/_src/gather.cjs && node $W/codeflow/.worktrees/tsk-1122/project-management/design/TSK-1122/_src/build.cjs\"",
+  "kinds": [
+    {
+      "kind": "Status report",
+      "views": [
+        "overview",
+        "topic",
+        "item",
+        "list",
+        "issues",
+        "decisions",
+        "evidence",
+        "commands"
+      ],
+      "lead": "percent and partition",
+      "note": "this prototype",
+      "opening": "hero percent with its delta, the deliverable line, one card per outcome, the partition figure, stream cards",
+      "figure": "partition",
+      "reads": "the task and epic records on the line, GitHub, work next, the trackers"
+    },
+    {
+      "kind": "Epic close",
+      "views": [
+        "overview",
+        "topic",
+        "item",
+        "evidence",
+        "decisions"
+      ],
+      "lead": "criteria proved on the final candidate",
+      "note": "one topic: the epic",
+      "opening": "the epic's criteria as a proved or not-proved list on the final candidate, then the journeys run and the gate result",
+      "figure": "criteria",
+      "reads": "the epic record, the candidate's gate log and journey evidence"
+    },
+    {
+      "kind": "Security review",
+      "views": [
+        "overview",
+        "issues",
+        "item",
+        "evidence",
+        "commands"
+      ],
+      "lead": "findings by consequence",
+      "note": "issues first after the overview",
+      "opening": "findings ordered by consequence, blocking first, each with the threat it closes and the file and line",
+      "figure": "severity",
+      "reads": "the review verdict file and the diff under review"
+    },
+    {
+      "kind": "Weekly workspace digest",
+      "views": [
+        "overview",
+        "topic",
+        "timeline",
+        "decisions",
+        "evidence"
+      ],
+      "lead": "what landed, by day",
+      "note": "timeline carries the week",
+      "opening": "one row per day of the week with what landed, by project, and the decisions taken that day",
+      "figure": "timeline",
+      "reads": "merged pull requests, the trackers and RELEASE-PLAN.md"
+    },
+    {
+      "kind": "Design review",
+      "views": [
+        "overview",
+        "list",
+        "decisions",
+        "evidence"
+      ],
+      "lead": "before and after, side by side",
+      "note": "decisions gathered in one view",
+      "opening": "before and after side by side at the same width, then the checks run on the after",
+      "figure": "pair",
+      "reads": "two builds of the same page and their render logs"
+    },
+    {
+      "kind": "Feature",
+      "views": [
+        "overview",
+        "topic",
+        "item",
+        "list",
+        "evidence"
+      ],
+      "lead": "what the capability is, from docs/capabilities.md",
+      "note": "about text first (TSK-1098 AC-13)",
+      "opening": "what the capability is, from docs/capabilities.md, then the tasks that build it and their state",
+      "figure": "structure",
+      "reads": "the capability record, its epic and tasks"
+    },
+    {
+      "kind": "Hand-off",
+      "views": [
+        "overview",
+        "list",
+        "issues",
+        "commands"
+      ],
+      "lead": "what is owed, by owner",
+      "note": "commands to resume",
+      "opening": "what is owed, grouped by owner, each with its since time and the command to resume it",
+      "figure": "owners",
+      "reads": "the trackers' owed lists and the ledger"
+    },
+    {
+      "kind": "Incident",
+      "views": [
+        "overview",
+        "timeline",
+        "issues",
+        "evidence",
+        "commands"
+      ],
+      "lead": "the clock of events",
+      "note": "timeline first after the overview",
+      "opening": "the clock of events from first alert to recovery, then the open follow-ups",
+      "figure": "timeline",
+      "reads": "the incident log, CI runs and the follow-up records"
+    },
+    {
+      "kind": "Research or decision",
+      "views": [
+        "overview",
+        "list",
+        "decisions",
+        "evidence"
+      ],
+      "lead": "the question and the options",
+      "note": "one decisions view at the end",
+      "opening": "the question, the options with cost and recommendation, and the evidence each rests on",
+      "figure": "options",
+      "reads": "the research record and its sources"
+    },
+    {
+      "kind": "Small project",
+      "views": [
+        "overview",
+        "item",
+        "decisions",
+        "commands"
+      ],
+      "lead": "one outcome, its tasks",
+      "note": "no topic level",
+      "opening": "one outcome with its percent and the tasks under it, no topic level",
+      "figure": "bar",
+      "reads": "the standalone task records"
+    }
+  ],
+  "portalLayers": [
+    {
+      "layer": "Overview map",
+      "what": "what the product is and how its parts connect; one figure, short points",
+      "same": "the shell's overview kind and the top bar"
+    },
+    {
+      "layer": "Area page",
+      "what": "one area: its flow, its records and its commands; figures per flow",
+      "same": "the topic kind with tabs"
+    },
+    {
+      "layer": "Reference page",
+      "what": "the exact contract: encoded tables, labelled code, a visual table",
+      "same": "the list and commands kinds"
+    }
+  ],
+  "names": {
+    "TSK-336": "the default-branch policy verdicts",
+    "TSK-431": "seat account profiles",
+    "TSK-1039": "the quick gate explanation",
+    "TSK-1062": "the Windows killed-gate test",
+    "TSK-1095": "the status facts command",
+    "TSK-1098": "the status document",
+    "TSK-1101": "the export stage frames",
+    "TSK-1120": "the dashboard shell",
+    "TSK-1121": "revision in place with change marks",
+    "TSK-1122": "this prototype",
+    "TSK-1156": "Codex builder seat gates",
+    "TSK-1162": "one token source",
+    "TSK-1127": "the report and portal samples",
+    "TSK-1164": "a planned task not on the line yet",
+    "TSK-1165": "a planned task not on the line yet",
+    "TSK-1170": "a planned task not on the line yet",
+    "TSK-437": "lane isolation, item 1",
+    "TSK-1000": "the first EPC-025 line merge",
+    "TSK-422": "the ledger event log",
+    "EPC-022": "the 4.0.0 milestone fixes",
+    "EPC-024": "quality defaults, local scan parity and seat capacity",
+    "EPC-025": "the coordination ledger",
+    "EPC-026": "the capabilities catalog epic",
+    "SPC-015": "the EPC-024 line repair spec"
+  },
+  "namesNote": "Short phrases drawn from each record title on the line at the read; a task not on the line is named as planned.",
+  "epicContext": {
+    "EPC-022": {
+      "whyNow": "This is the 4.0.0 release itself: the epic fixes or settles each issue of the plan for the 4.0.0 release, which the operator renumbered from 3.2.0 on 2026-10-28.",
+      "source": "EPC-022.md Summary, first paragraph (line 18 to 29 on the line)"
+    },
+    "EPC-024": {
+      "whyNow": "Its release slot is open: the record says it is the 4.2.0 epic unless the operator orders it earlier, and its line is cut from main after 4.0.0 ships. Its 21 tasks count in this report because the basis counts all three epics.",
+      "source": "EPC-024.md Summary, the \"Release slot\" paragraph (line 53 to 62 on the line)"
+    },
+    "EPC-025": {
+      "whyNow": "It targets this release: its line merges into the EPC-022 line through one reviewed pull request before the pull request to main, and the operator chose on 2026-10-24 to merge the line once with the ledger event log landed.",
+      "source": "EPC-025.md Summary (line 18 to 45 on the line)"
+    }
+  },
+  "lanesNote": "A lane is one builder, seat or subagent on one unit; this list has one row per tracker entry, and a row may hold two seats or an idle seat.",
+  "terms": [
+    [
+      "the line",
+      "the integration branch all 4.0.0 work lands on before one pull request to main"
+    ],
+    [
+      "on main",
+      "the task's own record on origin/main says complete"
+    ],
+    [
+      "in a pull request",
+      "an open pull request against the line names the task in its branch name"
+    ],
+    [
+      "pts",
+      "percentage points: the change in the percent since the previous report"
+    ],
+    [
+      "marked ready",
+      "a pull request its author took out of draft; not a review verdict"
+    ],
+    [
+      "work next",
+      "the command `codeflow work next`, which lists ready, waiting and blocked tasks with reasons"
+    ],
+    [
+      "theme",
+      "the epic record section that introduced a task, the grouping of TSK-1095 AC-15"
+    ],
+    [
+      "lane",
+      "one builder, seat or subagent on one unit of work"
+    ],
+    [
+      "seat",
+      "an interactive model session (Claude, Codex or Grok) a Coordinator drives"
+    ],
+    [
+      "d1 to d12",
+      "the operator's decisions of 12:07 EST, 2 Nov, listed in Your decisions"
+    ]
+  ],
+  "epicShort": {
+    "EPC-022": {
+      "oneLine": "The 4.0.0 release: every issue of the plan fixed or settled, landed on one line and merged once into main.",
+      "delivers": "the fixes and settlements of the 4.0.0 plan, on one line",
+      "forWhom": "adopters and contributors running codeflow ci and its hooks",
+      "whyNow": "it is the 4.0.0 release itself, renumbered from 3.2.0 on 28 Oct",
+      "source": "EPC-022.md Summary (line 18 to 34 on the line): what it delivers and done means; \"It serves\" sentence",
+      "card": "every plan issue fixed or settled, merged once into main",
+      "menu": "4.0.0 milestone fixes"
+    },
+    "EPC-024": {
+      "oneLine": "Stricter evidence defaults for new projects, the same scans locally as in CI, and more seats.",
+      "delivers": "strict evidence defaults, local scan parity with CI, seat capacity",
+      "forWhom": "adopters starting a project and Coordinators running seats",
+      "whyNow": "its slot is the 4.2.0 epic unless the operator orders it earlier",
+      "source": "EPC-024.md Summary and the \"Release slot\" paragraph (line 53 to 62 on the line)",
+      "card": "strict evidence defaults, local scan parity with CI, more seats",
+      "whyNowMore": "its line is cut after 4.0.0 ships",
+      "menu": "Quality defaults and seats"
+    },
+    "EPC-025": {
+      "oneLine": "The coordination ledger: every handed-over item and every lane visible on disk, so any session can follow up.",
+      "delivers": "a follow-up ledger and lane records on disk, with an event log",
+      "forWhom": "any orchestrating or lone session, on any harness or model",
+      "whyNow": "it merges into the 4.0.0 line before the pull request to main",
+      "source": "EPC-025.md Outcome (line 18 to 45 on the line); the record carries no Summary \"It serves\" sentence, so for whom is read from the Outcome",
+      "card": "every handed-over item and every lane visible on disk",
+      "forWhomNote": "from the Outcome; the record has no \"It serves\" sentence",
+      "whyNowMore": "the operator chose on 24 Oct to merge once with the event log",
+      "menu": "Coordination ledger"
+    }
+  },
+  "blockerShort": {
+    "b1": {
+      "do": "sign in a second Codex account and write accounts.toml in the root checkout",
+      "why": "decision d9 asks for the account proven live; no agent can sign in for you",
+      "alt": "accept AC-4 on the recorded dry run, with reduced assurance"
+    },
+    "b2": {
+      "do": "apply the paste-ready test edit on PR 466",
+      "why": "the edit is the operator's to make (decision d10)",
+      "alt": "let a builder make it under your name; not recommended"
+    },
+    "b3": {
+      "do": "retire the EPC-024 line and re-cut it from the 4.0.0 tip",
+      "why": "the fast-forward was refused; nothing moved, nothing lost",
+      "alt": "file the gap as a task and wait for the pre-push fix"
+    },
+    "b4": {
+      "do": "rebuild the hook binary from the line, then rerun the gates",
+      "why": "the installed binary's source digest differs from the line's sources",
+      "alt": "run the gates with the worktree binary first on PATH"
+    }
+  },
+  "blockersEvidenceAt": "2026-11-02 12:33 EST"
+}

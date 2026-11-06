@@ -1,0 +1,29 @@
+{
+  "phase": "after",
+  "page": "prototype.html",
+  "sha256": "174f2adf712bfb25256d714880a22ac72628233ca442cb45c941c46104c69260",
+  "viewport": "1440x900",
+  "theme": "graphite",
+  "mode": "light",
+  "colours": {
+    "main": {
+      "element": "html",
+      "background": "rgb(18, 118, 110)"
+    },
+    "line": {
+      "element": "html",
+      "background": "color(srgb 0.38902 0.643922 0.623529)"
+    },
+    "lineMark": {
+      "element": "svg",
+      "fill": "color(srgb 0.38902 0.643922 0.623529)"
+    },
+    "taskFigure": {
+      "task": "k-TSK-275",
+      "passedStageMarks": 3,
+      "fill": "color(srgb 0.38902 0.643922 0.623529)"
+    },
+    "specimenMark": "rgb(176, 112, 0)"
+  },
+  "feature": "f-CAP-001"
+}

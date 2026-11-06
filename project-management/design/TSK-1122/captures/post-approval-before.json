@@ -1,0 +1,29 @@
+{
+  "phase": "before",
+  "page": "approved-c5d21c9d7.html",
+  "sha256": "05cbe730c94a619162692410c47d9fc735e97a4429d2d42821e450f188623dd2",
+  "viewport": "1440x900",
+  "theme": "graphite",
+  "mode": "light",
+  "colours": {
+    "main": {
+      "element": "html",
+      "background": "rgb(18, 118, 110)"
+    },
+    "line": {
+      "element": "html",
+      "background": "color(srgb 0.48 0.695686 0.678431)"
+    },
+    "lineMark": {
+      "element": "svg",
+      "fill": "rgb(18, 118, 110)"
+    },
+    "taskFigure": {
+      "task": "k-TSK-275",
+      "passedStageMarks": 3,
+      "fill": "rgb(18, 118, 110)"
+    },
+    "specimenMark": "color(srgb 0.52549 0.721569 0.705882)"
+  },
+  "feature": null
+}

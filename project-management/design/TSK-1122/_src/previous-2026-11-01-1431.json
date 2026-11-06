@@ -1,0 +1,312 @@
+{
+  "lineTip": "92149edc8",
+  "mainTip": "b2bb61af3",
+  "aheadOfMain": 364,
+  "behindMain": 4,
+  "deliverable": "CodeFlow 4.0.0: every task of its three epics lands on the integration line with its review, the line passes one full gate and the journey on the installed candidate, and one pull request from the line into main is ready for the operator to merge.",
+  "basis": "One percent basis everywhere: completed tasks over all tasks of EPC-022, EPC-024 and EPC-025, cancelled tasks excluded. A task is on main only when its own record on origin/main says complete; otherwise it is complete on the line only.",
+  "scope": {
+    "total": 221,
+    "complete": 76,
+    "onMain": 63,
+    "inPr": 11,
+    "blocked": 0,
+    "todo": 134
+  },
+  "epics": [
+    {
+      "id": "EPC-022",
+      "title": "the 4.0.0 milestone fixes",
+      "status": "in progress",
+      "total": 196,
+      "done": 75,
+      "onMain": 62,
+      "blocked": 0,
+      "inPr": 11,
+      "criteria": 183,
+      "verification": "unknown: no acceptance result recorded on the line",
+      "doneText": "75 tasks landed, 62 of them already on main: the default branch as the only local policy authority (ADR-0091), ignored and oversized files judged by the default branch's rules, dependency-audit exceptions through a reviewed hook, read-only git allowed while the authority is unresolved, a task pull request judging its syncs as the line push does, the strict text rule. PR 471 landed at 13:39 EST with the approved cleanups: TSK-044 and TSK-164 cancelled, the TSK-1097 sample set moved into TSK-1127.",
+      "notDoneText": "121 to do, among them the status family (TSK-1095 progress JSON, TSK-1097 tokens, TSK-1098 status --present, TSK-1120 dashboard shell, TSK-1121 change marks, TSK-1122 prototype), the shipped-instruction set (TSK-1030 to TSK-1034), the sanctioned browser route for review seats (TSK-1027), the managed CI cancelling superseded runs (TSK-1026). 0 blocked: the four records that waited on PR 471 (TSK-1022, TSK-1035, TSK-1052, TSK-1053) were released when it merged. 11 in open pull requests, 8 of them in conflict with the line.",
+      "todo": 121
+    },
+    {
+      "id": "EPC-024",
+      "title": "quality defaults, local scan parity and seat capacity",
+      "status": "in progress",
+      "total": 21,
+      "done": 0,
+      "onMain": 0,
+      "blocked": 0,
+      "inPr": 0,
+      "criteria": 24,
+      "verification": "unknown: no acceptance result recorded on the line",
+      "doneText": "Nothing landed. 21 tasks planned with criteria (issues 234, 252, 274, 275, 279, 286, 299 to 303).",
+      "notDoneText": "All 21 to do. The epic's own line could not be fast-forwarded to the 4.0.0 tip (blocker 3), so no task has started.",
+      "todo": 21
+    },
+    {
+      "id": "EPC-025",
+      "title": "the coordination ledger: follow-ups and lanes",
+      "status": "planning",
+      "total": 4,
+      "done": 1,
+      "onMain": 1,
+      "blocked": 0,
+      "inPr": 0,
+      "criteria": 5,
+      "verification": "unknown: the epic is still in planning",
+      "doneText": "1 task landed, on main: the coordination hierarchy plan (PR 462, Director, Coordinators and Workers).",
+      "notDoneText": "3 to do: the parent link on session records, rename and resume, the report and tree view. The operator accepted the hierarchy proposal on 2026-10-31 at 23:29.",
+      "todo": 3
+    }
+  ],
+  "streams": [
+    {
+      "id": "capabilities",
+      "title": "Capabilities catalog",
+      "step": 3,
+      "steps": 5,
+      "state": "page 1 decided about 12:30 (the check as proposed, tier scope B); its revision 3 was published 13:30 at the same link and answers the five comment threads; Codex asked for changes at 13:36 and a fix Worker runs since 13:46. The planning PR 473 (EPC-026, 15 tasks) is open; Codex asked for changes at 13:16 and a fix Worker runs since 13:32, then the Director lands it. The presentation part waits for the visual direction (step 5)",
+      "owner": "Capabilities Coordinator",
+      "done": [
+        "Page 1 decided about 12:30: the check as proposed, tier scope B",
+        "Revision 3 published 13:30 at the same link; answers the five comment threads"
+      ],
+      "now": [
+        "Page 1: Codex asked for changes at 13:36; a fix Worker runs since 13:46",
+        "Planning PR 473 (EPC-026, 15 tasks) open: Codex asked for changes at 13:16; a fix Worker runs since 13:32"
+      ],
+      "next": [
+        "The Director lands PR 473",
+        "The presentation part waits for the visual direction (step 5)"
+      ]
+    },
+    {
+      "id": "planning",
+      "title": "Estimation and planning (issue 334)",
+      "step": 3,
+      "steps": 5,
+      "state": "PR 471 landed at 13:39 (step 1); the proposal is confirmed (step 2); pages 2 and 3 were published at 12:48 and answered the operator's comments; the operator then asked for one coherent model, so step 3a, a coherence review by a Fable Worker running since 13:17, due about 14:32, comes before the pages are revised at the same links; then the re-banding of the open backlog (3c)",
+      "owner": "Planning Coordinator",
+      "done": [
+        "PR 471 landed at 13:39 (step 1)",
+        "Proposal confirmed (step 2)",
+        "Pages 2 and 3 published 12:48; operator comments answered"
+      ],
+      "now": [
+        "Step 3a: coherence review by a Fable Worker since 13:17, due about 14:32",
+        "Why: the operator asked for one coherent model"
+      ],
+      "next": [
+        "Pages revised at the same links",
+        "Re-banding of the open backlog (3c)"
+      ]
+    },
+    {
+      "id": "visual-docs",
+      "title": "Visual and docs direction",
+      "step": 3,
+      "steps": 6,
+      "state": "the Director passed the step 2 renders at 13:52 (neutral ground, green accent, readable scale, real figures); Codex asked for changes to the design and page 5 at 13:45, the fix batch finished at 14:25, a second Codex follow-up (chart colours, one snapshot) is closing about 14:45, then page 5 goes to the Director, then to you",
+      "owner": "Director",
+      "done": [
+        "Director passed the step 2 renders at 13:52: neutral ground, green accent, readable scale, real figures",
+        "Codex fix batch for the design and page 5 (asked 13:45) finished at 14:25"
+      ],
+      "now": [
+        "Second Codex follow-up (chart colours, one snapshot), closing about 14:45"
+      ],
+      "next": [
+        "Page 5 goes to the Director, then to you"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "n": 1,
+      "title": "Capabilities catalog",
+      "asks": "decided: the per-PR capability check and the minimal tier scope; revision 3 answers your five comments",
+      "state": "decided about 12:30; revision 3 published 13:30, under a Codex fix round",
+      "url": "https://claude.ai/artifact/Wr7ctEyEwoCq4M8wbVLr2p"
+    },
+    {
+      "n": 2,
+      "title": "Estimation model",
+      "asks": "confirm issue 334's bands and clock; decide default-on or opt-in",
+      "state": "published 12:48; revised after the coherence review (about 15:00 to 16:20)",
+      "url": "https://claude.ai/artifact/QSJp283o6VmdkPexWH2nip"
+    },
+    {
+      "n": 3,
+      "title": "From specs to epics and tasks",
+      "asks": "confirm how work is created and every epic and task change in 4.0.0",
+      "state": "published 12:48; revised after the coherence review (about 15:00)",
+      "url": "https://claude.ai/artifact/ESb6NwUfujm6U5ihmbRcS4"
+    },
+    {
+      "n": 4,
+      "title": "Coordination system",
+      "asks": "confirm roles, naming, delegation, trackers and the ADR-0094 amendment",
+      "state": "revision 2 published to the Director; waits for Codex round 2 and the render check",
+      "url": "https://claude.ai/artifact/AeMUHCmRoFWo3nSotgoPea"
+    },
+    {
+      "n": 5,
+      "title": "Visual and docs direction",
+      "asks": "the design direction and the accent, accepted 2026-11-02",
+      "state": "draft, under the Codex fix round; the Director passed the renders at 13:52",
+      "url": ""
+    },
+    {
+      "n": 6,
+      "title": "4.0.0 status report",
+      "asks": "read: this report, in the earlier form",
+      "state": "in the earlier form; decision 7 on page 5 rebuilds it on the new design",
+      "url": ""
+    }
+  ],
+  "bands": "Clock bands, the operator's current proposal (planning tracker, 11:55 and 12:15 notes): Easy 1 to 2 h, Medium 2 to 4 h, Hard 4 to 6 h, Very hard 6 to 8 h, split at planning; the clock runs from the start commit to completion minus blocked spans. The breakdown cleanups were approved at 11:35 EST.",
+  "prs": {
+    "openAgainstLine": 19,
+    "taskPrs": 17,
+    "planPrs": 2,
+    "ready": 2,
+    "conflicting": 8,
+    "mergeable": 11,
+    "unknown": 0,
+    "conflictingIds": [
+      458,
+      448,
+      443,
+      429,
+      425,
+      376,
+      337,
+      317
+    ],
+    "mergeableIds": [
+      478,
+      477,
+      475,
+      474,
+      473,
+      470,
+      468,
+      466,
+      463,
+      428,
+      344
+    ],
+    "unknownIds": [],
+    "mergedToday": [
+      471,
+      469,
+      467,
+      446,
+      331
+    ],
+    "mergedToMainToday": [
+      462
+    ],
+    "note": "Six PRs (478, 477, 475, 474, 470, 337) carry task records not yet on the line, so no epic counts them."
+  },
+  "blockers": [
+    {
+      "id": "b2",
+      "title": "Eight open task pull requests conflict with the line",
+      "who": "builders",
+      "rec": "each builder merges the line tip into its branch before asking for review (PRs 458, 448, 443, 429, 425, 376, 337, 317).",
+      "why": "ADR-0076: the builder merges the integration line into the task branch so conflicts surface in the task; the eleven mergeable PRs can land meanwhile.",
+      "alt": "land the eleven mergeable PRs first and rebase the eight afterwards, which moves the same conflicts later and adds more."
+    },
+    {
+      "id": "b3",
+      "title": "The EPC-024 line cannot be fast-forwarded to the 4.0.0 tip",
+      "who": "you (decision 2)",
+      "rec": "retire the EPC-024 line and re-cut it from the 4.0.0 tip in one planning PR; its tip e283948c6 is contained in the 4.0.0 line with no unique commits and no open PRs into it.",
+      "why": "the plain fast-forward push was refused by the pre-push codeflow ci, which judged the 167 commits as a PR range (acceptance-binding blocks, stale hook binary); nothing moved and nothing was lost (board, 2026-10-31 about 20:28).",
+      "alt": "file the gap as a task and wait for the pre-push fix and the hook binary refresh; EPC-024's 21 tasks cannot start until then."
+    },
+    {
+      "id": "b4",
+      "title": "The installed codeflow 3.1.0 rejects the line's test configuration",
+      "who": "you",
+      "rec": "install the line's own build as the hook binary (or set CODEFLOW_HOOK_BINARY per lane) until 4.0.0 publishes.",
+      "why": "`targets[1].heavy` is unknown to 3.1.0, so every lane pushing to the line hits the refusal; the planning lane already had to use its worktree build.",
+      "alt": "keep 3.1.0 and set the hook binary lane by lane, which repeats the workaround in every brief."
+    },
+    {
+      "id": "b5",
+      "title": "git fetch in the codeflow checkout reports an error on a broken local ref",
+      "who": "you",
+      "rec": "repair the TSK-412 worktree ref (`git worktree prune`, then remove the broken `refs/heads/task/TSK-412-...` entry) from your own terminal.",
+      "why": "fetch completes and the origin refs did update (the line tip was read live at 2026-11-01 14:31 EST), but each fetch prints \"bad object refs/heads/task/TSK-412-...\" and \"did not send all necessary objects\"; agents must not delete refs.",
+      "alt": "leave it; every fetch keeps printing the error and a future fetch may stop updating refs."
+    }
+  ],
+  "inputs": [
+    {
+      "id": "accent",
+      "title": "Graphite accent, after seeing these renders",
+      "markdown": "This sample uses the kit's existing deep green (`#12766e` light, `#63cbbf` dark), your trial of 12:18 EST.",
+      "options": [
+        {
+          "value": "green",
+          "label": "Keep the deep green as Graphite's default accent",
+          "cost": "none now; the kit already carries these values",
+          "recommended": true
+        },
+        {
+          "value": "plum",
+          "label": "Make plum, the curated second accent, the default",
+          "cost": "one token change in `tokens.json`, both modes"
+        },
+        {
+          "value": "other",
+          "label": "Another hue; say which",
+          "cost": "one more design round with renders in both modes"
+        }
+      ]
+    },
+    {
+      "id": "epc-024-line",
+      "title": "The EPC-024 line (blocker 3)",
+      "markdown": "The fast-forward to the 4.0.0 tip was refused; nothing moved, nothing lost.",
+      "options": [
+        {
+          "value": "retire",
+          "label": "Retire the EPC-024 line and re-cut it from the 4.0.0 tip",
+          "cost": "one planning PR changing the 21 tasks' integration target; no commits lost",
+          "recommended": true
+        },
+        {
+          "value": "file-wait",
+          "label": "File the gap as a task and wait for the pre-push fix",
+          "cost": "EPC-024 stays at 0 of 21 until the fix and the hook binary refresh land"
+        }
+      ]
+    }
+  ],
+  "answersFile": "coordination/decisions/2026-11-01-4.0.0-status-answers.md",
+  "recheck": "echo '1 of 4: the four tasks PR 471 released, read from the line'\nfor t in TSK-1022 TSK-1035 TSK-1052 TSK-1053; do printf '%s ' \"$t\"; git -C \"$W/codeflow\" show origin/integration/EPC-022-the-3-2-0-milestone-fixes:project-management/tasks/$t.md | grep -m1 '^status:'; done\necho '2 of 4: open pull requests against the line and their merge state'\ngh pr list -R sathyassn/codeflow --state open --base integration/EPC-022-the-3-2-0-milestone-fixes --json number,isDraft,mergeable,title --jq '.[]|\"\\(.number) \\(.mergeable) draft=\\(.isDraft) \\(.title)\"'\necho '3 of 4: the line against main'\ngh api repos/sathyassn/codeflow/compare/main...integration/EPC-022-the-3-2-0-milestone-fixes --jq '{ahead_by,behind_by}'\necho '4 of 4: the installed binary and the worktrees'\ncodeflow --version\ngit -C \"$W/codeflow\" worktree list",
+  "decided": [
+    {
+      "when": "11:35 EST",
+      "what": "the breakdown cleanups in PR 471 are approved (planning tracker)"
+    },
+    {
+      "when": "12:18 EST",
+      "what": "both cf-docs-portal modes, project portal and product docs site, each layered concept, architecture, technical (OUTCOMES.md, scope confirmed)"
+    },
+    {
+      "when": "12:18 EST",
+      "what": "the Graphite accent trial: the kit's deep green, no saturated blue; decision 1 below asks for the verdict on these renders"
+    },
+    {
+      "when": "about 12:30 EST",
+      "what": "page 1: the per-PR capability impact check approved as proposed, and minimal tier scope option B (capabilities tracker)"
+    }
+  ],
+  "streamsReadAt": "2026-11-01 14:31 EST",
+  "snapshotAt": "2026-11-01 14:31 EST"
+}

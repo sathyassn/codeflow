@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Status dashboard prototype: changes made after your approval</title>
+<style>
+:root { color-scheme: light dark; --ground: #fafafa; --text: #1c1c1c; --mute: #5a5a5a; --line: #d6d6d6; --panel: #fff; --wash: #eef6f5; }
+@media (prefers-color-scheme: dark) { :root { --ground: #161616; --text: #ececec; --mute: #a8a8a8; --line: #3a3a3a; --panel: #1f1f1f; --wash: #1c2b29; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ground); color: var(--text); font: 16px/1.5 system-ui, sans-serif; }
+main { max-width: 1120px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 28px; line-height: 1.25; margin: 0 0 8px; }
+h2 { font-size: 20px; margin: 40px 0 4px; }
+p { margin: 0 0 10px; max-width: 75ch; }
+.note { background: var(--wash); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 16px 0; }
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-width: 0; }
+figcaption { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+img { display: block; max-width: 100%; height: auto; }
+.mute { color: var(--mute); font-size: 14px; }
+code { font-size: 14px; }
+@media (max-width: 700px) { .pair { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<main>
+<h1>Status dashboard prototype: changes made after your approval</h1>
+<p>You approved the prototype on 2 November 2026 at commit <code>c5d21c9d7</code>. That approval stands. Two changes came after it, and you have not seen them. Each picture pair shows the approved page on the left and the changed page on the right.</p>
+<div class="note"><b>Your decision:</b> approve the built page, or name a change. Pull request 540 does not wait for this answer.</div>
+
+<h2>1. Task pages show Context, and capabilities open a feature page</h2>
+<p>Your words of 31 October: entity pages (feature, outcome, epic, theme, task) must open with what the item is about, from the record's Outcome and Context. The approved page showed Outcome only and had no feature page.</p>
+<div class="pair">
+  <figure><figcaption>Approved: task disclosure, Outcome only</figcaption><img src="captures/post-approval-task-context-before.png" alt="The approved task disclosure, holding the whole outcome only"></figure>
+  <figure><figcaption>Changed: task disclosure, Outcome and Context</figcaption><img src="captures/post-approval-task-context-after.png" alt="The changed task disclosure, holding the whole outcome and the record's context"></figure>
+</div>
+<p class="mute">Task records have no section named Context. The page uses each record's Description, with its text figures left out. The disclosure stays closed until opened.</p>
+<div class="pair">
+  <figure><figcaption>Approved: capability chips on an epic, not clickable</figcaption><img src="captures/post-approval-epic-chips-before.png" alt="The approved chips on an epic page"></figure>
+  <figure><figcaption>Changed: each capability chip opens its feature page</figcaption><img src="captures/post-approval-epic-chips-after.png" alt="The changed chips on an epic page, with capability names as links"></figure>
+</div>
+<figure style="margin-top:12px"><figcaption>New: a feature page. No menu row was added.</figcaption><img src="captures/post-approval-feature-view-after.png" alt="A new feature page opening with what the capability is, then its state and the epics that build it"></figure>
+
+<h2>2. Stage colours: bars, stage dots and specimen marks</h2>
+<p>Your words of 31 October asked that chart stage colours be distinguishable. On the approved page, the "complete on the line only" colour was under the 3:1 contrast floor in 8 of 228 checks. No single colour mix passes both that floor and the separation floor from "on main": 75% fails separation, and 65% fails contrast on the fill.</p>
+<p>The change: a 65% fill to stay separate from "on main", plus a 1 px accent outline that gives the mark its 3:1 boundary. The coord/catalog Coordinator chose this. The separation floor of 15 was selected by the visual and docs Coordinator, since retired, and is not your decision.</p>
+<h3>Bars</h3>
+<div class="pair">
+  <figure><figcaption>Approved: 55% fill, no outline</figcaption><img src="captures/post-approval-stage-fill-before.png" alt="The approved stage bar with the line segment at 55 percent accent"></figure>
+  <figure><figcaption>Changed: 65% fill, 1 px outline</figcaption><img src="captures/post-approval-stage-fill-after.png" alt="The changed stage bar with the line segment at 65 percent accent and an accent outline"></figure>
+</div>
+<div class="pair">
+  <figure><figcaption>Approved: the narrowest real segment, one task, 390 px wide</figcaption><img src="captures/post-approval-narrow-segment-390-before.png" alt="The approved stage bar at phone width, with a one-task line segment"></figure>
+  <figure><figcaption>Changed: the same segment</figcaption><img src="captures/post-approval-narrow-segment-390-after.png" alt="The changed stage bar at phone width, with a one-task line segment and its outline"></figure>
+</div>
+<h3>Stage dots on a task page</h3>
+<p>The dots for the stages a task has passed were full accent on the approved page, the colour the bars use for "on main". They now use the line colour and outline.</p>
+<div class="pair">
+  <figure><figcaption>Approved: passed stages in full accent</figcaption><img src="captures/post-approval-task-stage-figure-before.png" alt="The approved task stage figure, with passed stages in full accent"></figure>
+  <figure><figcaption>Changed: passed stages in the line colour</figcaption><img src="captures/post-approval-task-stage-figure-after.png" alt="The changed task stage figure, with passed stages in the line colour and outline"></figure>
+</div>
+<h3>Specimen marks for "in a pull request"</h3>
+<p>These 13 marks, in three specimen pages, were under 3:1. They now use the warning colour the bars already use for that stage.</p>
+<div class="pair">
+  <figure><figcaption>Approved</figcaption><img src="captures/post-approval-specimen-marks-before.png" alt="The approved specimen figure with its pull request marks"></figure>
+  <figure><figcaption>Changed</figcaption><img src="captures/post-approval-specimen-marks-after.png" alt="The changed specimen figure, with pull request marks in the warning colour"></figure>
+</div>
+</main>
+</body>
+</html>
