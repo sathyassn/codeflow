@@ -1,0 +1,11 @@
+id = "TSK-1364"
+uid = "250a48c4-1bba-44ef-ab49-240a73a453f0"
+kind = "TSK"
+title = "A cancelled CI run reports cancelled verdicts, not failed ones"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-06T01:37:28Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
