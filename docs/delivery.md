@@ -221,18 +221,17 @@ A receiver's first push still proves its own task landings.
   records as its own additions.
 - When two lines hold different criteria for a task, the check orders them
   by ancestry on the fetched history and reads no branch name or date. A
-  version is older when a commit that wrote it, on either line, precedes
-  every commit that wrote the other, and every other commit that wrote it
-  precedes them too or is the record's first appearance on its line: no
-  commit before it held any task file with the task's id or uid. So a sync
-  can bring in an edit whose branch forked before a merge on the receiving
-  line, or one that replaced criteria the receiving line later copied in
-  fresh. A commit that writes the older version after the newer one exists,
-  even after a deletion, is a decision and competes. A merge that kept the older version
-  against an even older one, or against a side that never held the record,
-  does not change the order. A merge that kept it against a newer or unordered
-  version rejected that version, so it still competes. When both lines wrote
-  their own criteria, neither is older and the sync refuses.
+  version is older when every commit on the receiving line that wrote it
+  precedes every commit that wrote the other, so a sync can bring in an
+  edit whose branch forked before a merge on the receiving line. A merge
+  that kept the older version against an even older one, or against a side
+  that never held the record, does not change the order. A merge that kept
+  it against a newer or unordered version rejected that version, so it
+  still competes. When both lines wrote their own criteria, neither is
+  older and the sync refuses. That includes a line that wrote the same
+  criteria on its own, without the receiving line's commit, and then
+  edited them: ancestry cannot tell that copy from a replay of the
+  receiving line's reviewed version, so the edit does not win.
 - Receiving-line record edits and competing criteria introductions still
   need their own judgment. A source landing with an unreviewed resolution,
   an unavailable home without a proven default-target landing, or an
