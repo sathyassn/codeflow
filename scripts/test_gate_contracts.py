@@ -598,8 +598,13 @@ class GateContracts(unittest.TestCase):
         self.assertFalse(profiles['essential']['fail-fast'])
         self.assertEqual(profiles['essential']['junit']['path'], 'junit.xml')
         self.assertNotIn('default-filter', profiles['essential'])
+        for name in ('read-benchmark', 'prose-exhaustive'):
+            self.assertEqual(set(targets[name]['modes']), {'full'})
+
+    def test_only_the_hosted_windows_profile_bounds_a_test(self):
         # TSK-1321 AC-6: the per-test bound is for the hosted Windows partitions
         # only; the local gates' slow tests keep running while active (TSK-1278).
+        profiles = tomllib.loads(read('.config/nextest.toml'))['profile']
         hosted = profiles['windows-hosted']
         self.assertEqual(hosted['slow-timeout'], {'period': '120s', 'terminate-after': 6})
         self.assertNotIn('slow-timeout', profiles['codeflow'])
@@ -609,8 +614,6 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(hosted['junit']['path'], 'junit.xml')
         self.assertNotIn('default-filter', hosted)
         self.assertNotIn('inherits', hosted)
-        for name in ('read-benchmark', 'prose-exhaustive'):
-            self.assertEqual(set(targets[name]['modes']), {'full'})
 
     def test_own_config_publishes_the_producer_graph_and_quality_floors(self):
         cfg = json.loads(read('.codeflow/test-config.json'))

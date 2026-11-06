@@ -592,7 +592,7 @@ class ActiveLineTests(unittest.TestCase):
 
 class DailyCacheTests(unittest.TestCase):
     """A run's caches belong to its own ref. The daily run still saves none: the
-    line's push runs keep them current, and it adds nothing worth saving."""
+    runs on main keep them current, and it adds nothing worth saving."""
 
     def steps_using(self, action):
         pattern = rf"^      - uses: {re.escape(action)}@[^\n]*\n((?:        .*\n)*)"

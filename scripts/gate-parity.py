@@ -563,7 +563,7 @@ LINE_VERDICT_JOB = """\
             echo "::error::the short checks concluded build=${BUILD} parts=${PARTS}; see the codeflow gates jobs"
             exit 1
           fi
-          line="the short checks passed at ${GITHUB_SHA}. This is not full gate evidence; the push to the line runs the full suites."
+          line="the short checks passed at ${GITHUB_SHA}. This is not full gate evidence; the push to the line runs the full Linux suites, and the pull request into main runs Windows."
           echo "$line"
           echo "$line" >> "$GITHUB_STEP_SUMMARY"
 """
