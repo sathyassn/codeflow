@@ -17,17 +17,26 @@
 //! is the total bytes of its epic and task records, `inventory.record_bytes`
 //! in the report and the baseline, and the budget is
 //! `1.5 × baseline peak × (record_bytes now / record_bytes at baseline) + 16 MiB`.
-//! Only the input scales the budget: a command whose peak grew faster than
-//! its input still fails. A baseline without `record_bytes` fails the check.
+//! Only the input scales the budget, and the 16 MiB does not scale. A run
+//! fails when its peak is over that budget: a peak may grow up to 1.5 times
+//! as fast as its input, as it could before the input grew, and growth past
+//! that fails. The same peak is held to a smaller budget on a smaller input.
+//! A command whose memory grows more slowly than its input gains headroom
+//! as the input grows; re-recording the baseline removes that. A baseline
+//! without `record_bytes` fails the check.
 //!
 //! Both baselines were recorded before the field existed, so their
 //! `record_bytes` was derived afterwards from the commit each was recorded
-//! at (TSK-1357): the CLI built at that commit wrote the epic and task
-//! records the fixture starts from, and the fixture's own record
-//! transformations were applied to them for all 10 epics and 10,000 tasks.
-//! The Linux baseline was recorded at 9f4316cae (2026-10-01, 26,676,877
-//! bytes); the macOS baseline at e945b5ac3 (2026-09-28, 41,042,447 bytes),
-//! whose task template was larger, and 9f4316cae only renamed it.
+//! at (TSK-1357), with
+//! `record_bytes_replay_for_the_cli_in_codeflow_bench_cli`: given the CLI
+//! built at that commit in `CODEFLOW_BENCH_CLI`, it has that CLI write the
+//! epic and task templates and applies this fixture's record
+//! transformations to all 10 epics and 10,000 tasks. Templates from before
+//! the `## Outcome` section have nothing for the Outcome step to fill, so
+//! the replay builds the records the baseline's own fixture built. The
+//! Linux baseline was recorded at 9f4316cae (2026-10-01, 26,676,877 bytes);
+//! the macOS baseline at e945b5ac3 (2026-09-28, 41,042,447 bytes), whose
+//! task template was larger, and 9f4316cae only renamed it.
 //!
 //! The ratio travels across machines, not across operating systems: the
 //! calibration is a few short git processes, and starting a process costs
@@ -69,8 +78,12 @@ use process_folders::isolated_home;
 mod outcome;
 
 fn with_env(command: &mut Command) -> &mut Command {
-    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
-    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
+    with_cli_env(command, Path::new(env!("CARGO_BIN_EXE_codeflow")))
+}
+
+/// The benchmark's environment, with the folder of `cli` first on `PATH`.
+fn with_cli_env<'a>(command: &'a mut Command, cli: &Path) -> &'a mut Command {
+    let path = std::env::join_paths(cli.parent().map(Path::to_path_buf).into_iter().chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
@@ -90,7 +103,17 @@ fn with_env(command: &mut Command) -> &mut Command {
 }
 
 fn run(program: &str, root: &Path, args: &[&str]) -> String {
-    let out = with_env(&mut Command::new(program))
+    run_with(
+        Path::new(env!("CARGO_BIN_EXE_codeflow")),
+        program,
+        root,
+        args,
+    )
+}
+
+/// Run `program` in the environment of the CLI at `cli`.
+fn run_with(cli: &Path, program: &str, root: &Path, args: &[&str]) -> String {
+    let out = with_cli_env(&mut Command::new(program), cli)
         .args(args)
         .current_dir(root)
         .output()
@@ -148,8 +171,16 @@ fn synthetic_uid(n: u64) -> String {
 /// then removed: every inventory record is one of these with its identity
 /// replaced. Returns `(epic, task)`.
 fn templates(root: &Path) -> (String, String) {
-    codeflow(root, &["epic", "new", "Template"]);
-    codeflow(
+    templates_from(Path::new(env!("CARGO_BIN_EXE_codeflow")), root)
+}
+
+/// [`templates`], written by the CLI at `cli`.
+fn templates_from(cli: &Path, root: &Path) -> (String, String) {
+    let program = cli.to_str().expect("UTF-8 CLI path");
+    run_with(cli, program, root, &["epic", "new", "Template"]);
+    run_with(
+        cli,
+        program,
         root,
         &[
             "task",
@@ -258,6 +289,28 @@ impl Stream {
     }
 }
 
+/// Every inventory record in order, as `(path, text)`: each line's epic,
+/// then its tasks, with synthetic uids numbered in that order.
+fn for_each_record(epic: &str, task: &str, mut each: impl FnMut(String, String)) {
+    let mut uid = 0_u64;
+    let mut next_uid = || {
+        uid += 1;
+        synthetic_uid(uid)
+    };
+    for line in 1..=LINES {
+        each(
+            format!("project-management/epics/EPC-{line:03}.md"),
+            epic_record(epic, line, &next_uid()),
+        );
+        for k in 1..=TASKS_PER_LINE {
+            each(
+                format!("project-management/tasks/{}.md", task_id(line, k)),
+                task_record(task, line, k, &next_uid()),
+            );
+        }
+    }
+}
+
 /// A fresh full-tier project holding the benchmark inventory, checked out on
 /// the first line. Returns the project and the total bytes of its epic and
 /// task records, the input the memory budget scales with.
@@ -278,28 +331,13 @@ fn inventory() -> (tempfile::TempDir, PathBuf, u64) {
         mark: 0,
         time: 1_700_000_000,
     };
-    let mut uid = 0_u64;
-    let mut next_uid = || {
-        uid += 1;
-        synthetic_uid(uid)
-    };
     let mut plan_files = Vec::new();
     let mut record_bytes = 0_usize;
-    for line in 1..=LINES {
-        let text = epic_record(&epic, line, &next_uid());
+    for_each_record(&epic, &task, |path, text| {
         record_bytes += text.len();
         let blob = stream.blob(&text);
-        plan_files.push((format!("project-management/epics/EPC-{line:03}.md"), blob));
-        for k in 1..=TASKS_PER_LINE {
-            let text = task_record(&task, line, k, &next_uid());
-            record_bytes += text.len();
-            let blob = stream.blob(&text);
-            plan_files.push((
-                format!("project-management/tasks/{}.md", task_id(line, k)),
-                blob,
-            ));
-        }
-    }
+        plan_files.push((path, blob));
+    });
     let plan = stream.commit(
         "refs/heads/plan/inventory",
         &base,
@@ -588,6 +626,45 @@ fn read_commands_on_ten_thousand_records_stay_within_their_budgets() {
     assert!(over.is_empty(), "over budget:\n{}", over.join("\n"));
 }
 
+/// The record bytes a CLI's templates give the inventory, for a baseline's
+/// `record_bytes` (see the module notes): the CLI at `CODEFLOW_BENCH_CLI`,
+/// or this build's when it is unset, writes the epic and task templates in a
+/// fresh full-tier project, and every inventory record is built from them.
+#[test]
+#[ignore = "replay: derives a baseline's record_bytes from the CLI of its recording commit"]
+fn record_bytes_replay_for_the_cli_in_codeflow_bench_cli() {
+    let cli = std::env::var_os("CODEFLOW_BENCH_CLI")
+        .filter(|path| !path.is_empty())
+        .map_or_else(
+            || PathBuf::from(env!("CARGO_BIN_EXE_codeflow")),
+            PathBuf::from,
+        );
+    let program = cli.to_str().expect("UTF-8 CLI path");
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    run_with(&cli, program, &root, &["init", "--yes", "--full"]);
+    let base = run_with(&cli, "git", &root, &["rev-parse", "HEAD"]);
+    run_with(&cli, program, &root, &["ids", "seed"]);
+    run_with(&cli, "git", &root, &["branch", &line_name(1), &base]);
+    let (epic, task) = templates_from(&cli, &root);
+    let (mut epics, mut tasks) = (0_usize, 0_usize);
+    for_each_record(&epic, &task, |path, text| {
+        if path.contains("/epics/") {
+            epics += text.len();
+        } else {
+            tasks += text.len();
+        }
+    });
+    eprintln!(
+        "{}: epic template {} bytes, task template {} bytes; records: epics {epics}, tasks {tasks}, record_bytes {}",
+        cli.display(),
+        epic.len(),
+        task.len(),
+        epics + tasks
+    );
+}
+
 /// The inventory's records pass `validate --docs`, which the benchmark times
 /// (TSK-1068). The benchmark is ignored and runs only in the release gate,
 /// so this small inventory, built from the same templates and record
@@ -822,8 +899,9 @@ fn the_budget_check_flags_a_run_over_its_baseline() {
 
 /// The memory budget scales with the fixture's input and only with it: a
 /// fixture with 1.8 times the record bytes may use 1.8 times the scaled part
-/// of the budget, the 16 MiB stays fixed, and a peak that grew past its
-/// input's growth by more than the 1.5 times allowance still fails.
+/// of the budget and the 16 MiB stays fixed. A peak may grow up to 1.5 times
+/// as fast as its input (2.7 times here, plus the 16 MiB); one KiB past that
+/// fails, and the same peak fails against the baseline's input.
 #[test]
 fn the_memory_budget_scales_with_the_fixture_input() {
     let baseline = serde_json::json!({
@@ -861,7 +939,8 @@ fn the_memory_budget_scales_with_the_fixture_input() {
         unscaled.len() == 1 && unscaled[0].contains("peak 129600 KiB, budget 124384 KiB"),
         "{unscaled:?}"
     );
-    // Growth beyond the input still fails: one KiB over the scaled budget.
+    // A peak 2.7 times the baseline (1.5 times the input's 1.8) plus 16 MiB
+    // is the limit; one KiB more fails.
     assert!(over_budget(&baseline, 1_800_000, &run(210_784)).is_empty());
     let over = over_budget(&baseline, 1_800_000, &run(210_785));
     assert!(
