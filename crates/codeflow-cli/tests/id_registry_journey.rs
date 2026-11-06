@@ -787,7 +787,12 @@ fn the_enforcing_registry_workflow_cannot_be_changed_by_the_pull_request_it_judg
         "the registry check is a step of the enforcing job"
     );
     let raw = std::fs::read_to_string(&asset).unwrap();
-    assert!(!raw.contains("secrets."), "no secret reaches the job");
+    // The workflow's one secret, the authority App's key, belongs to the
+    // authority job (TSK-1177); the enforcing job holds none.
+    assert!(
+        !serde_yaml::to_string(job).unwrap().contains("secrets."),
+        "no secret reaches the job"
+    );
     for step in job["steps"].as_sequence().unwrap() {
         // The job runs only on pull_request_target, whose `github.sha` is the
         // default branch's tip (TSK-336): the checkout is that authority,

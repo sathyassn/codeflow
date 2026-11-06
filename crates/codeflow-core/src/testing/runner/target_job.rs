@@ -6,13 +6,22 @@
 //! target running while the OS freed the lock, unseen by later runs.
 //!
 //! Here the runner starts the target suspended, places it in a new job
-//! object whose only handle this process holds, and then lets it run. The
-//! job carries `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so when this process
-//! ends, however it ends, the OS closes the handle and ends every process in
-//! the target's tree. Children join the job as they are created, and the
-//! target cannot escape it, because the job does not allow breakaway.
-//! Starting suspended closes the window in which the target could start a
-//! child before it joins.
+//! object and then lets it run. The job carries
+//! `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so the OS ends every process in the
+//! target's tree when the job's last handle closes. Children join the job as
+//! they are created, and the target cannot escape it, because the job does
+//! not allow breakaway. Starting suspended closes the window in which the
+//! target could start a child before it joins.
+//!
+//! With no fence held, this process holds the only handle, so its end,
+//! however it ends, ends the tree. The OS gives no order between that and
+//! freeing the gate's fence, so while the gate holds a fence a watcher
+//! outside the job holds it too, along with a copy of the job handle
+//! ([`super::job_watch`], TSK-1318). The watcher starts while the target is
+//! still suspended. When the gate ends, the watcher ends the job and frees
+//! its fences once the job is empty. If the watcher is killed as well, the
+//! last handle closes and the tree still ends, and the fence frees with the
+//! gate.
 
 use std::ffi::c_void;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
@@ -49,9 +58,15 @@ use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUS
 /// re-export's docs from the foreign crate and stops with an internal error.
 pub const CREATE_SUSPENDED: u32 = windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 
-/// The job holding one target's process tree. Dropping it ends any process
-/// still in the tree.
-pub struct TargetJob(OwnedHandle);
+/// The job holding one target's process tree, with the target's fence
+/// watcher. Dropping it never waits. The watcher, signaled by
+/// [`Self::terminate`] or at the latest by the drop, ends any process still
+/// in the tree and exits once the job is empty; with no watcher, closing the
+/// handle ends them.
+pub struct TargetJob {
+    job: OwnedHandle,
+    watch: Option<super::job_watch::JobWatch>,
+}
 
 impl TargetJob {
     pub(super) fn accounting(&self) -> std::io::Result<(u64, u32)> {
@@ -82,16 +97,18 @@ impl TargetJob {
     }
 
     /// Place `child`, started with [`CREATE_SUSPENDED`], in a new
-    /// kill-on-close job, then resume it. A job failure leaves the child
+    /// kill-on-close job, start its fence watcher while this process holds
+    /// a fence, then resume it. A job or watcher failure leaves the child
     /// suspended for the caller to end before it can run a command.
     ///
     /// # Errors
     ///
     /// Returns the OS error when the job cannot be created, configured or
-    /// joined, or when the child cannot be resumed. The caller ends the
-    /// child on either failure.
+    /// joined, when the watcher cannot start or hold the fences, or when the
+    /// child cannot be resumed. The caller ends the child on any failure.
     pub fn adopt(child: &Child) -> Result<Self, AdoptError> {
-        let job = Self::for_child(child).map_err(AdoptError::Job)?;
+        let mut job = Self::for_child(child).map_err(AdoptError::Job)?;
+        job.watch = super::job_watch::JobWatch::start(job.handle()).map_err(AdoptError::Watch)?;
         resume(child.id()).map_err(AdoptError::Resume)?;
         Ok(job)
     }
@@ -109,7 +126,10 @@ impl TargetJob {
             return Err(std::io::Error::last_os_error());
         }
         // SAFETY: `raw` is a valid job handle that nothing else owns.
-        let job = Self(unsafe { OwnedHandle::from_raw_handle(raw as RawHandle) });
+        let job = Self {
+            job: unsafe { OwnedHandle::from_raw_handle(raw as RawHandle) },
+            watch: None,
+        };
         // SAFETY: an all-zero JOBOBJECT_EXTENDED_LIMIT_INFORMATION is valid
         // (no limits); only the kill-on-close flag is set.
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
@@ -136,15 +156,29 @@ impl TargetJob {
         Ok(job)
     }
 
-    /// End every process in the target's tree now (the timeout path).
+    /// End every process in the target's tree now and tell the watcher to
+    /// exit once the job is empty.
     pub fn terminate(&self) {
         // SAFETY: the handle is valid; failure only means the tree has
         // already ended, and the caller has its own backstops.
         unsafe { TerminateJobObject(self.handle(), 1) };
+        if let Some(watch) = &self.watch {
+            watch.release();
+        }
+    }
+
+    /// Whether the job reads empty and the watcher, if any, has exited with
+    /// its fences. A count that cannot be read counts as not ended.
+    pub(super) fn ended(&mut self) -> bool {
+        self.accounting().is_ok_and(|(_, active)| active == 0)
+            && self
+                .watch
+                .as_mut()
+                .is_none_or(super::job_watch::JobWatch::finished)
     }
 
     fn handle(&self) -> HANDLE {
-        self.0.as_raw_handle() as HANDLE
+        self.job.as_raw_handle() as HANDLE
     }
 }
 

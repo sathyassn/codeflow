@@ -176,7 +176,7 @@ or CI runs.**
 | Stage | What must hold | Checked by |
 |---|---|---|
 | Start | The task record exists and is anchored: in the epic's planning change, or, for a standalone task, at head on its own branch. Code predecessors are complete, or reviewed and pinned with `--on TSK-NNN@<sha>` | `codeflow work claim`, `codeflow work start`; CI applies the same read-only check once per pull request |
-| Pull request | A `Task:` line names the task (`Task: TSK-NNN`), or the epic for the breakdown PR and the PR into `main` (`Task: EPC-NNN`); a planning amendment names every epic it changes (`Task: EPC-001, EPC-002`). A pull request that names neither is refused, whatever it touches | `codeflow ci` |
+| Pull request | A `Task:` line names the task (`Task: TSK-NNN`), or the epic for the breakdown PR and the PR into `main` (`Task: EPC-NNN`); a planning amendment names every epic it changes (`Task: EPC-001, EPC-002`); a sync of `main` into an integration line names the line's epic (see [a sync of main into a line](#a-sync-of-main-into-a-line)). A pull request that names neither is refused, whatever it touches | `codeflow ci` |
 | Criteria | The task may change its own criteria, and CI prints the change for the reviewer. Other records' criteria stay frozen except for completed standalone wording corrections (ADR-0080) and record-only redactions (ADR-0084). Both preserve every criterion and tag; see [acceptance waivers and redactions](#acceptance-waivers-and-redactions) | `codeflow ci` |
 | Evidence | The builder cites targeted tests and the quick gate (`codeflow test --mode quick`) with revision and command. The pull request stays a draft until its evidence exists | The reviewer |
 | Review | Every criterion not marked deferred has evidence on the reviewed revision, the needed checks are green, no material finding is open and every nit has a disposition | The other-lineage reviewer |
@@ -262,6 +262,54 @@ home, then merge the reviewed result. A refusal naming target history does
 not ask the receiver to reopen an unrelated task. Pass the intended
 `--branch` and `--base` when checking a detached or historical range; naming
 the same base by ref or commit id does not change the proof.
+
+### A sync of main into a line
+
+A line takes `main`'s landed work through a pull request into the line from
+a branch that carries no task, such as `chore/sync-main-into-epc-022`, with
+`Task: EPC-NNN` naming the line's epic. No task is filed for it. `codeflow
+ci` admits it as a sync when its history proves one:
+
+- the head contains the line's current tip, the base the run judges;
+- every commit the head brings beyond the line and `main` is a merge with
+  exactly two parents;
+- each merge's second parent is on `main`'s commit that the run trusts: the
+  commit `--policy-from` names, which the hosted policy check sets to the
+  default branch's own commit, never a ref name;
+- each merge's tree is the conflict-free automatic merge of its parents.
+
+The net diff may then carry what `main` holds, release notes in
+`changelog.d/` included. Every other check still judges the range: frozen
+criteria and the record checks.
+
+Each task or epic record has one home, where it changes:
+
+- a task's home is the target it declares in `integration_target`;
+- an epic's home is its own line, or the line its `parent_line` names.
+
+A sync takes `main`'s version only of records whose home is not the line,
+and never changes a record whose home is the line: the epic's record, the
+record of an epic that lands on the line, or the record of a task that
+targets the line. A task with no declared target is judged by its epic, and
+stays frozen when the line does not hold that epic's record. Removing or
+moving such a record is a change too.
+Because each record changes only at its home, `main` never holds a newer
+change to a record whose home is the line, so the refusal applies only when
+that rule was broken. A records-only sync that already passes as a planning
+amendment keeps that class.
+
+Refused, naming the cause:
+
+| What the range holds | Why |
+|---|---|
+| A merge of a commit that is not on `main`'s trusted commit, such as a local branch or a ref named like `origin/main` | The second parent is not reviewed default-branch history |
+| A merge of `main` into an older line commit, or a sync left behind after the line moved | The head does not contain the line's tip, so it would drop the line's newer work; redo the sync from the line's current tip |
+| A merge of the line into the sync branch, after the line moved | Its second parent is the line's, not `main`'s; redo the sync from the line's new tip |
+| A run with no `--policy-from` | No default-branch commit to trust |
+| A change to a record whose home is the line | It changes only on the line, through a planning amendment that names the epic |
+| A commit that is not a merge, before or after the merge or as the whole range | The commit is work of its own; it lands through its task |
+| A merge with a resolved conflict or a change of its own | Its tree differs from the clean merge of its parents; land it through a task |
+| A branch named like a sync whose history is not one | A name proves nothing |
 
 ### Acceptance waivers and redactions
 
