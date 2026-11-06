@@ -347,6 +347,8 @@ fn push_branch_to_trunk_copy(dir: &Path, branch: &str) -> (Option<i32>, String) 
     let out = super::git_command(dir)
         .args(["push", "origin", branch])
         .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("CODEFLOW_PR_IS_DRAFT")
         .output()
         .expect("git push runs");
     let all = format!(

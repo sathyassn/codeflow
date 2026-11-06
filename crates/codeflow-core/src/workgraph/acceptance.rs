@@ -123,6 +123,35 @@ pub(super) fn is_ancestor_or_same(
         .map_err(|error| format!("cannot read ancestry from {of} to {ancestor}: {error}"))
 }
 
+/// Whether the commit `reviewed` names is `head` or one of its ancestors
+/// (TSK-1291): a ready pull request lands only a completion whose reviewed
+/// commit its head contains. A name that does not resolve is `false`; an
+/// unreadable repository or history is an error, never `false`.
+///
+/// # Errors
+///
+/// When the repository, `head` or the history between them cannot be read.
+pub fn reviewed_in_history(
+    root: &std::path::Path,
+    reviewed: &str,
+    head: &str,
+) -> Result<bool, String> {
+    let repo = Repository::discover(root)
+        .map_err(|error| format!("cannot open the repository: {error}"))?;
+    let head = repo
+        .revparse_single(head)
+        .and_then(|object| object.peel_to_commit())
+        .map_err(|error| format!("cannot read the head {head}: {error}"))?
+        .id();
+    let Ok(reviewed) = repo
+        .revparse_single(reviewed)
+        .and_then(|object| object.peel_to_commit())
+    else {
+        return Ok(false);
+    };
+    is_ancestor_or_same(&repo, reviewed.id(), head)
+}
+
 /// A missing common ancestor is absence only when both histories can be read.
 pub(crate) fn common_base(repo: &Repository, left: Oid, right: Oid) -> Result<Option<Oid>, String> {
     let unreadable = |error: git2::Error| {
@@ -3321,7 +3350,10 @@ fn own_task_findings(
     (head, target): (&Graph, &Graph),
     paths: &[String],
     id: &str,
-    correctable: &std::collections::BTreeSet<String>,
+    (correctable, redacted): (
+        &std::collections::BTreeSet<String>,
+        &std::collections::BTreeSet<String>,
+    ),
     stacked: &[StackedHead],
     judging: &mut Judging<'_>,
 ) -> Vec<Finding> {
@@ -3338,7 +3370,7 @@ fn own_task_findings(
         (head, target),
         paths,
         id,
-        correctable,
+        (correctable, redacted),
         stacked,
     ));
     found
@@ -3363,32 +3395,51 @@ fn removals(record: &RecordView, old: &[Criterion]) -> Vec<Finding> {
 /// change to its content, or its removal. A record the range adds is new
 /// work, not an amendment; a predecessor's record kept as the reviewed head
 /// this branch stacks on has it (`stacked`) is that pull request's change;
-/// and a record in `correctable` (ADR-0080) is judged by
-/// [`frozen_criteria`].
+/// a record the range validly redacts (`redacted`) is judged by the
+/// redaction rule; and a record in `correctable` (ADR-0080), `own`
+/// included when it is complete, may change only the text of its criteria,
+/// which [`frozen_criteria`] judges: any change outside its criteria
+/// section is refused (TSK-1291).
 fn outside_own_record(
     (head, target): (&Graph, &Graph),
     changed_paths: &[String],
     own: &str,
-    correctable: &std::collections::BTreeSet<String>,
+    (correctable, redacted): (
+        &std::collections::BTreeSet<String>,
+        &std::collections::BTreeSet<String>,
+    ),
     stacked: &[StackedHead],
 ) -> Vec<Finding> {
+    const CRITERIA: &str = "## Acceptance Criteria";
     let mut found = Vec::new();
     for before in target.records.values().filter(|record| {
-        record.id != own
+        (record.id != own || correctable.contains(&record.id))
             && matches!(record.kind, RecordKind::Epic | RecordKind::Task)
-            && !correctable.contains(&record.id)
+            && !redacted.contains(&record.id)
     }) {
         let after = head.records.get(&before.id);
         let touched = changed_paths.contains(&before.path)
             || after.is_some_and(|record| changed_paths.contains(&record.path));
+        let correcting = correctable.contains(&before.id);
         if !touched
             || after.is_some_and(|record| {
                 record.content == before.content
+                    || (correcting
+                        && record.path == before.path
+                        && super::record_text::without_section(&record.content, CRITERIA)
+                            == super::record_text::without_section(&before.content, CRITERIA))
                     || stacked.iter().any(|stack| {
                         stack.task_id == record.id && stack.record.content == record.content
                     })
             })
         {
+            continue;
+        }
+        if correcting {
+            found.push(finding(
+                FROZEN_RULE,
+                format!("{} changes more than the text of its criteria in {own}'s pull request; a correction of a completed standalone task changes only its criteria text (ADR-0080), and its description, dependencies, provenance and every other field stay as they are", before.id),
+            ));
             continue;
         }
         let change = match after {
@@ -4746,8 +4797,9 @@ pub fn pull_request_findings_into(
         &at_head,
         *criteria == Criteria::Amendable,
     );
-    for id in redacted {
-        at_head.records.remove(&id);
+    let redacted: std::collections::BTreeSet<String> = redacted.into_iter().collect();
+    for id in &redacted {
+        at_head.records.remove(id);
     }
     let mut local_head = at_head.clone();
     for id in imported.keys() {
@@ -4796,19 +4848,32 @@ pub fn pull_request_findings_into(
                 (&at_head, &at_target),
                 &paths,
                 id,
-                &correcting(id),
+                (&correcting(id), &redacted),
                 &stacked,
                 &mut judging,
             )),
-            Criteria::Complete(id) => found.extend(frozen_criteria(
-                &at_head,
-                &at_target,
-                &paths,
-                &none(),
-                &correcting(id),
-                &stacked,
-                &mut judging,
-            )),
+            // A completed task's correction route (ADR-0080) keeps the
+            // ownership check: only the corrected criteria text may change
+            // (TSK-1291).
+            Criteria::Complete(id) => {
+                let correctable = correcting(id);
+                found.extend(frozen_criteria(
+                    &at_head,
+                    &at_target,
+                    &paths,
+                    &none(),
+                    &correctable,
+                    &stacked,
+                    &mut judging,
+                ));
+                found.extend(outside_own_record(
+                    (&at_head, &at_target),
+                    &paths,
+                    id,
+                    (&correctable, &redacted),
+                    &stacked,
+                ));
+            }
             _ => found.extend(frozen_criteria(
                 &at_head,
                 &at_target,

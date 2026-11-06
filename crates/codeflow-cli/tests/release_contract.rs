@@ -693,6 +693,8 @@ fn an_adopter_without_release_tooling_is_judged_by_codeflow_ci_alone() {
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env_remove("CODEFLOW_PR_BODY")
+            .env_remove("GITHUB_EVENT_PATH")
+            .env_remove("CODEFLOW_PR_IS_DRAFT")
             .env_remove("GITHUB_EVENT_NAME")
             .output()
             .unwrap();

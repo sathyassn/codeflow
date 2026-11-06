@@ -1,5 +1,7 @@
 //! The CI entry point judges a fix range and both task-landing provenances.
-use super::{combined, git, planned_task, run_in};
+#[cfg(unix)]
+use super::installed_push;
+use super::{codeflow, combined, git, planned_task, run_in};
 use std::path::Path;
 
 const TASK: &str = "project-management/tasks/TSK-001.md";
@@ -176,6 +178,358 @@ fn a_completion_derives_its_review_row_and_warns_on_a_different_one() {
             );
         }
     }
+}
+
+/// TSK-1291 AC-17: the review approved an earlier commit than the pull
+/// request head, and the record binds that review to it; the head itself
+/// only records the completion. The row `codeflow ci` derives, and the row
+/// its remedy asks for, name the bound commit, never the pull request head.
+#[test]
+fn the_derived_row_names_the_bound_commit_not_the_records_only_head() {
+    // `completed` records the completion in a commit after the reviewed one.
+    let (dir, reviewed, _) = completed(false, None);
+    let root = dir.path();
+    let head = String::from_utf8(
+        std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    assert_ne!(head, reviewed);
+    // A row citing the records-only head disagrees with the binding.
+    let out = ci_reviewed(root, "task/TSK-001-work", true, &reviews(&head));
+    let text = combined(&out);
+    assert!(out.status.success(), "{text}");
+    let derived = text
+        .lines()
+        .find(|line| line.contains("row derived from TSK-001's acceptance block"))
+        .unwrap_or_else(|| panic!("no derived row: {text}"));
+    assert!(
+        derived.contains(&format!("| whole unit at {reviewed} | approved |")),
+        "{derived}"
+    );
+    assert!(!derived.contains(&head), "{derived}");
+    assert!(
+        text.contains(&format!("binds the reviewed commit {reviewed}")),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("`whole unit at {reviewed}`")),
+        "{text}"
+    );
+    assert!(!text.contains(&format!("whole unit at {head}`")), "{text}");
+    // The row naming the bound commit agrees and passes silently.
+    let out = ci_reviewed(root, "task/TSK-001-work", true, &reviews(&reviewed));
+    let text = combined(&out);
+    assert!(out.status.success(), "{text}");
+    assert!(!text.contains("has no row approving it"), "{text}");
+}
+
+/// `codeflow ci` for TSK-001 with the given environment, such as the draft
+/// state.
+fn ci_with(root: &Path, reviews: &str, env: &[(&str, &str)]) -> std::process::Output {
+    let body = format!(
+        "## Summary\nRepair work.\n\n- repair\n\nTask: TSK-001\n## Changes\n- repair\n\n## Testing\n- fixture\n{reviews}"
+    );
+    let mut command = codeflow();
+    // Named one by one: a fixture never sets a variable it does not name.
+    for (key, value) in env {
+        match *key {
+            "CODEFLOW_PR_IS_DRAFT" => command.env("CODEFLOW_PR_IS_DRAFT", value),
+            "GITHUB_EVENT_PATH" => command.env("GITHUB_EVENT_PATH", value),
+            "CODEFLOW_PR_DRAFT" => command.env("CODEFLOW_PR_DRAFT", value),
+            other => panic!("unexpected variable {other}"),
+        };
+    }
+    command
+        .args([
+            "ci",
+            "--base",
+            LINE,
+            "--head",
+            "HEAD",
+            "--branch",
+            "task/TSK-001-work",
+            "--pr-body",
+            &body,
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap()
+}
+
+const NOT_LANDABLE: &str = "TSK-001 is not complete (status";
+
+/// TSK-1291 AC-5, AC-10 and AC-15: a code pull request for a task that is
+/// not complete is refused once it is known to be ready, from the variable
+/// or the host's event; a draft, and a run that cannot tell (a push, a
+/// local lint), pass, so the review of a ready pull request and durability
+/// pushes go on. `CODEFLOW_PR_DRAFT` is no draft state. A docs-only range
+/// is refused the same way (amended 2026-11-05): every ready task pull
+/// request needs its completion.
+#[test]
+fn an_unfinished_task_is_not_landable_once_ready() {
+    let dir = fixture();
+    let root = dir.path();
+    // A policy on the target, which the pre-push hook reads at the
+    // destination's default branch.
+    git(root, &["switch", "-q", "main"]);
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    std::fs::write(root.join(".codeflow/policy.json"), "{\"git\": {}}\n").unwrap();
+    commit(root, "chore: add the policy");
+    git(root, &["switch", "-q", LINE]);
+    git(root, &["merge", "-q", "--ff-only", "main"]);
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    std::fs::write(root.join("work.rs"), "// work\n").unwrap();
+    commit(root, "feat: work");
+    let pending = "\n## Reviews\n\nNone: pending\n";
+    let events = tempfile::tempdir().unwrap();
+    let event = events.path().join("event.json");
+    std::fs::write(&event, r#"{"pull_request":{"draft":false}}"#).unwrap();
+    let event = event.to_str().unwrap();
+    // A rerun of an old draft event: the live readiness, passed as the
+    // variable, wins over the event file.
+    let draft_event = events.path().join("draft-event.json");
+    std::fs::write(&draft_event, r#"{"pull_request":{"draft":true}}"#).unwrap();
+    let draft_event = draft_event.to_str().unwrap();
+    for (env, refused) in [
+        (
+            vec![
+                ("GITHUB_EVENT_PATH", draft_event),
+                ("CODEFLOW_PR_IS_DRAFT", "false"),
+            ],
+            true,
+        ),
+        (vec![("GITHUB_EVENT_PATH", draft_event)], false),
+        (vec![("CODEFLOW_PR_IS_DRAFT", "false")], true),
+        (vec![("GITHUB_EVENT_PATH", event)], true),
+        (vec![("CODEFLOW_PR_IS_DRAFT", "true")], false),
+        (
+            vec![
+                ("GITHUB_EVENT_PATH", event),
+                ("CODEFLOW_PR_IS_DRAFT", "true"),
+            ],
+            false,
+        ),
+        (vec![], false),
+        (vec![("CODEFLOW_PR_IS_DRAFT", "/tmp/body.md")], false),
+    ] {
+        let out = ci_with(root, pending, &env);
+        let text = combined(&out);
+        assert_eq!(!out.status.success(), refused, "{env:?}: {text}");
+        assert_eq!(text.contains(NOT_LANDABLE), refused, "{env:?}: {text}");
+    }
+    // AC-15: a real `git push` through the installed hook is not refused,
+    // since a push cannot tell readiness.
+    #[cfg(unix)]
+    {
+        let remote = events.path().join("remote.git");
+        git(
+            root,
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "-b",
+                "main",
+                remote.to_str().unwrap(),
+            ],
+        );
+        git(root, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        // Fixture setup, before the hook is installed.
+        git(root, &["push", "-q", "origin", "main", LINE]);
+        let pushed = installed_push(root, "task/TSK-001-work");
+        let text = combined(&pushed);
+        assert!(!text.contains(NOT_LANDABLE), "{text}");
+        assert!(pushed.status.success(), "{text}");
+    }
+    // AC-10: the former name is the release preflight's body path, never a
+    // draft state.
+    let out = ci_with(root, pending, &[("CODEFLOW_PR_DRAFT", "false")]);
+    assert!(out.status.success(), "{}", combined(&out));
+    // A docs-only range is refused too.
+    git(root, &["switch", "-q", LINE]);
+    git(root, &["switch", "-qc", "task/TSK-001-docs"]);
+    std::fs::write(root.join("README.md"), "# Notes\n").unwrap();
+    commit(root, "docs: notes");
+    let out = codeflow()
+        .env("CODEFLOW_PR_IS_DRAFT", "false")
+        .args([
+            "ci",
+            "--base",
+            LINE,
+            "--head",
+            "HEAD",
+            "--branch",
+            "task/TSK-001-docs",
+            "--pr-body",
+            "## Summary\nNotes.\n\n- notes\n\nTask: TSK-001\n## Changes\n- notes\n\n## Reviews\n\nNone: pending\n",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{}", combined(&out));
+    assert!(combined(&out).contains(NOT_LANDABLE), "{}", combined(&out));
+}
+
+/// TSK-1291 AC-5, amended 2026-11-05: a ready task pull request that only
+/// syncs its line (it takes `main`'s records and changelog entries, the
+/// shape of PRs 615 and 616, which landed without their completions) is
+/// refused while its task is not complete, and the refusal names the fix,
+/// a records-only commit on top of the reviewed head. A completion whose
+/// `reviewed:` is a commit the head does not contain is refused too; one
+/// bound to the reviewed head, recorded in a commit on top of it, passes.
+#[test]
+fn a_ready_sync_pull_request_needs_its_completion_at_the_reviewed_head() {
+    let dir = fixture();
+    let root = dir.path();
+    // `main` moves on: a changelog entry and a note of other landed work.
+    git(root, &["switch", "-q", "main"]);
+    std::fs::create_dir_all(root.join("changelog.d")).unwrap();
+    std::fs::write(root.join("changelog.d/TSK-002.md"), "- other work\n").unwrap();
+    std::fs::write(root.join("NOTES.md"), "Other work landed.\n").unwrap();
+    commit(root, "docs: other work lands on main");
+    // The sync: a task branch from the line merges `main` and nothing else.
+    git(root, &["switch", "-q", LINE]);
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    git(
+        root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "chore: take main's records",
+            "main",
+        ],
+    );
+    let synced = String::from_utf8(
+        std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    let ready = [("CODEFLOW_PR_IS_DRAFT", "false")];
+    let pending = "\n## Reviews\n\nNone: pending\n";
+    let out = ci_with(root, pending, &ready);
+    let text = combined(&out);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains(NOT_LANDABLE), "{text}");
+    assert!(
+        text.contains("add a records-only commit on top of that reviewed head"),
+        "{text}"
+    );
+    assert!(text.contains("codeflow task status"), "{text}");
+    // A draft of the same sync passes.
+    let out = ci_with(root, pending, &[("CODEFLOW_PR_IS_DRAFT", "true")]);
+    assert!(out.status.success(), "{}", combined(&out));
+
+    // A completion bound to a commit outside the head's history.
+    git(root, &["switch", "-q", "main"]);
+    git(root, &["switch", "-qc", "elsewhere"]);
+    std::fs::write(root.join("other.rs"), "// elsewhere\n").unwrap();
+    let elsewhere = commit(root, "feat: other work");
+    git(root, &["switch", "-q", "task/TSK-001-work"]);
+    task(root, "complete", &block(&elsewhere));
+    commit(root, "docs(records): complete TSK-001");
+    let out = ci_with(root, "", &ready);
+    let text = combined(&out);
+    assert!(!out.status.success(), "{text}");
+    assert!(
+        text.contains(&format!(
+            "TSK-001's acceptance block binds {elsewhere}, which is not the head"
+        )),
+        "{text}"
+    );
+
+    // The completion bound to the reviewed sync head, in a records-only
+    // commit on top of it, passes.
+    git(root, &["reset", "-q", "--hard", &synced]);
+    task(root, "complete", &block(&synced));
+    commit(root, "docs(records): bind the reviewed head");
+    let out = ci_with(root, "", &ready);
+    let text = combined(&out);
+    assert!(out.status.success(), "{text}");
+    assert!(!text.contains("not landable"), "{text}");
+}
+
+/// TSK-1291 AC-8: under a policy that requires Reviews at block level, a
+/// completed task's derived row lets the section be left out or empty; a
+/// task with no acceptance block still needs it.
+#[test]
+fn a_derived_review_row_satisfies_a_required_reviews_section() {
+    let dir = fixture();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        r#"{"git":{"pr_sections":"block","pr_required_sections":["Summary","Changes","Reviews"]}}"#,
+    )
+    .unwrap();
+    commit(root, "chore: require reviews");
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    std::fs::write(root.join("work.rs"), "// work\n").unwrap();
+    let reviewed = commit(root, "feat: work");
+    let missing = "PR body is missing required section '## Reviews'";
+    let open = ci_reviewed(root, "task/TSK-001-work", true, "");
+    assert!(!open.status.success(), "{}", combined(&open));
+    assert!(combined(&open).contains(missing), "{}", combined(&open));
+    task(root, "complete", &block(&reviewed));
+    commit(root, "docs: complete task");
+    for section in ["", "\n## Reviews\n\n"] {
+        let out = ci_reviewed(root, "task/TSK-001-work", true, section);
+        let text = combined(&out);
+        assert!(out.status.success(), "{section:?}: {text}");
+        assert!(!text.contains(missing), "{text}");
+        assert!(
+            !text.contains("'## Reviews' is present but empty"),
+            "{text}"
+        );
+    }
+}
+
+/// TSK-1291 AC-5: an unfinished task with a parseable acceptance block
+/// naming an earlier commit is still refused once ready, and its block
+/// derives no Reviews row, under a policy that requires one.
+#[test]
+fn a_todo_task_with_a_parseable_block_is_still_not_landable() {
+    let dir = fixture();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        r#"{"git":{"pr_sections":"block","pr_required_sections":["Summary","Changes","Reviews"]}}"#,
+    )
+    .unwrap();
+    commit(root, "chore: require reviews");
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    std::fs::write(root.join("work.rs"), "// first\n").unwrap();
+    let stale = commit(root, "feat: first pass");
+    // The block stays in a todo record while product code moves on.
+    task(root, "todo", &block(&stale));
+    commit(root, "docs: paste an acceptance block");
+    std::fs::write(root.join("work.rs"), "// later\n").unwrap();
+    commit(root, "feat: later work");
+    let out = ci_with(root, "", &[("CODEFLOW_PR_IS_DRAFT", "false")]);
+    let text = combined(&out);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains(NOT_LANDABLE), "{text}");
+    assert!(text.contains("(status todo)"), "{text}");
+    assert!(
+        text.contains("PR body is missing required section '## Reviews'"),
+        "an unfinished task's block derives no Reviews row: {text}"
+    );
+    assert!(!text.contains("row derived from"), "{text}");
 }
 
 #[test]

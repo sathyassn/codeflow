@@ -241,6 +241,53 @@ def read_pr_bodies(bodies: list[str], binary: Path | None = None) -> list[dict[s
     return readings
 
 
+# The `codeflow ci --release-impact-rule` answer's version
+# (`crates/codeflow-cli/src/cmd/ci.rs`, RULE_PROTOCOL).
+RULE_PROTOCOL = 1
+
+
+def release_section_rule(binary: Path, root: Path, base: str, head: str, into: str) -> str | None:
+    """The level at which a body without a Release impact section is
+    refused for a pull request from `base` to `head` into `into`, or None
+    when it may leave the section out (TSK-1291). `codeflow ci` decides it
+    with the one rule it applies itself (`release_section_rule`), under the
+    checkout's policy, so the two never disagree on whether a body needs the
+    section."""
+    try:
+        done = subprocess.run(
+            [str(binary), "ci", "--release-impact-rule", "--base", base, "--head", head, "--into", into],
+            cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+    except OSError as error:
+        fail(f"{binary} could not run: {error}")
+    if done.returncode != 0:
+        fail(
+            f"{binary} ci --release-impact-rule failed ({done.returncode}): "
+            f"{done.stderr.strip() or done.stdout.strip()}; a codeflow built from this tree decides it"
+        )
+    try:
+        answer = json.loads(done.stdout)
+    except json.JSONDecodeError as error:
+        fail(f"{binary} ci --release-impact-rule printed no JSON: {error}")
+    if not isinstance(answer, dict) or answer.get("protocol") != RULE_PROTOCOL or type(answer.get("protocol")) is not int:
+        fail(f"{binary} answers rule protocol {answer.get('protocol') if isinstance(answer, dict) else None!r}; "
+             f"this release.py reads protocol {RULE_PROTOCOL}: use a codeflow built from this tree")
+    level = answer.get("level")
+    if level not in (None, "block", "warn") or answer.get("required") is not (level is not None):
+        fail(f"{binary} ci --release-impact-rule printed an unexpected answer")
+    return level
+
+
+def target_branch(ref: str) -> str:
+    """The branch name a target ref such as `origin/integration/x` or
+    `refs/remotes/origin/main` names."""
+    for prefix in ("refs/remotes/origin/", "refs/heads/", "origin/"):
+        if ref.startswith(prefix):
+            return ref[len(prefix):]
+    return ref
+
+
+
 def release_impact_fields(reading: dict[str, Any]) -> list[tuple[str, str]] | None:
     pairs = reading["release_impact"]
     if pairs is None:
@@ -1302,7 +1349,26 @@ def pr_verdict(
         if args.body_file
         else os.getenv(args.body_env, "")
     )
-    fields = parse_release_impact(body, codeflow_bin(args))
+    binary = codeflow_bin(args)
+    reading = read_pr_bodies([body], binary)[0]
+    if release_impact_fields(reading) is None:
+        # One rule decides whether the section is required, the one `codeflow
+        # ci` applies (TSK-1291); a body that may leave it out declares no
+        # impact, which the checks below hold to the tree.
+        level = release_section_rule(
+            binary, args.root, base, head, target_branch(args.target_ref or args.base)
+        )
+        if level == "block":
+            fail("PR body must contain exactly one '## Release impact' section")
+        if level == "warn":
+            print(
+                "release.py: warning: PR body has no '## Release impact' section; the policy reports "
+                "that at warn, so it is read as declaring no impact",
+                file=sys.stderr,
+            )
+        fields = {"impact": "none", "breaking": "no", MIGRATION_GUIDANCE: "no"}
+    else:
+        fields = parse_release_impact(body, binary, reading=reading)
     floor = commit_impact(base, head, cwd=args.root)
     if IMPACT_ORDER[fields["impact"]] < IMPACT_ORDER[floor]:
         changed = set(changed_paths(base, head, cwd=args.root))

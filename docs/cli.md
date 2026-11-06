@@ -517,7 +517,8 @@ standalone task, or a follow-up of it, may correct the wording of that
 task's criteria; `codeflow ci` prints the delta as a `work.criteria_frozen`
 note and still refuses an added, removed, renumbered or reordered
 criterion, a changed tag or checkbox form, or an added list item that is
-no criterion (ADR-0080).
+no criterion (ADR-0080; [ready pull requests](policy-reference.md#ready-pull-requests-and-record-ranges)).
+
 `codeflow ci` reads the branch's task from the judged head, never the
 checkout; how it judges a task's own criteria on its integration line is
 in the [policy reference](policy-reference.md#own-task-criteria-on-an-integration-line).

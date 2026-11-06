@@ -928,6 +928,43 @@ example:
 'integration/EPC-001-anchor' is not the target of any task of EPC-001 on 'origin/integration/EPC-001-anchor', nor of a task of an epic declaring parent_line 'integration/EPC-001-anchor' there, so it is not a bound epic line
 ```
 
+## Ready pull requests and record ranges
+
+`codeflow ci` reads these rules (TSK-1291):
+
+- A pull request is known to be ready when `CODEFLOW_PR_IS_DRAFT` is
+  `false`, or, without it, when the host's event (`GITHUB_EVENT_PATH`) says
+  it is not a draft; a push and a local run cannot tell.
+  `CODEFLOW_PR_DRAFT` is not a draft state: it names the PR body file the
+  release preflight reads.
+- Once a pull request is known to be ready, a task pull request is refused
+  as not landable until its task is complete with `reviewed:` at the head
+  or an ancestor of it, whatever the range changes: code, records only, or
+  a sync of its line. The fix is a records-only commit on top of the
+  reviewed head that runs `codeflow task status <id> complete --acceptance
+  <file>`. An unfinished task's acceptance block derives no Reviews row.
+- A ready record-only cancellation needs a Reviews row approving its exact
+  head.
+- A criteria-text correction of a completed task changes nothing else: an
+  epic edit, or a description, dependency or provenance edit of the
+  corrected record, is refused.
+- A task that removes a criterion gives the reason in the PR body on its
+  own line, `AC-n removed: <reason>`, optionally led by the task id, with at
+  least three words of reason that are not ids or forms of "remove".
+- A planning or cancellation range is held to the planning paths in every
+  commit, not only its final diff, and a planning pull request runs the
+  docs validation once, on the candidate head.
+- Record and id-registry checks, in `codeflow ci` and in `codeflow ids
+  check --base --head`, turn on when the checkout, the base or the head
+  tracks durable work.
+- Whether a PR body needs a `## Release impact` section is one rule, which
+  `scripts/release.py check-pr` reads from `codeflow ci
+  --release-impact-rule`. Into a protected branch or with a breaking commit
+  it is required at the stronger of `git.pr_release_impact` and, when the
+  policy lists it in `git.pr_required_sections`, `git.pr_sections`.
+  Elsewhere, an unprotected line included, it may be left out whatever the
+  policy lists. A section that is present is always checked.
+
 ## Destination lookup failures
 
 `codeflow ci` and pre-push refuse under `ci.destination_unavailable` when

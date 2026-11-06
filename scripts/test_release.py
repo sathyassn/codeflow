@@ -2842,6 +2842,115 @@ class FragmentPreflightTests(PreflightTests):
 
 
 
+class ReleaseImpactRuleTests(unittest.TestCase):
+    """TSK-1291 AC-18: one rule decides whether a PR body needs a Release
+    impact section, and `codeflow ci` and the hosted `check-pr` both read it
+    from the same evaluator, so a body without the section gets the same
+    verdict from both (PR 629 passed `codeflow ci` and failed the hosted
+    check, job 127543911865). The rule is the settled one (TSK-135,
+    TSK-184): required into a protected branch or with a breaking commit,
+    at the level `pr_release_impact` sets; optional on an unprotected line
+    whatever the policy lists."""
+
+    LINE = "integration/EPC-001-line"
+    BODY = "## Summary\nNotes for the line.\n\n- notes\n\nTask: TSK-001\n\n## Changes\n- notes\n"
+
+    def setUp(self) -> None:
+        self.repo = Repository()
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def verdicts(self, level: str, into: str,
+                 listed: bool = True) -> tuple[subprocess.CompletedProcess[str], str | None, str]:
+        """`codeflow ci` and `check-pr` on a docs pull request into `into`
+        whose body has no Release impact section, under a policy that sets
+        `pr_release_impact` to `level` and, when `listed`, lists the section
+        among the required ones (whose `pr_sections` level, block, then also
+        applies into a protected branch): the ci run, the hosted check's
+        error (None when it passed) and its stderr."""
+        sections = ["Summary", "Changes"] + (["Release impact"] if listed else [])
+        repo = self.repo
+        # `codeflow ci` reads the project file, which needs its schema.
+        project = repo.root / ".codeflow/project.toml"
+        project.write_text('schema_version = 1\ntier = "minimal"\nstack = "unset"\nareas = ["core"]\n'
+                           'policy_armed = true\ngit_hooks = "unwired"\npermission_preset = "default"\n'
+                           + project.read_text(encoding="utf-8"), encoding="utf-8")
+        repo.write(".codeflow/policy.json", json.dumps({
+            "schema_version": 1,
+            "git": {"pr_release_impact": level,
+                    "pr_required_sections": sections},
+        }) + "\n")
+        base = repo.commit("chore: adopt a policy")
+        command(repo.root, "git", "branch", self.LINE, base)
+        repo.write("docs/notes.md", "notes\n")
+        head = repo.commit("docs: add notes")
+        body = repo.root / ".git" / "body.md"
+        body.write_text(self.BODY, encoding="utf-8")
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith(("GITHUB_", "CODEFLOW_PR_", "CI_", "BITBUCKET_"))}
+        ci = subprocess.run(
+            [str(CODEFLOW), "ci", "--base", base, "--head", head, "--into", into,
+             "--branch", "task/TSK-001-notes", "--pr-body-file", str(body)],
+            cwd=repo.root, capture_output=True, text=True, env=env,
+        )
+        stderr = io.StringIO()
+        error: str | None = None
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
+            try:
+                release.check_pr(repo.args(base=base, head=head, target_ref=into, body_file=body,
+                                           body_env=None, codeflow_bin=str(CODEFLOW)))
+            except release.ReleaseError as failure:
+                error = str(failure)
+        return ci, error, stderr.getvalue()
+
+    def test_a_line_body_without_the_section_passes_both_at_any_level(self) -> None:
+        for level in ("warn", "block"):
+            with self.subTest(level=level):
+                self.tearDown()
+                self.setUp()
+                ci, error, stderr = self.verdicts(level, self.LINE)
+                self.assertEqual(ci.returncode, 0, ci.stdout + ci.stderr)
+                self.assertNotIn("Release impact section", ci.stdout + ci.stderr)
+                self.assertIsNone(error, "the hosted check refuses what codeflow ci passes")
+                self.assertNotIn("Release impact", stderr)
+
+    def test_a_main_body_without_the_section_warns_in_both_at_warn(self) -> None:
+        # The shipped section list, which does not list Release impact.
+        ci, error, stderr = self.verdicts("warn", "main", listed=False)
+        self.assertEqual(ci.returncode, 0, ci.stdout + ci.stderr)
+        self.assertIn("Release impact section", ci.stdout + ci.stderr)
+        self.assertIsNone(error, "the hosted check refuses what codeflow ci passes")
+        self.assertIn("no '## Release impact' section", stderr)
+
+    def test_a_listed_section_into_main_takes_the_stronger_level_in_both(self) -> None:
+        # Listed among the required sections, the section's `pr_sections`
+        # level (block) applies into main over `pr_release_impact` at warn.
+        ci, error, _ = self.verdicts("warn", "main")
+        self.assertEqual(ci.returncode, 1, ci.stdout + ci.stderr)
+        self.assertIn("missing required section '## Release impact'", ci.stdout + ci.stderr)
+        self.assertIn("exactly one '## Release impact' section", error or "")
+
+    def test_a_main_body_without_the_section_fails_both_at_block(self) -> None:
+        ci, error, _ = self.verdicts("block", "main")
+        self.assertEqual(ci.returncode, 1, ci.stdout + ci.stderr)
+        self.assertIn("Release impact section", ci.stdout + ci.stderr)
+        self.assertIsNotNone(error)
+        self.assertIn("exactly one '## Release impact' section", error or "")
+
+    def test_the_rule_answers_with_its_protocol(self) -> None:
+        repo = self.repo
+        base = repo.target
+        repo.write("docs/notes.md", "notes\n")
+        head = repo.commit("docs: add notes")
+        # No policy lists the section, and the line is not protected.
+        self.assertIsNone(release.release_section_rule(CODEFLOW, repo.root, base, head, self.LINE))
+        # Into a protected branch the section is required.
+        self.assertEqual(release.release_section_rule(CODEFLOW, repo.root, base, head, "main"), "warn")
+        self.assertEqual(release.target_branch("origin/integration/x"), "integration/x")
+        self.assertEqual(release.target_branch("refs/remotes/origin/main"), "main")
+
+
 def check_pr_json(repo: Repository, base: str, head: str, body: str) -> dict[str, object]:
     path = repo.root / ".git" / "body.md"
     path.write_text(body)

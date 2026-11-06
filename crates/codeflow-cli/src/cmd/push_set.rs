@@ -720,7 +720,14 @@ fn run_check_with(
     }
     let started = Instant::now();
     let output = codeflow_core::git::output_with_input(
-        command.current_dir(root).env_remove("CODEFLOW_PR_BODY"),
+        // A push is not a pull request: no body, and no readiness, so a
+        // landing refusal for a ready pull request never stops a durability
+        // push (TSK-1291).
+        command
+            .current_dir(root)
+            .env_remove("CODEFLOW_PR_BODY")
+            .env_remove("CODEFLOW_PR_IS_DRAFT")
+            .env_remove("GITHUB_EVENT_PATH"),
         input.unwrap_or_default().as_bytes(),
     );
     steps.push(PushStep {

@@ -184,8 +184,12 @@ Concurrency:
 
 Release impact rules for each PR:
 
-- The PR carries one `Release impact` section with `Impact`, `Breaking`,
-  `Rationale` and `Migration`.
+- A PR into a protected branch, such as `main`, or one whose range carries
+  a breaking commit carries one `Release impact` section with `Impact`,
+  `Breaking`, `Rationale` and `Migration`, at the `git.pr_release_impact`
+  level. A PR into an unprotected line may leave it out; its checkpoint PR
+  to `main` carries it. `codeflow ci` and `check-pr` read this from one
+  rule (TSK-1291), and a section that is present is always checked.
 - `codeflow ci`'s one evaluator judges the section's fields, and `check-pr`
   calls it and judges nothing of the section separately (TSK-451).
   `Breaking: yes` needs `Impact: major` and substantive migration guidance;

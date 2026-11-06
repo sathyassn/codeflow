@@ -605,7 +605,7 @@ fn planning_amendment_range(root: &Path, range: &Range<'_>) -> Result<bool, Stri
 /// `git.work_records` level.
 /// A criterion `found` names (`<task> <criterion>`) that a task removes
 /// from its own record (TSK-451): the pull request body gives the reason on
-/// a visible line naming the criterion and its removal, or the removal is
+/// a visible line `AC-n removed: <reason>` (TSK-1291), or the removal is
 /// refused, so weakening a criterion stays visible to the review. A push
 /// has no body yet and is judged on its pull request.
 fn removal(body: Option<&str>, found: &Finding) -> Option<super::TaggedViolation> {
@@ -618,7 +618,7 @@ fn removal(body: Option<&str>, found: &Finding) -> Option<super::TaggedViolation
         println!("{}", note.line("codeflow ci", "note"));
         return None;
     };
-    if super::pr_body::gives_removal_reason(body, criterion) {
+    if super::pr_body::gives_removal_reason(body, task, criterion) {
         println!("codeflow ci: {task} removes {criterion}, with the reason in the PR body");
         return None;
     }
@@ -627,7 +627,7 @@ fn removal(body: Option<&str>, found: &Finding) -> Option<super::TaggedViolation
         violation: Violation::always_blocking(
             REMOVAL_RULE,
             format!("{task} removes its criterion {criterion}, and the PR body gives no reason for it"),
-            "give the reason in the PR body on a line naming the criterion, for example `- AC-2 removed: <why the remaining criteria suffice>`, or keep the criterion",
+            "give the reason in the PR body on its own line `AC-n removed: <reason>`, optionally led by the task id, with at least three words of reason that are not ids, for example `- AC-2 removed: the remaining criteria cover this path`, or keep the criterion",
         ),
     })
 }

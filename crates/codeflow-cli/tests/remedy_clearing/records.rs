@@ -159,7 +159,10 @@ fn clears_work_classification() {
     let hosted = registered();
     let root = &hosted.root;
     hosted.branch("plan/outcome");
-    plan_epic(root, "the outcome");
+    let epic = plan_epic(root, "the outcome");
+    // A planning range runs the docs validation on its head (TSK-1291
+    // AC-9), so the epic states its outcome as its author does.
+    super::state_outcome(root, &epic);
     set_field(root, TASK, "epic_id", "EPC-001");
     set_field(root, TASK, "standalone_reason", "null");
     write(root, INDEX, "# Documents\n");
@@ -888,6 +891,59 @@ fn clears_review_row_binding() {
             );
             let fixed = std::fs::read_to_string(&body).unwrap().replace(&house, row);
             std::fs::write(&body, fixed).unwrap();
+        },
+    );
+}
+
+/// TSK-1291: a ready pull request whose task is not complete is not
+/// landable; the printed step, `codeflow task status <id> complete
+/// --acceptance <file>` with the review of the head, clears it.
+#[test]
+fn clears_unfinished_ready() {
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    hosted.plan_task("plan/work");
+    hosted.land("plan/work");
+    hosted.branch("task/TSK-001-work");
+    // A code range: a text file alone reads as documentation.
+    commit(root, "src/lib.rs", "feat: add the library");
+    let body = hosted.dir.path().join("ready.md");
+    std::fs::write(&body, BODY).unwrap();
+    let body = body.to_str().unwrap().to_string();
+    let upstream = hosted.upstream();
+    let ready = || {
+        text(
+            &command(exe().to_str().unwrap(), root)
+                .env("CODEFLOW_PR_IS_DRAFT", "false")
+                .args([
+                    "ci",
+                    "--base",
+                    &upstream,
+                    "--head",
+                    "HEAD",
+                    "--branch",
+                    "task/TSK-001-work",
+                    "--pr-body-file",
+                    &body,
+                ])
+                .output()
+                .unwrap(),
+        )
+    };
+    prove(
+        "UNFINISHED_READY",
+        "it is not landable yet",
+        ready,
+        |printed| {
+            let acceptance = review_head(root);
+            let step = printed_command(printed, "UNFINISHED_READY", None);
+            run_printed(
+                root,
+                &step,
+                &[("<id>", "TSK-001"), ("<file>", &acceptance)],
+                &[],
+            );
+            commit_all(root, "chore: record the review of the head");
         },
     );
 }
