@@ -363,10 +363,18 @@ class GateContracts(unittest.TestCase):
     def test_the_consumer_scaffold_gains_no_admission_mechanism(self):
         # TSK-1239 AC-5: CI completion admission is this repository's own;
         # the scaffold's policy workflow neither waits for nor re-runs on
-        # codeflow-ci, and ships no admission workflow.
+        # codeflow-ci, and ships no admission workflow. The trigger is matched
+        # as a word, so the API field `workflow_runs` in the Mode B producer
+        # check is not a trigger, and the inline forms `on: [workflow_run]`
+        # and `on: workflow_run` still are.
+        trigger = r'\bworkflow_run\b'
+        self.assertNotRegex('[(.workflow_runs[0].event // "(no run)")]', trigger)
+        with self.assertRaises(AssertionError):
+            self.assertNotRegex('on: [workflow_run]\n', trigger)
         for path in ('assets/base/ci/codeflow-policy.yml', '.codeflow/.baseline/.github/workflows/codeflow-policy.yml'):
             scaffold = read(path)
-            for mechanism in ('workflow_run', 'policy-admission', 'ci-reuse.py', '--wait', 'actions: write',
+            self.assertNotRegex(scaffold, trigger, f'{path} holds a workflow_run trigger')
+            for mechanism in ('policy-admission', 'ci-reuse.py', '--wait', 'actions: write',
                               'codeflow-admission'):
                 self.assertNotIn(mechanism, scaffold, f'{path} holds {mechanism}')
         self.assertFalse((ROOT / 'assets' / 'base' / 'ci' / 'codeflow-admission.yml').exists())
