@@ -356,26 +356,22 @@ fn export(root: &Path, commit: &str, into: &mut Scratch, suppressions: bool) -> 
         into.target(&path)?;
         entries.push((fields[2].to_string(), path));
     }
-    let mut command = crate::git::judging_command();
-    let mut child = command
-        .args(["cat-file", "--batch"])
-        .env("GIT_NO_REPLACE_OBJECTS", "1")
-        .current_dir(root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("git did not run: {error}"))?;
-    let mut input = child.stdin.take().ok_or("git cat-file has no input")?;
     let ids = entries.iter().fold(String::new(), |mut ids, (oid, _)| {
         ids.push_str(oid);
         ids.push('\n');
         ids
     });
-    let writer = std::thread::spawn(move || {
-        use std::io::Write as _;
-        input.write_all(ids.as_bytes())
-    });
+    let mut command = crate::git::judging_command();
+    command
+        .args(["cat-file", "--batch"])
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .current_dir(root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // The ids are written from the helper's own thread while the blobs
+    // are read here, so neither side can block the other.
+    let (mut child, writer) = crate::git::spawn_with_input(&mut command, ids.into_bytes())
+        .map_err(|error| format!("git did not run: {error}"))?;
     let mut stdout =
         std::io::BufReader::new(child.stdout.take().ok_or("git cat-file has no output")?);
     for (_, path) in &entries {
@@ -399,7 +395,9 @@ fn export(root: &Path, commit: &str, into: &mut Scratch, suppressions: bool) -> 
         into.write(path, &data)
             .map_err(|why| format!("{why} (the dependency audit)"))?;
     }
-    let _ = writer.join();
+    writer
+        .finish()
+        .map_err(|error| format!("cannot list the files of {commit} for git: {error}"))?;
     let status = child
         .wait()
         .map_err(|error| format!("git did not finish: {error}"))?;
@@ -695,22 +693,12 @@ mod tests {
 
     /// Run git in `repo`, feeding `input`; its trimmed output.
     fn git(repo: &Path, args: &[&str], input: &str) -> String {
-        use std::io::Write as _;
-        let mut child = crate::git::judging_command()
+        let mut command = crate::git::judging_command();
+        command
             .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
             .args(args)
-            .current_dir(repo)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
-        let out = child.wait_with_output().unwrap();
+            .current_dir(repo);
+        let out = crate::git::output_with_input(&mut command, input.as_bytes()).unwrap();
         assert!(out.status.success(), "git {args:?}");
         String::from_utf8(out.stdout).unwrap().trim().to_string()
     }
