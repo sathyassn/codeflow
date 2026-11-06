@@ -319,6 +319,7 @@ fn every_shipped_checkout_keeps_no_credential() {
                     assert!(
                         [
                             "Read the pull request's current body",
+                            "the pull request is unchanged since it was judged",
                             "Fetch the pull request's base and head as data",
                             "Fetch the shared registry",
                             "codeflow ci (commit + branch + PR-body standards)",
