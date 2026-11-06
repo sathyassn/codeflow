@@ -316,6 +316,39 @@ pre-push refuses only a new cancelled record without its reason or scope,
 or a path a planning amendment cannot carry; the pull request check judges
 the rest.
 
+## A local branch and its fetched line disagree
+
+A check that names a target or a predecessor by a bare branch name reads
+the fetched copy of that branch: the same branch on the remote the local
+branch tracks, else `origin/<name>`. An upstream naming another branch, as
+git sets when a line is cut from `origin/main`, is never read for the line.
+
+- A local branch behind the fetched line never decides, so no one has to
+  move it.
+- A local branch ahead of the fetched line is honoured by `work next`, `work
+  start` and a reopen's completion, and the output names it in full, for
+  example `refs/heads/main@1a2b3c4d5`. `work claim` refuses it, as below.
+- Where nothing of that name is fetched, the local branch decides, and the
+  output names it in full.
+
+- `work claim cuts a task branch from the fetched tip of '<line>', and the
+  local branch refs/heads/<line> at <sha> differs from
+  refs/remotes/origin/<line> at <sha>` means the local branch holds commits
+  the fetched line lacks. A claim is pushed for others to build on, so it is
+  never cut from unpushed commits. Land them through a pull request first,
+  or claim from a checkout whose local branch matches the fetched line.
+- `local branch '<name>' and '<ref>' have diverged`, from `work start` or
+  `task status complete`, and `the local branch ... and ... have diverged`,
+  from a reopen's completion, name both tips by commit. Judge against the
+  fetched line: name it with `--into <ref>` where the command takes it, or
+  work from a fresh worktree of it (`git worktree add --detach <path>
+  <ref>`). A plain `git fetch origin` refreshes the fetched ref without
+  moving the local branch.
+- `predecessor branch <branch> has a copy at <sha> that is ahead of the pin`
+  or `has diverged from the pin` means a copy of the predecessor's branch
+  moved past the reviewed head. Rebase on its new reviewed head and pin that,
+  or delete or reset the stray copy. A copy behind the pin is accepted.
+
 ## A blocked task refuses its own pull request
 
 `work.stable_planning_anchor: task TSK-NNN is blocked` means the target

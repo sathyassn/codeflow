@@ -42,7 +42,9 @@ pub enum WorkCommand {
     Claim {
         /// Stable task id.
         task_id: String,
-        /// Reviewed predecessor pin, repeat once per code dependency.
+        /// Reviewed predecessor pin, repeat once per code dependency. A copy
+        /// of the predecessor branch behind the pin is accepted; a copy ahead
+        /// of it or diverged from it is refused.
         #[arg(long, value_name = "TSK-NNN@SHA")]
         on: Vec<String>,
     },
@@ -571,6 +573,65 @@ fn reviewed(
     Ok(false)
 }
 
+/// Why the review provider failed, from the first line it wrote to stderr
+/// (issue 547): the cause (no pull request, authentication or network),
+/// then the provider's own words, redacted (URL userinfo and secret-shaped
+/// text) and cut to one bounded terminal line.
+fn provider_failure(stderr: &str) -> String {
+    let first = stderr
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    let lower = first.to_ascii_lowercase();
+    let cause = if lower.contains("no pull requests found")
+        || lower.contains("no open pull requests")
+        || lower.contains("could not resolve to a pullrequest")
+    {
+        "no pull request has this branch as its head"
+    } else if [
+        "auth",
+        "401",
+        "403",
+        "credential",
+        "token",
+        "logged in",
+        "login",
+    ]
+    .iter()
+    .any(|word| lower.contains(word))
+    {
+        "the provider could not authenticate; check `gh auth status`"
+    } else if [
+        "could not connect",
+        "connecting",
+        "connection",
+        "network",
+        "timeout",
+        "timed out",
+        "dial tcp",
+        "no such host",
+        "resolve host",
+        "unreachable",
+    ]
+    .iter()
+    .any(|word| lower.contains(word))
+    {
+        "the provider could not reach the host"
+    } else {
+        "the provider gave another error"
+    };
+    let shown = codeflow_core::coord::text::terminal(&codeflow_core::coord::text::redact(
+        &codeflow_core::git::remote_query::display_urls(first),
+    ));
+    let shown: String = shown.chars().take(300).collect();
+    if shown.is_empty() {
+        format!("cannot verify review for this pin: provider failed: {cause} (it wrote no error message)")
+    } else {
+        format!("cannot verify review for this pin: provider failed: {cause}: {shown}")
+    }
+}
+
 /// Bound provider lifetime and response size; a regular output file means a
 /// descendant retaining stdout cannot hold an output-reader thread open.
 fn pr_review(
@@ -582,6 +643,7 @@ fn pr_review(
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
     let mut output = tempfile::tempfile().map_err(|error| error.to_string())?;
+    let mut errors = tempfile::tempfile().map_err(|error| error.to_string())?;
     let mut command = Command::new("gh");
     command
         .args([
@@ -596,7 +658,7 @@ fn pr_review(
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(output.try_clone().map_err(|error| error.to_string())?)
-        .stderr(Stdio::null());
+        .stderr(errors.try_clone().map_err(|error| error.to_string())?);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
@@ -626,6 +688,14 @@ fn pr_review(
                 ));
             }
         }
+        if errors
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() > 1_048_576)
+        {
+            break Err(
+                "cannot verify review for this pin: provider error output too large".to_string(),
+            );
+        }
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
@@ -648,7 +718,10 @@ fn pr_review(
     let _ = child.kill();
     let _ = child.wait();
     if !status?.success() {
-        return Err("cannot verify review for this pin: provider failed".into());
+        let mut said = Vec::new();
+        let _ = errors.rewind();
+        let _ = (&mut errors).take(4096).read_to_end(&mut said);
+        return Err(provider_failure(&String::from_utf8_lossy(&said)));
     }
     output.rewind().map_err(|error| error.to_string())?;
     let mut bytes = Vec::new();

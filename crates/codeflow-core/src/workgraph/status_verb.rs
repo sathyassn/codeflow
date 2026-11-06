@@ -271,14 +271,20 @@ fn bind_completion_of(
     if kind == RecordKind::Task {
         let repo = git2::Repository::discover(repo_root)
             .map_err(|e| VerbError::Refused(vec![e.to_string()]))?;
-        let target =
-            super::work_start::resolve_work_target(repo_root, after.integration_target.as_deref())
-                .map_err(|error| VerbError::Refused(vec![error.to_string()]))?
-                .ok_or_else(|| {
-                    VerbError::Refused(vec![
-                        "cannot resolve the task target for reopen criteria".into()
-                    ])
-                })?;
+        // The checked resolver: a reopen is judged against the fetched line
+        // or a local branch that contains it, and a local branch diverged
+        // from it refuses, naming both tips (TSK-416 AC-9).
+        let target = super::work_start::resolve_work_target_checked(
+            repo_root,
+            after.integration_target.as_deref(),
+        )
+        .map_err(|error| VerbError::Refused(vec![error.to_string()]))?
+        .map(|resolved| resolved.target)
+        .ok_or_else(|| {
+            VerbError::Refused(vec![
+                "cannot resolve the task target for reopen criteria".into()
+            ])
+        })?;
         let frozen = super::acceptance::reopened_criteria(
             &repo,
             &target,
@@ -1026,7 +1032,10 @@ fn supersede_active_block(content: &str, reason: &str) -> Option<String> {
         {
             let mut out: Vec<String> = lines.iter().map(|line| (*line).to_string()).collect();
             out[header] = "acceptance_superseded:".to_string();
-            out.insert(header + 1, format!("  reason: {reason}"));
+            // A double-quoted scalar (JSON's string form is one), so any
+            // reason, ': ', '#' and quotes included, reads back as written.
+            let quoted = super::record_text::reason_scalar(reason);
+            out.insert(header + 1, format!("  reason: {quoted}"));
             return Some(out.join("\n"));
         }
         index = body_end + 1;
@@ -1149,8 +1158,52 @@ mod tests {
         let reopened = supersede_active_block(&content, "regression").unwrap();
         assert_eq!(reopened.matches("acceptance_superseded:").count(), 1);
         assert!(reopened.ends_with(
-            "```yaml\nacceptance_superseded:\n  reason: regression\n  reviewed: x\n```\n"
+            "```yaml\nacceptance_superseded:\n  reason: \"regression\"\n  reviewed: x\n```\n"
         ));
+    }
+
+    /// TSK-416 AC-19: a reopen reason with ': ', '#' and quotes is written
+    /// as a quoted scalar and reads back byte for byte, both as YAML and as
+    /// the block parser reads it.
+    #[test]
+    fn a_reopen_reason_reads_back_byte_for_byte() {
+        let reason = r#"review: found a gap # in "AC-2" and 'AC-3' \ back"#;
+        let block = format!(
+            "acceptance:\n  reviewed: {}\n  review: https://example.test/pr/1\n  criteria:\n    AC-1: verified | cargo test\n  journey: ran\n  not_verified: none\n  follow_ups: none\n  verdict: approved\n",
+            "a".repeat(40)
+        );
+        let content = format!("---\nid: TSK-001\n---\n\n## Closeout\n\n```yaml\n{block}```\n");
+        let reopened = supersede_active_block(&content, reason).unwrap();
+        let blocks = super::super::record_text::acceptance_blocks(&reopened);
+        let parsed = blocks[0].parsed.as_ref().unwrap();
+        assert!(parsed.superseded);
+        assert_eq!(parsed.reason.as_deref(), Some(reason));
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&blocks[0].inner).unwrap();
+        assert_eq!(
+            yaml["acceptance_superseded"]["reason"].as_str(),
+            Some(reason)
+        );
+        // A reason written unquoted before this change still reads as written.
+        let old = reopened.replace(
+            &super::super::record_text::reason_scalar(reason),
+            "plain words",
+        );
+        let blocks = super::super::record_text::acceptance_blocks(&old);
+        assert_eq!(
+            blocks[0].parsed.as_ref().unwrap().reason.as_deref(),
+            Some("plain words")
+        );
+    }
+
+    /// TSK-416 AC-19: the Closeout's reason bullets are Markdown lines, read
+    /// from the first colon on, so such a reason reads back unchanged too.
+    #[test]
+    fn a_cancellation_reason_bullet_reads_back_byte_for_byte() {
+        let reason = r#"replaced: see # "TSK-9" and 'TSK-8'"#;
+        let body = format!("## Closeout\n\n- cancelled: {reason}\n- scope: moved: to TSK-9\n");
+        let parsed = super::super::record_text::parse_cancellation(&body);
+        assert_eq!(parsed.reason, reason);
+        assert_eq!(parsed.scope, "moved: to TSK-9");
     }
 
     /// Issue 94: the status verb's write refuses a link above the record

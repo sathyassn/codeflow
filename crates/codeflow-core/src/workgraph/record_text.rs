@@ -1490,7 +1490,11 @@ fn parse_acceptance_lines<'a>(
     if criteria.is_empty() {
         return Err(block_error(first_line, "criteria lists no criterion"));
     }
-    let reason = get("reason").ok();
+    // A value that is not one quoted string is an older unquoted reason,
+    // read as written, so a landed record stays valid.
+    let reason = get("reason")
+        .ok()
+        .map(|value| serde_json::from_str::<String>(&value).unwrap_or(value));
     if superseded != reason.is_some() {
         return Err(block_error(
             first_line,
@@ -1510,6 +1514,15 @@ fn parse_acceptance_lines<'a>(
     })
 }
 
+/// A reopen reason as the block writes it: a double-quoted scalar, JSON's
+/// string form, so any one-line reason, ': ', '#' and quotes included,
+/// reads back byte for byte as YAML and as [`parse_acceptance`] reads it.
+/// A reason written before this form (unquoted) still parses as written.
+#[must_use]
+pub fn reason_scalar(reason: &str) -> String {
+    serde_json::to_string(reason).unwrap_or_else(|_| format!("{reason:?}"))
+}
+
 /// Render the inside of a fenced block; the exact inverse of
 /// [`parse_acceptance`] for any block it accepts.
 #[must_use]
@@ -1521,7 +1534,7 @@ pub fn render_acceptance(block: &AcceptanceBlock) -> String {
     };
     let mut lines = vec![header.to_string()];
     if let Some(reason) = &block.reason {
-        lines.push(format!("  reason: {reason}"));
+        lines.push(format!("  reason: {}", reason_scalar(reason)));
     }
     lines.push(format!("  reviewed: {}", block.reviewed));
     lines.push(format!("  review: {}", block.review));

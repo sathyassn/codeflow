@@ -1357,7 +1357,7 @@ fn a_completed_task_is_fixed_in_one_pull_request_on_a_fresh_project() {
         (
             "reason",
             new.as_str(),
-            reopened.replace("  reason: regression\n", ""),
+            reopened.replace("  reason: \"regression\"\n", ""),
             "reason",
         ),
     ] {

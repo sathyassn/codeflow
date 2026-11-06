@@ -122,6 +122,15 @@ const GIT2_TEXT: &[&str] = &["shorthand", "symbolic_target"];
 /// only reaches a person or is not a git or OS name: (file, enclosing item,
 /// call, how many, closed reason tag); the comment states the precise contract.
 const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-416 (issue 547): a failed review provider's stderr, shown to a
+    // person after redaction, never compared or used as a name
+    (
+        "codeflow-cli/src/cmd/work.rs",
+        "pr_review",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // Both startup_glob_paths callers construct pattern from Pattern.rest, a UTF-8
     // shell-word String. Only those pattern components are decoded to recognize
     // recursive stars; base and filesystem entry names are never decoded here.
@@ -1511,6 +1520,39 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-416 (issue 547): the review provider has already failed and the
+    // claim refuses either way; its stderr is read, bounded, only to name the
+    // cause and show its first line, redacted, to a person.
+    (
+        "crates/codeflow-cli/src/cmd/work.rs",
+        "pr_review",
+        "obtain-absent:read_to_end",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-cli/src/cmd/work.rs",
+        "provider_failure",
+        "lines",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-cli/src/cmd/work.rs",
+        "provider_failure",
+        "trim",
+        1,
+        "display",
+    ),
+    // TSK-416 AC-19: a reason written as a quoted scalar is decoded; a record
+    // written before that keeps its raw text, which was the reason as given.
+    (
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "parse_acceptance_lines",
+        "obtain-absent:from_str",
+        1,
+        "prose",
+    ),
     // TSK-397: doctor's Claude settings reader. A layer that is not UTF-8
     // or not a JSON object is reported, never read as an absent layer. A
     // `.git` file's `gitdir:` value is trimmed as Git trims it, and the main
@@ -4997,27 +5039,11 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // Its only caller, stale_warnings, adds to Verdict.warnings, which validate keeps out of issues; is_clean and the ci and work checks read issues only.
-    (
-        "crates/codeflow-core/src/workgraph/lifecycle.rs",
-        "has_active_branch",
-        "obtain-absent:find_reference",
-        1,
-        "display",
-    ),
     // The result only selects the stale in_progress warning text in stale_warnings; validate warnings never block (is_clean reads issues only).
     (
         "crates/codeflow-core/src/workgraph/lifecycle.rs",
         "has_active_branch",
         "obtain-absent:descendant_of",
-        1,
-        "display",
-    ),
-    // The target tip only feeds the stale in_progress warning; report warnings are printed by validate and never fail ci or work.
-    (
-        "crates/codeflow-core/src/workgraph/lifecycle.rs",
-        "has_active_branch",
-        "obtain-absent:peel_to_commit",
         1,
         "display",
     ),
