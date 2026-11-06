@@ -2759,7 +2759,7 @@
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "414f4df1f2ecf5cc54c14316bca62648f183ce3fbedf25febe58406b73b042b1",
+      "sha256": "f07a356d6313ffd2fe18640e721278c834240c40f7e5cd0fbba48f304bbb6b4a",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
@@ -2873,7 +2873,7 @@
     ".grok/sandbox.toml": {
       "src": "grok/sandbox.toml",
       "ownership": "user-owned",
-      "sha256": "7b0a0b6c46f9a16468d588f4db4f871302109150166bff01e644bd2c502cd686",
+      "sha256": "975bbb83ff7feaf639ef24bfb3f83ffb42613e50ef538f7912c136b0944bff12",
       "exec": false
     },
     "AGENTS.md": {

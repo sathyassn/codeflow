@@ -53,6 +53,7 @@ read_only = [
   ".codeflow/git-hooks",
   ".git/hooks",
   ".github/workflows",
+  ".github/actions",
 ]
 deny = [
   "/Users/*/.ssh",
@@ -116,6 +117,7 @@ read_only = [
   ".codeflow/git-hooks",
   ".git/hooks",
   ".github/workflows",
+  ".github/actions",
 ]
 deny = [
   "/Users/*/.ssh",

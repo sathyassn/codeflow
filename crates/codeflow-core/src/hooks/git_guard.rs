@@ -1099,14 +1099,15 @@ fn evaluate_report_with_runners(
             continue;
         }
 
-        // GIT_CONFIG_* env injection of a protected config key (parallel to the
-        // hook-skip env vars) — `GIT_CONFIG_KEY_0=core.hooksPath …`.
-        if ctx.policy.hook_integrity.is_active() && git_config_env_sets_hooks_path(&tokens) {
-            violations.push(hook_integrity_violation(
-                ctx.policy.hook_integrity,
-                "command injects core.hooksPath via GIT_CONFIG_* env".to_string(),
-            ));
-            continue;
+        // A configuration-source variable (`GIT_CONFIG_GLOBAL`,
+        // `GIT_CONFIG_KEY_0`, …) set on any segment, git call or not, can
+        // redirect the hooks of every later git call; refuse it whatever the
+        // value (TSK-1349). The rest of the segment is still judged, so a
+        // git call it prefixes keeps its own findings.
+        if ctx.policy.hook_integrity.is_active() {
+            if let Some(var) = git_config_source_assignment(&tokens) {
+                violations.push(git_config_source_violation(ctx.policy.hook_integrity, &var));
+            }
         }
 
         // Dispatch on the argument vector the program receives: unquoted
@@ -1435,17 +1436,94 @@ fn leading_env_assignments(tokens: &[String]) -> Vec<(&str, &str)> {
     out
 }
 
-/// Detect a `core.hooksPath` set through git's `GIT_CONFIG_*` env mechanism —
-/// `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=…` or
-/// the older `GIT_CONFIG_PARAMETERS='core.hooksPath=…'`. Parallel to the
-/// hook-skip env vars: an env-set of a protected key disarms the plane.
-fn git_config_env_sets_hooks_path(tokens: &[String]) -> bool {
-    leading_env_assignments(tokens)
+/// Git's configuration-source variables (git-config(1) ENVIRONMENT, Git
+/// 2.53): each replaces a configuration file or adds entries, so each can set
+/// `core.hooksPath`, or an `include.path` to a file that does, for every git
+/// call the session runs after it. `GIT_CONFIG_VALUE_<n>` is inert without
+/// its key, which this list holds.
+fn git_config_source_variable(name: &str) -> bool {
+    matches!(
+        name,
+        "GIT_CONFIG_GLOBAL" | "GIT_CONFIG_SYSTEM" | "GIT_CONFIG_COUNT" | "GIT_CONFIG_PARAMETERS"
+    ) || name.starts_with("GIT_CONFIG_KEY_")
+}
+
+/// The first configuration-source variable a simple command sets, whatever
+/// the value: an assignment prefix, an assignment carried by `env`, `export`,
+/// the declare family or `command`, or a bare name `export` or the declare
+/// family marks for export (TSK-1349). The value is not read: a file or key
+/// the guard cannot see could hold a hook path, so any setting refuses.
+fn git_config_source_assignment(tokens: &[String]) -> Option<String> {
+    if let Some((name, _)) = leading_env_assignments(tokens)
         .into_iter()
-        .any(|(name, val)| {
-            (name.starts_with("GIT_CONFIG_KEY_") || name == "GIT_CONFIG_PARAMETERS")
-                && mentions_hooks_path(val)
-        })
+        .find(|(name, _)| git_config_source_variable(name))
+    {
+        return Some(name.to_string());
+    }
+    let at = tokens
+        .iter()
+        .position(|t| !t.split_once('=').is_some_and(|(n, _)| is_identifier(n)))?;
+    let program = tokens[at].as_str();
+    if program != "export" && !is_declare_builtin(program) {
+        return None;
+    }
+    tokens[at + 1..]
+        .iter()
+        .find(|t| git_config_source_variable(t))
+        .cloned()
+}
+
+/// The hook-integrity finding for a configuration-source assignment.
+fn git_config_source_violation(level: PolicyLevel, var: &str) -> Violation {
+    hook_integrity_violation(
+        level,
+        format!(
+            "command sets `{var}`, which can point git at another hooks path for every later git call"
+        ),
+    )
+}
+
+/// The first shell write on `command` to an enforcement path, judged by
+/// git-guard's writer checks (links, `..`, case and patterns resolved), so
+/// exec-guard refuses the writes git-guard refuses, a new or edited workflow
+/// under `.github/workflows/` included (TSK-1349).
+pub(crate) fn line_integrity_write(
+    command: &str,
+    cwd: &Path,
+    level: PolicyLevel,
+) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    // Each segment re-reads the whole line's words against the repository's
+    // enforcement paths; one snapshot serves them all, as in git-guard's own
+    // evaluation. A caller's open scope is kept.
+    let _facts = super::edit_guard::RepoFactsScope::enter();
+    let segments = expand_shell_commands(command).segments;
+    let run = run_dirs(&segments, cwd);
+    segments.iter().find_map(|segment| {
+        let mut words = shell_tokens(segment);
+        strip_reserved_words(&mut words);
+        if words.is_empty() {
+            return None;
+        }
+        integrity_write_in_run(&words, &redirect_writes(segment), level, &run, cwd, command)
+    })
+}
+
+/// The first simple command on `command` that sets a configuration-source
+/// variable, judged as git-guard judges each segment, so exec-guard refuses
+/// the same assignments (TSK-1349 AC-4), a bare `export` with no git call on
+/// the line included.
+pub(crate) fn line_config_source(command: &str, level: PolicyLevel) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    expand_commands(command).iter().find_map(|segment| {
+        let mut tokens = command_argv(segment);
+        strip_reserved_words(&mut tokens);
+        git_config_source_assignment(&tokens).map(|var| git_config_source_violation(level, &var))
+    })
 }
 
 /// Inspect assignments before launchers are stripped, including prior exports.
@@ -1987,7 +2065,13 @@ fn cd_target(tokens: &[String]) -> Option<String> {
 
 /// The hook shims and the integrity files: directory prefixes and exact files
 /// whose mutation would disarm or falsify the enforcement plane.
-const INTEGRITY_PREFIXES: &[&str] = &[".git/hooks", ".git/refs/remotes", ".codeflow/git-hooks"];
+const INTEGRITY_PREFIXES: &[&str] = &[
+    ".git/hooks",
+    ".git/refs/remotes",
+    ".codeflow/git-hooks",
+    ".github/workflows",
+    ".github/actions",
+];
 const INTEGRITY_FILES: &[&str] = &[
     ".codeflow/policy.json",
     ".codeflow/project.toml",
@@ -3646,7 +3730,13 @@ fn word_could_name_spelled(value: &str) -> Option<&'static str> {
             let names: Vec<&str> = needle.split('/').collect();
             let whole_dir = matches!(
                 *needle,
-                ".codex" | ".grok" | ".codeflow/git-hooks" | ".git/hooks" | ".git/refs/remotes"
+                ".codex"
+                    | ".grok"
+                    | ".codeflow/git-hooks"
+                    | ".git/hooks"
+                    | ".git/refs/remotes"
+                    | ".github/workflows"
+                    | ".github/actions"
             );
             // The word's first `k` components end the needle (the unknown
             // directory supplies the rest) or hold it whole; any further
@@ -4482,7 +4572,10 @@ const ENFORCEMENT_TEXT: &[&str] = &[
     ".git/config",
     ".git/packed-refs",
     ".git/refs/remotes",
-    ".github/workflows/codeflow-ci.yml",
+    // Every workflow and local action, whatever its name: any file here
+    // runs in CI with the workflow's token (TSK-1349).
+    ".github/workflows",
+    ".github/actions",
     ".codex",
     ".grok",
 ];
@@ -6972,6 +7065,15 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
                 return Some(finding);
             }
         }
+        // A hard link gives its source a second name a later write can go
+        // through, so the source is judged as written (TSK-1349).
+        if makes_hard_link(cmd, &copy.flags) {
+            if let Some(path) = self.integrity(&copy.sources) {
+                return Some(self.refuse(format!(
+                    "`{cmd}` makes a hard link to the integrity path `{path}`, so a write through the link changes it"
+                )));
+            }
+        }
         if let Some(p) = self.integrity(&copy_destinations(cmd, copy)) {
             return Some(self.refuse(format!("`{cmd}` writes the integrity path `{p}`")));
         }
@@ -7107,6 +7209,21 @@ fn contained_git_directory_violation(
             ),
         )),
         Err(error) => Some(hook_integrity_violation(level, error)),
+    }
+}
+
+/// Whether a copier call makes hard links to its sources: `ln` without
+/// `-s`/`--symbolic`, and `cp -l`/`--link`.
+fn makes_hard_link(cmd: &str, flags: &[String]) -> bool {
+    let short = |letter: char| {
+        flags
+            .iter()
+            .any(|f| f.starts_with('-') && !f.starts_with("--") && f[1..].contains(letter))
+    };
+    match cmd {
+        "ln" => !(short('s') || flags.iter().any(|f| f == "--symbolic")),
+        "cp" => short('l') || flags.iter().any(|f| f == "--link"),
+        _ => false,
     }
 }
 
@@ -10909,6 +11026,53 @@ fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
     (hooks_path, retarget)
 }
 
+/// The include key (`include.path` or `includeIf.<condition>.path`, in the
+/// spelling git documents) that a `-c` or `--config-env` global flag before
+/// the subcommand sets, if one does. Git reads the named file as
+/// configuration, and the guard does not read it: any include refuses, so a
+/// file the guard cannot open, or one that changes after the check, fails
+/// closed (TSK-1349).
+fn git_globals_include(args: &[String]) -> Option<&'static str> {
+    let include = |entry: &str| -> Option<&'static str> {
+        let key = entry.split_once('=').map_or(entry, |(key, _)| key);
+        let lower = key.to_ascii_lowercase();
+        if lower == "include.path" {
+            Some("include.path")
+        } else if lower.starts_with("includeif.")
+            && lower
+                .rsplit_once('.')
+                .is_some_and(|(_, last)| last == "path")
+        {
+            Some("includeIf.<condition>.path")
+        } else {
+            None
+        }
+    };
+    let mut idx = 0;
+    while idx < args.len() {
+        let t = args[idx].as_str();
+        match t {
+            "-c" | "--config-env" => {
+                if let Some(key) = args.get(idx + 1).and_then(|v| include(v)) {
+                    return Some(key);
+                }
+                idx += 2;
+            }
+            t if GLOBAL_VALUE_OPTIONS.contains(&t) => idx += 2,
+            _ => {
+                if let Some(key) = t.strip_prefix("--config-env=").and_then(include) {
+                    return Some(key);
+                }
+                if !t.starts_with('-') {
+                    return None; // the subcommand
+                }
+                idx += 1;
+            }
+        }
+    }
+    None
+}
+
 /// `true` when a `git config` invocation can write `core.hooksPath`: a set,
 /// add, replace or unset whose operands name the key (a value naming it
 /// counts too, so an alias body that rewrites the hook path is caught), a
@@ -13686,6 +13850,14 @@ fn git_args_hook_skip(args: &[String], level: PolicyLevel, depth: usize) -> Opti
             level,
             "a git global flag (`-c`/`--config-env` core.hooksPath=…) overrides the hook path for this command"
                 .to_string(),
+        ));
+    }
+    if let Some(key) = git_globals_include(args) {
+        return Some(hook_integrity_violation(
+            level,
+            format!(
+                "a git global flag (`-c`/`--config-env` {key}=…) includes a configuration file, which can override the hook path for this command"
+            ),
         ));
     }
     if let Some(finding) = hook_skip_violation(args, level) {
@@ -17797,11 +17969,17 @@ mod tests {
             "GIT_CONFIG=/opt/homebrew/etc/gitconfig git config --local alias.co checkout"
                 .to_string(),
             format!("GIT_CONFIG={repo_config} git config alias.co checkout"),
-            "GIT_CONFIG_GLOBAL=/dev/null git config alias.co checkout".to_string(),
         ] {
             let v = at(&cmd, &repo);
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
+        // Setting a configuration-source variable refuses whatever its value,
+        // `/dev/null` included (TSK-1349): the guard does not read the file.
+        let v = at(
+            "GIT_CONFIG_GLOBAL=/dev/null git config alias.co checkout",
+            &repo,
+        );
+        assert!(has_rule(&v, "git.hook_integrity"), "{v:?}");
         // The refusal names the file and what the value does.
         let v = at(
             "git config --file /opt/homebrew/etc/gitconfig core.pager 'sh x'",
@@ -20605,15 +20783,27 @@ mod tests {
         for cmd in [
             "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x",
             "GIT_CONFIG_PARAMETERS='core.hooksPath=/x' git commit -m x",
+            // Any key refuses (TSK-1349): an `include.path` key, or one the
+            // guard reads as harmless, can still name a file that sets the
+            // hooks path, and exec-guard already refused this line.
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.email GIT_CONFIG_VALUE_0=x git status",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=include.path GIT_CONFIG_VALUE_0=/tmp/i git commit -m x",
+            "GIT_CONFIG_GLOBAL=/tmp/g git commit -m x",
+            "export GIT_CONFIG_GLOBAL=/tmp/g",
+            "export GIT_CONFIG_SYSTEM=/tmp/s",
+            "export GIT_CONFIG_KEY_0=core.hooksPath",
+            "GIT_CONFIG_GLOBAL=/tmp/g; export GIT_CONFIG_GLOBAL",
+            "typeset -x GIT_CONFIG_PARAMETERS=x",
         ] {
             assert!(has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"), "{cmd}");
         }
-        // A non-hooksPath GIT_CONFIG_* injection is not an integrity concern.
-        assert!(evaluate(
-            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.email GIT_CONFIG_VALUE_0=x git status",
-            &ctx(&p, "feat/x")
-        )
-        .is_empty());
+        // Naming a variable sets nothing. (`printenv GIT_CONFIG_GLOBAL`
+        // refused before this task, under the rule for a line that names a
+        // `GIT_CONFIG` variable beside a program the guard does not read.)
+        assert!(!has_rule(
+            &evaluate("echo GIT_CONFIG_GLOBAL", &ctx(&p, "feat/x")),
+            "git.hook_integrity"
+        ));
     }
 
     #[test]

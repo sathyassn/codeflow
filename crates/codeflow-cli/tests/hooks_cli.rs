@@ -25,6 +25,9 @@ mod target_repository;
 #[path = "hooks_cli/text_rule.rs"]
 mod text_rule;
 
+#[path = "hooks_cli/workflow_paths.rs"]
+mod workflow_paths;
+
 /// TSK-397: under the strict text rule, the default this suite runs in,
 /// once a line's directory is unknown, the exec guard refuses a word filled in at
 /// run time given to any program; git-guard does not judge it.

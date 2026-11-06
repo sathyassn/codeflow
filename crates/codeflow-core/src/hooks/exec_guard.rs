@@ -214,11 +214,7 @@ pub fn evaluate_ruled(
             violations.push(finding);
         }
     }
-    // A git option that skips a client hook refuses here as in git-guard
-    // (TSK-1349), so neither guard admits it alone.
-    if let Some(finding) = super::git_guard::line_hook_skip(command, integrity) {
-        merge_strongest(&mut violations, finding);
-    }
+    git_guard_line_checks(command, prose, cwd, integrity, &mut violations);
     // Programs the line's Git calls and program values run are judged as
     // commands of their own after the line's own findings, so a
     // hook-integrity refusal of the line itself still names that rule.
@@ -365,6 +361,35 @@ fn runner_violations(
             format!("cannot verify the program Git runs: {why}"),
             crate::remedy::SECRET_SELECTION.remedy(),
         )],
+    }
+}
+
+/// git-guard's line checks that exec-guard repeats, so neither guard admits
+/// alone what the other refuses (TSK-1349 AC-4).
+fn git_guard_line_checks(
+    command: &str,
+    prose: bool,
+    cwd: &std::path::Path,
+    integrity: PolicyLevel,
+    violations: &mut Vec<Violation>,
+) {
+    // A git option that skips a client hook.
+    if let Some(finding) = super::git_guard::line_hook_skip(command, integrity) {
+        merge_strongest(violations, finding);
+    }
+    // A Git configuration-source variable set anywhere on the line, a bare
+    // `export` included.
+    if let Some(finding) = super::git_guard::line_config_source(command, integrity) {
+        merge_strongest(violations, finding);
+    }
+    // A shell write to an enforcement path, a workflow included. A command
+    // an earlier check already refuses with a blocking finding (`rm -rf /`
+    // under the catastrophic floor) keeps that one finding, as for the
+    // startup check.
+    if !prose && !violations.iter().any(|v| v.level == PolicyLevel::Block) {
+        if let Some(finding) = super::git_guard::line_integrity_write(command, cwd, integrity) {
+            merge_strongest(violations, finding);
+        }
     }
 }
 
@@ -595,12 +620,45 @@ mod tests {
                 }
             }
         }
+        // A project deletion is judged in a project that holds the
+        // directories it names, and is never a dangerous deletion. Since
+        // TSK-1349 exec-guard repeats git-guard's write check, so a form
+        // git-guard refuses because it cannot place a glob (a `cd` inside a
+        // loop, after which `*` could name `.codeflow/policy.json`) refuses
+        // here too, with that one `git.hook_integrity` finding.
+        let project = tempfile::tempdir().unwrap();
+        let project = project.path().canonicalize().unwrap();
+        for dir in ["build", "dist", "target"] {
+            std::fs::create_dir(project.join(dir)).unwrap();
+        }
         for command in PROJECT_DELETIONS {
             for nesting in NESTINGS {
                 let nested = nesting.replace("{}", command);
-                assert!(evaluate(&nested, &section).is_empty(), "{nested}");
+                let found = evaluate_at(&nested, &section, PolicyLevel::Block, &project, &project);
+                if found.is_empty() {
+                    continue;
+                }
+                let write = super::super::git_guard::line_integrity_write(
+                    &nested,
+                    &project,
+                    PolicyLevel::Block,
+                );
+                assert!(
+                    found.len() == 1
+                        && found[0].rule == "git.hook_integrity"
+                        && write.is_some_and(|w| w.message == found[0].message),
+                    "{nested}: {found:?}"
+                );
             }
         }
+        let looped = "for i in 1; do cd build && rm -rf *; done";
+        let found = evaluate_at(looped, &section, PolicyLevel::Block, &project, &project);
+        assert!(
+            found.len() == 1
+                && found[0].rule == "git.hook_integrity"
+                && found[0].message.contains("cannot tell the directory"),
+            "{looped}: {found:?}"
+        );
     }
 
     /// TSK-397 design D: where the strict rule applies, a run-time word

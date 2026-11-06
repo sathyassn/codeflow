@@ -95,6 +95,16 @@ missing automation for adoption rather than silently enabling publication.
   `--no-post-rewrite` on `commit`, and `-c core.hooksPath=…`; abbreviated or
   in a cluster of short options too. On `push` `-n` is `--dry-run`, and on
   `merge`, `pull` and `rebase` it is `--no-stat`, so it stays allowed there.
+  An include flag (`-c include.path=…`, `includeIf.<condition>.path`) and
+  setting `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_COUNT`,
+  `GIT_CONFIG_PARAMETERS` or `GIT_CONFIG_KEY_<n>`, with any value and with or
+  without a git call on the line, refuse under the same rule.
+- Every file under `.github/workflows/` and `.github/actions/`, new or
+  existing, is an enforcement path, since each runs as CI code: the guards
+  refuse an agent's write there however the path is spelled or reached
+  (letter case, `..`, a symbolic or hard link) and through the file tools.
+  A workflow or local action changes through the operator or
+  `codeflow update`.
 
 ## Protected branches
 

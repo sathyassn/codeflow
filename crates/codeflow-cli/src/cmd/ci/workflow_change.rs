@@ -1,5 +1,6 @@
 //! The workflow-change finding (TSK-336 AC-11, ADR-0091): a range that
-//! changes a managed workflow or `codeflow-release.yml` gets a warning
+//! changes a managed workflow, `codeflow-release.yml` or any other file
+//! under `.github/workflows/` or `.github/actions/` (TSK-1349) gets a warning
 //! naming the triggers, the permissions and the jobs it changes. The
 //! default branch's copy of a workflow judges every pull request, so a
 //! head's edit takes effect only once it lands there; the warning puts
@@ -59,7 +60,24 @@ pub(super) fn dispatch(
     let Some(base) = base else {
         return;
     };
-    for path in watched() {
+    let mut paths = watched();
+    // Every workflow or local action the range adds, edits or removes,
+    // whatever its name: a new file there runs once it lands (TSK-1349).
+    match changed_workflows(root, base, head) {
+        Ok(changed) => paths.extend(changed),
+        Err(error) => tagged.push(TaggedViolation {
+            sha: None,
+            violation: Violation::new(
+                RULE,
+                PolicyLevel::Warn,
+                format!(
+                    "which workflows this change edits cannot be told ({error}); review every file under .github/workflows/ and .github/actions/ as a workflow change"
+                ),
+                codeflow_core::remedy::CI_WORKFLOW_CHANGED.with(&[("path", WORKFLOW_DIRS[0])]),
+            ),
+        }),
+    }
+    for path in paths {
         if let Some(message) = describe(root, base, head, &path) {
             tagged.push(TaggedViolation {
                 sha: None,
@@ -82,6 +100,37 @@ pub(super) fn render(violation: &Violation, plane: &str) -> String {
         plane,
         "the default branch's copy of each workflow, which judges every pull request (ADR-0091)",
     )
+}
+
+/// The directories whose files run as CI code: the workflows GitHub reads,
+/// and the local actions a workflow runs with `uses: ./.github/actions/<x>`.
+const WORKFLOW_DIRS: [&str; 2] = [".github/workflows/", ".github/actions/"];
+
+/// The paths under [`WORKFLOW_DIRS`] that differ between `base` and `head`,
+/// compared without case so a spelling a case-insensitive checkout folds
+/// into the directory is listed too.
+fn changed_workflows(root: &Path, base: &str, head: &str) -> Result<Vec<String>, String> {
+    let out = codeflow_core::git::judging_command()
+        .args(["diff", "--name-only", "-z", "--no-renames", base, head])
+        .current_dir(root)
+        .output()
+        .map_err(|error| format!("cannot run git diff: {error}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git diff failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(out
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|name| !name.is_empty())
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .filter(|name| {
+            let lower = name.to_ascii_lowercase();
+            WORKFLOW_DIRS.iter().any(|dir| lower.starts_with(dir))
+        })
+        .collect())
 }
 
 /// The bytes of `path` at `rev`: `Ok(None)` when absent. They stay bytes,

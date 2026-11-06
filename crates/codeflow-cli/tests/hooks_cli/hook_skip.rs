@@ -193,6 +193,176 @@ fn neither_guard_reads_a_lookalike_as_a_hook_skip() {
     assert!(refused.is_empty(), "{}", refused.join("\n"));
 }
 
+/// Lines that set one of git's configuration-source variables, which can
+/// replace the hooks path for every later git call. Each refuses on the line
+/// that sets it, whatever the value, with or without a git call after it.
+const CONFIG_SOURCES: &[&str] = &[
+    "export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig",
+    "export GIT_CONFIG_SYSTEM=/tmp/s.gitconfig",
+    "export GIT_CONFIG_COUNT=1",
+    "export GIT_CONFIG_KEY_0=include.path",
+    "export GIT_CONFIG_KEY_0=core.hooksPath",
+    "export GIT_CONFIG_KEY_3=user.email",
+    "export GIT_CONFIG_PARAMETERS=\"'include.path=/tmp/i'\"",
+    "GIT_CONFIG_GLOBAL=/tmp/g.gitconfig",
+    "GIT_CONFIG_GLOBAL=/tmp/g.gitconfig; export GIT_CONFIG_GLOBAL",
+    "declare -x GIT_CONFIG_GLOBAL=/tmp/g.gitconfig",
+    "export GIT_CONFIG_GLOBAL",
+    "env GIT_CONFIG_GLOBAL=/tmp/g.gitconfig git commit -m x",
+    "GIT_CONFIG_GLOBAL=/tmp/g.gitconfig git commit -m x",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=include.path GIT_CONFIG_VALUE_0=/tmp/i git commit -m x",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.email GIT_CONFIG_VALUE_0=x git status",
+    "export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig; git commit -m x",
+    "sh -c 'export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig'",
+    "true && export GIT_CONFIG_SYSTEM=/tmp/s.gitconfig",
+];
+
+/// Include flags on a git call: git reads the named file as configuration,
+/// so it can set the hooks path. The file need not exist for the refusal.
+const INCLUDES: &[&str] = &[
+    "git -c include.path=/tmp/i commit -m x",
+    "git -c Include.Path=/nonexistent/unreadable commit -m x",
+    "git -c includeIf.gitdir:/.path=/tmp/i commit -m x",
+    "git --config-env include.path=INC commit -m x",
+    "git --config-env=includeIf.onbranch:feat/*.path=INC commit -m x",
+    "sh -c 'git -c include.path=/tmp/i commit -m x'",
+];
+
+/// Findings 1 to 3 of the TSK-1349 security review: both guards refuse a
+/// configuration-source assignment under `git.hook_integrity`, and exec-guard
+/// refuses an include flag under it, so exec-guard admits nothing git-guard
+/// refuses. git-guard refuses an include flag under `git.policy_authority`,
+/// which protects every include key, as it did before this task.
+#[test]
+fn both_guards_refuse_configuration_sources_and_includes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("p");
+    std::fs::create_dir(&root).unwrap();
+    let worktree = fixture(&root);
+    let mut admitted = Vec::new();
+    let cases = CONFIG_SOURCES
+        .iter()
+        .map(|command| (*command, false))
+        .chain(INCLUDES.iter().map(|command| (*command, true)));
+    for (command, include) in cases {
+        for name in ["git-guard", "exec-guard"] {
+            let out = hook(name, &worktree, command);
+            let said = stderr(&out);
+            let rule = said.contains("policy rule git.hook_integrity")
+                || (include
+                    && name == "git-guard"
+                    && said.contains("policy rule git.policy_authority"));
+            if out.status.code() != Some(2) || !rule {
+                admitted.push(format!("{name}: {command}\n{said}"));
+            }
+        }
+    }
+    assert!(
+        admitted.is_empty(),
+        "configuration sources admitted:\n{}",
+        admitted.join("\n")
+    );
+}
+
+/// The lines around these variables that set nothing: reading or naming
+/// them, and the variables git does not read as a configuration source.
+#[test]
+fn neither_guard_refuses_a_configuration_variable_it_does_not_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("p");
+    std::fs::create_dir(&root).unwrap();
+    let worktree = fixture(&root);
+    let mut refused = Vec::new();
+    for command in [
+        "git commit -m x",
+        "echo GIT_CONFIG_GLOBAL",
+        "git commit -m GIT_CONFIG_GLOBAL=x",
+        "git -c user.email=t@example.com commit -m x",
+    ] {
+        for name in ["git-guard", "exec-guard"] {
+            let said = stderr(&hook(name, &worktree, command));
+            if said.contains("can point git at another hooks path")
+                || said.contains("includes a configuration file")
+            {
+                refused.push(format!("{name}: {command}\n{said}"));
+            }
+        }
+    }
+    assert!(refused.is_empty(), "{}", refused.join("\n"));
+}
+
+/// The threat the refusal closes, driven with the git the tests run: a
+/// commit runs the repository's pre-commit hook, and the same commit with
+/// `GIT_CONFIG_GLOBAL`, or `GIT_CONFIG_COUNT` with an `include.path`, naming
+/// a file that sets `core.hooksPath` to an empty directory runs none. The
+/// export that sets the variable is its own tool call, refused by both
+/// guards above; the plain commit after it is admitted, which is why the
+/// export must refuse.
+#[test]
+fn a_configuration_source_skips_the_hooks_of_a_later_plain_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("p");
+    std::fs::create_dir(&root).unwrap();
+    init_repo(&root, "feat/x");
+    let marker = dir.path().join("ran");
+    let hooks = root.join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let pre_commit = hooks.join("pre-commit");
+    std::fs::write(
+        &pre_commit,
+        format!(
+            "#!/bin/sh\ntouch '{}'\n",
+            codeflow_core::portable_path::slashed(&marker)
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&pre_commit, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let empty = dir.path().join("no-hooks");
+    std::fs::create_dir(&empty).unwrap();
+    let redirect = dir.path().join("redirect.gitconfig");
+    std::fs::write(
+        &redirect,
+        format!(
+            "[core]\n\thooksPath = {}\n",
+            codeflow_core::portable_path::slashed(&empty)
+        ),
+    )
+    .unwrap();
+    let commit = |env: &[(&str, &Path)], extra: &[(&str, &str)]| -> bool {
+        let _ = std::fs::remove_file(&marker);
+        let mut cmd = super::git_command();
+        cmd.args(["commit", "--allow-empty", "-q", "-m", "chore: probe"])
+            .current_dir(&root);
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        for (k, v) in extra {
+            cmd.env(k, v);
+        }
+        assert!(cmd.status().unwrap().success());
+        marker.exists()
+    };
+    assert!(commit(&[], &[]), "a plain commit runs the pre-commit hook");
+    assert!(
+        !commit(&[("GIT_CONFIG_GLOBAL", &redirect)], &[]),
+        "GIT_CONFIG_GLOBAL redirects the hooks"
+    );
+    assert!(
+        !commit(
+            &[("GIT_CONFIG_VALUE_0", &redirect)],
+            &[
+                ("GIT_CONFIG_COUNT", "1"),
+                ("GIT_CONFIG_KEY_0", "include.path")
+            ]
+        ),
+        "an include through GIT_CONFIG_COUNT redirects the hooks"
+    );
+}
+
 /// AC-5: the refusal names the rule, the flag as git documents it and the
 /// sanctioned path, and carries nothing of the project: no branch, path or
 /// value the command wrote.

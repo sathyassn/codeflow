@@ -1235,7 +1235,8 @@ pub(crate) fn repository_enforcement_target(
                 }
             }
         }
-        Ok(false)
+        let resolved = normalized(target, true).map_err(|error| error.to_string())?;
+        hard_link_to_protected(&resolved, &protected)
     };
 
     for owner in super::repo::target_roots(target, root)? {
@@ -1250,6 +1251,89 @@ pub(crate) fn repository_enforcement_target(
 /// How many entries a protected directory is walked for before the walk
 /// gives up and stands for the whole directory.
 const CANDIDATE_WALK_LIMIT: usize = 4096;
+
+/// Whether `target` is an existing file with more than one hard link that
+/// shares its inode with a protected file, so a write to it changes that
+/// file under another name (TSK-1349). Only a multiply linked file is
+/// compared. A protected directory too large to walk, or one the guard
+/// cannot read, counts as holding it: the check fails closed.
+#[cfg(unix)]
+fn hard_link_to_protected(target: &Path, protected: &[ProtectedPath]) -> Result<bool, String> {
+    use std::os::unix::fs::MetadataExt as _;
+    // A path that does not exist, runs through a file, or is a name the
+    // platform refuses holds no file, so a write cannot reach one through
+    // it; any other error refuses.
+    let meta = match std::fs::symlink_metadata(target) {
+        Ok(meta) => meta,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::NotADirectory
+                    | std::io::ErrorKind::InvalidFilename
+            ) =>
+        {
+            return Ok(false)
+        }
+        Err(error) => return Err(format!("cannot inspect {}: {error}", target.display())),
+    };
+    if !meta.is_file() || meta.nlink() < 2 {
+        return Ok(false);
+    }
+    let key = (meta.dev(), meta.ino());
+    let same = |path: &Path| -> Result<bool, String> {
+        match std::fs::symlink_metadata(path) {
+            Ok(m) => Ok((m.dev(), m.ino()) == key),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(format!("cannot inspect {}: {error}", path.display())),
+        }
+    };
+    let mut walked = 0usize;
+    for entry in protected {
+        let path = entry.path[1].as_ref().map_err(Clone::clone)?;
+        if !entry.directory {
+            if same(path)? {
+                return Ok(true);
+            }
+            continue;
+        }
+        let mut pending = vec![path.clone()];
+        while let Some(dir) = pending.pop() {
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
+                    if same(&dir)? {
+                        return Ok(true);
+                    }
+                    continue;
+                }
+                Err(error) => return Err(format!("cannot read {}: {error}", dir.display())),
+            };
+            for item in entries {
+                walked += 1;
+                if walked > CANDIDATE_WALK_LIMIT {
+                    return Ok(true);
+                }
+                let item = item.map_err(|error| format!("cannot read an entry: {error}"))?;
+                let kind = item
+                    .file_type()
+                    .map_err(|error| format!("cannot inspect an entry: {error}"))?;
+                if kind.is_dir() {
+                    pending.push(item.path());
+                } else if same(&item.path())? {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(not(unix))]
+fn hard_link_to_protected(_target: &Path, _protected: &[ProtectedPath]) -> Result<bool, String> {
+    Ok(false)
+}
 
 /// The paths a `find` starting at `start` may hand to its action that hold
 /// enforcement state or a registered checkout, resolved through symlinks:
