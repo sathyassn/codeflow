@@ -715,7 +715,7 @@ fn clears_task_record_missing() {
     commit(root, "x.txt", "feat: add x");
     prove(
         "TASK_RECORD_MISSING",
-        "does not identify a visible task record",
+        "names no task record in the judged head",
         || hosted.ci("task/TSK-002-more", &[]),
         |printed| {
             hosted.branch("plan/more");

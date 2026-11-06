@@ -243,13 +243,13 @@ impl Graph {
                     match loaded {
                         Ok(()) => crate::git::Walk::Continue,
                         Err(error) => {
-                            failure = Some(format!("{path}: {error}"));
+                            failure = Some(format!("{path} at {revision}: {error}"));
                             crate::git::Walk::Stop
                         }
                     }
                 }
                 Err(error) => {
-                    failure = Some(format!("{path}: {}", error.message()));
+                    failure = Some(format!("{path} at {revision}: {}", error.message()));
                     crate::git::Walk::Stop
                 }
             }

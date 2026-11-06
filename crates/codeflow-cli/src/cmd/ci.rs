@@ -42,9 +42,8 @@ use codeflow_core::scaffold::ScaffoldManifest;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::work_start::ReviewedPin;
 use codeflow_core::workgraph::{
-    branch_claims_task_id, declared_work_target, declared_work_target_at_revision,
-    durable_work_tracking_enabled, resolve_work_target_checked, task_id_from_branch,
-    task_id_from_branch_at,
+    durable_work_tracking_enabled, durable_work_tracking_enabled_at, judged_branch_claims_task_id,
+    resolve_work_target_checked,
 };
 use judging::{judging_policy, Authority};
 use pr_body::find_section;
@@ -398,8 +397,18 @@ pub fn run(args: &CiArgs) -> i32 {
     };
 
     // Resolve names and pin revisions once before any range rule runs.
-    let context = match context::resolve(&root, args, &environment, &working.git.protected_branches)
-    {
+    // The working copy's policy finds the range, its work prefixes as its
+    // protected branches (see `judging_policy`): the judging policy is read at
+    // the base, which the declared target picks. The pre-push hook picks the
+    // base and target under the judging policy's prefixes and passes them as
+    // `--base` and `--into` (TSK-1257).
+    let context = match context::resolve(
+        &root,
+        args,
+        &environment,
+        &working.git.protected_branches,
+        &working.git.branch_prefixes,
+    ) {
         Ok(context) => context,
         Err(error) => {
             eprintln!(
@@ -796,8 +805,9 @@ pub fn run(args: &CiArgs) -> i32 {
     let level = git.work_planning_level();
     let own_task = own_branch_preflight(
         &root,
+        git,
+        (base_sha.as_deref(), &head),
         &branch,
-        &head,
         &stacked,
         level,
         work_class
@@ -1766,28 +1776,22 @@ fn work_start_reader_error(error: &codeflow_core::workgraph::work_start::WorkSta
 #[allow(clippy::too_many_arguments)] // The run context and its validated exemption class.
 fn own_branch_preflight(
     root: &Path,
+    git: &GitPolicy,
+    (base, head): (Option<&str>, &str),
     branch: &str,
-    head: &str,
     stacked: &[ReviewedPin],
     level: PolicyLevel,
     exemption: bool,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
 ) -> bool {
-    let claims = match branch_claims_task_id(root, branch) {
-        Ok(claims) => claims,
-        Err(error) => {
-            tagged.push(TaggedViolation {
-                sha: None,
-                violation: tracking_state_violation(error),
-            });
-            return false;
-        }
-    };
+    // The work prefixes of the policy the run judges with, never the
+    // checkout's (TSK-1257).
+    let claims = judged_branch_claims_task_id(&git.branch_prefixes, branch);
     if branch.starts_with("task/") || claims {
-        match durable_work_tracking_enabled(root) {
+        match tracking_judged(root, base, head) {
             Ok(true) => {
-                evaluate_work_start(root, branch, head, stacked, level, exemption, tagged);
+                evaluate_work_start(root, git, branch, head, stacked, level, exemption, tagged);
                 ran.push("work-start");
                 return true;
             }
@@ -1802,6 +1806,17 @@ fn own_branch_preflight(
         }
     }
     false
+}
+
+/// Whether durable work tracking is on in the checkout, at the judged
+/// `head` or at `base` (TSK-1257): a checkout without tracking state never
+/// switches a check off for a range whose commits carry it.
+pub(super) fn tracking_judged(root: &Path, base: Option<&str>, head: &str) -> Result<bool, String> {
+    let mut enabled = durable_work_tracking_enabled(root).map_err(|error| error.to_string())?;
+    for revision in base.into_iter().chain([head]) {
+        enabled |= durable_work_tracking_enabled_at(root, revision)?;
+    }
+    Ok(enabled)
 }
 
 /// The visible workgraph, checked once per run for tracked work at the
@@ -1889,33 +1904,36 @@ fn stacked_pins(root: &Path, git: &GitPolicy, branch: &str, head: &str) -> Vec<R
     }
 }
 
-/// The task checks for the task the branch carries, at the
-/// `git.work_planning` level (TSK-133).
+/// The task the branch carries, read from the task records at the judged
+/// `head` under the work prefixes of the policy the run judges with
+/// (TSK-1257, TSK-350 AC-1). The checkout's records and policy take no
+/// part: a record only the checkout holds names no task, and one the
+/// checkout lacks hides none.
 pub(super) fn branch_task_at(
     root: &Path,
+    git: &GitPolicy,
     branch: &str,
     head: &str,
 ) -> Result<Option<String>, String> {
-    match task_id_from_branch_at(root, branch, head).map_err(|error| error.to_string())? {
-        Some(task) => Ok(Some(task)),
-        None => task_id_from_branch(root, branch).map_err(|error| error.to_string()),
-    }
+    codeflow_core::workgraph::judged_task_id(root, &git.branch_prefixes, branch, head)
+        .map_err(|error| error.to_string())
 }
 
+/// The integration target `task` declares in its record at the judged
+/// `head` (TSK-1257), never in the checkout's copy of the record.
 pub(super) fn work_target_at(
     root: &Path,
-    branch: &str,
     head: &str,
     task: &str,
 ) -> Result<Option<String>, String> {
-    match declared_work_target_at_revision(root, branch, head).map_err(|error| error.to_string())? {
-        Some(target) => Ok(Some(target)),
-        None => declared_work_target(root, task).map_err(|error| error.to_string()),
-    }
+    codeflow_core::workgraph::task_target_at_revision(root, task, head)
+        .map_err(|error| format!("{task}'s record at {head} cannot be read: {error}"))
 }
 
+#[allow(clippy::too_many_arguments)] // The run context and its validated exemption class.
 fn evaluate_work_start(
     root: &Path,
+    git: &GitPolicy,
     branch: &str,
     head: &str,
     stacked: &[ReviewedPin],
@@ -1925,7 +1943,7 @@ fn evaluate_work_start(
 ) {
     // The head's records first: from a base checkout (the hosted policy
     // workflow) the branch's own standalone record is not on disk.
-    let task_at_head = match branch_task_at(root, branch, head) {
+    let task_at_head = match branch_task_at(root, git, branch, head) {
         Ok(task) => task,
         Err(error) => {
             tagged.push(TaggedViolation {
@@ -1936,7 +1954,7 @@ fn evaluate_work_start(
         }
     };
     if let Some(task_id) = task_at_head {
-        let declared = match work_target_at(root, branch, head, &task_id) {
+        let declared = match work_target_at(root, head, &task_id) {
             Ok(target) => target,
             Err(error) => {
                 tagged.push(TaggedViolation {
@@ -1995,7 +2013,9 @@ fn evaluate_work_start(
             violation: Violation::new(
                 "work.task_record",
                 level,
-                format!("task branch '{branch}' does not identify a visible task record"),
+                format!(
+                    "task branch '{branch}' names no task record in the judged head {head}: no record under project-management/ at that commit carries the branch's task id, and a record only the checkout holds is not read"
+                ),
                 codeflow_core::remedy::TASK_RECORD_MISSING.remedy(),
             ),
         });
@@ -3624,6 +3644,7 @@ mod tests {
             let mut tagged = Vec::new();
             evaluate_work_start(
                 dir.path(),
+                &GitPolicy::default(),
                 "task/TSK-001-fix",
                 &head,
                 &[],

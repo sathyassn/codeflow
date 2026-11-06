@@ -42,6 +42,8 @@ crates/codeflow-cli/tests/hooks_cli.rs	"{GIT_CONFIG_PARAMETERS,X}=\"'alias.ship=
 crates/codeflow-cli/tests/hooks_cli.rs	env(key,value)	1	Copies the isolated codeflow command environment for alternate-binary guard probes; preserves inherited Git settings.
 crates/codeflow-cli/tests/hooks_cli.rs	env(variable,&parent)	1	TSK-283 doctor probes a temporary global or system include file; the child only reads configuration and performs no Git mutation.
 crates/codeflow-cli/tests/hooks_cli.rs	env_remove(key)	1	Copies the isolated codeflow command environment for alternate-binary guard probes; preserves inherited Git settings.
+crates/codeflow-cli/tests/acceptance_cli/head_tree_records.rs	env(key,value)	1	TSK-1257 copies the isolated codeflow command environment onto CODEFLOW_JOURNEY_BIN to replay the journey on a release; preserves inherited Git settings.
+crates/codeflow-cli/tests/acceptance_cli/head_tree_records.rs	env_remove(key)	1	TSK-1257 copies the isolated codeflow command environment onto CODEFLOW_JOURNEY_BIN to replay the journey on a release; preserves inherited Git settings.
 crates/codeflow-cli/tests/hooks_cli.rs	exec_guard_tool(dir.path(),"Bash","GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0='push origin v9.9.9' git ship")	1	TSK-283 installed-project journey sends command text to exec-guard, without executing the release command.
 crates/codeflow-cli/tests/present_cli.rs	env(OWNER_PID_ENV,owner.to_string())	1	Sets the presentation owner PID test variable only.
 crates/codeflow-cli/tests/prose_oracle.rs	env_clear()	1	Shell oracle uses logging stubs including Git and never operates on a repository.
