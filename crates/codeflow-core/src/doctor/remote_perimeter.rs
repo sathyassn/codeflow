@@ -1185,7 +1185,7 @@ mod tests {
         }
     }
 
-    const SIX: &str = r#"[{"context":"codeflow gates","integration_id":15368},{"context":"trusted: commit standards","integration_id":15368},{"context":"release impact","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"windows","integration_id":15368}]"#;
+    const SIX: &str = r#"[{"context":"codeflow gates","integration_id":15368},{"context":"commit standards","integration_id":15368},{"context":"release impact","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"windows","integration_id":15368}]"#;
 
     /// The answers of a host whose default branch `main` carries `rules`
     /// (the body of `rules/branches/main`), `classic` protection (or 404)
@@ -1377,7 +1377,7 @@ mod tests {
                 args,
                 "[]",
                 Some(
-                    r#"{"required_status_checks":{"strict":true,"contexts":["codeflow gates","secret scan","security review","trusted: commit standards"]},"enforce_admins":{"enabled":false}}"#,
+                    r#"{"required_status_checks":{"strict":true,"contexts":["codeflow gates","secret scan","security review","commit standards"]},"enforce_admins":{"enabled":false}}"#,
                 ),
                 "[]",
             )
@@ -1508,7 +1508,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
         std::fs::write(
             dir.path().join(".codeflow/policy.json"),
-            r#"{"git":{"required_checks":["codeflow gates","secret scan","security review","trusted: commit standards","linux"]}}"#,
+            r#"{"git":{"required_checks":["codeflow gates","secret scan","security review","commit standards","linux"]}}"#,
         )
         .unwrap();
         let text = warn_text(&check(&opts(dir.path(), exec)));
@@ -1523,7 +1523,7 @@ mod tests {
     }
 
     /// The four policy names as ruleset check objects.
-    const FOUR: &str = r#"[{"context":"codeflow gates","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"trusted: commit standards","integration_id":15368}]"#;
+    const FOUR: &str = r#"[{"context":"codeflow gates","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"commit standards","integration_id":15368}]"#;
 
     const ONE_ACTOR: &str =
         r#"[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]"#;
@@ -1567,14 +1567,14 @@ mod tests {
                 args,
                 "[]",
                 Some(
-                    r#"{"required_status_checks":{"strict":false,"contexts":["codeflow gates","secret scan","security review","trusted: commit standards"]},"enforce_admins":{"enabled":false}}"#,
+                    r#"{"required_status_checks":{"strict":false,"contexts":["codeflow gates","secret scan","security review","commit standards"]},"enforce_admins":{"enabled":false}}"#,
                 ),
             )
         }
         let dir = project();
         let text = warn_text(&check(&opts(dir.path(), ruleset_exec)));
         assert!(
-            text.contains("ruleset 2 lets 1 actor(s) bypass it, and no rule that binds everyone requires codeflow gates, secret scan, security review, trusted: commit standards"),
+            text.contains("ruleset 2 lets 1 actor(s) bypass it, and no rule that binds everyone requires codeflow gates, secret scan, security review, commit standards"),
             "{text}"
         );
         let text = warn_text(&check(&opts(dir.path(), classic_exec)));
@@ -1899,7 +1899,7 @@ mod tests {
 on: pull_request_target
 jobs:
   commit-standards:
-    name: 'trusted: commit standards'
+    name: 'commit standards'
   secret-scan:
     name: 'secret scan'
   authority:
@@ -1950,7 +1950,7 @@ jobs:
     /// Mode B, and the workflows that declare their names.
     fn protected_world() -> World {
         let trusted = checks(&[
-            ("trusted: commit standards", 15368),
+            ("commit standards", 15368),
             ("secret scan", 15368),
             ("codeflow gates", 15368),
         ]);
@@ -2297,8 +2297,8 @@ jobs:
     }
 
     /// AC-3: a foreign ruleset that requires names no workflow on the
-    /// default branch produces (this repository's 24379074 once the old
-    /// names are gone) warns with the route.
+    /// default branch produces (here `release impact` and `secret scan`,
+    /// which the fixture's workflows do not declare) warns with the route.
     #[test]
     fn a_foreign_ruleset_requiring_a_name_nothing_produces_warns() {
         let mut world = protected_world();
@@ -2309,12 +2309,12 @@ jobs:
             "rules": [{ "type": "required_status_checks", "parameters": {
                 "strict_required_status_checks_policy": true,
                 "required_status_checks": checks(&[
-                    ("codeflow gates", 15368), ("commit standards", 15368), ("secret scan", 15368)
+                    ("codeflow gates", 15368), ("release impact", 15368), ("secret scan", 15368)
                 ]) } }]
         }));
         let text = warn_text(&judge(world, None));
         assert!(
-            text.contains("ruleset 'main required checks' (24379074) requires commit standards, which no workflow on main produces"),
+            text.contains("ruleset 'main required checks' (24379074) requires release impact, which no workflow on main produces"),
             "{text}"
         );
         assert!(

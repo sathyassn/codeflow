@@ -2292,7 +2292,7 @@ printf '{}'
         assert!(
             text.contains(
                 "require status checks to pass on a branch that is up to date with its base: \
-                 codeflow gates, secret scan, security review, trusted: commit standards"
+                 codeflow gates, secret scan, security review, commit standards"
             ),
             "{text:?}"
         );
@@ -2355,22 +2355,29 @@ printf '{}'
             .contains("solo-administrator"));
     }
 
-    /// TSK-1176: a name is trusted by the explicit table, never by its
-    /// spelling, the required names keep their plain form, and the Mode A
+    /// TSK-1176, TSK-1368: a name is trusted by the explicit table, never by
+    /// its spelling, the required names keep their plain form, and the Mode A
     /// name drops only the `trusted: ` prefix.
     #[test]
     fn trusted_verdicts_are_an_explicit_table() {
+        assert!(is_trusted_verdict("commit standards"));
         assert!(is_trusted_verdict("secret scan"));
         assert!(is_trusted_verdict("trusted: release impact"));
         for name in [
+            "trusted: commit standards",
             "trusted: secret scan",
             "trusted: other",
+            "Commit standards",
             "Secret scan",
             "release impact",
             "history scan",
         ] {
             assert!(!is_trusted_verdict(name), "{name}");
         }
+        assert_eq!(
+            authority_name("commit standards"),
+            "authority: commit standards"
+        );
         assert_eq!(authority_name("secret scan"), "authority: secret scan");
         assert_eq!(
             authority_name("trusted: release impact"),
@@ -2385,10 +2392,16 @@ printf '{}'
             policy_text: POLICY_WITH_TRUSTED.to_string(),
             ..Declared::default()
         };
-        assert!(declared
-            .trusted_names()
-            .iter()
-            .any(|name| name == "secret scan"));
+        assert_eq!(
+            declared.trusted_names(),
+            ["commit standards", "secret scan", "trusted: release impact"]
+        );
+        let prefixed = Declared {
+            policy_workflow: true,
+            policy_text: POLICY_PREFIXED.to_string(),
+            ..Declared::default()
+        };
+        assert!(prefixed.trusted_names().is_empty());
     }
 
     #[test]
@@ -2398,7 +2411,7 @@ name: x
 on: pull_request_target
 jobs:
   verdict:
-    name: 'trusted: commit standards'
+    name: 'commit standards'
     runs-on: ubuntu-24.04
   scan:
     name: 'secret scan'
@@ -2417,10 +2430,10 @@ jobs:
             names.into_iter().collect::<Vec<_>>(),
             [
                 "authority",
+                "commit standards",
                 "gates",
                 "other",
                 "secret scan",
-                "trusted: commit standards",
             ]
         );
         assert_eq!(
@@ -2631,10 +2644,9 @@ esac
         let writes = host.writes();
         assert_eq!(writes.len(), 1, "{writes:?}");
         assert_eq!(writes[0].0, "PUT repos/o/r/rulesets/900");
-        // The six live checks stay, now strict; the policy's
-        // `trusted: commit standards` (TSK-336) and its two missing rules
-        // are added. `secret scan` is already among the live checks, so a
-        // trusted producer needs no ruleset change (TSK-1176).
+        // The six live checks stay, now strict, and already hold the
+        // policy's `commit standards` and `secret scan`, so a trusted producer
+        // needs no ruleset change (TSK-1176); its two missing rules are added.
         let body = &writes[0].1;
         let kinds: Vec<&str> = body["rules"]
             .as_array()
@@ -2653,11 +2665,7 @@ esac
         );
         let checks = &body["rules"][0]["parameters"];
         assert_eq!(checks["strict_required_status_checks_policy"], true);
-        let mut expected = owned["rules"][0]["parameters"]["required_status_checks"].clone();
-        expected
-            .as_array_mut()
-            .unwrap()
-            .push(json!({"context": "trusted: commit standards", "integration_id": 15368}));
+        let expected = owned["rules"][0]["parameters"]["required_status_checks"].clone();
         assert_eq!(checks["required_status_checks"], expected);
         assert_eq!(body["bypass_actors"], json!([]));
         assert_eq!(body["enforcement"], "active");
@@ -2739,13 +2747,14 @@ esac
     // answers; the hosted fixture on a scratch repository is owed.
     // -----------------------------------------------------------------------
 
-    /// The policy workflow TSK-336 lands, reduced to what B and C read.
+    /// The policy workflow TSK-336 lands, with the verdict name the
+    /// rulesets require (TSK-1368), reduced to what B and C read.
     const POLICY_WITH_TRUSTED: &str = r#"
 name: codeflow-policy
 on: pull_request_target
 jobs:
   commit-standards:
-    name: 'trusted: commit standards'
+    name: 'commit standards'
     runs-on: ubuntu-24.04
   secret-scan:
     name: 'secret scan'
@@ -2757,16 +2766,21 @@ jobs:
     environment: codeflow-authority
     runs-on: ubuntu-24.04
     steps:
-      - run: "create 'authority: commit standards' 'authority: secret scan' 'authority: release impact'"
+      - run: "create 'authority: commit standards' 'authority: release impact'"
 "#;
 
-    /// Today's policy workflow: one job named `commit standards`.
-    const POLICY_TODAY: &str = r"
+    /// A policy workflow whose jobs are only spelled like trusted verdicts:
+    /// neither `trusted: commit check` nor `trusted: secret scan` is on the
+    /// list, and the prefix alone makes neither trusted.
+    const POLICY_PREFIXED: &str = r"
 name: codeflow-policy
 on: pull_request_target
 jobs:
   policy:
-    name: commit standards
+    name: 'trusted: commit check'
+    runs-on: ubuntu-24.04
+  scan:
+    name: 'trusted: secret scan'
     runs-on: ubuntu-24.04
 ";
 
@@ -2776,6 +2790,8 @@ on: pull_request
 jobs:
   gates:
     name: codeflow gates
+  secret-scan:
+    name: secret scan
   security-review:
     name: security review
   windows-verdict:
@@ -3047,19 +3063,20 @@ jobs:
             assert_eq!(checks["strict_required_status_checks_policy"], true);
             let policy = match app {
                 Some(app) => pins(&[
-                    ("authority: secret scan", app),
                     ("authority: commit standards", app),
+                    ("authority: secret scan", app),
                     ("authority: release impact", app),
                 ]),
                 None => pins(&[
+                    ("commit standards", 15368),
                     ("secret scan", 15368),
-                    ("trusted: commit standards", 15368),
                     ("trusted: release impact", 15368),
                 ]),
             };
             let mut expected = policy;
             expected.extend(pins(&[
                 ("codeflow gates", 15368),
+                ("secret scan", 15368),
                 ("security review", 15368),
                 ("windows", 15368),
             ]));
@@ -3084,8 +3101,8 @@ jobs:
             assert_eq!(
                 check_pins(&c),
                 pins(&[
+                    ("commit standards", 15368),
                     ("secret scan", 15368),
-                    ("trusted: commit standards", 15368),
                     ("trusted: release impact", 15368),
                     ("codeflow gates", 15368),
                     ("windows", 15368),
@@ -3115,10 +3132,10 @@ jobs:
         for (workflows, why) in [
             (
                 vec![
-                    (POLICY_WORKFLOW, POLICY_TODAY),
+                    (POLICY_WORKFLOW, POLICY_PREFIXED),
                     (".github/workflows/codeflow-ci.yml", CI_WORKFLOW),
                 ],
-                "does not declare trusted: commit standards, secret scan",
+                "does not declare commit standards, secret scan;",
             ),
             (
                 vec![(".github/workflows/codeflow-ci.yml", CI_WORKFLOW)],
@@ -3153,7 +3170,7 @@ jobs:
         // Mode A needs the authority: names in the policy workflow too; C
         // does not use them and is written.
         let mut policy = POLICY_WITH_TRUSTED.to_string();
-        policy = policy.replace("'authority: secret scan'", "");
+        policy = policy.replace("'authority: release impact'", "");
         let host = Fake::new(
             &[
                 (POLICY_WORKFLOW, policy.as_str()),
@@ -3167,7 +3184,7 @@ jobs:
         );
         let text = report.render();
         assert!(
-            text.contains("does not create authority: secret scan"),
+            text.contains("does not create authority: release impact"),
             "{text:?}"
         );
         let names: Vec<String> = host

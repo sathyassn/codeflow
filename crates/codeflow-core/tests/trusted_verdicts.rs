@@ -1,9 +1,10 @@
 //! TSK-336 (ADR-0091): the trusted verdicts are produced only by the jobs of
 //! the policy workflow, which GitHub runs from the default branch on
 //! `pull_request_target`. A verdict is a name in the one table,
-//! [`TRUSTED_VERDICTS`], whatever its spelling: no workflow that runs on
-//! `pull_request` or `push` emits one (TSK-1176). These read every workflow
-//! the repository ships or runs.
+//! [`TRUSTED_VERDICTS`], never judged by its spelling: a required check keeps
+//! its plain name (TSK-1368, TSK-1176). No workflow that runs on
+//! `pull_request` or `push` emits a trusted verdict's name or a `trusted:`
+//! name. These read every workflow the repository ships or runs.
 use codeflow_core::remote::{is_trusted_verdict, TRUSTED_VERDICTS};
 use serde_yaml::Value;
 use std::path::{Path, PathBuf};
@@ -106,31 +107,55 @@ fn events(workflow: &Value) -> Vec<String> {
     }
 }
 
-/// TSK-1176 (operator decision, 2026-11-06): a required check keeps its plain
-/// name, so `secret scan` is the name the rulesets already require and the
-/// table holds it with no `trusted:` prefix.
-#[test]
-fn the_scan_verdict_keeps_its_plain_required_name() {
-    assert!(TRUSTED_VERDICTS.contains(&"secret scan"));
-    assert!(!is_trusted_verdict("trusted: secret scan"));
+/// Whether a job's check name must come only from the trusted workflow: a
+/// listed verdict, or anything spelled like one.
+fn looks_trusted(name: &str) -> bool {
+    is_trusted_verdict(name) || name.starts_with("trusted: ")
 }
 
-/// AC-2, AC-9 (review round 1, R1-1), TSK-1176 AC-4: a name in the table comes
-/// only from a workflow that `pull_request_target` alone starts, and the job
-/// carries no `if`. A job-level `if` skips a job but keeps its check, and
-/// GitHub counts a skipped required check as passing, so a push, schedule or
-/// dispatch run of a workflow holding a job of that name would leave a passing
-/// check under it at the pushed commit. So a head-run `secret scan` job fails
-/// here in any workflow copy.
+/// TSK-1368, TSK-1176 (operator decision, 2026-11-06): the table is reviewed
+/// here, so a change to it is a change to this test. A required check keeps
+/// its plain name, and only `trusted: release impact` keeps its prefix, until
+/// TSK-1178 renames it.
+#[test]
+fn the_trusted_verdicts_are_the_listed_names() {
+    assert_eq!(
+        TRUSTED_VERDICTS,
+        ["commit standards", "secret scan", "trusted: release impact"]
+    );
+    for (path, workflow) in workflows() {
+        for (id, name, _) in jobs(&workflow) {
+            if name.starts_with("trusted: ") {
+                assert!(
+                    is_trusted_verdict(&name),
+                    "{path} job {id} ('{name}') is spelled as a trusted verdict but is not on the list"
+                );
+            }
+        }
+    }
+}
+
+/// AC-2, AC-9 (review round 1, R1-1), TSK-1368, TSK-1176 AC-4: a trusted
+/// verdict's name comes only from a policy workflow that `pull_request_target`
+/// alone starts, and the job carries no `if`. A job-level `if` skips a job but
+/// keeps its check, and GitHub counts a skipped required check as passing, so a
+/// push, schedule or dispatch run of a workflow holding a trusted-named job
+/// would leave a passing check under that name at the pushed commit. Each name
+/// is checked as listed, so a head-run `secret scan` job fails here in any
+/// workflow copy.
 #[test]
 fn only_pull_request_target_workflows_emit_a_trusted_name() {
+    let mut producers = Vec::new();
     for (path, workflow) in workflows() {
         for (id, name, job) in jobs(&workflow) {
-            assert_ne!(
-                name, "commit standards",
-                "{path} job {id} still produces the old name"
-            );
-            if is_trusted_verdict(&name) {
+            if name == "commit standards" {
+                producers.push(path.clone());
+            }
+            if looks_trusted(&name) {
+                assert!(
+                    path.ends_with("/codeflow-policy.yml"),
+                    "{path} job {id} ('{name}'): only the policy workflow produces a trusted verdict"
+                );
                 assert_eq!(
                     events(&workflow),
                     ["pull_request_target"],
@@ -143,6 +168,15 @@ fn only_pull_request_target_workflows_emit_a_trusted_name() {
             }
         }
     }
+    assert_eq!(
+        producers,
+        [
+            ".github/workflows/codeflow-policy.yml",
+            "assets/base/ci/codeflow-policy.yml",
+            ".codeflow/.baseline/.github/workflows/codeflow-policy.yml",
+        ],
+        "commit standards has one producer in each workflow set"
+    );
 }
 
 /// AC-2: the registry check of pushes, the schedule and manual runs lives in
@@ -223,19 +257,15 @@ fn the_policy_workflows_declare_their_trusted_names() {
     };
     assert_eq!(
         declared("assets/base/ci/codeflow-policy.yml"),
-        ["trusted: commit standards", "secret scan"]
+        ["commit standards", "secret scan"]
     );
     assert_eq!(
         declared(".codeflow/.baseline/.github/workflows/codeflow-policy.yml"),
-        ["trusted: commit standards", "secret scan"]
+        ["commit standards", "secret scan"]
     );
     assert_eq!(
         declared(".github/workflows/codeflow-policy.yml"),
-        [
-            "trusted: commit standards",
-            "trusted: release impact",
-            "secret scan",
-        ]
+        ["commit standards", "trusted: release impact", "secret scan"]
     );
 }
 
@@ -248,7 +278,7 @@ fn the_policy_workflows_declare_their_trusted_names() {
 fn every_verdict_job_runs_only_the_default_branch_code() {
     for (path, workflow) in workflows() {
         for (id, name, job) in jobs(&workflow) {
-            if !is_trusted_verdict(&name) {
+            if !looks_trusted(&name) {
                 continue;
             }
             let steps = job["steps"].as_sequence().unwrap();

@@ -86,7 +86,8 @@ fn step<'a>(job: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no step {name}"))
 }
 
-/// `(job id, name)` of each trusted verdict job.
+/// `(job id, name)` of each trusted verdict job, by the explicit list
+/// (TSK-1368), never by a `trusted:` spelling.
 fn verdict_jobs(workflow: &Value) -> Vec<(String, String)> {
     jobs(workflow)
         .into_iter()
@@ -582,8 +583,8 @@ exit 22
 
     // -- the refusal (Mode B) ------------------------------------------------
 
-    const NAMES: &str = "trusted: commit standards\ntrusted: release impact\n";
-    const STANDARDS: &str = "check-runs?check_name=trusted%3A%20commit%20standards&filter=all";
+    const NAMES: &str = "commit standards\ntrusted: release impact\n";
+    const STANDARDS: &str = "check-runs?check_name=commit%20standards&filter=all";
     const RELEASE: &str = "check-runs?check_name=trusted%3A%20release%20impact&filter=all";
 
     fn runs(list: &[(u64, u64, u64)]) -> String {
@@ -710,7 +711,7 @@ exit 22
             (
                 "a check run from another app",
                 vec![("GET", STANDARDS, runs(&[(1, 4242, 10)]))],
-                "check run 1 named 'trusted: commit standards' is on",
+                "check run 1 named 'commit standards' is on",
             ),
             (
                 "a head job of that name on pull_request, skipped or sleeping",
@@ -742,9 +743,9 @@ exit 22
                 vec![(
                     "GET",
                     "/statuses?",
-                    r#"[{"id": 8, "context": "trusted: commit standards", "state": "success", "creator": {"login": "agent"}}]"#.to_owned(),
+                    r#"[{"id": 8, "context": "commit standards", "state": "success", "creator": {"login": "agent"}}]"#.to_owned(),
                 )],
-                "commit status 8 named 'trusted: commit standards' (success, set by agent)",
+                "commit status 8 named 'commit standards' (success, set by agent)",
             ),
             (
                 "a commit status of an authority name",
@@ -959,7 +960,7 @@ exit 22
         assert!(calls.contains(&format!(
             r#"body: {{"name":"authority: commit standards","head_sha":"{HEAD}","status":"in_progress","details_url":"https://github.test/o/r/actions/runs/9"}}"#
         )), "{calls}");
-        assert!(calls.contains(r#"body: {"status":"completed","conclusion":"failure","output":{"title":"trusted: commit standards failure""#), "{calls}");
+        assert!(calls.contains(r#"body: {"status":"completed","conclusion":"failure","output":{"title":"commit standards failure""#), "{calls}");
         assert!(calls.contains(r#"body: {"status":"completed","conclusion":"success","output":{"title":"trusted: release impact success""#), "{calls}");
         assert!(calls.contains(&format!("judged by main@{AUTHORITY}")));
         // The installation token is used, and revoked, only through header
@@ -1043,12 +1044,7 @@ decode "$p" | jq -c '{iss, span: (.exp - .iat)}'"#,
 
         let host = Host::new(&app_routes());
         let app_key = key(host.path());
-        let output = create(
-            &host,
-            "123",
-            &app_key,
-            "trusted: commit standards=success\n",
-        );
+        let output = create(&host, "123", &app_key, "commit standards=success\n");
         assert_eq!(output.status.code(), Some(1), "{}", text(&output));
         assert!(text(&output).contains("is not an authority: name"));
         assert!(!host.calls().contains("check-runs"));

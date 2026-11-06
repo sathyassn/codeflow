@@ -155,13 +155,13 @@ fn the_dry_run_names_the_three_rulesets_and_reads_no_host() {
 }
 
 #[cfg(unix)]
-/// The policy workflow on the recorded default branch, with the `trusted:`
-/// names TSK-336 declares.
+/// The policy workflow on the recorded default branch, with the trusted
+/// verdict the rulesets require (TSK-1368).
 const POLICY: &str = r#"
 on: pull_request_target
 jobs:
   commit-standards:
-    name: "trusted: commit standards"
+    name: "commit standards"
   secret-scan:
     name: "secret scan"
 "#;
@@ -249,7 +249,7 @@ fn two_runs_write_the_owned_rulesets_once_and_never_the_foreign_one() {
         "created ruleset 'codeflow authority updates' (1001) on ~DEFAULT_BRANCH: only bypass actors update it, bypass: RepositoryRole 5 (always)",
         "created ruleset 'codeflow authority checks' (1002) on ~DEFAULT_BRANCH",
         "created ruleset 'codeflow line checks' (1003) on refs/heads/integration/**",
-        "strict checks: trusted: commit standards (app 15368), secret scan (app 15368), codeflow gates (app 15368), windows (app 15368)",
+        "strict checks: commit standards (app 15368), secret scan (app 15368), codeflow gates (app 15368), windows (app 15368)",
     ] {
         assert!(report.contains(name), "{name}: {report}");
     }

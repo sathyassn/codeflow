@@ -266,7 +266,8 @@ mod tests {
             "rules": [
                 { "type": "required_status_checks", "ruleset_id": 99, "parameters": {
                     "required_status_checks": [
-                        { "context": "trusted: commit standards", "integration_id": 15368 }
+                        { "context": "commit standards", "integration_id": 15368 },
+                        { "context": "trusted: secret scan", "integration_id": 15368 }
                     ] } }
             ],
             "rulesets": rulesets()
@@ -282,9 +283,11 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("pins: trusted: commit standards pinned to Actions;"),
+            text.contains("pins: commit standards pinned to Actions;"),
             "{text}"
         );
+        // A `trusted:` spelling outside the explicit set is not a verdict pin.
+        assert!(!text.contains("trusted: secret scan"), "{text}");
     }
 
     #[test]

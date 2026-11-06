@@ -33,7 +33,7 @@ pub const INTEGRATION_BRANCH_PREFIX: &str = "integration/";
 pub const NON_UTF8_BRANCH: &str = "\0not-valid-utf8";
 
 /// The check the policy workflow's commit standards verdict job posts.
-pub const COMMIT_STANDARDS_CHECK: &str = "trusted: commit standards";
+pub const COMMIT_STANDARDS_CHECK: &str = "commit standards";
 
 /// The check the policy workflow's secret scan verdict job posts.
 pub const SECRET_SCAN_CHECK: &str = "secret scan";

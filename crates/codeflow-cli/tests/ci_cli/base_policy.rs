@@ -165,7 +165,7 @@ fn a_head_that_changes_the_setup_hook_is_named() {
 fn a_head_that_changes_a_workflow_is_warned_by_name() {
     const POLICY_WF: &str = ".github/workflows/codeflow-policy.yml";
     const RELEASE_WF: &str = ".github/workflows/codeflow-release.yml";
-    let base_policy = "name: codeflow-policy\non:\n  pull_request_target:\npermissions:\n  contents: read\njobs:\n  commit-lint:\n    name: 'trusted: commit standards'\n    permissions:\n      contents: read\n    runs-on: ubuntu-24.04\n    steps:\n      - run: codeflow ci\n";
+    let base_policy = "name: codeflow-policy\non:\n  pull_request_target:\npermissions:\n  contents: read\njobs:\n  commit-lint:\n    name: 'commit standards'\n    permissions:\n      contents: read\n    runs-on: ubuntu-24.04\n    steps:\n      - run: codeflow ci\n";
     let dir = fixture(Some("{}"));
     let root = dir.path();
     git(root, &["switch", "-q", "main"]);
@@ -194,7 +194,7 @@ fn a_head_that_changes_a_workflow_is_warned_by_name() {
     assert!(text.contains("adds triggers push"), "{text}");
     assert!(text.contains("adds jobs forged ('secret scan')"), "{text}");
     assert!(
-        text.contains("changes the permissions of jobs commit-lint ('trusted: commit standards')"),
+        text.contains("changes the permissions of jobs commit-lint ('commit standards')"),
         "{text}"
     );
     assert!(
@@ -222,12 +222,12 @@ fn the_workflow_warning_reads_the_change_not_the_widened_commit_range() {
     let dir = fixture(Some("{}"));
     let root = dir.path();
     git(root, &["switch", "-q", "main"]);
-    write(root, POLICY_WF, "on:\n  pull_request_target:\njobs:\n  commit-lint:\n    name: 'trusted: commit standards'\n    runs-on: ubuntu-24.04\n    steps:\n      - run: codeflow ci\n");
+    write(root, POLICY_WF, "on:\n  pull_request_target:\njobs:\n  commit-lint:\n    name: 'commit standards'\n    runs-on: ubuntu-24.04\n    steps:\n      - run: codeflow ci\n");
     commit(root, "ci: add the policy workflow");
     // The line changes the workflow; the task branch, cut from the line,
     // does not.
     git(root, &["switch", "-q", "-c", "line"]);
-    write(root, POLICY_WF, "on:\n  pull_request_target:\n  push:\njobs:\n  commit-lint:\n    name: 'trusted: commit standards'\n    runs-on: ubuntu-24.04\n    steps:\n      - run: codeflow ci\n");
+    write(root, POLICY_WF, "on:\n  pull_request_target:\n  push:\njobs:\n  commit-lint:\n    name: 'commit standards'\n    runs-on: ubuntu-24.04\n    steps:\n      - run: codeflow ci\n");
     commit(root, "ci: add a push trigger on the line");
     git(root, &["switch", "-q", "-C", "feat/x"]);
     write(root, "y.txt", "y\n");
