@@ -5237,15 +5237,32 @@ fn private_pull(fx: &Fx) -> (Pull, String, Requests) {
     (pull, server, requests)
 }
 
-/// A pull-request API endpoint that answers every request with `json`, as
-/// `GET /repos/<repository>/pulls/<number>` does. Returns its base URL.
+/// A pull-request API endpoint that answers a request carrying the run's
+/// token (`Authorization: Bearer`) with `json`, as
+/// `GET /repos/<repository>/pulls/<number>` does, and refuses any other
+/// with `401`. Returns its base URL.
 fn api_origin(json: String) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
-            if read_request(&mut stream).is_none() {
+            let Some((head, _)) = read_request(&mut stream) else {
+                continue;
+            };
+            // As the API of a private repository: a read without the run's
+            // token is refused, so a step that stops sending it fails.
+            let bearer = format!("bearer {FAKE_TOKEN}");
+            let authorized = head.lines().skip(1).any(|line| {
+                line.split_once(':').is_some_and(|(key, value)| {
+                    key.trim().eq_ignore_ascii_case("authorization")
+                        && value.trim().eq_ignore_ascii_case(&bearer)
+                })
+            });
+            if !authorized {
+                let _ = stream.write_all(
+                    b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
                 continue;
             }
             let _ = stream.write_all(
