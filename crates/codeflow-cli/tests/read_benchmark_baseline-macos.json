@@ -3,32 +3,32 @@
     "lines": 10,
     "task_records": 10000,
     "stale_task_branches": 3000,
-    "record_bytes": 41042447
+    "record_bytes": 48541777
   },
   "calibration_ms": 296,
   "commands": {
     "orient": {
       "wall_ms": 41992,
       "latency_ratio": 141.47,
-      "peak_kib": 184432,
+      "peak_kib": 219776,
       "git_processes": 500
     },
     "status": {
       "wall_ms": 48813,
       "latency_ratio": 164.45,
-      "peak_kib": 188064,
+      "peak_kib": 224864,
       "git_processes": 500
     },
     "validate --docs": {
       "wall_ms": 1893,
       "latency_ratio": 6.38,
-      "peak_kib": 126544,
+      "peak_kib": 141552,
       "git_processes": 0
     },
     "work next": {
       "wall_ms": 41466,
       "latency_ratio": 139.7,
-      "peak_kib": 176768,
+      "peak_kib": 214640,
       "git_processes": 500
     }
   },
