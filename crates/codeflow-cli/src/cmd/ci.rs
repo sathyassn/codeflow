@@ -205,16 +205,6 @@ pub struct CiArgs {
     /// goes over its budget (TSK-1306).
     #[arg(long, value_name = "FILE", hide = true)]
     pub timings_out: Option<PathBuf>,
-
-    /// Stop early when a check already blocks: after the commit,
-    /// added-line, conflict-marker, workflow and path checks, skipping the
-    /// record, work and pull request checks; and after the record and
-    /// branch-name checks, skipping the work and pull request checks. The
-    /// pre-push hook passes it: the push is refused either way, and the
-    /// refusal comes sooner (TSK-1306). A run that stops this way still
-    /// fails; hosted CI never passes it and always runs every check.
-    #[arg(long, hide = true)]
-    pub stop_on_cheap_failure: bool,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -636,17 +626,6 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
         }),
     }
     timings.lap("path-policy");
-    if args.stop_on_cheap_failure && cheap_checks_block(&tagged, args.run_level, &judging.raw) {
-        skipped.push("records, work and pull request checks");
-        return stopped_early(
-            args,
-            &judging.raw,
-            pr_body.as_deref(),
-            tagged,
-            &ran,
-            &skipped,
-        );
-    }
 
     let destination = match args.destination.clone() {
         Some(destination) => Some(destination),
@@ -768,17 +747,6 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
         ran.push("branch-naming");
     }
     timings.lap("branch-naming");
-    if args.stop_on_cheap_failure && cheap_checks_block(&tagged, args.run_level, &judging.raw) {
-        skipped.push("work and pull request checks");
-        return stopped_early(
-            args,
-            &judging.raw,
-            pr_body.as_deref(),
-            tagged,
-            &ran,
-            &skipped,
-        );
-    }
 
     // --- pull request classification (TSK-104) -----------------------------
     // Every product pull request has one class; tracked work runs the
@@ -956,50 +924,6 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
         write_blocking_rules(out, &tagged);
     }
     report(&tagged, &ran, &skipped)
-}
-
-/// End a run that `--stop-on-cheap-failure` stopped, as a full run ends:
-/// the findings so far settled and at the level the plane prints them, the
-/// blocking rule ids for the hook, and the summary naming what was skipped.
-/// The run fails, as it would have with every check: the remaining checks
-/// could add findings, never lift one (TSK-1306).
-fn stopped_early(
-    args: &CiArgs,
-    raw: &Result<Option<serde_json::Value>, String>,
-    pr_body: Option<&str>,
-    mut tagged: Vec<TaggedViolation>,
-    ran: &[&str],
-    skipped: &[&str],
-) -> i32 {
-    settle_watched_paths(&mut tagged, pr_body);
-    if let Some(running) = args.run_level {
-        run_under(running, raw, &mut tagged);
-    }
-    if let Some(out) = &args.blocking_rules_out {
-        write_blocking_rules(out, &tagged);
-    }
-    let code = report(&tagged, ran, skipped);
-    eprintln!(
-        "codeflow ci: stopped early: a check above already blocks, so these did not run: {}",
-        skipped.join(", ")
-    );
-    code
-}
-
-/// Whether a finding found so far blocks at the level it would print at:
-/// with a run level, each finding as [`run_under`] lowers it, so a check
-/// the plane's level downgrades never stops the run early (TSK-1306).
-fn cheap_checks_block(
-    tagged: &[TaggedViolation],
-    running: Option<PolicyLevel>,
-    raw: &Result<Option<serde_json::Value>, String>,
-) -> bool {
-    tagged.iter().any(|tagged| {
-        let level = running.map_or(tagged.violation.level, |running| {
-            tagged.violation.level_under(running, raw)
-        });
-        level == PolicyLevel::Block
-    })
 }
 
 /// The blocking findings' rule ids, one per line, for the pre-push hook's

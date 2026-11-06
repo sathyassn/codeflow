@@ -573,8 +573,8 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
 
 | Push set | What happens |
 |---|---|
-| Order | The hook's own ref rules run before any `codeflow ci`. Each `codeflow ci` stops after its commit, added-line, conflict-marker, workflow and path checks, or after its record and branch-name checks, when one of them blocks, and names the checks it did not run. |
-| After a refusal | The later branches' checks and the release preflight do not run. The id sync still runs, so a pending reservation is published. The printed rerun runs every check. |
+| Order | The hook's own ref rules run before any `codeflow ci`. Each `codeflow ci` runs every check, so the hook reports the same findings CI reports for the range. |
+| After a refusal | The later branches' checks and the release preflight do not run. The id sync still runs, so a pending reservation is published. The printed rerun repeats the refused step. |
 | A passing push | Every check runs, as before. |
 | Time | Over `git.push_budget_seconds` (default 60) the hook names the slowest step and, for a `codeflow ci` step, its three slowest checks. The budget only reports; it never refuses a push. `codeflow ci --timings` prints the time of every check. |
 

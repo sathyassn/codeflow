@@ -27,13 +27,11 @@
 //!   another line's tip. A new branch keeps the base. CI judging the pull
 //!   request stays the authority.
 //! - Cheap checks first, and the first refusal stops the set (TSK-1306):
-//!   the hook's own ref rules run before any `codeflow ci`; each `codeflow
-//!   ci` stops after its commit, added-line, conflict-marker, workflow and
-//!   path checks when one of them blocks, and again after the record and
-//!   branch-name checks (`--stop-on-cheap-failure`); a refusal skips the
-//!   later branches' checks and the release preflight.
-//!   A push that passes runs every check, as before. Stopping never turns
-//!   a refusal into a pass.
+//!   the hook's own ref rules run before any `codeflow ci`, and a refusal
+//!   skips the later branches' checks and the release preflight. Each
+//!   `codeflow ci` runs every check, so the hook reports the findings CI
+//!   reports for the same range (SPC-013 R-120). A push that passes runs
+//!   every check, as before. Stopping never turns a refusal into a pass.
 //! - The whole set is timed; over `git.push_budget_seconds` (default 60 s)
 //!   the hook names the slowest step and, for a `codeflow ci` step, its
 //!   slowest checks. The budget only reports: it never refuses a push.
@@ -776,11 +774,6 @@ fn run_check_with(
     }
     if let Some(out) = &timings_out {
         command.arg("--timings-out").arg(&out.0);
-    }
-    if is_ci {
-        // The push is refused either way once a cheap check blocks; the
-        // printed rerun leaves the flag out and runs every check.
-        command.arg("--stop-on-cheap-failure");
     }
     let started = Instant::now();
     let output = codeflow_core::git::output_with_input(

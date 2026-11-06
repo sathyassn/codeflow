@@ -404,9 +404,9 @@ fn the_push_budget_comes_from_the_landed_policy_and_never_refuses() {
 // ---------------------------------------------------------------------------
 
 /// A commit the commit rules refuse stops the push set at the first
-/// refusal: `codeflow ci` stops after its cheap checks, the release
-/// preflight does not run, the push is refused and the printed rerun runs
-/// every check (TSK-1306 AC-6).
+/// refusal: the release preflight does not run and the push is refused.
+/// The `codeflow ci` step itself runs every check, so the hook reports what
+/// CI reports for the range (SPC-013 R-120; TSK-1306 AC-6).
 #[test]
 fn a_refused_commit_stops_the_push_set_before_the_slow_checks() {
     let dir = scaffolded("--standard");
@@ -434,15 +434,11 @@ fn a_refused_commit_stops_the_push_set_before_the_slow_checks() {
     let out = pushed(&root);
     assert!(out.contains("push set check failed: `codeflow ci"), "{out}");
     assert!(out.contains("git.commit_format"), "{out}");
-    assert!(
-        out.contains("stopped early: a check above already blocks, so these did not run: records, work and pull request checks"),
-        "{out}"
-    );
+    assert!(!out.contains("stopped early"), "{out}");
     assert!(
         out.contains("the release preflight did not run: a check above already refuses the push"),
         "{out}"
     );
-    assert!(!out.contains("--stop-on-cheap-failure"), "{out}");
     not_landed(&dest, &out, "feat/x", &local);
 }
 

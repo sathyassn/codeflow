@@ -768,12 +768,11 @@ fn clears_id_registry() {
     );
 }
 
-/// A record check that refuses stops the run the pre-push hook makes
-/// (`--stop-on-cheap-failure`) before the work and pull request checks, and
-/// the stopped run refuses with the same blocking finding as a full run,
-/// which still runs them (TSK-1306 AC-6).
+/// A record check that refuses fails the run and the work and pull request
+/// checks still run after it, so the run the pre-push hook makes reports
+/// what CI reports for the same range (SPC-013 R-120; TSK-1306 AC-8).
 #[test]
-fn a_refused_record_stops_the_hook_run_before_the_work_checks() {
+fn a_refused_record_still_runs_the_work_checks() {
     let hosted = registered();
     let root = &hosted.root;
     hosted.branch("plan/more");
@@ -793,15 +792,6 @@ fn a_refused_record_stops_the_hook_run_before_the_work_checks() {
     write(root, hand, &format!("{copied}\n"));
     commit_all(root, "docs: plan more work");
     let finding = "TSK-002: not reserved in the registry";
-    let stopped = hosted.ci("plan/more", &["--stop-on-cheap-failure"]);
-    assert!(stopped.contains(finding), "{stopped}");
-    assert!(stopped.contains("codeflow ci: FAILED"), "{stopped}");
-    assert!(
-        stopped.contains(
-            "stopped early: a check above already blocks, so these did not run: work and pull request checks"
-        ),
-        "{stopped}"
-    );
     let full = hosted.ci("plan/more", &[]);
     assert!(full.contains(finding), "{full}");
     assert!(full.contains("codeflow ci: FAILED"), "{full}");
