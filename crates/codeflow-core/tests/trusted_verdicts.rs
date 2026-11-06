@@ -396,7 +396,7 @@ fn the_policy_ci_step_gets_only_the_run_token() {
         .unwrap();
     let (_, _, job) = jobs(&workflow)
         .into_iter()
-        .find(|(_, name, _)| name == "trusted: commit standards")
+        .find(|(_, name, _)| name == "commit standards")
         .unwrap();
     let permissions = job["permissions"].as_mapping().unwrap();
     assert_eq!(
