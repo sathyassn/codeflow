@@ -1807,11 +1807,12 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     assert!(POLICY.contains("--pr-body-file \"$BODY_FILE\""));
     assert!(POLICY.contains("/pulls/${PR_NUMBER}\" -o \"${RUNNER_TEMP}/pull.json\""));
 
-    // TSK-336: the verdict job, under its trusted name, is the policy
-    // workflow's only job and has no `if`, since a skipped job still
-    // reports its check; the registry check has its own workflow and name.
+    // TSK-336: the verdict job is the policy workflow's only job and has
+    // no `if`, since a skipped job still reports its check; the registry
+    // check has its own workflow and name. TSK-1368: it carries the name
+    // the rulesets require.
     let enforcing = job(POLICY, "commit-lint");
-    assert!(enforcing.contains("    name: \"trusted: commit standards\"\n"));
+    assert!(enforcing.contains("    name: \"commit standards\"\n"));
     assert!(!enforcing.contains("\n    if: "));
     assert!(!POLICY.contains("registry-check:"));
     let registry = job(REGISTRY, "registry-check");
