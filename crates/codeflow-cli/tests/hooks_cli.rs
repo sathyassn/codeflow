@@ -11619,6 +11619,91 @@ fn an_automatic_merge_is_scanned_in_commit_msg() {
     );
 }
 
+// TSK-1350 AC-2 and AC-4: with `git.commit_ticket_merges` on, the wired
+// commit-msg hook refuses a `--no-ff` landing merge without its ticket
+// footer, for git's default subject and for an author's own, and the
+// refusal names the merge, the rule and the keys.
+#[cfg(unix)]
+#[test]
+fn a_landing_merge_without_its_ticket_footer_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    init_repo(d, "integration/line");
+    write_policy(
+        d,
+        r#"{"schema_version":1,"git":{"commit_ticket_keys":["Refs"],"commit_ticket_required":"warn","commit_ticket_merges":"block"}}"#,
+    );
+    git(d, &["checkout", "-q", "-b", "task/x"]);
+    std::fs::write(d.join("thing.txt"), "thing\n").unwrap();
+    git(d, &["add", "thing.txt"]);
+    git(
+        d,
+        &["commit", "-q", "-m", "feat: add thing", "-m", "Refs: TSK-1"],
+    );
+    git(d, &["checkout", "-q", "integration/line"]);
+    wire_scan_hooks(d);
+
+    for subject in [None, Some("feat: land the thing")] {
+        let mut args = vec!["merge", "--no-ff", "--no-edit", "task/x"];
+        if let Some(s) = subject {
+            args.extend(["-m", s]);
+        }
+        let out = run_wired_git(d, &args, None);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{subject:?}: {stderr}");
+        assert!(
+            stderr.contains("policy rule git.commit_ticket_merges (block)"),
+            "{subject:?}: {stderr}"
+        );
+        let named = subject.unwrap_or("Merge branch 'task/x' into integration/line");
+        assert!(
+            stderr.contains(&format!("merge commit '{named}'")),
+            "{stderr}"
+        );
+        assert!(stderr.contains("keys: Refs"), "{stderr}");
+        let _ = run_wired_git(d, &["merge", "--abort"], None);
+    }
+
+    // With the footer, both subject forms land.
+    let out = run_wired_git(
+        d,
+        &[
+            "merge",
+            "--no-ff",
+            "task/x",
+            "-m",
+            "Merge branch 'task/x' into integration/line",
+            "-m",
+            "Refs: TSK-1",
+        ],
+        None,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(d, &["reset", "-q", "--hard", "HEAD~1"]);
+    let out = run_wired_git(
+        d,
+        &[
+            "merge",
+            "--no-ff",
+            "task/x",
+            "-m",
+            "feat: land the thing",
+            "-m",
+            "Refs: TSK-1",
+        ],
+        None,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn an_automatic_merge_in_a_linked_worktree_is_scanned() {
