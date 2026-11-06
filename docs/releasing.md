@@ -244,9 +244,8 @@ an operator decision; agents and Coordinators never rule on it.
 | Weekly run, `main` | secret scan of the full history and dependency audit | yes | yes | yes | yes | yes | yes |
 
 - The short checks are the Linux build and lint checks, the policy check
-  (`codeflow-policy.yml`, pull requests only) with its `trusted: commit
-  standards` and `trusted: release impact` jobs, and the secret scan in
-  `codeflow-ci.yml`.
+  (`codeflow-policy.yml`, pull requests only) with its `commit standards`
+  and `trusted: release impact` jobs, and the secret scan.
 - The security review is not one of the short checks the operator named.
   It runs on every event as a secure default; removing it from an event
   needs its own operator decision.
