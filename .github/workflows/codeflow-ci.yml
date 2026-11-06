@@ -1163,8 +1163,7 @@ jobs:
           echo "every Windows job passed"
 
   secret-scan:
-    name: history scan
-    if: github.event_name != 'pull_request'
+    name: secret scan
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -1172,17 +1171,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The gitleaks step is the adopter template's (TSK-210);
+      # scripts/check-scaffold-gitleaks.sh keeps the two the same.
       # Run the gitleaks binary directly (pinned) rather than the
       # gitleaks-action wrapper, which requires a GitHub token/license. The
       # archive is downloaded and unpacked under the runner's temp directory,
       # never in the checkout, so a file or link a pull request commits at
       # that name is not written through.
       #
-      # Every exemption comes from github.sha: the default-branch authority
-      # for a pull request, or the pushed commit for a push. A new exemption
-      # takes effect once it lands on that authority. The step fails before it scans when that commit is
-      # not in the checkout. It leaves the checkout intact and gives gitleaks
-      # explicit copies of the authority's inputs, choosing
+      # Every exemption comes from the trusted commit: the pull request's
+      # base, or the pushed commit on a push. A pull request cannot exempt
+      # the leak it adds; a new exemption takes effect once its own pull
+      # request merges. The step fails before it scans when that commit is
+      # not in the checkout. It deletes the checkout's .gitleaksignore,
+      # .gitleaks.toml and .gitleaks.json (a link is removed, never
+      # followed) and gives gitleaks the trusted commit's copies, choosing
       # the configuration as gitleaks does: GITLEAKS_CONFIG, then
       # GITLEAKS_CONFIG_TOML, then .gitleaks.json beside .gitleaks.toml, then
       # .gitleaks.toml, else the default rules. An inline gitleaks:allow
@@ -1209,10 +1212,10 @@ jobs:
       # No step before this one runs code from the checkout: a step that
       # did could write GITHUB_ENV or GITHUB_PATH for this one, so
       # GITLEAKS_CONFIG and GITLEAKS_CONFIG_TOML here can only come from
-      # this workflow's own env. Keep it that way when you add steps. In
-      # codeflow-ci.yml, a workflow you customised before this protection
-      # may already run such a step; codeflow update keeps it and warns
-      # until you move it after this step or into another job.
+      # this workflow's own env. Keep it that way when you add steps. A
+      # workflow you customised before this protection may already run such
+      # a step; codeflow update keeps it and warns until you move it after
+      # this step or into another job.
       #
       # gitleaks' default git log leaves out what a merge itself adds, any
       # file whose type changes and any file git judges binary, so a secret
@@ -1232,8 +1235,8 @@ jobs:
       # diff.noprefix, for one, gitleaks would drop each path's first
       # directory, and an exemption for leak.txt would cover dir/leak.txt.
       #
-      # gitleaks reads only the commits the event brings (SCAN_FROM..SCAN_HEAD):
-      # on a pull request, what the pull request's head holds
+      # gitleaks reads only the commits the event brings (SCAN_FROM..HEAD):
+      # on a pull request, what the pull request merged into its base holds
       # and the base does not; on a push, what the pushed commit holds and
       # the previous tip did not. A finding already in the base, or on a
       # branch the pull request does not bring, is not this change's to fix
@@ -1246,15 +1249,13 @@ jobs:
       # leak from it. The step prints which history it read. A range that
       # changes no file has nothing to scan and passes. Before gitleaks
       # runs, the step checks only the
-      # history the pull request brings, the commits its head holds and its
-      # base does not, for what gitleaks cannot read reliably, and
+      # history the pull request brings, the commits HEAD holds and the
+      # trusted commit does not, for what gitleaks cannot read reliably, and
       # names the commit and the refs that hold it. On a push that range is
       # empty, since the pushed commit is the trusted commit, so a push scan
-      # reads its history without these refusals. An octopus merge (three or
-      # more parents) in a pull request is refused; merge its branches one
-      # at a time. Push and full-history scans also read octopus commits
-      # against their first parent, since remerge diffs omit their additions.
-      # gitleaks' patch parser misreads some names that git
+      # reads its history without these refusals. git cannot show what an octopus merge (three or more
+      # parents) adds, so one in that range is refused; merge the branches one
+      # at a time. gitleaks' patch parser misreads some names that git
       # quotes: it skips one that ends in a backslash without an error, and a
       # newline in a name splits a conflicted merge's header into lines the
       # wrapper cannot tell apart. So the step refuses a path with a
@@ -1282,14 +1283,9 @@ jobs:
       # reads no commit.
       - name: gitleaks
         env:
-          TRUSTED_SHA: ${{ github.sha }}
-          SCAN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-          PR_BASE: ${{ github.event.pull_request.base.sha || '' }}
+          TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
           SCAN_FROM: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
         run: |
-          set -euo pipefail
-          # A replace ref must never substitute the objects being judged.
-          export GIT_NO_REPLACE_OBJECTS=1
           case ${TRUSTED_SHA:-} in
             '' | *[!0-9a-f]*)
               echo "::error::no trusted commit to read exemptions from; refusing to scan"; exit 1 ;;
@@ -1300,12 +1296,7 @@ jobs:
           TRUSTED_SHA=$(git rev-parse --verify "${TRUSTED_SHA}^{commit}")
           # The history the scan reads: the event's own commits when it
           # names a start the checkout holds, else all of HEAD's.
-          # The authority remains checked out; the PR head is only Git data.
-          requested=${SCAN_HEAD:-HEAD}
-          if [ "$requested" != HEAD ] && ! printf '%s\n' "$requested" | grep -Eqx '[0-9a-f]{40}'; then
-            echo "::error::scan head is not a full commit id; refusing to scan"; exit 1
-          fi
-          head=$(git rev-parse --verify "${requested}^{commit}")
+          head=$(git rev-parse --verify 'HEAD^{commit}')
           scan=$head
           case ${SCAN_FROM:-} in
             '') scope="the full history of HEAD (a scheduled or manual run)" ;;
@@ -1339,28 +1330,18 @@ jobs:
           workspace=$(pwd -P)
           trusted=$(mktemp -d "$RUNNER_TEMP/gitleaks-trusted.XXXXXX")
           trap 'rm -rf "$tool" "$trusted" || true' EXIT
-          mkdir "$trusted/tree" "$trusted/source"
-          # Gitleaks also reads source/.gitleaksignore despite an explicit
-          # ignore path. Give it Git metadata without any checkout files.
-          printf 'gitdir: %s\n' "$(git rev-parse --absolute-git-dir)" >"$trusted/source/.git"
-          # Remerge diffs omit octopus additions. Read those commits against
-          # their first parent as well, including files later deleted.
-          git rev-list --min-parents=3 "$scan" -- >"$trusted/octopus"
+          mkdir "$trusted/tree"
           real_git=$(command -v git)
           mkdir "$trusted/bin"
           cat >"$trusted/bin/git" <<GIT
           #!/bin/bash
-          set -euo pipefail
+          set -o pipefail
           pin=(-c core.quotePath=true -c diff.noprefix=false -c diff.mnemonicPrefix=false
             -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ -c diff.relative=false -c color.ui=false
             -c color.diff=false -c format.pretty=medium -c log.date=default -c log.decorate=false
             -c log.abbrevCommit=false -c log.showSignature=false -c log.showRoot=true)
           if [ "\$1" = -C ] && [ "\$3" = log ]; then
             "$real_git" "\${pin[@]}" "\$@" | sed '/^remerge /d'
-            while IFS= read -r merge; do
-              "$real_git" "\${pin[@]}" -C "$workspace" log -1 -p --diff-merges=first-parent \
-                --diff-filter=uxdb --text --no-ext-diff --no-textconv "\$merge" --
-            done <"$trusted/octopus"
             exit
           fi
           exec "$real_git" "\${pin[@]}" "\$@"
@@ -1368,9 +1349,8 @@ jobs:
           chmod +x "$trusted/bin/git"
           export PATH="$trusted/bin:$PATH"
           # Refuses what gitleaks cannot read reliably in the history the pull
-          # request brings: what its head holds and its base does not. Pushes
-          # retain the existing trusted-history exemption from this preflight.
-          python3 -I - "${PR_BASE:-$TRUSTED_SHA}" "$head" <<'PY'
+          # request brings: what HEAD holds and the trusted commit does not.
+          python3 -I - "$TRUSTED_SHA" "$head" <<'PY'
           import re
           import subprocess
           import sys
@@ -1449,9 +1429,7 @@ jobs:
                               refuse(f"merge {where(commit)} joins a change to the path \"{named(name)}\" made on its "
                                      f"parent {parent}; {unreadable}; {fix}")
           PY
-          # Do not alter the authority checkout. Explicit inputs prevent
-          # gitleaks from discovering configuration in the scanned tree.
-          : >"$trusted/ignore"
+          rm -f .gitleaksignore .gitleaks.toml .gitleaks.json
           # Writes the trusted ignore file, the configuration when gitleaks
           # needs one named, and each file that configuration extends.
           python3 -I - "$TRUSTED_SHA" "$workspace" "$trusted" <<'PY'
@@ -1663,12 +1641,6 @@ jobs:
                                   kind = "one-parent commit" if count == 1 else f"commit with {count} parents"
                                   warning(f".gitleaksignore line {number}: {kind} {commit}; no replacement inferred for {fingerprint}")
                                   continue
-                              diff = query("show", "--format=", "--remerge-diff", "--no-ext-diff", "--no-textconv", commit, "--", path[2:])
-                              headers = [f"remerge CONFLICT ({kind}): Merge conflict in {path[2:]}".encode("utf-8")
-                                         for kind in ("content", "add/add")]
-                              if diff.returncode or not any(header in diff.stdout.splitlines() for header in headers):
-                                  warning(f".gitleaksignore line {number}: no remerge CONFLICT header for {fingerprint}; no replacement inferred")
-                                  continue
                               replacement = f"{commit}:{path[2:]}:{rule}:{line}"
                               warning(f".gitleaksignore line {number}: legacy remerge fingerprint {fingerprint}; review and replace with {replacement}")
                           else:
@@ -1703,9 +1675,6 @@ jobs:
               else:
                   use(beside, ".gitleaks.json")
           PY
-          if [ ! -f "$trusted/config.toml" ] && [ -z "${GITLEAKS_CONFIG:-}" ] && [ -z "${GITLEAKS_CONFIG_TOML:-}" ]; then
-            printf '[extend]\nuseDefault = true\n' >"$trusted/config.toml"
-          fi
           set --
           if [ -f "$trusted/config.toml" ]; then set -- --config "$trusted/config.toml"; fi
           inline_allow=$(cat "$trusted/inline-allow")
@@ -1714,7 +1683,7 @@ jobs:
               echo "::error::cannot list the file changes in ${scope}; refusing to skip the scan"; exit 1
             fi
             changed=$(printf '%s\n' "$files" | awk 'NF { n++ } END { print n + 0 }')
-            if [ "$changed" -eq 0 ] && [ ! -s "$trusted/octopus" ]; then
+            if [ "$changed" -eq 0 ]; then
               echo "No file changes in ${scope}; nothing to scan."
               exit 0
             fi
@@ -1724,7 +1693,7 @@ jobs:
           report="$RUNNER_TEMP/gitleaks-report.json"
           log="$RUNNER_TEMP/gitleaks.log"
           rc=0
-          (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$trusted/source" "$@" \
+          (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$workspace" "$@" \
             --log-opts "--full-history --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv ${scan} --" \
             --gitleaks-ignore-path "$trusted/ignore" --ignore-gitleaks-allow \
             --no-banner --log-level debug --exit-code 0 \

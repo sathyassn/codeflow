@@ -42,6 +42,12 @@ use std::path::{Path, PathBuf};
 /// argument with whitespace removed, how many, why it never holds git).
 const DYNAMIC: &[(&str, &str, usize, &str)] = &[
     (
+        "codeflow-core/src/testing/runner/job_watch.rs",
+        "&binary",
+        1,
+        "the Windows fence watcher is the designated codeflow binary itself, or in a unit test a missing path, never git (TSK-1318)",
+    ),
+    (
         "codeflow-core/src/security/outward.rs",
         "shell",
         2,

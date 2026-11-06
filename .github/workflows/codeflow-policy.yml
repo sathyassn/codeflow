@@ -12,8 +12,9 @@
 # R-113), and judges with the authority's policy, never the target's. The
 # pull request's base and head are fetched only as git data and never run.
 # After every step the job asserts that the checkout is still the authority.
-# The token is read-only and no secret is used. Builds and tests of the head
-# run in codeflow-ci.yml on `pull_request`.
+# The verdict job's token is read-only and the job uses no secret; only the
+# `authority` job below holds one. Builds and tests of the head run in
+# codeflow-ci.yml on `pull_request`.
 #
 # `codeflow ci` runs the SAME commit-format, no-AI-attribution, no-emoji,
 # breaking-footer, branch-naming and PR-body checks as the git hooks and the
@@ -54,6 +55,19 @@
 # never through `env:` or an argument, because the runner prints a step's
 # `env:` values in its log. Each run makes two API reads on the job's token.
 #
+# Each verdict job, just before its last read, refuses another producer of
+# a trusted name that is on the head at that moment: a check run of that
+# name from another workflow, event or app, or a commit status of a trusted
+# or authority name (Mode B). Mode B is a lower tier: it does not close forgery by a later
+# producer. GitHub takes the newest check run of a name, so a workflow that
+# runs after the verdict job, for example on an event this file does not
+# run on, can still satisfy a trusted: name pinned to GitHub Actions. Only
+# Mode A closes it: for a pull request into the default branch, the
+# `authority` job creates the `authority:` checks with a GitHub App held in
+# the environment `codeflow-authority`, concluded from the verdict jobs,
+# and ruleset B pins those names to the App. Without the App it creates
+# none (ADR-0091, TSK-1177).
+#
 # This repository's copy: CodeFlow is its own first consumer, so the verdict
 # jobs build the authority's own source in place of the pinned release, and
 # a second verdict job, `trusted: release impact`, runs scripts/release.py
@@ -80,12 +94,16 @@ jobs:
     name: "trusted: commit standards"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    # Read access to pull requests serves the body step, and read access
-    # to actions the merge admission; the token stays read-only.
+    # Read access to pull requests serves the body step, read access to
+    # actions the merge admission, and read access to actions, checks and
+    # statuses the last step, which looks for another producer of a trusted
+    # name; the token stays read-only.
     permissions:
       contents: read
       pull-requests: read
       actions: read
+      checks: read
+      statuses: read
     steps:
       # The authority is the default branch at the one commit this run was
       # started for. A run whose ref is not the default branch (an older
@@ -236,6 +254,47 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
+      # The host's rules for the default branch, read with the read-only
+      # token for the report's authority line and nothing else. A failure
+      # here leaves the line saying the rules are unreadable and never
+      # changes the verdict (TSK-1177 AC-2).
+      - name: Read the host rules for the authority line
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          umask 077
+          dir=$(mktemp -d "${RUNNER_TEMP}/codeflow-rules.XXXXXX")
+          printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\n' "$GH_TOKEN" > "${dir}/headers"
+          branch=$(jq -rn --arg v "$DEFAULT_BRANCH" '$v | @uri')
+          out="${RUNNER_TEMP}/codeflow-host-rules.json"
+          if curl -fsS --retry 3 --max-time 60 -H @"${dir}/headers" -o "${dir}/rules.json" \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/rules/branches/${branch}?per_page=100" \
+            && curl -fsS --retry 3 --max-time 60 -H @"${dir}/headers" -o "${dir}/rulesets.json" \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=true&per_page=100" \
+            && jq -n --arg branch "$DEFAULT_BRANCH" --arg sha "$AUTHORITY_SHA" \
+              --slurpfile rules "${dir}/rules.json" --slurpfile rulesets "${dir}/rulesets.json" \
+              '{branch: $branch, authority: $sha, rules: $rules[0], rulesets: $rulesets[0]}' > "$out"; then
+            echo "host rules read for ${DEFAULT_BRANCH}"
+          else
+            jq -n --arg branch "$DEFAULT_BRANCH" --arg sha "$AUTHORITY_SHA" \
+              '{branch: $branch, authority: $sha, unreadable: "the host rules could not be read with this token"}' > "$out"
+            echo "::warning::the host rules for ${DEFAULT_BRANCH} could not be read; the report's authority line says so and the verdict is unchanged"
+          fi
+          rm -rf "$dir"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
       # The PR body reaches `codeflow ci` as a file, never interpolated into
       # the script and never through `env:` (the runner logs those values), so
       # an untrusted body can neither inject shell nor reach the log. The
@@ -249,6 +308,7 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           BODY_FILE: ${{ runner.temp }}/pr-body.md
           ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
+          CODEFLOW_HOST_RULES: ${{ runner.temp }}/codeflow-host-rules.json
         # The authority must carry its policy: judging with defaults where it
         # has none would pass what the project never chose (TSK-336).
         run: |
@@ -339,6 +399,105 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
+      # Just before the last read, this step refuses another producer of a
+      # trusted name that is on the head when it runs (ADR-0091, Mode B). It reads once: a producer
+      # that runs later is not seen, and GitHub takes the newest check run
+      # of a name, so Mode B does not close forgery by a later producer;
+      # only Mode A, the App authority, does.
+      # A check run of a trusted name counts only when GitHub Actions
+      # created it in a pull_request_target run of this workflow's own path,
+      # which only the default branch's file can start. A job of that name
+      # in another workflow or event (skipped, sleeping or built from an
+      # expression), a check run from any other app and any commit status
+      # of a trusted or authority name fail this job, and so does an API
+      # error (TSK-1177 AC-1).
+      - name: Refuse another producer of a trusted name
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TRUSTED_NAMES: |
+            trusted: commit standards
+            trusted: release impact
+        run: |
+          set -euo pipefail
+          umask 077
+          if ! printf '%s\n' "$HEAD_SHA" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error::the pull request head '${HEAD_SHA}' is not a full commit id; nothing is judged"; exit 1
+          fi
+          work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/codeflow-producers.XXXXXX")
+          trap 'rm -rf "$work"' EXIT
+          printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\n' "$GH_TOKEN" > "${work}/headers"
+          api() { curl -fsS --retry 3 --max-time 60 -H @"${work}/headers" "$@"; }
+          repo="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
+          workflow=${GITHUB_WORKFLOW_REF#"${GITHUB_REPOSITORY}/"}
+          workflow=${workflow%%@*}
+          found=0
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            encoded=$(jq -rn --arg v "$name" '$v | @uri')
+            page=1
+            while :; do
+              api "${repo}/commits/${HEAD_SHA}/check-runs?check_name=${encoded}&filter=all&per_page=100&page=${page}" > "${work}/runs.json"
+              count=$(jq -e '.check_runs | if type == "array" then length else error("no check_runs list") end' "${work}/runs.json")
+              jq -r '.check_runs[] | [(.id | tostring), (.app.id // 0 | tostring), (.check_suite.id // 0 | tostring)] | @tsv' "${work}/runs.json" > "${work}/runs.tsv"
+              while IFS=$'\t' read -r id app suite; do
+                why=
+                if [ "$app" != 15368 ]; then
+                  why="app ${app} created it, not GitHub Actions"
+                else
+                  case "$suite" in
+                    '' | *[!0-9]*) echo "::error::check run ${id} names no readable check suite"; exit 1 ;;
+                  esac
+                  if [ ! -f "${work}/suite-${suite}" ]; then
+                    api "${repo}/actions/runs?check_suite_id=${suite}&per_page=1" > "${work}/suite.json"
+                    jq -r 'def clean: gsub("[^ -~]"; "?"); [(.workflow_runs[0].event // "(no run)" | clean), (.workflow_runs[0].path // "(no run)" | clean)] | @tsv' "${work}/suite.json" > "${work}/suite-${suite}"
+                  fi
+                  IFS=$'\t' read -r event path < "${work}/suite-${suite}"
+                  if [ "$event" != pull_request_target ] || [ "$path" != "$workflow" ]; then
+                    why="a ${event} run of ${path} created it, not a pull_request_target run of ${workflow}"
+                  fi
+                fi
+                if [ -n "$why" ]; then
+                  echo "::error::check run ${id} named '${name}' is on ${HEAD_SHA}: ${why}"
+                  found=1
+                fi
+              done < "${work}/runs.tsv"
+              [ "$count" -ge 100 ] || break
+              page=$((page + 1))
+            done
+          done <<< "$TRUSTED_NAMES"
+          page=1
+          while :; do
+            api "${repo}/commits/${HEAD_SHA}/statuses?per_page=100&page=${page}" > "${work}/statuses.json"
+            count=$(jq -e 'if type == "array" then length else error("not a list of statuses") end' "${work}/statuses.json")
+            jq -r --arg names "$TRUSTED_NAMES" 'def clean: gsub("[^ -~]"; "?");
+              ($names | split("\n") | map(select(length > 0))) as $trusted
+              | ($trusted + ($trusted | map("authority: " + ltrimstr("trusted: ")))) as $all
+              | .[] | select(.context as $c | any($all[]; . == $c))
+              | [(.id | tostring), (.context | clean), (.state // "?" | clean), (.creator.login // "?" | clean)] | @tsv' "${work}/statuses.json" > "${work}/statuses.tsv"
+            while IFS=$'\t' read -r id context state creator; do
+              echo "::error::commit status ${id} named '${context}' (${state}, set by ${creator}) is on ${HEAD_SHA}; no status may carry a trusted or authority name"
+              found=1
+            done < "${work}/statuses.tsv"
+            [ "$count" -ge 100 ] || break
+            page=$((page + 1))
+          done
+          if [ "$found" -ne 0 ]; then
+            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails; remove the workflow, job or status that produced it, then add a new commit to the pull request, since a re-run on this head reads the same check runs and fails again"
+            exit 1
+          fi
+          echo "no other producer of a trusted or authority name is on ${HEAD_SHA} now; Mode B does not see one that runs later"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
       # The last read. The run judged the head, base branch and body it read
       # above; if any changed while it ran, this run fails with its own
       # message and the run queued by that change decides. The base commit is
@@ -399,10 +558,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # Read access to pull requests serves the body step; the read-only
-    # token also reads the host's published releases.
+    # token also reads the host's published releases, and actions, checks
+    # and statuses for the last step.
     permissions:
       contents: read
       pull-requests: read
+      actions: read
+      checks: read
+      statuses: read
     steps:
       # The authority is the default branch at the one commit this run was
       # started for. A run whose ref is not the default branch (an older
@@ -594,6 +757,105 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
+      # Just before the last read, this step refuses another producer of a
+      # trusted name that is on the head when it runs (ADR-0091, Mode B). It reads once: a producer
+      # that runs later is not seen, and GitHub takes the newest check run
+      # of a name, so Mode B does not close forgery by a later producer;
+      # only Mode A, the App authority, does.
+      # A check run of a trusted name counts only when GitHub Actions
+      # created it in a pull_request_target run of this workflow's own path,
+      # which only the default branch's file can start. A job of that name
+      # in another workflow or event (skipped, sleeping or built from an
+      # expression), a check run from any other app and any commit status
+      # of a trusted or authority name fail this job, and so does an API
+      # error (TSK-1177 AC-1).
+      - name: Refuse another producer of a trusted name
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TRUSTED_NAMES: |
+            trusted: commit standards
+            trusted: release impact
+        run: |
+          set -euo pipefail
+          umask 077
+          if ! printf '%s\n' "$HEAD_SHA" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error::the pull request head '${HEAD_SHA}' is not a full commit id; nothing is judged"; exit 1
+          fi
+          work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/codeflow-producers.XXXXXX")
+          trap 'rm -rf "$work"' EXIT
+          printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\n' "$GH_TOKEN" > "${work}/headers"
+          api() { curl -fsS --retry 3 --max-time 60 -H @"${work}/headers" "$@"; }
+          repo="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
+          workflow=${GITHUB_WORKFLOW_REF#"${GITHUB_REPOSITORY}/"}
+          workflow=${workflow%%@*}
+          found=0
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            encoded=$(jq -rn --arg v "$name" '$v | @uri')
+            page=1
+            while :; do
+              api "${repo}/commits/${HEAD_SHA}/check-runs?check_name=${encoded}&filter=all&per_page=100&page=${page}" > "${work}/runs.json"
+              count=$(jq -e '.check_runs | if type == "array" then length else error("no check_runs list") end' "${work}/runs.json")
+              jq -r '.check_runs[] | [(.id | tostring), (.app.id // 0 | tostring), (.check_suite.id // 0 | tostring)] | @tsv' "${work}/runs.json" > "${work}/runs.tsv"
+              while IFS=$'\t' read -r id app suite; do
+                why=
+                if [ "$app" != 15368 ]; then
+                  why="app ${app} created it, not GitHub Actions"
+                else
+                  case "$suite" in
+                    '' | *[!0-9]*) echo "::error::check run ${id} names no readable check suite"; exit 1 ;;
+                  esac
+                  if [ ! -f "${work}/suite-${suite}" ]; then
+                    api "${repo}/actions/runs?check_suite_id=${suite}&per_page=1" > "${work}/suite.json"
+                    jq -r 'def clean: gsub("[^ -~]"; "?"); [(.workflow_runs[0].event // "(no run)" | clean), (.workflow_runs[0].path // "(no run)" | clean)] | @tsv' "${work}/suite.json" > "${work}/suite-${suite}"
+                  fi
+                  IFS=$'\t' read -r event path < "${work}/suite-${suite}"
+                  if [ "$event" != pull_request_target ] || [ "$path" != "$workflow" ]; then
+                    why="a ${event} run of ${path} created it, not a pull_request_target run of ${workflow}"
+                  fi
+                fi
+                if [ -n "$why" ]; then
+                  echo "::error::check run ${id} named '${name}' is on ${HEAD_SHA}: ${why}"
+                  found=1
+                fi
+              done < "${work}/runs.tsv"
+              [ "$count" -ge 100 ] || break
+              page=$((page + 1))
+            done
+          done <<< "$TRUSTED_NAMES"
+          page=1
+          while :; do
+            api "${repo}/commits/${HEAD_SHA}/statuses?per_page=100&page=${page}" > "${work}/statuses.json"
+            count=$(jq -e 'if type == "array" then length else error("not a list of statuses") end' "${work}/statuses.json")
+            jq -r --arg names "$TRUSTED_NAMES" 'def clean: gsub("[^ -~]"; "?");
+              ($names | split("\n") | map(select(length > 0))) as $trusted
+              | ($trusted + ($trusted | map("authority: " + ltrimstr("trusted: ")))) as $all
+              | .[] | select(.context as $c | any($all[]; . == $c))
+              | [(.id | tostring), (.context | clean), (.state // "?" | clean), (.creator.login // "?" | clean)] | @tsv' "${work}/statuses.json" > "${work}/statuses.tsv"
+            while IFS=$'\t' read -r id context state creator; do
+              echo "::error::commit status ${id} named '${context}' (${state}, set by ${creator}) is on ${HEAD_SHA}; no status may carry a trusted or authority name"
+              found=1
+            done < "${work}/statuses.tsv"
+            [ "$count" -ge 100 ] || break
+            page=$((page + 1))
+          done
+          if [ "$found" -ne 0 ]; then
+            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails; remove the workflow, job or status that produced it, then add a new commit to the pull request, since a re-run on this head reads the same check runs and fails again"
+            exit 1
+          fi
+          echo "no other producer of a trusted or authority name is on ${HEAD_SHA} now; Mode B does not see one that runs later"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
       # The last read, as in the commit standards job: this job read the body
       # and judged the event's head and base branch, so it fails when any of
       # them changed while it ran, and the run queued by that change decides.
@@ -641,704 +903,238 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
-  secret-scan:
-    name: "trusted: secret scan"
+  # The authority job (ADR-0091 "Check identity", TSK-1177). It runs only
+  # for a pull request into the default branch, after the verdict jobs, and
+  # is the only job in the repository that references the environment
+  # `codeflow-authority`, whose deployment-branch rule admits only the
+  # default branch. It checks out nothing, runs no action and executes no
+  # file from any branch; every event field reaches a script through `env:`.
+  #
+  # Mode A: with the App configured in that environment (the variable
+  # CODEFLOW_AUTHORITY_APP_ID and the secret CODEFLOW_AUTHORITY_APP_KEY),
+  # one step mints the App's installation token, masked, scoped to this
+  # repository and Checks write, never an output, and revoked when the step
+  # ends. It creates the `authority:` check runs on the head SHA
+  # `in_progress`, then concludes each from its verdict job through
+  # `needs`: success only when that job succeeded. Ruleset B pins the
+  # `authority:` names to the App, so no workflow, and no token an agent
+  # holds, can produce them.
+  #
+  # Mode B, the lower tier: with no App configured, the job creates no
+  # check, and its refusal step reads the producers of the trusted names
+  # once, as each verdict job's last step does. Mode B does not close
+  # forgery by a later producer; only Mode A does.
+  authority:
+    name: authority checks
+    needs: [commit-lint, release-impact]
+    if: ${{ !cancelled() && github.event_name == 'pull_request_target' && github.event.pull_request.base.ref == github.event.repository.default_branch }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
+    environment: codeflow-authority
+    # The workflow token only reads, for the refusal step; the App token is
+    # minted inside the step that creates the checks.
     permissions:
-      contents: read
-    env:
-      GIT_NO_REPLACE_OBJECTS: '1'
+      actions: read
+      checks: read
+      statuses: read
     steps:
       - name: Resolve the authority
         env:
           EVENT: ${{ github.event_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
           AUTHORITY_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT" != pull_request_target ] || [ -z "$DEFAULT_BRANCH" ] || [ "$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then
-            echo "::error::this run is for ${GITHUB_REF} on ${EVENT}, not the default branch ${DEFAULT_BRANCH:-(unknown)} on pull_request_target; nothing is judged"; exit 1
-          fi
-          if ! printf '%s\n' "$AUTHORITY_SHA" | grep -Eqx '[0-9a-f]{40}'; then
-            echo "::error::the run's commit '${AUTHORITY_SHA}' is not a full commit id; nothing is judged"; exit 1
-          fi
-          echo "judged by ${DEFAULT_BRANCH}@${AUTHORITY_SHA}" | tee -a "$GITHUB_STEP_SUMMARY"
-
-      # The authority, never the pull request's head or its target. The
-      # binary, the pin and the policy all come from this checkout.
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-
-      - name: Assert the authority checkout
-        env:
-          AUTHORITY_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          head=$(git rev-parse --verify HEAD)
-          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
-            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
-          fi
-
-      - name: Fetch the pull request's base and head as data
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"
-          fetched=$(git rev-parse refs/codeflow/pr-head)
-          if [ "$fetched" != "$HEAD_SHA" ]; then
-            echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); this run belongs to an older event, so it fails; re-run the check for the current head"; exit 1
+          if [ "$EVENT" != pull_request_target ] || [ -z "$DEFAULT_BRANCH" ] || [ "$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}" ] || [ "$BASE_REF" != "$DEFAULT_BRANCH" ]; then
+            echo "::error::this run is for ${GITHUB_REF} on ${EVENT} into ${BASE_REF}, not a pull request into the default branch ${DEFAULT_BRANCH:-(unknown)} on pull_request_target; no authority check is created"; exit 1
           fi
-          git fetch --no-tags origin "+${BASE_SHA}:refs/codeflow/pr-base"
-          if [ "$(git rev-parse refs/codeflow/pr-base)" != "$BASE_SHA" ]; then
-            echo "::error::cannot fetch the pull request's base ${BASE_SHA}; nothing is judged"; exit 1
-          fi
+          for sha in "$AUTHORITY_SHA" "$HEAD_SHA"; do
+            if ! printf '%s\n' "$sha" | grep -Eqx '[0-9a-f]{40}'; then
+              echo "::error::'${sha}' is not a full commit id; no authority check is created"; exit 1
+            fi
+          done
+          echo "judged by ${DEFAULT_BRANCH}@${AUTHORITY_SHA}" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Assert the authority checkout
+      # Before any check is created, this job refuses another producer of a
+      # trusted name that is on the head now (ADR-0091, Mode B), so in
+      # Mode A a refusal leaves the authority: checks uncreated and the
+      # merge blocked. It reads once: a producer that runs later is not
+      # seen, so Mode B does not close forgery by a later producer; only
+      # Mode A, the App authority, does.
+      # A check run of a trusted name counts only when GitHub Actions
+      # created it in a pull_request_target run of this workflow's own path,
+      # which only the default branch's file can start. A job of that name
+      # in another workflow or event (skipped, sleeping or built from an
+      # expression), a check run from any other app and any commit status
+      # of a trusted or authority name fail this job, and so does an API
+      # error (TSK-1177 AC-1).
+      - name: Refuse another producer of a trusted name
         env:
-          AUTHORITY_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TRUSTED_NAMES: |
+            trusted: commit standards
+            trusted: release impact
         run: |
           set -euo pipefail
-          head=$(git rev-parse --verify HEAD)
-          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
-            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          umask 077
+          if ! printf '%s\n' "$HEAD_SHA" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error::the pull request head '${HEAD_SHA}' is not a full commit id; nothing is judged"; exit 1
           fi
-
-      # Run the gitleaks binary directly (pinned) rather than the
-      # gitleaks-action wrapper, which requires a GitHub token/license. The
-      # archive is downloaded and unpacked under the runner's temp directory,
-      # never in the checkout, so a file or link a pull request commits at
-      # that name is not written through.
-      #
-      # Every exemption comes from github.sha: the default-branch authority
-      # for a pull request, or the pushed commit for a push. A new exemption
-      # takes effect once it lands on that authority. The step fails before it scans when that commit is
-      # not in the checkout. It leaves the checkout intact and gives gitleaks
-      # explicit copies of the authority's inputs, choosing
-      # the configuration as gitleaks does: GITLEAKS_CONFIG, then
-      # GITLEAKS_CONFIG_TOML, then .gitleaks.json beside .gitleaks.toml, then
-      # .gitleaks.toml, else the default rules. An inline gitleaks:allow
-      # comment counts only on a commit the trusted commit already holds, unless
-      # its git.secret_scan_inline_allow policy is never, which ignores all of them.
-      #
-      # gitleaks resolves an [extend] path, and a relative GITLEAKS_CONFIG,
-      # against its working directory. It runs from a directory that holds
-      # the trusted commit's copy of each file the configuration extends and
-      # nothing else, so the pull request's copy is never read and a file the
-      # trusted commit lacks fails the step. Copying the chain keeps an
-      # existing extended configuration working, which refusing every
-      # [extend] path would break. An absolute path into the checkout is
-      # refused; name the file relative to the repository root instead. A
-      # file outside the checkout is read where it is, and
-      # [extend] useDefault = true needs no file.
-      #
-      # Nothing from the checkout runs or steers the scan. The Python
-      # helpers run isolated (python3 -I), so a module the pull request
-      # commits beside them is never imported; they need Python 3.11 or
-      # later, for tomllib. git reads .gitattributes from the trusted commit
-      # (GIT_ATTR_SOURCE, git 2.41 or later), so a pull request cannot mark
-      # its own files -diff to hide their changes.
-      # No step before this one runs code from the checkout: a step that
-      # did could write GITHUB_ENV or GITHUB_PATH for this one, so
-      # GITLEAKS_CONFIG and GITLEAKS_CONFIG_TOML here can only come from
-      # this workflow's own env. Keep it that way when you add steps. In
-      # codeflow-ci.yml, a workflow you customised before this protection
-      # may already run such a step; codeflow update keeps it and warns
-      # until you move it after this step or into another job.
-      #
-      # gitleaks' default git log leaves out what a merge itself adds, any
-      # file whose type changes and any file git judges binary, so a secret
-      # added in a merge resolution, in a file that replaces a link, or
-      # after a NUL byte would go unread. The scan names its own log
-      # options: --remerge-diff shows only what each merge adds beyond its
-      # automatic result, so a branch's commits are not reported twice; the
-      # diff filter keeps type changes; --text shows every file as text; and
-      # no external diff or textconv filter rewrites what git shows.
-      # gitleaks runs git from PATH, and the git it finds there drops the
-      # "remerge" notes that --remerge-diff writes into a conflicted file's
-      # header. gitleaks' patch parser does not know them and would name the
-      # file b/<path>, so an exemption for a real b/ path could apply to it.
-      # That git also pins the patch format whatever the runner's git
-      # configuration says: the a/ and b/ prefixes, quoted names, no colour,
-      # the medium format with full hashes and the root commit's diff. With
-      # diff.noprefix, for one, gitleaks would drop each path's first
-      # directory, and an exemption for leak.txt would cover dir/leak.txt.
-      #
-      # gitleaks reads only the commits the event brings (SCAN_FROM..SCAN_HEAD):
-      # on a pull request, what the pull request's head holds
-      # and the base does not; on a push, what the pushed commit holds and
-      # the previous tip did not. A finding already in the base, or on a
-      # branch the pull request does not bring, is not this change's to fix
-      # and does not fail it. The weekly and manual runs, a push that
-      # creates the branch and a push whose previous tip is not in the
-      # checkout (a force push) read the whole history of HEAD instead, so
-      # every commit on the default branch is scanned once as it arrives
-      # and again each week. No run reads a branch or tag that HEAD does
-      # not reach, so an unrelated ref can neither fail this scan nor hide a
-      # leak from it. The step prints which history it read. A range that
-      # changes no file has nothing to scan and passes. Before gitleaks
-      # runs, the step checks only the
-      # history the pull request brings, the commits its head holds and its
-      # base does not, for what gitleaks cannot read reliably, and
-      # names the commit and the refs that hold it. On a push that range is
-      # empty, since the pushed commit is the trusted commit, so a push scan
-      # reads its history without these refusals. An octopus merge (three or
-      # more parents) in a pull request is refused; merge its branches one
-      # at a time. Push and full-history scans also read octopus commits
-      # against their first parent, since remerge diffs omit their additions.
-      # gitleaks' patch parser misreads some names that git
-      # quotes: it skips one that ends in a backslash without an error, and a
-      # newline in a name splits a conflicted merge's header into lines the
-      # wrapper cannot tell apart. So the step refuses a path with a
-      # backslash, a double quote or a control character that a commit in the
-      # range adds, changes, renames or copies, or that a merge in it changes
-      # beyond its automatic result. A conflicted merge's header can also name
-      # a file either side renamed or deleted, the trusted side included, so
-      # each merge's own sides count too: every path that differs between a
-      # merge base and either parent. Renaming the file in a later commit
-      # leaves the name in the earlier one, so the fix is to rewrite the pull
-      # request's commits, or, for a change on the trusted side, to rebase
-      # onto the base instead of merging it in. Names with spaces or
-      # non-ASCII letters are read correctly and pass, and gitleaks is not
-      # shown deleted files, so a pull request that merges nothing may delete
-      # such a file. History the trusted commit holds is not checked: it met
-      # these checks, or predates them, when it merged.
-      #
-      # The step then drops one known false positive from the report: the
-      # security-stage prose CodeFlow 3.0.0 seeded on line 209 of the
-      # pipeline workflow ("vulnerable/malicious deps"), which the
-      # generic-api-key rule mistakes for a key. Only a generic-api-key
-      # finding whose value and matched text are exactly that prose, in one
-      # of those two paths exactly, is dropped; anything else, on the same
-      # line included, fails the job. So does a scan that logs an error or
-      # reads no commit.
-      - name: gitleaks
-        env:
-          TRUSTED_SHA: ${{ github.sha }}
-          SCAN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-          PR_BASE: ${{ github.event.pull_request.base.sha || '' }}
-          SCAN_FROM: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
-        run: |
-          set -euo pipefail
-          # A replace ref must never substitute the objects being judged.
-          export GIT_NO_REPLACE_OBJECTS=1
-          case ${TRUSTED_SHA:-} in
-            '' | *[!0-9a-f]*)
-              echo "::error::no trusted commit to read exemptions from; refusing to scan"; exit 1 ;;
-          esac
-          if ! git cat-file -e "${TRUSTED_SHA}^{commit}" 2>/dev/null; then
-            echo "::error::trusted commit ${TRUSTED_SHA} is not in the checkout; refusing to scan"; exit 1
-          fi
-          TRUSTED_SHA=$(git rev-parse --verify "${TRUSTED_SHA}^{commit}")
-          # The history the scan reads: the event's own commits when it
-          # names a start the checkout holds, else all of HEAD's.
-          # The authority remains checked out; the PR head is only Git data.
-          requested=${SCAN_HEAD:-HEAD}
-          if [ "$requested" != HEAD ] && ! printf '%s\n' "$requested" | grep -Eqx '[0-9a-f]{40}'; then
-            echo "::error::scan head is not a full commit id; refusing to scan"; exit 1
-          fi
-          head=$(git rev-parse --verify "${requested}^{commit}")
-          scan=$head
-          case ${SCAN_FROM:-} in
-            '') scope="the full history of HEAD (a scheduled or manual run)" ;;
-            *[!0-9a-f]*)
-              echo "::error::scan start ${SCAN_FROM} is not a commit id; refusing to scan"; exit 1 ;;
-            *[!0]*)
-              if git cat-file -e "${SCAN_FROM}^{commit}" 2>/dev/null; then
-                start=$(git rev-parse --verify "${SCAN_FROM}^{commit}")
-                scan="${start}..${head}"
-                scope="the $(git rev-list --count "$head" --not "$start" --) commit(s) HEAD holds and ${start} does not"
-              else
-                scope="the full history of HEAD (the previous tip ${SCAN_FROM} is not in the checkout)"
-              fi ;;
-            *) scope="the full history of HEAD (the push created the branch)" ;;
-          esac
-          echo "Secret scan reads ${scope}."
-          if ! git version | awk '{ split($3, v, "."); exit !(v[1] > 2 || (v[1] == 2 && v[2] >= 41)) }'; then
-            echo "::error::$(git version) cannot read .gitattributes from the trusted commit; upgrade git to 2.41 or later; refusing to scan"; exit 1
-          fi
-          export GIT_ATTR_SOURCE="$TRUSTED_SHA"
-          GITLEAKS_VERSION=8.30.1
-          GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          # The exit traps remove the folders the step makes in the runner's
-          # temp directory; the report and log below stay there.
-          tool=$(mktemp -d "$RUNNER_TEMP/gitleaks-tool.XXXXXX")
-          trap 'rm -rf "$tool" || true' EXIT
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$tool/$archive"
-          printf '%s  %s\n' "$GITLEAKS_SHA256" "$tool/$archive" | sha256sum -c -
-          tar -xzf "$tool/$archive" -C "$tool" gitleaks
-          workspace=$(pwd -P)
-          trusted=$(mktemp -d "$RUNNER_TEMP/gitleaks-trusted.XXXXXX")
-          trap 'rm -rf "$tool" "$trusted" || true' EXIT
-          mkdir "$trusted/tree" "$trusted/source"
-          # Gitleaks also reads source/.gitleaksignore despite an explicit
-          # ignore path. Give it Git metadata without any checkout files.
-          printf 'gitdir: %s\n' "$(git rev-parse --absolute-git-dir)" >"$trusted/source/.git"
-          # Remerge diffs omit octopus additions. Read those commits against
-          # their first parent as well, including files later deleted.
-          git rev-list --min-parents=3 "$scan" -- >"$trusted/octopus"
-          real_git=$(command -v git)
-          mkdir "$trusted/bin"
-          cat >"$trusted/bin/git" <<GIT
-          #!/bin/bash
-          set -euo pipefail
-          pin=(-c core.quotePath=true -c diff.noprefix=false -c diff.mnemonicPrefix=false
-            -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ -c diff.relative=false -c color.ui=false
-            -c color.diff=false -c format.pretty=medium -c log.date=default -c log.decorate=false
-            -c log.abbrevCommit=false -c log.showSignature=false -c log.showRoot=true)
-          if [ "\$1" = -C ] && [ "\$3" = log ]; then
-            "$real_git" "\${pin[@]}" "\$@" | sed '/^remerge /d'
-            while IFS= read -r merge; do
-              "$real_git" "\${pin[@]}" -C "$workspace" log -1 -p --diff-merges=first-parent \
-                --diff-filter=uxdb --text --no-ext-diff --no-textconv "\$merge" --
-            done <"$trusted/octopus"
-            exit
-          fi
-          exec "$real_git" "\${pin[@]}" "\$@"
-          GIT
-          chmod +x "$trusted/bin/git"
-          export PATH="$trusted/bin:$PATH"
-          # Refuses what gitleaks cannot read reliably in the history the pull
-          # request brings: what its head holds and its base does not. Pushes
-          # retain the existing trusted-history exemption from this preflight.
-          python3 -I - "${PR_BASE:-$TRUSTED_SHA}" "$head" <<'PY'
-          import re
-          import subprocess
-          import sys
-
-          sha, head = sys.argv[1:]
-          unreadable = "gitleaks cannot read a backslash, double quote or control character in a path reliably"
-          rewrite = ("rewrite the pull request's commits so that none uses the name; "
-                     "renaming it in a later commit leaves it in this one")
-
-
-          def refuse(message):
-              print(f"::error::{message}; refusing to scan")
-              sys.exit(1)
-
-
-          def git(*args, codes=(0,)):
-              run = subprocess.run(["git", *args], capture_output=True, check=False)
-              if run.returncode not in codes:
-                  error = run.stderr.decode("utf-8", "replace").strip()
-                  refuse(f"git {args[0]} failed ({error}), so the step cannot check the history the pull request brings")
-              return run
-
-
-          def where(commit):
-              refs = git("for-each-ref", "--contains", commit, "--format=%(refname)", "--").stdout.decode("utf-8", "replace").split()
-              more = f" and {len(refs) - 5} more" if len(refs) > 5 else ""
-              return f"{commit} (in {', '.join(['HEAD', *refs[:5]])}{more})"
-
-
-          def odd(name):
-              return any(c < 32 or c == 127 or c in b'"\\' for c in name)
-
-
-          def named(name):
-              return ascii(name.decode("utf-8", "replace"))[1:-1]
-
-
-          commits = [line.split() for line in git("rev-list", "--parents", head, "--not", sha, "--").stdout.decode().splitlines()]
-          for commit, *parents in commits:
-              if len(parents) > 2:
-                  refuse(f"octopus merge {where(commit)} is not in the trusted commit, and git cannot show what it adds; "
-                         "rewrite the pull request's history to merge its branches one at a time")
-          # Each path a commit adds, changes, renames or copies, and each path
-          # a merge changes beyond its automatic result.
-          listing = git("log", "-z", "--format=%x01%H", "--name-status", "--diff-filter=uxdb", "--remerge-diff",
-                        "--no-ext-diff", head, "--not", sha, "--").stdout.split(b"\0")
-          commit, names = None, 0
-          for token in listing:
-              if names:
-                  names -= 1
-                  if odd(token):
-                      refuse(f"commit {where(commit)} adds, changes or renames the path \"{named(token)}\"; {unreadable}; {rewrite}")
-                  continue
-              token = token.lstrip(b"\n")
-              if token.startswith(b"\x01"):
-                  commit = token[1:].decode()
-              elif re.fullmatch(rb"[RC][0-9]*", token):
-                  names = 2
-              elif re.fullmatch(rb"[A-Z][0-9]*", token):
-                  names = 1
-              elif token:
-                  refuse(f"cannot read git's list of the paths that commit {commit} changes")
-          # A conflicted merge's header can also name a path that either side
-          # changed since a merge base, the trusted side included.
-          empty = git("hash-object", "-t", "tree", "/dev/null").stdout.decode().strip()
-          for commit, *parents in commits:
-              if len(parents) != 2:
-                  continue
-              bases = git("merge-base", "--all", *parents, "--", codes=(0, 1)).stdout.decode().split() or [empty]
-              for base in bases:
-                  for parent in parents:
-                      for name in git("diff-tree", "-r", "-z", "--name-only", base, parent, "--").stdout.split(b"\0"):
-                          if odd(name):
-                              held = git("merge-base", "--is-ancestor", parent, sha, "--", codes=(0, 1)).returncode == 0
-                              fix = "rebase the pull request onto the trusted commit instead of merging it in" if held else rewrite
-                              refuse(f"merge {where(commit)} joins a change to the path \"{named(name)}\" made on its "
-                                     f"parent {parent}; {unreadable}; {fix}")
-          PY
-          # Do not alter the authority checkout. Explicit inputs prevent
-          # gitleaks from discovering configuration in the scanned tree.
-          : >"$trusted/ignore"
-          # Writes the trusted ignore file, the configuration when gitleaks
-          # needs one named, and each file that configuration extends.
-          python3 -I - "$TRUSTED_SHA" "$workspace" "$trusted" <<'PY'
-          import json
-          import os
-          import re
-          import signal
-          import subprocess
-          import sys
-          import time
-          import tomllib
-
-          sha, workspace, trusted = sys.argv[1:]
-          os.environ["GIT_LITERAL_PATHSPECS"] = "1"
-
-
-          def refuse(message):
-              print(f"::error::{message}")
-              sys.exit(1)
-
-
-          def in_checkout(path):
-              return any(p == workspace or p.startswith(workspace + os.sep)
-                         for p in (os.path.normpath(path), os.path.realpath(path)))
-
-
-          def blob(path):
-              """The trusted commit's regular file at a repository path, or None."""
-              listing = subprocess.run(["git", "ls-tree", "-z", sha, "--", path],
-                                       capture_output=True, check=True).stdout
-              entry = listing.split(b"\0")[0]
-              if not entry:
-                  return None
-              mode, kind, oid = entry.split(b"\t")[0].decode().split(" ")
-              if kind != "blob" or mode not in ("100644", "100755"):
-                  refuse(f"{path} on trusted commit {sha} is not a regular file; commit the file itself")
-              return subprocess.run(["git", "cat-file", "blob", oid],
-                                    capture_output=True, check=True).stdout
-
-
-          # Missing policy/key keeps the older workflow's trusted behavior.
-          # A malformed trusted value fails closed, never defaults to an allow.
-          class PolicyObject(dict):
-              def __init__(self, pairs):
-                  super().__init__(pairs)
-                  self.has_duplicates = len(pairs) != len(self)
-
-
-          policy = blob(".codeflow/policy.json")
-          try:
-              data = json.loads(policy, object_pairs_hook=PolicyObject) if policy is not None else PolicyObject([])
-              git = data.get("git", PolicyObject([]))
-              # The typed loader rejects duplicate root and Git fields too.
-              if data.has_duplicates or git.has_duplicates:
-                  raise ValueError("duplicate policy key")
-              inline_allow = git.get("secret_scan_inline_allow", "trusted")
-          except (ValueError, AttributeError):
-              refuse("cannot read git.secret_scan_inline_allow from the trusted policy; commit a JSON object with trusted or never")
-          if inline_allow not in ("trusted", "never"):
-              refuse("git.secret_scan_inline_allow on the trusted commit must be trusted or never")
-          with open(os.path.join(trusted, "inline-allow"), "w", encoding="utf-8") as handle:
-              handle.write(inline_allow)
-
-
-          def in_repository(path, owner):
-              rel = os.path.normpath(path)
-              if rel == ".." or rel.startswith("../"):
-                  refuse(f"{owner} names {path}, outside the repository; use an absolute path")
-              data = blob(rel)
-              if data is None:
-                  refuse(f"{owner} names {rel}, which trusted commit {sha} does not hold; commit it there first")
-              return rel, data
-
-
-          def extended(text):
-              # Keys match without case, as gitleaks reads them. A file that
-              # does not parse is left to gitleaks, which fails to load it.
-              for parse in (tomllib.loads, json.loads):
-                  try:
-                      data = parse(text)
-                      break
-                  except ValueError:
-                      continue
-              else:
-                  return None
-              if not isinstance(data, dict):
-                  return None
-              extend = next((v for k, v in data.items() if k.lower() == "extend"), None)
-              if not isinstance(extend, dict):
-                  return None
-              path = next((v for k, v in extend.items() if k.lower() == "path"), None)
-              return path if isinstance(path, str) and path else None
-
-
-          def walk(text, owner):
-              seen = set()
-              while (path := extended(text)) is not None:
-                  if os.path.isabs(path):
-                      if in_checkout(path):
-                          refuse(f"{owner} extends {path}, a file in the checkout that the pull request can change; "
-                                 "name it relative to the repository root")
-                      if path in seen or not os.path.isfile(path):
-                          return
-                      seen.add(path)
-                      with open(path, encoding="utf-8", errors="replace") as handle:
-                          owner, text = path, handle.read()
-                      continue
-                  rel, data = in_repository(path, owner)
-                  if rel in seen:
-                      return
-                  seen.add(rel)
-                  target = os.path.join(trusted, "tree", rel)
-                  os.makedirs(os.path.dirname(target), exist_ok=True)
-                  with open(target, "wb") as handle:
-                      handle.write(data)
-                  owner, text = rel, data.decode("utf-8", "replace")
-
-
-          def use(data, owner):
-              with open(os.path.join(trusted, "config.toml"), "wb") as handle:
-                  handle.write(data)
-              walk(data.decode("utf-8", "replace"), owner)
-
-
-          def diagnose_fingerprints(ignore):
-              # Advisory only: never rewrite or alias an exemption. Bound the
-              # input, candidates and total Git time independently of the scan.
-              deadline = time.monotonic() + 5
-              cache = {}
-              candidates = 0
-              clipped = len(ignore) > 65536
-              lines = ignore[:65536].splitlines(keepends=True)
-              if clipped and lines and not lines[-1].endswith(b"\n"):
-                  lines.pop()
-
-              def warning(message):
-                  message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-                  print(f"::warning::{message}")
-
-              def query(*args):
-                  if args not in cache:
-                      remaining = deadline - time.monotonic()
-                      if remaining <= 0:
-                          raise TimeoutError
-                      with subprocess.Popen(["git", *args], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                            start_new_session=True) as child:
-                          try:
-                              output, _ = child.communicate(timeout=remaining)
-                          except subprocess.TimeoutExpired:
-                              # A helper's descendants must not keep a pipe or
-                              # the diagnostic alive after its time budget.
-                              try:
-                                  os.killpg(child.pid, signal.SIGKILL)
-                              except ProcessLookupError:
-                                  pass
-                              child.stdout.close()
-                              child.wait()
-                              raise
-                      cache[args] = subprocess.CompletedProcess(args, child.returncode, output)
-                  return cache[args]
-
-              def exists(commit, path):
-                  result = query("ls-tree", "-z", "--full-tree", commit, "--", path)
-                  if result.returncode:
-                      raise ValueError
-                  if not result.stdout:
-                      return False
-                  if result.stdout.split(b"\t", 1)[-1] != path.encode("utf-8") + b"\0":
-                      raise ValueError
-                  return True
-
-              try:
-                  for number, raw in enumerate(lines, 1):
-                      if time.monotonic() >= deadline:
-                          raise TimeoutError
-                      try:
-                          fingerprint = raw.decode("utf-8").strip()
-                      except UnicodeDecodeError:
-                          warning(f".gitleaksignore line {number} is not UTF-8; review it manually")
-                          continue
-                      parts = fingerprint.split(":", 1)
-                      if len(parts) != 2 or not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", parts[0]):
-                          continue
-                      commit, rest = parts
-                      fields = rest.rsplit(":", 2)
-                      if len(fields) != 3:
-                          continue
-                      path, rule, line = fields
-                      if not path.startswith("b/") or path.endswith("/") or not rule or not re.fullmatch(r"[1-9][0-9]*", line):
-                          continue
-                      if candidates == 50:
-                          clipped = True
-                          break
-                      candidates += 1
-                      result = query("cat-file", "-t", commit)
-                      if result.returncode or result.stdout.strip() != b"commit":
-                          warning(f".gitleaksignore line {number}: unreadable commit {commit}; fetch or investigate it before migration")
-                          continue
-                      try:
-                          if exists(commit, path):
-                              warning(f".gitleaksignore line {number}: existing b/ path for {fingerprint}; keep this fingerprint unchanged")
-                          elif exists(commit, path[2:]):
-                              result = query("rev-list", "--parents", "-n", "1", commit, "--")
-                              parents = result.stdout.split()
-                              if result.returncode or not parents or parents[0] != commit.encode("ascii"):
-                                  raise ValueError
-                              count = len(parents) - 1
-                              if count != 2:
-                                  kind = "one-parent commit" if count == 1 else f"commit with {count} parents"
-                                  warning(f".gitleaksignore line {number}: {kind} {commit}; no replacement inferred for {fingerprint}")
-                                  continue
-                              diff = query("show", "--format=", "--remerge-diff", "--no-ext-diff", "--no-textconv", commit, "--", path[2:])
-                              headers = [f"remerge CONFLICT ({kind}): Merge conflict in {path[2:]}".encode("utf-8")
-                                         for kind in ("content", "add/add")]
-                              if diff.returncode or not any(header in diff.stdout.splitlines() for header in headers):
-                                  warning(f".gitleaksignore line {number}: no remerge CONFLICT header for {fingerprint}; no replacement inferred")
-                                  continue
-                              replacement = f"{commit}:{path[2:]}:{rule}:{line}"
-                              warning(f".gitleaksignore line {number}: legacy remerge fingerprint {fingerprint}; review and replace with {replacement}")
-                          else:
-                              warning(f".gitleaksignore line {number}: neither path exists for {fingerprint}; no replacement inferred")
-                      except ValueError:
-                          warning(f".gitleaksignore line {number}: cannot inspect commit or paths for {fingerprint}; no replacement inferred")
-              except (TimeoutError, subprocess.TimeoutExpired):
-                  clipped = True
-              if clipped:
-                  warning("legacy fingerprint diagnostics stopped at the review limit; review remaining entries manually")
-
-
-          ignore = blob(".gitleaksignore")
-          if ignore is not None:
-              with open(os.path.join(trusted, "ignore"), "wb") as handle:
-                  handle.write(ignore)
-              diagnose_fingerprints(ignore)
-          named = os.environ.get("GITLEAKS_CONFIG", "")
-          if named and os.path.isabs(named) and not in_checkout(named):
-              if os.path.isfile(named):
-                  with open(named, encoding="utf-8", errors="replace") as handle:
-                      walk(handle.read(), named)
-          elif named:
-              rel, data = in_repository(os.path.relpath(os.path.join(workspace, named), workspace), "GITLEAKS_CONFIG")
-              use(data, rel)
-          elif os.environ.get("GITLEAKS_CONFIG_TOML", ""):
-              walk(os.environ["GITLEAKS_CONFIG_TOML"], "GITLEAKS_CONFIG_TOML")
-          elif (toml := blob(".gitleaks.toml")) is not None:
-              beside = blob(".gitleaks.json")
-              if beside is None:
-                  use(toml, ".gitleaks.toml")
-              else:
-                  use(beside, ".gitleaks.json")
-          PY
-          if [ ! -f "$trusted/config.toml" ] && [ -z "${GITLEAKS_CONFIG:-}" ] && [ -z "${GITLEAKS_CONFIG_TOML:-}" ]; then
-            printf '[extend]\nuseDefault = true\n' >"$trusted/config.toml"
-          fi
-          set --
-          if [ -f "$trusted/config.toml" ]; then set -- --config "$trusted/config.toml"; fi
-          inline_allow=$(cat "$trusted/inline-allow")
-          if [ "$scan" != "$head" ]; then
-            if ! files=$(git log --format= --name-only --diff-filter=uxdb --remerge-diff --no-ext-diff "$scan" --); then
-              echo "::error::cannot list the file changes in ${scope}; refusing to skip the scan"; exit 1
-            fi
-            changed=$(printf '%s\n' "$files" | awk 'NF { n++ } END { print n + 0 }')
-            if [ "$changed" -eq 0 ] && [ ! -s "$trusted/octopus" ]; then
-              echo "No file changes in ${scope}; nothing to scan."
-              exit 0
-            fi
-          fi
-          # The report stays in the runner's temp directory; the log names
-          # each finding's rule, file, line and commit, never its value.
-          report="$RUNNER_TEMP/gitleaks-report.json"
-          log="$RUNNER_TEMP/gitleaks.log"
-          rc=0
-          (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$trusted/source" "$@" \
-            --log-opts "--full-history --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv ${scan} --" \
-            --gitleaks-ignore-path "$trusted/ignore" --ignore-gitleaks-allow \
-            --no-banner --log-level debug --exit-code 0 \
-            --report-format json --report-path "$report") 2>"$log" || rc=$?
-          # gitleaks exits 0 when git fails, even part way through, and logs
-          # git's failure only at debug level. Debug lines can quote decoded
-          # file content, so they stay in the temp file; the job log gets
-          # info and above. Each check reads only gitleaks' own message,
-          # which follows the time and level, so scanned text never matches.
-          plain=$(sed $'s/\033\\[[0-9;]*m//g' "$log")
-          printf '%s\n' "$plain" | grep -E '^[^ ]+ (INF|WRN|ERR|FTL) ' >&2 || true
-          scanned=$(printf '%s\n' "$plain" | sed -n 's/^[^ ]* INF \([0-9][0-9]*\) commits scanned\..*/\1/p' | tail -n 1)
-          if [ "$rc" -ne 0 ] || printf '%s\n' "$plain" | grep -qE '^[^ ]+ (ERR|FTL) |^[^ ]+ DBG command aborted' \
-            || [ "${scanned:-0}" -eq 0 ] || ! jq -e 'type == "array"' "$report" >/dev/null 2>&1; then
-            echo "::error::gitleaks did not complete a scan (exit ${rc}, ${scanned:-no} commits read)"
+          work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/codeflow-producers.XXXXXX")
+          trap 'rm -rf "$work"' EXIT
+          printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\n' "$GH_TOKEN" > "${work}/headers"
+          api() { curl -fsS --retry 3 --max-time 60 -H @"${work}/headers" "$@"; }
+          repo="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
+          workflow=${GITHUB_WORKFLOW_REF#"${GITHUB_REPOSITORY}/"}
+          workflow=${workflow%%@*}
+          found=0
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            encoded=$(jq -rn --arg v "$name" '$v | @uri')
+            page=1
+            while :; do
+              api "${repo}/commits/${HEAD_SHA}/check-runs?check_name=${encoded}&filter=all&per_page=100&page=${page}" > "${work}/runs.json"
+              count=$(jq -e '.check_runs | if type == "array" then length else error("no check_runs list") end' "${work}/runs.json")
+              jq -r '.check_runs[] | [(.id | tostring), (.app.id // 0 | tostring), (.check_suite.id // 0 | tostring)] | @tsv' "${work}/runs.json" > "${work}/runs.tsv"
+              while IFS=$'\t' read -r id app suite; do
+                why=
+                if [ "$app" != 15368 ]; then
+                  why="app ${app} created it, not GitHub Actions"
+                else
+                  case "$suite" in
+                    '' | *[!0-9]*) echo "::error::check run ${id} names no readable check suite"; exit 1 ;;
+                  esac
+                  if [ ! -f "${work}/suite-${suite}" ]; then
+                    api "${repo}/actions/runs?check_suite_id=${suite}&per_page=1" > "${work}/suite.json"
+                    jq -r 'def clean: gsub("[^ -~]"; "?"); [(.workflow_runs[0].event // "(no run)" | clean), (.workflow_runs[0].path // "(no run)" | clean)] | @tsv' "${work}/suite.json" > "${work}/suite-${suite}"
+                  fi
+                  IFS=$'\t' read -r event path < "${work}/suite-${suite}"
+                  if [ "$event" != pull_request_target ] || [ "$path" != "$workflow" ]; then
+                    why="a ${event} run of ${path} created it, not a pull_request_target run of ${workflow}"
+                  fi
+                fi
+                if [ -n "$why" ]; then
+                  echo "::error::check run ${id} named '${name}' is on ${HEAD_SHA}: ${why}"
+                  found=1
+                fi
+              done < "${work}/runs.tsv"
+              [ "$count" -ge 100 ] || break
+              page=$((page + 1))
+            done
+          done <<< "$TRUSTED_NAMES"
+          page=1
+          while :; do
+            api "${repo}/commits/${HEAD_SHA}/statuses?per_page=100&page=${page}" > "${work}/statuses.json"
+            count=$(jq -e 'if type == "array" then length else error("not a list of statuses") end' "${work}/statuses.json")
+            jq -r --arg names "$TRUSTED_NAMES" 'def clean: gsub("[^ -~]"; "?");
+              ($names | split("\n") | map(select(length > 0))) as $trusted
+              | ($trusted + ($trusted | map("authority: " + ltrimstr("trusted: ")))) as $all
+              | .[] | select(.context as $c | any($all[]; . == $c))
+              | [(.id | tostring), (.context | clean), (.state // "?" | clean), (.creator.login // "?" | clean)] | @tsv' "${work}/statuses.json" > "${work}/statuses.tsv"
+            while IFS=$'\t' read -r id context state creator; do
+              echo "::error::commit status ${id} named '${context}' (${state}, set by ${creator}) is on ${HEAD_SHA}; no status may carry a trusted or authority name"
+              found=1
+            done < "${work}/statuses.tsv"
+            [ "$count" -ge 100 ] || break
+            page=$((page + 1))
+          done
+          if [ "$found" -ne 0 ]; then
+            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails; remove the workflow, job or status that produced it, then add a new commit to the pull request, since a re-run on this head reads the same check runs and fails again"
             exit 1
           fi
-          # The report holds no line text, so an inline gitleaks:allow is read
-          # from the commit that holds the finding, and only a commit the
-          # trusted commit already holds counts, when its policy permits it.
-          held='[]'
-          if [ "$inline_allow" = trusted ]; then
-          held=$(python3 -I - "$report" "$TRUSTED_SHA" <<'PY'
-          import json
-          import re
-          import subprocess
-          import sys
+          echo "no other producer of a trusted or authority name is on ${HEAD_SHA} now; Mode B does not see one that runs later"
 
-          report, sha = sys.argv[1:]
-          held = []
-          with open(report, encoding="utf-8") as handle:
-              findings = json.load(handle)
-          for finding in findings:
-              commit = finding.get("Commit") or ""
-              if not re.fullmatch(r"[0-9a-f]{40,64}", commit):
-                  continue
-              ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", commit, sha, "--"],
-                                        capture_output=True)
-              if ancestor.returncode:
-                  continue
-              shown = subprocess.run(["git", "cat-file", "blob", f"{commit}:{finding['File']}"],
-                                     capture_output=True)
-              start = max(finding["StartLine"], 1)
-              lines = shown.stdout.split(b"\n")[start - 1:max(finding["EndLine"], start)]
-              if shown.returncode == 0 and any(b"gitleaks:allow" in line for line in lines):
-                  held.append(finding["Fingerprint"])
-          print(json.dumps(held))
-          PY
-          )
-          fi
-          if [ "$held" != "[]" ]; then
-            echo "Allowed $(printf '%s' "$held" | jq length) finding(s) marked gitleaks:allow on commits the trusted commit holds."
-          fi
-          findings="$RUNNER_TEMP/gitleaks-findings.json"
-          jq --argjson held "$held" '[.[] | select(.Fingerprint as $f | any($held[]; . == $f) | not)]' "$report" >"$findings"
-          # The text is split so this file does not hold the text it allows.
-          known='select(.RuleID == "generic-api-key" and .Secret == ("vulnerable/" + "malicious") and .Match == ("authz gaps, vulnerable/" + "malicious ") and (.File == ".claude/workflows/pipeline.workflow.js" or .File == ".codeflow/.baseline/.claude/workflows/pipeline.workflow.js"))'
-          allowed=$(jq "[.[] | $known] | length" "$findings")
-          if [ "$allowed" -gt 0 ]; then
-            echo "Allowed ${allowed} finding(s) of the CodeFlow 3.0.0 pipeline prose \"vulnerable/malicious\"."
-          fi
-          leaks=$(jq "[.[] | select(([.] | map($known) | length) == 0)]" "$findings")
-          count=$(printf '%s' "$leaks" | jq length)
-          if [ "$count" -gt 0 ]; then
-            # Workflow-command properties escape %, CR, LF, : and , in names.
-            printf '%s' "$leaks" | jq -r '.[] | "::error file=\(.File | gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A") | gsub(":"; "%3A") | gsub(","; "%2C")),line=\(.StartLine)::gitleaks \(.RuleID) in commit \(.Commit[0:12])"'
-            echo "gitleaks found ${count} leak(s)."
-            exit 1
-          fi
-          echo "No leaks found."
-
-      - name: Assert the authority checkout
+      - name: Create the authority checks
         env:
+          APP_ID: ${{ vars.CODEFLOW_AUTHORITY_APP_ID }}
+          APP_KEY: ${{ secrets.CODEFLOW_AUTHORITY_APP_KEY }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           AUTHORITY_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          VERDICTS: |
+            authority: commit standards=${{ needs.commit-lint.result }}
+            authority: release impact=${{ needs.release-impact.result }}
         run: |
           set -euo pipefail
-          head=$(git rev-parse --verify HEAD)
-          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
-            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          umask 077
+          if [ -z "$APP_ID" ] && [ -z "$APP_KEY" ]; then
+            echo "Mode B: no authority App is configured, so no authority: check is created; Mode B does not close forgery by a later producer, and only Mode A, the App authority, does" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
+          if [ -z "$APP_ID" ] || [ -z "$APP_KEY" ]; then
+            echo "::error::the authority App is half configured: set both the variable CODEFLOW_AUTHORITY_APP_ID and the secret CODEFLOW_AUTHORITY_APP_KEY in codeflow-authority, or neither"; exit 1
+          fi
+          if ! printf '%s\n' "$APP_ID" | grep -Eqx '[0-9]+|Iv[0-9A-Za-z._-]+'; then
+            echo "::error::CODEFLOW_AUTHORITY_APP_ID is not an App id or client id"; exit 1
+          fi
+          work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/codeflow-authority.XXXXXX")
+          token=
+          finish() {
+            if [ -n "$token" ]; then
+              curl -fsS --max-time 30 -X DELETE -H @"${work}/token-headers" "${GITHUB_API_URL}/installation/token" >/dev/null \
+                || echo "::warning::the installation token could not be revoked; it expires within the hour"
+            fi
+            rm -rf "$work"
+          }
+          trap finish EXIT
+          headers() {
+            printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\n' "$1"
+          }
+          b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+          # The App's JWT, as GitHub documents it for Bash: issued a minute
+          # in the past for clock drift, valid for at most ten minutes.
+          printf '%s\n' "$APP_KEY" > "${work}/key.pem"
+          unset APP_KEY
+          now=$(date +%s)
+          header=$(printf '%s' '{"typ":"JWT","alg":"RS256"}' | b64url)
+          payload=$(jq -cjn --arg iss "$APP_ID" --argjson iat "$((now - 60))" --argjson exp "$((now + 540))" '{iat: $iat, exp: $exp, iss: $iss}' | b64url)
+          signature=$(printf '%s.%s' "$header" "$payload" | openssl dgst -sha256 -sign "${work}/key.pem" -binary | b64url)
+          rm -f "${work}/key.pem"
+          jwt="${header}.${payload}.${signature}"
+          echo "::add-mask::${jwt}"
+          headers "$jwt" > "${work}/app-headers"
+          installation=$(curl -fsS --retry 3 --max-time 60 -H @"${work}/app-headers" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/installation" | jq -r '.id // empty')
+          if ! printf '%s\n' "$installation" | grep -Eqx '[0-9]+'; then
+            echo "::error::the authority App is not installed on ${GITHUB_REPOSITORY}; no authority check is created"; exit 1
+          fi
+          jq -cn --arg repo "${GITHUB_REPOSITORY#*/}" '{repositories: [$repo], permissions: {checks: "write"}}' > "${work}/scope.json"
+          curl -fsS --retry 3 --max-time 60 -X POST -H @"${work}/app-headers" --data @"${work}/scope.json" \
+            "${GITHUB_API_URL}/app/installations/${installation}/access_tokens" > "${work}/token.json"
+          token=$(jq -r '.token // empty' "${work}/token.json")
+          rm -f "${work}/token.json" "${work}/app-headers"
+          if [ -z "$token" ]; then
+            echo "::error::GitHub returned no installation token; no authority check is created"; exit 1
+          fi
+          echo "::add-mask::${token}"
+          headers "$token" > "${work}/token-headers"
+          api() { curl -fsS --retry 3 --max-time 60 -H @"${work}/token-headers" "$@"; }
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          : > "${work}/created.tsv"
+          while IFS='=' read -r name result; do
+            [ -n "$name" ] || continue
+            case "$name" in
+              "authority: "?*) ;;
+              *) echo "::error::'${name}' in VERDICTS is not an authority: name"; exit 1 ;;
+            esac
+            jq -cn --arg name "$name" --arg sha "$HEAD_SHA" --arg url "$run_url" \
+              '{name: $name, head_sha: $sha, status: "in_progress", details_url: $url}' > "${work}/create.json"
+            id=$(api -X POST --data @"${work}/create.json" "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/check-runs" | jq -r '.id // empty')
+            if ! printf '%s\n' "$id" | grep -Eqx '[0-9]+'; then
+              echo "::error::GitHub did not create ${name}"; exit 1
+            fi
+            printf '%s\t%s\t%s\n' "$id" "$name" "$result" >> "${work}/created.tsv"
+          done <<< "$VERDICTS"
+          while IFS=$'\t' read -r id name result; do
+            verdict="trusted: ${name#"authority: "}"
+            conclusion=failure
+            if [ "$result" = success ]; then conclusion=success; fi
+            jq -cn --arg conclusion "$conclusion" --arg title "${verdict} ${result}" \
+              --arg summary "${verdict} ended ${result} in ${run_url}; judged by ${DEFAULT_BRANCH}@${AUTHORITY_SHA}" \
+              '{status: "completed", conclusion: $conclusion, output: {title: $title, summary: $summary}}' > "${work}/conclude.json"
+            api -X PATCH --data @"${work}/conclude.json" "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/check-runs/${id}" >/dev/null
+            echo "${name}: ${conclusion}" | tee -a "$GITHUB_STEP_SUMMARY"
+          done < "${work}/created.tsv"

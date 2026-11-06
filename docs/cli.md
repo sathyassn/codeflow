@@ -205,7 +205,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--provider <PROVIDER>` | Remote provider (only `github` has an adapter; others print the manual checklist). Default `github`. |
 | | `--dry-run` | Print the intended rules without applying anything. |
 | | `--profile <PROFILE>` | Who reviews and who moves the default branch: solo-administrator (no approval; only the administrator role updates the default branch) or independent-review (one approval, stale approvals dismissed, the last push approved by someone else; only the maintain role updates it). One of `solo-administrator`, `independent-review`. Default `solo-administrator`. |
-| | `--check-app <APP_ID>` | The id of the GitHub App that creates the authority: checks (Mode A). Without it, the trusted: checks are pinned to GitHub Actions (Mode B). |
+| | `--check-app <APP_ID>` | The id of the GitHub App that creates the authority: checks (Mode A). Without it, the trusted: checks are pinned to GitHub Actions (Mode B), a lower tier that does not close forgery by a later producer; only Mode A, the App authority, closes it. |
 | | `--lines <PATTERN>` | The integration-line branch pattern "codeflow line checks" targets. Default `integration/**`. |
 
 ### Verify
