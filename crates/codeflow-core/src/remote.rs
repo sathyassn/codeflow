@@ -2766,7 +2766,7 @@ jobs:
     environment: codeflow-authority
     runs-on: ubuntu-24.04
     steps:
-      - run: "create 'authority: commit standards' 'authority: release impact'"
+      - run: "create 'authority: commit standards' 'authority: secret scan' 'authority: release impact'"
 "#;
 
     /// A policy workflow whose jobs are only spelled like trusted verdicts:
@@ -3076,7 +3076,6 @@ jobs:
             let mut expected = policy;
             expected.extend(pins(&[
                 ("codeflow gates", 15368),
-                ("secret scan", 15368),
                 ("security review", 15368),
                 ("windows", 15368),
             ]));
