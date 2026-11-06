@@ -1731,7 +1731,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ),
     (
         "crates/codeflow-cli/src/cmd/ci.rs",
-        "run",
+        "run_checks",
         "obtain-absent:var",
         1,
         "unproven",
