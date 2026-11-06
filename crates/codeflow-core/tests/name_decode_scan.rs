@@ -669,6 +669,22 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // TSK-1308: a failed Git command's stderr in the refusal a person reads; stdout uses strict decoding.
+    (
+        "codeflow-core/src/workgraph/candidate_removal.rs",
+        "git",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
+    // TSK-1308: a failed `gh pr list` stderr in the refusal a person reads; any failure refuses the removal.
+    (
+        "codeflow-cli/src/cmd/work.rs",
+        "open_pull_requests",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-core/src/workgraph/readiness.rs",
@@ -5089,6 +5105,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/workgraph/readiness.rs",
         "git_bytes",
+        "trim",
+        1,
+        "display",
+    ),
+    // TSK-1308: trims a failed Git command's stderr for the refusal a person reads; successful stdout is decoded strictly.
+    (
+        "crates/codeflow-core/src/workgraph/candidate_removal.rs",
+        "git",
+        "trim",
+        1,
+        "display",
+    ),
+    // TSK-1308: trims a failed `gh pr list` stderr for the refusal a person reads; it decides nothing beyond refusing.
+    (
+        "crates/codeflow-cli/src/cmd/work.rs",
+        "open_pull_requests",
         "trim",
         1,
         "display",
