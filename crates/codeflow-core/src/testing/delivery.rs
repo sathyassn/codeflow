@@ -424,9 +424,9 @@ pub fn select(targets: &[TargetConfig], mode: &str, options: &GateOptions) -> Se
     let reason = if options.all {
         "--all: every target".to_string()
     } else if let Some(base) = &options.since {
-        format!("every target: --since {base} narrows nothing, since no local run record earns selection credit (ADR-0089)")
+        format!("every target: --since {base} narrows nothing; local narrowing is unavailable, since no local run record earns selection credit (ADR-0089)")
     } else {
-        "every target: no local run record earns selection credit (ADR-0089)".to_string()
+        "every target: local narrowing is unavailable, since no local run record earns selection credit (ADR-0089)".to_string()
     };
     Selection {
         selected: eligible,
