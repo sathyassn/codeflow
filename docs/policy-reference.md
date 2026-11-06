@@ -1268,8 +1268,9 @@ private repository on Free uses Mode B.
 
 ### The Actions event policy on public repositories
 
-The `trusted:` and `authority:` checks come from `codeflow-policy.yml`,
-which runs only on `pull_request_target`. From 2026-12-02 GitHub blocks
+The trusted verdicts and the `authority:` checks come from
+`codeflow-policy.yml`, which runs only on `pull_request_target`, always from
+the default branch's copy of the file. From 2026-12-02 GitHub blocks
 that event in public repositories unless an Actions event policy allows it,
 so a public repository needs one policy that targets that workflow alone and
 allows the events it runs on (TSK-1347). The command and the reasons for its
@@ -1344,7 +1345,8 @@ to its required-checks answer:
   one path: none, `~ALL`, a wildcard, or another path).
 - **Note, never a pass:** a bypass list, ruleset, environment, environment
   list, secret list or workflow that cannot be read (secret lists need an
-  administrator's token); the repository's visibility, or on a public
+  administrator's token, and an answer over 16 MiB counts as unread, never
+  as its first or last part); the repository's visibility, or on a public
   repository an Actions event policy list or policy that cannot be read
   (reported as "unreadable: needs an administrator's token" when the host
   refuses it), or an organization policy that selects repositories by

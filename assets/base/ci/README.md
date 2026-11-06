@@ -216,9 +216,9 @@ From 2026-12-02 GitHub blocks `pull_request_target` in every public
 repository unless an Actions event policy allows it
 ([changelog](https://github.blog/changelog/2026-11-02-pull_request_target-blocked-by-default-december-2)).
 `codeflow-policy.yml` runs only on that event, so without such a policy its
-`trusted:` checks never start, and every pull request waits on a required
-check that never runs. Nothing merges until an administrator acts. Private
-and internal repositories are not affected.
+verdict jobs never start, and every pull request waits on a required check
+that never runs. Nothing merges until an administrator acts. Private and
+internal repositories are not affected.
 
 The fix is one repository policy that targets `codeflow-policy.yml` alone
 and allows the events it runs on. `codeflow remote protect`, run with a
