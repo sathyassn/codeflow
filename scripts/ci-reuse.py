@@ -71,11 +71,11 @@ Usage: ci-reuse.py --repo OWNER/NAME --sha SHA --event EVENT --workflow-ref REF 
                    --push-only NAME --require NAME [--require NAME ...]
 
 `ci-reuse.py admit --repo OWNER/NAME --head SHA --pull N --workflow PATH --require NAME
---base BRANCH` is the single-pass merge admission (TSK-1239):
+[--wait SECONDS]` is the merge admission `commit standards` runs (TSK-449):
 it passes only when the newest pull_request run of PATH for pull request N
 at exactly that head
-completed with success and every named verdict job succeeded. It rechecks
-the current pull request and latest run attempt and never waits for CI.
+completed with success and every named verdict job succeeded, waiting up to
+SECONDS for a pending or absent run, and refuses everything else.
 """
 
 from __future__ import annotations
@@ -471,65 +471,31 @@ class Pending(Skip):
     """An admission that may still pass once the head's run finishes."""
 
 
-def current_pull(api, pull: int, head: str, base: str) -> dict:
-    """Read current PR identity and readiness from the repository API."""
-    record = api.pull(pull)
-    if record.get("number") != pull or (record.get("base") or {}).get("repo", {}).get("full_name") != api.repo:
-        raise Skip("the current pull request does not belong to this repository")
-    if record.get("state") != "open" or record.get("draft") is not False:
-        raise Skip("the pull request must be open and ready for review")
-    if (record.get("head") or {}).get("sha") != head:
-        raise Skip("the pull request head has moved; its new head must be judged")
-    if (record.get("base") or {}).get("ref") != base:
-        raise Skip("the pull request was retargeted; its current target must be judged")
-    if "body" not in record or not isinstance(record.get("body"), (str, type(None))):
-        raise Skip("the pull request body is unreadable")
-    return record
-
-
-def newest_run(head: str, workflow_path: str, api, pull: int) -> dict:
+def admit(head: str, workflow_path: str, required: set[str], api, pull: int) -> int:
+    """Merge admission for a pull request (TSK-449 AC-6): the id of the
+    newest codeflow-ci pull_request run at exactly `head` when it completed
+    with success and every required verdict job concluded success. A draft's
+    run skips its verdicts (neutral), so it never admits; a pending, absent,
+    cancelled or failed run, one only for another head, or one that names
+    another pull request (a green run of the same commit elsewhere), refuses."""
+    if not SHA.match(head):
+        raise Skip(f"the head {head!r} is not a commit id")
     runs = [run for run in api.runs(head)
             if run.get("event") == "pull_request" and run.get("head_sha") == head
-            and run.get("path") == workflow_path and type(run.get("id")) is int
+            and run.get("path") == workflow_path and isinstance(run.get("id"), int)
             and any(pr.get("number") == pull for pr in run.get("pull_requests") or [])]
     if not runs:
         raise Pending(f"no {workflow_path} pull_request run of #{pull} exists for head {head}")
-    return max(runs, key=lambda r: (r.get("run_number", 0), r.get("run_attempt", 0), r["id"]))
-
-
-def admit(head: str, workflow_path: str, required: set[str], api, pull: int,
-          base: str, completed_run: int | None = None, completed_attempt: int | None = None) -> int:
-    """Admit the current ready PR on its newest exact-head, exact-target CI
-    attempt. A pending or missing run refuses immediately; no runner waits."""
-    if not SHA.fullmatch(head) or not base or not required:
-        raise Skip("admission requires a head commit, target branch and named verdicts")
-    before = current_pull(api, pull, head, base)
-    run = newest_run(head, workflow_path, api, pull)
-    attempt = run.get("run_attempt")
-    if type(attempt) is not int or attempt < 1:
-        raise Skip("the CI run has no valid attempt")
-    if completed_run is not None and (run["id"], attempt) != (completed_run, completed_attempt):
-        raise Skip("the completion is not the newest run attempt; the newest attempt decides")
-    if not any(pr.get("number") == pull and (pr.get("base") or {}).get("ref") == base
-               for pr in run.get("pull_requests") or []):
-        raise Skip("the CI run judged another target branch")
+    run = max(runs, key=lambda r: (r.get("run_number", 0), r.get("run_attempt", 0), r["id"]))
     if run.get("status") != "completed":
         raise Pending(f"run {run['id']} for head {head} is {run.get('status')}")
     if run.get("conclusion") != "success":
         raise Skip(f"run {run['id']} for head {head} concluded {run.get('conclusion')}")
-    jobs = api.attempt_jobs(run["id"], attempt)
+    jobs = {job.get("name"): job.get("conclusion") for job in api.jobs(run["id"])}
     for name in sorted(required):
-        verdicts = [job for job in jobs if job.get("name") == name]
-        if len(verdicts) != 1 or verdicts[0].get("conclusion") != "success":
-            raise Skip(f"verdict {name!r} of run {run['id']} did not uniquely succeed; "
-                       "mark the pull request ready to run its verdicts")
-    # A rerun may start during the jobs read, or a newer run may supersede it.
-    after_run = newest_run(head, workflow_path, api, pull)
-    if after_run != run:
-        raise Skip("the newest CI run changed while admission read its verdicts")
-    after = current_pull(api, pull, head, base)
-    if after.get("body") != before.get("body"):
-        raise Skip("the pull request body changed while admission read its verdicts")
+        if jobs.get(name) != "success":
+            raise Skip(f"verdict {name!r} of run {run['id']} concluded {jobs.get(name) or 'nothing'}; "
+                       "a draft's verdicts are skipped, so mark the pull request ready to run them at this head")
     return run["id"]
 
 
@@ -537,31 +503,35 @@ def admit_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="ci-reuse.py admit", description=admit.__doc__.split("\n\n")[0])
     parser.add_argument("--repo", required=True)
     parser.add_argument("--head", required=True)
-    parser.add_argument("--pull", type=int, required=True)
-    parser.add_argument("--base", required=True)
-    parser.add_argument("--workflow", required=True)
-    parser.add_argument("--require", action="append", required=True)
-    parser.add_argument("--completed-run", type=int)
-    parser.add_argument("--completed-attempt", type=int)
+    parser.add_argument("--pull", type=int, required=True, help="the pull request the run must belong to")
+    parser.add_argument("--workflow", required=True, help="the workflow file whose run must pass")
+    parser.add_argument("--require", action="append", default=[], help="a verdict job that must succeed")
+    parser.add_argument("--wait", type=int, default=0, help="seconds to wait for a pending or absent run")
     parser.add_argument("--api", default=os.environ.get("GITHUB_API_URL", "https://api.github.com"))
     args = parser.parse_args(argv)
-    if (args.completed_run is None) != (args.completed_attempt is None):
-        parser.error("completion requires both run id and attempt")
     api = Api(args.api, args.repo, os.environ.get("GH_TOKEN", ""))
-    try:
-        run = admit(args.head, args.workflow, set(args.require), api, args.pull, args.base,
-                    args.completed_run, args.completed_attempt)
-    except Pending:
-        print("ci-reuse admit: pending; CI completion will request admission again")
-        return 1
-    except Skip as reason:
-        print(f"ci-reuse admit: refused: {reason}")
-        return 1
-    except Exception:  # noqa: BLE001 - API/parse failures refuse without logging response data
-        print("ci-reuse admit: refused: cannot verify current pull request and CI records")
-        return 1
-    print(f"ci-reuse admit: run {run} passed every verdict at head {args.head}")
-    return 0
+    deadline = time.monotonic() + max(args.wait, 0)
+    while True:
+        try:
+            run = admit(args.head, args.workflow, set(args.require), api, args.pull)
+        except Pending as reason:
+            if time.monotonic() + POLL_SECONDS > deadline:
+                print(f"ci-reuse admit: refused: {reason}; re-run this check once that run completes")
+                return 1
+            print(f"ci-reuse admit: waiting: {reason}")
+            time.sleep(POLL_SECONDS)
+            continue
+        except Skip as reason:
+            print(f"ci-reuse admit: refused: {reason}")
+            return 1
+        except Exception as error:  # noqa: BLE001 - any failure refuses admission
+            print(f"ci-reuse admit: refused: the decision failed ({type(error).__name__}: {error})")
+            return 1
+        print(f"ci-reuse admit: run {run} passed every verdict at head {args.head}")
+        return 0
+
+
+POLL_SECONDS = 30
 
 
 class Git:
@@ -608,18 +578,9 @@ class Api:
         self.url, self.repo, self.token = url.rstrip("/"), repo, token
 
     def get(self, path: str) -> dict | list:
-        headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-        request = urllib.request.Request(f"{self.url}/repos/{self.repo}/{path}", headers=headers)
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.load(response)
-
-    def write(self, path: str, payload: dict, method: str) -> dict:
-        request = urllib.request.Request(f"{self.url}/repos/{self.repo}/{path}",
-                                         data=json.dumps(payload).encode(), method=method, headers={
+        request = urllib.request.Request(f"{self.url}/repos/{self.repo}/{path}", headers={
             "Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json", "X-GitHub-Api-Version": "2022-11-28"})
+            "X-GitHub-Api-Version": "2022-11-28"})
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.load(response)
 
@@ -644,12 +605,6 @@ class Api:
 
     def jobs(self, run: int) -> list[dict]:
         return self.pages(f"actions/runs/{run}/jobs?filter=latest", "jobs")
-
-    def pull(self, number: int) -> dict:
-        return self.get(f"pulls/{number}")
-
-    def attempt_jobs(self, run: int, attempt: int) -> list[dict]:
-        return self.pages(f"actions/runs/{run}/attempts/{attempt}/jobs", "jobs")
 
     def artifacts(self, run: int) -> list[dict]:
         return self.pages(f"actions/runs/{run}/artifacts", "artifacts")

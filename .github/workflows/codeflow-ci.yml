@@ -164,7 +164,7 @@ jobs:
           WORKFLOW_REF: ${{ github.workflow_ref }}
           WINDOWS_IMAGE_OS: ${{ needs.windows-image.outputs.os }}
           WINDOWS_IMAGE_VERSION: ${{ needs.windows-image.outputs.version }}
-          DECIDER_SHA256: cb06984914d062a64b6eec17e8948402b7129c4ebebed15cf9b299c8699882c6
+          DECIDER_SHA256: 4d3b132da04ce6cbb3bc3a0ffd2e1978603f52a4462b93064889fffc44059d24
         run: |
           actual=$(sha256sum scripts/ci-reuse.py | cut -d ' ' -f 1)
           if [ "$actual" != "$DECIDER_SHA256" ]; then

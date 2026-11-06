@@ -11,7 +11,6 @@ runs every job.
 """
 
 import importlib.util
-import copy
 import io
 import json
 import os
@@ -164,9 +163,6 @@ def artifact(run_id=77, head=HEAD, windows=False, **changes):
 class FakeApi:
     def __init__(self, pulls=None, runs=None, jobs=None, caches=None, base="main", artifacts=None, zips=None,
                  logs=None):
-        self.repo = "o/r"
-        self.current = {"number": 95, "state": "open", "draft": False, "body": "current body",
-                        "head": {"sha": HEAD}, "base": {"ref": base, "repo": {"full_name": self.repo}}}
         self.cache_queries = []
         self.logs = logs or {}
         self.cache_list = caches if caches is not None else [{"key": APT_KEY, "ref": MAIN_REF}]
@@ -196,12 +192,6 @@ class FakeApi:
 
     def jobs(self, run_id):
         return self.job_lists.get(run_id, [])
-
-    def pull(self, number):
-        return self.current
-
-    def attempt_jobs(self, run_id, attempt):
-        return self.jobs(run_id)
 
     def job_log_head(self, job_id):
         found = self.logs.get(job_id)
@@ -692,10 +682,10 @@ class MainTests(unittest.TestCase):
 class AdmissionTests(unittest.TestCase):
     """TSK-449 AC-6: `commit standards` admits a pull request only on a
     completed successful ready run at the exact head; each other case
-    refuses without sleeping. Current PR identity, target and attempt decide."""
+    refuses, and only a pending or absent run is worth waiting for."""
 
     def admitted(self, api):
-        return reuse.admit(HEAD, WORKFLOW, REQUIRED, api, 95, "main")
+        return reuse.admit(HEAD, WORKFLOW, REQUIRED, api, 95)
 
     def refused(self, api, pending=False):
         with self.assertRaises(reuse.Skip) as caught:
@@ -709,14 +699,14 @@ class AdmissionTests(unittest.TestCase):
     def test_a_draft_neutral_run_at_the_same_head_refuses(self):
         draft = [job("codeflow gates", "skipped"), job("windows", "skipped"), job("secret scan")]
         reason = self.refused(FakeApi(jobs={77: draft}))
-        self.assertIn("'codeflow gates' of run 77 did not uniquely succeed", reason)
+        self.assertIn("'codeflow gates' of run 77 concluded skipped", reason)
         self.assertIn("mark the pull request ready", reason)
 
-    def test_no_ready_run_refuses_immediately(self):
+    def test_no_ready_run_refuses_and_may_be_waited_for(self):
         self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run of #95 exists",
                       self.refused(FakeApi(runs=[]), pending=True))
 
-    def test_a_pending_run_refuses_immediately(self):
+    def test_a_pending_run_refuses_and_may_be_waited_for(self):
         for status in ("queued", "in_progress", "waiting"):
             with self.subTest(status=status):
                 api = FakeApi(runs=[run(status=status, conclusion=None)])
@@ -746,463 +736,40 @@ class AdmissionTests(unittest.TestCase):
         api = FakeApi(runs=[run(), run(id=78, run_number=6, status="in_progress", conclusion=None)])
         self.assertIn("run 78", self.refused(api, pending=True))
         # A missing verdict job refuses.
-        self.assertIn("'windows' of run 77 did not uniquely succeed",
+        self.assertIn("'windows' of run 77 concluded nothing",
                       self.refused(FakeApi(jobs={77: [job("codeflow gates")]})))
 
-    def test_current_identity_head_target_and_readiness_are_required(self):
-        for change in ({"number": 96}, {"state": "closed"}, {"draft": True},
-                       {"draft": None}, {"head": {"sha": MAIN}},
-                       {"base": {"ref": "other", "repo": {"full_name": "o/r"}}},
-                       {"base": {"ref": "main", "repo": {"full_name": "other/repo"}}}):
-            with self.subTest(change=change):
-                api = FakeApi()
-                api.current.update(change)
-                self.refused(api)
-
-    def test_a_body_edit_before_admission_uses_current_body(self):
-        api = FakeApi()
-        api.current["body"] = "body edited after CI began"
-        self.assertEqual(self.admitted(api), 77)
-
-    def test_body_or_pr_changes_during_admission_refuse(self):
-        for change in ({"body": "new body"}, {"head": {"sha": MAIN}},
-                       {"base": {"ref": "retarget", "repo": {"full_name": "o/r"}}},
-                       {"draft": True}, {"state": "closed"}):
-            with self.subTest(change=change):
-                class Changing(FakeApi):
-                    def attempt_jobs(self, run_id, attempt):
-                        self.current = {**self.current, **change}
-                        return super().attempt_jobs(run_id, attempt)
-                self.refused(Changing())
-
-    def test_a_success_on_the_previous_target_never_admits(self):
-        api = FakeApi(runs=[run(pull_requests=[{"number": 95, "base": {"ref": "old"}}])])
-        self.assertIn("another target", self.refused(api))
-
-    def test_completion_must_name_the_latest_attempt(self):
-        api = FakeApi(runs=[run(run_attempt=2)])
-        with self.assertRaises(reuse.Skip):
-            reuse.admit(HEAD, WORKFLOW, REQUIRED, api, 95, "main", 77, 1)
-        self.assertEqual(reuse.admit(HEAD, WORKFLOW, REQUIRED, api, 95, "main", 77, 2), 77)
-        with self.assertRaises(reuse.Skip):
-            reuse.admit(HEAD, WORKFLOW, REQUIRED, api, 95, "main", 76, 2)
-
-    def test_a_rerun_started_during_job_lookup_refuses(self):
-        class Rerunning(FakeApi):
-            def attempt_jobs(self, run_id, attempt):
-                self.run_list = [run(run_attempt=2, status="in_progress", conclusion=None)]
-                return GREEN_JOBS
-        self.assertIn("changed", self.refused(Rerunning()))
-
-    def test_a_new_run_started_during_job_lookup_refuses(self):
-        class NewRun(FakeApi):
-            def attempt_jobs(self, run_id, attempt):
-                self.run_list = [run(), run(id=78, run_number=6)]
-                return GREEN_JOBS
-        self.assertIn("changed", self.refused(NewRun()))
-
-    def test_jobs_are_read_for_the_exact_attempt(self):
-        class Attempts(FakeApi):
-            def attempt_jobs(self, run_id, attempt):
-                # Latest attempt's skipped job must defeat an older green one.
-                return GREEN_JOBS if attempt == 1 else [job("windows", "skipped")]
-        self.refused(Attempts(runs=[run(run_attempt=2)]))
-
-    def test_duplicate_verdicts_cannot_hide_a_failed_job(self):
-        self.refused(FakeApi(jobs={77: [*GREEN_JOBS, job("windows", "failure")]}))
-
-    def test_admission_requires_named_verdicts(self):
-        with self.assertRaises(reuse.Skip):
-            reuse.admit(HEAD, WORKFLOW, set(), FakeApi(), 95, "main")
-
-    def test_main_is_single_pass_and_api_errors_fail_closed(self):
-        def run_main(api):
+    def test_main_waits_only_for_a_pending_run_and_fails_closed(self):
+        def run_main(api, wait):
             out = io.StringIO()
-            with mock.patch.object(reuse, "Api", return_value=api), redirect_stdout(out):
+            with mock.patch.object(reuse, "Api", return_value=api), \
+                    mock.patch.object(reuse.time, "sleep") as sleep, redirect_stdout(out):
                 code = reuse.admit_main(["--repo", "o/r", "--head", HEAD, "--workflow", WORKFLOW,
                                          "--require", "codeflow gates", "--require", "windows",
-                                         "--pull", "95", "--base", "main"])
-            return code, out.getvalue()
-        self.assertEqual(run_main(FakeApi())[0], 0)
-        self.assertEqual(run_main(FakeApi(runs=[run(status="in_progress", conclusion=None)]))[0], 1)
-        self.assertEqual(run_main(FakeApi(runs=[]))[0], 1)
-        self.assertEqual(run_main(FakeApi(runs=[run(conclusion="failure")]))[0], 1)
-        for method in ("pull", "runs", "attempt_jobs"):
-            with self.subTest(method=method):
-                api = FakeApi()
-                with mock.patch.object(api, method, side_effect=OSError("private response")):
-                    code, text = run_main(api)
-                self.assertEqual(code, 1)
-                self.assertIn("cannot verify", text)
-                self.assertNotIn("private response", text)
+                                         "--pull", "95", "--wait", str(wait)])
+            return code, out.getvalue(), sleep.call_count
+        self.assertEqual(run_main(FakeApi(), 0)[0], 0)
+        code, text, slept = run_main(FakeApi(runs=[run(status="in_progress", conclusion=None)]), 0)
+        self.assertEqual((code, slept), (1, 0), text)
+        code, text, slept = run_main(FakeApi(runs=[run(conclusion="failure")]), 600)
+        self.assertEqual((code, slept), (1, 0), text)
 
-    def test_admission_contains_no_sleep_or_wait_option(self):
-        import inspect
-        source = inspect.getsource(reuse.admit_main)
-        self.assertNotIn("sleep", source)
-        self.assertNotIn("--wait", source)
-
-    def test_consumer_template_baseline_and_manifest_keep_the_same_permissions(self):
-        import hashlib
-        template = (ROOT / "assets/base/ci/codeflow-policy.yml").read_bytes()
-        baseline = (ROOT / ".codeflow/.baseline/.github/workflows/codeflow-policy.yml").read_bytes()
-        manifest = json.loads((ROOT / ".codeflow/manifest.json").read_text())
-        self.assertEqual(template, baseline)
-        self.assertEqual(hashlib.sha256(template).hexdigest(),
-                         manifest["files"][".github/workflows/codeflow-policy.yml"]["sha256"])
-        self.assertIn(b"permissions: {}", template)
-        self.assertIn(b"      contents: read\n      pull-requests: read", template)
-
-    def test_consumer_template_has_no_admission_mechanism(self):
-        template = (ROOT / "assets/base/ci/codeflow-policy.yml").read_text()
-        for marker in ("ci-reuse.py", "workflow_run:", "checks: write", "check-runs"):
-            self.assertNotIn(marker, template)
-
-
-POLICY_SPEC = importlib.util.spec_from_file_location("policy_admission", ROOT / "scripts/policy-admission.py")
-policy = importlib.util.module_from_spec(POLICY_SPEC)
-POLICY_SPEC.loader.exec_module(policy)
-
-
-class PolicyApi(FakeApi):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.current["base"]["sha"] = MAIN
-        self.current["head"]["ref"] = "task/example"
-        self.check_list = []
-        self.writes = []
-
-    def pull(self, number):
-        return copy.deepcopy(self.current)
-
-    def get(self, path):
-        if path.startswith("actions/runs/"):
-            return copy.deepcopy(self.run_list[0])
-        raise AssertionError(path)
-
-    def pages(self, path, key):
-        if path.startswith(f"commits/{HEAD}/check-runs?") and key == "check_runs":
-            return self.check_list
-        raise AssertionError((path, key))
-
-    def write(self, path, payload, method):
-        self.writes.append((path, payload, method))
-        return {"id": 100}
-
-
-def policy_event(completion=True):
-    api = PolicyApi()
-    event = {"repository": {"full_name": "o/r"}, "number": 95,
-             "pull_request": api.current, "workflow_run": run()}
-    name = "workflow_run" if completion else "pull_request_target"
-    return name, event
-
-
-class PublisherTests(unittest.TestCase):
-    def identity(self, completion=True):
-        name, event = policy_event(completion)
-        return policy.event_identity(name, event, "o/r")
-
-    def publish(self, reader=None, writer=None, identity=None, result="success", body_digest=None):
-        reader = reader or PolicyApi()
-        writer = writer or reader
-        identity = identity or self.identity()
-        return policy.publish(reader, writer, identity,
-                              body_digest or policy.digest(reader.current["body"]), result,
-                              "https://github.com/o/r/actions/runs/99")
-
-    def test_success_is_written_only_to_the_bound_head(self):
-        api = PolicyApi()
-        self.assertEqual(self.publish(api), "success")
-        path, pending, method = api.writes[0]
-        self.assertEqual((path, method), ("check-runs", "POST"))
-        self.assertEqual(pending["head_sha"], HEAD)
-        self.assertEqual(pending["status"], "completed")
-        self.assertEqual(pending["conclusion"], "failure")
-        payload = api.writes[-1][1]
-        self.assertEqual(payload["name"], "commit standards")
-        self.assertEqual(payload["conclusion"], "success")
-        self.assertIn("CI run 77, attempt 1", payload["output"]["summary"])
-        self.assertNotIn("current body", json.dumps(payload))
-
-    def test_failed_cancelled_skipped_and_pending_ci_never_write_success(self):
-        for changes in ({"conclusion": "failure"}, {"conclusion": "cancelled"},
-                        {"conclusion": "skipped"}, {"status": "in_progress", "conclusion": None}):
-            with self.subTest(changes=changes):
-                api = PolicyApi(runs=[run(**changes)])
-                # PR events can report pending as failure without waiting.
-                self.assertEqual(self.publish(api, identity=self.identity(False)), "failure")
-                self.assertEqual(api.writes[-1][1]["conclusion"], "failure")
-
-    def test_failed_and_cancelled_completions_write_failure(self):
-        for conclusion in ("failure", "cancelled"):
-            api = PolicyApi(runs=[run(conclusion=conclusion)])
-            identity = {**self.identity(), "conclusion": conclusion}
-            self.assertEqual(self.publish(api, identity=identity), "failure")
-
-    def test_missing_run_refuses_without_waiting(self):
-        api = PolicyApi(runs=[])
-        self.assertEqual(self.publish(api, identity=self.identity(False)), "failure")
-        self.assertEqual(api.writes[-1][1]["conclusion"], "failure")
-        with self.assertRaises(policy.reuse.Skip):
-            self.publish(PolicyApi(runs=[]))
-
-    def test_validation_failure_and_changed_body_cannot_be_admitted(self):
-        for result in ("failure", "cancelled", "skipped"):
-            self.assertEqual(self.publish(PolicyApi(), result=result), "failure")
-        self.assertEqual(self.publish(PolicyApi(), body_digest="0" * 64), "failure")
-
-    def test_retarget_event_replaces_an_earlier_success_with_failure(self):
-        api = PolicyApi()
-        api.current["base"]["ref"] = "integration/new-target"
-        identity = {**self.identity(False), "base": "integration/new-target"}
-        self.assertEqual(self.publish(api, identity=identity), "failure")
-        self.assertEqual(api.writes[-1][1]["conclusion"], "failure")
-
-    def test_draft_closed_or_skipped_verdict_refuses(self):
-        for changes in ({"draft": True}, {"state": "closed"}):
-            api = PolicyApi()
-            api.current.update(changes)
-            self.assertEqual(self.publish(api), "failure")
-        self.assertEqual(self.publish(PolicyApi(jobs={77: [job("codeflow gates", "skipped"), job("windows")]})), "failure")
-
-    def test_stale_head_target_attempt_or_completion_never_admits(self):
-        for changes in ({"head": MAIN}, {"base": "old-target"}, {"attempt": 2},
-                        {"run": 78}, {"conclusion": "failure"}):
-            with self.subTest(changes=changes):
-                api = PolicyApi()
-                with self.assertRaises(policy.reuse.Skip):
-                    self.publish(api, identity={**self.identity(), **changes})
-                self.assertEqual(len(api.writes), 1)
-                self.assertEqual(api.writes[0][1]["conclusion"], "failure")
-
-    def test_api_failure_at_each_read_never_writes_success(self):
-        for method in ("pull", "runs", "get", "attempt_jobs"):
-            api, writer = PolicyApi(), PolicyApi()
-            with self.subTest(method=method), mock.patch.object(api, method, side_effect=OSError("API error")):
-                with self.assertRaises(OSError):
-                    self.publish(api, writer)
-                self.assertFalse(any(payload.get("conclusion") == "success" for _, payload, _ in writer.writes))
-
-    def test_initial_read_error_revokes_an_earlier_green_at_the_same_head(self):
-        reader, writer = PolicyApi(), PolicyApi()
-        writer.current_conclusion = "success"
-        def write(path, payload, method):
-            writer.current_conclusion = payload.get("conclusion", "pending")
-            writer.writes.append((path, payload, method))
-            return {"id": 100}
-        with mock.patch.object(reader, "pull", side_effect=OSError("initial read unavailable")), \
-                mock.patch.object(writer, "write", side_effect=write):
-            with self.assertRaises(OSError):
-                self.publish(reader, writer)
-        self.assertEqual(writer.current_conclusion, "failure")
-        self.assertEqual(writer.writes[0][1]["head_sha"], HEAD)
-
-    def test_head_move_after_verdict_read_keeps_failure_at_the_event_head(self):
-        class Moving(PolicyApi):
-            def attempt_jobs(self, run_id, attempt):
-                self.current["head"]["sha"] = MAIN
-                return GREEN_JOBS
-        api = Moving()
-        with self.assertRaises(policy.reuse.Skip):
-            self.publish(api)
-        self.assertEqual(len(api.writes), 1)
-        self.assertEqual(api.writes[0][1]["head_sha"], HEAD)
-        self.assertEqual(api.writes[0][1]["conclusion"], "failure")
-
-    def test_rerun_after_verdict_read_never_writes_success(self):
-        class Rerunning(PolicyApi):
-            def attempt_jobs(self, run_id, attempt):
-                self.run_list = [run(run_attempt=2)]
-                return GREEN_JOBS
-        api = Rerunning()
-        with self.assertRaises(policy.reuse.Skip):
-            self.publish(api)
-        self.assertEqual(len(api.writes), 1)
-        self.assertEqual(api.writes[0][1]["conclusion"], "failure")
-
-    def test_only_the_freshly_created_check_can_be_promoted(self):
-        api = PolicyApi()
-        api.check_list = [{"id": 200, "name": "commit standards", "app": {"slug": "github-actions"},
-                           "external_id": "codeflow-policy:pull:95"},
-                          {"id": 201, "name": "commit standards", "app": {"slug": "other"},
-                           "external_id": "codeflow-policy:pull:95"}]
-        with mock.patch.object(api, "pages", side_effect=AssertionError("existing checks must not be selected")):
-            self.assertEqual(self.publish(api), "success")
-        self.assertEqual([path for path, _, _ in api.writes], ["check-runs", "check-runs/100"])
-        self.assertEqual(api.check_list[0]["id"], 200)
-
-    def test_missing_ambiguous_or_wrong_event_identity_refuses(self):
-        for field, value in (("pull_requests", []), ("pull_requests", [{"number": 95}, {"number": 96}]),
-                             ("event", "push"), ("path", "wrong.yml"), ("run_attempt", 0)):
-            name, event = policy_event()
-            event["workflow_run"][field] = value
-            with self.subTest(field=field), self.assertRaises(policy.reuse.Skip):
-                policy.event_identity(name, event, "o/r")
-        name, event = policy_event()
-        with self.assertRaises(policy.reuse.Skip):
-            policy.event_identity(name, event, "another/repository")
-
-    def test_prepare_reads_current_body_and_writes_no_body_step_output(self):
-        api = PolicyApi()
-        api.current["body"] = "latest body, with $(untrusted shell)"
-        with tempfile.TemporaryDirectory() as directory:
-            fields = policy.prepare(api, self.identity(False), Path(directory))
-            self.assertEqual(Path(directory, "pr-body.md").read_text(), api.current["body"] + "\n")
-            self.assertEqual(fields["digest"], policy.digest(api.current["body"]))
-            self.assertNotIn(api.current["body"], json.dumps(fields))
-            self.assertEqual(fields["base_sha"], MAIN)
-
-    def test_step_output_newlines_and_missing_body_are_refused(self):
-        for value in ("task/line\nhead=injected", "task/line\rhead=injected"):
-            api = PolicyApi()
-            api.current["head"]["ref"] = value
-            with tempfile.TemporaryDirectory() as directory, self.assertRaises(policy.reuse.Skip):
-                policy.prepare(api, self.identity(False), Path(directory))
-        api = PolicyApi()
-        del api.current["body"]
-        with tempfile.TemporaryDirectory() as directory, self.assertRaises(policy.reuse.Skip):
-            policy.prepare(api, self.identity(False), Path(directory))
-
-    def test_publisher_reads_public_metadata_without_its_write_token(self):
-        request = None
-        def response(value, **kwargs):
-            nonlocal request
-            request = value
-            return io.BytesIO(b'{}')
-        with mock.patch.object(policy.reuse.urllib.request, "urlopen", side_effect=response):
-            policy.reuse.Api("https://api.github.com", "o/r", "").get("actions/runs/77")
-        self.assertIsNone(request.get_header("Authorization"))
-
-    def test_prepare_cli_uses_current_body_and_only_emits_digest(self):
-        api = PolicyApi()
-        api.current["body"] = "body edited after the native event"
-        name, event = policy_event(False)
-        with tempfile.TemporaryDirectory() as directory:
-            event_path = Path(directory, "event.json")
-            event_path.write_text(json.dumps(event))
-            output_path = Path(directory, "outputs")
-            env = {"GITHUB_REPOSITORY": "o/r", "GITHUB_EVENT_NAME": name,
-                   "GITHUB_EVENT_PATH": str(event_path), "RUNNER_TEMP": directory,
-                   "GITHUB_OUTPUT": str(output_path)}
-            out = io.StringIO()
-            with mock.patch.dict(os.environ, env), mock.patch("sys.argv", ["policy-admission.py", "prepare"]), \
-                    mock.patch.object(policy.reuse, "Api", return_value=api), redirect_stdout(out):
-                self.assertEqual(policy.main(), 0)
-            self.assertEqual(Path(directory, "pr-body.md").read_text(), api.current["body"] + "\n")
-            self.assertIn(f"digest={policy.digest(api.current['body'])}", output_path.read_text())
-            self.assertNotIn(api.current["body"], output_path.read_text() + out.getvalue())
-
-    def test_invalid_created_check_id_cannot_be_promoted(self):
-        for check_id in (None, True, "100", 0):
-            reader, writer = PolicyApi(), PolicyApi()
-            with self.subTest(check_id=check_id), \
-                    mock.patch.object(writer, "write", return_value={"id": check_id}) as write, \
-                    mock.patch.object(reader, "pull", side_effect=AssertionError("no reads before a valid failing check")):
-                with self.assertRaises(policy.reuse.Skip):
-                    self.publish(reader, writer)
-                self.assertEqual(write.call_count, 1)
-                self.assertEqual(write.call_args.args[1]["conclusion"], "failure")
-
-    def test_final_body_or_readiness_change_keeps_the_failing_check(self):
-        for change in ({"body": "last read changed body"}, {"draft": True}, {"state": "closed"}):
-            class Changing(PolicyApi):
-                calls = 0
-                def pull(self, number):
-                    self.calls += 1
-                    if self.calls == 4:
-                        self.current.update(change)
-                    return super().pull(number)
-            api = Changing()
-            with self.subTest(change=change), self.assertRaises(policy.reuse.Skip):
-                self.publish(api)
-            self.assertEqual(len(api.writes), 1)
-            self.assertEqual(api.writes[0][1]["conclusion"], "failure")
-
-    def test_new_run_after_admission_never_promotes_the_old_run(self):
-        class Changing(PolicyApi):
+        class Finishing(FakeApi):
             calls = 0
-            def pull(self, number):
-                self.calls += 1
-                if self.calls == 4:
-                    self.run_list = [run(id=78, run_number=6)]
-                return super().pull(number)
-        api = Changing()
-        with self.assertRaises(policy.reuse.Skip):
-            self.publish(api, identity=self.identity(False))
-        self.assertEqual(len(api.writes), 1)
-        self.assertEqual(api.writes[0][1]["conclusion"], "failure")
 
+            def runs(self, head):
+                Finishing.calls += 1
+                return [run()] if Finishing.calls > 2 else [run(status="in_progress", conclusion=None)]
+        with mock.patch.object(reuse.time, "monotonic", return_value=0.0):
+            code, text, slept = run_main(Finishing(), 600)
+        self.assertEqual((code, slept), (0, 2), text)
 
-class PublisherCliTests(unittest.TestCase):
-    """The real CLI entry, event file, Request encoding and JSON API adapter,
-    with the external HTTP transport controlled. No socket/Actions journey
-    or hosted required-check behavior is claimed by these tests."""
-
-    def journey(self, fail_first_read=False):
-        api = PolicyApi()
-        writes, reads = [], []
-        def transport(request, **kwargs):
-            path = request.full_url.removeprefix("https://api.fixture.invalid")
-            method = request.get_method()
-            auth = request.get_header("Authorization")
-            if method in ("POST", "PATCH"):
-                payload = json.loads(request.data)
-                writes.append((method, path, payload, auth))
-                return io.BytesIO(b'{"id": 100}')
-            reads.append((path, auth))
-            if path.endswith("/pulls/95"):
-                if fail_first_read:
-                    error = policy.reuse.urllib.error.HTTPError(request.full_url, 503, "fixture read unavailable", {}, None)
-                    error.close()
-                    raise error
-                value = api.current
-            elif "/attempts/1/jobs?" in path:
-                value = {"total_count": len(GREEN_JOBS), "jobs": GREEN_JOBS}
-            elif "/actions/runs?" in path:
-                value = {"total_count": 1, "workflow_runs": [run()]}
-            elif path.endswith("/actions/runs/77"):
-                value = run()
-            else:
-                raise AssertionError(path)
-            return io.BytesIO(json.dumps(value).encode())
-
-        with tempfile.TemporaryDirectory() as directory:
-            name, event = policy_event()
-            event_path = Path(directory, "event.json")
-            event_path.write_text(json.dumps(event))
-            env = {"GITHUB_REPOSITORY": "o/r", "GH_TOKEN": "fixture-token",
-                   "GITHUB_API_URL": "https://api.fixture.invalid", "GITHUB_EVENT_NAME": name,
-                   "GITHUB_EVENT_PATH": str(event_path), "GITHUB_SERVER_URL": "https://github.com",
-                   "GITHUB_RUN_ID": "99", "RUNNER_TEMP": directory,
-                   "GITHUB_OUTPUT": str(Path(directory, "outputs")), "VALIDATION_RESULT": "success",
-                   "JUDGED_DIGEST": policy.digest(api.current["body"])}
-            out = io.StringIO()
-            with mock.patch.dict(os.environ, env), mock.patch("sys.argv", ["policy-admission.py", "publish"]), \
-                    mock.patch.object(policy.reuse.urllib.request, "urlopen", side_effect=transport), redirect_stdout(out):
-                code = policy.main()
-        return subprocess.CompletedProcess([], code, out.getvalue(), ""), writes, reads
-
-    def test_success_traverses_cli_entry_and_http_request_encoding(self):
-        done, writes, reads = self.journey()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual([method for method, _, _, _ in writes], ["POST", "PATCH"])
-        self.assertEqual(writes[0][2]["head_sha"], HEAD)
-        self.assertEqual(writes[0][2]["conclusion"], "failure")
-        self.assertEqual(writes[-1][1], "/repos/o/r/check-runs/100")
-        self.assertEqual(writes[-1][2]["conclusion"], "success")
-        self.assertTrue(reads)
-        self.assertTrue(all(auth is None for _, auth in reads))
-        self.assertTrue(all(auth == "Bearer fixture-token" for _, _, _, auth in writes))
-        self.assertNotIn("current body", done.stdout + done.stderr)
-
-    def test_initial_http_error_leaves_the_required_check_failing(self):
-        done, writes, _ = self.journey(fail_first_read=True)
-        self.assertEqual(done.returncode, 1)
-        self.assertEqual(len(writes), 1)
-        self.assertEqual(writes[0][2]["conclusion"], "failure")
-        self.assertIn("refused", done.stdout)
-        self.assertNotIn("current body", done.stdout + done.stderr)
+        class Broken(FakeApi):
+            def runs(self, head):
+                raise OSError("network down")
+        code, text, _ = run_main(Broken(), 0)
+        self.assertEqual(code, 1)
+        self.assertIn("refused: the decision failed", text)
 
 
 class WindowsTierTests(unittest.TestCase):

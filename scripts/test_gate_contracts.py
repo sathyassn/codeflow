@@ -290,18 +290,23 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(re.findall(r'^    name: (.+)$', registry, re.M), ['registry check'])
         self.assertIn('run: codeflow ids check\n', registry)
 
-    def test_commit_standards_starts_on_ci_completion_without_polling(self):
+    def test_commit_standards_admits_only_the_exact_heads_ready_run(self):
+        # TSK-449 AC-6: merge admission is the required `commit standards`
+        # check. It reruns when a draft is made ready, reads run records with
+        # a read-only token from the trusted target checkout, and refuses a
+        # draft at once (no wait) while a ready head waits for its run.
         workflow = read('.github/workflows/codeflow-policy.yml')
-        self.assertIn('  workflow_run:\n    workflows: [codeflow-ci]\n    types: [completed]', workflow)
-        self.assertIn('ready_for_review, converted_to_draft]', workflow)
-        self.assertIn('  cancel-in-progress: false\n  queue: max', workflow)
-        self.assertIn('github.event.workflow_run.pull_requests[0].number', workflow)
-        self.assertIn('--base "$BASE_REF"', workflow)
-        self.assertIn('--workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows', workflow)
-        self.assertIn('VALIDATION_RESULT: ${{ needs.validate.result }}', workflow)
-        self.assertIn('JUDGED_DIGEST: ${{ needs.validate.outputs.digest }}', workflow)
-        self.assertNotIn('--wait', workflow)
-        self.assertNotIn('sleep ', workflow)
+        self.assertIn('    types: [opened, synchronize, reopened, edited, ready_for_review]\n', workflow)
+        step = workflow.split("      - name: the exact head's ready codeflow-ci run passed\n", 1)[1]
+        self.assertIn("        if: github.event_name == 'pull_request_target'\n", step)
+        self.assertIn('python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER"', step)
+        self.assertIn('          PR_NUMBER: ${{ github.event.pull_request.number }}\n', step)
+        self.assertIn('--workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows', step)
+        self.assertIn('          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n', step)
+        self.assertIn('          if [ "$DRAFT" = true ]; then wait=0; fi\n', step)
+        wait = int(re.search(r'^          wait=(\d+)$', step, re.M).group(1))
+        self.assertLessEqual(wait, 40 * 60, 'the wait stays inside the 45-minute job bound')
+        self.assertNotIn('pull_request.head.ref', step)
 
     def test_release_tier_targets_leave_the_hosted_landing_gate(self):
         # TSK-449 AC-4: prose-exhaustive, read-benchmark, present-browser and

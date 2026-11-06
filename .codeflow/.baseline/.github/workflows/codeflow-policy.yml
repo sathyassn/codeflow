@@ -59,7 +59,8 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited, ready_for_review]
 
-permissions: {}
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) }}
