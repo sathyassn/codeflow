@@ -1,0 +1,11 @@
+id = "TSK-1368"
+uid = "67e59c2a-9302-405f-ac5a-076865a133d2"
+kind = "TSK"
+title = "The policy verdict job keeps the required name commit standards"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-06T15:43:48Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
