@@ -127,9 +127,9 @@ Local-artifact authority job:
   - `windows` is the one verdict over the Windows build, checks, test
     partitions and journeys. It is computed from each job's result and names
     every job that is not green. A pull request into an integration line
-    runs no Windows job and no Linux coverage shard, and both verdicts pass
-    there with those suites not selected; see
-    [Where CI suites run](#where-ci-suites-run).
+    runs no Windows job and no Linux coverage shard and publishes neither
+    verdict: it starts `codeflow-line-pr.yml`, whose verdict is `codeflow
+    gates (line)`; see [Where CI suites run](#where-ci-suites-run).
   - On a push to main or to an integration line whose merge commit has
     exactly the tree of a pull request head whose `codeflow-ci` run passed
     every job, both verdicts pass by naming that run and the gate and
@@ -273,15 +273,12 @@ an operator decision; agents and Coordinators never rule on it.
 
 The workflows apply the table as follows:
 
-- Today a ready line pull request still runs the Linux gate parts
-  (`codeflow build` and the `present` and `checks` parts,
-  `codeflow-ci.yml:250`, `:273`, `:284-292`) and the two coverage shards
-  and their report (`:584`, `:592`, `:667`). The reduced Windows tier
-  (`REDUCED_TIER`, `:755-789`) skips the Windows test build, the twelve
-  partitions and `windows-journeys` (`:812`, `:877`, `:1010`), and still runs the
-  Windows checks, the release journey and `windows-tier-journeys` (`:946`,
-  `:993`, `:1064`). The `windows` verdict accepts exactly that result
-  (`:1132-1138`).
+- A ready line pull request starts `codeflow-line-pr.yml` and never
+  `codeflow-ci.yml`, so it leaves no row of `codeflow gates` or `windows`,
+  skipped or otherwise. That workflow runs `codeflow build`, the `present`
+  and `checks` parts, the secret scan and the security review, and reports
+  `codeflow gates (line)`. The three coverage shards, their report and every
+  Windows job run on the line push.
 - After TSK-1321 (PR 620) lands, a line pull request runs only the short
   checks. The coverage shards and every Windows job leave it, and the line
   push runs them.

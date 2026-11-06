@@ -26,6 +26,7 @@ SPEC.loader.exec_module(parity)
 
 CONFIG = json.loads(parity.CONFIG.read_text(encoding="utf-8"))
 WORKFLOW = parity.WORKFLOW.read_text(encoding="utf-8")
+LINE = (ROOT / ".github" / "workflows" / "codeflow-line-pr.yml").read_text(encoding="utf-8")
 CI = parity.ci_rust_job_commands(WORKFLOW)
 PORTAL = "docs-portal"
 PRESENT = "present-browser"
@@ -514,9 +515,9 @@ class GatePartControls(unittest.TestCase):
         self.assertIn(self.VERDICT_IF, WORKFLOW)
         self.assert_problem(WORKFLOW.replace("    name: codeflow gates\n", "    name: gates verdict\n"),
                             "exactly one job must be named")
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: windows\n"), self.EXACT)
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates]\n"), self.EXACT)
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: windows\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates]\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n"), self.EXACT)
         self.assert_problem(WORKFLOW.replace(self.VERDICT_IF,
                                              "    if: github.event_name == 'push'\n    name: codeflow gates\n"),
                             self.EXACT)
@@ -533,7 +534,7 @@ class GatePartControls(unittest.TestCase):
                 "            exit 1\n          fi\n          echo \"every part",
                 "            exit 0\n          fi\n          echo \"every part"),
             "continue-on-error on the verdict": WORKFLOW.replace(
-                "    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n    continue-on-error: true\n"),
+                "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n    continue-on-error: true\n"),
             "a reuse that needs no skipped part": WORKFLOW.replace(
                 '[ "$REUSE" = success ] && [ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ]',
                 '[ "$REUSE" = success ]'),
@@ -643,7 +644,7 @@ class GatePartControls(unittest.TestCase):
         })
 
     def test_comments_and_blank_lines_in_the_verdict_are_allowed(self):
-        workflow = WORKFLOW.replace("    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]\n\n    # the parts\n")
+        workflow = WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n\n    # the parts\n")
         self.assertNotEqual(workflow, WORKFLOW)
         self.assertEqual(self.problems(workflow), [])
 
@@ -778,74 +779,89 @@ class HostedEventParityControls(unittest.TestCase):
         self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)
 
 
-class WindowsTierControls(unittest.TestCase):
-    """TSK-1242, TSK-1321: the tier job is pinned, off or on, and only the jobs a
-    pull request into an integration line drops leave it through the tier."""
+class LinePlacementControls(unittest.TestCase):
+    """TSK-1321: a pull request into an integration line starts the line
+    workflow and not codeflow-ci.yml, and publishes only literal line names."""
 
-    SWITCH_OFF = '          REDUCED_TIER: "off"\n'
-    SWITCH_ON = '          REDUCED_TIER: "on"\n'
+    def problems(self, workflow=WORKFLOW, line=LINE):
+        return parity.line_placement_problems(workflow, line)
 
-    def problems(self, workflow):
-        return parity.windows_tier_problems(workflow)
+    def assert_problem(self, workflow, line, words):
+        problems = self.problems(workflow, line)
+        self.assertTrue(any(words in problem for problem in problems), problems)
 
-    def turned_on(self):
-        current = self.SWITCH_ON if self.SWITCH_ON in WORKFLOW else self.SWITCH_OFF
-        return WORKFLOW.replace(current, self.SWITCH_ON)
+    def test_the_workflows_are_the_pinned_forms(self):
+        self.assertEqual(self.problems(), [])
 
-    def test_either_switch_state_is_the_pinned_form(self):
-        self.assertEqual(self.problems(WORKFLOW), [])
-        self.assertEqual(self.problems(self.turned_on()), [])
-        self.assertEqual(self.problems(self.turned_on().replace(self.SWITCH_ON, self.SWITCH_OFF)), [])
-
-    def test_another_switch_value_is_refused(self):
-        changed = self.turned_on().replace(self.SWITCH_ON, '          REDUCED_TIER: "yes"\n')
-        self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)))
-
-    def test_the_event_and_base_rule_is_pinned_both_ways(self):
-        # TSK-1321, operator decision 2026-11-02 card 3: every pull request
-        # into an integration line, and nothing else, takes the reduced tier.
-        arm = "              integration/?*)\n"
-        event = '          elif [ "$EVENT" != pull_request ]; then\n'
-        job_if = "    if: github.event_name == 'pull_request'\n    name: windows tier\n"
-        on = self.turned_on()
-        for name, old, new in (
-                ("a wider base", arm, "              */*)\n"),
-                ("any base", arm, "              *)\n"),
-                ("an empty line name", arm, "              integration/*)\n"),
-                ("a narrower base", arm, "              integration/EPC-*)\n"),
-                ("no event check", event, '          elif false; then\n'),
-                ("another event", event, '          elif [ "$EVENT" != push ]; then\n'),
-                ("the job on every event", job_if, "    name: windows tier\n"),
-                ("a path condition", '          BASE: ${{ github.event.pull_request.base.ref }}\n',
-                 '          BASE: ${{ github.event.pull_request.base.ref }}\n          PATHS: docs/\n')):
+    def test_codeflow_ci_starting_for_a_line_pull_request_is_refused(self):
+        ignore = '    branches-ignore: ["integration/**"]\n'
+        self.assertIn(ignore, WORKFLOW)
+        for name, new in (("no filter", ""), ("a narrower filter", '    branches-ignore: ["integration/EPC-*"]\n'),
+                          ("an allow-list", '    branches: [main, master]\n')):
             with self.subTest(change=name):
-                self.assertIn(old, on)
-                changed = on.replace(old, new)
-                self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)), name)
+                self.assert_problem(WORKFLOW.replace(ignore, new, 1), LINE, "must not start for a pull request")
 
-    def test_a_journey_job_of_the_reduced_tier_is_refused(self):
-        job = parity.workflow_jobs(WORKFLOW)["windows-journeys"]
-        extra = WORKFLOW.replace(job, job + "\n  windows-tier-journeys:\n    name: x\n    runs-on: windows-latest\n"
-                                       "    timeout-minutes: 5\n    steps:\n      - run: true\n", 1)
-        self.assertNotEqual(extra, WORKFLOW)
-        self.assertTrue(any("runs no journey job of its own" in p for p in self.problems(extra)))
+    def test_a_tier_coming_back_is_refused(self):
+        job = "\n  windows-tier:\n    name: x\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    steps:\n      - run: true\n"
+        self.assert_problem(WORKFLOW + job, LINE, "has no tier")
+        self.assert_problem(WORKFLOW.replace("name: codeflow-ci\n", 'name: codeflow-ci\n# REDUCED_TIER\n', 1), LINE, "has no tier")
 
-    def test_a_moved_job_that_ignores_the_tier_is_refused(self):
-        for name in parity.TIER_JOBS:
-            with self.subTest(job=name):
-                job = parity.workflow_jobs(WORKFLOW)[name]
-                self.assertIn(parity.TIER_CLAUSE, job)
-                for changed_job in (job.replace("needs.windows-tier.outputs.tier != 'reduced' && ", "", 1),
-                                    job.replace("    needs: [reuse, windows-tier]\n", "    needs: reuse\n", 1)):
-                    changed = WORKFLOW.replace(job, changed_job, 1)
-                    self.assertNotEqual(changed, WORKFLOW)
-                    self.assertTrue(any(f"`{name}` must need" in p for p in self.problems(changed)))
+    def test_a_missing_line_workflow_is_refused(self):
+        self.assert_problem(WORKFLOW, None, "codeflow-line-pr.yml is missing")
 
-    def test_another_job_reading_the_tier_is_refused(self):
-        job = parity.workflow_jobs(WORKFLOW)["gates"]
-        changed = WORKFLOW.replace(job, job.replace("!cancelled() &&", "needs.windows-tier.outputs.tier != 'reduced' && !cancelled() &&", 1))
-        self.assertNotEqual(changed, WORKFLOW)
-        self.assertTrue(any("may read the tier" in p for p in self.problems(changed)))
+    def test_the_line_workflow_starting_on_anything_else_is_refused(self):
+        filter_line = '    branches: ["integration/**"]\n'
+        for name, changed in (
+                ("every base", LINE.replace(filter_line, "", 1)),
+                ("main too", LINE.replace(filter_line, '    branches: ["integration/**", main]\n', 1)),
+                ("a push too", LINE.replace("on:\n  pull_request:\n", "on:\n  push:\n  pull_request:\n", 1))):
+            with self.subTest(change=name):
+                self.assertNotEqual(changed, LINE)
+                self.assert_problem(WORKFLOW, changed, "must start only for a pull request into an integration line")
+
+    def test_a_required_name_in_the_line_workflow_is_refused(self):
+        for name in ("codeflow gates", "windows"):
+            with self.subTest(name=name):
+                changed = LINE.replace("    name: codeflow gates (line)\n", f"    name: {name}\n", 1)
+                self.assert_problem(WORKFLOW, changed, "must publish exactly")
+
+    def test_a_skipped_row_of_a_required_name_is_refused(self):
+        # A job whose `if:` is false still leaves a row under its name.
+        extra = "\n  hidden:\n    if: false\n    name: windows\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    steps:\n      - run: true\n"
+        self.assert_problem(WORKFLOW, LINE + extra, "must publish exactly")
+
+    def test_an_expression_valued_name_is_refused(self):
+        changed = LINE.replace("    name: codeflow gates (line)\n",
+                               "    name: ${{ github.event_name == 'x' && 'windows' || 'codeflow gates (line)' }}\n", 1)
+        self.assert_problem(WORKFLOW, changed, "must publish exactly")
+
+    def test_a_copied_job_that_drifts_is_refused(self):
+        for job in parity.LINE_COPIED_JOBS:
+            with self.subTest(job=job):
+                text = parity.workflow_jobs(LINE)[job]
+                changed = LINE.replace(text, text.replace("    timeout-minutes:", "    continue-on-error: true\n    timeout-minutes:", 1), 1)
+                self.assertNotEqual(changed, LINE)
+                self.assert_problem(WORKFLOW, changed, f"`{job}` must be the same job")
+
+    def test_a_gate_job_that_drifts_is_refused(self):
+        for job in parity.LINE_GATE_JOBS:
+            with self.subTest(job=job):
+                text = parity.workflow_jobs(LINE)[job]
+                changed = LINE.replace(text, text.replace("    timeout-minutes:", "    continue-on-error: true\n    timeout-minutes:", 1), 1)
+                self.assert_problem(WORKFLOW, changed, f"`{job}` must be the same job")
+                condition = LINE.replace(text, text.replace(parity.LINE_GATES_IF, "${{ false }}", 1), 1)
+                self.assertNotEqual(condition, LINE)
+                self.assert_problem(WORKFLOW, condition, "must run under exactly")
+
+    def test_a_line_verdict_that_could_pass_a_failure_is_refused(self):
+        for name, old, new in (("always passes", 'if [ "$BUILD" != success ] || [ "$PARTS" != success ]; then', "if false; then"),
+                               ("forgives the build", '[ "$BUILD" != success ] || ', ""),
+                               ("a forgiven exit", "            exit 1\n          fi\n          line=",
+                                "            exit 0\n          fi\n          line="),
+                               ("needs one job", "    needs: [gates-build, gates]\n", "    needs: gates\n")):
+            with self.subTest(change=name):
+                self.assertIn(old, LINE)
+                self.assert_problem(WORKFLOW, LINE.replace(old, new, 1), "must be exactly this")
 
 
 class CoverageShardControls(unittest.TestCase):

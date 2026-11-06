@@ -952,9 +952,9 @@ class LeftOutLineTests(unittest.TestCase):
                 self.evidence(request)
 
     def test_a_left_out_line_can_earn_no_reduced_tier_credit(self):
-        """The tier and the proof that a run was full tier read nothing the daily run
-        produces, so a daily pass can credit no line with them. The tier verdict
-        still calls its own pass not full evidence, for any line."""
+        """The verdicts and the proof that a run was full read nothing the daily run
+        produces, so a daily pass can credit no line with them, and no tier remains
+        that could."""
         readers = {
             "codeflow-ci.yml": workflow("codeflow-ci"),
             "ci-reuse.py": (ROOT / "scripts/ci-reuse.py").read_text(encoding="utf-8"),
@@ -965,13 +965,7 @@ class LeftOutLineTests(unittest.TestCase):
                                  "windows-daily-verdict", "windows-daily-run", "workflows/windows-daily"):
                 with self.subTest(reader=name, output=daily_output):
                     self.assertNotIn(daily_output, text)
-        tier = jobs(workflow("codeflow-ci"))["windows-tier"]
-        self.assertNotRegex(tier, r"(?i)\bdaily\b")
-        self.assertNotIn("needs:", tier)
-        self.assertNotIn("actions/", tier)
-        self.assertNotRegex(tier, r"\bgh\b")
-        verdict = jobs(workflow("codeflow-ci"))["windows-verdict"]
-        self.assertIn("This is not Windows evidence", step_script(verdict, "Every Windows job the tier runs passed"))
+        self.assertNotIn("windows-tier", jobs(workflow("codeflow-ci")))
 
 
 class SkipTests(unittest.TestCase):

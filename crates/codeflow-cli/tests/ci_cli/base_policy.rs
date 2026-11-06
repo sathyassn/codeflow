@@ -158,6 +158,34 @@ fn a_head_that_changes_the_setup_hook_is_named() {
     assert!(!String::from_utf8_lossy(&out.stderr).contains("this change adds"));
 }
 
+/// TSK-1321: the line workflow carries the verdict `commit standards` admits
+/// a line pull request on, so a change to it is named like a managed
+/// workflow's.
+#[test]
+fn a_head_that_changes_the_line_workflow_is_warned_by_name() {
+    const LINE_WF: &str = ".github/workflows/codeflow-line-pr.yml";
+    let base = "name: codeflow-line-pr\non:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  gates-line-verdict:\n    name: codeflow gates (line)\n    runs-on: ubuntu-24.04\n    steps:\n      - run: true\n";
+    let dir = fixture(Some("{}"));
+    let root = dir.path();
+    git(root, &["switch", "-q", "main"]);
+    write(root, LINE_WF, base);
+    commit(root, "ci: add the line workflow");
+    git(root, &["switch", "-q", "feat/x"]);
+    git(root, &["merge", "-q", "--ff-only", "main"]);
+    write(
+        root,
+        LINE_WF,
+        &base.replace("  pull_request:\n", "  pull_request:\n  push:\n"),
+    );
+    commit(root, "ci: widen the line workflow");
+    let text = said(&ci(root));
+    assert!(
+        text.contains(&format!("this change edits {LINE_WF}")),
+        "{text}"
+    );
+    assert!(text.contains("adds triggers push"), "{text}");
+}
+
 /// TSK-336 AC-11: a head that changes a managed workflow or the release
 /// workflow gets a warning naming the triggers, permissions and jobs it
 /// changes. It never blocks: the default branch's copy keeps judging.

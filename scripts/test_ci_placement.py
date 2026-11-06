@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Where each job of .github/workflows/codeflow-ci.yml and of the daily run
-(.github/workflows/windows-daily-run.yml) runs (TSK-1321).
+"""Where each job of .github/workflows/codeflow-ci.yml, of the line workflow
+(codeflow-line-pr.yml) and of the daily run (windows-daily-run.yml) runs
+(TSK-1321).
 
 Suite placement is an operator decision (2026-11-05, "A plus Linux off line
 PRs"). The placement ADR (ADR-0097, "CI suite placement by event") and the
 maintainer page (docs/releasing.md, "Where CI suites run") each hold it as one
-table, by event and suite. These tests read every job's `if:` and `needs:`
-from the workflows themselves and evaluate them as GitHub does for each kind
-of run, with the tier step run in bash. They fail when:
+table, by event and suite. These tests read every workflow's triggers and
+every job's `if:` and `needs:` from the workflows themselves and evaluate them
+as GitHub does for each kind of run. They fail when:
 
 - the doc table differs from the table of the ADR the section links;
 - a cell of the doc table differs from what the workflows run for that event
@@ -16,7 +17,10 @@ of run, with the tier step run in bash. They fail when:
 - PLACEMENT below, one row per job and one column per kind of run, differs
   from the workflows or from the doc table;
 - a table, row, column or cell cannot be read, a job is in no suite, or a
-  suite has no job (fail closed).
+  suite has no job (fail closed);
+- a pull request into an integration line starts a job named for a required
+  check of main, skipped or not, since GitHub counts a skipped required check
+  as a success.
 
 So a job added, removed or moved needs a visible edit to PLACEMENT, and a
 placement change needs the doc and ADR tables changed with it, which takes a
@@ -27,7 +31,6 @@ import importlib.util
 import json
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import unittest
@@ -40,7 +43,6 @@ parity = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(parity)
 WORKFLOWS = ROOT / ".github" / "workflows"
 WORKFLOW = (WORKFLOWS / "codeflow-ci.yml").read_text(encoding="utf-8")
-BASH = shutil.which("bash")
 
 # The kinds of run. A ready pull request into an integration line or into
 # main, a draft into either, a ready pull request into any other base; a push
@@ -62,39 +64,45 @@ RUNS = {
 }
 
 # The placement table. `yes` runs, `-` does not. A pull request into an
-# integration line runs only the short checks: the Linux build and gate
-# parts, and the secret scan and security review (its commit standards and
-# release impact run in codeflow-policy.yml and codeflow-release.yml). A
-# draft runs only the secret scan and security review. Linux coverage and
-# every Windows job run on line pushes, pull requests into main, the weekly
-# and manual runs. Both verdicts run on every ready run and pass with their
+# integration line starts only the line workflow, which runs the short
+# checks: the Linux build and gate parts, the secret scan and the security
+# review (its commit standards and release impact run in codeflow-policy.yml
+# and codeflow-release.yml). A draft runs only the secret scan and security
+# review. Linux coverage and every Windows job run on line pushes, pull
+# requests into main, the weekly and manual runs. The two required verdicts
+# never run on a line pull request, so they cannot pass there with their
 # suites not selected. The daily column is the daily run, on main and each
 # active line at the commit the dispatcher resolved: the Linux build and gate
 # parts, the Linux coverage shards with their report and every Windows job,
 # which is never merge evidence. Each row names its jobs' workflow: ci for
-# codeflow-ci.yml, daily for the daily runner.
+# codeflow-ci.yml, line for the line workflow, daily for the daily runner.
 PLACEMENT = """\
 job                       workflow  line PR  draft line PR  main PR  draft main PR  other PR  line push  main push  weekly  manual  daily
 ubuntu-image              ci        -        -              -        -              -         yes        yes        -       -       -
 windows-image             ci        -        -              -        -              -         yes        yes        -       -       -
 reuse                     ci        -        -              -        -              -         yes        yes        -       -       -
-provenance                ci        yes      yes            yes      yes            yes       -          -          -       -       -
-gates-build               ci        yes      -              yes      -              -         yes        yes        yes     yes     -
-gates                     ci        yes      -              yes      -              -         yes        yes        yes     yes     -
+provenance                ci        -        -              yes      yes            yes       -          -          -       -       -
+gates-build               ci        -        -              yes      -              -         yes        yes        yes     yes     -
+gates                     ci        -        -              yes      -              -         yes        yes        yes     yes     -
 gates-release             ci        -        -              yes      -              -         -          yes        yes     yes     -
 gates-coverage            ci        -        -              yes      -              -         yes        yes        yes     yes     -
 gates-coverage-report     ci        -        -              yes      -              -         yes        yes        yes     yes     -
-gates-verdict             ci        yes      -              yes      -              yes       yes        yes        yes     yes     -
-windows-tier              ci        yes      yes            yes      yes            yes       -          -          -       -       -
+gates-verdict             ci        -        -              yes      -              yes       yes        yes        yes     yes     -
 windows-build             ci        -        -              yes      -              -         yes        yes        yes     yes     -
 windows-tests             ci        -        -              yes      -              -         yes        yes        yes     yes     -
 windows                   ci        -        -              yes      -              -         yes        yes        yes     yes     -
 windows-release-journey   ci        -        -              yes      -              -         yes        yes        yes     yes     -
 windows-journeys          ci        -        -              yes      -              -         yes        yes        yes     yes     -
-windows-verdict           ci        yes      -              yes      -              yes       yes        yes        yes     yes     -
-secret-scan               ci        yes      yes            yes      yes            yes       yes        yes        yes     yes     -
-gitleaks-canary           ci        yes      yes            yes      yes            yes       yes        yes        yes     yes     -
-security-review           ci        yes      yes            yes      yes            yes       yes        yes        yes     yes     -
+windows-verdict           ci        -        -              yes      -              yes       yes        yes        yes     yes     -
+secret-scan               ci        -        -              yes      yes            yes       yes        yes        yes     yes     -
+gitleaks-canary           ci        -        -              yes      yes            yes       yes        yes        yes     yes     -
+security-review           ci        -        -              yes      yes            yes       yes        yes        yes     yes     -
+gates-build               line      yes      -              -        -              -         -          -          -       -       -
+gates                     line      yes      -              -        -              -         -          -          -       -       -
+gates-line-verdict        line      yes      -              -        -              -         -          -          -       -       -
+secret-scan               line      yes      yes            -        -              -         -          -          -       -       -
+gitleaks-canary           line      yes      yes            -        -              -         -          -          -       -       -
+security-review           line      yes      yes            -        -              -         -          -          -       -       -
 gates-build               daily     -        -              -        -              -         -          -          -       -       yes
 gates                     daily     -        -              -        -              -         -          -          -       -       yes
 gates-coverage            daily     -        -              -        -              -         -          -          -       -       yes
@@ -105,7 +113,7 @@ windows                   daily     -        -              -        -          
 windows-release-journey   daily     -        -              -        -              -         -          -          -       -       yes
 windows-journeys          daily     -        -              -        -              -         -          -          -       -       yes
 """
-WORKFLOW_FILES = {"ci": "codeflow-ci.yml", "daily": "windows-daily-run.yml"}
+WORKFLOW_FILES = {"ci": "codeflow-ci.yml", "line": "codeflow-line-pr.yml", "daily": "windows-daily-run.yml"}
 
 # The short checks a line pull request keeps in the other workflows: commit
 # standards and the policy check, and release impact. Their only job
@@ -136,25 +144,28 @@ def workflow_text(name: str) -> str:
     return WORKFLOW if name == "ci" else (WORKFLOWS / WORKFLOW_FILES[name]).read_text(encoding="utf-8")
 
 
-def started_by(kind: str) -> str:
-    """A kind of run starts one workflow: the daily run starts only the daily
-    runner, the others only ci."""
-    return "daily" if RUNS[kind].get("workflow") == WORKFLOW_FILES["daily"] else "ci"
+def started_by(kind: str) -> set[str]:
+    """The workflows a kind of run can start: the daily run only the daily
+    runner, any other ci and the line workflow, by their triggers."""
+    return {"daily"} if RUNS[kind].get("workflow") == WORKFLOW_FILES["daily"] else {"ci", "line"}
 
 
 DISPATCHER = WORKFLOWS / "windows-daily.yml"
 
 
-def triggers(text: str) -> dict[str, list[str] | None]:
-    """A workflow's events, each with its branch filter or None."""
+def triggers(text: str) -> dict[str, dict[str, list[str]]]:
+    """A workflow's events, each with its `branches` and `branches-ignore`."""
     block = re.search(r"(?ms)^on:\n(.*?)(?=^[^\s#])", text)
     if not block:
         raise ValueError("a workflow has no readable `on:` block")
     found = {}
     for event in re.finditer(r"(?m)^  ([a-z_]+):[^\n]*\n((?:(?:    .*)?\n)*)", block.group(1)):
-        branches = re.search(r"(?m)^    branches: \[(.*)\]$", event.group(2))
-        found[event.group(1)] = ([item.strip().strip("\"'") for item in branches.group(1).split(",")]
-                                 if branches else None)
+        filters = {}
+        for key in ("branches", "branches-ignore"):
+            value = re.search(rf"(?m)^    {key}: \[(.*)\]$", event.group(2))
+            if value:
+                filters[key] = [item.strip().strip("\"'") for item in value.group(1).split(",")]
+        found[event.group(1)] = filters
     return found
 
 
@@ -163,11 +174,13 @@ def triggered(text: str, run: dict) -> bool:
     events = triggers(text)
     if run["event"] not in events:
         return False
-    patterns = events[run["event"]]
-    if patterns is None:
-        return True
     name = run["ref"].removeprefix("refs/heads/") if run["event"] == "push" else run["base"]
-    return any(fnmatchcase(name, pattern.replace("**", "*")) for pattern in patterns)
+    def matches(patterns):
+        return any(fnmatchcase(name, pattern.replace("**", "*")) for pattern in patterns)
+    filters = events[run["event"]]
+    if "branches" in filters and not matches(filters["branches"]):
+        return False
+    return not matches(filters.get("branches-ignore", []))
 
 
 def ran_by(kind: str, texts: dict[str, str] | None = None, reuse_run: str = "",
@@ -181,7 +194,7 @@ def ran_by(kind: str, texts: dict[str, str] | None = None, reuse_run: str = "",
         dispatcher = DISPATCHER.read_text(encoding="utf-8") if dispatcher is None else dispatcher
         if "schedule" not in triggers(dispatcher):
             return {name: set() for name in WORKFLOW_FILES}
-    return {name: simulate(texts[name], RUNS[kind], reuse_run=reuse_run) if name == started else set()
+    return {name: simulate(texts[name], RUNS[kind], reuse_run=reuse_run) if name in started else set()
             for name in WORKFLOW_FILES}
 
 
@@ -340,45 +353,8 @@ def job_fields(text: str) -> tuple[str | None, list[str]]:
     return (condition.group(1) if condition else None), needs
 
 
-def run_tier(event: str, base: str) -> str:
-    env, script = step("windows-tier", "Choose the Windows tier")
-    with tempfile.TemporaryDirectory() as folder:
-        out = Path(folder) / "output"
-        out.write_text("", encoding="utf-8")
-        values = {"PATH": os.environ["PATH"], "HOME": folder, "REDUCED_TIER": env["REDUCED_TIER"], "EVENT": event,
-                  "BASE": base, "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": os.devnull}
-        done = subprocess.run([BASH, "--noprofile", "--norc", "-eo", "pipefail", "-c", script], cwd=folder,
-                              env=values, capture_output=True, text=True, check=True)
-        assert done.returncode == 0
-        return out.read_text(encoding="utf-8").strip().removeprefix("tier=")
-
-
-def step(job: str, name: str) -> tuple[dict[str, str], str]:
-    lines = parity.workflow_jobs(WORKFLOW)[job].splitlines()
-    start = lines.index(f"      - name: {name}")
-    env, script, at = {}, [], start + 1
-    while at < len(lines) and not lines[at].startswith("      - "):
-        line = lines[at]
-        if line == "        env:":
-            at += 1
-            while lines[at].startswith("          ") and ":" in lines[at]:
-                key, value = lines[at].strip().split(": ", 1)
-                env[key] = value[1:-1] if value[:1] in "'\"" and value[-1:] == value[:1] else value
-                at += 1
-            continue
-        if line == "        run: |":
-            at += 1
-            while at < len(lines) and (not lines[at].strip() or lines[at].startswith(" " * 10)):
-                script.append(lines[at][10:])
-                at += 1
-            continue
-        at += 1
-    return env, "\n".join(script) + "\n"
-
-
-def simulate(workflow: str, run: dict, tier_result=None, reuse_run: str = "") -> set[str]:
-    """The jobs that run, every job that runs passing. `tier_result` replaces
-    the tier job's outcome, for the fail-closed cases; `reuse_run` is the run
+def simulate(workflow: str, run: dict, reuse_run: str = "") -> set[str]:
+    """The jobs that run, every job that runs passing; `reuse_run` is the run
     the reuse job names."""
     if not triggered(workflow, run):
         return set()
@@ -399,19 +375,11 @@ def simulate(workflow: str, run: dict, tier_result=None, reuse_run: str = "") ->
             if not set(tokens(text)) & STATUS:
                 text = f"success() && ({text})"
             runs = truthy(Expression(text, context, results, direct).evaluate())
-            outputs = {}
-            if runs and name == "windows-tier":
-                outputs = {"tier": run_tier(run["event"], run["base"])}
-            if runs and name == "reuse" and reuse_run:
-                outputs = {"run": reuse_run}
-            result = "success" if runs else "skipped"
-            if name == "windows-tier" and runs and tier_result is not None:
-                result, outputs = tier_result
-            results[name] = {"result": result, "outputs": outputs}
+            outputs = {"run": reuse_run} if runs and name == "reuse" and reuse_run else {}
+            results[name] = {"result": "success" if runs else "skipped", "outputs": outputs}
     return {name for name, value in results.items() if value["result"] != "skipped"}
 
 
-@unittest.skipIf(BASH is None or os.name == "nt", "the tier step runs in Linux bash")
 class PlacementTests(unittest.TestCase):
     """Every job runs on exactly the kinds of run its row names."""
 
@@ -432,42 +400,56 @@ class PlacementTests(unittest.TestCase):
 
     def test_the_daily_run_runs_the_line_push_s_suites_without_the_short_checks(self):
         push, daily = ran_by("line push")["ci"], ran_by("daily")["daily"]
-        # The image, reuse, tier and verdict jobs serve a run itself and test nothing.
+        # The image, reuse and verdict jobs serve a run itself and test nothing.
         self.assertEqual(push - NOT_A_SUITE - set().union(*SHORT_JOBS.values()), daily)
 
     def test_a_line_pull_request_runs_only_the_short_checks(self):
-        ran = simulate(WORKFLOW, RUNS["line PR"])
-        self.assertEqual(ran, {"provenance", "gates-build", "gates", "gates-verdict", "windows-tier",
-                               "windows-verdict", "secret-scan", "gitleaks-canary", "security-review"})
+        ran = ran_by("line PR")
+        self.assertEqual(ran["ci"], set())
+        self.assertEqual(ran["line"], {"gates-build", "gates", "gates-line-verdict", "secret-scan",
+                                       "gitleaks-canary", "security-review"})
 
-    def test_a_job_moved_back_onto_line_pull_requests_is_caught(self):
-        for job in ("gates-coverage", "windows", "windows-release-journey", "windows-build"):
-            with self.subTest(job=job):
-                text = parity.workflow_jobs(WORKFLOW)[job]
-                moved = WORKFLOW.replace(text, text.replace("needs.windows-tier.outputs.tier != 'reduced' && ", "", 1))
-                self.assertNotEqual(moved, WORKFLOW)
-                self.assertIn(job, simulate(moved, RUNS["line PR"]))
+    def test_a_line_pull_request_publishes_no_required_name_of_main(self):
+        # A job whose `if:` is false still leaves a skipped row, so this reads
+        # every job of every workflow the run starts, not only those that run.
+        texts = {name: workflow_text(name) for name in WORKFLOW_FILES}
+        for kind in ("line PR", "draft line PR"):
+            started = [name for name in started_by(kind) if triggered(texts[name], RUNS[kind])]
+            self.assertEqual(started, ["line"], kind)
+            for name in started:
+                published = {re.search(r"^ {4}name:\s*(.+?)\s*$", text, re.M).group(1)
+                             for text in parity.workflow_jobs(texts[name]).values()}
+                with self.subTest(run=kind, workflow=name):
+                    self.assertEqual(published & MAIN_ONLY_NAMES, set())
+
+    def test_a_job_widened_onto_line_pull_requests_is_caught(self):
+        ci = workflow_text("ci")
+        widened = ci.replace('    branches-ignore: ["integration/**"]\n', "", 1)
+        self.assertNotEqual(widened, ci)
+        ran = simulate(widened, RUNS["line PR"])
+        self.assertLessEqual({"gates-verdict", "windows-verdict"}, ran)
 
     def test_a_short_check_dropped_from_line_pull_requests_is_caught(self):
-        text = parity.workflow_jobs(WORKFLOW)["gates"]
-        moved = WORKFLOW.replace(text, text.replace("!cancelled() && ", "!cancelled() && needs.windows-tier.outputs."
-                                                    "tier != 'reduced' && ", 1).replace(
-                                     "needs: [reuse, gates-build]", "needs: [reuse, gates-build, windows-tier]", 1))
+        line = workflow_text("line")
+        text = parity.workflow_jobs(line)["gates"]
+        moved = line.replace(text, text.replace("!cancelled() && ", "!cancelled() && !always() && ", 1))
         self.assertNotIn("gates", simulate(moved, RUNS["line PR"]))
 
-    def test_an_unreadable_event_or_base_runs_the_full_set(self):
-        # The tier step fails closed: an empty or unexpected event or base,
-        # or a tier job that failed or wrote nothing, runs every moved job.
-        line = RUNS["line PR"]
-        full = simulate(WORKFLOW, line, tier_result=("success", {"tier": "full"}))
-        moved = {"gates-coverage", "gates-coverage-report", "windows-build", "windows-tests", "windows",
-                 "windows-release-journey", "windows-journeys"}
-        self.assertLessEqual(moved, full)
-        for case in (("failure", {}), ("success", {}), ("success", {"tier": ""}), ("success", {"tier": "full "})):
-            with self.subTest(tier=case):
-                self.assertEqual(simulate(WORKFLOW, line, tier_result=case), full)
-        self.assertEqual(run_tier("", line["base"]), "full")
-        self.assertEqual(run_tier("pull_request", ""), "full")
+    def test_any_base_that_is_not_a_line_starts_the_full_workflow(self):
+        # Fail closed: only a base GitHub reads as integration/** avoids the
+        # full run. Nothing else can select the line workflow.
+        for base in ("main", "master", "feature/x", "task/integration/x", "integration", "Integration/x"):
+            with self.subTest(base=base):
+                run = {**RUNS["main PR"], "base": base}
+                self.assertTrue(triggered(workflow_text("ci"), run))
+                self.assertFalse(triggered(workflow_text("line"), run))
+        self.assertTrue(triggered(workflow_text("ci"), {**RUNS["main PR"], "base": ""}))
+
+    def test_every_other_event_starts_the_full_workflow(self):
+        for kind in ("line push", "main push", "weekly", "manual"):
+            with self.subTest(run=kind):
+                self.assertTrue(triggered(workflow_text("ci"), RUNS[kind]))
+                self.assertFalse(triggered(workflow_text("line"), RUNS[kind]))
 
 
 # The parity check (TSK-1321 AC-12). The placement table of docs/releasing.md,
@@ -504,9 +486,12 @@ SHORT_JOBS = {"secret scan": frozenset({"secret-scan", "gitleaks-canary"}),
 # Short checks of codeflow-policy.yml and codeflow-release.yml, on pull requests
 # only (OtherWorkflowTests).
 PR_ONLY_CHECKS = frozenset({"policy check", "commit standards", "release impact"})
-# Jobs that serve a run itself: images, reuse, the tier, provenance, verdicts.
-NOT_A_SUITE = frozenset({"ubuntu-image", "windows-image", "reuse", "provenance", "windows-tier",
-                         "gates-verdict", "windows-verdict"})
+# Jobs that serve a run itself: images, reuse, provenance, verdicts.
+NOT_A_SUITE = frozenset({"ubuntu-image", "windows-image", "reuse", "provenance",
+                         "gates-verdict", "windows-verdict", "gates-line-verdict"})
+# The verdicts that run only where their suites run (ADR-0097). A line pull
+# request must leave no row of these names, skipped or not.
+MAIN_ONLY_NAMES = frozenset({"codeflow gates", "windows"})
 # Every short-checks cell the table may hold, and the checks it names. "yes"
 # is the five the operator named plus the security review, which the page
 # says runs on every event. Any other text fails.
@@ -595,7 +580,7 @@ def parity_problems(doc: str, read_adr, texts: dict[str, str], ran, reused=None,
         event = row[0]
         for kind in EVENT_ROWS.get(event, ()):
             started = started_by(kind)
-            done = ran(kind)[started]
+            done = set().union(*(ran(kind)[name] for name in started))
             for column, cell in zip(COLUMNS[1:], row[1:]):
                 where = f"{event} / {column} ({kind}): the table says {cell!r}"
                 if column == "Short checks":
@@ -619,9 +604,10 @@ def parity_problems(doc: str, read_adr, texts: dict[str, str], ran, reused=None,
                     continue
                 if members - done:
                     problems.append(f"{where}; the workflows do not run {sorted(members - done)}")
-                if SUITE_CELLS[cell] == "reused" and reused is not None and members & reused(kind)[started]:
+                still_run = set().union(*(reused(kind)[name] for name in started)) if reused is not None else set()
+                if SUITE_CELLS[cell] == "reused" and members & still_run:
                     problems.append(f"{where}; with a reused run the workflows still run "
-                                    f"{sorted(members & reused(kind)[started])}")
+                                    f"{sorted(members & still_run)}")
     return problems
 
 
@@ -629,7 +615,6 @@ def read_repo(relative: str) -> str:
     return (ROOT / "docs" / relative).read_text(encoding="utf-8")
 
 
-@unittest.skipIf(BASH is None or os.name == "nt", "the tier step runs in Linux bash")
 class DocParityTests(unittest.TestCase):
     """The doc table, its ADR's table, PLACEMENT and the workflows agree."""
 
@@ -677,8 +662,9 @@ class DocParityTests(unittest.TestCase):
 
     def test_a_job_condition_widened_to_line_pull_requests_fails(self):
         ci = self.texts["ci"]
-        job = parity.workflow_jobs(ci)["windows-build"]
-        widened = ci.replace(job, job.replace("needs.windows-tier.outputs.tier != 'reduced' && ", "", 1))
+        widened = ci.replace('    branches-ignore: ["integration/**"]\n', "", 1).replace(
+            """(github.event_name == 'pull_request' && !github.event.pull_request.draft && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'""",
+            """(github.event_name == 'pull_request' && !github.event.pull_request.draft || github.event_name == 'push'""")
         self.assertNotEqual(widened, ci)
         self.assertFails(self.problems(texts={**self.texts, "ci": widened}),
                          "Pull request into an integration line", "Windows partitions", "windows-build")
@@ -730,6 +716,75 @@ class DocParityTests(unittest.TestCase):
         self.assertNotEqual(ignores_reuse, ci)
         self.assertFails(self.problems(texts={**self.texts, "ci": ignores_reuse}),
                          "Push to `main`", "Release gates", "reused run")
+
+
+class AdmissionTests(unittest.TestCase):
+    """AC-14: `commit standards` judges a line pull request by the workflow it
+    ran. The step runs here against a stand-in `gh` and `python3`."""
+
+    @classmethod
+    def setUpClass(cls):
+        text = (WORKFLOWS / "codeflow-policy.yml").read_text(encoding="utf-8")
+        job = parity.workflow_jobs(text)["commit-lint"].splitlines()
+        at = job.index("      - name: the exact head's ready codeflow-ci run passed")
+        start = job.index("        run: |", at) + 1
+        script = []
+        for line in job[start:]:
+            if line.strip() and not line.startswith(" " * 10):
+                break
+            script.append(line[10:])
+        cls.script = "\n".join(script) + "\n"
+
+    def admit(self, base, gh):
+        with tempfile.TemporaryDirectory() as folder:
+            bin_dir = Path(folder)
+            calls = bin_dir / "calls"
+            for name, body in (("gh", gh), ("python3", 'printf "%s\\n" "$@" > "$CALLS"\n')):
+                tool = bin_dir / name
+                tool.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+                tool.chmod(0o755)
+            env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "CALLS": str(calls), "REPOSITORY": "o/r", "HEAD_SHA": "a" * 40,
+                   "PR_NUMBER": "7", "DRAFT": "false", "BASE_REF": base}
+            done = subprocess.run(["/bin/sh", "-eu", "-c", self.script], env=env, capture_output=True, text=True,
+                                  cwd=folder)
+            return done.returncode, done.stdout + done.stderr, (calls.read_text(encoding="utf-8").splitlines()
+                                                                if calls.exists() else None)
+
+    FOUND = 'echo .github/workflows/codeflow-line-pr.yml\n'
+    ABSENT = 'echo "gh: Not Found (HTTP 404)" >&2\nexit 1\n'
+    BROKEN = 'echo "gh: Server Error (HTTP 502)" >&2\nexit 1\n'
+    UNCALLED = 'echo "gh must not be called" >&2\nexit 9\n'
+
+    def assertFullVerdicts(self, argv):
+        self.assertEqual(argv[argv.index("--workflow") + 1], ".github/workflows/codeflow-ci.yml")
+        self.assertEqual([argv[at + 1] for at, word in enumerate(argv) if word == "--require"],
+                         ["codeflow gates", "windows"])
+
+    def test_a_pull_request_into_main_needs_both_required_verdicts(self):
+        for base in ("main", "master", "feature/x", "integration/", "integration", ""):
+            with self.subTest(base=base):
+                code, out, argv = self.admit(base, self.UNCALLED)
+                self.assertEqual(code, 0, out)
+                self.assertFullVerdicts(argv)
+
+    def test_a_line_pull_request_that_ran_the_line_workflow_needs_its_verdict(self):
+        code, out, argv = self.admit("integration/EPC-022-fixes", self.FOUND)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(argv[argv.index("--workflow") + 1], ".github/workflows/codeflow-line-pr.yml")
+        self.assertEqual([argv[at + 1] for at, word in enumerate(argv) if word == "--require"],
+                         ["codeflow gates (line)"])
+
+    def test_a_line_without_the_line_workflow_keeps_both_required_verdicts(self):
+        # A line that has not yet taken main, and every adopter's line.
+        code, out, argv = self.admit("integration/EPC-022-fixes", self.ABSENT)
+        self.assertEqual(code, 0, out)
+        self.assertFullVerdicts(argv)
+
+    def test_an_unreadable_answer_refuses_admission(self):
+        code, out, argv = self.admit("integration/EPC-022-fixes", self.BROKEN)
+        self.assertEqual(code, 1, out)
+        self.assertIsNone(argv)
+        self.assertIn("HTTP 502", out)
 
 
 class OtherWorkflowTests(unittest.TestCase):
