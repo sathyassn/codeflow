@@ -72,20 +72,40 @@ pub fn parse_target_coverage(
     target: &TargetConfig,
     run_result: &TargetRunResult,
 ) -> Result<Vec<FileCoverage>, TestingError> {
+    parse_target_coverage_totals(target, run_result).map(|(files, _)| files)
+}
+
+/// Parse coverage data for a single target, with the report's own totals
+/// where its format records them (llvm-cov-json: lines, functions and
+/// regions). Other formats return `None` for the totals.
+///
+/// # Errors
+///
+/// Returns `TestingError` if the coverage file cannot be read or parsed.
+pub fn parse_target_coverage_totals(
+    target: &TargetConfig,
+    run_result: &TargetRunResult,
+) -> Result<(Vec<FileCoverage>, Option<coverage::CoverageTotals>), TestingError> {
     let Some(cov_config) = &target.coverage else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     };
 
     let cov_path = match &run_result.coverage_path {
         Some(p) if p.exists() => p,
-        _ => return Ok(Vec::new()),
+        _ => return Ok((Vec::new(), None)),
     };
 
+    let mut totals = None;
     let mut coverages = match cov_config.format {
         CoverageFormat::Lcov => coverage::lcov::parse_lcov(cov_path)?,
         CoverageFormat::Cobertura => coverage::cobertura::parse_cobertura(cov_path)?,
         CoverageFormat::IstanbulSummary => coverage::istanbul::parse_istanbul(cov_path)?,
         CoverageFormat::GoCover => coverage::go_cover::parse_go_cover(cov_path)?,
+        CoverageFormat::LlvmCovJson => {
+            let report = coverage::llvm_cov::parse_llvm_cov(cov_path)?;
+            totals = Some(report.totals);
+            report.files
+        }
     };
 
     // Normalize absolute paths to cwd-relative for exception matching.
@@ -105,7 +125,7 @@ pub fn parse_target_coverage(
         }
     }
 
-    Ok(coverages)
+    Ok((coverages, totals))
 }
 
 /// Evaluate coverage thresholds for a target.

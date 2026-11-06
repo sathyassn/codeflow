@@ -478,6 +478,8 @@ pub enum CoverageFormat {
     Cobertura,
     IstanbulSummary,
     GoCover,
+    /// `llvm-cov export -format=json`, as `cargo llvm-cov --json` writes it.
+    LlvmCovJson,
 }
 
 /// A coverage rule.
@@ -1351,6 +1353,7 @@ mod tests {
             ("\"cobertura\"", CoverageFormat::Cobertura),
             ("\"istanbul-summary\"", CoverageFormat::IstanbulSummary),
             ("\"go-cover\"", CoverageFormat::GoCover),
+            ("\"llvm-cov-json\"", CoverageFormat::LlvmCovJson),
         ] {
             let parsed: CoverageFormat = serde_json::from_str(json).unwrap();
             assert_eq!(parsed, expected);
