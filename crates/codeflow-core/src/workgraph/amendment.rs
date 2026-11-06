@@ -471,14 +471,67 @@ pub fn epic_problem(
     };
     match (status(base), status(head)) {
         (Err(error), _) | (_, Err(error)) => Some(format!(
-            "cannot read the epic records to check {epic}: {error}"
+            "cannot read the epic records to check the `Task:` line: {error}"
         )),
-        (_, Ok(None)) => Some(format!("`Task:` names {epic}, which has no epic record")),
+        // The epic is the pull request body's own text until a record
+        // vouches for it, so a message names it only once one does.
+        (_, Ok(None)) => Some("`Task:` names an epic that has no epic record".to_string()),
         (Ok(Some(status)), _) if status == "cancelled" => {
             Some(format!("`Task:` names {epic}, which is cancelled"))
         }
         _ => None,
     }
+}
+
+/// Whether a task record holds `task` on the target or at the head.
+///
+/// The caller judges a `Task:` line only where durable tracking is on (the
+/// classification's own decision), so a project with no record yet is not
+/// tracking off: a full-tier project tracks work before its first record.
+fn task_on_record(
+    repo_root: &std::path::Path,
+    base: &str,
+    head: &str,
+    task: &str,
+) -> Result<bool, String> {
+    let read = |revision: &str| -> Result<bool, String> {
+        let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+        let graph = Graph::from_revision(&repo, revision)?;
+        Ok(graph
+            .records
+            .get(task)
+            .is_some_and(|record| record.kind == RecordKind::Task))
+    };
+    Ok(read(base)? || read(head)?)
+}
+
+/// Why `task`, named by a pull request body's `Task:` line, cannot be
+/// trusted as written: no task record holds it on the target or at the
+/// head. The message never repeats the identifier, which is the body's own
+/// text until a record vouches for it (TSK-1040).
+#[must_use]
+pub fn task_problem(
+    repo_root: &std::path::Path,
+    base: &str,
+    head: &str,
+    task: &str,
+) -> Option<String> {
+    match task_on_record(repo_root, base, head, task) {
+        Err(error) => Some(format!(
+            "cannot read the task records to check the `Task:` line: {error}"
+        )),
+        Ok(false) => Some(
+            "`Task:` names a task that has no task record on the target or at the head".to_string(),
+        ),
+        Ok(true) => None,
+    }
+}
+
+/// Whether a task record holds `task` on the target or at the head, so a
+/// message may repeat it (TSK-1040). A read failure is no vouching.
+#[must_use]
+pub fn task_recorded(repo_root: &std::path::Path, base: &str, head: &str, task: &str) -> bool {
+    task_on_record(repo_root, base, head, task).unwrap_or(false)
 }
 
 /// Why a planning amendment that changes `AGENTS.md`'s managed block is
