@@ -101,7 +101,17 @@ A landed task ends with cleanup that proves the merge and inspects worktree
 state first. Ancestry never proves a squash merge: require PR state `MERGED`
 and match the branch tip to its recorded head SHA, or show that `git cherry`
 against the updated target has no unapplied `+` entry, before any branch
-force-delete; ancestry proves only a normal merge. Never force-remove a
+force-delete; ancestry proves only a normal merge. A landing candidate
+branch (named with `git.candidate_prefix`, default `candidate/`) whose
+line got the same tree through another commit has its own merge proof:
+`codeflow work remove-candidate <branch> --line <line>` fetches the line,
+which must be a protected branch or an `integration/` line, finds a commit
+on its first-parent history with the candidate's tree,
+refuses when a worktree uses the branch or a pull request is open from it,
+then removes it and records the proof in the ledger; `--dry-run` shows the
+proof first. A task branch never uses it. A candidate that never landed
+stays: in a clone with a remote, a local branch no remote holds and no
+worktree uses counts neither as a completion nor as a claim. Never force-remove a
 dirty worktree; preserve or harvest dirty or untracked work first. Unproven
 work is retained, never guessed safe.
 

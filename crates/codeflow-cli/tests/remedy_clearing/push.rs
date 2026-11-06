@@ -291,29 +291,82 @@ fn slow_python(root: &Path) -> PathBuf {
     bin
 }
 
+/// The production budget check and remedy for a push set whose release
+/// preflight took `slow`: the over-budget finding as the hook builds it, or
+/// none. The duration is measured input; no clock or budget setting enters
+/// the binary or its environment (TSK-356 AC-2).
+fn budget_finding(slow: std::time::Duration) -> Option<String> {
+    use codeflow_core::hooks::git_hook::{over_budget_note, PushStep, PUSH_SET_BUDGET};
+    let steps = [
+        PushStep {
+            name: "target policy".into(),
+            duration: std::time::Duration::from_millis(20),
+        },
+        PushStep {
+            name: "release preflight (feat/x)".into(),
+            duration: slow,
+        },
+    ];
+    let total = steps.iter().map(|step| step.duration).sum();
+    over_budget_note(&steps, total, PUSH_SET_BUDGET).map(|note| note.line("codeflow", "note"))
+}
+
+/// The push set's budget and its remedy without a real minute's wait: the
+/// comparison and the remedy come from the hook's own code with a measured
+/// duration, the printed step runs on the real project, and the next real
+/// push no longer runs the step the finding named. The real slow push is
+/// `push_budget_is_reported_after_a_real_slow_step`, in the full gate.
 #[test]
 fn clears_push_over_budget_builtin() {
+    use std::time::Duration;
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    released(&root, &dest);
+    let before = preflighted(&root);
+    assert!(before.contains("push set finished"), "{before}");
+    for under in [Duration::from_secs(1), Duration::from_millis(59_980)] {
+        assert_eq!(budget_finding(under), None, "{under:?}");
+    }
+    let printed = budget_finding(Duration::from_secs(61)).expect("over-budget finding");
+    assert!(printed.contains("over its 60s budget"), "{printed}");
+    assert_prints_row(&printed, "PUSH_OVER_BUDGET_BUILTIN");
+    assert!(printed.contains("built-in `release preflight"), "{printed}");
+    let policy = read(&root, ".codeflow/policy.json");
+    let mut value: serde_json::Value = serde_json::from_str(&policy).unwrap();
+    value["git"]["test_gate_on_push"] = serde_json::json!("off");
+    write(
+        &root,
+        ".codeflow/policy.json",
+        &serde_json::to_string_pretty(&value).unwrap(),
+    );
+    commit_all(&root, "chore: drop the push set");
+    let after = pushed(&root);
+    assert!(!after.contains("release preflight"), "{after}");
+    assert!(!after.contains("over its 60s budget"), "{after}");
+}
+
+/// The real process path behind the budget (TSK-356 AC-2): a release
+/// preflight through a `python3` that takes 61 s, timed by the hook's own
+/// clock. The note names the step and its remedy, and the push still lands.
+/// It waits a real minute, so only the full gate runs it
+/// (`.config/nextest.toml`).
+#[test]
+fn push_budget_is_reported_after_a_real_slow_step() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
     let dest = with_destination(&root);
     released(&root, &dest);
     let slow = slow_python(&root);
-    prove(
-        "PUSH_OVER_BUDGET_BUILTIN",
-        "over its 60s budget",
-        || push_with_path(&root, &slow, &["origin", "HEAD"]),
-        |printed| {
-            assert!(printed.contains("built-in `release preflight"), "{printed}");
-            let policy = read(&root, ".codeflow/policy.json");
-            let mut value: serde_json::Value = serde_json::from_str(&policy).unwrap();
-            value["git"]["test_gate_on_push"] = serde_json::json!("off");
-            write(
-                &root,
-                ".codeflow/policy.json",
-                &serde_json::to_string_pretty(&value).unwrap(),
-            );
-            commit_all(&root, "chore: drop the push set");
-        },
+    let out = push_with_path(&root, &slow, &["origin", "HEAD"]);
+    let printed = block(&out, "over its 60s budget");
+    assert_prints_row(printed, "PUSH_OVER_BUDGET_BUILTIN");
+    assert!(printed.contains("built-in `release preflight"), "{printed}");
+    assert!(out.contains("push set finished"), "{out}");
+    assert_eq!(
+        text(&run("git", &dest, &["rev-parse", "feat/x"])).trim(),
+        head_sha(&root),
+        "the budget note must leave the push's verdict intact: {out}"
     );
 }
 

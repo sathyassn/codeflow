@@ -318,6 +318,14 @@ pub struct GitPolicy {
     /// Additional remotes whose branches count as advisory work claims.
     /// Origin and the target's fetch remote always count. Empty by default.
     pub claim_remotes: Vec<String>,
+    /// The name prefix of landing candidate branches, which
+    /// `codeflow work remove-candidate` removes by tree-equality proof
+    /// (TSK-1308). Default `candidate/`.
+    pub candidate_prefix: String,
+    /// How many commits of a line's first-parent history
+    /// `codeflow work remove-candidate` searches for the candidate's tree.
+    /// Default 200.
+    pub candidate_search_depth: u32,
     /// Words a generated branch name leaves out, because a sandbox can refuse
     /// to read a ref file with such a word in its name. A project sets the
     /// list its own harness needs; an empty list keeps every word.
@@ -646,6 +654,8 @@ impl Default for GitPolicy {
                 .map(ToString::to_string)
                 .collect(),
             claim_remotes: Vec::new(),
+            candidate_prefix: "candidate/".to_string(),
+            candidate_search_depth: 200,
             branch_name_omit_words: DEFAULT_BRANCH_NAME_OMIT_WORDS
                 .iter()
                 .map(ToString::to_string)
@@ -823,6 +833,54 @@ impl GitPolicy {
             return true;
         }
         self.branch_prefixes.iter().any(|p| branch.starts_with(p))
+    }
+
+    /// Why `git.candidate_prefix` does not keep landing candidates apart from
+    /// every other branch this policy names, or `None` when it does
+    /// (TSK-1308). The prefix must not be empty, and must not equal, contain
+    /// or be contained by any `git.branch_prefixes` entry, the
+    /// `integration/` line prefix, or the literal start of any
+    /// `git.protected_branches` name or pattern (a pattern up to its first
+    /// glob character, so `*` overlaps every prefix). Names are compared
+    /// without case. `codeflow work remove-candidate` deletes on tree
+    /// equality alone, so an overlap would let it delete work or line
+    /// branches; the schema and the removal both refuse it.
+    #[must_use]
+    pub fn candidate_prefix_problem(&self) -> Option<String> {
+        let prefix = self.candidate_prefix.to_lowercase();
+        if prefix.is_empty() {
+            return Some(
+                "git.candidate_prefix is empty, so it would name every branch; use a prefix such as candidate/".into(),
+            );
+        }
+        let literal = |entry: &str| -> String {
+            let end = entry
+                .find(['*', '?', '[', '{', '\\'])
+                .unwrap_or(entry.len());
+            entry[..end].to_lowercase()
+        };
+        let named = self
+            .branch_prefixes
+            .iter()
+            .map(|entry| (entry.to_lowercase(), "a git.branch_prefixes entry"))
+            .chain(std::iter::once((
+                INTEGRATION_BRANCH_PREFIX.to_string(),
+                "the integration line prefix",
+            )))
+            .chain(
+                self.protected_branches
+                    .iter()
+                    .map(|entry| (literal(entry), "a git.protected_branches entry")),
+            );
+        for (other, source) in named {
+            if prefix.starts_with(&other) || other.starts_with(&prefix) {
+                return Some(format!(
+                    "git.candidate_prefix `{}` overlaps `{other}` ({source}), so a branch that is not a landing candidate could be removed on tree equality alone; choose a prefix that shares no start with a sanctioned branch prefix, `{INTEGRATION_BRANCH_PREFIX}` or a protected branch, such as candidate/",
+                    self.candidate_prefix
+                ));
+            }
+        }
+        None
     }
 
     /// The configured protected branch entries (names and glob patterns), for
