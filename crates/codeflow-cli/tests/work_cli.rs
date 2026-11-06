@@ -3044,3 +3044,97 @@ fn a_claim_that_cannot_write_the_config_renames_nothing() {
     assert_eq!(git(root, &["branch", "--show-current"]), "fix/standalone");
     assert!(git(root, &["branch", "--list", "task/TSK-003*"]).is_empty());
 }
+
+/// TSK-1308 AC-4: `work remove-candidate` prints the proof, removes the
+/// candidate whose tree the line landed by another commit, and records it in
+/// the ledger. `gh` answers no open pull request; a `gh` that fails refuses.
+#[test]
+#[cfg(unix)]
+fn remove_candidate_prints_the_proof_and_records_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = fixture();
+    let root = dir.path();
+    let _origin = with_origin(root);
+    git(root, &["switch", "-q", "-c", "feature"]);
+    write(root, "src/a.rs", "pub fn a() {}\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: a"]);
+    git(root, &["switch", "-q", "-c", "candidate/c1", "main"]);
+    git(
+        root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "chore(merge): candidate",
+            "feature",
+        ],
+    );
+    git(root, &["switch", "-q", "-c", "landing", "main"]);
+    git(
+        root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "Merge pull request #1",
+            "feature",
+        ],
+    );
+    git(root, &["push", "-q", "origin", "landing:integration/x"]);
+    let landed = git(root, &["rev-parse", "landing"]);
+    git(root, &["switch", "-q", "main"]);
+    let tip = git(root, &["rev-parse", "candidate/c1"]);
+    let bin = tempfile::tempdir().unwrap();
+    write(
+        bin.path(),
+        "gh",
+        "#!/bin/sh\necho 'not signed in' >&2\nexit 1\n",
+    );
+    std::fs::set_permissions(
+        bin.path().join("gh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let args = [
+        "work",
+        "remove-candidate",
+        "candidate/c1",
+        "--line",
+        "integration/x",
+    ];
+    let out = cli(root, &args, Some(bin.path()));
+    assert!(!out.status.success());
+    assert!(
+        text(&out).contains("cannot tell whether `candidate/c1` has an open pull request"),
+        "{}",
+        text(&out)
+    );
+    write(bin.path(), "gh", "#!/bin/sh\necho '[]'\n");
+    let out = cli(root, &args, Some(bin.path()));
+    succeeds(&out);
+    let shown = text(&out);
+    assert!(
+        shown.contains(&format!(
+            "work remove-candidate: removed candidate/c1 (tip {tip})"
+        )),
+        "{shown}"
+    );
+    assert!(
+        shown.contains(&format!(
+            "of {landed} on the first-parent history of origin/integration/x"
+        )),
+        "{shown}"
+    );
+    assert!(git(root, &["branch", "--list", "candidate/c1"]).is_empty());
+    let ledger = std::fs::read_to_string(
+        root.join(".git/codeflow/ledger/memory-events/memory-events.jsonl"),
+    )
+    .unwrap();
+    let event: serde_json::Value = serde_json::from_str(ledger.lines().last().unwrap()).unwrap();
+    assert_eq!(event["event"], "candidate_removed");
+    assert_eq!(event["tip"], tip);
+    assert_eq!(event["line_commit"], landed);
+}

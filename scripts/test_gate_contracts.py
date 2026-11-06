@@ -568,7 +568,7 @@ class GateContracts(unittest.TestCase):
         self.assertIn('cleanup', cleanup)
         self.assertIn('check:real-browser-cleanup', read('.codeflow/test-config.json'))
 
-    def test_essential_rust_keeps_doctests_and_full_gate_membership(self):
+    def test_essential_rust_keeps_doctests_and_leaves_matrices_to_full(self):
         targets = {t['name']: t for t in json.loads(read('.codeflow/test-config.json'))['targets']}
         workspace = targets['rust-workspace']
         self.assertEqual(set(workspace['modes']), {'essential'})
@@ -591,7 +591,23 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(profiles['essential']['overrides'], profiles['codeflow']['overrides'])
         self.assertFalse(profiles['essential']['fail-fast'])
         self.assertEqual(profiles['essential']['junit']['path'], 'junit.xml')
-        self.assertNotIn('default-filter', profiles['essential'])
+        # The full gate runs every test; essential leaves out exactly the
+        # exhaustive matrices and the real one-minute wait (TSK-356).
+        self.assertNotIn('default-filter', profiles['codeflow'])
+        full_only = [
+            ('binary(tier_floor_e2e)', 'init_writes_the_compaction_default_at_every_tier_and_preset'),
+            ('binary(tier_floor_e2e)', 'every_harness_wiring_judges_composed_deletions_and_help_at_every_tier'),
+            ('binary(init_e2e)', 'split_references_install_and_update_replaces_whole_files_at_standard_and_full'),
+            ('binary(init_e2e)', 'init_and_update_bring_the_plain_writing_rule_at_every_tier'),
+            ('package(codeflow-core)&kind(lib)', 'scaffold::state::tests::an_update_after_a_crash_at_any_point_installs_the_new_version'),
+            ('package(codeflow-core)&kind(lib)', 'scaffold::state::tests::a_crash_with_the_file_on_another_drive_still_installs_the_new_version'),
+            ('package(codeflow-core)&kind(lib)', 'hooks::git_guard::tests::test_random_shell_patterns_never_match_less_than_bash'),
+            ('package(codeflow-core)&kind(lib)', 'hooks::git_guard::tests::test_random_words_are_refused_whenever_bash_reaches_an_enforcement_file'),
+            ('package(codeflow-core)&kind(lib)', 'hooks::git_guard::tests::test_random_words_are_refused_whenever_zsh_reaches_an_enforcement_file'),
+            ('binary(remedy_clearing)', 'push::push_budget_is_reported_after_a_real_slow_step'),
+        ]
+        expected = 'not(' + '|'.join(f'({scope}&test(={name}))' for scope, name in full_only) + ')'
+        self.assertEqual(''.join(profiles['essential']['default-filter'].split()), expected)
         for name in ('read-benchmark', 'prose-exhaustive'):
             self.assertEqual(set(targets[name]['modes']), {'full'})
 

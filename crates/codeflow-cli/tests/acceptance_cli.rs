@@ -5692,6 +5692,70 @@ fn a_stale_branch_whose_name_is_not_utf8_still_holds_the_record() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
 }
 
+/// TSK-1308: in a clone with a remote, a local branch that no remote holds
+/// and no worktree has checked out is a leftover copy, never evidence of a
+/// landing. TSK-1039's push was refused because the replaced candidate
+/// `candidate/epc-022-c3c6` (tip ee6da4b34, never landed) held a merge of
+/// its own pull request head at 6c884608d. Such a branch no longer stops a
+/// reopen from changing its criteria; the same branch still refuses once a
+/// remote holds it or a worktree uses it, and in a clone with no remote
+/// (the stale-branch tests above).
+#[test]
+fn a_local_only_candidate_is_no_landing_in_a_clone_with_a_remote() {
+    for case in ["local only", "on the remote", "checked out"] {
+        let dir = repo(&[], "");
+        let root = dir.path();
+        let path = record_path("TSK-001");
+        git(root, &["switch", "-q", "-c", "candidate/c1"]);
+        write(
+            root,
+            &path,
+            &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, LANDED)),
+        );
+        commit(root, "chore(merge): a candidate holds the completed task");
+        let admitted = codeflow()
+            .args(["ids", "admit", &path])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(admitted.status.success());
+        // The remote holds `main` only; the candidate stays local.
+        let _origin = with_origin(root, "main");
+        if case == "on the remote" {
+            git(root, &["push", "-q", "origin", "candidate/c1:candidate/c1"]);
+            git(root, &["fetch", "-q", "origin"]);
+        }
+        git(root, &["switch", "-q", "-c", "task/TSK-001-fix", "main"]);
+        let trees = tempfile::tempdir().unwrap();
+        if case == "checked out" {
+            let at = trees.path().join("c1");
+            git(
+                root,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    at.to_str().unwrap(),
+                    "candidate/c1",
+                ],
+            );
+        }
+        let shape = |record: String| standalone_one(&record);
+        // `codeflow ci` is the push check; the local verb in a clone with
+        // remotes also needs a pinned target, which this does not judge.
+        let [_, ci] = complete_reopen_complete(root, &path, &shape, "main", false);
+        if case == "local only" {
+            assert_eq!(ci.0, 0, "a local-only candidate: {}", ci.1);
+            continue;
+        }
+        // The published or checked-out local branch is live again, and is
+        // named first.
+        let needle = "`candidate/c1` records a completion of this task outside this range";
+        assert_ne!(ci.0, 0, "{case}: {}", ci.1);
+        assert!(ci.1.contains(needle), "{case}: {}", ci.1);
+    }
+}
+
 /// Copies of the task's record that came from this range's own commits do
 /// not count as recorded elsewhere: a branch stacked on the reviewed fix
 /// and a remote copy of the task branch with an unrelated commit on top
