@@ -1,0 +1,11 @@
+id = "TSK-1367"
+uid = "16c42f6a-b748-42a4-a05e-ba85602b8284"
+kind = "TSK"
+title = "A stale policy run ends early instead of blocking the current head"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-06T04:10:37Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
