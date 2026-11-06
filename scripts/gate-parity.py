@@ -538,13 +538,18 @@ on:
 
 """
 LINE_VERDICT = "codeflow gates (line)"
-LINE_JOB_NAMES = {"gates-build": "codeflow build", "gates": "codeflow gates (${{ matrix.part }})",
+LINE_JOB_NAMES = {"provenance": "record the tested merge (${{ matrix.artifact }})",
+                  "gates-build": "codeflow build", "gates": "codeflow gates (${{ matrix.part }})",
                   "gates-line-verdict": LINE_VERDICT, "secret-scan": "secret scan",
                   "gitleaks-canary": "gitleaks allowlist canary", "security-review": "security review"}
 # The jobs copied whole, and the two whose `if:` and `needs:` leave out the
 # reuse decision and the bases, which a line pull request has no need of.
 LINE_COPIED_JOBS = ("secret-scan", "gitleaks-canary", "security-review")
 LINE_GATE_JOBS = ("gates-build", "gates")
+# A line pull request records its tested merge, so a line push can reuse its
+# short checks (TSK-1026 AC-7). Only the Ubuntu record: no Windows job runs here.
+LINE_PROVENANCE_DROPPED = ("          - artifact: ci-provenance-windows", "            runner: windows-latest",
+                           "            python: python")
 LINE_GATES_IF = "${{ !cancelled() && !github.event.pull_request.draft }}"
 LINE_VERDICT_JOB = """\
     if: ${{ always() && !github.event.pull_request.draft }}
@@ -645,6 +650,10 @@ def line_placement_problems(workflow: str, line: str | None) -> list[str]:
         condition = re.search(r"^ {4}if:\s*(.+?)\s*$", jobs.get(job, ""), re.M)
         if not condition or condition.group(1) != LINE_GATES_IF:
             problems.append(f"`{job}` in codeflow-line-pr.yml must run under exactly `{LINE_GATES_IF}`")
+    wanted = [text for text in norm_job(full.get("provenance", "")) if text not in LINE_PROVENANCE_DROPPED]
+    if not wanted or norm_job(jobs.get("provenance", "")) != wanted:
+        problems.append("`provenance` in codeflow-line-pr.yml must be codeflow-ci.yml's job with only its Ubuntu "
+                        "record, so a line pull request records its tested merge")
     if norm_job(jobs.get("gates-line-verdict", "")) != norm_job(LINE_VERDICT_JOB):
         problems.append(f"`{LINE_VERDICT}` must be exactly this, so it passes only when the build and every part "
                         "passed:\n" + LINE_VERDICT_JOB)

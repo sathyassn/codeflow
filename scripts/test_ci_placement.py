@@ -105,6 +105,7 @@ gates-line-verdict        line      yes      -              -        -          
 secret-scan               line      yes      yes            -        -              -         -          -          -       -       -
 gitleaks-canary           line      yes      yes            -        -              -         -          -          -       -       -
 security-review           line      yes      yes            -        -              -         -          -          -       -       -
+provenance                line      yes      yes            -        -              -         -          -          -       -       -
 gates-build               push      -        -              -        -              -         yes        -          -       -       -
 gates                     push      -        -              -        -              -         yes        -          -       -       -
 gates-coverage            push      -        -              -        -              -         yes        -          -       -       -
@@ -429,7 +430,7 @@ class PlacementTests(unittest.TestCase):
     def test_a_line_pull_request_runs_only_the_short_checks(self):
         ran = ran_by("line PR")
         self.assertEqual(ran["ci"], set())
-        self.assertEqual(ran["line"], {"gates-build", "gates", "gates-line-verdict", "secret-scan",
+        self.assertEqual(ran["line"], {"provenance", "gates-build", "gates", "gates-line-verdict", "secret-scan",
                                        "gitleaks-canary", "security-review"})
 
     def test_a_line_pull_request_publishes_no_required_name_of_main(self):
@@ -777,6 +778,7 @@ class AdmissionTests(unittest.TestCase):
         self.line = self.commit("line work")
         self.git("switch", "-q", "main")
         self.write(self.LINE_FILE, "the line workflow\n")
+        self.write("main.txt", "main work\n")
         self.main = self.commit("the placement")
 
     def git(self, *args):

@@ -743,7 +743,7 @@ class HostedEventParityControls(unittest.TestCase):
         # Every gate job's pull request clause requires a non-draft, whatever
         # the base, so a draft runs no gate and spends no runner on one.
         self.assertTrue(self.READY.startswith(
-            "github.event_name == 'pull_request' && !github.event.pull_request.draft && ("))
+            "github.event_name == 'pull_request' && !github.event.pull_request.draft && contains("))
 
     def test_schedule_and_dispatch_keep_unconditional_security_jobs(self):
         trigger = WORKFLOW.split("permissions:", 1)[0]
@@ -793,6 +793,22 @@ class LinePlacementControls(unittest.TestCase):
 
     def test_the_workflows_are_the_pinned_forms(self):
         self.assertEqual(self.problems(), [])
+
+    def test_a_line_pull_request_keeps_its_provenance_with_no_windows_runner(self):
+        job = parity.workflow_jobs(LINE)["provenance"]
+        self.assertIn("artifact: ci-provenance\n", job)
+        self.assertIn("name: Write what this run tested", job)
+        self.assertNotIn("windows-latest", job)
+        for label, changed in (("dropped", LINE.replace(job, "", 1)),
+                               ("a Windows record", LINE.replace("            runner: ubuntu-24.04\n            python: python3\n",
+                                                                 "            runner: ubuntu-24.04\n            python: python3\n"
+                                                                 "          - artifact: ci-provenance-windows\n"
+                                                                 "            runner: windows-latest\n"
+                                                                 "            python: python\n", 1)),
+                               ("no merge tree", LINE.replace('"merge_tree": git(', '"tree": git(', 1))):
+            with self.subTest(label):
+                self.assertNotEqual(changed, LINE)
+                self.assertTrue(self.problems(WORKFLOW, changed), label)
 
     def test_the_line_push_workflow_is_the_pinned_form(self):
         self.assertEqual(parity.line_push_problems(WORKFLOW, LINE_PUSH), [])
