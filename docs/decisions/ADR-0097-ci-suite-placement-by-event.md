@@ -77,20 +77,11 @@ How to read the table:
   current events, which the daily run is not one of; moving them is an
   operator decision.
 
-Until TSK-1321 lands, the line at `1107c5974` differs from this table:
-
-- Line pull requests still run every Linux gate part and both coverage
-  shards with their report (`codeflow-ci.yml:251`, `:562`, `:645`).
-- Line pull requests still run the Windows checks, the release journey and
-  the reduced tier's journey job; only the build, the partitions and their
-  journey job are skipped, by the reduced tier switch
-  (`codeflow-ci.yml:758`, `REDUCED_TIER: "on"`).
-- The daily run is Windows only (`windows-daily-run.yml`): it runs no Linux
-  build, lint, tests or coverage.
-- The daily workflows start only from `main` (`windows-daily.yml`, the
-  `sources` job), and `main` does not hold them until the EPC-022 line
-  merges, so no daily run exists yet. PR 597 (TSK-1314, merge `df718e015`)
-  moved each line's daily run under that line's own ref.
+TSK-1321 brings the workflows to this table, and
+`scripts/test_ci_placement.py` fails when the table, the maintainer page's
+table or the workflows differ. The daily workflows start from `main`
+(`windows-daily.yml`, the `sources` job), and PR 597 (TSK-1314, merge
+`df718e015`) moved each line's daily run under that line's own ref.
 
 ## Consequences
 

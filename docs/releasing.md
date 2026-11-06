@@ -263,12 +263,12 @@ an operator decision; agents and Coordinators never rule on it.
 
 The workflows apply the table as follows:
 
-- Line pull requests run the Linux build and lint parts only. The coverage
+- With the reduced tier switch in `codeflow-ci.yml` (`REDUCED_TIER`) on,
+  line pull requests run the Linux build and lint parts only. The coverage
   shards and their report skip, and the line push runs them.
-- Line pull requests run no Windows job. With the reduced tier switch in
-  `codeflow-ci.yml` (`REDUCED_TIER`) on, the `windows-tier` job skips the
-  Windows build, the partitions, the Windows checks, the release journey
-  and the journey job.
+- The same switch keeps every Windows build, test and journey job off line
+  pull requests: the Windows build, the partitions, the Windows checks, the
+  release journey and the journey job skip.
 - The daily run runs the Linux build, lint, tests and coverage as well as
   every Windows job.
 - The daily workflows start from `main` and run `main` and each active
@@ -640,7 +640,7 @@ ADR-0013, ADR-0014 and the parity section of
 | Duo contract and interactive lanes | The host-neutral duo contract test passes. Both native interactive lanes complete a scoped canary with the task's required Model Context Protocol (MCP) tools: Claude Code to Codex through the interactive Codex CLI in a Herdr tab (the plugin only as a recorded fallback), and Codex to Claude through task-scoped Herdr (tmux as the last fallback) with the qualified tracked Stop/StopFailure lifecycle, as `cf-model-orchestrator/resources/routing/transport.md` states. Record versions, effort, exact commands, observed tool access and graceful degradation. Auth status output never replaces a working interactive session |
 | Ensemble and model bindings | The current ensemble record, selectors and effort and worker policy name only bindings qualified for this release. Every `capability-supported` harness catalog entry still proves the full capability contract, and catalog support is never taken as concrete binding qualification. Any changed concrete binding has an approved full native result, not only a diagnostic pack. `codeflow doctor --check model-bindings` passes for each retained local promotion record, or the exact non-probeable native canary needed is recorded; requested and observed identity, harness version and declared settings drift are resolved. The repository's project selection is absent or empty, or resolves atomically to exact stable-role binding IDs; a diagnostic pack or parseable harness name is not promotion evidence |
 | CodeQL | Before the repository is public, no committed CodeQL workflow has entered the portable scaffold and the CodeQL state stays pending. After it is public, enable GitHub CodeQL default setup for Rust with `security-extended`, and confirm tool status shows the intended files analyzed with zero extraction or configuration errors. Treat it as advisory until five consecutive applicable PR runs are healthy, then decide separately whether branch protection should require it. Roll back branch-protection requirements before disabling the setup |
-| Coverage | The one instrumented run, `cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow` (the `rust-coverage` target of the full gate), passes locally. CI runs the same command as two shards and applies the same floor to their merged count. CI billing or availability never substitutes for this evidence |
+| Coverage | The one instrumented run, `cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow` (the `rust-coverage` target of the full gate), passes locally. CI runs the same command as three shards and applies the same floor to their merged count. CI billing or availability never substitutes for this evidence |
 | Distribution plan | `cargo dist plan --output-format=json` lists all four archives, both installers and the native runner rows |
 | Source archive | `source.tar.gz` comes from `git archive`, so it leaves out `docs/verification/` (`export-ignore` in `.gitattributes`). A contract test compares the real archive with the tracked files |
 | Installers | Canary the shell installer on each macOS and Linux architecture and the PowerShell installer on Windows. Confirm WSL2 selects the Linux archive and native Windows installs `codeflow.exe` |
