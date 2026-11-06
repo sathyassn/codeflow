@@ -37,9 +37,6 @@ fn paths_are_compared_with_forward_slashes() {
 /// installed baseline.
 fn workflows() -> Vec<(String, Value)> {
     let root = repo_root();
-    // Operator-owned workflow edits are validated as proposals before the
-    // operator installs them. Normal test runs still read the actual files.
-    let proposals = std::env::var_os("CODEFLOW_WORKFLOW_PROPOSALS").map(|path| root.join(path));
     let mut found = Vec::new();
     for dir in [
         ".github/workflows",
@@ -58,30 +55,7 @@ fn workflows() -> Vec<(String, Value)> {
             .collect();
         entries.sort();
         for path in entries {
-            let input = if dir == ".github/workflows" {
-                match (
-                    proposals.as_ref(),
-                    path.file_name().and_then(|name| name.to_str()),
-                ) {
-                    (Some(proposals), Some("codeflow-ci.yml")) => {
-                        proposals.join("codeflow-ci.proposed.yml")
-                    }
-                    (Some(proposals), Some("codeflow-policy.yml")) => {
-                        proposals.join("codeflow-policy.proposed.yml")
-                    }
-                    _ => path.clone(),
-                }
-            } else {
-                path.clone()
-            };
-            if input != path {
-                eprintln!(
-                    "workflow proposal: {} replaces {} for this test only",
-                    input.display(),
-                    path.display()
-                );
-            }
-            let text = std::fs::read_to_string(&input).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
             let value: Value = serde_yaml::from_str(&text)
                 .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
             if value.get("jobs").is_some() {
@@ -308,6 +282,49 @@ fn every_verdict_job_runs_only_the_default_branch_code() {
             }
         }
     }
+}
+
+/// TSK-1176 review nit N2: `scripts/check-scaffold-gitleaks.sh` exercises
+/// the template `codeflow-policy.yml` gitleaks step. The `history scan` in
+/// `codeflow-ci.yml` runs on push and schedule, so every copy of the step,
+/// in both workflows and all three folders, must be that step exactly, or
+/// the fixture's evidence stops applying to the copy that runs.
+#[test]
+fn every_secret_scan_step_is_the_tested_step() {
+    let step = |workflow: &Value| -> Option<Value> {
+        workflow["jobs"]
+            .get("secret-scan")?
+            .get("steps")?
+            .as_sequence()?
+            .iter()
+            .find(|step| step["name"].as_str() == Some("gitleaks"))
+            .cloned()
+    };
+    let all = workflows();
+    let tested = all
+        .iter()
+        .find(|(path, _)| path == "assets/base/ci/codeflow-policy.yml")
+        .and_then(|(_, workflow)| step(workflow))
+        .expect("the template policy workflow has the tested gitleaks step");
+    let mut copies = Vec::new();
+    for (path, workflow) in &all {
+        if let Some(found) = step(workflow) {
+            assert_eq!(found, tested, "{path}: the gitleaks step drifted");
+            copies.push(path.clone());
+        }
+    }
+    copies.sort();
+    assert_eq!(
+        copies,
+        [
+            ".codeflow/.baseline/.github/workflows/codeflow-ci.yml",
+            ".codeflow/.baseline/.github/workflows/codeflow-policy.yml",
+            ".github/workflows/codeflow-ci.yml",
+            ".github/workflows/codeflow-policy.yml",
+            "assets/base/ci/codeflow-ci.yml",
+            "assets/base/ci/codeflow-policy.yml",
+        ]
+    );
 }
 
 /// TSK-1176 AC-1/2/4/5: every event class gets the correct producer and
