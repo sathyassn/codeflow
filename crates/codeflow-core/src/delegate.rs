@@ -120,6 +120,10 @@ pub struct Launch {
     pub model: Option<String>,
     /// The effort passed to the delegate CLI, when known.
     pub effort: Option<String>,
+    /// The config home the seat launched under (the account profile's folder
+    /// for the family, TSK-431), when it was not the CLI's default. A folder
+    /// path only, never a credential.
+    pub config_home: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -131,6 +135,9 @@ struct LaunchRecord {
     model: String,
     /// Requested effort, or `unknown` when the launcher did not say.
     effort: String,
+    /// The config home the seat launched under, when the launcher gave one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    config_home: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -288,6 +295,11 @@ pub fn init_with_launch(
         run_id: run_id.to_string(),
         model: requested("model", launch.model.as_ref())?,
         effort: requested("effort", launch.effort.as_ref())?,
+        config_home: launch
+            .config_home
+            .as_deref()
+            .map(config_home_value)
+            .transpose()?,
     };
     validate_absolute(state_dir)?;
     validate_outside_git_worktree(state_dir)?;
@@ -302,6 +314,21 @@ pub fn init_with_launch(
     install_json(&settings_path, &settings)?;
     install_json(&state_dir.join("launch.json"), &record)?;
     Ok(settings_path)
+}
+
+/// A config home as recorded: an absolute path of at most 1024 bytes with no
+/// control character.
+fn config_home_value(value: &str) -> Result<String, DelegateError> {
+    if value.is_empty()
+        || value.len() > 1024
+        || value.chars().any(char::is_control)
+        || !Path::new(value).is_absolute()
+    {
+        return Err(DelegateError::invalid(
+            "delegate config home must be an absolute path of at most 1024 bytes with no control characters",
+        ));
+    }
+    Ok(value.to_string())
 }
 
 /// A provenance value as recorded: exact, nonblank, 1 to 128 bytes, no control
@@ -1438,6 +1465,7 @@ fn provenance(
     if let Some(launch) = &launch {
         validate_header(launch.schema_version, &launch.run_id, run_id, "launch")?;
     }
+    let config_home = launch.as_ref().and_then(|l| l.config_home.clone());
     let (requested_model, requested_effort) =
         launch.map_or_else(|| (unknown(), unknown()), |l| (l.model, l.effort));
     let (observed_model, observed_effort, reason) =
@@ -1452,6 +1480,9 @@ fn provenance(
     });
     if let Some(reason) = reason {
         provenance["observed_unknown_reason"] = reason.into();
+    }
+    if let Some(config_home) = config_home {
+        provenance["config_home"] = config_home.into();
     }
     Ok(provenance)
 }

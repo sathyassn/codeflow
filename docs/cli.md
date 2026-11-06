@@ -331,6 +331,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--state-dir <DIR>` | Absolute path for the owner-only protocol state. Required. |
 | | `--model <SELECTOR>` | The model selector the delegate CLI is launched with; recorded as requested provenance (`unknown` when omitted). |
 | | `--effort <LEVEL>` | The effort the delegate CLI is launched with; recorded as requested provenance (`unknown` when omitted). |
+| | `--config-home <DIR>` | The config home the delegate CLI is launched under, from the account profile (`codeflow models launch-env`); recorded in each turn's provenance. Omit it for the CLI's default home. |
 | `codeflow delegate arm` | | Arm one prompt for a delegate turn |
 | | `--run-id <ID>` | Unique run identifier. Required. |
 | | `--state-dir <DIR>` | Absolute path for the owner-only protocol state. Required. |
@@ -355,6 +356,17 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--route <ROUTE>` | Exact override invocation route: `<seat-or-line>@<harness>`. |
 | | `--effort <EFFORT>` | Exact override invocation effort. |
 | | `--json` | Print the resolution as JSON; input errors go to stderr with exit 2. |
+| `codeflow models limits` | | Show each family's account and its limit state (5-hour and weekly windows), from what the CLIs exposed and `record-limits` stored |
+| | `--json` | Print the readings and accounts as JSON. |
+| `codeflow models record-limits` | | Store a family's limit payload from standard input: Claude Code's statusline JSON or a Codex app-server rate-limit result or event; for Grok, record its limit-hit error with `--limit-hit`. Writes one file under `.codeflow/local/limits/` |
+| | `--family <FAMILY>` | Family the payload on standard input comes from. Required. One of `claude`, `codex`, `grok`. |
+| | `--limit-hit` | Grok only: record that Grok reported a usage limit, which is its only signal. Reads nothing from standard input. |
+| | `--resets-at <EPOCH>` | With --limit-hit: Unix time (seconds) the error says the limit resets. |
+| | `--config-home <DIR>` | Config home of the seat that produced the payload. Defaults to the family's own config-home variable in this process, or the CLI's default home when that is unset. A reading is shown only for the config home the current profile names. |
+| `codeflow models launch-env` | | Print the one config-home variable a seat of a family launches with, from the untracked account profile, as a shell line to `eval` |
+| | `--family <FAMILY>` | Family whose seat is about to launch. Required. One of `claude`, `codex`, `grok`. |
+| | `--json` | Print the variable and folder as JSON instead of a shell line. |
+| | `--check` | Do not print a launch line: succeed only when this process's environment already matches the profile (the mapped variable is the mapped folder; for an unmapped family its variable is unset). |
 
 ### Present
 

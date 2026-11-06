@@ -93,6 +93,22 @@ pane_id=$(printf '%s' "$created" | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')
 # Tracked Claude only: set after shell init in its dedicated pane; verify `1`.
 herdr pane run "$pane_id" 'export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1; echo $CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'
+# Account profile (transport rule, "Account profiles"): the pane runs the
+# line that sets or unsets this family's own config-home variable, then
+# proves it holds. Any failure stops here, before `agent start`, or the
+# seat would run under the CLI's default or an inherited account.
+# The proof is a fresh acknowledgement per launch: the pane prints
+# CF_HOME_OK_<nonce> only after `--check` succeeds. `wait-output --match`
+# is a substring search that includes output already in the pane, so a fixed
+# word could come from the echoed command, a path or an error message. The
+# nonce is new each launch and the printf splits the word from it, so only a
+# passed check in this launch prints the exact text that is waited for.
+home_line=$(codeflow models launch-env --family <claude|codex|grok>) || exit 1
+herdr pane run "$pane_id" "$home_line" || exit 1
+nonce=$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')
+[ "${#nonce}" -eq 24 ] || exit 1
+herdr pane run "$pane_id" "codeflow models launch-env --family <claude|codex|grok> --check && printf '%s%s\n' CF_HOME_OK_ $nonce" || exit 1
+herdr pane wait-output "$pane_id" --match "CF_HOME_OK_$nonce" --source recent-unwrapped --timeout 15000 || exit 1
 herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex|grok> \
   --pane "$pane_id" -- <native-args>
 ```

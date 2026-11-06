@@ -36,6 +36,10 @@ lcov.info
 # linked worktree checkouts (not git's .git/worktrees/ metadata)
 .worktrees/
 
+# untracked per-machine state: the account profile (paths and caps, never a
+# token) and the limit readings
+.codeflow/local/
+
 # crash-recovery/locking state for opt-in portal reconciliation
 .codeflow/.docs-portal.lock
 .codeflow/.docs-portal-transaction/

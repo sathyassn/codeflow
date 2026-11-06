@@ -94,6 +94,46 @@ operator's (First-run prompts). A consult or review edits nothing whatever
 its mode. Never `--dangerously-skip-permissions` unless the operator named
 it, and never `--dangerously-bypass-hook-trust`.
 
+### Account profiles
+
+A project can keep an untracked profile, `.codeflow/local/accounts.toml`
+(or `accounts.toml` in the user's CodeFlow home), that maps a family to a
+config home the operator has already signed in to. The file holds folder
+paths, the name of an API-key variable and a spend cap, never a token;
+`codeflow models launch-env` and `codeflow models limits` refuse a file
+that names one. Every managed launch of a seat sets that family's own
+variable and no other, in the seat's shell before its CLI starts:
+
+| Family | Variable |
+|---|---|
+| Claude | `CLAUDE_CONFIG_DIR` |
+| Codex | `CODEX_HOME` |
+| Grok | `GROK_HOME` |
+
+```bash
+home_line=$(codeflow models launch-env --family <claude|codex|grok>) || exit 1
+eval "$home_line" || exit 1
+codeflow models launch-env --family <claude|codex|grok> --check || exit 1
+```
+
+Run it in the shell that starts the seat, before its CLI, and start the CLI
+only after all three lines pass. The line is `export VARIABLE='folder'`
+when the profile maps a home for the family, and `unset VARIABLE` when it
+does not (no profile, or no entry for that family), so a home inherited from
+the caller never reaches a seat the profile does not map. `--check` then
+fails unless the shell holds what the profile says. A refused profile exits
+2 and prints its reason on stderr; the first `|| exit 1` stops the launch
+itself, because starting the seat anyway would run it under the CLI's
+default or an inherited account. CodeFlow sets or unsets only the launching
+family's variable; the other two families' variables are inherited
+unchanged. A tracked Claude seat also passes the folder to
+`codeflow delegate init --config-home <dir>`, so each turn's provenance
+names it. CodeFlow never signs in, copies or moves a sign-in, or switches a
+seat between accounts: choosing another account is the operator's, and
+rotating one person's subscriptions to get past a limit is outside what
+CodeFlow does. `codeflow models limits` shows each family's account and
+limit state (5-hour and weekly windows, or `not exposed`).
+
 ### First-run prompts
 
 A new seat can stop at a folder trust prompt, a hook trust prompt or a

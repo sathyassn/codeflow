@@ -885,6 +885,21 @@ The same rule is in the module documentation of
 `crates/codeflow-core/src/hooks/policy_schema.rs`, where a contributor adds a
 key.
 
+## Untracked local state
+
+`.codeflow/local/` holds per-machine files that no policy key governs and no
+commit carries. The managed `.gitignore` region ignores the folder. It
+contains the account profile `accounts.toml` (folder paths, the name of an
+API-key variable and a spend cap, never a token) and `limits/`, one small
+reading file per model family, each reading kept per config home, with a
+lock file beside it. `codeflow models limits`, `launch-env` and
+`record-limits` read and write them; see [delegation](delegation.md). A
+profile that names a token or credential is refused whole. A config home is
+refused when it is, or resolves through a link to, a place inside the main
+checkout or any linked worktree (other than a real folder under this
+folder), when it is not a folder, or when this folder holds tracked files.
+No read or write here follows a link.
+
 ## Rules with no key
 
 `security.shell_startup` is enforced by exec-guard and edit-guard. It

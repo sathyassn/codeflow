@@ -148,3 +148,96 @@ Hosting worked when:
 - your own pane keeps focus
 - the agent reports the tab label, agent name and the peer's native thread or
   session id
+
+### Run a family under another account and read its limits
+
+A long run can stop when one family's subscription reaches its 5-hour or
+weekly limit. CodeFlow does not switch accounts or move a sign-in. It lets a
+project say which folder each family's seats start under, and it shows the
+limit state each CLI exposes.
+
+1. Sign in to the second account yourself, in its own config home (for
+   example `CODEX_HOME=~/.codex-second codex login`).
+2. Write the untracked profile `.codeflow/local/accounts.toml` in the main
+   checkout (or `accounts.toml` in your CodeFlow home). It holds folder
+   paths, the name of an API-key variable and a spend cap, never a token:
+
+   ```toml
+   schema_version = 1
+
+   [families.codex]
+   config_home = "~/.codex-second"
+
+   [families.codex.api_fallback]
+   key_env = "CODEX_FALLBACK_API_KEY"   # the variable's name, never its value
+   spend_cap_usd = 25
+   ```
+
+   The spend cap is a figure the profile records and `models limits`
+   shows. CodeFlow does not enforce it or read the key.
+
+   A key whose name says token, secret or credential, a value shaped like a
+   secret, an unknown key, a relative path, a config home that is not a
+   folder, and a config home that is or links into the project (the main
+   checkout or any linked worktree) outside a real folder under
+   `.codeflow/local/` each refuse the whole file. A parse error names a line
+   and column, never the text. The managed `.gitignore` keeps
+   `.codeflow/local/` untracked.
+3. The agent launches each seat with only that family's variable
+   (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME`) by running, in the
+   seat's shell before its CLI starts:
+
+   ```bash
+   home_line=$(codeflow models launch-env --family <family>) || exit 1
+   eval "$home_line" || exit 1
+   codeflow models launch-env --family <family> --check || exit 1
+   ```
+
+   The line is `export VARIABLE='folder'` for a mapped family and
+   `unset VARIABLE` for one the profile does not map, so a home inherited
+   from the caller never reaches that seat. `--check` fails unless the shell
+   holds what the profile says. A refused profile exits 2 with the reason and
+   the first `|| exit 1` stops the launch itself, so a seat never starts under
+   the default or an inherited account by mistake. The other two families'
+   variables are not touched. In a Herdr seat the same three steps run in the
+   pane, and the launch waits for a fresh acknowledgement before
+   `herdr agent start` (`cf-herdr`, "Create or resume"). The acknowledgement
+   carries a random value made for that launch and is printed only when
+   `--check` passes, so a path, an echoed command, an error message or output
+   left in the pane by an earlier launch can never stand for it.
+4. `codeflow models limits` prints each family's account and limit state.
+   Readings arrive from what each CLI already exposes:
+
+   | Family | Source | How it reaches CodeFlow |
+   |---|---|---|
+   | Claude Code | statusline JSON `rate_limits.five_hour` and `seven_day` (Pro, Max and Ultra plans only, after the first response) | the statusline script pipes its input to `codeflow models record-limits --family claude` |
+   | Codex | app-server `account/rateLimits/read` result and `account/rateLimits/updated` event | the payload piped to `codeflow models record-limits --family codex` |
+   | Grok Build | no usage reading; only the limit-hit error | `codeflow models record-limits --family grok --limit-hit [--resets-at EPOCH]` |
+
+   Claude Code runs the statusline command on every refresh, so a script
+   that already reads the JSON from standard input adds one line:
+
+   ```bash
+   input=$(cat)
+   printf '%s' "$input" | codeflow models record-limits --family claude >/dev/null 2>&1
+   ```
+
+   Codex's `rateLimits` is its default quota bucket; a payload that lists
+   other buckets only under `rateLimitsByLimitId` is read for the default
+   one. The Codex window names come from the installed release's own schema,
+   not vendor documentation, so a payload the reader cannot parse is refused
+   with a message and nothing is stored.
+
+   A reading belongs to the config home of the process that recorded it
+   (`record-limits --config-home DIR`, else the family's variable in that
+   process, else the CLI's default home). When the profile later names
+   another home, the old reading is not shown as that account's: the family
+   shows `not exposed` and a note names the homes that have readings. A file
+   written by the earlier build (version 1) names no home, so its readings
+   belong to no account: they are ignored, the view says so, and the next
+   `record-limits` for that family replaces the file. Nothing is carried over
+   to any home.
+
+   A window with no reading shows `not exposed`; a window that reset after
+   its reading shows that, with the old figure. Choosing a route from these
+   readings is TSK-432's work, not this command's.

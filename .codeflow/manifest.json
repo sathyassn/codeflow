@@ -395,7 +395,7 @@
     ".agents/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "17885692903758cf1b69bd18b8f4ba615034aea6ebcf917b01caeaf716c4a404",
+      "sha256": "dae45d424c222ea2d03b582ec83490a740149d8ed0df8576a8dfb9f787b23a82",
       "exec": false
     },
     ".agents/skills/cf-herdr/references/review-and-harvest.md": {
@@ -641,7 +641,7 @@
     ".agents/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "2ae60e36cdee005be4d864f14c79a403cad7625237b5ede9c7c359dc355d2f96",
+      "sha256": "3d9acdce66b37f713eecceab722077d5bef6b3ee791995691632a913e0ebb6cb",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -1241,7 +1241,7 @@
     ".claude/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "17885692903758cf1b69bd18b8f4ba615034aea6ebcf917b01caeaf716c4a404",
+      "sha256": "dae45d424c222ea2d03b582ec83490a740149d8ed0df8576a8dfb9f787b23a82",
       "exec": false
     },
     ".claude/skills/cf-herdr/references/review-and-harvest.md": {
@@ -1487,7 +1487,7 @@
     ".claude/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "2ae60e36cdee005be4d864f14c79a403cad7625237b5ede9c7c359dc355d2f96",
+      "sha256": "3d9acdce66b37f713eecceab722077d5bef6b3ee791995691632a913e0ebb6cb",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -1823,7 +1823,7 @@
     ".gitignore": {
       "src": "gitignore",
       "ownership": "managed-region",
-      "sha256": "e623b22f663c47c5aabf9d9faa4e965b70b2de7701de5c7c69772acd844d26c2",
+      "sha256": "383734dd2009d864a017a9aed4c48c515d6e12e1ee7fbb44512d6eb830da5a99",
       "exec": false
     },
     ".grok/hooks/codeflow.json": {

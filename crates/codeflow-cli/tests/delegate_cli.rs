@@ -465,6 +465,49 @@ fn provenance_the_transport_does_not_give_is_unknown() {
 }
 
 #[test]
+fn a_launch_under_a_profile_config_home_records_the_folder_in_each_result() {
+    // TSK-431: the account profile's config home reaches the turn's
+    // provenance as a folder path; a launch without one adds no key.
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    let home = temp.path().join("second-claude-home");
+    let output = run(codeflow()
+        .args(["delegate", "init", "--run-id", "run-1", "--state-dir"])
+        .arg(&state)
+        .args(["--model", "opus", "--config-home"])
+        .arg(&home));
+    assert_eq!(output.status.code(), Some(0));
+    let result = completed_turn(
+        &state,
+        r#"{"hook_event_name":"SessionStart","source":"startup","session_id":"s1","cwd":"/tmp"}"#,
+    );
+    assert_eq!(
+        result["provenance"]["config_home"],
+        home.to_string_lossy().as_ref()
+    );
+    let (_temp, plain) = initialized();
+    let result = completed_turn(
+        &plain,
+        r#"{"hook_event_name":"SessionStart","source":"startup","session_id":"s1","cwd":"/tmp"}"#,
+    );
+    assert!(result["provenance"].get("config_home").is_none());
+}
+
+#[test]
+fn init_rejects_a_relative_or_control_character_config_home() {
+    for bad in ["relative/home", "/tmp/a\nb", ""] {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let output = run(codeflow()
+            .args(["delegate", "init", "--run-id", "run-1", "--state-dir"])
+            .arg(&state)
+            .args(["--config-home", bad]));
+        assert_ne!(output.status.code(), Some(0), "{bad:?}");
+        assert!(!state.join("launch.json").exists(), "{bad:?}");
+    }
+}
+
+#[test]
 fn init_rejects_an_unusable_requested_model_or_effort() {
     for flags in [["--model", ""], ["--effort", "high\nlow"]] {
         let temp = tempfile::tempdir().unwrap();

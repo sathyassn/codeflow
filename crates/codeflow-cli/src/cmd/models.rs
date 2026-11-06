@@ -18,7 +18,18 @@ pub struct ModelsArgs {
 #[derive(Debug, Subcommand)]
 enum ModelsCommand {
     /// Resolve every participant and obligation without launching or writing.
-    Resolve(ResolveArgs),
+    Resolve(Box<ResolveArgs>),
+    /// Show each family's account and its limit state (5-hour and weekly
+    /// windows), from what the CLIs exposed and `record-limits` stored.
+    Limits(super::seats::LimitsArgs),
+    /// Store a family's limit payload from standard input: Claude Code's
+    /// statusline JSON or a Codex app-server rate-limit result or event; for
+    /// Grok, record its limit-hit error with `--limit-hit`. Writes one file
+    /// under `.codeflow/local/limits/`.
+    RecordLimits(super::seats::RecordArgs),
+    /// Print the one config-home variable a seat of a family launches with,
+    /// from the untracked account profile, as a shell line to `eval`.
+    LaunchEnv(super::seats::LaunchEnvArgs),
 }
 
 #[derive(Debug, Args)]
@@ -61,7 +72,12 @@ struct ResolveArgs {
 }
 
 pub fn run(args: &ModelsArgs) -> i32 {
-    let ModelsCommand::Resolve(args) = &args.command;
+    let args = match &args.command {
+        ModelsCommand::Resolve(args) => args.as_ref(),
+        ModelsCommand::Limits(args) => return super::seats::show_limits(args),
+        ModelsCommand::RecordLimits(args) => return super::seats::record(args),
+        ModelsCommand::LaunchEnv(args) => return super::seats::launch_env(args),
+    };
     let result = match resolve(args) {
         Ok(result) => result,
         Err(reason) => {
