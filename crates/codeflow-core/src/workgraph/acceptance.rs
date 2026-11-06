@@ -932,7 +932,8 @@ fn archive_problem(
 }
 
 /// One completion the range's history made: the commit that introduced
-/// it, its active block, and whether the record left `complete` after it.
+/// it, its active block, and whether the record left `complete` on a commit
+/// that descends from it.
 struct Made {
     block: AcceptanceBlock,
     at: Oid,
@@ -975,8 +976,14 @@ fn completions_made(
             continue;
         };
         let Some((active, archive)) = state(&record) else {
-            if let Some(last) = made.last_mut() {
-                last.reopened_after = true;
+            // Only a commit that descends from a completion can reopen it.
+            // The walk also meets parallel commits, such as earlier work
+            // on the line merged after the completion, that sort after it
+            // without containing it; their record never left `complete`.
+            for completion in &mut made {
+                if !completion.reopened_after && is_ancestor_or_same(repo, completion.at, oid)? {
+                    completion.reopened_after = true;
+                }
             }
             continue;
         };
@@ -5909,6 +5916,137 @@ mod tests {
         assert!(problems(Some(&line), &renamed)[0].contains("chronological order"));
         let skipped = record("todo", &[b(Some("second")), b(Some("third"))]);
         assert!(!problems(Some(&target), &skipped).is_empty());
+    }
+
+    /// The archive judge on a line where TSK-001 was completed, reopened
+    /// and completed again, then a side branch that forked at `fork`
+    /// merges in after the second completion. With `reopen_on_side`, the
+    /// side branch reopens the record and the merge keeps the line's
+    /// completion. The side commits are dated after the completion, so the
+    /// walk sorts them after it. Returns the archive refusal, if any.
+    fn tsk1185_archive_after_side_merge(reopen_on_side: bool) -> Option<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let path = "project-management/tasks/TSK-001.md";
+        let clock = std::cell::Cell::new(1_700_000_000_i64);
+        let run = |args: &[&str]| {
+            clock.set(clock.get() + 60);
+            let date = format!("@{} +0000", clock.get());
+            let out = crate::git::command()
+                .args(args)
+                .current_dir(root)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_AUTHOR_DATE", &date)
+                .env("GIT_COMMITTER_DATE", &date)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env_remove("GIT_INDEX_FILE")
+                .output()
+                .expect("git runs");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let commit = |message: &str| {
+            run(&["add", "-A"]);
+            run(&["commit", "-qm", message]);
+            run(&["rev-parse", "HEAD"])
+        };
+        let fence = |inner: String| format!("```yaml\n{inner}```\n");
+        let block = |reviewed: &str, reason: Option<&str>| {
+            let head = match reason {
+                Some(reason) => format!("acceptance_superseded:\n  reason: {reason}\n"),
+                None => "acceptance:\n".to_string(),
+            };
+            fence(format!(
+                "{head}  reviewed: {reviewed}\n  review: session:r@sha256:00\n  criteria:\n    AC-1: verified | ran\n  journey: none | no journey criterion\n  not_verified: none\n  follow_ups: none: test\n  verdict: approved\n"
+            ))
+        };
+        let record = |status: &str, closeout: &[String]| {
+            std::fs::write(
+                root.join(path),
+                format!(
+                    "---\nid: TSK-001\nstatus: {status}\n---\n# TSK-001\n\n## Acceptance Criteria\n\n- AC-1 When run, it works.\n\n## Closeout\n\n{}",
+                    closeout.join("\n")
+                ),
+            )
+            .unwrap();
+        };
+        let work = |file: &str, text: &str| std::fs::write(root.join(file), text).unwrap();
+
+        run(&["init", "-q", "-b", "line"]);
+        run(&["config", "user.email", "t@example.com"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+        record("todo", &[]);
+        work("src.txt", "base\n");
+        let base = commit("base");
+        work("src.txt", "first\n");
+        let first = commit("first fix");
+        record("complete", &[block(&first, None)]);
+        commit("complete TSK-001");
+        record("todo", &[block(&first, Some("one more fix"))]);
+        commit("reopen TSK-001");
+        work("src.txt", "second\n");
+        let second = commit("second fix");
+        record(
+            "complete",
+            &[block(&first, Some("one more fix")), block(&second, None)],
+        );
+        let completed = commit("complete TSK-001 again");
+
+        let fork = if reopen_on_side { &completed } else { &base };
+        run(&["switch", "-qc", "side", fork.as_str()]);
+        if reopen_on_side {
+            record(
+                "todo",
+                &[
+                    block(&first, Some("one more fix")),
+                    block(&second, Some("reopened on the side")),
+                ],
+            );
+            commit("reopen TSK-001 on the side");
+        }
+        for step in ["one", "two"] {
+            work("notes.txt", &format!("{step}\n"));
+            commit(&format!("side note {step}"));
+        }
+        run(&["switch", "-q", "line"]);
+        // The side's reopen conflicts with the line's completion; the merge
+        // keeps the line's record.
+        let strategy = if reopen_on_side { "ours" } else { "ort" };
+        run(&[
+            "merge", "-q", "--no-ff", "-s", strategy, "-m", "merge", "side",
+        ]);
+        let merged = Oid::from_str(&run(&["rev-parse", "HEAD"])).unwrap();
+
+        let repo = Repository::open(root).unwrap();
+        let stub = RecordView::parse(RecordKind::Task, path, "---\nid: TSK-001\n---\n").unwrap();
+        let task = record_at(&repo, merged, &stub).unwrap().unwrap();
+        assert_eq!(task.status, "complete");
+        archive_problem(&repo, &task, None, None, Landing::Commit(merged)).unwrap()
+    }
+
+    /// TSK-1185 AC-8: a parallel commit on which the task is still todo
+    /// does not reopen a completion it does not contain, however the walk
+    /// sorts it (the EPC-026 shape: TSK-1143's completion at 01bc53eb4 and
+    /// PR 564's merge 6387b70bf).
+    #[test]
+    fn tsk1185_a_parallel_todo_commit_does_not_reopen_the_completion() {
+        assert_eq!(tsk1185_archive_after_side_merge(false), None);
+    }
+
+    /// TSK-1185 AC-8 control: a reopen on a commit that descends from the
+    /// completion still demands the completion in the archive, even when a
+    /// merge keeps the line's complete record.
+    #[test]
+    fn tsk1185_a_reopen_that_descends_from_the_completion_still_needs_the_archive() {
+        let problem = tsk1185_archive_after_side_merge(true).expect("refused");
+        assert!(problem.contains("is missing"), "{problem}");
     }
 
     #[test]
