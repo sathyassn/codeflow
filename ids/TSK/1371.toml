@@ -1,0 +1,11 @@
+id = "TSK-1371"
+uid = "a894ae53-df22-4fe8-b33f-dbc2e9eec90f"
+kind = "TSK"
+title = "Main merges into the EPC-026 line through one reviewed sync"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-06T18:56:29Z"
+target = "integration/EPC-026-the-capabilities-catalog"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
