@@ -21,7 +21,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / '.github/workflows/codeflow-policy.yml'
 REGISTRY = ROOT / '.github/workflows/codeflow-registry.yml'
-POLICY_SHA256 = 'a78e5e9f6d4ce8c249cff7095cf1ade8cc8bc0bf73a42a02d6bb86d79db7d9c4'
+POLICY_SHA256 = 'a94e6882a7c32aa242d6e5d566adfda6d05f77354d0e844f9c93dfe17dbd750a'
 REGISTRY_SHA256 = '5c49427c230d86a88827448dd2e889c0357efba0063452908ad19cee0fb1e1dd'
 NAMESPACE = 'codeflow-policy-main-binary-v3-'
 DEPS_NAMESPACE = 'codeflow-policy-main-deps-v3'
