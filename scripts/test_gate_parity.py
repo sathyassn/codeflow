@@ -751,7 +751,7 @@ class HostedEventParityControls(unittest.TestCase):
             condition = re.search(r"^ {4}if:\s*(.+?)\s*$", job, re.M)
             if name == "secret-scan":
                 # TSK-1176: pull requests are scanned by the default branch's
-                # `trusted: secret scan`; this history scan skips only them.
+                # `secret scan`; this history scan skips only them.
                 self.assertEqual(condition and condition.group(1),
                                  "github.event_name != 'pull_request'", name)
             else:
