@@ -121,7 +121,6 @@ fn run(command: &mut Command, input: Option<&[u8]>) -> Result<Output, String> {
 /// The macOS keychain, through `/usr/bin/security`.
 #[cfg(target_os = "macos")]
 pub struct Keychain {
-    security: PathBuf,
     keychain: Option<PathBuf>,
 }
 
@@ -130,23 +129,19 @@ impl Keychain {
     /// The user's default (login) keychain.
     #[must_use]
     pub fn login() -> Self {
-        Self {
-            security: PathBuf::from("/usr/bin/security"),
-            keychain: None,
-        }
+        Self { keychain: None }
     }
 
     /// A named keychain file, for a scratch keychain in tests.
     #[must_use]
     pub fn at(keychain: &Path) -> Self {
         Self {
-            security: PathBuf::from("/usr/bin/security"),
             keychain: Some(keychain.to_path_buf()),
         }
     }
 
     fn find(&self, account: &str, password: bool) -> Command {
-        let mut command = Command::new(&self.security);
+        let mut command = Command::new("/usr/bin/security");
         command.args([
             "find-generic-password",
             "-s",
@@ -187,10 +182,10 @@ impl KeyStore for Keychain {
     }
 
     fn available(&self) -> Result<(), String> {
-        if self.security.is_file() {
+        if Path::new("/usr/bin/security").is_file() {
             Ok(())
         } else {
-            Err(format!("{} is missing", self.security.display()))
+            Err("/usr/bin/security is missing".to_string())
         }
     }
 
@@ -214,7 +209,7 @@ impl KeyStore for Keychain {
     fn store(&self, account: &str, secret: &str) -> Result<(), String> {
         let line = keychain_add_line(account, secret, self.keychain.as_deref());
         let output = run(
-            Command::new(&self.security).arg("-i"),
+            Command::new("/usr/bin/security").arg("-i"),
             Some(line.as_bytes()),
         )?;
         if self.exists(account)? {
@@ -275,9 +270,12 @@ pub struct SecretService;
 
 #[cfg(all(unix, not(target_os = "macos")))]
 impl SecretService {
-    fn tool() -> Result<PathBuf, String> {
+    /// A `secret-tool` command, once `secret-tool` is found on PATH. The
+    /// program is a literal so the git spawn contract reads it as one.
+    fn command() -> Result<Command, String> {
         which::which("secret-tool")
-            .map_err(|_| "secret-tool (libsecret) is not installed".to_string())
+            .map_err(|_| "secret-tool (libsecret) is not installed".to_string())?;
+        Ok(Command::new("secret-tool"))
     }
 }
 
@@ -288,18 +286,12 @@ impl KeyStore for SecretService {
     }
 
     fn available(&self) -> Result<(), String> {
-        Self::tool().map(|_| ())
+        Self::command().map(|_| ())
     }
 
     fn exists(&self, account: &str) -> Result<bool, String> {
         let output = run(
-            Command::new(Self::tool()?).args([
-                "lookup",
-                "service",
-                AGENT_KEY_SERVICE,
-                "account",
-                account,
-            ]),
+            Self::command()?.args(["lookup", "service", AGENT_KEY_SERVICE, "account", account]),
             None,
         )?;
         Ok(output.status.success() && !output.stdout.is_empty())
@@ -307,7 +299,7 @@ impl KeyStore for SecretService {
 
     fn store(&self, account: &str, secret: &str) -> Result<(), String> {
         let output = run(
-            Command::new(Self::tool()?).args([
+            Self::command()?.args([
                 "store",
                 &format!("--label={AGENT_KEY_SERVICE}"),
                 "service",
@@ -329,13 +321,7 @@ impl KeyStore for SecretService {
 
     fn load(&self, account: &str) -> Result<String, String> {
         let output = run(
-            Command::new(Self::tool()?).args([
-                "lookup",
-                "service",
-                AGENT_KEY_SERVICE,
-                "account",
-                account,
-            ]),
+            Self::command()?.args(["lookup", "service", AGENT_KEY_SERVICE, "account", account]),
             None,
         )?;
         if !output.status.success() || output.stdout.is_empty() {
@@ -396,7 +382,6 @@ pub trait Signer {
 /// `openssl dgst -sha256 -sign /dev/stdin`: the key on standard input, the
 /// data (not secret) in a file in a private temporary folder.
 pub struct OpensslSigner {
-    openssl: PathBuf,
     scratch: PathBuf,
 }
 
@@ -407,18 +392,10 @@ impl OpensslSigner {
     ///
     /// When `openssl` is not installed.
     pub fn discover(scratch: &Path) -> Result<Self, String> {
-        let openssl =
-            which::which("openssl").map_err(|_| "openssl is not installed".to_string())?;
-        Ok(Self::new(openssl, scratch))
-    }
-
-    /// Use the given `openssl`.
-    #[must_use]
-    pub fn new(openssl: PathBuf, scratch: &Path) -> Self {
-        Self {
-            openssl,
+        which::which("openssl").map_err(|_| "openssl is not installed".to_string())?;
+        Ok(Self {
             scratch: scratch.to_path_buf(),
-        }
+        })
     }
 }
 
@@ -431,7 +408,7 @@ impl Signer for OpensslSigner {
         let path = dir.path().join("signing-input");
         std::fs::write(&path, data)
             .map_err(|error| format!("cannot write the signing input: {error}"))?;
-        let mut command = Command::new(&self.openssl);
+        let mut command = Command::new("openssl");
         command
             .args(["dgst", "-sha256", "-sign", "/dev/stdin"])
             .arg(&path);
@@ -465,7 +442,7 @@ pub trait AppHttp {
 
 /// `curl`, with the headers on standard input (`-H @-`).
 pub struct CurlHttp {
-    curl: PathBuf,
+    _found: (),
 }
 
 impl CurlHttp {
@@ -475,8 +452,8 @@ impl CurlHttp {
     ///
     /// When `curl` is not installed.
     pub fn discover() -> Result<Self, String> {
-        let curl = which::which("curl").map_err(|_| "curl is not installed".to_string())?;
-        Ok(Self { curl })
+        which::which("curl").map_err(|_| "curl is not installed".to_string())?;
+        Ok(Self { _found: () })
     }
 }
 
@@ -491,7 +468,7 @@ impl AppHttp for CurlHttp {
         let headers = format!(
             "Authorization: Bearer {bearer}\nAccept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\nUser-Agent: codeflow\n"
         );
-        let mut command = Command::new(&self.curl);
+        let mut command = Command::new("curl");
         command.args([
             "-sS",
             "--fail-with-body",
@@ -913,18 +890,17 @@ pub(crate) mod tests {
     #[cfg(unix)]
     #[test]
     fn openssl_signer_leaves_no_file_after_success_or_failure() {
-        let Ok(openssl) = which::which("openssl") else {
+        let scratch = tempfile::tempdir().unwrap();
+        let Ok(signer) = OpensslSigner::discover(scratch.path()) else {
             eprintln!("openssl not installed; skipped");
             return;
         };
-        let made = Command::new(&openssl)
+        let made = Command::new("openssl")
             .args(["genrsa", "2048"])
             .output()
             .unwrap();
         assert!(made.status.success());
         let pem = String::from_utf8(made.stdout).unwrap();
-        let scratch = tempfile::tempdir().unwrap();
-        let signer = OpensslSigner::new(openssl, scratch.path());
         let signature = signer.sign_rs256(&pem, b"header.payload").unwrap();
         assert_eq!(signature.len(), 256);
         assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
