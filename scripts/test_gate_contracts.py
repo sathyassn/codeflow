@@ -232,32 +232,35 @@ class GateContracts(unittest.TestCase):
         self.assertIn("needs.windows-build.result == 'success'", jobs['windows-tests'])
         self.assertIn("needs.windows-tests.result != 'skipped'", jobs['windows-journeys'])
 
-    # TSK-254: pull request runs share one group per pull request and cancel
-    # the run they supersede. The policy workflow runs only on
-    # pull_request_target (TSK-336); push, schedule and dispatch start
-    # codeflow-registry.yml, which has no group, so a registry run is never
-    # replaced. The exact text is pinned: a group keyed on the ref would
-    # cancel runs of other pull requests.
+    # TSK-1040: pull request runs share one group per pull request and queue
+    # (`queue: max`, no cancellation), so no event cancels or replaces a run.
+    # The policy workflow runs only on pull_request_target (TSK-336); push,
+    # schedule and dispatch start codeflow-registry.yml, which has no group.
+    # The exact text is pinned: a group keyed on the ref, or any cancellation,
+    # would cancel the run that judges a pushed head.
     POLICY_CONCURRENCY = (
         "\nconcurrency:\n"
         "  group: ${{ format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) }}\n"
-        "  cancel-in-progress: true\n\n"
+        "  cancel-in-progress: false\n"
+        "  queue: max\n\n"
     )
-    # The judging run reads the body when it runs, so the newest body is
-    # judged whichever event's run survives the group.
+    # The judging run reads the body when it runs, so a run that waited in
+    # the queue judges the newest body, whichever event started it.
     POLICY_BODY = (
         "          curl -fsSL --retry 3 --max-time 60 \\\n"
         "            -H \"Authorization: Bearer ${GH_TOKEN}\" -H \"Accept: application/vnd.github+json\" \\\n"
         "            \"${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}\" -o \"${RUNNER_TEMP}/pull.json\"\n"
     )
 
-    def assert_policy_cancels_only_superseded_pull_request_runs(self, workflow, admission=False):
+    def assert_policy_queues_every_pull_request_run(self, workflow, admission=False):
         self.assertEqual(workflow.count('concurrency:'), 1, 'one workflow-level group, no job-level one')
         self.assertIn(self.POLICY_CONCURRENCY, workflow)
         self.assertLess(workflow.index(self.POLICY_CONCURRENCY), workflow.index('\njobs:\n'))
         self.assertIn(self.POLICY_BODY, workflow)
         self.assertIn('          GH_TOKEN: ${{ github.token }}\n', workflow)
-        self.assertIn('          CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}\n', workflow)
+        self.assertIn('          BODY_FILE: ${{ runner.temp }}/pr-body.md\n', workflow)
+        self.assertIn('--pr-body-file "$BODY_FILE"', workflow)
+        self.assertNotIn('CODEFLOW_PR_BODY', workflow)
         self.assertNotIn('github.event.pull_request.body', workflow)
         actions = '      actions: read\n' if admission else ''
         self.assertIn(f'    permissions:\n      contents: read\n      pull-requests: read\n{actions}    steps:\n', workflow)
@@ -274,7 +277,7 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(workflow.count('cargo build --release'), 2, 'trusted: commit standards and release impact')
         self.assertIn('codeflow ids check --base', workflow)
         self.assertIn('codeflow ci --base', workflow)
-        self.assert_policy_cancels_only_superseded_pull_request_runs(workflow, admission=True)
+        self.assert_policy_queues_every_pull_request_run(workflow, admission=True)
         self.assertIn('Swatinem/rust-cache@', workflow)
         self.assertNotIn('github.event.pull_request.head.sha }}\n          fetch-depth', workflow)
         for event in ('  push:', '  schedule:', '  workflow_dispatch:'):
@@ -352,7 +355,7 @@ class GateContracts(unittest.TestCase):
             self.assertIn(command, runs)
 
     def test_the_adopter_policy_template_cancels_only_pr_runs_the_same_way(self):
-        self.assert_policy_cancels_only_superseded_pull_request_runs(read('assets/base/ci/codeflow-policy.yml'))
+        self.assert_policy_queues_every_pull_request_run(read('assets/base/ci/codeflow-policy.yml'))
         # Marking a draft ready reruns the standards, so a check that reads
         # the pull request at ready (its Testing citation) judges it then.
         self.assertIn('    types: [opened, synchronize, reopened, edited, ready_for_review]\n',
