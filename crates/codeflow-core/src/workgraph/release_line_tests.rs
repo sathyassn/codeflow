@@ -220,7 +220,12 @@ impl Fx {
 
     /// Judge the release push with `approved` as the approved cutoffs.
     fn judged(&self, approved: &[(&str, &str)]) -> Result<Judgement, String> {
-        let destination = ask_destination(&self.root, Some(self.origin.to_str().unwrap())).unwrap();
+        let destination = ask_destination(
+            &self.root,
+            Some(self.origin.to_str().unwrap()),
+            QueryLimits::default(),
+        )
+        .unwrap();
         let published = self.git(&["rev-parse", &format!("origin/{RELEASE}")]);
         judge(&self.root, &destination, &published, "HEAD", approved)
     }
@@ -711,7 +716,7 @@ fn a_release_scope_refuses_a_checked_out_branch_that_is_not_utf8() {
         b"ref: refs/heads/integration/release-\xe9\n",
     )
     .unwrap();
-    let error = checkout_scope(dir.path(), None).unwrap_err();
+    let error = checkout_scope(dir.path(), None, QueryLimits::default()).unwrap_err();
     let reason = if cfg!(windows) {
         "cannot read current branch"
     } else {
@@ -783,7 +788,7 @@ fn a_release_scope_refuses_an_origin_url_that_is_not_utf8() {
     config
         .write_all(b"[remote \"origin\"]\n\turl = file:///caf\xff\n")
         .unwrap();
-    let error = checkout_scope(dir.path(), None).unwrap_err();
+    let error = checkout_scope(dir.path(), None, QueryLimits::default()).unwrap_err();
     assert!(error.contains("not valid UTF-8"), "{error}");
 }
 
@@ -848,7 +853,7 @@ fn r22_advertisement_refuses_invalid_oid_and_keeps_empty_remote() {
 fn r22_checkout_scope_refuses_remote_lookup_error_and_keeps_absence() {
     let dir = tempfile::tempdir().unwrap();
     let (repo, _) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
-    assert!(checkout_scope(dir.path(), None).is_ok());
+    assert!(checkout_scope(dir.path(), None, QueryLimits::default()).is_ok());
     let mut config = repo.config().unwrap();
     config.set_str("remote.origin.url", "unused").unwrap();
     config
@@ -858,7 +863,7 @@ fn r22_checkout_scope_refuses_remote_lookup_error_and_keeps_absence() {
         )
         .unwrap();
     assert!(repo.find_remote("origin").is_err());
-    assert!(checkout_scope(dir.path(), None).is_err());
+    assert!(checkout_scope(dir.path(), None, QueryLimits::default()).is_err());
 }
 
 #[test]
@@ -896,6 +901,7 @@ fn named_default(name: &str, tip: Oid) -> Destination {
         url: None,
         default: Some((name.to_string(), tip)),
         heads: vec![(name.to_string(), tip)],
+        limits: QueryLimits::default(),
     }
 }
 
@@ -1023,7 +1029,7 @@ fn a_release_judgement_names_the_default_branch_escaped() {
         &fx.origin,
         &["symbolic-ref", "HEAD", &format!("refs/heads/{name}")],
     );
-    let destination = ask_destination(&fx.root, Some(origin)).unwrap();
+    let destination = ask_destination(&fx.root, Some(origin), QueryLimits::default()).unwrap();
     assert_eq!(destination.default.as_ref().unwrap().0, name);
     let published = fx.git(&["rev-parse", &format!("origin/{RELEASE}")]);
     for approved in [&[(LINE_A, landing.as_str())][..], &[]] {
