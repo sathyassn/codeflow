@@ -153,9 +153,10 @@ pub(super) struct Outside<'a> {
     /// is still at that tip. A commit another ref also reaches still counts.
     pub(super) replaced: Option<&'a Replaced>,
     /// Exact tips the run judges as part of the range (TSK-433): proved
-    /// tips of the line the range head contains. Like `head`, their own
-    /// history never counts as outside (TSK-416 AC-20). Only these
-    /// commits are hidden, never a ref by its name.
+    /// tips of the line the range head contains. A commit one of them holds
+    /// that descends from `head` carries `head`'s completion inside the
+    /// range, so it never counts as outside (TSK-416 AC-20). Only these
+    /// exact commits count, never a ref by its name.
     pub(super) judged: &'a [Oid],
 }
 
@@ -1001,8 +1002,8 @@ impl<'r> RecordStore<'r> {
     /// record held elsewhere is no landing (issue #67), and a copy inherited
     /// from the range's own commits (a branch stacked on this one, or this
     /// branch's remote copy with unrelated commits on top) adds nothing.
-    /// The history of each `judged` tip, an exact commit the run judges as
-    /// the range, is hidden as `head`'s is (TSK-416 AC-20).
+    /// A commit that carries `head`'s completion forward inside a `judged`
+    /// tip is the range's own ([`Self::carried_in_range`], TSK-416 AC-20).
     ///
     /// # Errors
     ///
@@ -1049,9 +1050,6 @@ impl<'r> RecordStore<'r> {
             walk.push(*tip).map_err(unreadable)?;
         }
         walk.hide(head).map_err(unreadable)?;
-        for tip in judged {
-            walk.hide(*tip).map_err(unreadable)?;
-        }
         let commits = walk.collect::<Result<Vec<_>, _>>().map_err(unreadable)?;
         for commit in commits {
             let found = self.held_at(commit, task)?;
@@ -1075,7 +1073,7 @@ impl<'r> RecordStore<'r> {
             let adds = found.records.iter().any(|(blob, record)| {
                 !inherited.contains(blob) && super::acceptance::shows_completion(record)
             });
-            if !adds {
+            if !adds || self.carried_in_range(commit, head, judged)? {
                 continue;
             }
             let mut holder = commit.to_string();
@@ -1088,6 +1086,31 @@ impl<'r> RecordStore<'r> {
             return Ok(Some((holder, commit)));
         }
         Ok(None)
+    }
+
+    /// Whether `commit`, which adds a completing version outside `head`'s
+    /// history, is the range's own carrying of `head`'s completion (TSK-416
+    /// AC-20): it descends from `head`, and a `judged` tip, an exact proved
+    /// tip of the line the run head contains, holds it. A merge inside the
+    /// line that rewrites the record after the completion is such a commit.
+    /// A completion `head` does not reach (an earlier landing on the line,
+    /// TSK-220) and a commit only another ref holds are not, and nothing is
+    /// matched by a ref's name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the ancestry cannot be read, so the caller
+    /// fails closed.
+    fn carried_in_range(&self, commit: Oid, head: Oid, judged: &[Oid]) -> Result<bool, String> {
+        if judged.is_empty() || !super::acceptance::is_ancestor_or_same(self.repo, head, commit)? {
+            return Ok(false);
+        }
+        for tip in judged {
+            if super::acceptance::is_ancestor_or_same(self.repo, commit, *tip)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -1496,10 +1519,10 @@ mod tests {
             .is_none());
     }
 
-    /// TSK-416 AC-20: a judged tip's history is hidden like the head's, so
-    /// a completion only that tip reaches is no holder outside; the same
-    /// commit with no judged tip still is, and a judged tip that cannot be
-    /// read refuses.
+    /// TSK-416 AC-20: a completion a judged tip holds that descends from the
+    /// head is the range's own and no holder outside; the same commit with
+    /// no judged tip still is, and so is one that does not descend from the
+    /// head (TSK-220); a judged tip that cannot be read refuses.
     #[test]
     fn a_judged_tips_history_is_no_holder_and_an_unreadable_one_refuses() {
         let dir = tempfile::tempdir().unwrap();
@@ -1520,6 +1543,15 @@ mod tests {
             .holder_outside(&task, base, &[tip], None)
             .unwrap()
             .is_none());
+        let tree = repo.find_commit(base).unwrap().tree().unwrap();
+        let who = git2::Signature::now("T", "t@example.test").unwrap();
+        let unrelated = repo
+            .commit(None, &who, &who, "unrelated head", &tree, &[])
+            .unwrap();
+        let held = RecordStore::new(&repo)
+            .holder_outside(&task, unrelated, &[tip], None)
+            .unwrap();
+        assert_eq!(held.map(|(_, commit)| commit), Some(tip));
         let missing = Oid::from_str(&"1".repeat(40)).unwrap();
         assert!(RecordStore::new(&repo)
             .holder_outside(&task, base, &[missing], None)

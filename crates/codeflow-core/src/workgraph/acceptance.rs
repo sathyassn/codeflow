@@ -2383,9 +2383,9 @@ fn judge_reopened(
     tips.retain(|(_, point)| seen.insert(*point));
     let own: Vec<Oid> = own_history.iter().map(|(_, point)| *point).collect();
     // The proved tips the run head contains are the range under judgment
-    // (TSK-433), so their history is no holder outside it either: a merge
-    // inside the line that rewrites the record is the range's own (TSK-416
-    // AC-20). Each is one exact commit; a ref is never hidden by its name.
+    // (TSK-433): a merge inside the line that carries the recovered
+    // completion and rewrites the record is the range's own, no holder
+    // outside it (TSK-416 AC-20). Each is one exact commit, never a name.
     let judged_tips = criteria.judged_commits();
     store.judge(
         &identity,
