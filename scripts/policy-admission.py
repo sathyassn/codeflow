@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge admission for this repository's `trusted: commit standards` check
+"""Merge admission for this repository's `commit standards` check
 (TSK-1239), started when the pull request's codeflow-ci run completes, with
 no runner held while that run is pending.
 

@@ -776,7 +776,7 @@ ADMISSION_SPEC = importlib.util.spec_from_file_location("policy_admission", ROOT
 admission = importlib.util.module_from_spec(ADMISSION_SPEC)
 ADMISSION_SPEC.loader.exec_module(admission)
 POLICY = ".github/workflows/codeflow-policy.yml"
-STANDARDS = "trusted: commit standards"
+STANDARDS = "commit standards"
 CREATED = "2026-11-05T10:00:00Z"
 
 

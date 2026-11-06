@@ -356,8 +356,8 @@ class GateContracts(unittest.TestCase):
                 self.assertNotIn('${{', line, f'event data reaches a script only through env: {line}')
         self.assertIn('python3 -I scripts/policy-admission.py rerun --repo "$REPOSITORY" --run "$RUN_ID" --head "$HEAD_SHA"',
                       admission)
-        self.assertIn('--job "trusted: commit standards"', admission)
-        self.assertIn('    name: "trusted: commit standards"\n', policy)
+        self.assertIn('--job "commit standards"', admission)
+        self.assertIn('    name: "commit standards"\n', policy)
         self.assertNotRegex(admission, r'(?m)^    name: "?trusted:', 'the re-run job is never a trusted name')
 
     def test_the_consumer_scaffold_gains_no_admission_mechanism(self):
