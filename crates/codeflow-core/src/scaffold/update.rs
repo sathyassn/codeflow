@@ -49,6 +49,7 @@ use std::path::{Path, PathBuf};
 use super::assets::Shipped;
 use super::init::{build_context, render_entry};
 use super::manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest};
+use super::pipeline_stage;
 use super::prior_release;
 use super::region::{self, BlockOutcome};
 use super::report::{Action, Report};
@@ -1137,6 +1138,14 @@ fn update_entry(
                 sync_user_owned_json(root, entry, &rendered, raw, installed, report, diffs)?;
             } else {
                 let mut notes = vec![Shown::fixed("user-owned: never mutated by update")];
+                if entry.dest == pipeline_stage::PIPELINE_DEST {
+                    // Read only to advise: the copy is never written here.
+                    let live =
+                        std::fs::read(&dest_path).map_err(|e| ScaffoldError::io(&dest_path, e))?;
+                    if pipeline_stage::runs_essential_per_change(&live) {
+                        notes.push(Shown::fixed(pipeline_stage::UPDATE_NOTICE));
+                    }
+                }
                 let is_new_entry = !installed.files.contains_key(&entry.dest);
                 let baseline_missing = Baseline::read(root, &entry.dest)?.is_none();
                 if is_new_entry || baseline_missing {

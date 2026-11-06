@@ -27,6 +27,7 @@ mod codex_profile;
 mod git_config;
 mod grok_hooks;
 mod guard_timeouts;
+mod pipeline;
 mod remote_perimeter;
 mod sandbox;
 mod startup_files;
@@ -323,6 +324,7 @@ const CHECK_NAMES: &[&str] = &[
     "test-config",
     "id-registry",
     "adopter-fit",
+    "pipeline",
 ];
 
 /// Return the ordered list of all available check names.
@@ -363,6 +365,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("test-config", check_test_config);
     m.insert("id-registry", check_id_registry);
     m.insert("adopter-fit", check_adopter_fit);
+    m.insert("pipeline", pipeline::check);
     m
 }
 

@@ -101,7 +101,7 @@
     ".agents/skills/cf-develop/SKILL.md": {
       "src": "agents/skills/cf-develop/SKILL.md",
       "ownership": "managed",
-      "sha256": "aed02264386fad0e96ea6aefbfde7558c5d27036ab560352d9802f532350d9af",
+      "sha256": "463ab63dec07e0e7651c231093b6df1cc6d16b8568feef707c4cc53209f0a707",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/SKILL.md": {
@@ -1463,7 +1463,7 @@
     ".claude/skills/cf-develop/SKILL.md": {
       "src": "agents/skills/cf-develop/SKILL.md",
       "ownership": "managed",
-      "sha256": "aed02264386fad0e96ea6aefbfde7558c5d27036ab560352d9802f532350d9af",
+      "sha256": "463ab63dec07e0e7651c231093b6df1cc6d16b8568feef707c4cc53209f0a707",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/SKILL.md": {

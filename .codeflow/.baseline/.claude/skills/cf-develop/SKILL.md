@@ -66,7 +66,9 @@ records the required interactive seat unavailable and the reduced assurance.
       verdict before the primary turn ends; never defer it to a later
       callback or bypass review. Claude Code
       unattended/batch runs use `.claude/workflows/pipeline.workflow.js` for
-      the same build/review/verify stages.
+      the same build/review/verify stages; its verify stage runs the affected
+      targeted checks and `codeflow test --mode quick --strict`, never a whole
+      essential or full gate.
    c. On `changes_requested`, act on the findings as
       `cf-model-orchestrator/resources/quality/findings.md` sets out: one
       batch, fixed in this PR, each material fix confirmed by its finder on

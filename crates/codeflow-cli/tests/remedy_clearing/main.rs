@@ -232,6 +232,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_REMOTE_UNREAD", Excluded(HostingRemote)),
     ("DOCTOR_MANAGED_DRIFT", Runs),
     ("DOCTOR_CUSTOMIZATION", Runs),
+    ("DOCTOR_PIPELINE_STAGE", Runs),
     ("DOCTOR_INSTRUCTIONS", Runs),
     ("DOCTOR_READING", Runs),
     ("DOCTOR_READING_CONFIG", Runs),
@@ -3202,6 +3203,45 @@ fn clears_doctor_customization() {
                 }
                 write(&root, path, &text);
             }
+        },
+    );
+}
+
+/// TSK-370: a 3.1.0 pipeline still runs essential on every change; the
+/// printed line, put in place of the old one, clears the warning.
+#[test]
+fn clears_doctor_pipeline_stage() {
+    const PIPELINE: &str = ".claude/workflows/pipeline.workflow.js";
+    const LEAD: &str = "keeping its indentation: ";
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    write(
+        &root,
+        PIPELINE,
+        include_str!("../fixtures/pipeline-3.1.0.workflow.js"),
+    );
+    prove(
+        "DOCTOR_PIPELINE_STAGE",
+        "still runs `codeflow test --mode essential --strict`",
+        || doctor(&root, "pipeline"),
+        |printed| {
+            let flat = printed.split_whitespace().collect::<Vec<_>>().join(" ");
+            let start = flat.find(LEAD).expect("the printed line") + LEAD.len();
+            let end = flat[start..].find("approved.',").expect("its end") + start;
+            let line = &flat[start..end + "approved.',".len()];
+            let copy = read(&root, PIPELINE);
+            let edited: Vec<String> = copy
+                .split('\n')
+                .map(|l| {
+                    let body = l.trim_start();
+                    if body.starts_with("'Run the affected targeted checks, then") {
+                        format!("{}{line}", &l[..l.len() - body.len()])
+                    } else {
+                        l.to_string()
+                    }
+                })
+                .collect();
+            write(&root, PIPELINE, &edited.join("\n"));
         },
     );
 }

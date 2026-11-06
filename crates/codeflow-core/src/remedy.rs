@@ -779,6 +779,11 @@ catalog! {
     /// Managed regions edited by hand.
     DOCTOR_MANAGED_DRIFT = Step::Codeflow("codeflow update"),
         "move the hand edits outside the codeflow markers (or accept losing them), then `codeflow update` rewrites the blocks";
+    /// An installed pipeline whose verify stage still runs a whole
+    /// essential gate on every change (TSK-370). The file is user-owned, so
+    /// only an edit moves it.
+    DOCTOR_PIPELINE_STAGE = Step::Edit(".claude/workflows/pipeline.workflow.js"),
+        "in .claude/workflows/pipeline.workflow.js, replace the verify stage line that starts 'Run the affected targeted checks, then `codeflow test --mode essential --strict`' with this line, keeping its indentation: {line} Then `codeflow doctor --check pipeline` confirms it. A project that wants an essential run on every change keeps its copy as it is";
     /// Project context still at its template placeholders.
     DOCTOR_CUSTOMIZATION = Step::Edit("{path}"),
         "replace the template placeholders in {path} with this project's context (the /cf-customize skill checks it against the project)";
