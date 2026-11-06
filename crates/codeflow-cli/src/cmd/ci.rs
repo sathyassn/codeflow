@@ -3688,6 +3688,53 @@ mod tests {
         }
     }
 
+    /// TSK-1348: a bot committer changes no commit rule. A real commit object
+    /// with the agent App as committer gets the same range refusals as any
+    /// other, and the clean control shows they come from the message.
+    #[cfg(unix)]
+    #[test]
+    fn a_bot_committed_commit_meets_the_same_range_checks() {
+        use std::ffi::OsStr;
+        let dir = tempfile::tempdir().unwrap();
+        let base = repo_with_commit(dir.path(), &[b"seed"]);
+        let tree = run_git(
+            dir.path(),
+            &[OsStr::new("rev-parse"), OsStr::new("HEAD^{tree}")],
+            b"",
+        );
+        for (message, refused) in [
+            (
+                "feat: add thing\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+                Some("git.ai_attribution"),
+            ),
+            ("added some stuff\n", Some("git.commit_format")),
+            ("feat: add thing\n", None),
+        ] {
+            let raw = format!("tree {tree}\nparent {base}\nauthor Human <human@example.invalid> 1 +0000\ncommitter cf-agent[bot] <353475153+cf-agent[bot]@users.noreply.github.com> 1 +0000\n\n{message}");
+            let head = run_git(
+                dir.path(),
+                &[
+                    OsStr::new("hash-object"),
+                    OsStr::new("-t"),
+                    OsStr::new("commit"),
+                    OsStr::new("-w"),
+                    OsStr::new("--stdin"),
+                ],
+                raw.as_bytes(),
+            );
+            let commits = enumerate_commits(dir.path(), &base, &head).unwrap();
+            let found = evaluate_commits(&git(), &commits);
+            match refused {
+                Some(rule) => assert!(
+                    found.iter().any(|tagged| tagged.violation.rule == rule
+                        && tagged.violation.level == PolicyLevel::Block),
+                    "{message}"
+                ),
+                None => assert!(found.is_empty(), "{message}"),
+            }
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn r22_commit_enumeration_preserves_empty_range_and_valid_message() {

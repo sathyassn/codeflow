@@ -211,6 +211,11 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow remote agent-token` | | Print a GitHub installation token of this repository's agent App, valid for one hour, for `GH_TOKEN` or `git push`. The App's key is read from this computer's credential store and never printed |
 | | `--repo <OWNER/NAME>` | The repository, `owner/name` (default: the `origin` remote). |
 | | `--git-credential <OPERATION>` | Answer as a git credential helper: `get` for `https://github.com` prints the token as the password of `x-access-token`; another host or operation prints nothing. |
+| | `--committer <FIELD>` | Print the App's committer name or email instead of a token, confirmed with GitHub; nothing reaches standard output when it cannot be confirmed. No token is minted. One of `name`, `email`. |
+| `codeflow remote import-agent-key` | | Store this computer's own key for the repository's agent App, from a private key file generated on the App's settings page. Needs no administrator role and no `gh` login |
+| | `--key-file <PATH>` | The private key file; it must be readable only by you. Required. |
+| | `--client-id <ID>` | The App's Client ID, from its settings page. Required. |
+| | `--repo <OWNER/NAME>` | The repository, `owner/name` (default: the `origin` remote). |
 
 ### Verify
 
@@ -536,6 +541,8 @@ a rule; the rulesets, profiles and recovery window are in the
 [policy reference](policy-reference.md#remote-protection). A live read that
 fails or does not parse writes nothing. `codeflow doctor --check
 remote-perimeter` reads the default branch's live rules back.
+`codeflow remote setup-apps`, `agent-token` and `import-agent-key` are walked
+through step by step in [Set up the GitHub Apps](github-apps.md).
 
 ### Verify notes
 

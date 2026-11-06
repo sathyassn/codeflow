@@ -2,9 +2,12 @@
 //! <name>] [--check-app <id>] [--lines <pattern>]` — write the rulesets this
 //! command owns to the remote (charter §6.1 plane 3, TSK-1080).
 //! `codeflow remote setup-apps` creates the authority and agent GitHub Apps,
-//! and `codeflow remote agent-token` mints the agent App's token (TSK-1348).
+//! `codeflow remote agent-token` mints the agent App's token or prints its
+//! committer values, and `codeflow remote import-agent-key` stores another
+//! computer's key for that App (TSK-1348).
 
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -87,7 +90,10 @@ pub enum RemoteCommand {
     /// commit template or trailer setting. Each App takes two clicks:
     /// "Create GitHub App" on GitHub, then "Install" on the printed link.
     /// Every write is listed with what undoes it. A second run creates
-    /// nothing already set up.
+    /// nothing it finds: it reads the agent App with its own key, and
+    /// reports a private authority App as present but not verified. The run
+    /// prints the committer lines for each harness's project settings and
+    /// edits no settings file.
     SetupApps {
         /// The authority App's name (default `codeflow-authority-<repo>`);
         /// GitHub App names are unique across GitHub, at most 34 characters.
@@ -121,6 +127,34 @@ pub enum RemoteCommand {
         /// host or operation prints nothing.
         #[arg(long, value_name = "OPERATION")]
         git_credential: Option<String>,
+
+        /// Print the App's committer name or email instead of a token,
+        /// confirmed with GitHub; nothing reaches standard output when it
+        /// cannot be confirmed. No token is minted.
+        #[arg(long, value_name = "FIELD", value_parser = ["name", "email"], conflicts_with = "git_credential")]
+        committer: Option<String>,
+    },
+
+    /// Store this computer's own key for the repository's agent App, from a
+    /// private key file generated on the App's settings page. Needs no
+    /// administrator role and no `gh` login.
+    ///
+    /// The key is proved first: GitHub must answer as the App, show it as
+    /// the repository's agent App, and show it installed there. A file
+    /// others can read and an existing entry are refused. The file is left
+    /// in place for you to delete.
+    ImportAgentKey {
+        /// The private key file; it must be readable only by you.
+        #[arg(long, value_name = "PATH")]
+        key_file: PathBuf,
+
+        /// The App's Client ID, from its settings page.
+        #[arg(long, value_name = "ID")]
+        client_id: String,
+
+        /// The repository, `owner/name` (default: the `origin` remote).
+        #[arg(long, value_name = "OWNER/NAME")]
+        repo: Option<String>,
     },
 }
 
@@ -160,7 +194,17 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
         RemoteCommand::AgentToken {
             repo,
             git_credential,
-        } => run_agent_token(repo.as_deref(), git_credential.as_deref()),
+            committer,
+        } => run_agent_token(
+            repo.as_deref(),
+            git_credential.as_deref(),
+            committer.as_deref(),
+        ),
+        RemoteCommand::ImportAgentKey {
+            key_file,
+            client_id,
+            repo,
+        } => run_import_agent_key(key_file, client_id, repo.as_deref()),
     }
 }
 
@@ -220,17 +264,8 @@ fn run_setup_apps(options: &SetupOptions, paste: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `codeflow remote agent-token`.
-fn run_agent_token(repo: Option<&str>, git_credential: Option<&str>) -> anyhow::Result<()> {
-    if let Some(operation) = git_credential {
-        // Git sends the request on standard input; only `get` for
-        // https://github.com is answered, and nothing is minted otherwise.
-        let mut request = String::new();
-        let _ = std::io::stdin().read_to_string(&mut request);
-        if operation != "get" || !agent_key::credential_request_is_github(&request) {
-            return Ok(());
-        }
-    }
+/// The repository named by `--repo`, or the `origin` remote.
+fn resolve_repository(repo: Option<&str>) -> anyhow::Result<String> {
     let repository = match repo {
         Some(repo) => repo.to_string(),
         None => codeflow_core::remote::github_origin(&repo_root()?)
@@ -242,9 +277,64 @@ fn run_agent_token(repo: Option<&str>, git_credential: Option<&str>) -> anyhow::
     if !apps::valid_repository(&repository) {
         anyhow::bail!("'{repository}' is not owner/name");
     }
+    Ok(repository)
+}
+
+/// `codeflow remote import-agent-key`.
+fn run_import_agent_key(
+    key_file: &Path,
+    client_id: &str,
+    repo: Option<&str>,
+) -> anyhow::Result<()> {
+    let repository = resolve_repository(repo)?;
     let signer = OpensslSigner::discover(&std::env::temp_dir()).map_err(anyhow::Error::msg)?;
     let http = CurlHttp::discover().map_err(anyhow::Error::msg)?;
     let store = os_store();
+    let import = agent_key::KeyImport {
+        repository: &repository,
+        client_id,
+        key_file,
+    };
+    let lines = agent_key::import_agent_key(store.as_ref(), &signer, &http, &import, unix_now()?)
+        .map_err(|error| anyhow::anyhow!("remote import-agent-key: {error}"))?;
+    for line in lines {
+        println!("{}", codeflow_core::git::display_print(&line));
+    }
+    Ok(())
+}
+
+/// `codeflow remote agent-token`.
+fn run_agent_token(
+    repo: Option<&str>,
+    git_credential: Option<&str>,
+    committer: Option<&str>,
+) -> anyhow::Result<()> {
+    if let Some(operation) = git_credential {
+        // Git sends the request on standard input; only `get` for
+        // https://github.com is answered, and nothing is minted otherwise.
+        let mut request = String::new();
+        let _ = std::io::stdin().read_to_string(&mut request);
+        if operation != "get" || !agent_key::credential_request_is_github(&request) {
+            return Ok(());
+        }
+    }
+    let repository = resolve_repository(repo)?;
+    let signer = OpensslSigner::discover(&std::env::temp_dir()).map_err(anyhow::Error::msg)?;
+    let http = CurlHttp::discover().map_err(anyhow::Error::msg)?;
+    let store = os_store();
+    if let Some(field) = committer {
+        // Computed first: nothing reaches standard output on a failure.
+        let committer =
+            agent_key::bot_committer(store.as_ref(), &signer, &http, &repository, unix_now()?)
+                .map_err(|error| anyhow::anyhow!("remote agent-token: {error}"))?;
+        let value = if field == "email" {
+            committer.email
+        } else {
+            committer.name
+        };
+        writeln!(std::io::stdout().lock(), "{value}")?;
+        return Ok(());
+    }
     let minted = agent_key::mint(store.as_ref(), &signer, &http, &repository, unix_now()?)
         .map_err(|error| anyhow::anyhow!("remote agent-token: {error}"))?;
     let mut out = std::io::stdout().lock();

@@ -1543,6 +1543,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // TSK-1348: an installation answer that is not JSON has no id, and a read-back that is not an entry does not match, so the import refuses and never reports the key kept.
+    (
+        "crates/codeflow-core/src/remote/agent_key.rs",
+        "import_agent_key",
+        "obtain-absent:from_str",
+        2,
+        "unproven",
+    ),
     // TSK-1348: an installation answer that is not JSON has no id, so mint returns an error and no token.
     (
         "crates/codeflow-core/src/remote/agent_key.rs",
@@ -1610,8 +1618,16 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // TSK-1348: a permission level that is not text reads as empty, so the App is reported as not the one the manifest asks for.
     (
         "crates/codeflow-core/src/remote/apps.rs",
-        "existing_app_problems",
+        "app_problems",
         "obtain-absent:as_str",
+        1,
+        "unproven",
+    ),
+    // TSK-1348: an answer for the App that is not JSON is a failed lookup, which stops the run; only an HTTP 404 lets it go on.
+    (
+        "crates/codeflow-core/src/remote/apps.rs",
+        "lookup_app",
+        "obtain-absent:from_str",
         1,
         "unproven",
     ),
@@ -7175,6 +7191,8 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/remote/agent_key.rs", "import_agent_key", "exists", 1, "KeyStore::exists before the file is read: true refuses and an error stops the import; only false goes on, and the read-back checks what was kept (TSK-1348)."),
+    ("crates/codeflow-core/src/remote/agent_key.rs", "read_key_file", "is_file", 1, "Type check on symlink_metadata, which already succeeded; anything but a regular file is refused, and the bounded read checks it again (TSK-1348)."),
     ("crates/codeflow-core/src/remote/agent_key.rs", "CurlHttp::discover", "is_file", 1, "A missing /usr/bin/curl refuses the command (TSK-1348); a present one only lets the spawn go on, and a failed spawn is still an error."),
     ("crates/codeflow-core/src/remote/agent_key.rs", "OpensslSigner::discover", "is_file", 1, "A missing /usr/bin/openssl refuses the command (TSK-1348); a present one only lets the spawn go on, and a failed spawn is still an error."),
     ("crates/codeflow-core/src/remote/agent_key.rs", "SecretService::command", "is_file", 1, "A missing /usr/bin/secret-tool refuses the store (TSK-1348); a present one only lets the spawn go on, and a failed spawn is still an error."),

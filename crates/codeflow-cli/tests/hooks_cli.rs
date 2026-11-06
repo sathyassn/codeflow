@@ -3743,6 +3743,123 @@ fn commit_msg_blocks_attribution_and_malformed_subject() {
     assert_eq!(out.status.code(), Some(0));
 }
 
+/// A repository whose real `git commit` runs the commit-msg hook, with the
+/// agent App's two values in the environment, as a session's settings set
+/// them (TSK-1348).
+fn bot_committed_commit(dir: &Path, message: &str) -> Output {
+    init_repo(dir, "feat/x");
+    let hook = dir.join(".git/hooks/commit-msg");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nexec '{}' git-hook commit-msg \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::fs::write(dir.join("change.txt"), "change\n").unwrap();
+    git(dir, &["add", "change.txt"]);
+    git_command()
+        .args(["commit", "-m", message])
+        .env("GIT_COMMITTER_NAME", "cf-agent[bot]")
+        .env(
+            "GIT_COMMITTER_EMAIL",
+            "353475153+cf-agent[bot]@users.noreply.github.com",
+        )
+        .current_dir(dir)
+        .output()
+        .expect("git runs")
+}
+
+/// TSK-1348: the bot committer is never a route around a message check. The
+/// hook reads the message, so these pass with or without the committer; they
+/// pin that floor, and the clean control shows the refusals come from the
+/// message.
+#[test]
+fn a_bot_committed_commit_with_an_ai_trailer_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = bot_committed_commit(
+        dir.path(),
+        "feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+    );
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("git.ai_attribution"));
+}
+
+#[test]
+fn a_bot_committed_non_conventional_message_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = bot_committed_commit(dir.path(), "added some stuff\n");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("git.commit_format"));
+}
+
+/// TSK-1348: the guard reads both ways a line can carry the two values as
+/// commit metadata, a literal and a substitution of `--committer`. A commit
+/// message is the commit-msg hook's to judge, here and without the values.
+#[test]
+fn the_guard_reads_the_committer_values_as_data() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    let judged = |command: &str| {
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "git-guard"])
+                .current_dir(dir.path()),
+            &guard_payload(command, dir.path()),
+        )
+    };
+    for command in [
+        "GIT_COMMITTER_NAME='cf-agent[bot]' GIT_COMMITTER_EMAIL='1+cf-agent[bot]@users.noreply.github.com' git commit -m 'feat: x'",
+        "GIT_COMMITTER_NAME=\"$(codeflow remote agent-token --committer name)\" GIT_COMMITTER_EMAIL=\"$(codeflow remote agent-token --committer email)\" git commit -m 'feat: x'",
+    ] {
+        let out = judged(command);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{command}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let message = "git commit -m 'feat: x' -m 'Co-Authored-By: Claude <noreply@anthropic.com>'";
+    let plain = judged(message);
+    let prefixed = judged(&format!("GIT_COMMITTER_NAME='cf-agent[bot]' {message}"));
+    assert_eq!(
+        prefixed.status.code(),
+        plain.status.code(),
+        "the committer values changed the guard's verdict\nplain: {}\nprefixed: {}",
+        String::from_utf8_lossy(&plain.stderr),
+        String::from_utf8_lossy(&prefixed.stderr)
+    );
+}
+
+#[test]
+fn a_bot_committed_clean_message_keeps_the_human_author() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = bot_committed_commit(dir.path(), "feat(cli): wire the hook plane\n");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let shown = git_command()
+        .args(["log", "-1", "--format=%an <%ae>%n%cn <%ce>"])
+        .current_dir(dir.path())
+        .output()
+        .expect("git runs");
+    assert_eq!(
+        String::from_utf8_lossy(&shown.stdout),
+        "t <t@example.com>\ncf-agent[bot] <353475153+cf-agent[bot]@users.noreply.github.com>\n"
+    );
+}
+
 #[test]
 fn commit_msg_requires_a_blank_line_after_the_subject() {
     let dir = tempfile::tempdir().unwrap();

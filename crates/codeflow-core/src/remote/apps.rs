@@ -23,7 +23,10 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::agent_key::{redact, signed_app_jwt, AgentApp, AppHttp, KeyStore, Signer, API_ROOT};
+use super::agent_key::{
+    app_as_itself, committer_for_slug, redact, signed_app_jwt, AgentApp, AppHttp, BotCommitter,
+    KeyStore, Signer, API_ROOT,
+};
 
 /// The environment that holds the authority App's key; only the default
 /// branch may deploy to it.
@@ -163,14 +166,23 @@ impl Target {
     /// The App's settings page where it is deleted.
     #[must_use]
     pub fn app_settings_url(&self, slug: &str) -> String {
-        if self.organization {
-            format!(
-                "https://github.com/organizations/{}/settings/apps/{slug}/advanced",
-                self.owner
-            )
-        } else {
-            format!("https://github.com/settings/apps/{slug}/advanced")
+        self.app_page_url(slug, "/advanced")
+    }
+
+    /// A page of the App's settings: `tail` is empty or starts with `/`.
+    #[must_use]
+    pub fn app_page_url(&self, slug: &str, tail: &str) -> String {
+        app_page(self.organization.then_some(self.owner.as_str()), slug, tail)
+    }
+}
+
+/// A page of an App's settings, under `organization` when one owns it.
+pub(crate) fn app_page(organization: Option<&str>, slug: &str, tail: &str) -> String {
+    match organization {
+        Some(owner) => {
+            format!("https://github.com/organizations/{owner}/settings/apps/{slug}{tail}")
         }
+        None => format!("https://github.com/settings/apps/{slug}{tail}"),
     }
 }
 
@@ -377,6 +389,16 @@ fn not_found(error: &str) -> bool {
     error.contains("404") || error.contains("Not Found")
 }
 
+/// Whether a `gh` failure is an HTTP 404. `gh` prints the status after the
+/// response body, so the last status in the text is the real one, and a body
+/// that holds "404" under another status does not count. Unlike [`not_found`],
+/// which leads to "create", this leads to "carry on", so it is exact.
+fn status_is_404(error: &str) -> bool {
+    error
+        .rfind("(HTTP ")
+        .is_some_and(|at| error[at..].starts_with("(HTTP 404)"))
+}
+
 fn forbidden(error: &str) -> bool {
     error.contains("403")
         || error.contains("Resource not accessible")
@@ -460,13 +482,20 @@ fn preflight(gh: Gh<'_>) -> Result<Target, String> {
     })
 }
 
+/// Deployment from selected branches only, as GitHub writes and shows it.
+fn restricted_policy() -> Value {
+    json!({"protected_branches": false, "custom_branch_policies": true})
+}
+
 /// The environment body: deployment from selected branches only, keeping
-/// any reviewers, self-review rule and wait timer it already has, so a run
-/// never removes a protection rule.
+/// any reviewers, self-review rule, wait timer and administrator bypass it
+/// already has, so a run never removes a protection rule or changes the
+/// bypass.
 fn environment_body(existing: Option<&Value>) -> Value {
-    let mut body = json!({
-        "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}
-    });
+    let mut body = json!({"deployment_branch_policy": restricted_policy()});
+    if let Some(bypass) = existing.and_then(|environment| environment.get("can_admins_bypass")) {
+        body["can_admins_bypass"] = bypass.clone();
+    }
     let rules = existing
         .and_then(|environment| environment.get("protection_rules"))
         .and_then(Value::as_array)
@@ -502,7 +531,8 @@ fn environment_body(existing: Option<&Value>) -> Value {
 }
 
 /// Create or restrict `codeflow-authority` to the default branch. This is
-/// the first write, and it needs Administration write.
+/// the first write, and it needs Administration write. An environment that
+/// is already restricted gets no write.
 fn environment(gh: Gh<'_>, target: &Target, report: &mut SetupReport) -> Result<(), String> {
     let repository = &target.repository;
     let path = format!("repos/{repository}/environments/{AUTHORITY_ENVIRONMENT}");
@@ -518,6 +548,16 @@ fn environment(gh: Gh<'_>, target: &Target, report: &mut SetupReport) -> Result<
             ))
         }
     };
+    let restricted = restricted_policy();
+    let shown_policy = existing
+        .as_ref()
+        .and_then(|environment| environment.get("deployment_branch_policy"));
+    if shown_policy == Some(&restricted) {
+        report.lines.push(format!(
+            "environment {AUTHORITY_ENVIRONMENT}: already deploys from selected branches only"
+        ));
+        return branch_policy(gh, target, &path, report);
+    }
     let free_note = if target.private {
         "; a private repository on GitHub Free has no environment secrets, so it uses Mode B (docs/policy-reference.md \"Mode A setup\")"
     } else {
@@ -537,29 +577,21 @@ fn environment(gh: Gh<'_>, target: &Target, report: &mut SetupReport) -> Result<
             )
         }
     })?;
-    let restricted = json!({"protected_branches": false, "custom_branch_policies": true});
-    match &existing {
-        None => report.writes.push(HostWrite {
+    report.writes.push(match &existing {
+        None => HostWrite {
             what: format!("created the environment {AUTHORITY_ENVIRONMENT}, deployments from selected branches only"),
             undo: format!("gh api -X DELETE {path}"),
-        }),
-        Some(environment) if environment.get("deployment_branch_policy") != Some(&restricted) => {
-            report.writes.push(HostWrite {
-                what: format!(
-                    "set the environment {AUTHORITY_ENVIRONMENT} to deploy from selected branches only (was {})",
-                    environment
-                        .get("deployment_branch_policy")
-                        .map_or_else(|| "any branch".to_string(), Value::to_string)
-                ),
-                undo: format!(
-                    "set its deployment branches back in the repository's Settings, Environments, {AUTHORITY_ENVIRONMENT}"
-                ),
-            });
-        }
-        Some(_) => report.lines.push(format!(
-            "environment {AUTHORITY_ENVIRONMENT}: already deploys from selected branches only"
-        )),
-    }
+        },
+        Some(_) => HostWrite {
+            what: format!(
+                "set the environment {AUTHORITY_ENVIRONMENT} to deploy from selected branches only (was {})",
+                shown_policy.map_or_else(|| "any branch".to_string(), Value::to_string)
+            ),
+            undo: format!(
+                "set its deployment branches back in the repository's Settings, Environments, {AUTHORITY_ENVIRONMENT}"
+            ),
+        },
+    });
     branch_policy(gh, target, &path, report)
 }
 
@@ -846,25 +878,41 @@ fn hook_problems(auth: &AppAuth<'_>, target: &Target, client_id: &str, pem: &str
     }
 }
 
-/// What is missing or wrong in an App that is already set up, read from
-/// GitHub under the administrator's login: its id, permissions and events
-/// must be those the manifest asks for.
-fn existing_app_problems(gh: Gh<'_>, kind: AppKind, slug: &str, id: Option<u64>) -> Vec<String> {
+/// What `gh api apps/<slug>` gave.
+enum AppLookup {
+    /// GitHub showed the App.
+    Shown(Value),
+    /// An HTTP 404: a private App this login cannot read, or a deleted App.
+    /// This login cannot tell them apart.
+    NotShown,
+    /// Anything else, as an item for the "missing" list.
+    Failed(String),
+}
+
+/// Read an App under the administrator's login.
+fn lookup_app(gh: Gh<'_>, kind: AppKind, slug: &str) -> AppLookup {
     let label = kind.label();
-    let answer = match gh(&["api", &format!("apps/{slug}")], None) {
-        Ok(answer) => answer,
-        Err(error) => {
-            return vec![format!(
-                "the {label} App {slug} on GitHub ({})",
-                first_line(&error)
-            )]
-        }
-    };
-    let Ok(app) = serde_json::from_str::<Value>(&answer) else {
-        return vec![format!(
-            "the {label} App {slug}: GitHub's answer is not JSON"
-        )];
-    };
+    match gh(&["api", &format!("apps/{slug}")], None) {
+        Ok(answer) => serde_json::from_str(&answer).map_or_else(
+            |_| {
+                AppLookup::Failed(format!(
+                    "the {label} App {slug}: GitHub's answer is not JSON"
+                ))
+            },
+            AppLookup::Shown,
+        ),
+        Err(error) if status_is_404(&error) => AppLookup::NotShown,
+        Err(error) => AppLookup::Failed(format!(
+            "the {label} App {slug} on GitHub ({})",
+            first_line(&error)
+        )),
+    }
+}
+
+/// What is missing or wrong in `app`, an App GitHub showed: its id,
+/// permissions and events must be those the manifest asks for.
+pub(crate) fn app_problems(kind: AppKind, slug: &str, id: Option<u64>, app: &Value) -> Vec<String> {
+    let label = kind.label();
     let mut wrong = Vec::new();
     let found = app.get("id").and_then(Value::as_u64);
     if id.is_none() || found != id {
@@ -891,11 +939,41 @@ fn existing_app_problems(gh: Gh<'_>, kind: AppKind, slug: &str, id: Option<u64>)
         Err(why) => wrong.push(why),
     }
     wrong.extend(
-        event_problems(&app)
+        event_problems(app)
             .into_iter()
             .map(|why| format!("the {label} App {slug} without {why}")),
     );
     wrong
+}
+
+/// The lines for an authority App this login cannot read: what was checked,
+/// what was not and why, and where to look.
+fn unverified_authority_lines(
+    target: &Target,
+    slug: &str,
+    id: u64,
+    replace: &str,
+) -> Result<Vec<String>, String> {
+    let permissions = expected_permissions(AppKind::Authority)?
+        .iter()
+        .map(|(name, level)| format!("{name} {level}"))
+        .collect::<Vec<_>>()
+        .join(" and ");
+    Ok(vec![
+        "authority App: present but not verified, nothing created".to_string(),
+        format!(
+            "  checked: the variable {AUTHORITY_ID_VARIABLE} ({id}) and the secret {AUTHORITY_KEY_SECRET} (its name only; the value cannot be read)"
+        ),
+        format!(
+            "  not checked: the App {slug} itself. GitHub's API answered 404, and it answers 404 both for a private App this login cannot read and for a deleted App, so this run cannot tell them apart"
+        ),
+        format!(
+            "  check it yourself: {} should show App ID {id}, and {} should show only {permissions}, with no events",
+            target.app_page_url(slug, ""),
+            target.app_page_url(slug, "/permissions")
+        ),
+        format!("  {replace}"),
+    ])
 }
 
 /// The authority App, its key secret and id variable.
@@ -999,8 +1077,10 @@ fn authority(
 /// An authority App already recorded by its id variable: it counts as set
 /// up only when the key secret exists (its name; the value is never read)
 /// and the App GitHub shows has that id, the manifest's permissions and no
-/// events. Otherwise the run stops, naming what is present and what is
-/// missing.
+/// events. An App GitHub answers 404 for is reported as present but not
+/// verified when the variable and the secret hold, because its key is not
+/// local and a private App looks the same as a deleted one. Otherwise the
+/// run stops, naming what is present and what is missing.
 fn existing_authority(
     gh: Gh<'_>,
     target: &Target,
@@ -1030,14 +1110,31 @@ fn existing_authority(
         )),
     }
     let slug = name.to_lowercase();
-    let problems = existing_app_problems(gh, AppKind::Authority, &slug, value.parse().ok());
-    if problems.is_empty() {
-        present.push(format!("the authority App {slug} as the manifest asks"));
-    }
-    missing.extend(problems);
+    let id = value.parse::<u64>().ok();
     let replace = format!(
         "to set it up again, delete that App, then `gh api -X DELETE {variable}` and `gh secret delete {AUTHORITY_KEY_SECRET} --env {AUTHORITY_ENVIRONMENT} --repo {repository}`, and run again"
     );
+    match lookup_app(gh, AppKind::Authority, &slug) {
+        AppLookup::Shown(app) => {
+            let problems = app_problems(AppKind::Authority, &slug, id, &app);
+            if problems.is_empty() {
+                present.push(format!("the authority App {slug} as the manifest asks"));
+            }
+            missing.extend(problems);
+        }
+        AppLookup::Failed(why) => missing.push(why),
+        AppLookup::NotShown => match id.filter(|id| *id > 0) {
+            // Nothing else will check the variable, so it must hold an id.
+            None => missing.push(format!("{AUTHORITY_ID_VARIABLE} holding an App id")),
+            Some(id) if missing.is_empty() => {
+                report
+                    .lines
+                    .extend(unverified_authority_lines(target, &slug, id, &replace)?);
+                return Ok(());
+            }
+            Some(_) => {}
+        },
+    }
     if missing.is_empty() {
         report.lines.push(format!(
             "authority App: already set up ({}), nothing created; {replace}",
@@ -1053,12 +1150,47 @@ fn existing_authority(
     }
 }
 
+/// The lines a project adds to its harness settings, for the three
+/// supported harnesses. They are printed; no settings file is edited.
+fn harness_lines(committer: &BotCommitter) -> Vec<String> {
+    let BotCommitter { name, email } = committer;
+    vec![
+        format!("committer: {name} <{email}>"),
+        "add these lines to your project settings and commit them; this command edits no settings file, and `codeflow baseline approve` admits the change".to_string(),
+        String::new(),
+        "Claude Code, inside \"env\" in .claude/settings.json:".to_string(),
+        format!("  \"GIT_COMMITTER_NAME\": \"{name}\","),
+        format!("  \"GIT_COMMITTER_EMAIL\": \"{email}\""),
+        String::new(),
+        "Codex, at the end of .codex/config.toml:".to_string(),
+        "  [shell_environment_policy.set]".to_string(),
+        format!("  GIT_COMMITTER_NAME = \"{name}\""),
+        format!("  GIT_COMMITTER_EMAIL = \"{email}\""),
+        String::new(),
+        "Grok Build has no project environment setting; set these in the shell that launches it:".to_string(),
+        format!("  export GIT_COMMITTER_NAME='{name}'"),
+        format!("  export GIT_COMMITTER_EMAIL='{email}'"),
+    ]
+}
+
+/// Report the committer lines of the App `slug`. A bot user GitHub does not
+/// show yet is said so; the run neither guesses the values nor stops.
+fn report_committer(auth: &AppAuth<'_>, slug: &str, report: &mut SetupReport) {
+    match committer_for_slug(slug, auth.http) {
+        Ok(committer) => report.lines.extend(harness_lines(&committer)),
+        Err(_) => report.lines.push(format!(
+            "committer lines: not printed, because GitHub does not show {slug}[bot] yet; install the App and run `codeflow remote setup-apps` again"
+        )),
+    }
+}
+
 /// An agent App already kept in the credential store: it counts as set up
-/// only when the entry reads as an App with a key and the App GitHub shows
-/// has that id, the manifest's permissions and no events.
+/// only when the entry reads as an App with a key and GitHub, asked as the
+/// App with that key, shows that id and slug, the repository's owner, the
+/// manifest's permissions and no events.
 fn existing_agent(
-    gh: Gh<'_>,
     store: &dyn KeyStore,
+    auth: &AppAuth<'_>,
     target: &Target,
     report: &mut SetupReport,
 ) -> Result<(), String> {
@@ -1078,13 +1210,49 @@ fn existing_agent(
             store.describe()
         ));
     };
-    let problems = existing_app_problems(gh, AppKind::Agent, &app.slug, Some(app.app_id));
+    let answer = app_as_itself(
+        &app.client_id,
+        &app.pem,
+        auth.signer,
+        auth.http,
+        auth.now,
+    )
+    .map_err(|why| {
+        format!(
+            "the agent App is not fully set up; present: its key for {repository} in {}; missing: the agent App {} answering as itself ({}); after a network or GitHub failure, run again; otherwise {replace}",
+            store.describe(),
+            app.slug,
+            first_line(&why)
+        )
+    })?;
+    let mut problems = app_problems(AppKind::Agent, &app.slug, Some(app.app_id), &answer);
+    let shown_slug = answer
+        .get("slug")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if shown_slug != app.slug {
+        problems.push(format!(
+            "the agent App {} (GitHub shows slug '{shown_slug}')",
+            app.slug
+        ));
+    }
+    let owner = answer
+        .pointer("/owner/login")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !owner.eq_ignore_ascii_case(&target.owner) {
+        problems.push(format!(
+            "an agent App owned by '{}' (GitHub shows owner '{owner}')",
+            target.owner
+        ));
+    }
     if problems.is_empty() {
         report.lines.push(format!(
-            "agent App: already set up (its key for {repository} in {}, and the agent App {} as the manifest asks), nothing created; {replace}",
+            "agent App: already set up (its key for {repository} in {}, and the agent App {} as the manifest asks, read as the App itself through GET /app), nothing created; {replace}",
             store.describe(),
             app.slug
         ));
+        report_committer(auth, &app.slug, report);
         Ok(())
     } else {
         Err(format!(
@@ -1107,7 +1275,7 @@ fn agent(
 ) -> Result<(), String> {
     let repository = &target.repository;
     if store.exists(repository)? {
-        return existing_agent(gh, store, target, report);
+        return existing_agent(store, auth, target, report);
     }
     let app = create_app(gh, browser, auth, target, AppKind::Agent, name, report)?;
     let entry = AgentApp {
@@ -1144,6 +1312,7 @@ fn agent(
         "agent sessions act as {}[bot] with a token from `codeflow remote agent-token`",
         app.slug
     ));
+    report_committer(auth, &app.slug, report);
     Ok(())
 }
 
@@ -1490,13 +1659,43 @@ mod tests {
         }
     }
 
-    /// Answers `GET /app/hook/config` as the App would.
-    struct HookHttp(Result<String, String>);
+    /// Answers what a run asks without `gh`: `GET /app/hook/config` and
+    /// `GET /app` as the App would, and the public bot user. Each call's
+    /// path and bearer are kept.
+    struct HookHttp {
+        hook: Result<String, String>,
+        app: Result<String, String>,
+        bot: Result<String, String>,
+        calls: RefCell<Vec<(String, String)>>,
+    }
     impl HookHttp {
         fn repository_page() -> Self {
-            Self(Ok(
+            Self::hook(Ok(
                 r#"{"content_type":"json","url":"https://github.com/o/r"}"#.to_string(),
             ))
+        }
+
+        fn hook(hook: Result<String, String>) -> Self {
+            Self {
+                hook,
+                app: Ok(agent_answer(&json!({}))),
+                bot: Ok(BOT_USER.to_string()),
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn app(app: Result<String, String>) -> Self {
+            Self {
+                app,
+                ..Self::repository_page()
+            }
+        }
+
+        fn bot(bot: Result<String, String>) -> Self {
+            Self {
+                bot,
+                ..Self::repository_page()
+            }
         }
     }
     impl AppHttp for HookHttp {
@@ -1504,16 +1703,45 @@ mod tests {
             &self,
             method: &str,
             url: &str,
-            _: &str,
+            bearer: &str,
             body: Option<&str>,
         ) -> Result<String, String> {
-            assert_eq!(
-                (method, url, body),
-                ("GET", "https://api.github.com/app/hook/config", None)
-            );
-            self.0.clone()
+            assert_eq!((method, body), ("GET", None));
+            let path = url.strip_prefix("https://api.github.com").unwrap();
+            self.calls
+                .borrow_mut()
+                .push((path.to_string(), bearer.to_string()));
+            match path {
+                "/app/hook/config" => self.hook.clone(),
+                "/app" => self.app.clone(),
+                "/users/codeflow-agent-r%5Bbot%5D" => self.bot.clone(),
+                other => panic!("unexpected call: {other}"),
+            }
         }
     }
+
+    /// The public answer for the agent App's bot user.
+    const BOT_USER: &str = r#"{"login":"codeflow-agent-r[bot]","id":353475153,"type":"Bot"}"#;
+
+    /// `GET /app` for the agent App, with `changes` over its fields.
+    fn agent_answer(changes: &Value) -> String {
+        let mut app = json!({
+            "id": 202,
+            "slug": "codeflow-agent-r",
+            "owner": {"login": "o", "type": "User"},
+            "permissions": {"contents": "write", "pull_requests": "write", "metadata": "read"},
+            "events": [],
+        });
+        for (key, value) in changes.as_object().unwrap() {
+            app[key] = value.clone();
+        }
+        app.to_string()
+    }
+
+    /// The exact failure the operator's live run logged for a private App
+    /// under a `gh` login: the response body, then `gh`'s line, joined with
+    /// no separator.
+    const LIVE_404: &str = r#"{"message":"Not Found","documentation_url":"https://docs.github.com/rest/apps/apps#get-an-app","status":"404"}gh: Not Found (HTTP 404)"#;
 
     fn auth<'a>(signer: &'a OkSigner, http: &'a HookHttp) -> AppAuth<'a> {
         AppAuth {
@@ -1563,13 +1791,31 @@ mod tests {
                 "api apps/codeflow-authority-r",
                 Ok(&shown_app(101, r#"{"checks":"write","metadata":"read"}"#)),
             )
+    }
+
+    /// [`set_up_host`] with the authority App private, as the operator's
+    /// live run found it, and the environment restricted by the earlier run.
+    fn private_host() -> Host {
+        set_up_host()
+            .answer("api apps/codeflow-authority-r", Err(LIVE_404))
             .answer(
-                "api apps/codeflow-agent-r",
-                Ok(&shown_app(
-                    202,
-                    r#"{"contents":"write","pull_requests":"write","metadata":"read"}"#,
-                )),
+                "api repos/o/r/environments/codeflow-authority",
+                Ok(&restricted_environment(&json!({}))),
             )
+    }
+
+    /// The environment as GitHub shows it once restricted, with `changes`.
+    fn restricted_environment(changes: &Value) -> String {
+        let mut environment = json!({
+            "name": "codeflow-authority",
+            "can_admins_bypass": false,
+            "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true},
+            "protection_rules": [{"type": "branch_policy"}],
+        });
+        for (key, value) in changes.as_object().unwrap() {
+            environment[key] = value.clone();
+        }
+        environment.to_string()
     }
 
     /// A personal repository `o/r`, administrator `o`, no environment yet.
@@ -2069,19 +2315,370 @@ mod tests {
         );
         let store = MemoryStore::default();
         store.store("o/r", &agent_entry()).unwrap();
-        let host = set_up_host().answer(
-            "api apps/codeflow-agent-r",
-            Ok(&json!({
-                "id": 202,
-                "permissions": {"contents": "write", "pull_requests": "write", "metadata": "read"},
-                "events": ["push"],
-            })
-            .to_string()),
-        );
-        let report = run(&host, &mut Clicks::default(), &store);
+        let hook = HookHttp::app(Ok(agent_answer(&json!({"events": ["push"]}))));
+        let report = run_hook(&set_up_host(), &mut Clicks::default(), &store, &hook);
         let failure = report.failure.unwrap();
         assert!(failure.contains(r#"events ["push"]"#), "{failure}");
         assert!(!failure.contains("secretKEYmaterial"), "{failure}");
+    }
+
+    /// The operator's live defect: a private authority App answered 404 and
+    /// the run stopped before the agent App. It now goes on, says what it
+    /// checked, and never says "already set up" for an App nobody read.
+    #[test]
+    fn a_private_authority_app_does_not_stop_the_agent_app() {
+        let host = private_host();
+        let mut clicks = Clicks::default();
+        let report = run(&host, &mut clicks, &MemoryStore::default());
+        let shown = report.render().into_string();
+        assert_eq!(report.failure, None, "{shown}");
+        assert_eq!(clicks.manifests.len(), 1, "{shown}");
+        assert_eq!(
+            clicks.manifests[0].1["default_permissions"],
+            json!({"contents": "write", "pull_requests": "write"})
+        );
+        for line in [
+            "authority App: present but not verified, nothing created\n",
+            "  checked: the variable CODEFLOW_AUTHORITY_APP_ID (101) and the secret CODEFLOW_AUTHORITY_APP_KEY (its name only; the value cannot be read)\n",
+            "  not checked: the App codeflow-authority-r itself. GitHub's API answered 404, and it answers 404 both for a private App this login cannot read and for a deleted App, so this run cannot tell them apart\n",
+            "  check it yourself: https://github.com/settings/apps/codeflow-authority-r should show App ID 101, and https://github.com/settings/apps/codeflow-authority-r/permissions should show only checks write and metadata read, with no events\n",
+            "  to set it up again, delete that App, then `gh api -X DELETE repos/o/r/environments/codeflow-authority/variables/CODEFLOW_AUTHORITY_APP_ID` and `gh secret delete CODEFLOW_AUTHORITY_APP_KEY --env codeflow-authority --repo o/r`, and run again\n",
+        ] {
+            assert!(shown.contains(line), "{line}\n{shown}");
+        }
+        assert!(!shown.contains("authority App: already set up"), "{shown}");
+    }
+
+    /// An organization's pages are under the organization.
+    #[test]
+    fn a_private_organization_app_names_the_organization_pages() {
+        let host = private_host().answer(
+            "api repos/o/r",
+            Ok(r#"{"default_branch":"main","private":false,"owner":{"login":"o","type":"Organization"},"permissions":{"admin":true}}"#),
+        );
+        let report = run(&host, &mut Clicks::default(), &MemoryStore::default());
+        let shown = report.render().into_string();
+        assert!(
+            shown.contains("https://github.com/organizations/o/settings/apps/codeflow-authority-r should show")
+                && shown.contains("https://github.com/organizations/o/settings/apps/codeflow-authority-r/permissions should show"),
+            "{shown}"
+        );
+    }
+
+    /// The whole rerun on a private App: the agent App is read with its own
+    /// key, and `gh` is never asked for it.
+    #[test]
+    fn a_rerun_verifies_the_agent_app_with_its_own_key() {
+        let store = MemoryStore::default();
+        store.store("o/r", &agent_entry()).unwrap();
+        let host = private_host().answer("api apps/codeflow-agent-r", Err(LIVE_404));
+        let hook = HookHttp::repository_page();
+        let mut clicks = Clicks::default();
+        let report = run_hook(&host, &mut clicks, &store, &hook);
+        let shown = report.render().into_string();
+        assert_eq!(report.failure, None, "{shown}");
+        assert!(clicks.manifests.is_empty());
+        assert!(
+            shown.contains("agent App: already set up")
+                && shown.contains("read as the App itself through GET /app"),
+            "{shown}"
+        );
+        assert!(!host
+            .calls
+            .borrow()
+            .iter()
+            .any(|(call, _)| call == "api apps/codeflow-agent-r"));
+        let calls = hook.calls.borrow();
+        let (_, bearer) = calls.iter().find(|(path, _)| path == "/app").unwrap();
+        assert_eq!(bearer.split('.').count(), 3, "a JSON Web Token");
+        // The public bot user is read with no credentials.
+        let (_, public) = calls.iter().find(|(path, _)| path != "/app").unwrap();
+        assert_eq!(public, "");
+    }
+
+    /// With the App unreadable, the variable and the secret are all that is
+    /// left to check, so each one still stops the run.
+    #[test]
+    fn a_private_app_with_a_bad_variable_or_missing_secret_stops() {
+        let variable =
+            "api repos/o/r/environments/codeflow-authority/variables/CODEFLOW_AUTHORITY_APP_ID";
+        let secret =
+            "api repos/o/r/environments/codeflow-authority/secrets/CODEFLOW_AUTHORITY_APP_KEY";
+        let cases = [
+            (
+                private_host().answer(variable, Ok(r#"{"value":""}"#)),
+                "CODEFLOW_AUTHORITY_APP_ID",
+            ),
+            (
+                private_host().answer(variable, Ok(r#"{"value":"0"}"#)),
+                "CODEFLOW_AUTHORITY_APP_ID",
+            ),
+            (
+                private_host().answer(variable, Ok(r#"{"value":"not-a-number"}"#)),
+                "CODEFLOW_AUTHORITY_APP_ID",
+            ),
+            (
+                private_host().answer(secret, Err("gh: Not Found (HTTP 404)")),
+                "missing: the secret CODEFLOW_AUTHORITY_APP_KEY",
+            ),
+            (
+                private_host().answer(secret, Err("gh: Server Error (HTTP 500)")),
+                "the secret CODEFLOW_AUTHORITY_APP_KEY (cannot read it",
+            ),
+        ];
+        for (host, named) in cases {
+            let mut clicks = Clicks::default();
+            let report = run(&host, &mut clicks, &MemoryStore::default());
+            let shown = report.render().into_string();
+            let failure = report.failure.unwrap();
+            assert!(
+                failure.contains("the authority App is not fully set up")
+                    && failure.contains("missing: ")
+                    && failure.contains(named),
+                "{failure}"
+            );
+            assert!(!shown.contains("not verified"), "{shown}");
+            assert!(!shown.contains("already set up"), "{shown}");
+            assert!(clicks.manifests.is_empty());
+        }
+    }
+
+    /// Only a 404 status leads to "carry on". Everything else stops, also a
+    /// failure whose body happens to hold "404".
+    #[test]
+    fn only_a_real_404_lets_the_run_continue() {
+        for answer in [
+            Err("gh: Bad credentials (HTTP 401)"),
+            Err("gh: Forbidden (HTTP 403)"),
+            Err("gh: API rate limit exceeded (HTTP 429)"),
+            Err("gh: Bad Gateway (HTTP 502)"),
+            Err(r#"{"message":"upstream said 404"}gh: Bad Gateway (HTTP 502)"#),
+            Err(r#"{"message":"upstream said (HTTP 404)"}gh: Bad Gateway (HTTP 502)"#),
+            Err("Not Found: dial tcp: i/o timeout"),
+            Ok("<html>not json</html>"),
+        ] {
+            let host = private_host().answer("api apps/codeflow-authority-r", answer);
+            let mut clicks = Clicks::default();
+            let report = run(&host, &mut clicks, &MemoryStore::default());
+            let shown = report.render().into_string();
+            let failure = report
+                .failure
+                .unwrap_or_else(|| panic!("{answer:?}\n{shown}"));
+            assert!(
+                failure.contains("the authority App is not fully set up"),
+                "{failure}"
+            );
+            assert!(!shown.contains("not verified"), "{answer:?}\n{shown}");
+            assert!(clicks.manifests.is_empty(), "{answer:?}");
+        }
+        // gh may add a line after its status, such as a scope hint.
+        let host = private_host().answer(
+            "api apps/codeflow-authority-r",
+            Err("gh: Not Found (HTTP 404)\nThis API operation needs a scope"),
+        );
+        let report = run(&host, &mut Clicks::default(), &MemoryStore::default());
+        assert_eq!(report.failure, None);
+    }
+
+    /// The agent App's own answer decides: a refused key, a deleted App, a
+    /// failed read or an answer that differs is never "already set up", and
+    /// the text holds neither the key nor the token, whatever the transport
+    /// echoes.
+    #[test]
+    fn an_agent_app_that_fails_its_self_check_stops() {
+        let echo = |what: &str| Err(format!("GET failed: {what} key {AGENT_PEM}"));
+        let cases = [
+            (HookHttp::app(echo("401")), "answering as itself"),
+            (HookHttp::app(echo("404")), "answering as itself"),
+            (HookHttp::app(echo("timed out")), "answering as itself"),
+            (HookHttp::app(echo("502")), "run again"),
+            (HookHttp::app(Ok("not json".to_string())), "not JSON"),
+            (
+                HookHttp::app(Ok(agent_answer(&json!({"id": 999})))),
+                "GitHub shows 999",
+            ),
+            (
+                HookHttp::app(Ok(agent_answer(&json!({"slug": "another-app"})))),
+                "slug 'another-app'",
+            ),
+            (
+                HookHttp::app(Ok(agent_answer(&json!({"owner": {"login": "someone"}})))),
+                "owner 'someone'",
+            ),
+            (
+                HookHttp::app(Ok(agent_answer(
+                    &json!({"permissions": {"contents": "write", "administration": "write"}}),
+                ))),
+                "with permissions",
+            ),
+            (
+                HookHttp::app(Ok(agent_answer(&json!({"events": ["push"]})))),
+                r#"events ["push"]"#,
+            ),
+        ];
+        for (hook, named) in cases {
+            let store = MemoryStore::default();
+            store.store("o/r", &agent_entry()).unwrap();
+            let report = run_hook(&set_up_host(), &mut Clicks::default(), &store, &hook);
+            let shown = report.render().into_string();
+            let failure = report.failure.unwrap();
+            assert!(
+                failure.contains("the agent App is not fully set up") && failure.contains(named),
+                "{named}: {failure}"
+            );
+            assert!(!shown.contains("agent App: already set up"), "{shown}");
+            assert!(
+                !failure.contains("secretKEYmaterial") && !failure.contains("PRIVATE KEY"),
+                "{failure}"
+            );
+        }
+    }
+
+    /// The operator's log showed `writes: none` beside a PUT: a second run
+    /// wrote to the environment each time, and could reset its bypass.
+    #[test]
+    fn a_second_run_writes_nothing_to_a_restricted_environment() {
+        let store = MemoryStore::default();
+        store.store("o/r", &agent_entry()).unwrap();
+        let host = private_host();
+        let report = run(&host, &mut Clicks::default(), &store);
+        let shown = report.render().into_string();
+        assert_eq!(report.failure, None, "{shown}");
+        assert_eq!(host.writes(), Vec::<String>::new());
+        assert!(report.writes.is_empty(), "{shown}");
+        assert!(
+            shown.contains("already deploys from selected branches only"),
+            "{shown}"
+        );
+    }
+
+    /// A write that is needed carries the bypass value GitHub showed, so it
+    /// cannot turn the administrator bypass back on or off.
+    #[test]
+    fn a_needed_environment_write_keeps_can_admins_bypass() {
+        for bypass in [false, true] {
+            let existing = json!({
+                "can_admins_bypass": bypass,
+                "deployment_branch_policy": null,
+                "protection_rules": [],
+            });
+            let host = fresh_host().answer(
+                "api repos/o/r/environments/codeflow-authority",
+                Ok(&existing.to_string()),
+            );
+            let report = run(&host, &mut Clicks::default(), &MemoryStore::default());
+            assert_eq!(report.failure, None);
+            let calls = host.calls.borrow();
+            let (_, body) = calls
+                .iter()
+                .find(|(call, _)| call.starts_with("api -X PUT"))
+                .unwrap();
+            let body: Value = serde_json::from_str(body.as_ref().unwrap()).unwrap();
+            assert_eq!(body["can_admins_bypass"], json!(bypass));
+        }
+    }
+
+    /// The lines a project pastes into its harness settings, exact, on a
+    /// first run and on a verified rerun; the JSON and TOML forms hold the
+    /// values unchanged.
+    #[test]
+    fn setup_prints_committer_lines_for_each_harness() {
+        let name = "codeflow-agent-r[bot]";
+        let email = "353475153+codeflow-agent-r[bot]@users.noreply.github.com";
+        let expected = format!(
+            "committer: {name} <{email}>\nadd these lines to your project settings and commit them; this command edits no settings file, and `codeflow baseline approve` admits the change\n\nClaude Code, inside \"env\" in .claude/settings.json:\n  \"GIT_COMMITTER_NAME\": \"{name}\",\n  \"GIT_COMMITTER_EMAIL\": \"{email}\"\n\nCodex, at the end of .codex/config.toml:\n  [shell_environment_policy.set]\n  GIT_COMMITTER_NAME = \"{name}\"\n  GIT_COMMITTER_EMAIL = \"{email}\"\n\nGrok Build has no project environment setting; set these in the shell that launches it:\n  export GIT_COMMITTER_NAME='{name}'\n  export GIT_COMMITTER_EMAIL='{email}'\n"
+        );
+        let first = run(
+            &fresh_host(),
+            &mut Clicks::default(),
+            &MemoryStore::default(),
+        );
+        let shown = first.render().into_string();
+        assert!(shown.contains(&expected), "{shown}");
+        let store = MemoryStore::default();
+        store.store("o/r", &agent_entry()).unwrap();
+        let again = run(&private_host(), &mut Clicks::default(), &store);
+        let rerun = again.render().into_string();
+        assert!(rerun.contains(&expected), "{rerun}");
+
+        let between = |from: &str, to: &str| {
+            let start = shown.find(from).unwrap() + from.len();
+            shown[start..start + shown[start..].find(to).unwrap()].to_string()
+        };
+        let claude: Value = serde_json::from_str(&format!(
+            "{{{}}}",
+            between(".claude/settings.json:\n", "\n\nCodex")
+        ))
+        .unwrap();
+        assert_eq!(claude["GIT_COMMITTER_NAME"], name);
+        assert_eq!(claude["GIT_COMMITTER_EMAIL"], email);
+        let codex: toml::Value = between(".codex/config.toml:\n", "\n\nGrok")
+            .lines()
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .parse()
+            .unwrap();
+        let set = &codex["shell_environment_policy"]["set"];
+        assert_eq!(set["GIT_COMMITTER_NAME"].as_str(), Some(name));
+        assert_eq!(set["GIT_COMMITTER_EMAIL"].as_str(), Some(email));
+    }
+
+    /// The lines are printed, never written: the two settings files are
+    /// byte-identical after a run.
+    #[test]
+    fn setup_edits_no_settings_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = dir.path().join(".claude/settings.json");
+        let codex = dir.path().join(".codex/config.toml");
+        std::fs::create_dir_all(claude.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(codex.parent().unwrap()).unwrap();
+        std::fs::write(&claude, "{\"env\":{}}\n").unwrap();
+        std::fs::write(&codex, "[shell_environment_policy]\n").unwrap();
+        let before = (
+            std::fs::read(&claude).unwrap(),
+            std::fs::read(&codex).unwrap(),
+        );
+        let host = fresh_host();
+        let report = run(&host, &mut Clicks::default(), &MemoryStore::default());
+        assert_eq!(report.failure, None);
+        assert!(report.render().into_string().contains("GIT_COMMITTER_NAME"));
+        assert_eq!(
+            before,
+            (
+                std::fs::read(&claude).unwrap(),
+                std::fs::read(&codex).unwrap()
+            )
+        );
+        assert!(host
+            .calls
+            .borrow()
+            .iter()
+            .all(|(call, _)| !call.contains("settings.json") && !call.contains("config.toml")));
+    }
+
+    /// GitHub may not show the bot user yet. The run neither guesses the
+    /// values nor stops, and a later run prints them.
+    #[test]
+    fn an_unreadable_bot_user_prints_no_lines_and_does_not_stop() {
+        for bot in [
+            Err("GET failed: 404".to_string()),
+            Ok(r#"{"login":"someone","id":5,"type":"User"}"#.to_string()),
+        ] {
+            let report = run_hook(
+                &fresh_host(),
+                &mut Clicks::default(),
+                &MemoryStore::default(),
+                &HookHttp::bot(bot),
+            );
+            let shown = report.render().into_string();
+            assert_eq!(report.failure, None, "{shown}");
+            assert!(
+                shown.contains("committer lines: not printed, because GitHub does not show codeflow-agent-r[bot] yet; install the App and run `codeflow remote setup-apps` again"),
+                "{shown}"
+            );
+            assert!(!shown.contains("GIT_COMMITTER"), "{shown}");
+        }
     }
 
     /// F4: a created App with the expected permissions but events, an
@@ -2121,12 +2718,12 @@ mod tests {
             ),
             (
                 fresh_host(),
-                HookHttp(Ok(r#"{"url":"https://evil.example/hook"}"#.to_string())),
+                HookHttp::hook(Ok(r#"{"url":"https://evil.example/hook"}"#.to_string())),
                 "a webhook to 'https://evil.example/hook'",
             ),
             (
                 fresh_host(),
-                HookHttp(Err(format!("GET failed: 500 {AUTHORITY_PEM}"))),
+                HookHttp::hook(Err(format!("GET failed: 500 {AUTHORITY_PEM}"))),
                 "a webhook that can be checked",
             ),
         ];

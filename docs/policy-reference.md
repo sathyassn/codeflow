@@ -1289,14 +1289,24 @@ Every write is printed with what undoes it: a `gh` command for the
 environment, its branch policy, the secret and the variable, a `security`
 or `secret-tool` command for the stored key, and, for each App, its
 settings page, where "Delete GitHub App" is a web step. A second run creates
-nothing for an App that is fully set up: for the authority App, the id
-variable, the key secret (checked by name only) and an App with that id, the
-manifest's permissions and no events; for the agent App, a readable entry in
-the credential store and the same checks on its App. When only part is in
-place, the command stops with a non-zero exit and lists what is present and
-what is missing. When `codeflow` cannot listen on a local port, or
+nothing for an App it finds, writes nothing to an environment that is already
+restricted, and reports each App by what it could check. The agent App is
+read as itself: the stored key signs a token for `GET /app`, and the answer
+must show the entry's id and slug, the repository's owner, the manifest's
+permissions and no events, or the run stops. The authority App's key is not
+local, so it is read through `gh api apps/<slug>`. When GitHub shows the App,
+it must have the id in the variable, the manifest's permissions and no
+events, and the run prints `authority App: already set up`. A private App
+answers 404 to a normal login, as a deleted App does, and this run cannot
+tell them apart. On that 404, with a valid id variable and the key secret
+present (checked by name only), the run prints `authority App: present but
+not verified`, names what it checked and the pages to check by hand, and
+goes on to the agent App. Any other failure stops the run. When only part is
+in place, the command stops with a non-zero exit and lists what is present
+and what is missing. When `codeflow` cannot listen on a local port, or
 the browser cannot open the local page, `--paste` writes the page to a file
-and reads back the address GitHub opens, which holds the code.
+and reads back the address GitHub opens, which holds the code. The
+[GitHub Apps guide](github-apps.md) walks through both runs.
 
 Two steps stay in the browser, because GitHub has no API for them:
 registering an App from a manifest, and installing it. Whether an
@@ -1316,14 +1326,30 @@ key or a token run from fixed paths, `/usr/bin/openssl`, `/usr/bin/curl`
 and `/usr/bin/secret-tool`, never through `PATH`, and with an empty
 environment, so no `OPENSSL_CONF`, preloaded library, proxy variable or
 `.curlrc` applies to them (curl also gets `-q` first). A network that needs
-a proxy to reach `api.github.com` is not supported yet.
+a proxy to reach `api.github.com` is not supported yet. The agent App is
+optional: nothing in `codeflow doctor`, the hooks, the policy or `codeflow ci`
+requires it or its key, and the [GitHub Apps guide](github-apps.md) gives the
+three levels a computer can sit at.
 
-- `gh`: `GH_TOKEN="$(codeflow remote agent-token)" gh pr create ...`.
+- `gh`: `TOKEN="$(codeflow remote agent-token)" && GH_TOKEN="$TOKEN" gh pr
+  create ...`. Keep the `&&`: a failed token must stop the line, because an
+  empty `GH_TOKEN` may leave `gh` on the stored login.
 - `git push`: name the command as the credential helper for this push only,
   `git -c credential.helper= -c 'credential.helper=!codeflow remote
   agent-token --git-credential' push`. It answers `get` for
   `https://github.com` only, with the user `x-access-token` and the token;
   any other host gets no answer.
+- Committer: `codeflow remote agent-token --committer name` and
+  `--committer email` print the two values below, one each, confirmed with
+  GitHub. They mint no token, and they print nothing on standard output when
+  they cannot confirm the identity. `setup-apps` prints the lines for each
+  harness's project settings and edits no settings file.
+- Another computer: `codeflow remote import-agent-key --key-file <path>
+  --client-id <id>` stores that computer's own key for the repository's App.
+  It needs no administrator role or `gh` login, refuses a file others can
+  read and an existing entry, and stores nothing until GitHub has answered as
+  the App with this repository's installation. It leaves the file for the
+  developer to delete, and says so.
 - The key's custody rests on the session's sandbox: a sandboxed session
   must not reach the credential store, and only `codeflow remote
   agent-token` runs outside the sandbox. On macOS the key is a login
@@ -1332,12 +1358,19 @@ a proxy to reach `api.github.com` is not supported yet.
   supported store yet, so there the command refuses the agent App before
   creating it and `--no-agent` sets up the authority App alone.
 
-**Attribution.** Commits keep their human author and committer under any
-token: git writes them from the local configuration, and pushing does not
-change them. The setup changes no git identity, commit template or trailer
-setting, and adds no AI attribution (`git.ai_attribution` is unchanged).
-GitHub records the agent App as `<slug>[bot]` on what it does through its
-token:
+**Attribution.** A commit keeps its human author under any token. A commit an
+agent session makes names the agent App as committer, `<slug>[bot]`, when the
+session sets `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` to the values
+`codeflow remote agent-token --committer` prints. The identity comes through
+the environment only: the setup changes no git identity, commit template or
+trailer setting. The agent App as committer is an identity that names the
+App, not a model vendor, and is not AI attribution under git.ai_attribution.
+Nothing about the commit rules relaxes: agent commits still pass conventional
+commits, the commit-msg hook and `git.ai_attribution` at block, and no policy,
+hook or check is special-cased for bot-committed commits. The committer field
+is a provenance record, not proof: git lets anyone set it, and proof of who
+pushed is the token. GitHub records the agent App as `<slug>[bot]` on what it
+does through its token:
 
 | Action under the agent App's token | GitHub shows |
 |---|---|
@@ -1345,7 +1378,8 @@ token:
 | A merge it makes | merged by `<slug>[bot]` |
 | A merge commit GitHub makes for that merge | author `<slug>[bot]`; accepted by the operator on 2026-11-05; not yet observed, until TSK-1177's AC-3 fixture records it |
 | A push | the pusher is not yet observed (TSK-1348 AC-1, on the scratch repository) |
-| A commit made locally and pushed | the human author and committer |
+| A commit made in an agent session and pushed | author: the human; committer: `<slug>[bot]`; not yet observed, until TSK-1348 AC-7 records it |
+| A commit made without the two variables | the human author and committer |
 
 **Why a separate identity.** Rulesets, environments and Actions actor rules
 can tell agents from the human only when agents act under an identity of
