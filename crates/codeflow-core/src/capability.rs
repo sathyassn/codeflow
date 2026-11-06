@@ -9,6 +9,7 @@
 pub mod bootstrap;
 pub mod coverage;
 pub mod create;
+pub mod migrate;
 
 use serde::Deserialize;
 
@@ -836,17 +837,12 @@ fn legacy_record(entry: CapabilityEntry) -> CapabilityRecord {
     }
 }
 
-/// Keep each legacy entry's surrounding Markdown with the parsed entry.
-/// An equal-or-higher heading ends an entry's section; global guidance and
-/// group headings do not become capability prose. Quoted and fenced headings
-/// do not divide records. YAML parsing stays in `parse_capabilities`.
-fn legacy_records(content: &str, entries: Vec<CapabilityEntry>) -> Vec<CapabilityRecord> {
+/// The 0-based line and level of each heading outside quotes, lists and
+/// fences. Shared by the legacy reader and `capability migrate`.
+fn top_level_headings(content: &str) -> Vec<(usize, pulldown_cmark::HeadingLevel)> {
     use pulldown_cmark::{Event, Parser, Tag};
-    let lines: Vec<_> = content.split_inclusive('\n').collect();
-    let masked = mask_html_comments(content);
-    let syntax: Vec<_> = masked.lines().collect();
-    let offsets: Vec<_> = lines
-        .iter()
+    let offsets: Vec<_> = content
+        .split_inclusive('\n')
         .scan(0, |offset, line| {
             let start = *offset;
             *offset += line.len();
@@ -871,6 +867,18 @@ fn legacy_records(content: &str, entries: Vec<CapabilityEntry>) -> Vec<Capabilit
             _ => {}
         }
     }
+    headings
+}
+
+/// Keep each legacy entry's surrounding Markdown with the parsed entry.
+/// An equal-or-higher heading ends an entry's section; global guidance and
+/// group headings do not become capability prose. Quoted and fenced headings
+/// do not divide records. YAML parsing stays in `parse_capabilities`.
+fn legacy_records(content: &str, entries: Vec<CapabilityEntry>) -> Vec<CapabilityRecord> {
+    let lines: Vec<_> = content.split_inclusive('\n').collect();
+    let masked = mask_html_comments(content);
+    let syntax: Vec<_> = masked.lines().collect();
+    let headings = top_level_headings(content);
     let mut previous = 0;
     let starts: Vec<_> = entries
         .iter()
