@@ -9,11 +9,16 @@ failure is not proof. The ignored read benchmark has its own gate target.
 Usage: python3 scripts/journey-gate.py --results <junit file or directory>
        python3 scripts/journey-gate.py --list
        python3 scripts/journey-gate.py --part python|results [...]
+       python3 scripts/journey-gate.py --nextest-filter [--skip-benchmark]
 
 `--part` runs one half of the gate: `python` runs the Python journeys,
 which need no test results, and `results` reads the Rust journeys from the
 results. Two jobs that each run one part together run every journey once
 (TSK-265: the Windows Python journeys run beside the test partitions).
+
+`--nextest-filter` prints the filterset of exactly the Rust journey tests this
+platform runs, for the reduced Windows tier (TSK-1242), which runs them without
+the partitions and then reads their results with `--part results`.
 """
 
 from __future__ import annotations
@@ -90,6 +95,22 @@ def part(groups: "OrderedDict[tuple, list[str]]", name: str | None):
     for key, names in groups.items():
         ((mine if (key[0] == "python") == (name == "python") else other))[key] = names
     return mine, other
+
+
+def nextest_filter(groups: "OrderedDict[tuple, list[str]]") -> str:
+    """The nextest filterset selecting exactly the tests of the Rust groups,
+    by the same binary and full test name `result_failure` reads back."""
+    clauses = []
+    for key, names in groups.items():
+        if key[0] == "python":
+            continue
+        _, package, kind, target, _ = key
+        suite = package if kind == "--lib" else f"{package}::{target}"
+        tests = " | ".join(f"test(={name})" for name in names)
+        clauses.append(f"(binary_id(={suite}) & ({tests}))")
+    if not clauses:
+        raise ValueError("the journey map selects no Rust test on this platform")
+    return " | ".join(clauses)
 
 
 def command(key: tuple, names: list[str], test_threads: str | None) -> list[str]:
@@ -183,12 +204,17 @@ def main() -> int:
     parser.add_argument("--skip-benchmark", action="store_true")
     parser.add_argument("--test-threads", default=os.environ.get("JOURNEY_GATE_TEST_THREADS"))
     parser.add_argument("--part", choices=PARTS, help="run only the Python journeys or only the results")
+    parser.add_argument("--nextest-filter", action="store_true",
+                        help="print the filterset of this platform's Rust journey tests")
     args = parser.parse_args()
 
     journeys = load_journeys()
     groups, skipped, pending = plan(
         journeys, on_unix=os.name != "nt", with_benchmark=not args.skip_benchmark
     )
+    if args.nextest_filter:
+        print(nextest_filter(groups))
+        return 0
     groups, elsewhere = part(groups, args.part)
     if args.list:
         for key, names in groups.items():

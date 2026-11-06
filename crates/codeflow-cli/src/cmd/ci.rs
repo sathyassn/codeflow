@@ -194,8 +194,9 @@ pub struct CiArgs {
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
-/// `--pr-body` nor `--pr-body-file` is given (the GitHub policy workflow sets
-/// it from the pull request's current body, read by its `body` step).
+/// `--pr-body` nor `--pr-body-file` is given. The GitHub policy workflow does
+/// not use it: the runner prints a step's environment, so that workflow writes
+/// the body to a file and passes `--pr-body-file` (TSK-1040).
 const PR_BODY_ENV: &str = "CODEFLOW_PR_BODY";
 
 /// Whether the pull request is a draft (`true` or `false`), for a host
@@ -632,6 +633,15 @@ pub fn run(args: &CiArgs) -> i32 {
             _ => None,
         },
         release: std::cell::OnceCell::new(),
+        // The destination lookup's limits come from the policy that judges
+        // the range, read at its authority; with no authority, from the
+        // local policy authority or the shipped defaults, never the working
+        // copy the range can write (TSK-1301).
+        limits: if authority.is_some() {
+            codeflow_core::git::remote_query::QueryLimits::from_git(configured)
+        } else {
+            codeflow_core::git::remote_query::QueryLimits::from_authority_or_default(&root)
+        },
     };
     // Resolve the shared scope before either dependent check. An unreadable
     // destination refuses once; records and acceptance cannot judge it.
@@ -652,14 +662,15 @@ pub fn run(args: &CiArgs) -> i32 {
     };
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
+    let target_tip = target_tip(
+        &root,
+        &line_target,
+        args.into.as_deref(),
+        &names,
+        &environment,
+    );
+    target_containment_warning(&root, &line_target, &head, &target_tip, &names, &mut tagged);
     if scope_ready {
-        let target_tip = target_tip(
-            &root,
-            &line_target,
-            args.into.as_deref(),
-            &names,
-            &environment,
-        );
         record_checks(
             &root,
             &base_candidates,
@@ -1317,7 +1328,8 @@ fn target_tip(
 ) -> Result<String, NoTarget> {
     if let (Some(url), Some(listed)) = (names.destination, names.advertisement) {
         let destination = codeflow_core::workgraph::release_line::from_advertisement(url, listed)
-            .map_err(NoTarget::read)?;
+            .map_err(NoTarget::read)?
+            .with_limits(names.limits);
         let branch = match handed {
             Some(handed) => named_branch(handed).unwrap_or_else(|| handed.to_string()),
             None => match &destination.default {
@@ -1398,6 +1410,62 @@ fn target_tip(
 pub(super) struct NoTarget {
     pub(super) message: String,
     pub(super) remedy: String,
+}
+
+/// Review-time drift is advisory, independently of planning admission.
+fn target_containment_warning(
+    root: &Path,
+    target: &str,
+    head: &str,
+    tip: &Result<String, NoTarget>,
+    names: &Names<'_>,
+    tagged: &mut Vec<TaggedViolation>,
+) {
+    let result = (|| -> Result<Option<(String, String)>, String> {
+        // Reuse the live destination answer already obtained for the range.
+        // A failed remote read never makes an older tracking ref current.
+        let live = match names.release.get() {
+            Some(Err(_)) => return Err("the target's remote scope could not be verified".into()),
+            Some(Ok(Some((destination, _)))) if destination.url.is_some() => {
+                let branch = named_branch(target).unwrap_or_else(|| target.to_string());
+                Some(
+                    codeflow_core::workgraph::release_line::advertised_tip_here(
+                        root,
+                        destination,
+                        &branch,
+                    )?
+                    .to_string(),
+                )
+            }
+            _ => None,
+        };
+        let tip = match live.as_ref() {
+            Some(tip) => tip,
+            None => tip.as_ref().map_err(|e| e.message.clone())?,
+        };
+        if codeflow_core::workgraph::claim_base::head_contains(root, head, tip)? {
+            return Ok(None);
+        }
+        Ok(Some((
+            format!("head does not contain target '{target}' at {tip}"),
+            tip.clone(),
+        )))
+    })();
+    let (message, remedy) = match result {
+        Ok(None) => return,
+        Ok(Some((message, tip))) => (
+            message,
+            codeflow_core::remedy::WORK_TARGET_TIP.with(&[("tip", &tip)]),
+        ),
+        Err(error) => (
+            format!("target '{target}' tip is unverified: {error}"),
+            codeflow_core::remedy::WORK_TARGET_UNVERIFIED.remedy(),
+        ),
+    };
+    tagged.push(TaggedViolation {
+        sha: None,
+        violation: Violation::new("work.target_tip", PolicyLevel::Warn, message, remedy),
+    });
 }
 
 impl NoTarget {
@@ -2145,7 +2213,10 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
     } else if blocking {
         eprintln!("codeflow ci: FAILED — {blocks} blocking, {warnings} warning(s)");
     } else if skipped.is_empty() {
-        eprintln!("codeflow ci: {warnings} warning(s) only — proceeding");
+        eprintln!(
+            "codeflow ci: {warnings} warning(s) only; proceeding (checks run: {})",
+            ran.join(", ")
+        );
     } else {
         eprintln!(
             "codeflow ci: {warnings} warning(s); skipped: {}",
@@ -2241,21 +2312,19 @@ fn evaluate_pr_body(git: &GitPolicy, body: &str) -> Vec<Violation> {
             ));
         }
     }
-    if git.commit_emoji.is_active() {
-        if let Some(c) = standards::find_emoji(body) {
-            out.push(Violation::new(
-                "git.commit_emoji",
-                git.commit_emoji,
-                format!("PR body contains emoji ('{c}')"),
-                codeflow_core::remedy::PR_EMOJI.remedy(),
-            ));
-        }
+    if git.commit_emoji.is_active() && standards::find_emoji(body).is_some() {
+        out.push(Violation::new(
+            "git.commit_emoji",
+            git.commit_emoji,
+            "PR body contains an emoji".to_string(),
+            codeflow_core::remedy::PR_EMOJI.remedy(),
+        ));
     }
     out.extend(standards::pr_body_policy_character(git, body));
-    if let Some(id) = codeflow_core::validate::docs::ledger_citation(body) {
+    if codeflow_core::validate::docs::ledger_citation(body).is_some() {
         out.push(Violation::always_blocking(
             "coord.ledger_citation",
-            format!("PR body cites the coordination ledger id {id}"),
+            "PR body cites a coordination ledger id (an FU, LN or WS id)".to_string(),
             "name the task, pull request or commit instead; FU, LN and WS ids are local to one clone's coordination ledger (ADR-0086)",
         ));
     }
@@ -2382,11 +2451,11 @@ fn evaluate_pr_structure(
 
     // Template remnants: always warn-only — a nudge to finish the body, never
     // a block (mirrors the breaking_watch_paths tripwire convention).
-    for (line_no, line, what) in find_placeholders(&strip_html_comments(body, true)) {
+    for (line_no, what) in find_placeholders(&strip_html_comments(body, true)) {
         out.push(Violation::new(
             "git.pr_sections",
             PolicyLevel::Warn,
-            format!("PR body line {line_no} is a template remnant ({what}): '{line}'"),
+            format!("PR body line {line_no} is a template remnant ({what})"),
             codeflow_core::remedy::PR_TEMPLATE_REMNANT.remedy(),
         ));
     }
@@ -2460,10 +2529,11 @@ fn strip_html_comments(text: &str, preserve_lines: bool) -> String {
 }
 
 /// Scan the body for leftovers of the shipped PR template, each reported as
-/// (1-based line number, the trimmed line, what it is): the paste-your-output
+/// (1-based line number, what it is): the paste-your-output
 /// placeholder, a table row of empty cells (`|  |  |`), and unresolved
-/// Release impact alternatives.
-fn find_placeholders(body: &str) -> Vec<(usize, String, &'static str)> {
+/// Release impact alternatives. The line's own text is never returned: the
+/// policy run's log carries none of the body (TSK-1040).
+fn find_placeholders(body: &str) -> Vec<(usize, &'static str)> {
     let mut out = Vec::new();
     for (idx, line) in body.lines().enumerate() {
         let t = line.trim();
@@ -2487,7 +2557,7 @@ fn find_placeholders(body: &str) -> Vec<(usize, String, &'static str)> {
         } else {
             continue;
         };
-        out.push((idx + 1, t.to_string(), what));
+        out.push((idx + 1, what));
     }
     out
 }
@@ -2667,6 +2737,8 @@ pub(super) struct Names<'a> {
     /// a tip whose first-parent line a clean merge after a review may come
     /// from (TSK-220).
     pub candidate: Option<&'a str>,
+    /// The timeout and attempts for asking the destination (TSK-1301).
+    pub limits: codeflow_core::git::remote_query::QueryLimits,
     /// The release scope, asked once per run and shared by the checks.
     release: std::cell::OnceCell<
         Result<
@@ -4095,7 +4167,7 @@ mod tests {
             assert!(
                 found.iter().any(|v| v.rule == "coord.ledger_citation"
                     && v.level == PolicyLevel::Block
-                    && v.message.contains(planted)),
+                    && !v.message.contains(planted)),
                 "{planted}: {found:?}"
             );
         }
@@ -4689,7 +4761,10 @@ mod tests {
         let findings = find_placeholders(&strip_html_comments(body, true));
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].0, 4);
-        assert_eq!(findings[0].1, "- Breaking: yes | no");
+        assert_eq!(
+            findings[0].1,
+            "unresolved template alternatives or placeholders"
+        );
     }
 
     #[test]

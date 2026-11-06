@@ -42,6 +42,28 @@ created: {{DATE}}
      and name what decides it. `codeflow validate --docs` warns about an open
      task with no entry here and no path in its Description. -->
 
+<!-- Optional, only where the project adopted the estimation time-box
+     profile (`cf-estimate`, `.codeflow/estimate.json`); otherwise leave it
+     out. `cf-plan` writes it at breakdown, from the rubric, and it is then
+     frozen with the profile revision. Copy it out of this comment as a
+     `## Estimate` section here:
+
+     ## Estimate
+     - Drivers: S2 1, S3 3 = 4, Medium
+     - Band: Medium (2 to 4 h), profile v1; moved: none
+     - Split: not needed
+     - H: none; B: none
+
+     A move names one step and its reason (proof volume, record volume or a
+     key review set). Grade tasks by judgement: most are Medium or Hard,
+     an Easy task usually belongs with a sibling that shares its cause, code
+     path or proof, and a Very Hard task is split before claim. Every task
+     carries its own outcome and proof.
+     During the
+     work a Hard task adds `- Half-top: <time> <one line>`, and a task past
+     its top adds `- Cause: <blocker | wrong estimate | scope | review wait
+     | host>; <finish | split | re-plan>`. Class stays in frontmatter. -->
+
 ## Acceptance Criteria
 
 <!-- The single home for this task's acceptance: testable statements,
