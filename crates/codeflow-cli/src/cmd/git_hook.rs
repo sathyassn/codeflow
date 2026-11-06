@@ -156,7 +156,18 @@ pub fn run(args: &GitHookArgs) -> i32 {
                 let remote = args.args.first().map(String::as_str);
                 let url = args.args.get(1).map(String::as_str);
                 super::push_set::run(&root, &policy.git, &refs, remote, url, report);
-                sync_pending_ids(&root, remote, &refs, report);
+                // A refused push lands no record, so its reservations wait
+                // for the push that does (TSK-1306).
+                if codeflow_core::hooks::any_blocking(&report.violations) {
+                    if codeflow_core::ids::issue::has_pending(&root).unwrap_or(true) {
+                        report.status.push(
+                            "pending id reservations were not synced: the push is refused"
+                                .to_string(),
+                        );
+                    }
+                } else {
+                    sync_pending_ids(&root, remote, &refs, report);
+                }
             }
             ("pre-push", result)
         }

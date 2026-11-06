@@ -768,6 +768,46 @@ fn clears_id_registry() {
     );
 }
 
+/// A record check that refuses stops the run the pre-push hook makes
+/// (`--stop-on-cheap-failure`) before the work and pull request checks, and
+/// the stopped run refuses with the same blocking finding as a full run,
+/// which still runs them (TSK-1306 AC-6).
+#[test]
+fn a_refused_record_stops_the_hook_run_before_the_work_checks() {
+    let hosted = registered();
+    let root = &hosted.root;
+    hosted.branch("plan/more");
+    let hand = "project-management/tasks/TSK-002.md";
+    let copied: String = read(root, TASK)
+        .lines()
+        .map(|line| {
+            if line.starts_with("uid:") {
+                "uid: 3f0c5a52-2d7e-4b8e-9d57-5d0b8f0f1a11".to_string()
+            } else {
+                line.replace("TSK-001", "TSK-002")
+                    .replace("the work", "more work")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    write(root, hand, &format!("{copied}\n"));
+    commit_all(root, "docs: plan more work");
+    let finding = "TSK-002: not reserved in the registry";
+    let stopped = hosted.ci("plan/more", &["--stop-on-cheap-failure"]);
+    assert!(stopped.contains(finding), "{stopped}");
+    assert!(stopped.contains("codeflow ci: FAILED"), "{stopped}");
+    assert!(
+        stopped.contains(
+            "stopped early: a check above already blocks, so these did not run: work and pull request checks"
+        ),
+        "{stopped}"
+    );
+    let full = hosted.ci("plan/more", &[]);
+    assert!(full.contains(finding), "{full}");
+    assert!(full.contains("codeflow ci: FAILED"), "{full}");
+    assert!(!full.contains("stopped early"), "{full}");
+}
+
 #[test]
 fn clears_acceptance_binding() {
     let hosted = Hosted::new();

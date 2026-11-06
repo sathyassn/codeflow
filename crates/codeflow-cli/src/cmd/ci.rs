@@ -29,6 +29,7 @@ mod id_registry;
 mod judging;
 mod line_tip;
 pub(crate) mod pr_body;
+mod timing;
 mod work_records;
 mod workflow_change;
 
@@ -191,6 +192,28 @@ pub struct CiArgs {
     /// a landing candidate, and the hook itself judges a push to a line.
     #[arg(long, value_name = "REF", hide = true)]
     pub pushed_ref: Option<String>,
+
+    /// Print how long each check took, on stderr after the verdict, one
+    /// line per check and then the total. The times only report; they
+    /// change no verdict.
+    #[arg(long)]
+    pub timings: bool,
+
+    /// Write each check's time to this file, one `<check>\t<microseconds>`
+    /// line each: the pre-push hook names the slowest checks when a push
+    /// goes over its budget (TSK-1306).
+    #[arg(long, value_name = "FILE", hide = true)]
+    pub timings_out: Option<PathBuf>,
+
+    /// Stop early when a check already blocks: after the commit,
+    /// added-line, conflict-marker, workflow and path checks, skipping the
+    /// record, work and pull request checks; and after the record and
+    /// branch-name checks, skipping the work and pull request checks. The
+    /// pre-push hook passes it: the push is refused either way, and the
+    /// refusal comes sooner (TSK-1306). A run that stops this way still
+    /// fails; hosted CI never passes it and always runs every check.
+    #[arg(long, hide = true)]
+    pub stop_on_cheap_failure: bool,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -351,8 +374,20 @@ fn ci_environment(
     Ok(values)
 }
 
-#[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
 pub fn run(args: &CiArgs) -> i32 {
+    let mut timings = timing::Timings::start();
+    let code = run_timed(args, &mut timings);
+    if args.timings {
+        timings.print();
+    }
+    if let Some(out) = &args.timings_out {
+        timings.write(out);
+    }
+    code
+}
+
+#[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
+fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     let _judgment = codeflow_core::workgraph::history::judgment();
     if args.read_release_impact {
         return read_release_impact();
@@ -533,6 +568,7 @@ pub fn run(args: &CiArgs) -> i32 {
         || (base_candidates.clone(), range_source.clone()),
         |from| (vec![from], "--commits-from".to_string()),
     );
+    timings.lap("setup");
     let range = evaluate_commit_range(&root, &commit_bases, &head, &commit_source, git);
     tagged.extend(range.violations);
     if range.ran {
@@ -545,6 +581,7 @@ pub fn run(args: &CiArgs) -> i32 {
         Some(false) => skipped.push("added-lines"),
         None => {}
     }
+    timings.lap("commit");
     conflict_markers::dispatch(
         &root,
         git,
@@ -556,7 +593,9 @@ pub fn run(args: &CiArgs) -> i32 {
     // What this change does to the workflows is base..head; the wider
     // commit range `--commits-from` selects (pre-push) also holds commits
     // the target already carries, whose workflow edits are not this one's.
+    timings.lap("conflict-markers");
     workflow_change::dispatch(&root, base_sha.as_deref(), &head, &mut tagged, &mut ran);
+    timings.lap("workflow-change");
 
     match codeflow_core::hooks::path_policy::PathPolicy::from_git(configured).and_then(|paths| {
         let size_and_ignore = judging::content_rules(&root, authority.as_ref())?;
@@ -594,6 +633,11 @@ pub fn run(args: &CiArgs) -> i32 {
                 "repair the named policy source or Git object, then retry",
             ),
         }),
+    }
+    timings.lap("path-policy");
+    if args.stop_on_cheap_failure && cheap_checks_block(&tagged, args.run_level, &judging.raw) {
+        skipped.push("records, work and pull request checks");
+        return stopped_early(args, &judging.raw, &mut tagged, &ran, &skipped);
     }
 
     let destination = match args.destination.clone() {
@@ -660,6 +704,7 @@ pub fn run(args: &CiArgs) -> i32 {
             false
         }
     };
+    timings.lap("release-scope");
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
     let target_tip = target_tip(
@@ -670,6 +715,7 @@ pub fn run(args: &CiArgs) -> i32 {
         &environment,
     );
     target_containment_warning(&root, &line_target, &head, &target_tip, &names, &mut tagged);
+    timings.lap("target-tip");
     if scope_ready {
         record_checks(
             &root,
@@ -691,6 +737,7 @@ pub fn run(args: &CiArgs) -> i32 {
             &target_tip,
             &mut tagged,
             &mut ran,
+            timings,
         );
     }
 
@@ -711,6 +758,11 @@ pub fn run(args: &CiArgs) -> i32 {
             tagged.push(v);
         }
         ran.push("branch-naming");
+    }
+    timings.lap("branch-naming");
+    if args.stop_on_cheap_failure && cheap_checks_block(&tagged, args.run_level, &judging.raw) {
+        skipped.push("work and pull request checks");
+        return stopped_early(args, &judging.raw, &mut tagged, &ran, &skipped);
     }
 
     // --- pull request classification (TSK-104) -----------------------------
@@ -734,6 +786,7 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut tagged,
         &mut ran,
     );
+    timings.lap("line-tip");
     // A push of a task branch stacked on reviewed predecessor heads (SPC-013
     // R-42, issue #69); a pull request check keeps the landing rule.
     let stacked = if pr_body.is_none() && !pr_context {
@@ -775,6 +828,7 @@ pub fn run(args: &CiArgs) -> i32 {
             Some(change_class::classify(Some(&inventory), &project))
         }
     };
+    timings.lap("change-class");
     let work_class = if scope_ready {
         work_checks(
             &root,
@@ -788,6 +842,7 @@ pub fn run(args: &CiArgs) -> i32 {
             &stacked,
             &mut tagged,
             &mut ran,
+            timings,
         )
     } else {
         None
@@ -806,6 +861,7 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut tagged,
         &mut ran,
     );
+    timings.lap("own-branch-preflight");
     // The visible workgraph is checked once for tracked work, whether the
     // task comes from the branch or from the `Task:` line (TSK-133).
     if own_task
@@ -816,6 +872,7 @@ pub fn run(args: &CiArgs) -> i32 {
     {
         visible_graph_check(&root, level, &mut tagged, &mut ran);
     }
+    timings.lap("visible-graph");
 
     // --- PR-body check ----------------------------------------------------
     // A Bitbucket PR without a body channel was warned about when resolving
@@ -874,6 +931,7 @@ pub fn run(args: &CiArgs) -> i32 {
         );
         ran.push("PR-body");
     }
+    timings.lap("PR-body");
 
     settle_watched_paths(&mut tagged, pr_body.as_deref());
     if let Some(running) = args.run_level {
@@ -883,6 +941,48 @@ pub fn run(args: &CiArgs) -> i32 {
         write_blocking_rules(out, &tagged);
     }
     report(&tagged, &ran, &skipped)
+}
+
+/// End a run that `--stop-on-cheap-failure` stopped: the findings so far at
+/// the level the plane prints them, the blocking rule ids for the hook, and
+/// the summary naming what was skipped. The run fails, as it would have with
+/// every check: the remaining checks could add findings, never lift one
+/// (TSK-1306).
+fn stopped_early(
+    args: &CiArgs,
+    raw: &Result<Option<serde_json::Value>, String>,
+    tagged: &mut [TaggedViolation],
+    ran: &[&str],
+    skipped: &[&str],
+) -> i32 {
+    if let Some(running) = args.run_level {
+        run_under(running, raw, tagged);
+    }
+    if let Some(out) = &args.blocking_rules_out {
+        write_blocking_rules(out, tagged);
+    }
+    let code = report(tagged, ran, skipped);
+    eprintln!(
+        "codeflow ci: stopped early: a check above already blocks, so these did not run: {}",
+        skipped.join(", ")
+    );
+    code
+}
+
+/// Whether a finding found so far blocks at the level it would print at:
+/// with a run level, each finding as [`run_under`] lowers it, so a check
+/// the plane's level downgrades never stops the run early (TSK-1306).
+fn cheap_checks_block(
+    tagged: &[TaggedViolation],
+    running: Option<PolicyLevel>,
+    raw: &Result<Option<serde_json::Value>, String>,
+) -> bool {
+    tagged.iter().any(|tagged| {
+        let level = running.map_or(tagged.violation.level, |running| {
+            tagged.violation.level_under(running, raw)
+        });
+        level == PolicyLevel::Block
+    })
 }
 
 /// The blocking findings' rule ids, one per line, for the pre-push hook's
@@ -1005,6 +1105,7 @@ fn work_checks<'a>(
     stacked: &[ReviewedPin],
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&'a str>,
+    timings: &mut timing::Timings,
 ) -> Option<classification::Class> {
     let base = match resolve_base(root, base_candidates) {
         Ok(value) => value,
@@ -1085,6 +1186,7 @@ fn work_checks<'a>(
         );
         None
     };
+    timings.lap("classification");
     acceptance::dispatch(
         root,
         git,
@@ -1098,6 +1200,7 @@ fn work_checks<'a>(
         tagged,
         ran,
     );
+    timings.lap("acceptance");
     tagged.extend(tracked_review(
         root,
         git,
@@ -1106,6 +1209,7 @@ fn work_checks<'a>(
         range_parts.as_ref(),
         head,
     ));
+    timings.lap("review-row");
     class
 }
 
@@ -1235,6 +1339,7 @@ fn record_checks(
     target_tip: &Result<String, NoTarget>,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
+    timings: &mut timing::Timings,
 ) {
     // On a release range, the records it brings are judged where each was
     // introduced on its line (SPC-013 R-120).
@@ -1283,6 +1388,7 @@ fn record_checks(
     } else {
         None
     };
+    timings.lap("record-range");
     work_records::dispatch(
         root,
         base_candidates,
@@ -1294,7 +1400,9 @@ fn record_checks(
         tagged,
         ran,
     );
+    timings.lap("work-records");
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
+    timings.lap("id-registry");
 }
 
 /// The tip of `target`, the branch the range lands on, which the Outcome

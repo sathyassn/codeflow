@@ -565,6 +565,18 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
 `block`.
 
 - The range is bound to what is pushed.
+- Cheap checks come first, and the first refusal stops the set. The hook's
+  own ref rules run before any `codeflow ci`. Each `codeflow ci` stops after
+  its commit, added-line, conflict-marker, workflow and path checks when one
+  of them blocks, and skips the record, work and pull request checks. It
+  stops again after the record and branch-name checks when one of those
+  blocks, and skips the work and pull request checks. A refusal skips the later branches' checks, the release preflight and the
+  id sync. The printed rerun runs every check. A push that passes runs every
+  check, as before.
+- The set is timed. Over `git.push_budget_seconds` (default 60) the hook
+  names the slowest step and, for a `codeflow ci` step, its three slowest
+  checks. The budget only reports; it never refuses a push. `codeflow ci
+  --timings` prints the time of every check.
 - An existing protected or `integration/` branch starts at its advertised tip.
 - A branch with a declared target starts at the merge base with that target's
   advertised tip, read from the task record.

@@ -301,10 +301,12 @@ fn budget_finding(slow: std::time::Duration) -> Option<String> {
         PushStep {
             name: "target policy".into(),
             duration: std::time::Duration::from_millis(20),
+            parts: Vec::new(),
         },
         PushStep {
             name: "release preflight (feat/x)".into(),
             duration: slow,
+            parts: Vec::new(),
         },
     ];
     let total = steps.iter().map(|step| step.duration).sum();
@@ -367,6 +369,99 @@ fn push_budget_is_reported_after_a_real_slow_step() {
         text(&run("git", &dest, &["rev-parse", "feat/x"])).trim(),
         head_sha(&root),
         "the budget note must leave the push's verdict intact: {out}"
+    );
+}
+
+/// The budget is the policy's `git.push_budget_seconds`, read from the
+/// landed policy, and an overrun only reports (TSK-1306 AC-4): with a
+/// budget of 1 s and a release preflight that takes 2 s, the note names the
+/// project's budget and the push still lands.
+#[cfg(unix)]
+#[test]
+fn the_push_budget_comes_from_the_landed_policy_and_never_refuses() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    released(&root, &dest);
+    land_on_default(&root, &dest, |root| {
+        set_policy(root, &[("push_budget_seconds", 1.into())]);
+    });
+    let bin = root.parent().unwrap().join("two-second-bin");
+    python_stand_in(&bin, "sleep 2\n");
+    let out = push_with_path(&root, &bin, &["origin", "HEAD"]);
+    assert!(out.contains("over its 1s budget"), "{out}");
+    assert!(!out.contains("over its 60s budget"), "{out}");
+    assert!(out.contains("push set finished"), "{out}");
+    assert_eq!(
+        text(&run("git", &dest, &["rev-parse", "feat/x"])).trim(),
+        head_sha(&root),
+        "an overrun must never refuse the push: {out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cheap checks first (TSK-1306).
+// ---------------------------------------------------------------------------
+
+/// A commit the commit rules refuse stops the push set at the first
+/// refusal: `codeflow ci` stops after its cheap checks, the release
+/// preflight does not run, the push is refused and the printed rerun runs
+/// every check (TSK-1306 AC-6).
+#[test]
+fn a_refused_commit_stops_the_push_set_before_the_slow_checks() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    released(&root, &dest);
+    write(&root, "x.txt", "x\n");
+    git(&root, &["add", "x.txt"]);
+    // The commit-msg hook would refuse this subject; the push is what this
+    // test is about, so the message is written without it.
+    let made = run(
+        "git",
+        &root,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-q",
+            "-m",
+            "Not conventional.",
+        ],
+    );
+    assert!(made.status.success(), "{}", text(&made));
+    let local = head_sha(&root);
+    let out = pushed(&root);
+    assert!(out.contains("push set check failed: `codeflow ci"), "{out}");
+    assert!(out.contains("git.commit_format"), "{out}");
+    assert!(
+        out.contains("stopped early: a check above already blocks, so these did not run: records, work and pull request checks"),
+        "{out}"
+    );
+    assert!(
+        out.contains("the release preflight did not run: a check above already refuses the push"),
+        "{out}"
+    );
+    assert!(!out.contains("--stop-on-cheap-failure"), "{out}");
+    not_landed(&dest, &out, "feat/x", &local);
+}
+
+/// A push the cheap checks pass runs every check and the release preflight,
+/// as before, and lands (TSK-1306 AC-7).
+#[test]
+fn a_clean_push_runs_every_check_and_the_release_preflight() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    released(&root, &dest);
+    commit(&root, "src/tool.txt", "feat: add the tool");
+    let out = preflighted(&root);
+    assert!(!out.contains("stopped early"), "{out}");
+    assert!(!out.contains("did not run"), "{out}");
+    assert_eq!(
+        text(&run("git", &dest, &["rev-parse", "feat/x"])).trim(),
+        head_sha(&root),
+        "{out}"
     );
 }
 
