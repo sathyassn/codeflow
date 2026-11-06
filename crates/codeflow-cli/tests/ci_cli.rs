@@ -11,6 +11,8 @@
 
 #[path = "ci_cli/acceptance_fix.rs"]
 mod acceptance_fix;
+#[path = "ci_cli/authority_line.rs"]
+mod authority_line;
 #[path = "ci_cli/base_policy.rs"]
 mod base_policy;
 #[path = "ci_cli/cancelled_standalone.rs"]

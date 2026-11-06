@@ -123,6 +123,23 @@ fn refused(out: &Output) -> bool {
         && String::from_utf8_lossy(&out.stderr).contains("git.hook_integrity")
 }
 
+/// `Ok(true)` when the guard allowed the command, `Ok(false)` when it
+/// refused only because a Git child it runs to read state outlived its
+/// 3 s bound, as on a busy hosted runner, and `Err` for any other result.
+/// That refusal is the guard failing closed, a correct answer for a
+/// command it should otherwise allow (TSK-1318 AC-9).
+fn allowed_or_slow_child(out: &Output) -> Result<bool, String> {
+    if out.status.code() == Some(0) {
+        return Ok(true);
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if refused(out) && stderr.contains("exceeded 3 seconds") {
+        Ok(false)
+    } else {
+        Err(format!("{out:?}"))
+    }
+}
+
 /// Issue #342 commands are classified from a linked task worktree. None of
 /// the payloads run, including the absolute temporary destinations.
 #[test]
@@ -4394,9 +4411,12 @@ fn empty_copy_operands_read_as_the_current_directory() {
 // extracted, linked or cloned into place earlier on the line is state the
 // guard read before the line ran. With or without global callbacks, the
 // next Git command there is refused; ordinary writes that create no
-// repository state keep passing.
+// repository state keep passing. An ordinary command may also be refused
+// because a Git child the guard runs outlived its 3 s bound on a busy
+// runner (TSK-1318 AC-9, job 127565744853); at least one of them must pass.
 #[test]
 fn earlier_writes_make_the_next_runner_state_unknown() {
+    let mut allowed = 0;
     let f = Fixture::new();
     let evil = f.temp.path().join("evil");
     std::fs::create_dir(&evil).unwrap();
@@ -4442,7 +4462,9 @@ fn earlier_writes_make_the_next_runner_state_unknown() {
                 "printf x > notes.txt && git -C . status",
             ] {
                 let out = run(&stage, command);
-                assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+                let passed = allowed_or_slow_child(&out)
+                    .unwrap_or_else(|out| panic!("{hook} {command}: {out}"));
+                allowed += usize::from(passed);
             }
             for command in [
                 "printf note > notes.txt && git add notes.txt",
@@ -4452,10 +4474,78 @@ fn earlier_writes_make_the_next_runner_state_unknown() {
                 "rm -rf build && git status",
             ] {
                 let out = run(&f.linked, command);
-                assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+                let passed = allowed_or_slow_child(&out)
+                    .unwrap_or_else(|out| panic!("{hook} {command}: {out}"));
+                allowed += usize::from(passed);
             }
         }
     }
+    assert!(allowed > 0, "no ordinary command passed");
+}
+
+/// TSK-1318 AC-9: a Git child that outlives the guard's 3 s bound is
+/// refused, failing closed, and [`allowed_or_slow_child`] accepts only that
+/// refusal. A `git` on `PATH` that sleeps before `rev-parse --show-prefix`
+/// stands in for a busy runner, so the case is deterministic.
+#[cfg(unix)]
+#[test]
+fn a_slow_git_child_is_refused_and_only_that_refusal_is_tolerated() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let real = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(real.stdout).unwrap().trim().to_string();
+    assert!(!real.is_empty(), "git is on PATH");
+    let slow = f.temp.path().join("slow-git");
+    std::fs::create_dir(&slow).unwrap();
+    let wrapper = slow.join("git");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in *' --show-prefix '*) sleep 4 ;; esac\nexec '{real}' \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(slow.clone())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let stage = f.temp.path().join("stage");
+    std::fs::create_dir(&stage).unwrap();
+    let run = |command: &str, path: &std::ffi::OsStr| {
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "git-guard", "--contract", "3"])
+                .current_dir(&stage)
+                .env("HOME", f.temp.path())
+                .env("USERPROFILE", f.temp.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("PATH", path),
+            &guard_payload(command, &stage),
+        )
+    };
+    let out = run("git -C . status", &path);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("cannot verify Git configuration: child exceeded 3 seconds"),
+        "{out:?}"
+    );
+    assert_eq!(allowed_or_slow_child(&out), Ok(false));
+    let fast = run("git -C . status", &std::env::var_os("PATH").unwrap());
+    assert_eq!(allowed_or_slow_child(&fast), Ok(true), "{fast:?}");
+    // A refusal for any other reason is never tolerated.
+    std::fs::create_dir(stage.join("x")).unwrap();
+    let other = run(
+        "printf 'gitdir: /nonexistent\\n' > x/.git && git -C x status",
+        &std::env::var_os("PATH").unwrap(),
+    );
+    assert_eq!(other.status.code(), Some(2), "{other:?}");
+    assert!(allowed_or_slow_child(&other).is_err(), "{other:?}");
 }
 
 // Fable review round 5 majors 1 and 2, security round 8 R8-3: `~` and
