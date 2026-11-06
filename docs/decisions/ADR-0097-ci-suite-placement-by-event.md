@@ -41,7 +41,11 @@ tree. A push to `main` reuses when the tree matches. The daily run on `main`
 and each active line runs Linux and Windows, skipped when that tip was
 already tested, and the weekly run is unchanged. The rule across events: a
 tree that has passed a suite does not run it again, on a line or on `main`.
-A reuse that cannot be proven runs the suite. A suite that is not selected for
+A reuse that cannot be proven runs the suite.
+The weekly run is the one deliberate exception: it repeats its Linux and
+Windows suites on a tip that already passed, because the same tree can break
+when runner images or tools change, and the daily skip leaves no other check
+on a quiet branch. A suite that is not selected for
 an event never counts as a pass of a required check: GitHub treats a
 skipped required check as a success, so a skip cannot stand in for one,
 and TSK-1259 AC-9 holds that a not-selected result never satisfies a
@@ -108,10 +112,9 @@ maintainer page's table or the workflows differ; that script is not on
   pull request into `main`, so Windows proof of a change comes from one of
   those two, never from a line push. The operator accepted fixing such a
   failure forward on the line until the candidate push task lands.
-- The weekly run is unchanged, so a Monday tip the daily run already tested
-  runs those suites again. That sits against the rule across events. Changing
-  it is a change to where a suite runs, so it waits for the operator's
-  decision; TSK-1026 AC-17 holds the proposal.
+- A Monday tip the daily run already tested runs those suites again on the
+  weekly run. That is the deliberate exception in the Decision, and it costs
+  one repeat of the suites a week.
 - A batch of several pull requests pushes a tree no member tested, so its
   line push reuses nothing from them; a one-member landing on an equal tree
   reuses that member's short checks.
@@ -179,6 +182,10 @@ numbers move.
   skipped when that tip was already tested, and "a tree that has passed a
   suite does not run it again, on a line or on main" (`RELEASE-PLAN.md`,
   entry "2026-11-06 15:34: Operator decision on CI placement").
+- 2026-11-06, 16:37, this record. Operator: "ok. go as recommended". The weekly
+  run stays unchanged and is the one deliberate exception to the rule across
+  events (`RELEASE-PLAN.md`, entry "2026-11-06 16:37: Operator ruling on the
+  weekly run").
 
 ## Architecture impact
 

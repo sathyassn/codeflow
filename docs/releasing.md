@@ -225,7 +225,9 @@ request into an integration line runs only the short checks. A line push,
 one per batch, runs the full Linux suites, coverage included, and no
 Windows job. A pull request into `main` runs the full Windows suites once
 and reuses Linux from the line push on the same tree. A tree that has
-passed a suite does not run it again, on a line or on `main`. [ADR-0097](decisions/ADR-0097-ci-suite-placement-by-event.md)
+passed a suite does not run it again, on a line or on `main`; the weekly run
+is the one deliberate exception, because the same tree can break when runner
+images or tools change. [ADR-0097](decisions/ADR-0097-ci-suite-placement-by-event.md)
 records the decision and its dated history. Changing where a suite runs is
 an operator decision; agents and Coordinators never rule on it.
 
