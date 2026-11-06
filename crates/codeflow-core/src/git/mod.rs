@@ -12,6 +12,7 @@ pub mod conflict;
 pub mod name;
 pub mod remote_query;
 pub(crate) mod stdin;
+pub mod unreadable;
 
 pub use name::{
     diff_paths, display_json, display_key, display_line, display_message, display_output,

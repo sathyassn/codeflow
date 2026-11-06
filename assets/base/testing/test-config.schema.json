@@ -199,7 +199,8 @@
           "type": "integer",
           "minimum": 1,
           "default": 600,
-          "description": "Per-target wall-clock timeout in seconds. When the command runs longer, the runner kills it and the target fails loudly. Omitted \u2192 600s. Guards the gate/pre-push against a single hanging target blocking forever."
+          "description": "Base deadline in seconds (default 600). Heavy targets have a ceiling four times this base and a five-second bounded cleanup grace. Light targets retain a fixed deadline. A late-observed exit never passes.",
+          "maximum": 4611686018427386
         },
         "shell": {
           "type": "string",
@@ -319,6 +320,20 @@
           "type": "integer",
           "minimum": 1,
           "description": "Workers needed before this heavy target starts; requires execution.worker_budget and cannot exceed it. When the run's budget is lowered below it, the target runs at the budget. Omitted targets share the available budget."
+        },
+        "stall_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4611686018427386,
+          "default": 300,
+          "description": "Heavy target inactivity window in seconds with complete target-scoped CPU accounting. New output or increasing scoped CPU refreshes activity. Unsupported or uncertain accounting uses the absolute ceiling and reports why. Omitted: 300."
+        },
+        "cleanup_grace_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600,
+          "default": 5,
+          "description": "Seconds allowed after a target stops for termination, reaping, watcher shutdown and pipe draining. On Unix a supervised process group still running at half this time is killed; on Windows the target's job is terminated when it stops. Cleanup that does not finish is a non-pass. Omitted: 5."
         }
       },
       "additionalProperties": false

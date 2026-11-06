@@ -583,16 +583,16 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ),
     // a test target's captured output, shown
     (
-        "codeflow-core/src/testing/runner/mod.rs",
-        "render_capture",
+        "codeflow-core/src/testing/runner/output.rs",
+        "Output::rendered",
         "from_utf8_lossy",
         1,
         "display",
     ),
     // a test target's output scanned for progress words
     (
-        "codeflow-core/src/testing/runner/mod.rs",
-        "spawn_reader_with_progress",
+        "codeflow-core/src/testing/runner/output.rs",
+        "Output::ingest",
         "from_utf8_lossy",
         1,
         "grammar:test-progress",
@@ -681,6 +681,22 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "codeflow-core/src/workgraph/readiness.rs",
         "git",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
+    // TSK-1308: a failed Git command's stderr in the refusal a person reads; stdout uses strict decoding.
+    (
+        "codeflow-core/src/workgraph/candidate_removal.rs",
+        "git",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
+    // TSK-1308: a failed `gh pr list` stderr in the refusal a person reads; any failure refuses the removal.
+    (
+        "codeflow-cli/src/cmd/work.rs",
+        "open_pull_requests",
         "from_utf8_lossy",
         1,
         "display",
@@ -4202,14 +4218,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // A failed open returns None, and classify_cleanup maps an unknown working state to RetainUnproven.
-    (
-        "crates/codeflow-core/src/status.rs",
-        "repository_dirty",
-        "obtain-absent:Repository::open",
-        1,
-        "unproven",
-    ),
     // A non-string schema_version becomes unsupported version Err; the empty placeholder is never an accepted default. run_gate propagates UnsupportedSchemaVersion as TestingError.
     (
         "crates/codeflow-core/src/testing/config/mod.rs",
@@ -4517,14 +4525,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "obtain-absent:var_os",
         1,
         "unproven",
-    ),
-    // Splits captured output only to render progress notifications; it neither changes the subprocess output buffer nor gate results.
-    (
-        "crates/codeflow-core/src/testing/runner/mod.rs",
-        "spawn_reader_with_progress",
-        "lines",
-        1,
-        "display",
     ),
     // Strips quote characters only from the displayed serialized runner enum label; target configuration and execution retain the typed Runner value.
     (
@@ -4962,7 +4962,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/workgraph/acceptance.rs",
         "waiver_problem",
         "trim",
-        12,
+        11,
         "display",
     ),
     // Normalizes human-authored standalone explanation and rejects an empty narrative; task identity and integration target are separate exact fields.
@@ -4981,19 +4981,19 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
-    // Invalid UTF-8 returns the entry problem; range_problem treats that returned problem as a planning-only refusal.
-    (
-        "crates/codeflow-core/src/workgraph/amendment.rs",
-        "entry_problem",
-        "obtain-absent:from_utf8",
-        1,
-        "unproven",
-    ),
     // A discovery error becomes Err inside the status read, and epic_problem then returns Some(cannot read the epic records), a refusal.
     (
         "crates/codeflow-core/src/workgraph/amendment.rs",
         "epic_problem",
         "obtain-absent:Repository::discover",
+        1,
+        "unproven",
+    ),
+    // Invalid UTF-8 returns the irregular entry; entry_problem and the waiver's waiver_amendment_change treat it as a refusal.
+    (
+        "crates/codeflow-core/src/workgraph/amendment.rs",
+        "irregular_entry",
+        "obtain-absent:from_utf8",
         1,
         "unproven",
     ),
@@ -5121,6 +5121,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/workgraph/readiness.rs",
         "git_bytes",
+        "trim",
+        1,
+        "display",
+    ),
+    // TSK-1308: trims a failed Git command's stderr for the refusal a person reads; successful stdout is decoded strictly.
+    (
+        "crates/codeflow-core/src/workgraph/candidate_removal.rs",
+        "git",
+        "trim",
+        1,
+        "display",
+    ),
+    // TSK-1308: trims a failed `gh pr list` stderr for the refusal a person reads; it decides nothing beyond refusing.
+    (
+        "crates/codeflow-cli/src/cmd/work.rs",
+        "open_pull_requests",
         "trim",
         1,
         "display",
@@ -7039,6 +7055,8 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/git/unreadable.rs", "read_regular_file", "is_file", 1, "Type check on symlink_metadata, which already succeeded; a non-file is not opened so a FIFO cannot block the scan, and it is reported as readable because only a refused stat or open counts (TSK-1315)."),
+    ("crates/codeflow-core/src/git/unreadable.rs", "walk", "is_dir", 1, "Type check on a read_dir entry only chooses to descend; a non-directory entry is still read, so no file is skipped as absent (TSK-1315)."),
     ("crates/codeflow-core/src/hooks/gitleaks.rs", "private::open_folder", "is_dir", 1, "Type check on the descriptor opened without following a link; anything but a directory this user owns with mode 0700 refuses, which fails the scan as incomplete (TSK-412)."),
     ("crates/codeflow-core/src/hooks/gitleaks.rs", "Engine::locate", "is_file", 1,"A PATH folder whose gitleaks is not a file is skipped; when no folder has one the engine is Missing, a git.secret_scan_engine finding that refuses at block, and a found file still runs only after its checksum matches the pin (TSK-412)."),
     ("crates/codeflow-core/src/hooks/sandbox_state.rs", "read_text", "is_file", 2, "Type checks on obtained metadata, before and after opening; any non-file is unreadable, a strict-rule trigger, so a FIFO, device or directory never reads as an absent layer (TSK-397)."),
@@ -7068,6 +7086,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-cli/src/cmd/validate.rs", "validate_records", "ErrorKind::NotFound", 2, "The record home is absent only when both the followed and the unfollowed stat of the leaf under the discovered repository root find no name; a dangling link is reported as unreadable and fails validation."),
     ("crates/codeflow-cli/src/cmd/validate.rs", "validate_records", "is_file", 1, "Type check on metadata whose errors other than NotFound fail the check; a directory goes to collect_record_files, which propagates its errors."),
     ("crates/codeflow-cli/src/embedded.rs", "EmbeddedAssets::read", "ErrorKind::NotFound", 1, "Debug builds only (cfg(debug_assertions)) read the source tree's assets directory, mirroring the release Raw::get Option contract; release binaries never take this path."),
+    ("crates/codeflow-core/src/absence.rs", "deepest_entry", "ErrorKind::NotFound", 1, "Names the deepest entry so an ancestor walk can skip names nothing lies below: not found, a NUL or a refused name only moves the search outward, it never reports absence to a caller, and every other read failure, including Windows 206, is returned, so the caller fails closed."),
     ("crates/codeflow-core/src/absence.rs", "entry", "ErrorKind::NotFound", 1, "Serves the Windows short-name mapper: a leaf that is not found is Creatable only when missing_leaf finds a resolving directory above it, which the mapper refuses, and Impossible only beneath a non-directory or a refused name; a dangling or unreadable ancestor and every other error propagate, so the mapper fails closed."),
     ("crates/codeflow-core/src/absence.rs", "failure_proves_no_entry", "ErrorKind::NotFound", 1, "Serves cannot_exist and existing_metadata for the guards: a leaf that is not found names nothing when missing_leaf settles its ancestors (beneath a directory, beneath a non-directory, or under a refused name), or when the path is relative and every ancestor, including the empty one, is not found; an absolute path in that state, a dangling ancestor or an unreadable ancestor is an error, so the guard fails closed."),
     ("crates/codeflow-core/src/absence.rs", "missing_leaf", "ErrorKind::NotFound", 2, "The ancestor walk behind proven absence: an ancestor that is not found only continues the walk to the first existing one, and a dangling ancestor link becomes an error."),
