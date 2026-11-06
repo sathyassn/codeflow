@@ -386,7 +386,8 @@
             "lcov",
             "cobertura",
             "istanbul-summary",
-            "go-cover"
+            "go-cover",
+            "llvm-cov-json"
           ],
           "description": "Coverage artifact format."
         },

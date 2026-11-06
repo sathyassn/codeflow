@@ -580,7 +580,8 @@ class GateContracts(unittest.TestCase):
         self.assertTrue(command.endswith('cargo nextest run --workspace --no-fail-fast --profile essential && cargo test --workspace --doc'))
         self.assertEqual(workspace['report'], {'format': 'junit', 'path': 'target/nextest/essential/junit.xml'})
         self.assertEqual(targets['rust-coverage']['modes'], {'full': {'command':
-            'cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow'}})
+            'cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --json --summary-only '
+            '--output-path target/llvm-cov-summary.json --profile codeflow'}})
         self.assertEqual(targets['rust-doctest']['modes'], {'full': {'command': 'cargo test --workspace --doc'}})
         nextest = tomllib.loads(read('.config/nextest.toml'))
         profiles = nextest['profile']

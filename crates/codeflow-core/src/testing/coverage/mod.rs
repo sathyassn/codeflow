@@ -1,11 +1,44 @@
 //! Coverage format parsers.
 //!
-//! Supports four coverage formats: lcov, cobertura, istanbul-summary, go-cover.
+//! Supports five coverage formats: lcov, cobertura, istanbul-summary,
+//! go-cover and llvm-cov-json.
 
 pub mod cobertura;
 pub mod go_cover;
 pub mod istanbul;
 pub mod lcov;
+pub mod llvm_cov;
+
+/// One coverage measure over the whole report: how many items there are, how
+/// many ran, and the percentage of them that ran.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct CoverageCount {
+    pub count: u64,
+    pub covered: u64,
+    pub percent: f64,
+}
+
+impl CoverageCount {
+    /// The count with its percentage computed from `count` and `covered`.
+    #[must_use]
+    pub fn new(count: u64, covered: u64) -> Self {
+        Self {
+            count,
+            covered,
+            percent: FileCoverage::compute_percent(count, covered),
+        }
+    }
+}
+
+/// A report's totals. Lines come from every format; functions and regions
+/// only from a format that measures them (llvm-cov-json), and are `None`
+/// elsewhere rather than a guessed value.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct CoverageTotals {
+    pub lines: CoverageCount,
+    pub functions: Option<CoverageCount>,
+    pub regions: Option<CoverageCount>,
+}
 
 /// Parsed per-file coverage data.
 #[derive(Debug, Clone)]

@@ -10,9 +10,9 @@
 use std::path::Path;
 
 use crate::testing::config::{
-    self, load_named_test_config, load_test_config, ExecutionConfig, TargetConfig,
+    self, load_named_test_config, load_test_config, CoverageScope, ExecutionConfig, TargetConfig,
 };
-use crate::testing::coverage::FileCoverage;
+use crate::testing::coverage::{CoverageCount, CoverageTotals, FileCoverage};
 use crate::testing::delivery;
 pub use crate::testing::delivery::{matches as inputs_match, GateOptions};
 use crate::testing::error::TestingError;
@@ -107,6 +107,14 @@ pub struct CoverageReport {
     /// coverage measurement that silently vanishes must not pass (codex round-2:
     /// coverage fail-open on absent artifacts).
     pub data_missing: bool,
+    /// The report's totals: lines always when data was collected, and
+    /// functions and regions when the format measures them (llvm-cov-json).
+    /// A landing candidate's evidence reads them from here, bound to the
+    /// run's revision and trees.
+    pub totals: Option<CoverageTotals>,
+    /// The line floor the target's `global` coverage rule sets, the highest
+    /// when there are several; `None` without one.
+    pub floor: Option<u32>,
 }
 
 /// Outcome of running the test gate.
@@ -813,8 +821,15 @@ fn collect_coverage_reports(
             .coverage
             .as_ref()
             .is_some_and(|c| !c.rules.is_empty());
+        let floor = target.coverage.as_ref().and_then(|c| {
+            c.rules
+                .iter()
+                .filter(|rule| rule.scope == CoverageScope::Global)
+                .map(|rule| rule.minimum)
+                .max()
+        });
 
-        let coverages = match validation::parse_target_coverage(target, run) {
+        let (coverages, totals) = match validation::parse_target_coverage_totals(target, run) {
             Ok(c) => c,
             Err(e) => {
                 reports.push(CoverageReport {
@@ -826,6 +841,8 @@ fn collect_coverage_reports(
                     failing_files: Vec::new(),
                     note: Some(format!("coverage artifact could not be parsed: {e}")),
                     data_missing: enforcing,
+                    totals: None,
+                    floor,
                 });
                 continue;
             }
@@ -840,6 +857,8 @@ fn collect_coverage_reports(
                 failing_files: Vec::new(),
                 note: Some("no coverage data collected".to_string()),
                 data_missing: enforcing,
+                totals: None,
+                floor,
             });
             continue;
         }
@@ -848,6 +867,11 @@ fn collect_coverage_reports(
         let total_hit: u64 = coverages.iter().map(|c| c.lines_hit).sum();
         let overall_percent =
             (total_found > 0).then(|| FileCoverage::compute_percent(total_found, total_hit));
+        let totals = totals.unwrap_or_else(|| CoverageTotals {
+            lines: CoverageCount::new(total_found, total_hit),
+            functions: None,
+            regions: None,
+        });
 
         let thresholds = validation::evaluate_target_thresholds(target, &coverages, &[]);
         let thresholds_passed = thresholds.iter().filter(|r| r.pass).count();
@@ -871,6 +895,8 @@ fn collect_coverage_reports(
             failing_files,
             note: None,
             data_missing: false,
+            totals: Some(totals),
+            floor,
         });
     }
     reports
@@ -976,6 +1002,8 @@ mod tests {
             failing_files: vec![],
             note: None,
             data_missing: false,
+            totals: None,
+            floor: None,
         }
     }
     fn cov_missing() -> CoverageReport {
@@ -988,6 +1016,8 @@ mod tests {
             failing_files: vec![],
             note: Some("no coverage data collected".into()),
             data_missing: true,
+            totals: None,
+            floor: None,
         }
     }
     fn ok_result() -> GateTargetResult {
@@ -1307,6 +1337,14 @@ mod tests {
         assert_eq!(resolve_mode("quick", &[parse(&["full"])]), "quick");
     }
 
+    /// A target command that writes this run's coverage artifact: the gate
+    /// removes any earlier one before the target runs (TSK-369).
+    const COPY_COVERAGE: &str = if cfg!(windows) {
+        "copy /Y cov.src cov.lcov >NUL"
+    } else {
+        "cp cov.src cov.lcov"
+    };
+
     #[test]
     fn full_mode_coverage_shortfall_fails_the_gate() {
         // A target with coverage config + an lcov artifact below threshold must
@@ -1314,16 +1352,18 @@ mod tests {
         // thresholds were collected but never enforced).
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
-            dir.path().join("cov.lcov"),
+            dir.path().join("cov.src"),
             "SF:src/lib.rs\nDA:1,1\nDA:2,0\nend_of_record\n",
         )
         .unwrap();
         write_config(
             dir.path(),
-            r#"[{"name": "cov", "runner": "custom",
-                "modes": {"full": {"command": "exit 0"}, "essential": {"command": "exit 0"}},
-                "coverage": {"format": "lcov", "path": "cov.lcov",
-                             "rules": [{"scope": "per_file", "minimum": 85}]}}]"#,
+            &format!(
+                r#"[{{"name": "cov", "runner": "custom",
+                "modes": {{"full": {{"command": "{COPY_COVERAGE}"}}, "essential": {{"command": "exit 0"}}}},
+                "coverage": {{"format": "lcov", "path": "cov.lcov",
+                             "rules": [{{"scope": "per_file", "minimum": 85}}]}}}}]"#
+            ),
         );
 
         let outcome = run_gate(dir.path(), "full").unwrap();
@@ -1349,7 +1389,7 @@ mod tests {
         for scope in ["global", "per_package", "per_module"] {
             let dir = tempfile::tempdir().unwrap();
             std::fs::write(
-                dir.path().join("cov.lcov"),
+                dir.path().join("cov.src"),
                 "SF:src/lib.rs\nDA:1,1\nDA:2,0\nend_of_record\n",
             )
             .unwrap();
@@ -1357,7 +1397,7 @@ mod tests {
                 dir.path(),
                 &format!(
                     r#"[{{"name": "cov", "runner": "custom",
-                        "modes": {{"full": {{"command": "exit 0"}}}},
+                        "modes": {{"full": {{"command": "{COPY_COVERAGE}"}}}},
                         "coverage": {{"format": "lcov", "path": "cov.lcov",
                         "rules": [{{"scope": "{scope}", "minimum": 85}}]}}}}]"#
                 ),
@@ -1373,6 +1413,50 @@ mod tests {
             assert!(!passed, "{scope} shortfall must fail the gate");
             assert_eq!(coverage[0].thresholds_failed, 1, "scope {scope}");
         }
+    }
+
+    /// TSK-369: an llvm-cov export records line, function and region
+    /// totals and the global rule's floor in the run's coverage block.
+    #[test]
+    fn llvm_cov_totals_and_floor_are_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let measure = |count: u64, covered: u64| {
+            format!(r#"{{"count":{count},"covered":{covered},"percent":0}}"#)
+        };
+        let summary = format!(
+            r#"{{"lines":{},"functions":{},"regions":{}}}"#,
+            measure(10, 9),
+            measure(4, 3),
+            measure(20, 15)
+        );
+        std::fs::write(
+            dir.path().join("cov.src"),
+            format!(
+                r#"{{"type":"llvm.coverage.json.export","data":[{{"files":[{{"filename":"src/lib.rs","summary":{summary}}}],"totals":{summary}}}]}}"#
+            ),
+        )
+        .unwrap();
+        write_config(
+            dir.path(),
+            &format!(
+                r#"[{{"name": "cov", "runner": "custom",
+                    "modes": {{"full": {{"command": "{COPY_COVERAGE}"}}}},
+                    "coverage": {{"format": "llvm-cov-json", "path": "cov.lcov",
+                    "rules": [{{"scope": "global", "minimum": 80}}, {{"scope": "global", "minimum": 85}}]}}}}]"#
+            ),
+        );
+        let GateOutcome::Completed {
+            passed, coverage, ..
+        } = run_gate(dir.path(), "full").unwrap()
+        else {
+            panic!("expected a completed gate");
+        };
+        assert!(passed, "{coverage:?}");
+        let totals = coverage[0].totals.as_ref().expect("totals recorded");
+        assert_eq!(totals.lines, CoverageCount::new(10, 9));
+        assert_eq!(totals.functions, Some(CoverageCount::new(4, 3)));
+        assert_eq!(totals.regions, Some(CoverageCount::new(20, 15)));
+        assert_eq!(coverage[0].floor, Some(85));
     }
 
     #[test]

@@ -3344,5 +3344,47 @@ class FragmentRepairTests(unittest.TestCase):
         self.assertIn("disagree", str(check_pr_json(self.repo, self.base, head, self.repo.body("none"))["repair"]))
 
 
+# The suite spends most of its time waiting on the git and codeflow
+# processes each test starts, one after another, so on a loaded host it ran
+# past its 600 second gate timeout (TSK-369). With no test names given, each
+# test class runs in its own process, a few at a time; any failure, crash or
+# class that did not report fails the run. Naming tests runs them here, as
+# unittest does.
+WORKERS = 4
+
+
+def run_classes_in_parallel() -> int:
+    import concurrent.futures
+    import time
+
+    names = sorted(
+        name for name, value in vars(sys.modules[__name__]).items()
+        if isinstance(value, type) and issubclass(value, unittest.TestCase)
+        and unittest.defaultTestLoader.getTestCaseNames(value)
+    )
+    workers = max(1, min(WORKERS, os.cpu_count() or 1))
+
+    def run(name: str) -> tuple[str, int, str, float]:
+        start = time.monotonic()
+        result = subprocess.run([sys.executable, "-B", __file__, name], capture_output=True, text=True)
+        return name, result.returncode, result.stdout + result.stderr, time.monotonic() - start
+
+    failed = []
+    with concurrent.futures.ThreadPoolExecutor(workers) as pool:
+        for name, code, output, seconds in pool.map(run, names):
+            ran = re.search(r"^Ran (\d+) tests? in", output, re.MULTILINE)
+            ok = code == 0 and ran is not None and re.search(r"^OK\b", output, re.MULTILINE)
+            print(f"{name}: {'ok' if ok else 'FAILED'}, {ran.group(1) if ran else 0} tests, {seconds:.0f}s",
+                  flush=True)
+            if not ok:
+                failed.append(name)
+                print(output, flush=True)
+    print(f"{len(names)} classes in {workers} processes; failed: {', '.join(failed) or 'none'}")
+    return 1 if failed else 0
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if len(sys.argv) > 1:
+        unittest.main()
+    else:
+        sys.exit(run_classes_in_parallel())

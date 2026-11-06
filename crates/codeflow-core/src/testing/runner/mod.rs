@@ -815,6 +815,23 @@ fn run_owed_target(
                 })?;
         }
     }
+    // A coverage artifact left by an earlier run is removed before this one,
+    // so the figure recorded for this run's tree is one this run wrote; a
+    // target that writes none reports no coverage data (TSK-369).
+    if let Some(coverage) = &target.coverage {
+        let path = resolve_cwd(root, target.cwd.as_deref())?.join(&coverage.path);
+        locate(&path)
+            .and_then(|(tree, relative)| tree.remove(&relative))
+            .map_err(|error| {
+                TestingError::Io(std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "stale coverage {} refused: {error}; nothing was removed through it",
+                        path.display()
+                    ),
+                ))
+            })?;
+    }
     let declared = declarations
         .iter()
         .find(|t| t.name == target.name)
