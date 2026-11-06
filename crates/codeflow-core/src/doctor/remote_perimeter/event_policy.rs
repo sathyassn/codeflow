@@ -196,13 +196,10 @@ fn fix_body(path: &str, events: &[String]) -> String {
     .to_string()
 }
 
-/// `"name" (id)`, for messages.
+/// `"name" (id)`, for messages: the JSON forms, so a missing name reads
+/// `null`.
 fn label(policy: &Value) -> String {
-    format!(
-        "\"{}\" ({})",
-        policy["name"].as_str().unwrap_or("unnamed"),
-        policy["id"]
-    )
+    format!("{} ({})", policy["name"], policy["id"])
 }
 
 /// Which workflows besides one exact path a policy targets, if any: every
@@ -234,7 +231,11 @@ fn applies(policy: &Value, path: &str, repo: &Value) -> Applies {
             return Applies::Unknown("it selects repositories by property".to_string());
         }
         if let Some(names) = conditions.get("repository_name") {
-            let name = repo["name"].as_str().unwrap_or_default();
+            let Some(name) = repo["name"].as_str() else {
+                return Applies::Unknown(
+                    "it selects repositories by name, and the repository reported none".to_string(),
+                );
+            };
             match targeted(names, name, false) {
                 Ok(true) => {}
                 Ok(false) => return Applies::No,
@@ -293,9 +294,8 @@ fn read_policies(
     repo: &Value,
 ) -> Result<Vec<Value>, String> {
     let mut summaries = list(gh, &format!("repos/{nwo}/actions/policies"), nwo)?;
-    let owner = repo.pointer("/owner/login").and_then(Value::as_str);
     if repo.pointer("/owner/type").and_then(Value::as_str) == Some("Organization") {
-        let Some(org) = owner else {
+        let Some(org) = repo.pointer("/owner/login").and_then(Value::as_str) else {
             return Err(format!("{nwo} reported no owner login"));
         };
         summaries.extend(list(
@@ -316,16 +316,18 @@ fn read_policies(
         if !seen.insert(id.to_string()) {
             continue;
         }
-        let source = summary["source"].as_str().or(owner).unwrap_or_default();
-        let url = match summary["source_type"].as_str() {
-            Some("Repository") | None => format!("repos/{nwo}/actions/policies/{id}"),
-            Some("Organization") => format!("orgs/{source}/actions/policies/{id}"),
-            Some(other) => {
+        // The list names each policy's source; an organization policy
+        // without one cannot be read, so it is unknown, never skipped.
+        let url = match (summary["source_type"].as_str(), summary["source"].as_str()) {
+            (Some("Repository") | None, _) => format!("repos/{nwo}/actions/policies/{id}"),
+            (Some("Organization"), Some(org)) => format!("orgs/{org}/actions/policies/{id}"),
+            (Some(kind), source) => {
                 return Err(format!(
-                    "Actions event policy {} comes from the {} {source}, whose conditions doctor cannot read",
-                    label(&summary),
-                    other.to_ascii_lowercase()
-                ))
+                "Actions event policy {} comes from the {} {}, whose conditions doctor cannot read",
+                label(&summary),
+                kind.to_ascii_lowercase(),
+                source.map_or_else(|| "that the list does not name".to_string(), str::to_string)
+            ))
             }
         };
         let text = gh(&["api", &url]).map_err(|error| {
@@ -815,6 +817,38 @@ mod tests {
         assert!(out.event_warns.is_empty());
         assert!(
             out.event_unread[0].contains("selects repositories by property"),
+            "{:?}",
+            out.event_unread
+        );
+
+        // An organization policy whose list entry names no source cannot be
+        // read, so it is a note.
+        let unsourced = org_list.replace(r#""source":"acme","#, "");
+        let host = Host::new(&[
+            ("repos/sathyassn/codeflow/actions/policies", Ok(empty)),
+            ("orgs/acme/actions/policies", Ok(&unsourced)),
+        ]);
+        let out = run(&host, &repo, &policy_workflow());
+        assert!(out.event_warns.is_empty(), "{:?}", out.event_warns);
+        assert!(
+            out.event_unread[0].contains("the organization that the list does not name"),
+            "{:?}",
+            out.event_unread
+        );
+
+        // A repository that reports no name cannot be matched by name, so
+        // the name-selected policy is unknown, never "does not apply".
+        let host = Host::new(&[
+            ("repos/sathyassn/codeflow/actions/policies", Ok(empty)),
+            ("orgs/acme/actions/policies", Ok(org_list)),
+            ("orgs/acme/actions/policies/40", Ok(org)),
+        ]);
+        let mut nameless = repo.clone();
+        nameless.as_object_mut().unwrap().remove("name");
+        let out = run(&host, &nameless, &policy_workflow());
+        assert!(out.event_warns.is_empty(), "{:?}", out.event_warns);
+        assert!(
+            out.event_unread[0].contains("the repository reported none"),
             "{:?}",
             out.event_unread
         );
