@@ -99,10 +99,11 @@ missing automation for adoption rather than silently enabling publication.
   setting `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_COUNT`,
   `GIT_CONFIG_PARAMETERS` or `GIT_CONFIG_KEY_<n>`, with any value and with or
   without a git call on the line, refuse under the same rule.
-- Every file under `.github/workflows/` and `.github/actions/`, new or
-  existing, is an enforcement path, since each runs as CI code: the guards
-  refuse an agent's write there however the path is spelled or reached
-  (letter case, `..`, a symbolic or hard link) and through the file tools.
+- Every file under `.github/workflows/`, and under the local `actions/`
+  directory beside it, new or existing, is an enforcement path, since each
+  runs as CI code: the guards refuse an agent's write there however the
+  path is spelled or reached (letter case, `..`, a symbolic or hard link)
+  and through the file tools.
   A workflow or local action changes through the operator or
   `codeflow update`.
 
