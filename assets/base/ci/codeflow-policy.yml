@@ -1,7 +1,7 @@
 # codeflow policy: the enforcing CodeFlow check for pull requests. Written by
 # `codeflow init` and managed by `codeflow update`.
 #
-# The verdict job, `trusted: commit standards`, runs on `pull_request_target`
+# The verdict job, `commit standards`, runs on `pull_request_target`
 # for every pull request, whatever it targets. GitHub runs this file from the
 # repository's default branch, never from the pull request or its target,
 # and sets GITHUB_REF to that branch and GITHUB_SHA to its tip. The job
@@ -87,7 +87,7 @@ concurrency:
 
 jobs:
   commit-lint:
-    name: "trusted: commit standards"
+    name: "commit standards"
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # Read access to pull requests serves the body step, and read access to
@@ -481,7 +481,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           TRUSTED_NAMES: |
-            trusted: commit standards
+            commit standards
         run: |
           set -euo pipefail
           umask 077
@@ -683,7 +683,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           TRUSTED_NAMES: |
-            trusted: commit standards
+            commit standards
         run: |
           set -euo pipefail
           umask 077
@@ -835,7 +835,11 @@ jobs:
             printf '%s\t%s\t%s\n' "$id" "$name" "$result" >> "${work}/created.tsv"
           done <<< "$VERDICTS"
           while IFS=$'\t' read -r id name result; do
-            verdict="trusted: ${name#"authority: "}"
+            # The verdict job the check reports on, by its own name.
+            case "$name" in
+              "authority: commit standards") verdict="commit standards" ;;
+              *) verdict="trusted: ${name#"authority: "}" ;;
+            esac
             conclusion=failure
             if [ "$result" = success ]; then conclusion=success; fi
             jq -cn --arg conclusion "$conclusion" --arg title "${verdict} ${result}" \
