@@ -72,6 +72,11 @@ implements. Checked on 2026-11-05 against gitleaks 8.30.1 and osv-scanner
   `.gitleaksignore`, the gitleaks configuration, `.gitattributes`, each
   `osv-scanner.toml` and `.codeflow/audit-exceptions.sh`. Edits to them in
   the working tree or the range change nothing until they land on the base.
+- The dependency audit copies the head's files into a private folder. A
+  head file that a case-insensitive disk (macOS, Windows) would open as
+  `osv-scanner.toml`, such as `OSV-Scanner.toml`, is left out with the
+  exact name. Each path is checked one component at a time before it is
+  written; a tree entry such as `..` refuses the audit.
 - A range holding an octopus merge, or a path holding a backslash, double
   quote or control character, is refused.
 - Exit codes: 0 when nothing blocks (a `warn` finding included), 1 when a
@@ -84,5 +89,9 @@ implements. Checked on 2026-11-05 against gitleaks 8.30.1 and osv-scanner
 
 - A range holding a merge commit is refused on Windows, because the remerge
   header filter is a Unix shell wrapper.
+- The local secret scan follows `git.secret_scan`: it only warns at `warn`
+  and skips at `off` or `allow`, while the hosted `trusted: secret scan`
+  job always blocks. The
+  local scan can be laxer than the hosted job, never stricter.
 - Parity with the hosted job is shown by tests on fixtures here. A hosted
   run on a draft pull request (AC-6 and AC-10) has not been made.
