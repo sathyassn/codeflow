@@ -1,0 +1,11 @@
+id = "TSK-1369"
+uid = "f11f5a7f-049c-45e5-ad35-81d0e0b6c20e"
+kind = "TSK"
+title = "Core lib tests pass with or without CARGO_TARGET_DIR"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-06T16:58:25Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
