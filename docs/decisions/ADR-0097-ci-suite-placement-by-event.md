@@ -73,7 +73,7 @@ How to read the table:
 
 - The short checks are the five the operator named: the Linux build and
   lint checks, the policy check (`codeflow-policy.yml`, pull requests only)
-  with its `trusted: commit standards` and `trusted: release impact` jobs,
+  with its `commit standards` and `trusted: release impact` jobs,
   and the secret scan in `codeflow-ci.yml`.
 - The security review is not on the operator's list. It stays on every
   event, line pull requests included, as a secure-default reading: the job
