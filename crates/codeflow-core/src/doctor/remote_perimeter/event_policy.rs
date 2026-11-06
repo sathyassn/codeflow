@@ -160,13 +160,13 @@ fn judge_workflow(
     }
     if allowing.is_empty() {
         out.event_warns.push(format!(
-            "no Actions event policy allows {EVENT} for {path}: on a public repository GitHub blocks that event from 2026-12-02 unless a policy allows it, so {path} never starts and every pull request waits on a required check that never runs. As a repository administrator, allow it for this workflow alone: echo '{}' | gh api --method POST repos/{nwo}/actions/policies --input -",
-            fix_body(path, events)
+            "no Actions event policy allows {EVENT} for {path}: on a public repository GitHub blocks that event from 2026-12-02 unless a policy allows it, so {path} never starts and every pull request waits on a required check that never runs. As a repository administrator, {}",
+            fix_step(nwo, path, events)
         ));
         return;
     }
     for policy in allowing {
-        if let Some(scope) = broad(policy) {
+        if let Some(scope) = broad(policy, path) {
             out.event_warns.push(format!(
                 "Actions event policy {} allows {EVENT} for {scope}, not only {path}, so any workflow added there runs on that event with the default branch's token and secrets; narrow its workflow targets to {path}",
                 label(policy)
@@ -175,10 +175,67 @@ fn judge_workflow(
     }
 }
 
-/// The policy that allows exactly the events `path` runs on, for `path`
-/// alone: the one `remote protect` creates.
-fn fix_body(path: &str, events: &[String]) -> String {
-    crate::remote::event_policy_body(path, events).to_string()
+/// How to create the policy that allows exactly the events `path` runs on,
+/// for `path` alone: the one `remote protect` creates. The path and the
+/// event names come from the default branch's workflows, so the command is
+/// printed only when each is one plain shell word; otherwise the step names
+/// them, quoted as data, and prints no command.
+fn fix_step(nwo: &str, path: &str, events: &[String]) -> String {
+    let plain = |word: &str| {
+        !word.is_empty()
+            && word
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._/-".contains(&byte))
+    };
+    if plain(path) && events.iter().all(|event| plain(event)) {
+        format!(
+            "run `codeflow remote protect`, or allow it for this workflow alone: echo '{}' | gh api --method POST repos/{nwo}/actions/policies --input -",
+            crate::remote::event_policy_body(path, events)
+        )
+    } else {
+        format!(
+            "create an Actions event policy in Settings, Actions, Policies whose workflow path is {path:?} alone and whose allowed events are {events:?}; doctor prints no command, because the path or an event name is not a plain shell word"
+        )
+    }
+}
+
+/// Whether GitHub's default block can apply to `repo`: it is public, or its
+/// visibility is unknown.
+pub(super) fn affected(repo: &Value) -> bool {
+    matches!(
+        repo.get("visibility").and_then(Value::as_str),
+        Some("public") | None
+    )
+}
+
+/// Name the workflows whose events could not be read, for which no event
+/// policy was judged. `failures` is `(path, why)`; the reason itself is
+/// reported with the other unread settings.
+pub(super) fn skipped(
+    nwo: &str,
+    repo: &Value,
+    declared: &Declared,
+    failures: &[(String, String)],
+    out: &mut Perimeter,
+) {
+    if failures.is_empty() || !affected(repo) {
+        return;
+    }
+    let files = failures
+        .iter()
+        .map(|(path, _)| path.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    out.event_unread.push(if declared.events.is_empty() {
+        format!(
+            "the Actions event policies of {nwo} were not judged: doctor could not read the events of any workflow ({files})"
+        )
+    } else {
+        format!(
+            "the Actions event policies were not judged for {files}, whose events doctor could not read, so doctor cannot confirm whether GitHub starts {} on {EVENT}",
+            if failures.len() == 1 { "it" } else { "them" }
+        )
+    });
 }
 
 /// `"name" (id)`, for messages: the JSON forms, so a missing name reads
@@ -187,25 +244,30 @@ fn label(policy: &Value) -> String {
     format!("{} ({})", policy["name"], policy["id"])
 }
 
-/// Which workflows besides one exact path a policy targets, if any: every
-/// workflow when it has no path condition or includes `~ALL`, or the
-/// patterns with a wildcard.
-fn broad(policy: &Value) -> Option<String> {
+/// Which workflows besides `path` a policy targets, if any: every workflow
+/// when it has no path condition or includes `~ALL`, else every include
+/// entry that is not exactly `path` (another file, a wildcard, or a
+/// look-alike such as a `.yaml` or case variant), so an allow reaches
+/// `path` alone only when its include is that one path.
+fn broad(policy: &Value, path: &str) -> Option<String> {
     let Some(include) = policy
         .pointer("/conditions/workflow_path/include")
         .and_then(Value::as_array)
     else {
         return Some("every workflow".to_string());
     };
-    let patterns: Vec<&str> = include.iter().filter_map(Value::as_str).collect();
-    if patterns.contains(&"~ALL") {
+    if include.iter().any(|pattern| pattern == "~ALL") {
         return Some("every workflow".to_string());
     }
-    let wild: Vec<&str> = patterns
-        .into_iter()
-        .filter(|pattern| pattern.contains(['*', '?', '[', '{']))
+    let others: Vec<String> = include
+        .iter()
+        .filter(|pattern| pattern.as_str() != Some(path))
+        .map(|pattern| match pattern.as_str() {
+            Some(text) => text.to_string(),
+            None => pattern.to_string(),
+        })
         .collect();
-    (!wild.is_empty()).then(|| format!("the workflows matching {}", wild.join(", ")))
+    (!others.is_empty()).then(|| format!("the workflows matching {}", others.join(", ")))
 }
 
 /// Whether `policy` applies to the workflow at `path` in `repo`.
@@ -737,6 +799,93 @@ mod tests {
                 out.event_warns[0]
             );
         }
+    }
+
+    /// Grok finding 1 at `6e04f03b7`: an allowing policy whose include names
+    /// the workflow and another exact path, or a look-alike literal, also
+    /// allows the event elsewhere, so it warns like a wildcard.
+    #[test]
+    fn an_allowing_policy_that_names_other_paths_warns() {
+        for other in [
+            ".github/workflows/other.yml",
+            ".github/workflows/codeflow-policy.yaml",
+            ".github/workflows/Codeflow-Policy.yml",
+        ] {
+            let conditions = serde_json::json!({ "workflow_path": {
+                "include": [PATH, other], "exclude": [] } })
+            .to_string();
+            let wide = policy(9, "active", &conditions, &["pull_request_target"]);
+            let host = Host::new(&[
+                (
+                    "repos/sathyassn/codeflow/actions/policies",
+                    Ok(&list_of(&[&wide])),
+                ),
+                ("repos/sathyassn/codeflow/actions/policies/9", Ok(&wide)),
+            ]);
+            let out = run(&host, &public(), &policy_workflow());
+            assert_eq!(out.event_warns.len(), 1, "{other}: {:?}", out.event_warns);
+            assert!(
+                out.event_warns[0].contains(&format!(
+                    "allows pull_request_target for the workflows matching {other}, not only {PATH}"
+                )),
+                "{}",
+                out.event_warns[0]
+            );
+        }
+    }
+
+    /// Grok finding 2 at `6e04f03b7`: the path and event names come from
+    /// the default branch's workflows, so a `'` in either must never close
+    /// the quotes of the printed command.
+    #[test]
+    fn a_path_or_event_that_is_not_a_plain_word_prints_no_command() {
+        let host = Host::new(&[(
+            "repos/sathyassn/codeflow/actions/policies",
+            Ok(r#"{"total_count":0,"policies":[]}"#),
+        )]);
+        let hostile = ".github/workflows/x'; touch /tmp/pwned; '.yml";
+        for (path, events) in [
+            (hostile, &["pull_request_target"][..]),
+            (PATH, &["pull_request_target", "push'; id; '"][..]),
+            (".github/workflows/a b.yml", &["pull_request_target"][..]),
+        ] {
+            let out = run(&host, &public(), &declared(&[(path, events)]));
+            assert_eq!(out.event_warns.len(), 1, "{:?}", out.event_warns);
+            let warn = &out.event_warns[0];
+            assert!(!warn.contains("echo '"), "{warn}");
+            assert!(!warn.contains("gh api"), "{warn}");
+            assert!(warn.contains(&format!("{path:?} alone")), "{warn}");
+            assert!(warn.contains("not a plain shell word"), "{warn}");
+        }
+    }
+
+    #[test]
+    fn skipped_workflows_are_named_and_never_pass() {
+        let parsed = policy_workflow();
+        let failures = vec![(
+            ".github/workflows/codeflow-ci.yml".to_string(),
+            "not YAML".to_string(),
+        )];
+        let mut out = Perimeter::default();
+        skipped("o/r", &public(), &parsed, &failures, &mut out);
+        assert_eq!(
+            out.event_unread,
+            ["the Actions event policies were not judged for .github/workflows/codeflow-ci.yml, whose events doctor could not read, so doctor cannot confirm whether GitHub starts it on pull_request_target"]
+        );
+
+        let mut out = Perimeter::default();
+        skipped("o/r", &public(), &Declared::default(), &failures, &mut out);
+        assert_eq!(
+            out.event_unread,
+            ["the Actions event policies of o/r were not judged: doctor could not read the events of any workflow (.github/workflows/codeflow-ci.yml)"]
+        );
+
+        // A private repository is not blocked, so nothing is owed.
+        let mut repo = public();
+        repo["visibility"] = "private".into();
+        let mut out = Perimeter::default();
+        skipped("o/r", &repo, &parsed, &failures, &mut out);
+        assert!(out.event_unread.is_empty());
     }
 
     #[test]

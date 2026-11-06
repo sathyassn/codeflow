@@ -233,8 +233,10 @@ echo '{"name":"codeflow policy check","enforcement":"active",
   gh api --method POST repos/<owner>/<repo>/actions/policies --input -
 ```
 
-- **Allow it for this workflow alone.** A policy with no workflow targets,
-  `~ALL` or a wildcard also allows the event for any workflow added later.
+- **Allow it for this workflow alone.** Its only workflow target is
+  `.github/workflows/codeflow-policy.yml`. A policy with no workflow
+  targets, `~ALL`, a wildcard or another path also allows the event for
+  other workflows, including ones added later.
   GitHub's default exists to stop such a workflow from running head code
   with the default branch's token and secrets. `codeflow-policy.yml` runs
   the default branch's own workflow and reads the head only as git data

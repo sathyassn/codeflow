@@ -1340,7 +1340,8 @@ to its required-checks answer:
   runs on `pull_request_target` and no active Actions event policy allows
   that event for it (the warning carries the policy to create), a policy
   that targets it leaves out an event it runs on, or an allowing policy
-  also covers other workflows (no workflow targets, `~ALL` or a wildcard).
+  also covers other workflows (its workflow targets are anything but that
+  one path: none, `~ALL`, a wildcard, or another path).
 - **Note, never a pass:** a bypass list, ruleset, environment, environment
   list, secret list or workflow that cannot be read (secret lists need an
   administrator's token); the repository's visibility, or on a public

@@ -959,6 +959,26 @@ pub fn read_declared(
     nwo: &str,
     branch: &str,
 ) -> Result<Declared, String> {
+    let (declared, mut failures) = read_declared_each(gh, nwo, branch)?;
+    if failures.is_empty() {
+        Ok(declared)
+    } else {
+        Err(failures.swap_remove(0).1)
+    }
+}
+
+/// What the workflows on `branch` declare, file by file: the declaration of
+/// every workflow that could be read and parsed, and `(path, why)` for each
+/// that could not. A file that fails adds nothing to the declaration.
+///
+/// # Errors
+///
+/// Returns an error when the workflow folder cannot be read.
+pub fn read_declared_each(
+    gh: &dyn Fn(&[&str]) -> Result<String, String>,
+    nwo: &str,
+    branch: &str,
+) -> Result<(Declared, Vec<(String, String)>), String> {
     let reference = query_value(branch);
     let listing = match gh(&[
         "api",
@@ -966,7 +986,7 @@ pub fn read_declared(
     ]) {
         Ok(text) => text,
         Err(error) if error.contains("404") || error.contains("Not Found") => {
-            return Ok(Declared::default())
+            return Ok((Declared::default(), Vec::new()))
         }
         Err(error) => {
             return Err(format!(
@@ -981,6 +1001,7 @@ pub fn read_declared(
         ));
     };
     let mut declared = Declared::default();
+    let mut failures = Vec::new();
     for entry in &entries {
         let Some(path) = entry.get("path").and_then(Value::as_str) else {
             continue;
@@ -992,28 +1013,43 @@ pub fn read_declared(
         {
             continue;
         }
-        let text = gh(&[
+        let text = match gh(&[
             "api",
             "-H",
             "Accept: application/vnd.github.raw",
             &format!("repos/{nwo}/contents/{path}?ref={reference}"),
-        ])
-        .map_err(|error| {
-            format!(
-                "{path} on {branch} is not readable ({})",
-                first_line(&error)
-            )
-        })?;
-        let names =
-            workflow_job_names(&text).map_err(|why| format!("{path} on {branch}: {why}"))?;
-        for (job, environment) in
-            workflow_environments(&text).map_err(|why| format!("{path} on {branch}: {why}"))?
-        {
+        ]) {
+            Ok(text) => text,
+            Err(error) => {
+                failures.push((
+                    path.to_string(),
+                    format!(
+                        "{path} on {branch} is not readable ({})",
+                        first_line(&error)
+                    ),
+                ));
+                continue;
+            }
+        };
+        let parsed = workflow_job_names(&text).and_then(|names| {
+            Ok((
+                names,
+                workflow_environments(&text)?,
+                workflow_events(&text)?,
+            ))
+        });
+        let (names, environments, events) = match parsed {
+            Ok(parsed) => parsed,
+            Err(why) => {
+                failures.push((path.to_string(), format!("{path} on {branch}: {why}")));
+                continue;
+            }
+        };
+        for (job, environment) in environments {
             declared
                 .environments
                 .push((path.to_string(), job, environment));
         }
-        let events = workflow_events(&text).map_err(|why| format!("{path} on {branch}: {why}"))?;
         declared.events.push((path.to_string(), events));
         if path == POLICY_WORKFLOW {
             declared.policy_workflow = true;
@@ -1021,7 +1057,7 @@ pub fn read_declared(
         }
         declared.job_names.extend(names);
     }
-    Ok(declared)
+    Ok((declared, failures))
 }
 
 fn first_line(text: &str) -> &str {

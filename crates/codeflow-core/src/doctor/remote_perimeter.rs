@@ -315,10 +315,29 @@ fn perimeter(
     }
     // What the default branch declares is read first, so a ruleset list
     // that cannot be read does not hide the event policies.
-    let declared = remote::read_declared(gh, nwo, branch);
-    match &declared {
-        Ok(declared) => event_policy::judge(gh, nwo, repo, declared, &mut out),
-        Err(why) => out.unread.push(why.clone()),
+    // A workflow that cannot be read or parsed leaves the declaration
+    // unknown for the ruleset checks, but the event policies are still
+    // judged for every workflow that parsed, and each skipped one is named.
+    let declared = match remote::read_declared_each(gh, nwo, branch) {
+        Ok((declared, failures)) => {
+            event_policy::judge(gh, nwo, repo, &declared, &mut out);
+            event_policy::skipped(nwo, repo, &declared, &failures, &mut out);
+            match failures.into_iter().next() {
+                None => Ok(declared),
+                Some((_, why)) => Err(why),
+            }
+        }
+        Err(why) => {
+            if event_policy::affected(repo) {
+                out.event_unread.push(format!(
+                "the Actions event policies of {nwo} were not judged, since its workflows could not be listed"
+                ));
+            }
+            Err(why)
+        }
+    };
+    if let Err(why) = &declared {
+        out.unread.push(why.clone());
     }
     // Likewise the authority environment and where its key is stored, so a
     // failure there is never hidden behind an unread ruleset.
@@ -1545,6 +1564,59 @@ mod tests {
         assert!(
             remedy.contains("read the Actions event policies"),
             "{remedy}"
+        );
+    }
+
+    /// Grok finding 3 at `6e04f03b7`: a sibling workflow that is not one
+    /// YAML document must not stop the event policies being judged for the
+    /// workflows that parsed, and the skipped file is named.
+    #[test]
+    fn an_unparsed_workflow_never_hides_the_event_policy_judgment() {
+        const SHIPPED: &str = include_str!("../../../../assets/base/ci/codeflow-policy.yml");
+        fn exec(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", "repos/o/r"] => Ok(
+                    r#"{"default_branch":"main","visibility":"public","name":"r","id":1,"owner":{"login":"o","type":"User"}}"#
+                        .into(),
+                ),
+                ["api", "repos/o/r/contents/.github/workflows?ref=main"] => Ok(
+                    r#"[{"path":".github/workflows/codeflow-ci.yml","type":"file"},{"path":".github/workflows/codeflow-policy.yml","type":"file"}]"#.into(),
+                ),
+                ["api", "-H", _, "repos/o/r/contents/.github/workflows/codeflow-ci.yml?ref=main"] => {
+                    Ok("on: push\n---\non: pull_request\n".into())
+                }
+                ["api", "-H", _, "repos/o/r/contents/.github/workflows/codeflow-policy.yml?ref=main"] => {
+                    Ok(SHIPPED.into())
+                }
+                ["api", "repos/o/r/actions/policies?per_page=100&page=1"] => {
+                    Ok(r#"{"total_count":0,"policies":[]}"#.into())
+                }
+                _ => host(args, &ruleset(true), None, "[]"),
+            }
+        }
+        let dir = project();
+        let result = check(&opts(dir.path(), exec));
+        assert_ne!(result.status, Status::Pass, "{}", result.message);
+        assert!(
+            result.message.contains(
+                "no Actions event policy allows pull_request_target for .github/workflows/codeflow-policy.yml"
+            ),
+            "{}",
+            result.message
+        );
+        assert!(
+            result.message.contains(
+                "the Actions event policies were not judged for .github/workflows/codeflow-ci.yml"
+            ),
+            "{}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains(".github/workflows/codeflow-ci.yml on main: not YAML"),
+            "{}",
+            result.message
         );
     }
 
