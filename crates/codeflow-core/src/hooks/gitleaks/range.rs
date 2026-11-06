@@ -402,6 +402,110 @@ fn normalized(path: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 
+/// Whether `part`, one `/`-separated component of a path git lists, names
+/// a plain entry inside its folder. Empty, `.` and `..` are refused, and
+/// so is anything the platform parses as more than one plain name: a
+/// Windows drive prefix, root or `\` separator. On Windows a `:` (an
+/// alternate data stream) and a trailing dot or space (which Windows
+/// drops, so `..` could hide as `.. `) are refused too.
+fn plain_component(part: &str) -> bool {
+    if part.is_empty() || part == "." || part == ".." {
+        return false;
+    }
+    if cfg!(windows) && (part.contains(['\\', ':']) || part.ends_with(['.', ' '])) {
+        return false;
+    }
+    let mut components = Path::new(part).components();
+    matches!(
+        (components.next(), components.next()),
+        (Some(std::path::Component::Normal(name)), None) if name == std::ffi::OsStr::new(part)
+    )
+}
+
+/// A private folder that files read from git are copied into.
+///
+/// A path git lists comes from tree objects, and a crafted tree can hold
+/// entries named `..` (git lists them as `../name`) or, read on Windows,
+/// names with `\`. Each path is therefore checked one component at a time
+/// before anything is written, and each folder written into must resolve
+/// inside this one. Anything else is refused, and the caller fails closed.
+pub(crate) struct Scratch {
+    /// The folder, resolved.
+    root: PathBuf,
+    /// Folders already checked to resolve inside `root`.
+    checked: std::collections::HashSet<PathBuf>,
+}
+
+impl Scratch {
+    /// Make `root` (and its parents) and resolve it.
+    ///
+    /// # Errors
+    /// Why the folder cannot be made.
+    pub(crate) fn new(root: &Path) -> Result<Self, String> {
+        std::fs::create_dir_all(root)
+            .and_then(|()| root.canonicalize())
+            .map(|root| Self {
+                root,
+                checked: std::collections::HashSet::new(),
+            })
+            .map_err(|error| format!("cannot make the private folder: {error}"))
+    }
+
+    /// The folder, resolved.
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Where `path`, as git lists it, goes in the folder.
+    ///
+    /// # Errors
+    /// `path` is absolute or holds an empty, `.`, `..` or non-plain
+    /// component.
+    pub(crate) fn target(&self, path: &str) -> Result<PathBuf, String> {
+        let mut target = self.root.clone();
+        for part in path.split('/') {
+            if !plain_component(part) {
+                return Err(outside(path));
+            }
+            target.push(part);
+        }
+        Ok(target)
+    }
+
+    /// Write `data` at `path`, as git lists it, making its folders.
+    ///
+    /// # Errors
+    /// The path is refused by [`Scratch::target`], a folder on the way
+    /// resolves outside the folder, the file is a link, or the write fails.
+    pub(crate) fn write(&mut self, path: &str, data: &[u8]) -> Result<(), String> {
+        let target = self.target(path)?;
+        let parent = target.parent().unwrap_or(&self.root).to_path_buf();
+        if !self.checked.contains(&parent) {
+            std::fs::create_dir_all(&parent)
+                .map_err(|error| format!("cannot copy {path}: {error}"))?;
+            let real = parent
+                .canonicalize()
+                .map_err(|error| format!("cannot copy {path}: {error}"))?;
+            if !real.starts_with(&self.root) {
+                return Err(outside(path));
+            }
+            self.checked.insert(parent);
+        }
+        if std::fs::symlink_metadata(&target).is_ok_and(|meta| meta.file_type().is_symlink()) {
+            return Err(outside(path));
+        }
+        std::fs::write(&target, data).map_err(|error| format!("cannot copy {path}: {error}"))
+    }
+}
+
+/// The refusal for a path that would be written outside its folder.
+fn outside(path: &str) -> String {
+    format!(
+        "the commit lists the path \"{}\", which would be written outside the private folder it is copied into; nothing was copied there, and the scan fails closed",
+        crate::git::display_text(path)
+    )
+}
+
 /// The `[extend] path` of a gitleaks configuration, keys matched without
 /// case as gitleaks reads them; `None` when it has none or does not parse
 /// (gitleaks then fails to load it).
@@ -451,6 +555,7 @@ fn write_inputs(root: &Path, base: &str, folder: &ScanFolder) -> Result<(), Stri
     let tree = folder.path("tree");
     std::fs::create_dir(&tree)
         .map_err(|error| format!("cannot make the scan's tree folder: {error}"))?;
+    let mut tree = Scratch::new(&tree)?;
     let config = match blob(root, base, ".gitleaks.toml")? {
         Some(toml) => Some(match blob(root, base, ".gitleaks.json")? {
             Some(json) => (json, ".gitleaks.json".to_string()),
@@ -508,13 +613,7 @@ fn write_inputs(root: &Path, base: &str, folder: &ScanFolder) -> Result<(), Stri
                 crate::git::display_text(&rel)
             ));
         };
-        let target = tree.join(&rel);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| format!("cannot copy {rel} for the scan: {error}"))?;
-        }
-        std::fs::write(&target, &data)
-            .map_err(|error| format!("cannot copy {rel} for the scan: {error}"))?;
+        tree.write(&rel, &data)?;
         seen.push(rel.clone());
         text = String::from_utf8_lossy(&data).to_string();
         owner = rel;
@@ -834,6 +933,47 @@ mod tests {
             Some("rules/a.toml")
         );
         assert_eq!(normalized("../outside.toml"), None);
+    }
+
+    /// Security review F1 and its sibling sweep: every path a tree can list
+    /// that is not plain names inside the folder is refused, and a folder
+    /// that resolves outside it is refused before the write.
+    #[test]
+    fn a_scratch_folder_takes_only_plain_relative_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut scratch = Scratch::new(&dir.path().join("inner")).unwrap();
+        for path in [
+            "",
+            "/etc/passwd",
+            "../x",
+            "a/../../x",
+            "a//b",
+            "./a",
+            "a/./b",
+            "a/",
+            "..",
+        ] {
+            assert!(scratch.target(path).is_err(), "{path:?} was accepted");
+            assert!(scratch.write(path, b"x").is_err(), "{path:?} was written");
+        }
+        if cfg!(windows) {
+            for path in ["a\\..\\..\\x", "C:x", "a/b:stream", "a/.. ", "a/b."] {
+                assert!(scratch.target(path).is_err(), "{path:?} was accepted");
+            }
+        }
+        scratch.write("a/b/c.txt", b"ok").unwrap();
+        assert_eq!(
+            std::fs::read(scratch.root().join("a").join("b").join("c.txt")).unwrap(),
+            b"ok"
+        );
+        #[cfg(unix)]
+        {
+            let away = dir.path().join("away");
+            std::fs::create_dir(&away).unwrap();
+            std::os::unix::fs::symlink(&away, scratch.root().join("link")).unwrap();
+            assert!(scratch.write("link/x.txt", b"x").is_err());
+            assert!(!away.join("x.txt").exists());
+        }
     }
 
     #[test]

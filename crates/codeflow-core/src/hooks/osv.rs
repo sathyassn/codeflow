@@ -4,7 +4,11 @@
 //! It gives the verdict of the managed `security review` job's dependency
 //! audit for the same base and head. The audit reads the head's tree, with
 //! every `osv-scanner.toml` replaced by the base's copies, so a range cannot
-//! suppress its own advisory; `--no-ignore` keeps a `.gitignore` the range
+//! suppress its own advisory; a head file that a case-insensitive disk would
+//! open under that name (`OSV-Scanner.toml`, or `osv-scanner.toml.` on
+//! Windows) is left out too. Every path is copied only after each of its
+//! components is checked, so a crafted tree cannot write outside the
+//! audit's private folder. `--no-ignore` keeps a `.gitignore` the range
 //! edits from hiding a lockfile; and when the base holds
 //! `.codeflow/audit-exceptions.sh`, that hook, run from the base's files,
 //! accepts findings exactly as the hosted step lets it. The verdict comes
@@ -23,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use super::gitleaks::file_sha256;
-use super::gitleaks::range::{blob, resolve};
+use super::gitleaks::range::{blob, resolve, Scratch};
 
 /// The osv-scanner version the managed CI audit pins (`OSV_VERSION` in
 /// `assets/base/ci/codeflow-ci.yml`; a test holds the two equal).
@@ -301,10 +305,24 @@ pub fn levels(root: &Path, base: &str) -> Result<Levels, String> {
 const SUPPRESSIONS: &str = "osv-scanner.toml";
 const EXCEPTIONS: &str = ".codeflow/audit-exceptions.sh";
 
-/// Write the regular files of `commit` under `into`, leaving out each
-/// `osv-scanner.toml` when `suppressions` is false. Links and submodules are
-/// left out.
-fn export(root: &Path, commit: &str, into: &Path, suppressions: bool) -> Result<(), String> {
+/// Whether `name`, one path component, may open as `osv-scanner.toml` on
+/// this disk. macOS and Windows match names without case by default
+/// (Unicode case, so `ſ` is an `s`), and Windows drops trailing dots and
+/// spaces, so a range's `OSV-Scanner.toml` or `osv-scanner.toml.` is the
+/// file osv-scanner reads from that folder. The name is compared after
+/// lower- then upper-casing, which folds every such spelling.
+fn opens_as_suppressions(name: &str) -> bool {
+    name.trim_end_matches(['.', ' '])
+        .to_lowercase()
+        .to_uppercase()
+        == SUPPRESSIONS.to_uppercase()
+}
+
+/// Write the regular files of `commit` into `into`, leaving out every file
+/// that may open as `osv-scanner.toml` when `suppressions` is false. Links
+/// and submodules are left out, and a path that would leave `into` fails
+/// the export.
+fn export(root: &Path, commit: &str, into: &mut Scratch, suppressions: bool) -> Result<(), String> {
     let mut list = crate::git::judging_command();
     let listing = list
         .args(["ls-tree", "-r", "-z", "--full-tree", commit])
@@ -331,9 +349,11 @@ fn export(root: &Path, commit: &str, into: &Path, suppressions: bool) -> Result<
             continue;
         }
         let name = path.rsplit('/').next().unwrap_or_default();
-        if !suppressions && name == SUPPRESSIONS {
+        if !suppressions && opens_as_suppressions(name) {
             continue;
         }
+        // Checked before git is asked for any content.
+        into.target(&path)?;
         entries.push((fields[2].to_string(), path));
     }
     let mut command = crate::git::judging_command();
@@ -376,13 +396,8 @@ fn export(root: &Path, commit: &str, into: &Path, suppressions: bool) -> Result<
             .read_exact(&mut data)
             .map_err(|error| format!("cannot read {path} from {commit}: {error}"))?;
         data.pop();
-        let target = into.join(path);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| format!("cannot copy {path} for the audit: {error}"))?;
-        }
-        std::fs::write(&target, &data)
-            .map_err(|error| format!("cannot copy {path} for the audit: {error}"))?;
+        into.write(path, &data)
+            .map_err(|why| format!("{why} (the dependency audit)"))?;
     }
     let _ = writer.join();
     let status = child
@@ -395,7 +410,9 @@ fn export(root: &Path, commit: &str, into: &Path, suppressions: bool) -> Result<
 }
 
 /// Put the base's `osv-scanner.toml` files into the exported head tree.
-fn base_suppressions(root: &Path, base: &str, tree: &Path) -> Result<Vec<String>, String> {
+/// Only the exact name is placed, as the hosted audit on Linux reads it;
+/// the export already left out every head file that could open as one.
+fn base_suppressions(root: &Path, base: &str, tree: &mut Scratch) -> Result<Vec<String>, String> {
     let mut list = crate::git::judging_command();
     let listing = list
         .args(["ls-tree", "-r", "-z", "--full-tree", "--name-only", base])
@@ -415,19 +432,17 @@ fn base_suppressions(root: &Path, base: &str, tree: &Path) -> Result<Vec<String>
         if path.rsplit('/').next() != Some(SUPPRESSIONS) {
             continue;
         }
-        let data = blob(root, base, &path)?.unwrap_or_default();
-        let target = tree.join(&path);
+        let target = tree.target(&path)?;
         if let Some(parent) = target.parent() {
             if parent.exists() && !parent.is_dir() {
                 return Err(format!(
                     "the range replaces a folder holding {path} with a file"
                 ));
             }
-            std::fs::create_dir_all(parent)
-                .map_err(|error| format!("cannot place {path} for the audit: {error}"))?;
         }
-        std::fs::write(&target, data)
-            .map_err(|error| format!("cannot place {path} for the audit: {error}"))?;
+        let data = blob(root, base, &path)?.unwrap_or_default();
+        tree.write(&path, &data)
+            .map_err(|why| format!("{why} (placing the base's suppressions)"))?;
         written.push(path);
     }
     Ok(written)
@@ -445,9 +460,11 @@ pub fn audit(verified: &Verified, root: &Path, base: &str, head: &str) -> Result
         .prefix("codeflow-osv-")
         .tempdir()
         .map_err(|error| format!("cannot make the audit's folder: {error}"))?;
-    let tree = work.path().join("head");
-    export(root, &head, &tree, false)?;
-    base_suppressions(root, &base, &tree)?;
+    let mut head_files = Scratch::new(&work.path().join("head"))?;
+    export(root, &head, &mut head_files, false)?;
+    base_suppressions(root, &base, &mut head_files)?;
+    // Resolved, so osv-scanner's absolute paths start with it.
+    let tree = head_files.root().to_path_buf();
     let hook = blob(root, &base, EXCEPTIONS)?;
     let mut command = Command::new(&verified.path);
     command
@@ -590,9 +607,10 @@ fn run_exceptions(
     if findings.is_empty() {
         return Err("osv-scanner reported advisories but none could be listed from its JSON report; no project exception applies".to_string());
     }
-    let trusted = work.join("trusted");
-    export(root, base, &trusted, true)
+    let mut trusted = Scratch::new(&work.join("trusted"))?;
+    export(root, base, &mut trusted, true)
         .map_err(|why| format!("cannot export {EXCEPTIONS} and the project files from the base: {why}; no project exception applies"))?;
+    let trusted = trusted.root().to_path_buf();
     let list = work.join("findings.tsv");
     std::fs::write(
         &list,
@@ -673,6 +691,170 @@ mod tests {
         let scanner = Scanner::for_platform(None, "plan9", "mips");
         assert!(scanner.verify().unwrap_err().contains("no pinned"));
         assert!(scanner.describe().contains("no pinned binary"));
+    }
+
+    /// Run git in `repo`, feeding `input`; its trimmed output.
+    fn git(repo: &Path, args: &[&str], input: &str) -> String {
+        use std::io::Write as _;
+        let mut child = crate::git::judging_command()
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .current_dir(repo)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    /// A repository and a commit whose root tree holds `entries`, each
+    /// `(path, content)`, built with plumbing so any name git stores fits.
+    fn commit_of(repo: &Path, entries: &[(&str, &str)]) -> String {
+        fn tree(repo: &Path, entries: &[(Vec<&str>, &str)]) -> String {
+            use std::fmt::Write as _;
+            let mut lines = String::new();
+            let mut done: Vec<&str> = Vec::new();
+            for (parts, content) in entries {
+                if let [name] = parts.as_slice() {
+                    let blob = git(repo, &["hash-object", "-w", "--stdin"], content);
+                    writeln!(lines, "100644 blob {blob}\t{name}").unwrap();
+                } else if !done.contains(&parts[0]) {
+                    done.push(parts[0]);
+                    let inner: Vec<(Vec<&str>, &str)> = entries
+                        .iter()
+                        .filter(|(p, _)| p.len() > 1 && p[0] == parts[0])
+                        .map(|(p, c)| (p[1..].to_vec(), *c))
+                        .collect();
+                    let sub = tree(repo, &inner);
+                    writeln!(lines, "040000 tree {sub}\t{}", parts[0]).unwrap();
+                }
+            }
+            git(repo, &["mktree"], &lines)
+        }
+        let split: Vec<(Vec<&str>, &str)> = entries
+            .iter()
+            .map(|(path, content)| (path.split('/').collect(), *content))
+            .collect();
+        let root = tree(repo, &split);
+        git(repo, &["commit-tree", &root, "-m", "fixture"], "")
+    }
+
+    fn new_repo(dir: &Path) -> PathBuf {
+        let repo = dir.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-q"], "");
+        repo
+    }
+
+    /// Every file under `dir`, relative, with `/` between components.
+    fn files_under(dir: &Path) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(next) = stack.pop() {
+            for entry in std::fs::read_dir(&next).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let rel = path.strip_prefix(dir).unwrap();
+                    found.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    /// Security review F1: a tree entry named `..` makes git list
+    /// `../../pwned.txt`; the export refuses it before writing anything,
+    /// and nothing lands outside its folder.
+    #[test]
+    fn a_tree_entry_named_dot_dot_is_refused_and_nothing_is_written_outside() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = new_repo(dir.path());
+        let commit = commit_of(
+            &repo,
+            &[("Cargo.lock", "# lock\n"), ("../../pwned.txt", "pwned\n")],
+        );
+        let listed = git(&repo, &["ls-tree", "-r", "--name-only", &commit], "");
+        assert!(
+            listed.lines().any(|line| line == "../../pwned.txt"),
+            "{listed}"
+        );
+        let outer = dir.path().join("work");
+        let mut into = Scratch::new(&outer.join("a").join("head")).unwrap();
+        let error = export(&repo, &commit, &mut into, false).unwrap_err();
+        assert!(error.contains("outside the private folder"), "{error}");
+        assert_eq!(files_under(&outer), Vec::<String>::new());
+        assert!(!dir.path().join("pwned.txt").exists());
+    }
+
+    /// Security review F2: on a case-insensitive disk osv-scanner opens a
+    /// head's `OSV-Scanner.toml` as `osv-scanner.toml`, so the export
+    /// leaves out every spelling that may open as one, at every level.
+    #[test]
+    fn a_head_suppression_in_another_case_is_never_exported() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = new_repo(dir.path());
+        let head = commit_of(
+            &repo,
+            &[
+                ("Cargo.lock", "# lock\n"),
+                ("OSV-Scanner.toml", "[[IgnoredVulns]]\nid = \"X\"\n"),
+                ("sub/Cargo.lock", "# lock\n"),
+                ("sub/osv-SCANNER.TOML", "[[IgnoredVulns]]\nid = \"X\"\n"),
+                (
+                    "sub/deep/o\u{17f}v-scanner.toml",
+                    "[[IgnoredVulns]]\nid = \"X\"\n",
+                ),
+                (
+                    "sub/deep/osv-scanner.toml. ",
+                    "[[IgnoredVulns]]\nid = \"X\"\n",
+                ),
+            ],
+        );
+        let base = commit_of(&repo, &[("sub/osv-scanner.toml", "# base\n")]);
+        let mut into = Scratch::new(&dir.path().join("head")).unwrap();
+        export(&repo, &head, &mut into, false).unwrap();
+        base_suppressions(&repo, &base, &mut into).unwrap();
+        let files = files_under(into.root());
+        assert_eq!(
+            files,
+            ["Cargo.lock", "sub/Cargo.lock", "sub/osv-scanner.toml"],
+            "a head suppression was exported"
+        );
+        assert_eq!(
+            std::fs::read_to_string(into.root().join("sub/osv-scanner.toml")).unwrap(),
+            "# base\n"
+        );
+    }
+
+    #[test]
+    fn every_spelling_a_disk_may_open_as_the_suppression_file_matches() {
+        for name in [
+            "osv-scanner.toml",
+            "OSV-Scanner.toml",
+            "osv-scanner.toml.",
+            "osv-scanner.toml . ",
+            "o\u{17f}v-scanner.toml",
+        ] {
+            assert!(opens_as_suppressions(name), "{name}");
+        }
+        for name in [
+            "osv-scanner.tom",
+            "xosv-scanner.toml",
+            "osv-scanner.toml.bak",
+        ] {
+            assert!(!opens_as_suppressions(name), "{name}");
+        }
     }
 
     #[test]
