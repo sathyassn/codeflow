@@ -1,0 +1,11 @@
+id = "TSK-1365"
+uid = "1e59c54c-1873-4ebe-a8a7-5c53a6de7ad9"
+kind = "TSK"
+title = "The present browser check waits for stage measuring and rewrites the revision atomically"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-06T02:24:03Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
