@@ -66,7 +66,7 @@ COVERAGE_JOBS = frozenset({"gates-coverage", "gates-coverage-report"})
 # The runner's Linux build and gates parts, with the ids and commands of codeflow-ci.yml's.
 LINUX_GATE_JOBS = frozenset({"gates-build", "gates"})
 GATE_PARTS = ("present", "checks")
-COVERAGE_SHARDS = 2
+COVERAGE_SHARDS = 3
 SHA = re.compile(r"[0-9a-f]{40}")
 REF = re.compile(r"refs/heads/(?:main|integration/[A-Za-z0-9_./-]+)")
 MAIN = "refs/heads/main"

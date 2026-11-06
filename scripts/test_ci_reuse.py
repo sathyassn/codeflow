@@ -512,7 +512,7 @@ class ImageBindingTests(unittest.TestCase):
 
         def reused(name):
             return any(p.fullmatch(name) for p in patterns)
-        for name in ("codeflow build", "codeflow gates (checks)", "codeflow gates (coverage 1 of 2)",
+        for name in ("codeflow build", "codeflow gates (checks)", "codeflow gates (coverage 1 of 3)",
                      "codeflow gates (coverage report)", "windows test build", "windows tests (3 of 16)",
                      "windows checks (doc, clippy, Node)", "windows journeys", "windows release journey"):
             self.assertTrue(reused(name), name)

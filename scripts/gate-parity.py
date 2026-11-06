@@ -239,7 +239,7 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
 # shards, once. The merge's own tests (scripts/test_coverage_merge.py) and
 # the partition check's (scripts/test_partition_check.py) cover the rest.
 COVERAGE_TARGETS = ("rust-coverage", "journey-gate")
-COVERAGE_SHARDS = 2
+COVERAGE_SHARDS = 3
 SHARD_FILTER = "--partition hash:${{ matrix.shard }}/@COUNT@"
 COVERAGE_CANONICAL = "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow"
 COVERAGE_JOB = """\

@@ -867,8 +867,8 @@ class CoverageShardControls(unittest.TestCase):
 
     def test_the_committed_jobs_match_the_config_and_shard_count(self):
         self.assertEqual(self.problems(), [])
-        self.assertEqual(parity.COVERAGE_SHARDS, 2)
-        self.assertIn("        shard: [1, 2]\n", WORKFLOW)
+        self.assertEqual(parity.COVERAGE_SHARDS, 3)
+        self.assertIn("        shard: [1, 2, 3]\n", WORKFLOW)
 
     def test_a_shard_that_runs_less_or_another_command_is_refused(self):
         run = 'cargo llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow --partition'
@@ -878,10 +878,10 @@ class CoverageShardControls(unittest.TestCase):
                         run.replace(" --partition", " --lib --partition")):
             with self.subTest(changed=changed):
                 self.assert_problem(self.EXACT, WORKFLOW.replace(run, changed))
-        self.assert_problem(self.EXACT, WORKFLOW.replace("--partition hash:${{ matrix.shard }}/2",
-                                                         "--partition hash:1/2"))
-        self.assert_problem(self.EXACT, WORKFLOW.replace("--partition hash:${{ matrix.shard }}/2",
-                                                         "--partition count:${{ matrix.shard }}/2"))
+        self.assert_problem(self.EXACT, WORKFLOW.replace("--partition hash:${{ matrix.shard }}/3",
+                                                         "--partition hash:1/3"))
+        self.assert_problem(self.EXACT, WORKFLOW.replace("--partition hash:${{ matrix.shard }}/3",
+                                                         "--partition count:${{ matrix.shard }}/3"))
         self.assert_problem(self.EXACT, WORKFLOW.replace("        run: cargo llvm-cov clean --workspace\n",
                                                          "        run: true\n"))
         self.assert_problem(self.EXACT, WORKFLOW.replace("          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw\n"
@@ -890,10 +890,10 @@ class CoverageShardControls(unittest.TestCase):
                                                          "        run: cargo llvm-cov"))
 
     def test_a_shard_set_that_misses_or_exceeds_the_plan_is_refused(self):
-        for matrix in ("        shard: [1]\n", "        shard: [1, 2, 3]\n", "        shard: [1, 1]\n"):
+        for matrix in ("        shard: [1, 2]\n", "        shard: [1, 2, 3, 4]\n", "        shard: [1, 1, 2]\n"):
             with self.subTest(matrix=matrix):
-                self.assert_problem(self.EXACT, WORKFLOW.replace("        shard: [1, 2]\n", matrix))
-        self.assert_problem(self.EXACT, count=3)
+                self.assert_problem(self.EXACT, WORKFLOW.replace("        shard: [1, 2, 3]\n", matrix))
+        self.assert_problem(self.EXACT, count=2)
 
     def test_the_config_commands_drive_the_jobs(self):
         def narrowed(c):
@@ -914,10 +914,10 @@ class CoverageShardControls(unittest.TestCase):
         self.assert_problem("must require exactly present-web-build", cfg=mutated(requires))
 
     def test_a_report_that_could_pass_without_every_shard_or_the_floor_is_refused(self):
-        merge = "--floor-from .codeflow/test-config.json --shards 2 target/coverage/data"
+        merge = "--floor-from .codeflow/test-config.json --shards 3 target/coverage/data"
         self.assertIn(merge, WORKFLOW)
         controls = {
-            "a fixed floor": WORKFLOW.replace(merge, "--floor 80 --shards 2 target/coverage/data"),
+            "a fixed floor": WORKFLOW.replace(merge, "--floor 80 --shards 3 target/coverage/data"),
             "one shard": WORKFLOW.replace(merge, "--floor-from .codeflow/test-config.json --shards 1 target/coverage/data"),
             "a forgiven merge": WORKFLOW.replace(merge, merge + " || true"),
             "a skipped journey step": WORKFLOW.replace(

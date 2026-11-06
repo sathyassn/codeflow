@@ -97,7 +97,7 @@ def jobs(text):
 
 
 # The one daily-only command: the report job records the total and the commit.
-RECORD_TOTAL = ("python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards 2 "
+RECORD_TOTAL = ("python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards 3 "
                 "--total-file target/coverage/daily-coverage-total.json target/coverage/data")
 
 
@@ -153,9 +153,9 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn(f"runs-on: {runner}", added[name])
                 self.assertEqual(added[name].count("persist-credentials: false"), 1)
                 self.assertEqual(added[name].count("uses: actions/checkout@"), 1)
-        self.assertIn("shard: [1, 2]", added["gates-coverage"])
-        self.assertIn("--shards 2 ", RECORD_TOTAL)
-        self.assertEqual(len(re.findall(r"^\s+shard: \[1, 2\]$", existing["gates-coverage"], re.M)), 1)
+        self.assertIn("shard: [1, 2, 3]", added["gates-coverage"])
+        self.assertIn("--shards 3 ", RECORD_TOTAL)
+        self.assertEqual(len(re.findall(r"^\s+shard: \[1, 2, 3\]$", existing["gates-coverage"], re.M)), 1)
         self.assertIn("partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]", added["windows-tests"])
         self.assertIn("fail-fast: false", added["windows-tests"])
         self.assertIn("needs: gates-build", added["gates"])
