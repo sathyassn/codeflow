@@ -699,7 +699,7 @@
     function buildToc() {
       const panel = panels.find(p => !p.hidden);
       heads = $$('h2[id], h3[id]', panel);
-      const html = heads.map(h => `<li><a class="cf-toc-link${h.tagName === 'H3' ? ' is-l3' : ''}" href="#${h.id}" data-target="${h.id}">${esc(h.textContent.trim())}</a></li>`).join('');
+      const html = heads.map(h => `<li><a class="cf-toc-link${h.tagName === 'H3' ? ' is-l3' : ''}" href="#${esc(h.id)}" data-target="${esc(h.id)}">${esc(h.textContent.trim())}</a></li>`).join('');
       tocLists.forEach(l => { l.innerHTML = html; });
       activeId = '';
       spy();
