@@ -354,8 +354,9 @@ fn a_sync_naming_another_epic_is_refused() {
 }
 
 /// AC-2: every other refusal still applies. A clean sync that would change
-/// a line task's criteria, its status or its text, or the epic's criteria,
-/// because main holds that change, is refused by the frozen criteria.
+/// the criteria, status or text of a task whose home is the line, or the
+/// epic's criteria, is refused by the frozen criteria. Under the one-home
+/// rule main never holds such a change; these fixtures force one.
 #[test]
 fn a_clean_sync_cannot_change_the_lines_records() {
     for (path, content, what) in [
@@ -401,8 +402,9 @@ fn a_clean_sync_cannot_change_the_lines_records() {
     }
 }
 
-/// AC-2: the freeze covers the line's records, so another epic's record that
-/// main changed comes along with the sync.
+/// AC-2: the freeze covers records whose home is the line, so another
+/// epic's record whose home is main comes along with the sync when main
+/// changes it.
 #[test]
 fn a_clean_sync_carries_another_epics_record() {
     let dir = fixture();
@@ -428,6 +430,69 @@ fn a_clean_sync_carries_another_epics_record() {
     commit(root, "docs: reword the other epic's task");
     sync_branch(root);
     passes(&ci(root, "Task: EPC-001", None), "another epic's record");
+}
+
+/// AC-2 as amended 2026-11-05: a record's home is where it lands. TSK-005
+/// belongs to the line's epic but targets main, so its home is main, and the
+/// sync takes main's version of it.
+#[test]
+fn a_clean_sync_carries_a_main_homed_task_of_the_lines_epic() {
+    let dir = fixture();
+    let root = dir.path();
+    let homed = task("TSK-005", "main");
+    write(root, "project-management/tasks/TSK-005.md", &homed);
+    commit(root, "docs: plan a task of the epic on main");
+    super::git(root, &["switch", "-q", LINE]);
+    super::git(root, &["merge", "--no-ff", "-q", "--no-edit", "main"]);
+    super::git(root, &["switch", "-q", "main"]);
+    write(
+        root,
+        "project-management/tasks/TSK-005.md",
+        &homed.replace("Work.", "Other work."),
+    );
+    write(root, "changelog.d/TSK-005.md", FRAGMENT);
+    commit(root, "docs: reword a task whose home is main");
+    sync_branch(root);
+    passes(
+        &ci(root, "Task: EPC-001", None),
+        "a main-homed task of the line's epic",
+    );
+}
+
+/// AC-2 as amended 2026-11-05: a task of another epic that targets the line
+/// has its home on the line, so a sync never changes it, even when main
+/// holds a change to it against the one-home rule.
+#[test]
+fn a_clean_sync_cannot_change_another_epics_task_homed_on_the_line() {
+    let dir = fixture();
+    let root = dir.path();
+    let homed = task("TSK-004", LINE).replace("epic_id: EPC-001", "epic_id: EPC-002");
+    write(
+        root,
+        "project-management/epics/EPC-002.md",
+        &EPIC.replace("EPC-001", "EPC-002"),
+    );
+    write(root, "project-management/tasks/TSK-004.md", &homed);
+    commit(root, "docs: plan another epic's task on the line");
+    super::git(root, &["switch", "-q", LINE]);
+    super::git(root, &["merge", "--no-ff", "-q", "--no-edit", "main"]);
+    super::git(root, &["switch", "-q", "main"]);
+    write(
+        root,
+        "project-management/tasks/TSK-004.md",
+        &homed.replace("Work.", "Other work."),
+    );
+    write(root, "changelog.d/TSK-004.md", FRAGMENT);
+    commit(root, "docs: main rewords a line-homed task");
+    sync_branch(root);
+    let refused = ci(root, "Task: EPC-001", None);
+    let said = text(&refused);
+    assert!(
+        said.contains("pull request class: sync"),
+        "judged as a sync: {said}"
+    );
+    blocks(&refused, "a line-homed task", "work.criteria_frozen");
+    blocks(&refused, "a line-homed task", "whose home is the line");
 }
 
 /// AC-3: a merge whose tree is not the clean merge of its parents carries

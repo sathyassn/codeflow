@@ -266,10 +266,20 @@ ci` admits it as a sync when its history proves one:
 
 The net diff may then carry what `main` holds, release notes in
 `changelog.d/` included. Every other check still judges the range: frozen
-criteria and the record checks. A sync also cannot change the line's own
-records: the epic's record, the record of an epic that lands on the line, or
-the record of a task of that epic or one targeting the line, even when `main`
-holds the change. A records-only sync that already passes as a planning
+criteria and the record checks.
+
+Each task or epic record has one home, where it changes:
+
+- a task's home is the target it declares in `integration_target`;
+- an epic's home is its own line, or the line its `parent_line` names.
+
+A sync takes `main`'s version only of records whose home is not the line,
+and never changes a record whose home is the line: the epic's record, the
+record of an epic that lands on the line, or the record of a task that
+targets the line. A task with no declared target is judged by its epic.
+Because each record changes only at its home, `main` never holds a newer
+change to a record whose home is the line, so the refusal applies only when
+that rule was broken. A records-only sync that already passes as a planning
 amendment keeps that class.
 
 Refused, naming the cause:
@@ -279,7 +289,7 @@ Refused, naming the cause:
 | A merge of a commit that is not on `main`'s trusted commit, such as a local branch or a ref named like `origin/main` | The second parent is not reviewed default-branch history |
 | A merge of the line into the sync branch, after the line moved | Its second parent is the line's, not `main`'s; redo the sync from the line's new tip |
 | A run with no `--policy-from` | No default-branch commit to trust |
-| A change to one of the line's own records | Those change through a planning amendment that names the epic |
+| A change to a record whose home is the line | It changes only on the line, through a planning amendment that names the epic |
 | A commit that is not a merge, before or after the merge or as the whole range | The commit is work of its own; it lands through its task |
 | A merge with a resolved conflict or a change of its own | Its tree differs from the clean merge of its parents; land it through a task |
 | A branch named like a sync whose history is not one | A name proves nothing |

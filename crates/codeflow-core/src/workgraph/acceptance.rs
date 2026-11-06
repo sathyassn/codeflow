@@ -3415,12 +3415,15 @@ fn record_change(before: &RecordView, after: Option<&RecordView>) -> String {
     }
 }
 
-/// What a sync of the default branch changes in `line`'s own records, which
-/// only a planning amendment may change (TSK-1312): the record of `epic`, of
-/// an epic that lands on the line, and of a task of `epic` or one that
-/// targets the line, imported from the default branch or not. The default
-/// branch's other records come along, judged by the criteria freeze and the
-/// completion binding; a record the range adds is new, not a change.
+/// What a sync of the default branch changes in the records whose home is
+/// `line`, which only a planning amendment on the line may change (TSK-1312):
+/// the record of `epic`, of an epic that lands on the line, and of a task
+/// that targets the line, imported from the default branch or not. Each
+/// record has one home, so the default branch never holds a newer change to
+/// one of these. Records whose home is elsewhere, a task of `epic` that
+/// targets the default branch included, come along at the default branch's
+/// version, judged by the criteria freeze and the completion binding; a
+/// record the range adds is new, not a change.
 fn line_records_changed(
     (head, target): (&Graph, &Graph),
     changed_paths: &[String],
@@ -3432,14 +3435,24 @@ fn line_records_changed(
             super::work_start::logical_target(name) == super::work_start::logical_target(line)
         })
     };
+    let line_epic = |record: &RecordView| {
+        record.kind == RecordKind::Epic
+            && (record.id == epic || on_line(record.parent_line.as_ref()))
+    };
     let mut found = Vec::new();
     for before in target.records.values() {
         let line_record = match before.kind {
-            RecordKind::Epic => before.id == epic || on_line(before.parent_line.as_ref()),
-            RecordKind::Task => {
-                before.epic_id.as_deref() == Some(epic)
-                    || on_line(before.integration_target.as_ref())
-            }
+            RecordKind::Epic => line_epic(before),
+            // A task's home is the target it declares. One that declares
+            // none is judged by its epic, so an unknown home stays frozen.
+            RecordKind::Task => match before.integration_target {
+                Some(_) => on_line(before.integration_target.as_ref()),
+                None => before
+                    .epic_id
+                    .as_deref()
+                    .and_then(|id| target.records.get(id))
+                    .is_some_and(line_epic),
+            },
             RecordKind::Spec => false,
         };
         if !line_record {
@@ -3454,7 +3467,7 @@ fn line_records_changed(
         let change = record_change(before, after);
         found.push(finding(
             FROZEN_RULE,
-            format!("{change} in a sync of the default branch into {line}; a sync does not change the line's records, which change through a planning amendment that names the epic (ADR-0078)"),
+            format!("{change} in a sync of the default branch into {line}; a sync does not change a record whose home is the line, which changes through a planning amendment on the line that names the epic (ADR-0078)"),
         ));
     }
     found
@@ -4635,8 +4648,7 @@ pub enum Criteria {
     /// yet, so it carries `None` and its report names the epics it finds.
     Amendment(Option<Vec<String>>),
     /// A sync of the default branch into `epic`'s `line` (TSK-1312): criteria
-    /// stay frozen, and no record of the line changes, whatever the default
-    /// branch holds.
+    /// stay frozen, and no record whose home is the line changes.
     Sync { epic: String, line: String },
 }
 
@@ -4814,7 +4826,7 @@ pub fn pull_request_findings_into(
         found.extend(line_landing_copies(&repo, target_tip, head_tip, anchor)?);
     } else {
         let mut paths = super::lifecycle::changed_paths(&repo, &anchor.to_string(), Some(head))?;
-        // A sync's freeze of the line's records reads every path: an epic's
+        // A sync's freeze of line-homed records reads every path: an epic's
         // record has the default branch as its home, so it reads as imported.
         let all_paths = paths.clone();
         paths.retain(|path| !imported.values().any(|source| source.path == *path));
