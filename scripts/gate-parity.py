@@ -211,7 +211,7 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
         if norm_job(text) != norm_job(expected):
             problems.append(
                 f"`{VERDICT}` ({name}) must be exactly the verdict job: run "
-                "`if: always()` except on a draft, need the reuse, gates and "
+                "`if: ${{ !cancelled() }}` except on a draft, need the reuse, gates and "
                 "coverage jobs, and fail unless each of them succeeded or the reuse decision named a "
                 "run and all of them were skipped; any other form could let a skipped, failed or "
                 "cancelled part read as passed. Expected:\n" + expected)
@@ -307,7 +307,7 @@ COVERAGE_JOB = """\
           retention-days: 7
 """
 COVERAGE_REPORT_JOB = """\
-    if: always() && needs.gates-coverage.result != 'skipped' && (@CONDITION@)
+    if: ${{ !cancelled() && needs.gates-coverage.result != 'skipped' && (@CONDITION@) }}
     name: codeflow gates (coverage report)
     needs: gates-coverage
     runs-on: ubuntu-24.04
@@ -452,7 +452,7 @@ REUSE_JOB = """\
 # when gate selection skips the work.
 WINDOWS_VERDICT = "windows"
 WINDOWS_VERDICT_JOB = """\
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
     name: windows
     needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
     runs-on: ubuntu-24.04
@@ -551,8 +551,15 @@ LINE_GATE_JOBS = ("gates-build", "gates")
 LINE_PROVENANCE_DROPPED = ("          - artifact: ci-provenance-windows", "            runner: windows-latest",
                            "            python: python")
 LINE_GATES_IF = "${{ !cancelled() && !github.event.pull_request.draft }}"
+# One group per pull request. Only a new commit cancels, so a same-head event
+# such as ready_for_review never cancels a running run, and a rerun has its own
+# group. `queue` stays unset: GitHub refuses `queue: max` beside a cancel.
+LINE_CONCURRENCY = """\
+concurrency:
+  group: ${{ github.run_attempt == 1 && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-rerun-{1}-{2}', github.workflow, github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' && github.run_attempt == 1 }}"""
 LINE_VERDICT_JOB = """\
-    if: ${{ always() && !github.event.pull_request.draft }}
+    if: ${{ !cancelled() && !github.event.pull_request.draft }}
     name: codeflow gates (line)
     needs: [gates-build, gates]
     runs-on: ubuntu-24.04
@@ -590,10 +597,10 @@ LINE_PUSH_GATE_JOBS = {
     "gates-build": ("${{ !cancelled() }}", None),
     "gates": ("${{ !cancelled() }}", "gates-build"),
     "gates-coverage": ("${{ !cancelled() }}", None),
-    "gates-coverage-report": ("always() && needs.gates-coverage.result != 'skipped'", "gates-coverage"),
+    "gates-coverage-report": ("${{ !cancelled() && needs.gates-coverage.result != 'skipped' }}", "gates-coverage"),
 }
 LINE_PUSH_VERDICT_JOB = """\
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     name: codeflow gates
     needs: [gates-build, gates, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
@@ -636,6 +643,9 @@ def line_placement_problems(workflow: str, line: str | None) -> list[str]:
     if LINE_TRIGGER not in line:
         problems.append("codeflow-line-pr.yml must start only for a pull request into an integration line; its "
                         "trigger must be exactly:\n" + LINE_TRIGGER)
+    if concurrency_block(line) != LINE_CONCURRENCY:
+        problems.append("codeflow-line-pr.yml's `concurrency` block must be exactly this, so a same-head event "
+                        "never cancels a running run:\n" + LINE_CONCURRENCY)
     jobs, full = workflow_jobs(line), workflow_jobs(workflow)
     names = job_names(jobs)
     if names != LINE_JOB_NAMES:
@@ -769,7 +779,7 @@ def reuse_job_problems(jobs: dict[str, str]) -> list[str]:
 # request into an integration line starts no run of this workflow, so this
 # verdict has no "not selected" pass (see LINE_WORKFLOW above).
 VERDICT_JOB = """\
-    if: ${{{{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}}}
+    if: ${{{{ !cancelled() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}}}
     name: codeflow gates
     needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04

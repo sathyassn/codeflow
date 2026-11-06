@@ -978,5 +978,40 @@ class TestCollection(unittest.TestCase):
                 self.assertGreater(probe_count(source), 0)
 
 
+class LinePullRequestConcurrencyTests(unittest.TestCase):
+    """A same-head event must not cancel a running line pull request run: its
+    verdict would be lost, and `commit standards` needs that verdict."""
+
+    def run_of(self, action, attempt='1', run_id='7'):
+        workflow = read('.github/workflows/codeflow-line-pr.yml')
+        context = {'github.workflow': 'codeflow-line-pr', 'github.event_name': 'pull_request',
+                   'github.event.action': action, 'github.event.pull_request.number': '620',
+                   'github.run_id': run_id, 'github.run_attempt': attempt}
+        group = re.search(r'^  group: \$\{\{ (.+) \}\}$', workflow, re.M).group(1)
+        cancel = re.search(r'^  cancel-in-progress: \$\{\{ (.+) \}\}$', workflow, re.M).group(1)
+        return github_expression(group, context), github_expression(cancel, context)
+
+    def test_a_same_head_event_shares_the_group_and_cancels_nothing(self):
+        new_commit_group, _ = self.run_of('synchronize')
+        for action in ('opened', 'reopened', 'ready_for_review'):
+            with self.subTest(action):
+                group, cancels = self.run_of(action)
+                self.assertEqual(group, new_commit_group)
+                self.assertFalse(cancels)
+
+    def test_a_new_commit_cancels_the_older_run_of_that_pull_request(self):
+        group, cancels = self.run_of('synchronize')
+        self.assertEqual(group, 'codeflow-line-pr-pr-620')
+        self.assertTrue(cancels)
+
+    def test_a_rerun_has_its_own_group_and_cancels_nothing(self):
+        group, cancels = self.run_of('synchronize', attempt='2')
+        self.assertEqual(group, 'codeflow-line-pr-rerun-7-2')
+        self.assertFalse(cancels)
+
+    def test_queue_stays_unset_beside_a_cancel(self):
+        self.assertNotIn('queue:', PARITY.concurrency_block(read('.github/workflows/codeflow-line-pr.yml')))
+
+
 if __name__ == '__main__':
     unittest.main()

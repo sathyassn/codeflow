@@ -271,6 +271,12 @@ an operator decision; agents and Coordinators never rule on it.
   block in `codeflow-line-push.yml`). A run in progress for a push
   to `main`, a scheduled run or a dispatched run is never cancelled; GitHub
   may still replace a pending run in the same group.
+- On a pull request into a line only a new commit cancels a running run. A
+  same-head event such as marking it ready cancels nothing, so it never
+  costs that head its verdict.
+- A cancelled run starts no more jobs and posts no verdict. A job that failed
+  still reaches its verdict, which fails. `commit standards` admits only a
+  verdict that succeeded, so a cancelled or skipped verdict never admits.
 - Local full gates keep coverage instrumentation whatever the event.
 
 The workflows apply the table as follows:

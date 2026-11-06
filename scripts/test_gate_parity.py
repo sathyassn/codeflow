@@ -507,7 +507,7 @@ class GatePartControls(unittest.TestCase):
             with self.subTest(weaker=weaker):
                 self.assert_problem(WORKFLOW.replace(parity.PART_RUN, weaker), "must run exactly")
 
-    DRAFT_NEUTRAL = "${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}"
+    DRAFT_NEUTRAL = "${{ !cancelled() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}"
     VERDICT_IF = (f"    if: {DRAFT_NEUTRAL}\n"
                   "    name: codeflow gates\n")
     EXACT = "must be exactly the verdict job"
@@ -530,7 +530,7 @@ class GatePartControls(unittest.TestCase):
         """The four forms the TSK-203 review showed a substring check accepting."""
         controls = {
             "a condition that never runs": WORKFLOW.replace(
-                self.VERDICT_IF, self.VERDICT_IF.replace("always() && ", "always() && false && ")),
+                self.VERDICT_IF, self.VERDICT_IF.replace("!cancelled() && ", "!cancelled() && false && ")),
             "a forgiven exit": WORKFLOW.replace(
                 "            exit 1\n          fi\n          echo \"every part",
                 "            exit 0\n          fi\n          echo \"every part"),
@@ -731,10 +731,10 @@ class HostedEventParityControls(unittest.TestCase):
             job = parity.workflow_jobs(WORKFLOW)[name]
             condition = re.search(r"^ {4}if:\s*(.+?)\s*$", job, re.M).group(1)
             self.assertEqual(condition, GatePartControls.DRAFT_NEUTRAL)
-        for old, new in (("    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}\n    name: windows\n",
+        for old, new in (("    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}\n    name: windows\n",
                           "    if: always()\n    name: windows\n"),
-                         ("    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}\n    name: windows\n",
-                          "    if: ${{ always() && !github.event.pull_request.draft }}\n    name: windows\n")):
+                         ("    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}\n    name: windows\n",
+                          "    if: ${{ !cancelled() && !github.event.pull_request.draft }}\n    name: windows\n")):
             self.assertIn(old, WORKFLOW)
             problems = parity.windows_verdict_problems(WORKFLOW.replace(old, new))
             self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)
@@ -774,7 +774,7 @@ class HostedEventParityControls(unittest.TestCase):
     def test_a_windows_verdict_with_a_different_event_condition_is_refused(self):
         workflow = self.ready_workflow()
         job = parity.workflow_jobs(workflow)["windows-verdict"]
-        narrowed = job.replace("    if: ${{ always() && ", "    if: ${{ always() && github.event_name == 'push' && ")
+        narrowed = job.replace("    if: ${{ !cancelled() && ", "    if: ${{ !cancelled() && github.event_name == 'push' && ")
         self.assertNotEqual(job, narrowed)
         problems = parity.windows_verdict_problems(workflow.replace(job, narrowed))
         self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)
@@ -824,7 +824,7 @@ class LinePlacementControls(unittest.TestCase):
 
     def test_a_line_push_verdict_or_job_that_can_skip_is_refused(self):
         for label, old, new, words in (
-                ("verdict", "    if: ${{ always() }}\n", "    if: ${{ github.ref == 'x' }}\n", "must be exactly this"),
+                ("verdict", "    if: ${{ !cancelled() }}\n    name: codeflow gates\n", "    if: ${{ github.ref == 'x' }}\n    name: codeflow gates\n", "must be exactly this"),
                 ("a job", "    if: ${{ !cancelled() }}\n", "    if: ${{ github.ref == 'x' }}\n", "must run under exactly"),
                 ("a trigger", '    branches: ["integration/**"]', '    branches: ["integration/a"]', "must start only"),
                 ("concurrency", "cancel-in-progress: ${{", "cancel-in-progress: ${{ false && ", "`concurrency` block")):
@@ -983,8 +983,8 @@ class CoverageShardControls(unittest.TestCase):
                 "      - name: journey gate\n        if: false\n"),
             "one shard's list": WORKFLOW.replace(" target/coverage/results/coverage-shard-2/tests.json", ""),
             "a report that runs on skipped shards": WORKFLOW.replace(
-                "    if: always() && needs.gates-coverage.result != 'skipped' && (",
-                "    if: always() && ("),
+                "    if: ${{ !cancelled() && needs.gates-coverage.result != 'skipped' && (",
+                "    if: ${{ !cancelled() && ("),
             "continue-on-error on the report": WORKFLOW.replace(
                 "    needs: gates-coverage\n", "    needs: gates-coverage\n    continue-on-error: true\n"),
         }

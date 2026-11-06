@@ -937,6 +937,45 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--wait") + 1], "0")
 
 
+class CancelledExpression(Expression):
+    """The same evaluator, in a run that has been cancelled."""
+
+    def call(self, name, args):
+        return True if name == "cancelled" and not args else super().call(name, args)
+
+
+class CancelledRunTests(unittest.TestCase):
+    """A cancelled run starts no more work, since that would hold its concurrency
+    group and keep the new head waiting. A job that failed still reaches its verdict."""
+
+    READY = {"github.event_name": "pull_request", "github.event.pull_request.draft": False}
+    VERDICTS = (("codeflow-ci.yml", "gates-verdict"), ("codeflow-ci.yml", "windows-verdict"),
+                ("codeflow-line-pr.yml", "gates-line-verdict"), ("codeflow-line-push.yml", "gates-verdict"))
+
+    @staticmethod
+    def conditions(file: str) -> dict[str, str]:
+        found, job = {}, None
+        for line in (WORKFLOWS / file).read_text(encoding="utf-8").split("\njobs:\n", 1)[1].splitlines():
+            if name := re.fullmatch(r"  ([a-z0-9-]+):", line):
+                job = name.group(1)
+            elif condition := re.fullmatch(r"    if: (.+)", line):
+                found[job] = condition.group(1)
+        return found
+
+    def test_no_job_of_a_workflow_that_cancels_starts_after_the_cancel(self):
+        for file in ("codeflow-ci.yml", "codeflow-line-pr.yml", "codeflow-line-push.yml"):
+            for job, condition in self.conditions(file).items():
+                with self.subTest(file=file, job=job):
+                    self.assertNotIn("always()", condition)
+
+    def test_a_cancelled_run_posts_no_verdict_and_a_failed_job_still_reaches_it(self):
+        for file, job in self.VERDICTS:
+            condition = self.conditions(file)[job]
+            with self.subTest(file=file, job=job):
+                self.assertFalse(truthy(CancelledExpression(condition, self.READY, {}, []).evaluate()))
+                self.assertTrue(truthy(Expression(condition, self.READY, {}, []).evaluate()))
+
+
 class OtherWorkflowTests(unittest.TestCase):
     """The short checks a line pull request keeps outside codeflow-ci.yml."""
 

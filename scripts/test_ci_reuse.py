@@ -714,6 +714,18 @@ class AdmissionTests(unittest.TestCase):
         api = FakeApi(runs=[run(path=path)], jobs={77: [job(name)]})
         self.assertEqual(reuse.admit(HEAD, path, {name}, api, 95), 77)
 
+    def test_a_cancelled_run_s_line_verdict_refuses(self):
+        # A cancelled run ends with its verdict cancelled or skipped, and GitHub
+        # counts a skipped required check as a success. Admission does not.
+        path = ".github/workflows/codeflow-line-pr.yml"
+        name = "codeflow gates (line)"
+        for conclusion in ("cancelled", "skipped"):
+            with self.subTest(conclusion):
+                api = FakeApi(runs=[run(path=path)], jobs={77: [job(name, conclusion)]})
+                with self.assertRaises(reuse.Skip) as caught:
+                    reuse.admit(HEAD, path, {name}, api, 95)
+                self.assertIn(f"{name!r} of run 77 concluded {conclusion}", str(caught.exception))
+
     def test_no_ready_run_refuses_and_may_be_waited_for(self):
         self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run of #95 exists",
                       self.refused(FakeApi(runs=[]), pending=True))
