@@ -387,7 +387,8 @@ fn work_next_and_claim_pick_the_ready_task_and_status_agrees() {
 
     let claimed = ok(&codeflow(&root, &["work", "claim", "TSK-001"]), "claim");
     assert!(
-        claimed.contains(&format!("task/TSK-001-root from {LINE}@")),
+        // The claim names the fetched remote tip it was cut from (TSK-1047).
+        claimed.contains(&format!("task/TSK-001-root from origin/{LINE}@")),
         "{claimed}"
     );
     assert!(!claimed.to_lowercase().contains("lock"), "{claimed}");

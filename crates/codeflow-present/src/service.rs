@@ -359,6 +359,7 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
         .route("/app/", get(application))
         .route("/app/assets/{*path}", get(asset))
         .route("/app/api/reviews", post(submit_review))
+        .route("/app/api/stages/measure", post(submit_stage_measurement))
         .route("/app/api/answers", post(submit_answer))
         .route("/app/api/threads/list", post(list_threads))
         .route("/app/api/threads/reopen", post(reopen_thread))
@@ -605,25 +606,38 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
         Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
     };
     let body = match revision.content {
-        RevisionContent::Supported { document } => render_document(
-            &document,
-            &RenderOptions {
-                session_id: &state.session_id.to_string(),
-                revision: revision.revision,
-                event_sequence,
-                response_sequence,
-                answers: Some(&answers),
-                script_path: script,
-                style_path: style,
-                prepaint_source: prepaint.map(|asset| asset.source.as_str()),
-                utility_style: utility_style.as_deref(),
-                identity,
-                feedback: Some(&feedback),
-                read_only_warning: None,
-                interactive: true,
-                retired: None,
-            },
-        ),
+        RevisionContent::Supported { document } => {
+            let mut rendered = render_document(
+                &document,
+                &RenderOptions {
+                    session_id: &state.session_id.to_string(),
+                    revision: revision.revision,
+                    event_sequence,
+                    response_sequence,
+                    answers: Some(&answers),
+                    script_path: script,
+                    style_path: style,
+                    prepaint_source: prepaint.map(|asset| asset.source.as_str()),
+                    utility_style: utility_style.as_deref(),
+                    identity,
+                    feedback: Some(&feedback),
+                    read_only_warning: None,
+                    interactive: true,
+                    retired: None,
+                },
+            );
+            match crate::export::measurement_template(
+                &document,
+                revision.revision,
+                utility_style.as_deref().unwrap_or_default(),
+            ) {
+                Ok(template) => {
+                    rendered = rendered.replacen("</body>", &format!("{template}</body>"), 1);
+                }
+                Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+            }
+            rendered
+        }
         RevisionContent::Unsupported {
             schema_version,
             raw,
@@ -701,6 +715,41 @@ async fn asset(
             (HeaderName::from_static("x-content-type-options"), "nosniff"),
         ],
     )
+}
+
+async fn submit_stage_measurement(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response<Body> {
+    if let Err(response) = require_application_request(&state, &headers, true) {
+        return response;
+    }
+    let Ok(bytes) = axum::body::to_bytes(body, 4096).await else {
+        return plain(
+            StatusCode::BAD_REQUEST,
+            "stage measurement exceeds the request bound",
+        );
+    };
+    let Ok(report) = serde_json::from_slice::<crate::stage_measurements::StageMeasurement>(&bytes)
+    else {
+        return plain(StatusCode::BAD_REQUEST, "invalid stage measurement");
+    };
+    match state
+        .store
+        .record_stage_measurement(state.session_id, report)
+    {
+        Ok(outcome) => response_with_headers(
+            StatusCode::OK,
+            Body::from(serde_json::json!({ "status": outcome }).to_string()),
+            &[
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+        ),
+        Err(PresentError::InvalidRequest(message)) => plain(StatusCode::BAD_REQUEST, &message),
+        Err(error) => plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    }
 }
 
 async fn submit_review(
@@ -1934,6 +1983,172 @@ mod tests {
             );
         }
         headers
+    }
+
+    #[tokio::test]
+    async fn stage_measurements_require_application_auth_and_validate_before_writing() {
+        let document = crate::document::parse_document(br#"{"schema_version":2,"title":"Stage","blocks":[{"type":"html","id":"stage","title":"Measured stage","caption":"A measured paragraph.","html":"<p>Stage</p>"}]}"#).unwrap();
+        let (_temp, state) = app_state_with(document);
+        let valid = serde_json::json!({
+            "stage_id":"stage", "revision":1, "content_width":832.0,
+            "contract":crate::stage_measurements::rendering_contract(""),
+            "height":48.0, "theme":"slate", "mode":"light"
+        });
+        let encoded = serde_json::to_vec(&valid).unwrap();
+        let denied = submit_stage_measurement(
+            State(state.clone()),
+            HeaderMap::new(),
+            Body::from(encoded.clone()),
+        )
+        .await;
+        assert_ne!(denied.status(), StatusCode::OK);
+        assert!(state
+            .store
+            .stage_measurements(state.session_id)
+            .unwrap()
+            .is_empty());
+        let headers = application_headers(&state, true);
+        let accepted =
+            submit_stage_measurement(State(state.clone()), headers.clone(), Body::from(encoded))
+                .await;
+        assert_eq!(accepted.status(), StatusCode::OK);
+        for (field, value) in [
+            ("height", serde_json::json!("48px")),
+            ("revision", serde_json::json!(2)),
+            ("content_width", serde_json::json!(9999)),
+            ("contract", serde_json::json!("unknown")),
+            ("stage_id", serde_json::json!("missing")),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value;
+            let rejected = submit_stage_measurement(
+                State(state.clone()),
+                headers.clone(),
+                Body::from(serde_json::to_vec(&invalid).unwrap()),
+            )
+            .await;
+            assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(
+            state
+                .store
+                .stage_measurements(state.session_id)
+                .unwrap()
+                .len(),
+            1
+        );
+        let oversized =
+            submit_stage_measurement(State(state), headers, Body::from(vec![b' '; 4097])).await;
+        assert_eq!(oversized.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn stage_measurements_ignore_valid_older_revision_without_changing_current_state() {
+        let original = crate::document::parse_document(br#"{"schema_version":2,"title":"Original","blocks":[{"type":"html","id":"stage","title":"Original stage","caption":"A paragraph.","html":"<p>Original</p>"}]}"#).unwrap();
+        let (_temp, state) = app_state_with(original);
+        let headers = application_headers(&state, true);
+        let old_report = serde_json::json!({
+            "stage_id":"stage", "revision":1, "content_width":832.0,
+            "contract":crate::stage_measurements::rendering_contract(""),
+            "height":48.0, "theme":"slate", "mode":"light"
+        });
+        let before_update = submit_stage_measurement(
+            State(state.clone()),
+            headers.clone(),
+            Body::from(serde_json::to_vec(&old_report).unwrap()),
+        )
+        .await;
+        assert_eq!(before_update.status(), StatusCode::OK);
+        let replacement = crate::document::parse_document(br#"{"schema_version":2,"title":"Replacement","blocks":[{"type":"html","id":"replacement","title":"Replacement stage","caption":"Another paragraph.","html":"<p>Replacement</p>"}]}"#).unwrap();
+        state
+            .store
+            .update_document(state.session_id, replacement)
+            .unwrap();
+        let mut current = old_report.clone();
+        current["revision"] = serde_json::json!(2);
+        current["stage_id"] = serde_json::json!("replacement");
+        let accepted = submit_stage_measurement(
+            State(state.clone()),
+            headers.clone(),
+            Body::from(serde_json::to_vec(&current).unwrap()),
+        )
+        .await;
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let recorded_body = axum::body::to_bytes(accepted.into_body(), 512)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&recorded_body).unwrap(),
+            serde_json::json!({"status":"recorded"})
+        );
+        let saved = state.store.stage_measurements(state.session_id).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].revision, 2);
+        assert_eq!(saved[0].stage_id, "replacement");
+
+        let late = submit_stage_measurement(
+            State(state.clone()),
+            headers,
+            Body::from(serde_json::to_vec(&old_report).unwrap()),
+        )
+        .await;
+        assert_eq!(late.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(late.into_body(), 512).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"status":"ignored_stale_revision"})
+        );
+        assert_eq!(
+            state.store.stage_measurements(state.session_id).unwrap(),
+            saved
+        );
+    }
+
+    #[tokio::test]
+    async fn stage_measurements_reject_malformed_and_invalid_older_reports() {
+        let document = br#"{"schema_version":2,"title":"Stage","blocks":[{"type":"html","id":"stage","title":"Measured stage","caption":"A paragraph.","html":"<p>Stage</p>"}]}"#;
+        let (_temp, state) = app_state_with(crate::document::parse_document(document).unwrap());
+        state
+            .store
+            .update_document(
+                state.session_id,
+                crate::document::parse_document(document).unwrap(),
+            )
+            .unwrap();
+        let valid_old = serde_json::json!({
+            "stage_id":"stage", "revision":1, "content_width":832.0,
+            "contract":crate::stage_measurements::rendering_contract(""),
+            "height":48.0, "theme":"slate", "mode":"light"
+        });
+        let mut invalid_bodies = vec![b"{".to_vec(), b"{}".to_vec()];
+        for (field, value) in [
+            ("height", serde_json::json!("48px")),
+            ("height", serde_json::json!(23)),
+            ("content_width", serde_json::json!(9999)),
+            ("contract", serde_json::json!("unknown")),
+            ("stage_id", serde_json::json!("missing")),
+            ("theme", serde_json::json!("unknown")),
+            ("mode", serde_json::json!("unknown")),
+            ("revision", serde_json::json!(0)),
+            ("revision", serde_json::json!(3)),
+            ("extra", serde_json::json!(true)),
+        ] {
+            let mut invalid = valid_old.clone();
+            invalid[field] = value;
+            invalid_bodies.push(serde_json::to_vec(&invalid).unwrap());
+        }
+        let headers = application_headers(&state, true);
+        for body in invalid_bodies {
+            let rejected =
+                submit_stage_measurement(State(state.clone()), headers.clone(), Body::from(body))
+                    .await;
+            assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        }
+        assert!(state
+            .store
+            .stage_measurements(state.session_id)
+            .unwrap()
+            .is_empty());
     }
 
     /// The answer as the page sends it for `store-choice` of the forms
