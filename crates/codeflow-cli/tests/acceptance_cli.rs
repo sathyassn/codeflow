@@ -1127,6 +1127,12 @@ fn the_judged_policy_prefix_names_the_branch_task_for_landing_credit() {
     let policy = std::fs::read_to_string(root.join(&path)).unwrap();
     write(root, &path, &policy.replace(r#", "lane/""#, ""));
     let result = ci_on(root, LINE, branch, "Task: TSK-002");
+    assert_passes(&result, "the judged policy's prefix credits the branch");
+    assert!(
+        result.1.contains(SCOPE),
+        "the acceptance check ran: {}",
+        result.1
+    );
     assert!(
         !result.1.contains("src/lib.rs"),
         "the branch's reviewed head must credit its own work: {}",
