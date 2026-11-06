@@ -1,0 +1,11 @@
+id = "TSK-1360"
+uid = "44928178-ccd3-4ed4-835a-b7801e557b0b"
+kind = "TSK"
+title = "An interrupted capability migration reruns safely, and an offline id clash is repaired"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-06T00:12:17Z"
+target = "integration/EPC-026-the-capabilities-catalog"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
