@@ -277,8 +277,16 @@ fn every_verdict_job_runs_only_the_default_branch_code() {
             if name == "trusted: release impact" {
                 assert!(text.contains("python3 -I scripts/release.py check-pr"));
                 assert!(text.contains("--codeflow-bin target/release/codeflow"));
-                assert!(text.contains("CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}"));
+                // TSK-1040: the runner logs a step's `env:` values, so the
+                // body reaches the script as a file, as in commit standards.
+                assert!(text.contains("BODY_FILE: ${{ runner.temp }}/pr-body.md"));
+                assert!(text.contains("--body-file \"$BODY_FILE\""));
+                assert!(!text.contains("CODEFLOW_PR_BODY"));
+                assert!(!text.contains("outputs.text"));
                 assert!(!text.contains("github.event.pull_request.body"));
+                // A queued run cannot pass on a body that changed under it.
+                assert!(text.contains("the pull request is unchanged since it was judged"));
+                assert!(text.contains("JUDGED_DIGEST: ${{ steps.body.outputs.digest }}"));
             }
         }
     }
