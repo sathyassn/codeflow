@@ -486,7 +486,7 @@ COLUMNS = ("Event", "Short checks", "Linux build and lint", "Linux tests", "Linu
 EVENT_ROWS = {
     "Draft pull request, any base": ("draft line PR", "draft main PR"),
     "Pull request into an integration line": ("line PR",),
-    "Push to an integration line": ("line push",),
+    "Push to an integration line, one per batch": ("line push",),
     "Pull request into `main`": ("main PR",),
     "Push to `main`": ("main push",),
     "Daily run, `main` and each active line": ("daily",),
@@ -528,9 +528,14 @@ SHORT_CELLS = {
     "secret scan of the full history and dependency audit": frozenset({"secret scan", "security review"}),
 }
 # Every suite cell the table may hold. A reused cell runs the suite unless the
-# reuse job names a run, and then skips it. Any other text fails.
-SUITE_CELLS = {"yes": "runs", "no": "skips", "yes, or reused": "reused",
-               "yes, or the merged pull request's reused verdict": "reused"}
+# reuse job names a run, and then skips it. The cells that name TSK-1026's reuse
+# or the daily skip read as runs: each suite's job runs, and neither decision is
+# a reuse job of these workflows yet. Any other text fails.
+SUITE_CELLS = {"yes": "runs", "no": "skips", "yes, once": "runs",
+               "reused when the tree matches, else yes": "reused",
+               "yes, or the pull request's reused verdict on an equal tree": "runs",
+               "reused from the line push on the same tree, else yes": "runs",
+               "yes, skipped when that tip was already tested": "runs"}
 
 
 def placement_section(doc: str) -> str:
@@ -708,7 +713,7 @@ class DocParityTests(unittest.TestCase):
         self.assertFails(self.problems(adr=adr), "differs from", "Daily run")
 
     def test_an_unreadable_cell_fails(self):
-        event = "Push to an integration line"
+        event = "Push to an integration line, one per batch"
         doc = self.change_row(self.doc, event, "Linux coverage", "mostly")
         adr = self.change_row(self.adr, event, "Linux coverage", "mostly")
         self.assertFails(self.problems(doc, adr), event, "cannot read")

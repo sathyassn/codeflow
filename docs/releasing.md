@@ -225,11 +225,13 @@ Release impact rules for each PR:
 ### Where CI suites run
 
 The event that starts a hosted run decides which suites it runs. A pull
-request into an integration line runs only the short checks. A push to a
-line runs the full Linux suites and no Windows job. Pull requests into
-`main` and the daily and weekly runs run the full Linux and Windows suites,
-coverage included. A tree that has passed a suite does not run it again.
-[ADR-0097](decisions/ADR-0097-ci-suite-placement-by-event.md)
+request into an integration line runs only the short checks. A line push,
+one per batch, runs the full Linux suites, coverage included, and no
+Windows job. A pull request into `main` runs the full Windows suites once
+and reuses Linux from the line push on the same tree. A tree that has
+passed a suite does not run it again, on a line or on `main`; the weekly run
+is the one deliberate exception, because the same tree can break when runner
+images or tools change. [ADR-0097](decisions/ADR-0097-ci-suite-placement-by-event.md)
 records the decision and its dated history. Changing where a suite runs is
 an operator decision; agents and Coordinators never rule on it.
 
@@ -237,10 +239,10 @@ an operator decision; agents and Coordinators never rule on it.
 |---|---|---|---|---|---|---|---|
 | Draft pull request, any base | secret scan and security review only; commit standards passes only on a ready run | no | no | no | no | no | no |
 | Pull request into an integration line | yes | yes | no | no | no | no | no |
-| Push to an integration line | secret scan and security review | yes | yes | yes | no | no | no |
-| Pull request into `main` | yes | yes | yes | yes | yes | yes | yes |
-| Push to `main` | secret scan and security review | yes, or the merged pull request's reused verdict | yes, or reused | yes, or reused | yes, or reused | yes, or reused | yes, or reused |
-| Daily run, `main` and each active line | no | yes | yes | yes | yes | yes | no |
+| Push to an integration line, one per batch | secret scan and security review | yes, or the pull request's reused verdict on an equal tree | yes | yes | no | no | no |
+| Pull request into `main` | yes | reused from the line push on the same tree, else yes | reused from the line push on the same tree, else yes | reused from the line push on the same tree, else yes | yes, once | yes, once | yes |
+| Push to `main` | secret scan and security review | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes |
+| Daily run, `main` and each active line | no | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | no |
 | Weekly run, `main` | secret scan of the full history and dependency audit | yes | yes | yes | yes | yes | yes |
 
 - The short checks are the Linux build and lint checks, the policy check
@@ -256,13 +258,19 @@ an operator decision; agents and Coordinators never rule on it.
   daily run is not one of.
 - A suite that is not selected for an event never counts as a pass of a
   required check, since GitHub treats a skipped required check as a
-  success. Once the placement lands, the `integration/**` ruleset requires
-  only the short-check names, and `codeflow gates` and `windows` stay
-  required on `main`, where they run (operator decision of 2026-11-06). An
-  event or base the workflow cannot read runs the full suites.
+  success. Once the placement lands, the `integration/**` ruleset is to
+  require only the short-check names, and `codeflow gates` and `windows`
+  stay required on `main`, where they run; the operator applies that
+  change as a script. An event or base the workflow cannot read runs
+  the full suites.
 - A line pull request's verdicts come from the short checks only, so they
-  are never a landing batch's proof. A batch lands on a line as one push,
-  and that line push is the batch's hosted Linux proof.
+  are never a landing batch's proof. Once TSK-1351 and the landing-rule ADR
+  land, a batch lands on a line as one push, and that line push is the
+  batch's hosted Linux proof. Windows proof comes from the pull request
+  into `main` or the daily run, never from a line push.
+- A reuse that cannot be proven runs the suite. A batch of several pull
+  requests pushes a tree no member tested, so only a one-member landing on
+  an equal tree reuses that member's short checks.
 - Until TSK-1026 AC-15 lands, a pull request into `main` runs full Linux as
   well as full Windows. After it, Linux is reused from the line push on the
   same tree.

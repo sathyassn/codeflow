@@ -34,41 +34,50 @@ Suite placement is decided by the event that starts the run. A pull request
 into an integration line runs only the short checks: the Linux build and
 lint checks, the policy check, commit standards, secret scan and release
 impact. The Linux tests, Linux coverage and every Windows job leave line
-pull requests. Line pushes, which are the landing batch's hosted proof,
-pull requests into `main`, and the daily and weekly runs keep the full Linux
-and Windows suites, coverage included. A suite that is not selected for
+pull requests. A line push, one per batch, runs the full Linux suites,
+coverage included, and no Windows job. A pull request into `main` runs the
+full Windows suites once and reuses Linux from the line push on the same
+tree. A push to `main` reuses when the tree matches. The daily run on `main`
+and each active line runs Linux and Windows, skipped when that tip was
+already tested, and the weekly run is unchanged. The rule across events: a
+tree that has passed a suite does not run it again, on a line or on `main`.
+A reuse that cannot be proven runs the suite.
+The weekly run is the one deliberate exception: it repeats its Linux and
+Windows suites on a tip that already passed, because the same tree can break
+when runner images or tools change, and the daily skip leaves no other check
+on a quiet branch. A suite that is not selected for
 an event never counts as a pass of a required check: GitHub treats a
 skipped required check as a success, so a skip cannot stand in for one,
 and TSK-1259 AC-9 holds that a not-selected result never satisfies a
 required check. Once this placement lands, the `integration/**` ruleset is
 to require only the short-check names, and `codeflow gates` and `windows`
-stay required on `main`, where they run. That ruleset change waits for the
-operator's decision. An event or base the workflow cannot read fails
+stay required on `main`, where they run. The operator applies that change
+as a script. An event or base the workflow cannot read fails
 closed to the full run. Building this placement, the daily Linux
-suites included, is assigned to TSK-1321 (PR 620); coord/ci amends that
-task's criteria to it.
+suites included, is assigned to TSK-1321 (PR 620), and the reuse to TSK-1026;
+coord/ci amends those tasks' criteria to it.
 
 Changing where a suite runs is an operator decision. Agents and
 Coordinators never rule on it; they bring the evidence and a
 recommendation to the operator.
 
-Placement as decided on 2026-11-05, with the 2026-11-06 line-push row:
+Placement as decided on 2026-11-05 and amended on 2026-11-06:
 
 | Event | Short checks | Linux build and lint | Linux tests | Linux coverage | Windows checks and journeys | Windows partitions | Release gates |
 |---|---|---|---|---|---|---|---|
 | Draft pull request, any base | secret scan and security review only; commit standards passes only on a ready run | no | no | no | no | no | no |
 | Pull request into an integration line | yes | yes | no | no | no | no | no |
-| Push to an integration line | secret scan and security review | yes | yes | yes | no | no | no |
-| Pull request into `main` | yes | yes | yes | yes | yes | yes | yes |
-| Push to `main` | secret scan and security review | yes, or the merged pull request's reused verdict | yes, or reused | yes, or reused | yes, or reused | yes, or reused | yes, or reused |
-| Daily run, `main` and each active line | no | yes | yes | yes | yes | yes | no |
+| Push to an integration line, one per batch | secret scan and security review | yes, or the pull request's reused verdict on an equal tree | yes | yes | no | no | no |
+| Pull request into `main` | yes | reused from the line push on the same tree, else yes | reused from the line push on the same tree, else yes | reused from the line push on the same tree, else yes | yes, once | yes, once | yes |
+| Push to `main` | secret scan and security review | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes |
+| Daily run, `main` and each active line | no | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | no |
 | Weekly run, `main` | secret scan of the full history and dependency audit | yes | yes | yes | yes | yes | yes |
 
 How to read the table:
 
 - The short checks are the five the operator named: the Linux build and
   lint checks, the policy check (`codeflow-policy.yml`, pull requests only)
-  with its `trusted: commit standards` and `trusted: release impact` jobs,
+  with its `commit standards` and `trusted: release impact` jobs,
   and the secret scan in `codeflow-ci.yml`.
 - The security review is not on the operator's list. It stays on every
   event, line pull requests included, as a secure-default reading: the job
@@ -76,8 +85,7 @@ How to read the table:
   removing a security check needs its own operator decision.
 - A "no" cell means the suite does not run for that event. It never means
   the suite's required check reports a pass. Which checks each base
-  requires follows the ruleset change in the Decision, which waits for the
-  operator's decision. A "not selected" result exists only as a reported,
+  requires follows the ruleset change in the Decision. A "not selected" result exists only as a reported,
   non-evidence outcome where TSK-1259 and TSK-1190 define it.
 - On this repository the Linux tests run inside the coverage shards, so the
   Linux tests and Linux coverage columns move together.
@@ -97,19 +105,29 @@ maintainer page's table or the workflows differ; that script is not on
 ## Consequences
 
 - A line pull request reaches its verdicts after the short checks, so it
-  holds no Windows runner and no coverage shard.
-- A Linux test, Windows or coverage failure that a line pull request brings
-  is found on the line push, the daily run or the pull request into `main`.
-  The operator accepted fixing such a failure forward on the line until the
-  candidate push task lands.
+  holds no Windows runner and no coverage shard. A line push holds no
+  Windows runner either.
+- A Linux test or coverage failure that a line pull request brings is found
+  on the line push. A Windows failure is found on the daily run or on the
+  pull request into `main`, so Windows proof of a change comes from one of
+  those two, never from a line push. The operator accepted fixing such a
+  failure forward on the line until the candidate push task lands.
+- A Monday tip the daily run already tested runs those suites again on the
+  weekly run. That is the deliberate exception in the Decision, and it costs
+  one repeat of the suites a week.
+- A batch of several pull requests pushes a tree no member tested, so its
+  line push reuses nothing from them; a one-member landing on an equal tree
+  reuses that member's short checks.
 - Today a line push cannot reuse a line pull request's verdict, since that
   run ran the reduced Windows tier and a reduced-tier run is refused as
-  proof of the partitions, so every line push runs the full suites
-  (`scripts/ci-reuse.py:319-323`). The line pull request still runs the
-  Linux gate parts and the coverage shards today; `docs/releasing.md`,
-  "Where CI suites run", separates today from after TSK-1321. TSK-1026 AC-7 and AC-12 plan per-job reuse
-  on line pushes for jobs the pull request run ran and passed, which would
-  change this.
+  proof of the partitions, so every line push runs the full suites,
+  Windows included (`scripts/ci-reuse.py:319-323`). The line pull request
+  still runs the Linux gate parts and the coverage shards today;
+  `docs/releasing.md`, "Where CI suites run", separates today from after
+  TSK-1321. TSK-1026 AC-7 and AC-12 give a line push job-by-job reuse of
+  the jobs the pull request run ran and passed, which here are the short
+  checks; AC-15 gives a pull request into `main` reuse of the line push's
+  Linux jobs.
 - Moving a suite between events is one recorded operator decision, added to
   the history below and to the maintainer page, never a ruling in a task or
   a sweep.
@@ -154,14 +172,20 @@ numbers move.
   "Line pushes (the batch's hosted proof), PRs into main, and the daily and
   weekly runs keep the full Linux and Windows suites" (`RELEASE-PLAN.md`,
   entry "2026-11-05 15:57: Operator decision on CI placement").
-
-- 2026-11-06, 15:34. Operator, relayed by the Director: "agreed with
-  youre latest recommendation". The record reads: "A push to a line, one
-  per batch, runs full Linux and no Windows. A PR into main runs full
-  Windows once and reuses Linux from the line push on the same tree" and
-  "Rule: a tree that has passed a suite does not run it again, on a line or
-  on main" (`RELEASE-PLAN.md`, entry "2026-11-06 15:34: Operator decision
-  on CI placement"). For line pushes this replaces the 2026-11-05 entry.
+- 2026-11-06, 15:34, this record. Operator: "agreed with youre latest
+  recommendation" and "get this to main sooner ... so we don't revisit
+  this". For line pushes this replaces the previous entry; everything else
+  in that entry stands. The record reads: "A push to a line, one per batch,
+  runs full Linux and no Windows. A PR into main runs full Windows once and
+  reuses Linux from the line push on the same tree. A push to main reuses
+  when the tree matches." The daily run covers `main` and active lines,
+  skipped when that tip was already tested, and "a tree that has passed a
+  suite does not run it again, on a line or on main" (`RELEASE-PLAN.md`,
+  entry "2026-11-06 15:34: Operator decision on CI placement").
+- 2026-11-06, 16:37, this record. Operator: "ok. go as recommended". The weekly
+  run stays unchanged and is the one deliberate exception to the rule across
+  events (`RELEASE-PLAN.md`, entry "2026-11-06 16:37: Operator ruling on the
+  weekly run").
 
 ## Architecture impact
 
@@ -184,14 +208,18 @@ operator's decision 3 in that result. After the PR 631 review of
 gives the real reason a line push runs the full suites: the pull request
 ran the reduced Windows tier, which `scripts/ci-reuse.py` refuses as proof.
 
+Amended again on 2026-11-06, still before this record landed, for the
+operator's decision of 15:34: Windows leaves line pushes. The Decision, the
+table, the Consequences and the history now say so. This record moved from
+PR 631 to the records pull request into `main` so the placement reaches
+`main` ahead of the line.
+
 ## Note, 2026-11-06, line pushes
 
-The operator's 15:34 decision moves every Windows job off line pushes, and
-the table's line-push row now says so. Where the Decision and Consequences
-above say line pushes keep the Windows suites, this Note and that row
-replace them. A line push starts `codeflow-line-push.yml`, because a job in
-`codeflow-ci.yml` whose `if:` is false would leave a `windows` row at the
-line's tip, which is also the head of the pull request into `main`. Until
-TSK-1026 AC-15 lands, a pull request into `main` runs full Linux too. The
-`integration/**` ruleset change is decided, and the operator applies it in
-two steps.
+A line push starts `codeflow-line-push.yml`, because a job in `codeflow-ci.yml`
+whose `if:` is false would leave a `windows` row at the line's tip, which is
+also the head of the pull request into `main`. Where the Consequences above
+describe a line push running Windows today, that ends when TSK-1321 lands.
+Until TSK-1026 lands, a line push runs every Linux job and a pull request into
+`main` runs full Linux too. The operator applies the `integration/**` ruleset
+change in two steps.
