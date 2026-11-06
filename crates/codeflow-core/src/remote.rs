@@ -3020,22 +3020,13 @@ jobs:
                     .find(|(path, _)| *url == format!("repos/o/r/contents/{path}?ref=main"))
                     .map(|(_, text)| text.clone())
                     .ok_or_else(|| format!("gh: Not Found (HTTP 404) {url}")),
-                ["api", url] if url.starts_with("repos/o/r/actions/policies?") => {
-                    if self.policies_denied {
-                        return Err("gh: Resource not accessible by integration (HTTP 403)".into());
-                    }
-                    let policies = self.policies.borrow();
-                    Ok(
-                        json!({ "total_count": policies.len(), "policies": &*policies })
-                            .to_string(),
-                    )
+                ["api", url] if url.starts_with("repos/o/r/actions/policies") => {
+                    self.policy_api(None, input)
                 }
-                ["api", "-X", "POST", "repos/o/r/actions/policies", "--input", "-"] => {
-                    let mut body: Value = serde_json::from_str(input.unwrap()).unwrap();
-                    self.policy_writes.borrow_mut().push(body.clone());
-                    body["id"] = json!(5000 + self.policies.borrow().len());
-                    self.policies.borrow_mut().push(body.clone());
-                    Ok(body.to_string())
+                ["api", "-X", "POST", url, "--input", "-"]
+                    if *url == "repos/o/r/actions/policies" =>
+                {
+                    self.policy_api(Some("POST"), input)
                 }
                 ["api", "-X", method, path, "--input", "-"] => {
                     let mut body: Value = serde_json::from_str(input.unwrap()).unwrap();
@@ -3078,6 +3069,25 @@ jobs:
                 }
                 other => Err(format!("unexpected gh call {other:?}")),
             }
+        }
+
+        /// The Actions event policy endpoint (TSK-1347): the list, or a
+        /// `POST` that stores the body with the next id.
+        fn policy_api(&self, method: Option<&str>, input: Option<&str>) -> Result<String, String> {
+            if method.is_none() {
+                if self.policies_denied {
+                    return Err("gh: Resource not accessible by integration (HTTP 403)".into());
+                }
+                let policies = self.policies.borrow();
+                return Ok(
+                    json!({ "total_count": policies.len(), "policies": &*policies }).to_string(),
+                );
+            }
+            let mut body: Value = serde_json::from_str(input.unwrap()).unwrap();
+            self.policy_writes.borrow_mut().push(body.clone());
+            body["id"] = json!(5000 + self.policies.borrow().len());
+            self.policies.borrow_mut().push(body.clone());
+            Ok(body.to_string())
         }
 
         fn provider(self: &Rc<Self>) -> GithubProvider {
@@ -3181,7 +3191,7 @@ jobs:
             let host = standard_with(|fake| fake.policies = RefCell::new(vec![existing.clone()]));
             let report = apply_authority(&host, solo());
             assert!(host.policy_writes.borrow().is_empty(), "{existing}");
-            assert_eq!(*host.policies.borrow(), [existing.clone()]);
+            assert_eq!(*host.policies.borrow(), std::slice::from_ref(existing));
             assert_eq!(report.status, ProtectStatus::Applied);
             assert!(
                 report.lines.iter().any(|line| {
