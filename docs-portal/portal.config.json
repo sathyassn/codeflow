@@ -34,6 +34,7 @@
   "page_classes": [
     { "source": "docs/glossary.md", "class": "pass-through", "reason": "no-relationship", "note": "A table of term definitions with links; no relationship between terms needs drawing." },
     { "source": "docs/workspace-mode.md", "class": "illustrated" },
+    { "source": "docs/github-apps.md", "class": "illustrated" },
     { "source": "docs/skills.md", "class": "derived-lookup", "derive": "skill-catalog" },
     { "source": "docs/policy-reference.md", "class": "derived-lookup", "derive": "policy-reference" },
     { "source": "docs/CONTRIBUTING.md", "class": "pass-through", "reason": "governance" },

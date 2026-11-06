@@ -14,6 +14,8 @@ Every command in the `codeflow` binary does one of six jobs.
   that numbers them.
 - **Enforce** holds the git rules at each plane: the in-session guards, the
   git hooks, the CI check, the policy file and remote branch protection.
+  [Set up the GitHub Apps](github-apps.md) walks through the `codeflow remote`
+  commands for the authority and agent Apps.
 - **Verify** proves work before it lands: the test gate, record and document
   validation, local landing, health checks and the durable-work lifecycle.
 - **Remember** tells a session where things stand and why: the session
@@ -541,8 +543,6 @@ a rule; the rulesets, profiles and recovery window are in the
 [policy reference](policy-reference.md#remote-protection). A live read that
 fails or does not parse writes nothing. `codeflow doctor --check
 remote-perimeter` reads the default branch's live rules back.
-`codeflow remote setup-apps`, `agent-token` and `import-agent-key` are walked
-through step by step in [Set up the GitHub Apps](github-apps.md).
 
 ### Verify notes
 
