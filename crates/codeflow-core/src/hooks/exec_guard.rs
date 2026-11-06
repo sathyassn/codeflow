@@ -214,6 +214,11 @@ pub fn evaluate_ruled(
             violations.push(finding);
         }
     }
+    // A git option that skips a client hook refuses here as in git-guard
+    // (TSK-1349), so neither guard admits it alone.
+    if let Some(finding) = super::git_guard::line_hook_skip(command, integrity) {
+        merge_strongest(&mut violations, finding);
+    }
     // Programs the line's Git calls and program values run are judged as
     // commands of their own after the line's own findings, so a
     // hook-integrity refusal of the line itself still names that rule.

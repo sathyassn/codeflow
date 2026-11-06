@@ -89,6 +89,12 @@ missing automation for adoption rather than silently enabling publication.
   editing hooks, exporting gate tokens). Gates exist only where mistakes are
   irreversible or invisible. A guard's refusal names the policy rule it
   applied and the sanctioned path.
+- The guards refuse every git option that skips a hook, on every branch,
+  under `git.hook_integrity`: `--no-verify` on `commit`, `merge`, `pull`,
+  `push`, `rebase`, `am` and `p4 submit`, `-n` on `commit` and `am`,
+  `--no-post-rewrite` on `commit`, and `-c core.hooksPath=…`; abbreviated or
+  in a cluster of short options too. On `push` `-n` is `--dry-run`, and on
+  `merge`, `pull` and `rebase` it is `--no-stat`, so it stays allowed there.
 
 ## Protected branches
 

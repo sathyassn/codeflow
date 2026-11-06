@@ -9638,6 +9638,8 @@ fn check_git(
             "`git worktree repair` rewrites checkout integrity pointers".to_string(),
         ));
     }
+    // An option that skips a client hook, on every branch (TSK-1349).
+    out.extend(hook_skip_violation(args, policy.hook_integrity));
     branches.head_may_move |= !discard_readonly_git(sub, rest);
     let config_env = git::config_env_changes_decision(&args[..args.len() - rest.len() - 1]);
     let trigger = moved.transport_env.clone().or_else(|| {
@@ -13191,6 +13193,9 @@ struct ParsedOptions<'a> {
     long: Vec<(&'a str, Option<&'a str>)>,
     sequence: Vec<Seen<'a>>,
     operands: Vec<&'a str>,
+    /// How many of `operands` came before the end of the options, where the
+    /// command still reads a word that begins with `-` as an option.
+    option_operands: usize,
     /// The value each value-taking option was given, attached or from the
     /// next token, in encounter order.
     values: Vec<(Seen<'a>, &'a str)>,
@@ -13242,6 +13247,7 @@ fn parse_options_mode<'a, S: AsRef<str>>(
         long: Vec::new(),
         sequence: Vec::new(),
         operands: Vec::new(),
+        option_operands: 0,
         values: Vec::new(),
     };
     let mut index = 0;
@@ -13290,6 +13296,7 @@ fn parse_options_mode<'a, S: AsRef<str>>(
         }
         let Some(cluster) = token.strip_prefix('-').filter(|rest| !rest.is_empty()) else {
             parsed.operands.push(token);
+            parsed.option_operands += 1;
             if stop_at_operand {
                 parsed
                     .operands
@@ -13397,6 +13404,327 @@ fn no_verify_violation(sub: &str, branch: &str) -> Violation {
         "git.no_verify_bypass",
         format!("`git {sub} --no-verify` skips the client hooks on protected branch '{branch}'"),
         "do not bypass the hooks with --no-verify — fix the cause the gate flags, or land via the sanctioned path (PR / `codeflow integrate`)",
+    )
+}
+
+/// One git option that skips a client hook: the subcommand, the option as
+/// git documents it, a short letter that means the same there, and the hooks
+/// it skips (git 2.53: git-commit(1), git-merge(1), git-pull(1),
+/// git-push(1), git-rebase(1), git-am(1), git-p4(1); TSK-1349 AC-1).
+struct HookSkip {
+    sub: &'static str,
+    long: &'static str,
+    short: Option<char>,
+    hooks: &'static str,
+}
+
+/// Every option of [`HookSkip`]. `-n` counts only where git documents it as
+/// the same option: `git commit` and `git am`. On `push` it is `--dry-run`,
+/// and on `merge`, `pull` and `rebase` it is `--no-stat`.
+const HOOK_SKIPS: &[HookSkip] = &[
+    HookSkip {
+        sub: "commit",
+        long: "--no-verify",
+        short: Some('n'),
+        hooks: "the pre-commit and commit-msg hooks",
+    },
+    HookSkip {
+        sub: "commit",
+        long: "--no-post-rewrite",
+        short: None,
+        hooks: "the post-rewrite hook",
+    },
+    HookSkip {
+        sub: "merge",
+        long: "--no-verify",
+        short: None,
+        hooks: "the pre-merge-commit and commit-msg hooks",
+    },
+    HookSkip {
+        sub: "pull",
+        long: "--no-verify",
+        short: None,
+        hooks: "the pre-merge-commit and commit-msg hooks",
+    },
+    HookSkip {
+        sub: "push",
+        long: "--no-verify",
+        short: None,
+        hooks: "the pre-push hook",
+    },
+    HookSkip {
+        sub: "rebase",
+        long: "--no-verify",
+        short: None,
+        hooks: "the pre-rebase hook",
+    },
+    HookSkip {
+        sub: "am",
+        long: "--no-verify",
+        short: Some('n'),
+        hooks: "the pre-applypatch and applypatch-msg hooks",
+    },
+    HookSkip {
+        sub: "p4",
+        long: "--no-verify",
+        short: None,
+        hooks: "the p4-pre-submit and p4-changelist hooks",
+    },
+];
+
+/// `git merge` (git-merge(1), Git 2.53). The options that take a value, so a
+/// value is never read as an option; an option documented `--x[=<v>]` takes
+/// one only attached. Every other option is a flag.
+const GIT_MERGE_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('m', Arity::Value),
+        ('F', Arity::Value),
+        ('s', Arity::Value),
+        ('X', Arity::Value),
+        ('S', Arity::AttachedValue),
+    ],
+    long: &[
+        ("--cleanup", Arity::Value),
+        ("--strategy", Arity::Value),
+        ("--strategy-option", Arity::Value),
+        ("--into-name", Arity::Value),
+        ("--file", Arity::Value),
+        ("--gpg-sign", Arity::AttachedValue),
+        ("--log", Arity::AttachedValue),
+        ("--verify", Arity::Flag),
+        ("--no-verify", Arity::Flag),
+        ("--verify-signatures", Arity::Flag),
+        ("--no-verify-signatures", Arity::Flag),
+        ("--stat", Arity::Flag),
+        ("--no-stat", Arity::Flag),
+        ("--summary", Arity::Flag),
+        ("--no-summary", Arity::Flag),
+        ("--squash", Arity::Flag),
+        ("--no-squash", Arity::Flag),
+        ("--signoff", Arity::Flag),
+        ("--no-signoff", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// `git pull` (git-pull(1), Git 2.53), read the same way as
+/// [`GIT_MERGE_OPTIONS`]: its merge options and the fetch options that take
+/// a value.
+const GIT_PULL_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('s', Arity::Value),
+        ('X', Arity::Value),
+        ('j', Arity::Value),
+        ('o', Arity::Value),
+        ('S', Arity::AttachedValue),
+    ],
+    long: &[
+        ("--cleanup", Arity::Value),
+        ("--strategy", Arity::Value),
+        ("--strategy-option", Arity::Value),
+        ("--depth", Arity::Value),
+        ("--deepen", Arity::Value),
+        ("--shallow-since", Arity::Value),
+        ("--shallow-exclude", Arity::Value),
+        ("--negotiation-tip", Arity::Value),
+        ("--refmap", Arity::Value),
+        ("--jobs", Arity::Value),
+        ("--upload-pack", Arity::Value),
+        ("--server-option", Arity::Value),
+        ("--recurse-submodules", Arity::AttachedValue),
+        ("--gpg-sign", Arity::AttachedValue),
+        ("--log", Arity::AttachedValue),
+        ("--rebase", Arity::AttachedValue),
+        ("--verify", Arity::Flag),
+        ("--no-verify", Arity::Flag),
+        ("--verify-signatures", Arity::Flag),
+        ("--no-verify-signatures", Arity::Flag),
+        ("--stat", Arity::Flag),
+        ("--no-stat", Arity::Flag),
+        ("--dry-run", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// `git am` (git-am(1), Git 2.53). `-n` is `--no-verify` here; `-m` is
+/// `--message-id` and `-c` is `--scissors`, both flags.
+const GIT_AM_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('C', Arity::Value),
+        ('p', Arity::Value),
+        ('S', Arity::AttachedValue),
+    ],
+    long: &[
+        ("--quoted-cr", Arity::Value),
+        ("--empty", Arity::Value),
+        ("--whitespace", Arity::Value),
+        ("--directory", Arity::Value),
+        ("--exclude", Arity::Value),
+        ("--include", Arity::Value),
+        ("--patch-format", Arity::Value),
+        ("--resolvemsg", Arity::Value),
+        ("--gpg-sign", Arity::AttachedValue),
+        ("--show-current-patch", Arity::AttachedValue),
+        ("--no-verify", Arity::Flag),
+        ("--verify", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// `git p4` (git-p4(1)), a Python program whose option parser also takes an
+/// unambiguous prefix. Its value options are not modelled, so a value is
+/// read as an option, which can only add a refusal.
+const GIT_P4_OPTIONS: OptionSpec = OptionSpec {
+    short: &[],
+    long: &[("--no-verify", Arity::Flag)],
+    git_style: true,
+};
+
+/// The option grammar the hook-skip reader uses for `sub`.
+fn hook_skip_spec(sub: &str) -> &'static OptionSpec {
+    match sub {
+        "commit" => &GIT_COMMIT_OPTIONS,
+        "merge" => &GIT_MERGE_OPTIONS,
+        "pull" => &GIT_PULL_OPTIONS,
+        "push" => &GIT_PUSH_OPTIONS,
+        "rebase" => &GIT_REBASE_OPTIONS,
+        "am" => &GIT_AM_OPTIONS,
+        _ => &GIT_P4_OPTIONS,
+    }
+}
+
+/// `true` when the long option as written selects `skip`: the option itself,
+/// or a prefix of it longer than `--no-`. Git and `git p4`'s option parser
+/// take an unambiguous prefix as the option; a prefix that is also a prefix
+/// of another option is one git rejects, so refusing it fails closed and
+/// admits nothing git would run.
+fn selects_skip(written: &str, skip: &str) -> bool {
+    written == skip || (written.len() > "--no-".len() && skip.starts_with(written))
+}
+
+/// The hook-skip finding for one git invocation, if it has one: a
+/// [`HOOK_SKIPS`] option, written whole, abbreviated or as its short letter
+/// inside a cluster, wherever git reads it as an option; or a substitution
+/// where git would read an option, since its value could be one (fail
+/// closed). A `--verify` later on the line does not clear it: the guard
+/// refuses the mixed form rather than decide which one git keeps.
+/// `args` are the words after `git`, global options included.
+pub(crate) fn hook_skip_violation(args: &[String], level: PolicyLevel) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    let (sub, rest) = git_subcommand(args)?;
+    let skips: Vec<&HookSkip> = HOOK_SKIPS.iter().filter(|s| s.sub == sub).collect();
+    if skips.is_empty() {
+        return None;
+    }
+    let parsed = parse_options(rest, hook_skip_spec(sub));
+    for skip in &skips {
+        let long = parsed
+            .long
+            .iter()
+            .any(|(written, _)| selects_skip(written, skip.long));
+        let short = skip.short.is_some_and(|letter| parsed.has_short(&[letter]));
+        if long || short {
+            let shown = match skip.short {
+                Some(letter) if short && !long => {
+                    format!("`git {sub} -{letter}` (`{}`)", skip.long)
+                }
+                _ => format!("`git {sub} {}`", skip.long),
+            };
+            return Some(hook_skip_finding(
+                level,
+                format!("{shown} skips {}", skip.hooks),
+            ));
+        }
+    }
+    let unread = parsed
+        .long
+        .iter()
+        .map(|(written, _)| *written)
+        .chain(parsed.operands[..parsed.option_operands].iter().copied())
+        .chain(parsed.unread.iter().copied())
+        .any(expands);
+    unread.then(|| {
+        hook_skip_finding(
+            level,
+            format!(
+                "`git {sub}` has an argument the shell fills in where git reads options, so the guard cannot tell whether it skips {}",
+                skips[0].hooks
+            ),
+        )
+    })
+}
+
+/// The first git call on `command` that skips a client hook, read the way
+/// git-guard reads the line's simple commands: a hook-path override in its
+/// global options (`-c core.hooksPath=…`, `--config-env`), or a
+/// [`HOOK_SKIPS`] option, also inside an alias the call defines with `-c
+/// alias.<name>=…`. exec-guard judges with it, so it never admits a form
+/// git-guard refuses (TSK-1349 AC-4). An alias from a configuration file is
+/// git-guard's to resolve: it reads the repository the call targets.
+pub(crate) fn line_hook_skip(command: &str, level: PolicyLevel) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    simple_commands(command).iter().find_map(|words| {
+        let (program, args) = words.split_first()?;
+        if !matches!(program_kind(program), ProgramKind::Git) {
+            return None;
+        }
+        git_args_hook_skip(args, level, 0)
+    })
+}
+
+/// [`line_hook_skip`] for the words after `git`, `depth` aliases deep.
+fn git_args_hook_skip(args: &[String], level: PolicyLevel, depth: usize) -> Option<Violation> {
+    if scan_git_globals(args).0 {
+        return Some(hook_integrity_violation(
+            level,
+            "a git global flag (`-c`/`--config-env` core.hooksPath=…) overrides the hook path for this command"
+                .to_string(),
+        ));
+    }
+    if let Some(finding) = hook_skip_violation(args, level) {
+        return Some(finding);
+    }
+    let (sub, rest) = git_subcommand(args)?;
+    let globals = &args[..args.len() - rest.len() - 1];
+    let key = format!("alias.{}=", sub.to_ascii_lowercase());
+    let body = globals.windows(2).rev().find_map(|pair| {
+        (pair[0] == "-c")
+            .then(|| {
+                let (name, value) = pair[1].split_once('=')?;
+                format!("{}=", name.to_ascii_lowercase())
+                    .eq(&key)
+                    .then_some(value)
+            })
+            .flatten()
+    })?;
+    if depth >= NESTING_LIMIT {
+        return Some(hook_skip_finding(
+            level,
+            format!("`git {sub}` nests aliases past what the guard reads, so it cannot tell whether a hook is skipped"),
+        ));
+    }
+    if let Some(shell) = body.strip_prefix('!') {
+        return line_hook_skip(&format!("{shell} {}", quote_words(rest)), level);
+    }
+    let mut expanded: Vec<String> = globals.to_vec();
+    expanded.extend(shell_tokens(body));
+    expanded.extend(rest.iter().cloned());
+    git_args_hook_skip(&expanded, level, depth + 1)
+}
+
+fn hook_skip_finding(level: PolicyLevel, message: String) -> Violation {
+    Violation::new(
+        "git.hook_integrity",
+        level,
+        message,
+        crate::remedy::HOOK_SKIP.remedy(),
     )
 }
 
@@ -16610,11 +16938,19 @@ mod tests {
         }
     }
 
+    /// TSK-1349: a hook skip refuses on an unprotected branch too, under
+    /// `git.hook_integrity`; 3.x let these through off the protected list.
     #[test]
-    fn test_no_verify_on_feature_allowed() {
+    fn test_no_verify_on_feature_refused() {
         let p = default_policy();
-        assert!(evaluate("git commit --no-verify -m 'x'", &ctx(&p, "feat/x")).is_empty());
-        assert!(evaluate("git push --no-verify origin feat/x", &ctx(&p, "feat/x")).is_empty());
+        for cmd in [
+            "git commit --no-verify -m 'x'",
+            "git push --no-verify origin feat/x",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+            assert!(!has_rule(&v, "git.no_verify_bypass"), "{cmd}: {v:?}");
+        }
     }
 
     #[test]
@@ -16622,6 +16958,187 @@ mod tests {
         // `git push -n` is --dry-run, not --no-verify: must not be flagged.
         let p = default_policy();
         assert!(evaluate("git push -n origin feat/x", &ctx(&p, "feat/x")).is_empty());
+    }
+
+    // -- hook-skip options on every branch (TSK-1349) --
+
+    fn skips_hooks(cmd: &str, branch: &str, p: &GitPolicy) -> bool {
+        evaluate(cmd, &ctx(p, branch)).iter().any(|v| {
+            v.rule == "git.hook_integrity"
+                && (v.message.contains(" skips ") || v.message.contains("cannot tell whether"))
+        })
+    }
+
+    /// AC-2: every option of the AC-1 inventory, written whole, abbreviated
+    /// or as its short letter in a cluster, refuses on a protected and an
+    /// unprotected branch.
+    #[test]
+    fn test_every_hook_skip_option_refuses_on_every_branch() {
+        let p = default_policy();
+        for cmd in [
+            "git commit --no-verify -m x",
+            "git commit -n -m x",
+            "git commit --no-verif -m x",
+            "git commit --no-v -m x",
+            "git commit -qn -m x",
+            "git commit -anm msg",
+            "git commit -m x -n",
+            "git commit -m -- -n",
+            "git commit -m --end-of-options -n",
+            "git commit -C HEAD -n",
+            "git commit --amend --no-post-rewrite --no-edit",
+            "git commit --no-post-rew --no-edit",
+            "git merge --no-verify topic",
+            "git merge --no-verif topic",
+            "git pull --no-verify",
+            "git pull --no-verify origin main",
+            "git push --no-verify origin HEAD",
+            "git push --no-verif origin HEAD",
+            "git push -u --no-verify origin HEAD",
+            "git rebase --no-verify main",
+            "git rebase --no-veri main",
+            "git am --no-verify a.patch",
+            "git am -n a.patch",
+            "git am -3n a.patch",
+            "git am --no-ver a.patch",
+            "git p4 submit --no-verify",
+            "git p4 submit --no-ver",
+            "git -C /elsewhere commit --no-verify -m x",
+            "git --no-pager commit -n -m x",
+        ] {
+            for branch in ["main", "feat/x"] {
+                assert!(skips_hooks(cmd, branch, &p), "{cmd} on {branch}");
+            }
+        }
+    }
+
+    /// AC-2: `-n` where it means another option, and words that only look
+    /// like a skip, are not refused for it.
+    #[test]
+    fn test_lookalikes_of_hook_skips_are_not_refused() {
+        let p = default_policy();
+        for cmd in [
+            "git push -n origin HEAD",
+            "git push --dry-run origin HEAD",
+            "git merge -n topic",
+            "git pull -n",
+            "git rebase -n main",
+            "git commit -m --no-verify",
+            "git commit -m x -- --no-verify",
+            "git commit -m x --end-of-options --no-verify",
+            "git commit --verify -m x",
+            "git commit --n -m x",
+            "git commit --no- -m x",
+            "git commit -mn",
+            "git commit -uno -m x",
+            "git merge --no-verify-signatures topic",
+            "git merge -m --no-verify topic",
+            "git am -m a.patch",
+            "git log --no-verify",
+            "git status -n",
+        ] {
+            for branch in ["main", "feat/x"] {
+                assert!(!skips_hooks(cmd, branch, &p), "{cmd} on {branch}");
+            }
+        }
+    }
+
+    /// AC-3: when the guard cannot tell whether a skip is in effect, it
+    /// refuses: a skip with a later `--verify`, and a word the shell fills in
+    /// where git reads options.
+    #[test]
+    fn test_uncertain_hook_skips_fail_closed() {
+        let p = default_policy();
+        for cmd in [
+            "git commit --no-verify --verify -m x",
+            "git commit -n --verify -m x",
+            "git commit --verify -n -m x",
+            "git push --no-verify --verify origin HEAD",
+            "git merge --no-verify --verify topic",
+            "git am -n --verify a.patch",
+            "git commit -m x $FLAG",
+            "F=--no-verify; git commit $F -m x",
+            "git am \"$P\"",
+            "git pull $(echo --no-verify)",
+        ] {
+            for branch in ["main", "feat/x"] {
+                assert!(skips_hooks(cmd, branch, &p), "{cmd} on {branch}");
+            }
+        }
+        // A filled-in message value is a value, not an option.
+        assert!(!skips_hooks("git commit -m \"$MSG\"", "feat/x", &p));
+    }
+
+    /// AC-4: the refusal holds through every wrapper git-guard unwraps.
+    #[test]
+    fn test_hook_skips_refuse_through_wrappers() {
+        let p = default_policy();
+        for cmd in [
+            "sh -c 'git commit --no-verify -m x'",
+            "bash -c 'git commit -n -m x'",
+            "env FOO=1 git commit --no-verify -m x",
+            "env -i git merge --no-verify topic",
+            "command git push --no-verify origin HEAD",
+            "true && git commit --no-verify -m x",
+            "true; git rebase --no-verify main",
+            "(git am -n a.patch)",
+            "{ git commit -qn -m x; }",
+            "echo $(git commit --no-verify -m x)",
+        ] {
+            assert!(skips_hooks(cmd, "feat/x", &p), "{cmd}");
+        }
+        // An alias is judged by what it expands to.
+        let r = report("git -c alias.x='commit --no-verify' x -m y", "feat/s");
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule == "git.hook_integrity" && v.message.contains(" skips ")),
+            "{:?}",
+            r.violations
+        );
+    }
+
+    /// The refusal follows `git.hook_integrity`, and the protected-branch
+    /// `git.no_verify_bypass` refusal stays whatever that level is.
+    #[test]
+    fn test_hook_skip_follows_hook_integrity_and_keeps_the_protected_refusal() {
+        let mut p = default_policy();
+        p.hook_integrity = PolicyLevel::Warn;
+        let v = evaluate("git commit --no-verify -m x", &ctx(&p, "feat/x"));
+        assert!(
+            v.iter()
+                .any(|x| x.rule == "git.hook_integrity" && x.level == PolicyLevel::Warn),
+            "{v:?}"
+        );
+        p.hook_integrity = PolicyLevel::Off;
+        assert!(!skips_hooks("git commit --no-verify -m x", "feat/x", &p));
+        let v = evaluate("git commit --no-verify -m x", &ctx(&p, "main"));
+        assert!(has_rule(&v, "git.no_verify_bypass"), "{v:?}");
+    }
+
+    /// AC-5: the message names the flag as git documents it and the hooks,
+    /// and carries no value the command wrote.
+    #[test]
+    fn test_hook_skip_message_names_flag_and_hooks_only() {
+        let p = default_policy();
+        let v = evaluate("git commit -qn -m private-text", &ctx(&p, "feat/secret"));
+        let finding = v
+            .iter()
+            .find(|x| x.rule == "git.hook_integrity")
+            .unwrap_or_else(|| panic!("{v:?}"));
+        assert_eq!(
+            finding.message,
+            "`git commit -n` (`--no-verify`) skips the pre-commit and commit-msg hooks"
+        );
+        let v = evaluate("git merge --no-verif feat/secret", &ctx(&p, "feat/x"));
+        let finding = v
+            .iter()
+            .find(|x| x.rule == "git.hook_integrity")
+            .unwrap_or_else(|| panic!("{v:?}"));
+        assert_eq!(
+            finding.message,
+            "`git merge --no-verify` skips the pre-merge-commit and commit-msg hooks"
+        );
     }
 
     // -- safe commands --
@@ -20947,11 +21464,13 @@ mod tests {
                 );
             }
             // On a feature branch the target is not protected, so unknown
-            // commit arguments cannot reach a protected branch.
+            // commit arguments cannot reach a protected branch. They could
+            // still be a hook skip, which refuses on every branch (TSK-1349).
             for cmd in forms {
                 let r = evaluate_report(cmd, &ctx_with_dir_branch(&p, "feat/s", &fixture_resolver));
                 assert!(
-                    r.violations.is_empty(),
+                    r.violations.iter().all(|v| v.rule == "git.hook_integrity"
+                        && v.message.contains("cannot tell whether it skips")),
                     "{cmd} ({local:?}): {:?}",
                     r.violations
                 );

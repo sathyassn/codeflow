@@ -469,6 +469,9 @@ catalog! {
     /// The hooks or their policy edited from a session.
     HOOK_INTEGRITY = Step::Codeflow("codeflow update"),
         "the enforcement hooks and their policy are not agent-editable: fix the cause a gate flags rather than disabling it; hooks and policy change through a human or `codeflow update` (ADR-0009)";
+    /// A git option that skips a client hook (TSK-1349).
+    HOOK_SKIP = Step::Git("git commit"),
+        "run the git command again without the flag so its hooks run, and fix the cause a hook reports; never skip a hook (.codeflow/rules/git-rules.md \"Enforcement\"); for a commit, `git commit` without `--no-verify` or `-n`";
     /// An interpreter given an argument that names, or may name, an
     /// enforcement path (TSK-302).
     INTERPRETER_ARGUMENT = Step::Codeflow("codeflow update"),

@@ -12,6 +12,9 @@ use std::process::{Command, Output, Stdio};
 #[path = "hooks_cli/checkout_identity.rs"]
 mod checkout_identity;
 
+#[path = "hooks_cli/hook_skip.rs"]
+mod hook_skip;
+
 #[path = "hooks_cli/host_isolation.rs"]
 mod host_isolation;
 use host_isolation::{git_command, isolate_clone, isolate_git};
