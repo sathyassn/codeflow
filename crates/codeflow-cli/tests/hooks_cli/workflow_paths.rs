@@ -241,6 +241,66 @@ fn edit_guard_refuses_a_tool_write_under_the_workflow_directory() {
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
 }
 
+/// A spelling in another case is matched by the guard, not by the disk. The
+/// project holds no `.github`, so no disk can fold the spelling onto an
+/// existing directory: this runs the same on every host. The admitted lines
+/// show that only the workflow and action directories are folded.
+#[test]
+fn the_guards_fold_letter_case_without_the_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = project(dir.path());
+    init_repo(&root, "feat/w");
+    write_policy(&root, POLICY);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "chore: fixture"]);
+    let mut wrong = Vec::new();
+    for name in ["git-guard", "exec-guard"] {
+        for command in [
+            "echo x > .GitHub/Workflows/new.yml",
+            "echo x > .GITHUB/WORKFLOWS/new.yml",
+            "echo x > .github/Workflows/new.yml",
+            "echo x > .GitHub/Actions/build/action.yml",
+            "touch .GitHub/Workflows/new.yml",
+        ] {
+            let out = hook(name, &root, command);
+            if out.status.code() != Some(2)
+                || !stderr(&out).contains("policy rule git.hook_integrity")
+            {
+                wrong.push(format!("{name} admitted {command}\n{}", stderr(&out)));
+            }
+        }
+        for command in [
+            "echo x > .GitHub/notes.md",
+            "echo x > .GitHub/Workflows-old/new.yml",
+        ] {
+            let out = hook(name, &root, command);
+            if out.status.code() != Some(0) {
+                wrong.push(format!("{name} refused {command}\n{}", stderr(&out)));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    for (path, code) in [
+        (".GitHub/Workflows/new.yml", 2),
+        (".GitHub/Actions/build/action.yml", 2),
+        (".GitHub/notes.md", 0),
+    ] {
+        let payload = serde_json::json!({
+            "tool_name": "Write",
+            "tool_input": { "file_path": root.join(path), "content": "on: push\n" },
+            "cwd": root,
+        });
+        let out = run_with_stdin(
+            codeflow()
+                .args(["hook", "edit-guard", "--contract", "3"])
+                .current_dir(&root)
+                .env_remove("CLAUDE_PROJECT_DIR"),
+            &payload.to_string(),
+        );
+        assert_eq!(out.status.code(), Some(code), "{path}: {}", stderr(&out));
+    }
+}
+
 /// An empty project folder inside `dir`.
 fn project(dir: &Path) -> PathBuf {
     let root = dir.join("p");

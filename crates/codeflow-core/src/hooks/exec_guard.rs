@@ -668,6 +668,67 @@ mod tests {
         );
     }
 
+    /// A checkout with no `origin/HEAD`, as a hosted pull-request checkout
+    /// is: the policy authority cannot be read. A plain path that holds
+    /// nothing needs no such read, so its deletion is admitted (TSK-1349).
+    /// What the guard must read to judge still refuses: a pattern, and a path
+    /// that exists and could hold a worktree.
+    #[test]
+    fn a_plain_deletion_does_not_rest_on_the_policy_authority() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let repo = git2::Repository::init(&root).unwrap();
+        let tree = repo
+            .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+            .unwrap();
+        let who = git2::Signature::now("t", "t@example.com").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &who, &who, "chore: start", &tree, &[])
+            .unwrap();
+        repo.remote("origin", "https://example.invalid/x.git")
+            .unwrap();
+        repo.reference("refs/remotes/origin/work", commit, true, "fixture")
+            .unwrap();
+        std::fs::create_dir(root.join("build")).unwrap();
+        let section = SecuritySection::default();
+        let judge =
+            |command: &str| evaluate_at(command, &section, PolicyLevel::Block, &root, &root);
+        assert!(
+            judge("rm -rf target/debug").is_empty(),
+            "{:?}",
+            judge("rm -rf target/debug")
+        );
+        for command in ["rm -rf *", "rm -rf build", "rm -rf build target/debug"] {
+            let found = judge(command);
+            assert!(
+                found.len() == 1 && found[0].rule == "git.hook_integrity",
+                "{command}: {found:?}"
+            );
+        }
+    }
+
+    /// A deletion that runs in a directory the line reaches but the guard
+    /// cannot read refuses even for a plain path: the line can make that
+    /// directory a link to an enforcement directory first (TSK-1349).
+    #[test]
+    fn a_plain_deletion_in_a_directory_that_does_not_exist_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        git2::Repository::init(&root).unwrap();
+        let section = SecuritySection::default();
+        for command in [
+            "cd missing && rm -rf target",
+            "ln -s .codeflow b && cd b && rm -rf git-hooks",
+            "ln -s .codeflow b; cd b; rm -rf git-hooks",
+        ] {
+            let found = evaluate_at(command, &section, PolicyLevel::Block, &root, &root);
+            assert!(
+                found.len() == 1 && found[0].rule == "git.hook_integrity",
+                "{command}: {found:?}"
+            );
+        }
+    }
+
     /// TSK-397 design D: where the strict rule applies, a run-time word
     /// given to `rm` or `find` refuses under the directory check, never as a
     /// dangerous deletion. The baseline allows these, except where git-guard

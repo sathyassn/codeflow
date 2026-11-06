@@ -351,6 +351,112 @@ fn both_guards_refuse_configuration_sources_and_includes() {
     );
 }
 
+/// The one configuration-source form the hook-integrity check admits: an
+/// empty file, spelled literally, directly in front of one read-only git
+/// call. It sets nothing, ends with the call and runs no hook. git-guard
+/// passes it; exec-guard still refuses it under its own secret-read rule, as
+/// it did before TSK-1349, so the installed pair admits nothing new.
+const EMPTY_CONFIG_READS: &[&str] = &[
+    "GIT_CONFIG_GLOBAL=/dev/null git status",
+    "GIT_CONFIG_SYSTEM=/dev/null git status",
+    "GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git log -1",
+    "GIT_CONFIG_GLOBAL=/dev/null git diff --stat",
+];
+
+/// Every neighbour of that form. A spelling the guard would have to interpret
+/// refuses, even where the shell would read it as `/dev/null`.
+const NOT_EMPTY_CONFIG_READS: &[&str] = &[
+    // Quoted, joined, escaped or filled in at run time.
+    "GIT_CONFIG_GLOBAL=\"/dev/null\" git status",
+    "GIT_CONFIG_GLOBAL='/dev/null' git status",
+    "\"GIT_CONFIG_GLOBAL=/dev/null\" git status",
+    "GIT_CONFIG_GLOBAL=/dev/nu\"ll\" git status",
+    "GIT_CONFIG_GLOBAL=/dev/\"null\" git status",
+    "GIT_CONFIG_GLOBAL=/dev/nu\\ll git status",
+    "GIT_CONFIG_GLOBAL=$N git status",
+    "GIT_CONFIG_GLOBAL=${N} git status",
+    "GIT_CONFIG_GLOBAL=/dev/$N git status",
+    "GIT_CONFIG_GLOBAL=$(echo /dev/null) git status",
+    "N=/dev/null; GIT_CONFIG_GLOBAL=$N git status",
+    // A separator the shell does not read, so the word is not the literal.
+    "GIT_CONFIG_GLOBAL=/dev/null\u{a0}git status",
+    // Another file, or another spelling of the path.
+    "GIT_CONFIG_GLOBAL=/tmp/g.gitconfig git status",
+    "GIT_CONFIG_GLOBAL=g.conf git status",
+    "GIT_CONFIG_GLOBAL=//dev/null git status",
+    "GIT_CONFIG_GLOBAL=/dev/./null git status",
+    "GIT_CONFIG_GLOBAL=/dev/null/ git status",
+    "GIT_CONFIG_GLOBAL= git status",
+    // Another configuration source, or one beside the empty file.
+    "GIT_CONFIG_COUNT=0 git status",
+    "GIT_CONFIG_PARAMETERS=/dev/null git status",
+    "GIT_CONFIG_KEY_0=/dev/null git status",
+    "GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/tmp/s git status",
+    "GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=1 git status",
+    "FOO=1 GIT_CONFIG_GLOBAL=/dev/null git status",
+    // A setting that outlives the call.
+    "export GIT_CONFIG_GLOBAL=/dev/null",
+    "export GIT_CONFIG_GLOBAL=/dev/null; git status",
+    "GIT_CONFIG_GLOBAL=/dev/null; git status",
+    "GIT_CONFIG_GLOBAL=/dev/null",
+    "declare -x GIT_CONFIG_GLOBAL=/dev/null",
+    // A launcher, a git global option, or another path to git.
+    "env GIT_CONFIG_GLOBAL=/dev/null git status",
+    "exec env GIT_CONFIG_GLOBAL=/dev/null git status",
+    "command env GIT_CONFIG_GLOBAL=/dev/null git status",
+    "GIT_CONFIG_GLOBAL=/dev/null git -C . status",
+    "GIT_CONFIG_GLOBAL=/dev/null git -c user.name=x status",
+    "GIT_CONFIG_GLOBAL=/dev/null /usr/bin/git status",
+    "GIT_CONFIG_GLOBAL=/dev/null sh -c 'git status'",
+    // A call that runs a hook, reaches a remote or is not read-only.
+    "GIT_CONFIG_GLOBAL=/dev/null git commit -m x",
+    "GIT_CONFIG_GLOBAL=/dev/null git push origin HEAD",
+    "GIT_CONFIG_GLOBAL=/dev/null git fetch origin",
+    "GIT_CONFIG_GLOBAL=/dev/null git remote -v",
+    "GIT_CONFIG_GLOBAL=/dev/null git checkout feat/w",
+];
+
+/// The empty-file form passes the hook-integrity check, and it is the only
+/// one: each neighbour refuses under `git.hook_integrity`, naming the
+/// configuration it reads.
+#[test]
+fn only_a_literal_empty_configuration_on_a_read_is_admitted() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("p");
+    std::fs::create_dir(&root).unwrap();
+    let worktree = fixture(&root);
+    let mut wrong = Vec::new();
+    for name in ["git-guard", "exec-guard"] {
+        for command in EMPTY_CONFIG_READS {
+            let out = hook(name, &worktree, command);
+            let said = stderr(&out);
+            let expected = if name == "git-guard" {
+                out.status.code() == Some(0)
+            } else {
+                out.status.code() == Some(2)
+                    && said.contains("policy rule security.secret_reads")
+                    && !said.contains("git.hook_integrity")
+            };
+            if !expected {
+                wrong.push(format!("{name} misjudged {command}\n{said}"));
+            }
+        }
+        for command in NOT_EMPTY_CONFIG_READS {
+            let out = hook(name, &worktree, command);
+            let said = stderr(&out);
+            // `//dev/null` reads as a share path, which refuses first.
+            let reason = (said.contains("policy rule git.hook_integrity")
+                && said.contains("another hooks path"))
+                || (command.contains("=//dev/null")
+                    && said.contains("policy rule security.secret_reads"));
+            if out.status.code() != Some(2) || !reason {
+                wrong.push(format!("{name} admitted {command}\n{said}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// The lines around these variables that set nothing: reading or naming
 /// them, and the variables git does not read as a configuration source.
 #[test]

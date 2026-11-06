@@ -734,6 +734,14 @@ fn non_ascii_below(path: &Path, dir: &Path) -> bool {
             .any(|part| !part.as_os_str().as_encoded_bytes().is_ascii())
 }
 
+/// `path` is a checkout's `.github/workflows` or `.github/actions`. Its code
+/// runs with the workflow's token, and a spelling in another case names the
+/// same directory wherever the checkout's disk ignores case, so it is matched
+/// the same on every disk (TSK-1349 AC-7).
+fn workflow_directory(path: &Path) -> bool {
+    path.ends_with(".github/workflows") || path.ends_with(".github/actions")
+}
+
 /// `a` and `b` name one path, components compared as [`under_ignoring_case`]
 /// compares them.
 fn same_ignoring_case(a: &Path, b: &Path) -> bool {
@@ -962,9 +970,12 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
 struct ProtectedPath {
     path: [Result<PathBuf, String>; 2],
     directory: bool,
-    /// Under the git administrative directory, so compared without ASCII
-    /// case ([`under_ignoring_case`]).
+    /// Under the git administrative directory, so a non-ASCII name below it
+    /// is judged protected ([`non_ascii_below`]).
     git_owned: bool,
+    /// Compared without ASCII case ([`under_ignoring_case`]): a git-owned
+    /// path, or a workflow directory ([`workflow_directory`]).
+    fold_case: bool,
     base: PathBuf,
     resolved_base: [std::cell::OnceCell<Result<PathBuf, String>>; 2],
 }
@@ -1154,6 +1165,7 @@ fn protected_at(root: &Path) -> Result<Option<Protected>, String> {
                 path: both(path),
                 directory: *directory,
                 git_owned: path.starts_with(repo.commondir()),
+                fold_case: path.starts_with(repo.commondir()) || workflow_directory(path),
                 base: base.clone(),
                 resolved_base: Default::default(),
             })
@@ -1205,13 +1217,13 @@ pub(crate) fn repository_enforcement_target(
             for entry in protected.iter() {
                 let path = entry.path[reading].as_ref().map_err(Clone::clone)?;
                 let under = |inner: &Path, outer: &Path| {
-                    if entry.git_owned {
+                    if entry.fold_case {
                         under_ignoring_case(inner, outer)
                     } else {
                         inner.starts_with(outer)
                     }
                 };
-                let same = if entry.git_owned {
+                let same = if entry.fold_case {
                     same_ignoring_case(&target, path)
                 } else {
                     target == *path
@@ -1331,6 +1343,7 @@ fn hard_link_to_protected(target: &Path, protected: &[ProtectedPath]) -> Result<
 }
 
 #[cfg(not(unix))]
+#[allow(clippy::unnecessary_wraps)]
 fn hard_link_to_protected(_target: &Path, _protected: &[ProtectedPath]) -> Result<bool, String> {
     Ok(false)
 }

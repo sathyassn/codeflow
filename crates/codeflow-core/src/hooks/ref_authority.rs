@@ -541,6 +541,12 @@ const READ_ONLY_UNRESOLVED: &[&str] = &[
     "version",
 ];
 
+/// Whether `sub` is a git subcommand that stays allowed while the policy
+/// authority cannot be resolved.
+pub(super) fn read_only_subcommand(sub: &str) -> bool {
+    READ_ONLY_UNRESOLVED.contains(&sub)
+}
+
 /// Long options that can run a program, write a file or read outside the
 /// repository. A shortened spelling (`--ext`) counts as the full name.
 const REFUSED_LONG_OPTIONS: &[&str] = &[

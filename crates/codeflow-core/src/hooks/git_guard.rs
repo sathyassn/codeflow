@@ -1113,7 +1113,7 @@ fn evaluate_report_with_runners(
         // value (TSK-1349). The rest of the segment is still judged, so a
         // git call it prefixes keeps its own findings.
         if ctx.policy.hook_integrity.is_active() {
-            if let Some(var) = git_config_source_assignment(&tokens) {
+            if let Some(var) = git_config_source_assignment(&tokens, segment) {
                 violations.push(git_config_source_violation(ctx.policy.hook_integrity, &var));
             }
         }
@@ -1466,8 +1466,8 @@ fn git_config_source_variable(name: &str) -> bool {
 /// reader cannot find (`env -S`, a line of assignments only) is read for any
 /// such assignment word, so it fails closed. The value is not read: a file
 /// or key the guard cannot see could hold a hook path, so any setting
-/// refuses.
-fn git_config_source_assignment(tokens: &[String]) -> Option<String> {
+/// refuses, except the one form [`empties_config_for_a_read`] admits.
+fn git_config_source_assignment(tokens: &[String], segment: &str) -> Option<String> {
     let name_of = |word: &str| -> Option<String> {
         let name = word.split_once('=').map_or(word, |(name, _)| name);
         git_config_source_variable(name).then(|| name.to_string())
@@ -1481,8 +1481,10 @@ fn git_config_source_assignment(tokens: &[String]) -> Option<String> {
         return tokens.iter().find_map(assigned);
     };
     let at = tokens.len() - args.len() - 1;
-    if let Some(name) = tokens[..at].iter().find_map(assigned) {
-        return Some(name);
+    if !empties_config_for_a_read(&tokens[..at], program, args, segment) {
+        if let Some(name) = tokens[..at].iter().find_map(assigned) {
+            return Some(name);
+        }
     }
     if program != "export" && !is_declare_builtin(program) {
         return None;
@@ -1490,12 +1492,49 @@ fn git_config_source_assignment(tokens: &[String]) -> Option<String> {
     args.iter().find_map(|word| name_of(word))
 }
 
+/// `GIT_CONFIG_GLOBAL=/dev/null` or `GIT_CONFIG_SYSTEM=/dev/null` directly in
+/// front of one read-only `git <subcommand>`: the usual way to read a
+/// repository without a user's configuration. That file is known to be empty,
+/// so it can set no hooks path and no program; the prefix ends with the call,
+/// so no later call sees it; and the call runs no hook. A value the guard
+/// cannot read could hold either, and an `export` outlives the call, so both
+/// still refuse.
+///
+/// `prefix` holds the words in front of `program` with their quoting removed,
+/// so `segment` must also open with those words exactly as written: a quoted,
+/// joined or escaped spelling refuses. Every word in front must be such an
+/// assignment, so a launcher refuses too, and the subcommand must be the first
+/// word after `git`, so a git global option refuses.
+fn empties_config_for_a_read(
+    prefix: &[String],
+    program: &str,
+    args: &[String],
+    segment: &str,
+) -> bool {
+    program == "git"
+        && args
+            .first()
+            .is_some_and(|sub| super::ref_authority::read_only_subcommand(sub))
+        && !prefix.is_empty()
+        && prefix.iter().all(|word| {
+            matches!(
+                word.as_str(),
+                "GIT_CONFIG_GLOBAL=/dev/null" | "GIT_CONFIG_SYSTEM=/dev/null"
+            )
+        })
+        && segment
+            .split([' ', '\t'])
+            .filter(|word| !word.is_empty())
+            .take(prefix.len())
+            .eq(prefix.iter().map(String::as_str))
+}
+
 /// The hook-integrity finding for a configuration-source assignment.
 fn git_config_source_violation(level: PolicyLevel, var: &str) -> Violation {
     hook_integrity_violation(
         level,
         format!(
-            "command sets `{var}`, which can point git at another hooks path for every later git call"
+            "command sets `{var}`, which can point git at another hooks path for this call and every later git call"
         ),
     )
 }
@@ -1573,7 +1612,8 @@ pub(crate) fn line_config_source(command: &str, level: PolicyLevel) -> Option<Vi
     expand_commands(command).iter().find_map(|segment| {
         let mut tokens = command_argv(segment);
         strip_reserved_words(&mut tokens);
-        git_config_source_assignment(&tokens).map(|var| git_config_source_violation(level, &var))
+        git_config_source_assignment(&tokens, segment)
+            .map(|var| git_config_source_violation(level, &var))
     })
 }
 
@@ -5163,17 +5203,36 @@ fn worktree_delete_check(
     line: &str,
     except: Option<&Path>,
 ) -> Option<Violation> {
-    let held = match super::edit_guard::holds_registered_worktrees(cwd) {
-        Ok(held) => held,
-        Err(error) => {
-            return Some(hook_integrity_violation(
-                level,
-                format!("cannot read registered worktrees: {error}"),
-            ))
+    let resolved: Vec<_> = targets
+        .iter()
+        .filter(|t| !t.is_empty())
+        .map(|target| (*target, resolve_targets(target, cwd, line)))
+        .collect();
+    // Whether the checkout holds worktrees matters only for a word that can
+    // reach one the guard cannot place: a pattern, a word filled in at run
+    // time or one it cannot resolve. A plain path is judged by
+    // `checkout_under` below, so deleting one never rests on this read. A
+    // directory that does not exist yet stays unread and refuses: the line
+    // can make it a link first (`ln -s .codeflow b && cd b && rm -rf x`).
+    let plain = cwd.is_dir()
+        && resolved.iter().all(|(target, paths)| {
+            matches!(paths, Ok(Some(_))) && !has_glob(target) && !target.contains('$')
+        });
+    let held = if plain {
+        false
+    } else {
+        match super::edit_guard::holds_registered_worktrees(cwd) {
+            Ok(held) => held,
+            Err(error) => {
+                return Some(hook_integrity_violation(
+                    level,
+                    format!("cannot read registered worktrees: {error}"),
+                ))
+            }
         }
     };
-    for target in targets.iter().filter(|t| !t.is_empty()) {
-        match resolve_targets(target, cwd, line) {
+    for (target, paths) in resolved {
+        match paths {
             Err(error) => return Some(hook_integrity_violation(level, error)),
             Ok(Some(paths)) => {
                 if let Some(checkout) = paths

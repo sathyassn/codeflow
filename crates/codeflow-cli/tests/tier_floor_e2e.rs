@@ -981,6 +981,19 @@ fn pretooluse_commands(root: &Path, rel: &str) -> Vec<String> {
         .collect()
 }
 
+/// The reason of a hook's one `git.hook_integrity` refusal, the line after
+/// its heading; `None` for any other outcome.
+#[cfg(unix)]
+fn write_refusal(stderr: &str) -> Option<&str> {
+    if stderr.matches("policy rule ").count() != 1 {
+        return None;
+    }
+    stderr
+        .lines()
+        .skip_while(|line| !line.contains("policy rule git.hook_integrity"))
+        .nth(1)
+}
+
 /// Run a wired hook command through the shell, as the harness does, with a
 /// Bash tool call for `command` on stdin.
 #[cfg(unix)]
@@ -1103,15 +1116,25 @@ fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
     for tier in ["--minimal", "--standard", "--full"] {
         let (_tmp, root) = project();
         init(&root, tier);
+        // A project deletion is judged in a project that holds what it names.
+        for dir in ["build", "dist", "target"] {
+            std::fs::create_dir(root.join(dir)).unwrap();
+        }
         for wiring in [
             ".claude/settings.json",
             ".codex/hooks.json",
             ".grok/hooks/codeflow.json",
         ] {
-            let hook = pretooluse_commands(&root, wiring)
-                .into_iter()
-                .find(|command| command.contains("hook exec-guard"))
-                .unwrap_or_else(|| panic!("{tier} {wiring}: exec-guard not wired"));
+            let commands = pretooluse_commands(&root, wiring);
+            let wired = |name: &str| {
+                commands
+                    .iter()
+                    .find(|command| command.contains(&format!("hook {name}")))
+                    .unwrap_or_else(|| panic!("{tier} {wiring}: {name} not wired"))
+                    .as_str()
+            };
+            let hook = wired("exec-guard").to_string();
+            let git_guard = wired("git-guard");
             for (form, _) in guard_forms::COMPOSED_PAIRS {
                 let out = run_wired(&root, &hook, form);
                 let stderr = String::from_utf8_lossy(&out.stderr);
@@ -1136,6 +1159,13 @@ fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
                     && stderr.contains("policy rule security.text_guard (block)")
                     && stderr.contains("the strict text rule cannot verify the run-time argument")
                 {
+                    continue;
+                }
+                // TSK-1349 AC-4: exec-guard repeats git-guard's write check,
+                // so it refuses what git-guard refuses, for the same reason.
+                let beside = run_wired(&root, git_guard, command);
+                let beside = String::from_utf8_lossy(&beside.stderr);
+                if write_refusal(&stderr).is_some_and(|why| write_refusal(&beside) == Some(why)) {
                     continue;
                 }
                 assert_eq!(

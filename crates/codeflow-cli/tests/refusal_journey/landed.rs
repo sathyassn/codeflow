@@ -1143,7 +1143,6 @@ fn r3_f3_linked_remote_update_rejects_configuration_overrides() {
         "git remote -v",
         "git remote show origin",
         "git ls-remote origin",
-        "GIT_CONFIG_GLOBAL=g.conf git remote -v",
         "git config --get remotes.team",
     ] {
         let mut process = repo.command(&binary());
@@ -1151,6 +1150,17 @@ fn r3_f3_linked_remote_update_rejects_configuration_overrides() {
         let out = run_hook(process, &linked, "git-guard", command);
         assert_eq!(out.status.code(), Some(0), "{command}: {out:?}");
     }
+    // Listing remotes contacts no remote, so a configuration override on it
+    // is no authority change. The file is still one the guard cannot read,
+    // so it refuses as a configuration source (TSK-1349 finding 1).
+    let command = "GIT_CONFIG_GLOBAL=g.conf git remote -v";
+    let mut process = repo.command(&binary());
+    process.current_dir(&linked);
+    let out = run_hook(process, &linked, "git-guard", command);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{command}: {text}");
+    assert!(text.contains("policy rule git.hook_integrity"), "{text}");
+    assert!(!text.contains("git.policy_authority"), "{text}");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
