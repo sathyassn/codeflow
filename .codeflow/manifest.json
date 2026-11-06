@@ -713,7 +713,7 @@
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "6f8b78460e4d2397028629bc57b2a351d43dc98c543332e8adb0802f3ffa5043",
+      "sha256": "b8d6ea47c3f719732a4b432bddd21758eff685aba15597f479fea817dac0f77b",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -2075,7 +2075,7 @@
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "6f8b78460e4d2397028629bc57b2a351d43dc98c543332e8adb0802f3ffa5043",
+      "sha256": "b8d6ea47c3f719732a4b432bddd21758eff685aba15597f479fea817dac0f77b",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/references/codex-host.md": {

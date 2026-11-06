@@ -932,7 +932,7 @@ fn independent_discovery_precedes_the_one_challenged_plan() {
     // TSK-127 moved the entry-point cell's doctrine into the owning skill.
     assert!(
         normalized.contains(
-            "Both families independently research and analyze; Claude drafts the plan and owns design and integrated judgment, Codex or another family challenges it; the host assigns"
+            "Both families independently research and analyze; Claude drafts the plan and owns design and integrated judgment, Codex or a different lineage challenges it; the host assigns"
         ),
         "the orchestrator skill must expose independent discovery in its description"
     );

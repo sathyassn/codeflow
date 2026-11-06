@@ -1,6 +1,6 @@
 ---
 name: cf-model-orchestrator
-description: Coordinate the default Claude+Codex pair for routed work from Claude Code, Codex, or Grok Build. Both families independently research and analyze; Claude drafts the plan and owns design and integrated judgment, Codex or another family challenges it; the host assigns capable production and author-relative cross-lineage review and reconciles approval with native evidence. Use for routed work (a change to an adopter-facing path, research or analysis that will drive one, or plan, design, security or irreversible work); when unsure, route. Requires native interactive sessions and degrades legibly when a seat is unavailable; never uses headless model execution.
+description: Coordinate the default Claude+Codex pair for routed work from Claude Code, Codex, or Grok Build. Both families independently research and analyze; Claude drafts the plan and owns design and integrated judgment, Codex or a different lineage challenges it; the host assigns capable production and author-relative cross-lineage review and reconciles approval with native evidence. Use for routed work (a change to an adopter-facing path, research or analysis that will drive one, or plan, design, security or irreversible work); when unsure, route. Requires native interactive sessions and degrades legibly when a seat is unavailable; never uses headless model execution.
 ---
 
 # cf-model-orchestrator: host-neutral development duo

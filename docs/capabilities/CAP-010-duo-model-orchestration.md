@@ -41,7 +41,7 @@ The flow from brief to review:
   host records both outputs, disagreements kept
                     |
                     v
-  Claude drafts one plan; Codex or another family challenges it
+  Claude drafts one plan; Codex or a different lineage challenges it
                     |
                     v
   Claude and the challenger approve one version, or the host stops
