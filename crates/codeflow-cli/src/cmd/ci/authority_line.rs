@@ -11,8 +11,8 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use codeflow_core::remote::{
-    AUTHORITY_PREFIX, GITHUB_ACTIONS_APP_ID, MODE_B_LIMIT, RULESET_AUTHORITY_CHECKS,
-    RULESET_AUTHORITY_UPDATES, TRUSTED_PREFIX,
+    is_trusted_verdict, AUTHORITY_PREFIX, GITHUB_ACTIONS_APP_ID, MODE_B_LIMIT,
+    RULESET_AUTHORITY_CHECKS, RULESET_AUTHORITY_UPDATES,
 };
 use serde_json::Value;
 
@@ -88,8 +88,9 @@ pub(super) fn line(document: &Value) -> String {
     out
 }
 
-/// `(context, integration id)` for each required check of a trusted or
-/// authority name, in the order the host lists them.
+/// `(context, integration id)` for each required check of a trusted
+/// verdict (an explicit name, never a prefix) or an authority name, in the
+/// order the host lists them.
 fn pins(rules: &[Value]) -> Vec<(String, Option<u64>)> {
     rules
         .iter()
@@ -102,7 +103,7 @@ fn pins(rules: &[Value]) -> Vec<(String, Option<u64>)> {
         })
         .filter_map(|check| {
             let context = check["context"].as_str()?;
-            (context.starts_with(TRUSTED_PREFIX) || context.starts_with(AUTHORITY_PREFIX))
+            (is_trusted_verdict(context) || context.starts_with(AUTHORITY_PREFIX))
                 .then(|| (printable(context), check["integration_id"].as_u64()))
         })
         .collect()

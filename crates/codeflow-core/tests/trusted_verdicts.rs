@@ -1,9 +1,10 @@
-//! TSK-336 (ADR-0091): the policy and release verdicts are produced only by
-//! the `trusted:` jobs of the policy workflow, which GitHub runs from the
-//! default branch on `pull_request_target`. No workflow that runs on
-//! `pull_request` or `push` emits a `trusted:` name, and the old name
-//! `commit standards` has no producer. These read every workflow the
-//! repository ships or runs.
+//! TSK-336 (ADR-0091): the trusted verdicts are produced only by the jobs of
+//! the policy workflow, which GitHub runs from the default branch on
+//! `pull_request_target`. A verdict is a name in the one table,
+//! [`TRUSTED_VERDICTS`], whatever its spelling: no workflow that runs on
+//! `pull_request` or `push` emits one (TSK-1176). These read every workflow
+//! the repository ships or runs.
+use codeflow_core::remote::{is_trusted_verdict, TRUSTED_VERDICTS};
 use serde_yaml::Value;
 use std::path::{Path, PathBuf};
 
@@ -47,7 +48,8 @@ fn workflows() -> Vec<(String, Value)> {
             .unwrap_or_else(|error| panic!("{dir}: {error}"))
             .map(|entry| entry.unwrap().path())
             .filter(|path| {
-                path.extension().is_some_and(|ext| ext == "yml")
+                path.extension()
+                    .is_some_and(|ext| ext == "yml" || ext == "yaml")
                     && !path
                         .file_name()
                         .is_some_and(|name| name.to_string_lossy().starts_with('.'))
@@ -104,12 +106,22 @@ fn events(workflow: &Value) -> Vec<String> {
     }
 }
 
-/// AC-2, AC-9 (review round 1, R1-1): a `trusted:` name comes only from a
-/// workflow that `pull_request_target` alone starts, and the job carries no
-/// `if`. A job-level `if` skips a job but keeps its check, and GitHub counts
-/// a skipped required check as passing, so a push, schedule or dispatch run
-/// of a workflow holding a trusted-named job would leave a passing check
-/// under that name at the pushed commit. `commit standards` has no producer.
+/// TSK-1176 (operator decision, 2026-11-06): a required check keeps its plain
+/// name, so `secret scan` is the name the rulesets already require and the
+/// table holds it with no `trusted:` prefix.
+#[test]
+fn the_scan_verdict_keeps_its_plain_required_name() {
+    assert!(TRUSTED_VERDICTS.contains(&"secret scan"));
+    assert!(!is_trusted_verdict("trusted: secret scan"));
+}
+
+/// AC-2, AC-9 (review round 1, R1-1), TSK-1176 AC-4: a name in the table comes
+/// only from a workflow that `pull_request_target` alone starts, and the job
+/// carries no `if`. A job-level `if` skips a job but keeps its check, and
+/// GitHub counts a skipped required check as passing, so a push, schedule or
+/// dispatch run of a workflow holding a job of that name would leave a passing
+/// check under it at the pushed commit. So a head-run `secret scan` job fails
+/// here in any workflow copy.
 #[test]
 fn only_pull_request_target_workflows_emit_a_trusted_name() {
     for (path, workflow) in workflows() {
@@ -118,11 +130,7 @@ fn only_pull_request_target_workflows_emit_a_trusted_name() {
                 name, "commit standards",
                 "{path} job {id} still produces the old name"
             );
-            assert_ne!(
-                name, "secret scan",
-                "{path} job {id} still produces the old scan name"
-            );
-            if name.starts_with("trusted: ") {
+            if is_trusted_verdict(&name) {
                 assert_eq!(
                     events(&workflow),
                     ["pull_request_target"],
@@ -208,25 +216,25 @@ fn the_policy_workflows_declare_their_trusted_names() {
                     jobs(&workflow)
                         .into_iter()
                         .map(|(_, name, _)| name)
-                        .filter(|name| name.starts_with("trusted: "))
+                        .filter(|name| is_trusted_verdict(name))
                         .collect()
                 },
             )
     };
     assert_eq!(
         declared("assets/base/ci/codeflow-policy.yml"),
-        ["trusted: commit standards", "trusted: secret scan"]
+        ["trusted: commit standards", "secret scan"]
     );
     assert_eq!(
         declared(".codeflow/.baseline/.github/workflows/codeflow-policy.yml"),
-        ["trusted: commit standards", "trusted: secret scan"]
+        ["trusted: commit standards", "secret scan"]
     );
     assert_eq!(
         declared(".github/workflows/codeflow-policy.yml"),
         [
             "trusted: commit standards",
             "trusted: release impact",
-            "trusted: secret scan",
+            "secret scan",
         ]
     );
 }
@@ -240,7 +248,7 @@ fn the_policy_workflows_declare_their_trusted_names() {
 fn every_verdict_job_runs_only_the_default_branch_code() {
     for (path, workflow) in workflows() {
         for (id, name, job) in jobs(&workflow) {
-            if !name.starts_with("trusted: ") {
+            if !is_trusted_verdict(&name) {
                 continue;
             }
             let steps = job["steps"].as_sequence().unwrap();
@@ -386,7 +394,7 @@ fn scan_events_bind_authority_and_keep_the_pr_head_as_data() {
             "{path}: expressions must enter through env"
         );
         if events(&workflow) == ["pull_request_target"] {
-            assert_eq!(job["name"].as_str(), Some("trusted: secret scan"), "{path}");
+            assert_eq!(job["name"].as_str(), Some("secret scan"), "{path}");
             assert!(job.get("if").is_none(), "{path}");
             assert_eq!(
                 job["env"]["GIT_NO_REPLACE_OBJECTS"].as_str(),

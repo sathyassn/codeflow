@@ -14,9 +14,9 @@
 //!   request with the profile's approvals, strict required checks each
 //!   pinned to the identity that must produce it (the GitHub App given by
 //!   `--check-app` for the `authority:` names, else GitHub Actions for the
-//!   `trusted:` names), no force push, no deletion, no bypass.
+//!   trusted verdict names), no force push, no deletion, no bypass.
 //! - **C, "codeflow line checks"**, on the line pattern (`--lines`, default
-//!   `integration/**`): a pull request, the `trusted:` names and the test
+//!   `integration/**`): a pull request, the trusted verdict names and the test
 //!   verdicts pinned to GitHub Actions and strict, no force push, no
 //!   deletion, no bypass, and no creation rule.
 //!
@@ -53,7 +53,9 @@ use std::process::{Command, Stdio};
 
 use serde_json::{json, Value};
 
-use crate::hooks::policy::DEFAULT_REQUIRED_CHECKS;
+use crate::hooks::policy::{COMMIT_STANDARDS_CHECK, DEFAULT_REQUIRED_CHECKS, SECRET_SCAN_CHECK};
+
+pub use crate::hooks::policy::TRUSTED_VERDICTS;
 
 mod fnmatch;
 
@@ -77,22 +79,39 @@ pub const DEFAULT_LINES: &str = "integration/**";
 /// and C require.
 pub const POLICY_WORKFLOW: &str = ".github/workflows/codeflow-policy.yml";
 
-/// The prefix of the policy verdict job names the policy workflow runs from
-/// the default branch's file for every pull request.
-pub const TRUSTED_PREFIX: &str = "trusted: ";
+/// The prefix `trusted: release impact` still carries. It only shapes the
+/// Mode A name, as the workflow's `ltrimstr("trusted: ")` does; it never
+/// decides whether a name is trusted.
+const TRUSTED_PREFIX: &str = "trusted: ";
 
 /// The prefix of the check runs the GitHub App creates in Mode A.
 pub const AUTHORITY_PREFIX: &str = "authority: ";
 
+/// Whether `name` is one of the [`TRUSTED_VERDICTS`].
+#[must_use]
+pub fn is_trusted_verdict(name: &str) -> bool {
+    TRUSTED_VERDICTS.contains(&name)
+}
+
+/// The `authority:` check run name the GitHub App creates in Mode A for a
+/// trusted verdict: `secret scan` becomes `authority: secret scan`, and
+/// `trusted: release impact` becomes `authority: release impact`, as the
+/// policy workflow writes them.
+#[must_use]
+pub fn authority_name(verdict: &str) -> String {
+    let bare = verdict.strip_prefix(TRUSTED_PREFIX).unwrap_or(verdict);
+    format!("{AUTHORITY_PREFIX}{bare}")
+}
+
 /// What Mode B does not do, said wherever Mode B is named (TSK-1177 F1).
 /// Its refusal step reads the producers once, when each verdict job ends,
 /// and GitHub takes the newest check run of a name, so a workflow that runs
-/// later can still satisfy a `trusted:` name pinned to GitHub Actions.
-pub const MODE_B_LIMIT: &str = "Mode B is a lower tier: it does not close forgery by a later producer, since a workflow that runs after the verdict job can still produce a trusted: check; only Mode A, the App authority, closes it";
+/// later can still satisfy a trusted verdict name pinned to GitHub Actions.
+pub const MODE_B_LIMIT: &str = "Mode B is a lower tier: it does not close forgery by a later producer, since a workflow that runs after the verdict job can still produce a trusted verdict check; only Mode A, the App authority, closes it";
 
-/// The `trusted:` names B and C cannot do without; `trusted: release
+/// The trusted verdicts B and C cannot do without; `trusted: release
 /// impact` joins them where the workflow declares it.
-const REQUIRED_TRUSTED: &[&str] = &["trusted: commit standards", "trusted: secret scan"];
+const REQUIRED_TRUSTED: &[&str] = &[COMMIT_STANDARDS_CHECK, SECRET_SCAN_CHECK];
 
 /// The test verdicts of head code B requires, each where a workflow on the
 /// default branch declares it; `codeflow gates` is required outright.
@@ -262,7 +281,7 @@ impl Profile {
 pub struct AuthorityPlan {
     pub profile: Profile,
     /// The GitHub App that creates the `authority:` checks (Mode A), or
-    /// none for GitHub Actions and the `trusted:` names (Mode B).
+    /// none for GitHub Actions and the trusted verdict names (Mode B).
     pub check_app: Option<u64>,
     /// The integration-line pattern C targets, below `refs/heads/`.
     pub lines: String,
@@ -317,7 +336,7 @@ impl AuthorityPlan {
         match self.check_app {
             Some(app) => format!("Mode A, the authority: names pinned to GitHub App {app}"),
             None => format!(
-                "Mode B, the trusted: names pinned to GitHub Actions ({GITHUB_ACTIONS_APP_ID}); {MODE_B_LIMIT}"
+                "Mode B, the trusted verdict names pinned to GitHub Actions ({GITHUB_ACTIONS_APP_ID}); {MODE_B_LIMIT}"
             ),
         }
     }
@@ -332,7 +351,7 @@ impl AuthorityPlan {
                 DEFAULT_BRANCH_TEST_VERDICTS.join(", ")
             ),
             None => format!(
-                "the trusted: names the policy workflow declares and the declared test verdicts ({}), pinned to GitHub Actions",
+                "the trusted verdict names the policy workflow declares and the declared test verdicts ({}), pinned to GitHub Actions",
                 DEFAULT_BRANCH_TEST_VERDICTS.join(", ")
             ),
         };
@@ -364,7 +383,7 @@ impl AuthorityPlan {
                 vec![
                     "a pull request, no approval required".into(),
                     format!(
-                        "strict status checks on an up-to-date branch: the trusted: names the policy workflow declares and the declared test verdicts ({}), pinned to GitHub Actions",
+                        "strict status checks on an up-to-date branch: the trusted verdict names the policy workflow declares and the declared test verdicts ({}), pinned to GitHub Actions",
                         LINE_TEST_VERDICTS.join(", ")
                     ),
                     "block force pushes".into(),
@@ -753,13 +772,13 @@ pub struct Declared {
 }
 
 impl Declared {
-    /// The `trusted:` names the policy workflow declares as job names.
+    /// The [`TRUSTED_VERDICTS`] the policy workflow declares as job names.
     #[must_use]
     pub fn trusted_names(&self) -> Vec<String> {
         workflow_job_names(&self.policy_text)
             .unwrap_or_default()
             .into_iter()
-            .filter(|name| name.starts_with(TRUSTED_PREFIX))
+            .filter(|name| is_trusted_verdict(name))
             .collect()
     }
 
@@ -941,7 +960,7 @@ fn planned_checks(
 ) -> (PlannedChecks, PlannedChecks) {
     if !declared.policy_workflow {
         let why = format!(
-            "{POLICY_WORKFLOW} is not on the default branch, so no workflow declares the trusted: names this ruleset requires"
+            "{POLICY_WORKFLOW} is not on the default branch, so no workflow declares the trusted verdict names this ruleset requires"
         );
         return (Err(why.clone()), Err(why));
     }
@@ -987,7 +1006,7 @@ fn planned_checks(
         Some(app) => {
             let names: Vec<String> = trusted
                 .iter()
-                .map(|name| format!("{AUTHORITY_PREFIX}{}", &name[TRUSTED_PREFIX.len()..]))
+                .map(|name| authority_name(name))
                 .collect();
             let absent: Vec<&str> = names
                 .iter()
@@ -2273,7 +2292,7 @@ printf '{}'
         assert!(
             text.contains(
                 "require status checks to pass on a branch that is up to date with its base: \
-                 codeflow gates, trusted: secret scan, security review, trusted: commit standards"
+                 codeflow gates, secret scan, security review, trusted: commit standards"
             ),
             "{text:?}"
         );
@@ -2336,6 +2355,42 @@ printf '{}'
             .contains("solo-administrator"));
     }
 
+    /// TSK-1176: a name is trusted by the explicit table, never by its
+    /// spelling, the required names keep their plain form, and the Mode A
+    /// name drops only the `trusted: ` prefix.
+    #[test]
+    fn trusted_verdicts_are_an_explicit_table() {
+        assert!(is_trusted_verdict("secret scan"));
+        assert!(is_trusted_verdict("trusted: release impact"));
+        for name in [
+            "trusted: secret scan",
+            "trusted: other",
+            "Secret scan",
+            "release impact",
+            "history scan",
+        ] {
+            assert!(!is_trusted_verdict(name), "{name}");
+        }
+        assert_eq!(authority_name("secret scan"), "authority: secret scan");
+        assert_eq!(
+            authority_name("trusted: release impact"),
+            "authority: release impact"
+        );
+        assert!(REQUIRED_TRUSTED.contains(&"secret scan"));
+        assert!(DEFAULT_REQUIRED_CHECKS.contains(&"secret scan"));
+        // A head-built scan name cannot also be a test verdict of B.
+        assert!(!DEFAULT_BRANCH_TEST_VERDICTS.contains(&"secret scan"));
+        let declared = Declared {
+            policy_workflow: true,
+            policy_text: POLICY_WITH_TRUSTED.to_string(),
+            ..Declared::default()
+        };
+        assert!(declared
+            .trusted_names()
+            .iter()
+            .any(|name| name == "secret scan"));
+    }
+
     #[test]
     fn workflow_job_names_are_literal_names_or_ids() {
         let text = r"
@@ -2346,7 +2401,7 @@ jobs:
     name: 'trusted: commit standards'
     runs-on: ubuntu-24.04
   scan:
-    name: 'trusted: secret scan'
+    name: 'secret scan'
   gates:
     runs-on: ubuntu-24.04
   matrix:
@@ -2364,8 +2419,8 @@ jobs:
                 "authority",
                 "gates",
                 "other",
+                "secret scan",
                 "trusted: commit standards",
-                "trusted: secret scan"
             ]
         );
         assert_eq!(
@@ -2577,8 +2632,9 @@ esac
         assert_eq!(writes.len(), 1, "{writes:?}");
         assert_eq!(writes[0].0, "PUT repos/o/r/rulesets/900");
         // The six live checks stay, now strict; the policy's
-        // `trusted: secret scan` (TSK-1176), `trusted: commit standards`
-        // (TSK-336) and its two missing rules are added.
+        // `trusted: commit standards` (TSK-336) and its two missing rules
+        // are added. `secret scan` is already among the live checks, so a
+        // trusted producer needs no ruleset change (TSK-1176).
         let body = &writes[0].1;
         let kinds: Vec<&str> = body["rules"]
             .as_array()
@@ -2598,9 +2654,10 @@ esac
         let checks = &body["rules"][0]["parameters"];
         assert_eq!(checks["strict_required_status_checks_policy"], true);
         let mut expected = owned["rules"][0]["parameters"]["required_status_checks"].clone();
-        let added = expected.as_array_mut().unwrap();
-        added.push(json!({"context": "trusted: secret scan", "integration_id": 15368}));
-        added.push(json!({"context": "trusted: commit standards", "integration_id": 15368}));
+        expected
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"context": "trusted: commit standards", "integration_id": 15368}));
         assert_eq!(checks["required_status_checks"], expected);
         assert_eq!(body["bypass_actors"], json!([]));
         assert_eq!(body["enforcement"], "active");
@@ -2691,7 +2748,7 @@ jobs:
     name: 'trusted: commit standards'
     runs-on: ubuntu-24.04
   secret-scan:
-    name: 'trusted: secret scan'
+    name: 'secret scan'
     runs-on: ubuntu-24.04
   release-impact:
     name: 'trusted: release impact'
@@ -2990,14 +3047,14 @@ jobs:
             assert_eq!(checks["strict_required_status_checks_policy"], true);
             let policy = match app {
                 Some(app) => pins(&[
+                    ("authority: secret scan", app),
                     ("authority: commit standards", app),
                     ("authority: release impact", app),
-                    ("authority: secret scan", app),
                 ]),
                 None => pins(&[
+                    ("secret scan", 15368),
                     ("trusted: commit standards", 15368),
                     ("trusted: release impact", 15368),
-                    ("trusted: secret scan", 15368),
                 ]),
             };
             let mut expected = policy;
@@ -3027,9 +3084,9 @@ jobs:
             assert_eq!(
                 check_pins(&c),
                 pins(&[
+                    ("secret scan", 15368),
                     ("trusted: commit standards", 15368),
                     ("trusted: release impact", 15368),
-                    ("trusted: secret scan", 15368),
                     ("codeflow gates", 15368),
                     ("windows", 15368),
                 ]),
@@ -3061,7 +3118,7 @@ jobs:
                     (POLICY_WORKFLOW, POLICY_TODAY),
                     (".github/workflows/codeflow-ci.yml", CI_WORKFLOW),
                 ],
-                "does not declare trusted: commit standards, trusted: secret scan",
+                "does not declare trusted: commit standards, secret scan",
             ),
             (
                 vec![(".github/workflows/codeflow-ci.yml", CI_WORKFLOW)],
@@ -3175,7 +3232,7 @@ jobs:
                     "strict_required_status_checks_policy": false, "do_not_enforce_on_create": true,
                     "required_status_checks": [
                         { "context": "lint", "integration_id": 15368 },
-                        { "context": "trusted: secret scan" }
+                        { "context": "secret scan" }
                     ] } }
             ]
         })
@@ -3220,7 +3277,7 @@ jobs:
         assert_eq!(pinned[0], ("lint".to_string(), 15368), "kept first");
         assert_eq!(
             pinned[1],
-            ("trusted: secret scan".to_string(), 15368),
+            ("secret scan".to_string(), 15368),
             "an unpinned check is pinned"
         );
         assert_eq!(pinned.len(), 7, "{pinned:?}");

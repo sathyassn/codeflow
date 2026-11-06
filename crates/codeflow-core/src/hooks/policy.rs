@@ -32,14 +32,37 @@ pub const INTEGRATION_BRANCH_PREFIX: &str = "integration/";
 /// against a glob is refused, never allowed or read as detached.
 pub const NON_UTF8_BRANCH: &str = "\0not-valid-utf8";
 
+/// The check the policy workflow's commit standards verdict job posts.
+pub const COMMIT_STANDARDS_CHECK: &str = "trusted: commit standards";
+
+/// The check the policy workflow's secret scan verdict job posts.
+pub const SECRET_SCAN_CHECK: &str = "secret scan";
+
+/// The check this repository's release verdict job posts, until TSK-1178
+/// renames it.
+pub const RELEASE_IMPACT_CHECK: &str = "trusted: release impact";
+
+/// The one table of trusted verdict names: the checks only the policy
+/// workflow may produce, which GitHub runs from the default branch on
+/// `pull_request_target`. A name is trusted because it is listed here and
+/// the policy workflow declares it, never because of how it is spelled, and
+/// a required check keeps its plain name (operator decision, 2026-11-06).
+/// Every Rust consumer reads this table, and `trusted_verdicts.rs` and
+/// `authority_job.rs` hold each workflow's `TRUSTED_NAMES` list to it.
+pub const TRUSTED_VERDICTS: &[&str] = &[
+    COMMIT_STANDARDS_CHECK,
+    SECRET_SCAN_CHECK,
+    RELEASE_IMPACT_CHECK,
+];
+
 /// The status checks a protected branch requires when the policy names
 /// none: the job `name:` values of the shipped GitHub workflows, the
 /// default of [`GitPolicy::required_checks`].
 pub const DEFAULT_REQUIRED_CHECKS: &[&str] = &[
     "codeflow gates",
-    "trusted: secret scan",
+    SECRET_SCAN_CHECK,
     "security review",
-    "trusted: commit standards",
+    COMMIT_STANDARDS_CHECK,
 ];
 
 /// The words a generated branch name leaves out unless a project sets its own

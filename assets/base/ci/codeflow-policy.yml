@@ -16,6 +16,14 @@
 # `authority` job below holds one. Builds and tests of the head run in
 # codeflow-ci.yml on `pull_request`.
 #
+# The `secret scan` job is a second verdict job, run the same way. It reads
+# the pull request's commits only as git data, with the authority's pinned
+# gitleaks, configuration and exemptions, so a pull request cannot rewrite or
+# skip the scan that judges it. Its check keeps the plain name branch rules
+# already require (TSK-1176), and no other workflow may produce that name: the
+# refusal below fails a head-run job of that name. Pushes, the schedule and
+# manual runs scan in codeflow-ci.yml under another name, `history scan`.
+#
 # `codeflow ci` runs the SAME commit-format, no-AI-attribution, no-emoji,
 # breaking-footer, branch-naming and PR-body checks as the git hooks and the
 # Claude git-guard, reading the authority's .codeflow/policy.json (CodeFlow
@@ -27,7 +35,7 @@
 # the pull request (SPC-013 R-14, R-20, R-109; ADR-0072); with durable work
 # tracking off, `codeflow ids check` passes with a note. This workflow has
 # no other trigger: pushes, the schedule and manual runs check the registry
-# in codeflow-registry.yml, so they create no check under a `trusted:` name,
+# in codeflow-registry.yml, so they create no check under a trusted verdict's name,
 # not even a skipped one, which GitHub would count as passing.
 #
 # Pull request runs share one concurrency group per pull request, and no
@@ -61,7 +69,7 @@
 # or authority name (Mode B). Mode B is a lower tier: it does not close forgery by a later
 # producer. GitHub takes the newest check run of a name, so a workflow that
 # runs after the verdict job, for example on an event this file does not
-# run on, can still satisfy a trusted: name pinned to GitHub Actions. Only
+# run on, can still satisfy a trusted name pinned to GitHub Actions. Only
 # Mode A closes it: for a pull request into the default branch, the
 # `authority` job creates the `authority:` checks with a GitHub App held in
 # the environment `codeflow-authority`, concluded from the verdict jobs,
@@ -447,6 +455,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           TRUSTED_NAMES: |
             trusted: commit standards
+            secret scan
         run: |
           set -euo pipefail
           umask 077
@@ -577,11 +586,18 @@ jobs:
           fi
 
   secret-scan:
-    name: "trusted: secret scan"
+    name: "secret scan"
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # Read access to pull requests serves the last read, and read access to
+    # actions, checks and statuses the refusal step; the token stays
+    # read-only, and only those two steps receive it.
     permissions:
       contents: read
+      pull-requests: read
+      actions: read
+      checks: read
+      statuses: read
     env:
       GIT_NO_REPLACE_OBJECTS: '1'
     steps:
@@ -1278,6 +1294,145 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
+      # Just before the last read, this step refuses another producer of a
+      # trusted name that is on the head when it runs (ADR-0091, Mode B). It reads once: a producer
+      # that runs later is not seen, and GitHub takes the newest check run
+      # of a name, so Mode B does not close forgery by a later producer;
+      # only Mode A, the App authority, does.
+      # A check run of a trusted name counts only when GitHub Actions
+      # created it in a pull_request_target run of this workflow's own path,
+      # which only the default branch's file can start. A job of that name
+      # in another workflow or event (skipped, sleeping or built from an
+      # expression), a check run from any other app and any commit status
+      # of a trusted or authority name fail this job, and so does an API
+      # error (TSK-1177 AC-1).
+      - name: Refuse another producer of a trusted name
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TRUSTED_NAMES: |
+            trusted: commit standards
+            secret scan
+        run: |
+          set -euo pipefail
+          umask 077
+          if ! printf '%s\n' "$HEAD_SHA" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error::the pull request head '${HEAD_SHA}' is not a full commit id; nothing is judged"; exit 1
+          fi
+          work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/codeflow-producers.XXXXXX")
+          trap 'rm -rf "$work"' EXIT
+          printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\n' "$GH_TOKEN" > "${work}/headers"
+          api() { curl -fsS --retry 3 --max-time 60 -H @"${work}/headers" "$@"; }
+          repo="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
+          workflow=${GITHUB_WORKFLOW_REF#"${GITHUB_REPOSITORY}/"}
+          workflow=${workflow%%@*}
+          found=0
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            encoded=$(jq -rn --arg v "$name" '$v | @uri')
+            page=1
+            while :; do
+              api "${repo}/commits/${HEAD_SHA}/check-runs?check_name=${encoded}&filter=all&per_page=100&page=${page}" > "${work}/runs.json"
+              count=$(jq -e '.check_runs | if type == "array" then length else error("no check_runs list") end' "${work}/runs.json")
+              jq -r '.check_runs[] | [(.id | tostring), (.app.id // 0 | tostring), (.check_suite.id // 0 | tostring)] | @tsv' "${work}/runs.json" > "${work}/runs.tsv"
+              while IFS=$'\t' read -r id app suite; do
+                why=
+                if [ "$app" != 15368 ]; then
+                  why="app ${app} created it, not GitHub Actions"
+                else
+                  case "$suite" in
+                    '' | *[!0-9]*) echo "::error::check run ${id} names no readable check suite"; exit 1 ;;
+                  esac
+                  if [ ! -f "${work}/suite-${suite}" ]; then
+                    api "${repo}/actions/runs?check_suite_id=${suite}&per_page=1" > "${work}/suite.json"
+                    jq -r 'def clean: gsub("[^ -~]"; "?"); [(.workflow_runs[0].event // "(no run)" | clean), (.workflow_runs[0].path // "(no run)" | clean)] | @tsv' "${work}/suite.json" > "${work}/suite-${suite}"
+                  fi
+                  IFS=$'\t' read -r event path < "${work}/suite-${suite}"
+                  if [ "$event" != pull_request_target ] || [ "$path" != "$workflow" ]; then
+                    why="a ${event} run of ${path} created it, not a pull_request_target run of ${workflow}"
+                  fi
+                fi
+                if [ -n "$why" ]; then
+                  echo "::error::check run ${id} named '${name}' is on ${HEAD_SHA}: ${why}"
+                  found=1
+                fi
+              done < "${work}/runs.tsv"
+              [ "$count" -ge 100 ] || break
+              page=$((page + 1))
+            done
+          done <<< "$TRUSTED_NAMES"
+          page=1
+          while :; do
+            api "${repo}/commits/${HEAD_SHA}/statuses?per_page=100&page=${page}" > "${work}/statuses.json"
+            count=$(jq -e 'if type == "array" then length else error("not a list of statuses") end' "${work}/statuses.json")
+            jq -r --arg names "$TRUSTED_NAMES" 'def clean: gsub("[^ -~]"; "?");
+              ($names | split("\n") | map(select(length > 0))) as $trusted
+              | ($trusted + ($trusted | map("authority: " + ltrimstr("trusted: ")))) as $all
+              | .[] | select(.context as $c | any($all[]; . == $c))
+              | [(.id | tostring), (.context | clean), (.state // "?" | clean), (.creator.login // "?" | clean)] | @tsv' "${work}/statuses.json" > "${work}/statuses.tsv"
+            while IFS=$'\t' read -r id context state creator; do
+              echo "::error::commit status ${id} named '${context}' (${state}, set by ${creator}) is on ${HEAD_SHA}; no status may carry a trusted or authority name"
+              found=1
+            done < "${work}/statuses.tsv"
+            [ "$count" -ge 100 ] || break
+            page=$((page + 1))
+          done
+          if [ "$found" -ne 0 ]; then
+            echo "::error::another producer of a trusted name is on ${HEAD_SHA}, so this check fails; remove the workflow, job or status that produced it, then add a new commit to the pull request, since a re-run on this head reads the same check runs and fails again"
+            exit 1
+          fi
+          echo "no other producer of a trusted or authority name is on ${HEAD_SHA} now; Mode B does not see one that runs later"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      # The last read, as in the commit standards job, of the head and base
+      # branch this run scanned: if either changed while it ran, this run
+      # fails and the run queued by that change decides. The body is no input
+      # to the scan, so this job neither reads nor compares it.
+      - name: the pull request is unchanged since it was judged
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          JUDGED_HEAD: ${{ github.event.pull_request.head.sha }}
+          JUDGED_BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          if ! curl -fsSL --retry 3 --max-time 60 \
+            -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull-after.json"; then
+            echo "::error::cannot read the pull request again, so this run cannot show that what it scanned is current; it fails closed; re-run the check"; exit 1
+          fi
+          if ! head=$(jq -er '.head.sha' "${RUNNER_TEMP}/pull-after.json") \
+            || ! base=$(jq -er '.base.ref' "${RUNNER_TEMP}/pull-after.json"); then
+            echo "::error::the pull request read at the end of this run is unreadable, so this run fails closed; re-run the check"; exit 1
+          fi
+          if [ "$head" != "$JUDGED_HEAD" ]; then
+            echo "::error::the pull request head changed while this run scanned it (scanned ${JUDGED_HEAD}, now ${head}); the run queued by the new head decides"; exit 1
+          fi
+          if [ "$base" != "$JUDGED_BASE" ]; then
+            echo "::error::the pull request base branch changed while this run scanned it (scanned ${JUDGED_BASE}, now ${base}); the run queued by that change decides"; exit 1
+          fi
+          echo "the pull request head and base branch are unchanged since this run scanned them"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
   # The authority job (ADR-0091 "Check identity", TSK-1177). It runs only
   # for a pull request into the default branch, after the verdict jobs, and
   # is the only job in the repository that references the environment
@@ -1301,7 +1456,7 @@ jobs:
   # forgery by a later producer; only Mode A does.
   authority:
     name: authority checks
-    needs: [commit-lint]
+    needs: [commit-lint, secret-scan]
     if: ${{ !cancelled() && github.event_name == 'pull_request_target' && github.event.pull_request.base.ref == github.event.repository.default_branch }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -1351,6 +1506,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           TRUSTED_NAMES: |
             trusted: commit standards
+            secret scan
         run: |
           set -euo pipefail
           umask 077
@@ -1430,6 +1586,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           VERDICTS: |
             authority: commit standards=${{ needs.commit-lint.result }}
+            authority: secret scan=${{ needs.secret-scan.result }}
         run: |
           set -euo pipefail
           umask 077
@@ -1502,7 +1659,11 @@ jobs:
             printf '%s\t%s\t%s\n' "$id" "$name" "$result" >> "${work}/created.tsv"
           done <<< "$VERDICTS"
           while IFS=$'\t' read -r id name result; do
-            verdict="trusted: ${name#"authority: "}"
+            # The verdict job the check reports on, by its own name.
+            case "$name" in
+              "authority: secret scan") verdict="secret scan" ;;
+              *) verdict="trusted: ${name#"authority: "}" ;;
+            esac
             conclusion=failure
             if [ "$result" = success ]; then conclusion=success; fi
             jq -cn --arg conclusion "$conclusion" --arg title "${verdict} ${result}" \

@@ -8,6 +8,7 @@
 //! and logs every request, so the token handling, the check-run calls and
 //! each Mode B refusal are exercised without a host. The hosted fixtures
 //! of AC-3 are separate.
+use codeflow_core::remote::{authority_name, is_trusted_verdict};
 use serde_yaml::Value;
 use std::path::{Path, PathBuf};
 
@@ -85,12 +86,12 @@ fn step<'a>(job: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no step {name}"))
 }
 
-/// `(job id, name)` of each `trusted:` verdict job.
+/// `(job id, name)` of each trusted verdict job.
 fn verdict_jobs(workflow: &Value) -> Vec<(String, String)> {
     jobs(workflow)
         .into_iter()
         .map(|(id, job)| (id, str_of(&job, "name").to_owned()))
-        .filter(|(_, name)| name.starts_with("trusted: "))
+        .filter(|(_, name)| is_trusted_verdict(name))
         .collect()
 }
 
@@ -320,12 +321,7 @@ fn each_authority_check_is_concluded_from_its_verdict_job() {
         let create = step(&job, CREATE);
         let expected: Vec<String> = verdicts
             .iter()
-            .map(|(id, name)| {
-                format!(
-                    "authority: {}=${{{{ needs.{id}.result }}}}",
-                    name.trim_start_matches("trusted: ")
-                )
-            })
+            .map(|(id, name)| format!("{}=${{{{ needs.{id}.result }}}}", authority_name(name)))
             .collect();
         assert_eq!(
             lines(str_of(&create["env"], "VERDICTS")),
@@ -657,6 +653,52 @@ exit 22
             "{calls}"
         );
         assert!(host.temp_is_empty());
+    }
+
+    /// TSK-1176 AC-4: the name list the template ships covers the plain
+    /// `secret scan`, so a pull request that adds a job of that name to a
+    /// workflow it can edit, a green head-run job beside a red trusted scan,
+    /// fails the verdict job. The genuine trusted scan passes the same list.
+    #[test]
+    fn a_head_run_secret_scan_is_refused() {
+        const SCAN: &str = "check-runs?check_name=secret%20scan&filter=all";
+        let (_, workflow) = read("assets/base/ci/codeflow-policy.yml");
+        let shipped = str_of(
+            &step(&workflow["jobs"]["commit-lint"], GUARD)["env"],
+            "TRUSTED_NAMES",
+        )
+        .to_owned();
+        let empty = runs(&[]);
+        let answer = |scan: &str, event: &str, path: &str| {
+            let host = Host::new(&[
+                ("GET", STANDARDS, empty.as_str()),
+                ("GET", SCAN, scan),
+                ("GET", "check_suite_id=10", &suite(event, path)),
+                ("GET", "/statuses?", "[]"),
+            ]);
+            host.run(
+                &guard_script(),
+                &[
+                    ("GH_TOKEN", "ghs_workflow"),
+                    ("HEAD_SHA", HEAD),
+                    ("TRUSTED_NAMES", shipped.as_str()),
+                ],
+            )
+        };
+        let one = runs(&[(1, 15368, 10)]);
+        let forged = answer(&one, "pull_request", ".github/workflows/codeflow-ci.yml");
+        assert!(!forged.status.success(), "{}", text(&forged));
+        assert!(
+            text(&forged).contains(
+                "check run 1 named 'secret scan' is on \
+                 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: a pull_request run of \
+                 .github/workflows/codeflow-ci.yml created it"
+            ),
+            "{}",
+            text(&forged)
+        );
+        let genuine = answer(&one, "pull_request_target", WORKFLOW);
+        assert!(genuine.status.success(), "{}", text(&genuine));
     }
 
     /// Each named case fails closed and names the producer.

@@ -163,7 +163,7 @@ jobs:
   commit-standards:
     name: "trusted: commit standards"
   secret-scan:
-    name: "trusted: secret scan"
+    name: "secret scan"
 "#;
 
 #[cfg(unix)]
@@ -249,7 +249,7 @@ fn two_runs_write_the_owned_rulesets_once_and_never_the_foreign_one() {
         "created ruleset 'codeflow authority updates' (1001) on ~DEFAULT_BRANCH: only bypass actors update it, bypass: RepositoryRole 5 (always)",
         "created ruleset 'codeflow authority checks' (1002) on ~DEFAULT_BRANCH",
         "created ruleset 'codeflow line checks' (1003) on refs/heads/integration/**",
-        "strict checks: trusted: commit standards (app 15368), trusted: secret scan (app 15368), codeflow gates (app 15368), windows (app 15368)",
+        "strict checks: trusted: commit standards (app 15368), secret scan (app 15368), codeflow gates (app 15368), windows (app 15368)",
     ] {
         assert!(report.contains(name), "{name}: {report}");
     }

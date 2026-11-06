@@ -1,6 +1,6 @@
 //! The range scan behind `codeflow scan` (TSK-1176 AC-6 and AC-7, moved
 //! from TSK-430): the pinned gitleaks over the commits `head` holds and
-//! `base` does not, read the way the managed `trusted: secret scan` job reads
+//! `base` does not, read the way the managed `secret scan` job reads
 //! a pull request.
 //!
 //! The base is the trusted commit here, as the default-branch authority is
@@ -811,7 +811,7 @@ fn read_findings(raw: &[u8], found: bool, report: &mut RangeReport) -> Result<()
 
 impl Engine {
     /// Run the verified binary over `base..head` in the repository at
-    /// `root`, as the hosted `trusted: secret scan` job runs it for a pull
+    /// `root`, as the hosted `secret scan` job runs it for a pull
     /// request whose base is `base`.
     ///
     /// # Errors

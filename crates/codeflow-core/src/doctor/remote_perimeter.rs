@@ -1185,7 +1185,7 @@ mod tests {
         }
     }
 
-    const SIX: &str = r#"[{"context":"codeflow gates","integration_id":15368},{"context":"trusted: commit standards","integration_id":15368},{"context":"release impact","integration_id":15368},{"context":"trusted: secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"windows","integration_id":15368}]"#;
+    const SIX: &str = r#"[{"context":"codeflow gates","integration_id":15368},{"context":"trusted: commit standards","integration_id":15368},{"context":"release impact","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"windows","integration_id":15368}]"#;
 
     /// The answers of a host whose default branch `main` carries `rules`
     /// (the body of `rules/branches/main`), `classic` protection (or 404)
@@ -1377,7 +1377,7 @@ mod tests {
                 args,
                 "[]",
                 Some(
-                    r#"{"required_status_checks":{"strict":true,"contexts":["codeflow gates","trusted: secret scan","security review","trusted: commit standards"]},"enforce_admins":{"enabled":false}}"#,
+                    r#"{"required_status_checks":{"strict":true,"contexts":["codeflow gates","secret scan","security review","trusted: commit standards"]},"enforce_admins":{"enabled":false}}"#,
                 ),
                 "[]",
             )
@@ -1523,7 +1523,7 @@ mod tests {
     }
 
     /// The four policy names as ruleset check objects.
-    const FOUR: &str = r#"[{"context":"codeflow gates","integration_id":15368},{"context":"trusted: secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"trusted: commit standards","integration_id":15368}]"#;
+    const FOUR: &str = r#"[{"context":"codeflow gates","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"trusted: commit standards","integration_id":15368}]"#;
 
     const ONE_ACTOR: &str =
         r#"[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]"#;
@@ -1567,14 +1567,14 @@ mod tests {
                 args,
                 "[]",
                 Some(
-                    r#"{"required_status_checks":{"strict":false,"contexts":["codeflow gates","trusted: secret scan","security review","trusted: commit standards"]},"enforce_admins":{"enabled":false}}"#,
+                    r#"{"required_status_checks":{"strict":false,"contexts":["codeflow gates","secret scan","security review","trusted: commit standards"]},"enforce_admins":{"enabled":false}}"#,
                 ),
             )
         }
         let dir = project();
         let text = warn_text(&check(&opts(dir.path(), ruleset_exec)));
         assert!(
-            text.contains("ruleset 2 lets 1 actor(s) bypass it, and no rule that binds everyone requires codeflow gates, trusted: secret scan, security review, trusted: commit standards"),
+            text.contains("ruleset 2 lets 1 actor(s) bypass it, and no rule that binds everyone requires codeflow gates, secret scan, security review, trusted: commit standards"),
             "{text}"
         );
         let text = warn_text(&check(&opts(dir.path(), classic_exec)));
@@ -1901,7 +1901,7 @@ jobs:
   commit-standards:
     name: 'trusted: commit standards'
   secret-scan:
-    name: 'trusted: secret scan'
+    name: 'secret scan'
   authority:
     environment: codeflow-authority
     steps:
@@ -1951,7 +1951,7 @@ jobs:
     fn protected_world() -> World {
         let trusted = checks(&[
             ("trusted: commit standards", 15368),
-            ("trusted: secret scan", 15368),
+            ("secret scan", 15368),
             ("codeflow gates", 15368),
         ]);
         World {
@@ -2314,7 +2314,7 @@ jobs:
         }));
         let text = warn_text(&judge(world, None));
         assert!(
-            text.contains("ruleset 'main required checks' (24379074) requires commit standards, secret scan, which no workflow on main produces"),
+            text.contains("ruleset 'main required checks' (24379074) requires commit standards, which no workflow on main produces"),
             "{text}"
         );
         assert!(
