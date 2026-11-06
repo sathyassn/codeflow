@@ -59,7 +59,7 @@ From request to `main`, the work passes through the actors in this order:
   reviewer   one review of the whole change; a material finding is
       |      fixed in the same PR
       v
-  primary    batch candidate, one full gate on that exact candidate
+  primary    batch candidate, its landing-class checks on that exact candidate
       |      green: the integration line moves
       |      red: diagnose first, drop a member only on evidence
       v

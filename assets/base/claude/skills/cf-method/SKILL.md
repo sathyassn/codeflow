@@ -189,14 +189,14 @@ waive the clarity, safety, review or protected-branch conditions.
    candidate takes one full gate on that exact candidate. It lands through one of two
    sanctioned modes: **Local**, `codeflow integrate <candidate> --into
    integration/<…>` on a candidate cut from the current line tip (one per line at a time,
-   runs the non-selective full gate, keeps the tested tip); or **PR** into the
+   runs the checks its landing class selects, keeps the tested tip); or **PR** into the
    integration branch, merged by the primary once the candidate's
    selected landing checks are complete and green and the PR's
    required checks pass. The PR cites the gate run by its id and
    revision from its durable home. Local mode rebases by default; `--merge`
    runs from a linked worktree and gates a no-fast-forward merge commit that
    keeps the reviewed head and advances only the local line. Both modes execute
-   every target and refuse failures, skips and incomplete gates. A repository
+   every selected target and refuse failures, skips and incomplete gates. A repository
    with no targets retains the loud warning that the merge is not test-verified
    and may land. Neither variant pushes.
 4. **A red batch is diagnosed first.** Drop a member only when evidence

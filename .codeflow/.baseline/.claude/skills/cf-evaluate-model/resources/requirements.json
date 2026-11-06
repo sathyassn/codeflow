@@ -3140,7 +3140,7 @@
     {
       "id": "CF-PM-011",
       "level": "hard",
-      "statement": "Every PR reviewed and ready when an integration line lands joins one candidate in dependency order, with one full gate and one hosted run on that exact combined candidate. Later-ready PRs join the next candidate. Never serialize ready PRs behind each other's landing or hosted run; serialize candidates on a line, while different lines may land in parallel.",
+      "statement": "Every PR reviewed and ready when an integration line lands joins one candidate in dependency order, with the checks its landing class selects (one full gate for a code candidate) and one hosted run on that exact combined candidate. Later-ready PRs join the next candidate. Never serialize ready PRs behind each other's landing or hosted run; serialize candidates on a line, while different lines may land in parallel.",
       "sources": [
         {
           "path": ".agents/skills/cf-method/SKILL.md",
@@ -3148,13 +3148,14 @@
             "every PR",
             "reviewed and ready at that moment on one candidate in dependency order",
             "another PR's landing or hosted run",
-            "one full gate on that exact candidate"
+            "one full gate on that exact candidate",
+            "runs the checks its landing class selects"
           ]
         },
         {
           "path": "AGENTS.md",
           "markers": [
-            "one full gate and one hosted run on the exact candidate"
+            "the landing-class checks (one full gate for code) and one hosted run on the exact candidate"
           ]
         }
       ]
