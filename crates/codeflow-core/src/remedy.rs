@@ -315,6 +315,9 @@ catalog! {
     /// An epic created after adoption that names no deliverables (TSK-435).
     EPIC_DELIVERABLES = Step::Edit("{path}"),
         "in {path}, list each output and its home under `## Deliverables` as `- <output>: <path>`; a home not known yet is marked provisional with what decides it";
+    /// A frozen serving tag whose source is missing or no longer its task's epic.
+    SERVING_TRANSFER = Step::Edit("{path}"),
+        "restore the criterion named by the serves tag in {path}, or record its transfer to the task's epic in a planning amendment";
     /// A documentation layer the project does not have.
     DOCS_LAYER_ABSENT = Step::Codeflow("codeflow update"),
         "run `codeflow update`, which restores {path} at this project's tier";

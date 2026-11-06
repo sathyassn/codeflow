@@ -422,6 +422,29 @@ multi-task epic lands in gated batch candidates on its integration branch and
 reaches the protected branch as one reviewed body (cf-method, "Managing a body
 of work").
 
+### Moving a criterion with its tasks
+
+A criterion can transfer with its serving tasks while their `(serves ...)`
+tags stay frozen. A planning-only commit retains the original obligation in
+A, adds `- Amended YYYY-MM-DD: transferred to EPC-NNN AC-n.` beneath it,
+and introduces that destination criterion in open epic B. B's criterion
+must have the same obligation text and `(journey)` and `(after release)`
+tags; an aggregate summary or a criterion B already had does not qualify.
+The serving tasks belong to B at review. A task cancelled both now and at
+review is excluded from that membership check and never supplies proof.
+A cancellation only after review grants no exception.
+The reviewed commit contains this
+planning commit, and A closes the source criterion only with `waived |
+<transfer commit SHA>`. A tick, a `verified` row and a different amendment
+commit do not close it. An after-release source keeps the deferral rule
+above. B verifies the destination through a complete moved serving task's
+`verified` or `waived` result, with `journey: verified` for a journey;
+any open or complete native serving task beside the moved tasks prevents
+this credit.
+`codeflow validate --docs` warns about a dangling or foreign serves tag
+without a proven transfer, naming the task and tag. Unreadable history or
+an invalid transfer grants no transfer credit.
+
 ### Acceptance waivers and redactions
 
 A waiver is a criterion result in the fenced `yaml` acceptance block under

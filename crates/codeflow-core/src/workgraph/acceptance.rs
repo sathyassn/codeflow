@@ -187,7 +187,7 @@ pub fn text_at(
     blob_at(&repo, commit.id(), path)
 }
 
-fn record_at(
+pub(super) fn record_at(
     repo: &Repository,
     commit: Oid,
     record: &RecordView,
@@ -1126,7 +1126,7 @@ pub fn bind_epic_completion(
 /// Why a waiver in an epic's own block does not name the planning
 /// amendment of criterion `id` of `epic` inside the reviewed commit, if it
 /// does not.
-fn epic_waiver_problem(
+pub(super) fn epic_waiver_problem(
     repo: &Repository,
     epic: &RecordView,
     id: &str,
