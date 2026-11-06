@@ -2771,7 +2771,7 @@
     ".codeflow/rules/worktrees.md": {
       "src": "rules/worktrees.md",
       "ownership": "managed",
-      "sha256": "13461adcdda4a82ee418a2258f56d29fb4bb87b63cd1a1d8aeedbb0a3687b3e9",
+      "sha256": "a8765284f4afee71725e93c44b2f9d6b076eba7d5725c22487ea6dae44926344",
       "exec": false
     },
     ".codeflow/rules/writing.md": {
@@ -2849,7 +2849,7 @@
     ".github/workflows/codeflow-policy.yml": {
       "src": "ci/codeflow-policy.yml",
       "ownership": "managed",
-      "sha256": "d31a79a8b31f54df8e5a57f010131b821dd3e0bc6f68cff43fde4c1a16e1cd9d",
+      "sha256": "fc450186a0fefa0f0084b067637da6b3844f0b533d268d5e36db293322fc51bb",
       "exec": false
     },
     ".github/workflows/codeflow-registry.yml": {

@@ -341,34 +341,48 @@ struct WorkBranches {
     /// Branches on remotes outside the claim scope by task id: the remote
     /// and the branch name on it.
     unrelated: BTreeMap<String, Vec<(GitName, GitName)>>,
+    /// Leftover local branches by task id: no remote holds them and no
+    /// worktree has them checked out (TSK-1308). Filled only when the scan
+    /// is given the clone's [`LocalBranches`].
+    leftovers: BTreeMap<String, Vec<GitName>>,
 }
 
 impl WorkBranches {
     fn information(&self, task_id: &str, target: &str) -> Vec<String> {
-        self.unrelated
-            .get(task_id)
-            .into_iter()
-            .flatten()
-            .map(|(remote, branch)| {
-                let remote = remote.display();
-                format!(
-                    "also on {remote}: {} (not a claim: {remote} does not carry work to {})",
-                    branch.display(),
-                    crate::git::display_text(&shown(target))
-                )
-            })
-            .collect()
+        let unrelated =
+            self.unrelated
+                .get(task_id)
+                .into_iter()
+                .flatten()
+                .map(|(remote, branch)| {
+                    let remote = remote.display();
+                    format!(
+                        "also on {remote}: {} (not a claim: {remote} does not carry work to {})",
+                        branch.display(),
+                        crate::git::display_text(&shown(target))
+                    )
+                });
+        let leftovers = self.leftovers.get(task_id).into_iter().flatten().map(|branch| {
+            format!(
+                "local only: {} (not a claim: no remote holds it and no worktree has it checked out)",
+                branch.display()
+            )
+        });
+        unrelated.chain(leftovers).collect()
     }
 }
 
 /// Local branches and branches on claim remotes, plus information about
 /// branches on unrelated remotes. Origin's published copy shares its local
-/// branch name; other claim remotes keep their remote name.
+/// branch name; other claim remotes keep their remote name. With `local`,
+/// a local branch that is not live work is a leftover, reported as
+/// information instead of a claim (TSK-1308).
 fn visible_work_branches(
     repo: &Repository,
     prefixes: &[String],
     ids: &BTreeSet<String>,
     scope: &BTreeSet<String>,
+    local: Option<&super::local_branches::LocalBranches>,
 ) -> Result<WorkBranches, String> {
     let mut carried = WorkBranches::default();
     let branches = repo.branches(None).map_err(|error| error.to_string())?;
@@ -422,12 +436,16 @@ fn visible_work_branches(
         let Some(id) = carried_task_id_name(&suffix, ids) else {
             continue;
         };
+        let leftover = kind == BranchType::Local
+            && local.is_some_and(|local| !local.is_live(branch.get().name_bytes()));
         if let Some(remote) = unrelated {
             carried
                 .unrelated
                 .entry(id)
                 .or_default()
                 .push((remote, short));
+        } else if leftover {
+            carried.leftovers.entry(id).or_default().push(name);
         } else if seen.insert((name.clone(), oid)) {
             carried.claims.entry(id).or_default().push((name, oid));
         }
@@ -448,7 +466,7 @@ fn scope_scan<'a>(
     match scans.entry(remotes) {
         Slot::Occupied(found) => Ok(found.into_mut()),
         Slot::Vacant(slot) => {
-            let scan = visible_work_branches(repo, prefixes, ids, slot.key())?;
+            let scan = visible_work_branches(repo, prefixes, ids, slot.key(), None)?;
             Ok(slot.insert(scan))
         }
     }
@@ -1980,7 +1998,10 @@ fn refuse_claimed_or_landed(
 ) -> Result<Vec<String>, String> {
     let ids = BTreeSet::from([task_id.to_string()]);
     let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
-    let mut visible = visible_work_branches(repo, &prefixes, &ids, remotes)?;
+    // A leftover local branch, such as one from an earlier use of the id,
+    // is not a claim (TSK-1308); the claim names it.
+    let local = super::local_branches::LocalBranches::read(repo);
+    let mut visible = visible_work_branches(repo, &prefixes, &ids, remotes, Some(&local))?;
     let information = visible.information(task_id, reference);
     let mut carried = visible.claims.remove(task_id).unwrap_or_default();
     for remote in remotes {
@@ -2250,7 +2271,7 @@ pub fn other_branches(repo_root: &Path, task_id: &str, own: &str) -> Result<Vec<
     let ids = BTreeSet::from([task_id.to_string()]);
     let prefixes =
         work_prefixes(repo_root).map_err(|error| format!("cannot read work prefixes: {error}"))?;
-    let carried = visible_work_branches(&repo, &prefixes, &ids, &remotes)
+    let carried = visible_work_branches(&repo, &prefixes, &ids, &remotes, None)
         .map_err(|error| format!("cannot read work branches: {error}"))?
         .claims
         .remove(task_id)
@@ -3033,19 +3054,29 @@ mod tests {
         fs::write(root.join(".git").join("packed-refs"), packed).unwrap();
         let repository = Repository::open(root).unwrap();
         let ids = BTreeSet::from(["TSK-238".to_string()]);
-        let carried =
-            visible_work_branches(&repository, &["task/".to_string()], &ids, &BTreeSet::new())
-                .unwrap()
-                .claims;
+        let carried = visible_work_branches(
+            &repository,
+            &["task/".to_string()],
+            &ids,
+            &BTreeSet::new(),
+            None,
+        )
+        .unwrap()
+        .claims;
         let claims = &carried["TSK-238"];
         assert_eq!(claims.len(), 1, "{carried:?}");
         assert_eq!(claims[0].0, GitName::from_bytes(b"task/TSK-238-caf\xe9"));
         // A real U+FFFD in another branch is another claim, not the same one.
         run(root, &["branch", "task/TSK-238-caf\u{fffd}"]);
-        let carried =
-            visible_work_branches(&repository, &["task/".to_string()], &ids, &BTreeSet::new())
-                .unwrap()
-                .claims;
+        let carried = visible_work_branches(
+            &repository,
+            &["task/".to_string()],
+            &ids,
+            &BTreeSet::new(),
+            None,
+        )
+        .unwrap()
+        .claims;
         let names: BTreeSet<_> = carried["TSK-238"]
             .iter()
             .map(|(name, _)| name.clone())
@@ -3635,6 +3666,65 @@ mod tests {
         );
     }
 
+    /// TSK-1308: a local task branch left from an earlier use of the id,
+    /// which no remote holds and no worktree has checked out, is a leftover
+    /// copy, not a claim. `codeflow work claim TSK-1306` was refused by
+    /// `task/TSK-1306-the-landing-gate-is-chosen-by-what-the-candida`
+    /// (05f7e3cd9). The claim goes ahead and names the leftover; the same
+    /// branch is still a claim once a worktree uses it or a remote holds it.
+    #[test]
+    fn a_leftover_local_task_branch_is_not_a_claim() {
+        for case in ["leftover", "checked out", "on the remote"] {
+            let dir = repo();
+            let root = dir.path();
+            task(root, "TSK-194", "todo", "[]", "");
+            commit(root, "plan");
+            let _origin = with_origin(root);
+            run(root, &["branch", "task/TSK-194-an-earlier-use", "main"]);
+            let trees = tempfile::tempdir().unwrap();
+            match case {
+                "checked out" => {
+                    let at = trees.path().join("earlier");
+                    run(
+                        root,
+                        &[
+                            "worktree",
+                            "add",
+                            "-q",
+                            at.to_str().unwrap(),
+                            "task/TSK-194-an-earlier-use",
+                        ],
+                    );
+                }
+                "on the remote" => {
+                    run(
+                        root,
+                        &["push", "-q", "origin", "task/TSK-194-an-earlier-use"],
+                    );
+                    run(root, &["fetch", "-q", "origin"]);
+                }
+                _ => {}
+            }
+            let claimed = claim(root, "TSK-194");
+            if case == "leftover" {
+                let claimed = claimed.unwrap();
+                assert!(claimed.pushed);
+                assert_eq!(
+                    claimed.informational_branches,
+                    ["local only: task/TSK-194-an-earlier-use (not a claim: no remote holds it and no worktree has it checked out)"]
+                );
+            } else {
+                let refused = claimed.unwrap_err();
+                assert!(
+                    refused.contains(
+                        "already claimed by a visible branch: task/TSK-194-an-earlier-use"
+                    ),
+                    "{case}: {refused}"
+                );
+            }
+        }
+    }
+
     /// AC-3: fork targets count origin and upstream, without counting archives.
     #[test]
     fn a_fork_counts_origin_and_upstream_claims_but_not_archive() {
@@ -3701,7 +3791,7 @@ mod tests {
         );
         let ids = BTreeSet::from(["TSK-001".to_string()]);
         let prefixes = work_prefixes(root).unwrap();
-        let scanned = visible_work_branches(&repo, &prefixes, &ids, &remotes).unwrap();
+        let scanned = visible_work_branches(&repo, &prefixes, &ids, &remotes, None).unwrap();
         let local_names: BTreeSet<_> = scanned.claims["TSK-001"]
             .iter()
             .map(|(name, _)| name.clone())
