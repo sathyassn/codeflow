@@ -11,6 +11,7 @@
 //! the installation token, which expires after one hour, leaves the command,
 //! and every error is redacted of the key and the JSON Web Token.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -106,6 +107,39 @@ pub fn os_store() -> Box<dyn KeyStore> {
     }
 }
 
+/// The environment a helper is started from: the variables `codeflow`
+/// itself was given, or a fixed list in a test.
+type Inherited = Vec<(OsString, OsString)>;
+
+fn inherited(fixed: Option<&Inherited>) -> Inherited {
+    fixed
+        .cloned()
+        .unwrap_or_else(|| std::env::vars_os().collect())
+}
+
+/// Start a helper that sees a key or a token with an empty environment plus
+/// only the variables in `keep`. A variable that changes what the helper
+/// loads or reads (`PATH`, `DYLD_INSERT_LIBRARIES`, `LD_PRELOAD`,
+/// `LD_LIBRARY_PATH`, `OPENSSL_CONF`, `CURL_HOME`, `HOME`) never reaches it,
+/// and the helper itself is an absolute path, never found through `PATH`.
+fn confine(command: &mut Command, inherited: &[(OsString, OsString)], keep: &[&str]) {
+    command.env_clear();
+    for (name, value) in inherited {
+        let loader = name
+            .to_str()
+            .is_none_or(|name| name.starts_with("DYLD_") || name.starts_with("LD_"));
+        if !loader && keep.iter().any(|kept| name == kept) {
+            command.env(name, value);
+        }
+    }
+}
+
+/// A helper's output, for a message only: it is shown, never compared, and
+/// every caller that may echo a key passes it through [`redact`].
+fn helper_text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).trim().to_string()
+}
+
 fn run(command: &mut Command, input: Option<&[u8]>) -> Result<Output, String> {
     command.stdin(Stdio::null());
     match input {
@@ -194,14 +228,15 @@ impl KeyStore for Keychain {
         if output.status.success() {
             return Ok(true);
         }
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if output.status.code() == Some(44) || stderr.contains("could not be found") {
+        // `security` exits 44 (errSecItemNotFound) for no such entry; any
+        // other failure is an error, never "absent".
+        if output.status.code() == Some(44) {
             Ok(false)
         } else {
             Err(format!(
                 "cannot read {}: {}",
                 self.describe(),
-                stderr.trim()
+                helper_text(&output.stderr)
             ))
         }
     }
@@ -215,10 +250,13 @@ impl KeyStore for Keychain {
         if self.exists(account)? {
             Ok(())
         } else {
-            Err(format!(
-                "{} did not keep the entry: {}",
-                self.describe(),
-                String::from_utf8_lossy(&output.stderr).trim()
+            Err(redact(
+                &format!(
+                    "{} did not keep the entry: {}",
+                    self.describe(),
+                    helper_text(&output.stderr)
+                ),
+                &[secret],
             ))
         }
     }
@@ -229,12 +267,13 @@ impl KeyStore for Keychain {
             return Err(format!(
                 "no agent App entry for {account} in {} ({})",
                 self.describe(),
-                String::from_utf8_lossy(&output.stderr).trim()
+                helper_text(&output.stderr)
             ));
         }
         let text = String::from_utf8(output.stdout)
             .map_err(|_| format!("the entry for {account} is not text"))?;
-        let text = text.trim_end_matches('\n');
+        // `security -w` ends its answer with one newline.
+        let text = text.strip_suffix('\n').unwrap_or(text.as_str());
         // `security -w` prints data it judges not printable as hex.
         if text.starts_with('{') {
             Ok(text.to_string())
@@ -270,12 +309,20 @@ pub struct SecretService;
 
 #[cfg(all(unix, not(target_os = "macos")))]
 impl SecretService {
-    /// A `secret-tool` command, once `secret-tool` is found on PATH. The
-    /// program is a literal so the git spawn contract reads it as one.
+    /// `/usr/bin/secret-tool`, never one found through `PATH`, with only the
+    /// variables that reach the session bus. It is handed the key on
+    /// standard input when it stores it.
     fn command() -> Result<Command, String> {
-        which::which("secret-tool")
-            .map_err(|_| "secret-tool (libsecret) is not installed".to_string())?;
-        Ok(Command::new("secret-tool"))
+        if !Path::new("/usr/bin/secret-tool").is_file() {
+            return Err("/usr/bin/secret-tool (libsecret) is not installed".to_string());
+        }
+        let mut command = Command::new("/usr/bin/secret-tool");
+        confine(
+            &mut command,
+            &inherited(None),
+            &["DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"],
+        );
+        Ok(command)
     }
 }
 
@@ -312,9 +359,12 @@ impl KeyStore for SecretService {
         if output.status.success() {
             Ok(())
         } else {
-            Err(format!(
-                "secret-tool did not keep the entry: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
+            Err(redact(
+                &format!(
+                    "secret-tool did not keep the entry: {}",
+                    helper_text(&output.stderr)
+                ),
+                &[secret],
             ))
         }
     }
@@ -379,22 +429,29 @@ pub trait Signer {
     fn sign_rs256(&self, pem: &str, data: &[u8]) -> Result<Vec<u8>, String>;
 }
 
-/// `openssl dgst -sha256 -sign /dev/stdin`: the key on standard input, the
-/// data (not secret) in a file in a private temporary folder.
+/// `/usr/bin/openssl dgst -sha256 -sign /dev/stdin`: the key on standard
+/// input, the data (not secret) in a file in a private temporary folder.
+/// The program is never found through `PATH`, and it runs with an empty
+/// environment, so `OPENSSL_CONF` or a preloaded library cannot reach the
+/// process that reads the key.
 pub struct OpensslSigner {
     scratch: PathBuf,
+    inherited: Option<Inherited>,
 }
 
 impl OpensslSigner {
-    /// Use `openssl` from PATH, with temporary folders under `scratch`.
+    /// Use `/usr/bin/openssl`, with temporary folders under `scratch`.
     ///
     /// # Errors
     ///
-    /// When `openssl` is not installed.
+    /// When `/usr/bin/openssl` is not installed.
     pub fn discover(scratch: &Path) -> Result<Self, String> {
-        which::which("openssl").map_err(|_| "openssl is not installed".to_string())?;
+        if !Path::new("/usr/bin/openssl").is_file() {
+            return Err("/usr/bin/openssl is not installed".to_string());
+        }
         Ok(Self {
             scratch: scratch.to_path_buf(),
+            inherited: None,
         })
     }
 }
@@ -408,7 +465,8 @@ impl Signer for OpensslSigner {
         let path = dir.path().join("signing-input");
         std::fs::write(&path, data)
             .map_err(|error| format!("cannot write the signing input: {error}"))?;
-        let mut command = Command::new("openssl");
+        let mut command = Command::new("/usr/bin/openssl");
+        confine(&mut command, &inherited(self.inherited.as_ref()), &[]);
         command
             .args(["dgst", "-sha256", "-sign", "/dev/stdin"])
             .arg(&path);
@@ -416,9 +474,12 @@ impl Signer for OpensslSigner {
         if output.status.success() && !output.stdout.is_empty() {
             Ok(output.stdout)
         } else {
-            Err(format!(
-                "openssl could not sign the App's token: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
+            Err(redact(
+                &format!(
+                    "openssl could not sign the App's token: {}",
+                    helper_text(&output.stderr)
+                ),
+                &[pem],
             ))
         }
     }
@@ -440,20 +501,26 @@ pub trait AppHttp {
     ) -> Result<String, String>;
 }
 
-/// `curl`, with the headers on standard input (`-H @-`).
+/// `/usr/bin/curl -q`, with the headers on standard input (`-H @-`). The
+/// program is never found through `PATH`; `-q` comes first, so no `.curlrc`
+/// is read, and curl runs with an empty environment, so no `CURL_HOME`,
+/// `HOME` or proxy variable can add a proxy or a trace that would record
+/// the App's JSON Web Token or the installation token.
 pub struct CurlHttp {
-    _found: (),
+    inherited: Option<Inherited>,
 }
 
 impl CurlHttp {
-    /// Use `curl` from PATH.
+    /// Use `/usr/bin/curl`.
     ///
     /// # Errors
     ///
-    /// When `curl` is not installed.
+    /// When `/usr/bin/curl` is not installed.
     pub fn discover() -> Result<Self, String> {
-        which::which("curl").map_err(|_| "curl is not installed".to_string())?;
-        Ok(Self { _found: () })
+        if !Path::new("/usr/bin/curl").is_file() {
+            return Err("/usr/bin/curl is not installed".to_string());
+        }
+        Ok(Self { inherited: None })
     }
 }
 
@@ -468,8 +535,10 @@ impl AppHttp for CurlHttp {
         let headers = format!(
             "Authorization: Bearer {bearer}\nAccept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\nUser-Agent: codeflow\n"
         );
-        let mut command = Command::new("curl");
+        let mut command = Command::new("/usr/bin/curl");
+        confine(&mut command, &inherited(self.inherited.as_ref()), &[]);
         command.args([
+            "-q",
             "-sS",
             "--fail-with-body",
             "--max-time",
@@ -484,14 +553,17 @@ impl AppHttp for CurlHttp {
         }
         command.arg(url);
         let output = run(&mut command, Some(headers.as_bytes()))?;
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         if output.status.success() {
-            Ok(stdout)
+            String::from_utf8(output.stdout)
+                .map_err(|_| format!("the answer to {method} {url} is not UTF-8"))
         } else {
-            Err(format!(
-                "{method} {url} failed: {}{}",
-                stdout.trim(),
-                String::from_utf8_lossy(&output.stderr).trim()
+            Err(redact(
+                &format!(
+                    "{method} {url} failed: {}{}",
+                    helper_text(&output.stdout),
+                    helper_text(&output.stderr)
+                ),
+                &[bearer],
             ))
         }
     }
@@ -548,12 +620,26 @@ fn b64url(bytes: &[u8]) -> String {
 /// The App's JSON Web Token: RS256, issued 60 seconds in the past, valid
 /// for nine minutes (GitHub accepts at most ten), issuer the client id.
 fn app_jwt(app: &AgentApp, signer: &dyn Signer, now: u64) -> Result<String, String> {
+    signed_app_jwt(&app.client_id, &app.pem, signer, now)
+}
+
+/// [`app_jwt`] for an App known by its client id and key, such as one
+/// `setup-apps` has just created.
+pub(crate) fn signed_app_jwt(
+    client_id: &str,
+    pem: &str,
+    signer: &dyn Signer,
+    now: u64,
+) -> Result<String, String> {
     let header = b64url(json!({"alg": "RS256", "typ": "JWT"}).to_string().as_bytes());
-    let claims = json!({"iat": now.saturating_sub(60), "exp": now + 540, "iss": app.client_id});
+    let claims = json!({"iat": now.saturating_sub(60), "exp": now + 540, "iss": client_id});
     let input = format!("{header}.{}", b64url(claims.to_string().as_bytes()));
-    let signature = signer.sign_rs256(&app.pem, input.as_bytes())?;
+    let signature = signer.sign_rs256(pem, input.as_bytes())?;
     Ok(format!("{input}.{}", b64url(&signature)))
 }
+
+/// GitHub's REST API root, for callers in this module's parent.
+pub(crate) const API_ROOT: &str = API;
 
 /// Mint an installation token of the agent App for `repository`
 /// (`owner/name`), scoped to that repository. The key is read from `store`
@@ -627,6 +713,23 @@ pub fn mint(
         .unwrap_or("in one hour")
         .to_string();
     Ok(Minted { token, expires_at })
+}
+
+/// Whether a git credential request (Git's `key=value` lines on standard
+/// input) is for `https://github.com`. Any other host, including one an
+/// `insteadOf` rewrite points at, gets no answer and no token is minted.
+#[must_use]
+pub fn credential_request_is_github(request: &str) -> bool {
+    let mut protocol = None;
+    let mut host = None;
+    for line in request.split('\n') {
+        match line.strip_suffix('\r').unwrap_or(line).split_once('=') {
+            Some(("protocol", value)) => protocol = Some(value),
+            Some(("host", value)) => host = Some(value),
+            _ => {}
+        }
+    }
+    protocol == Some("https") && host == Some("github.com")
 }
 
 /// What a git credential helper prints for `get`: the installation token
@@ -895,12 +998,7 @@ pub(crate) mod tests {
             eprintln!("openssl not installed; skipped");
             return;
         };
-        let made = Command::new("openssl")
-            .args(["genrsa", "2048"])
-            .output()
-            .unwrap();
-        assert!(made.status.success());
-        let pem = String::from_utf8(made.stdout).unwrap();
+        let pem = throwaway_key();
         let signature = signer.sign_rs256(&pem, b"header.payload").unwrap();
         assert_eq!(signature.len(), 256);
         assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
@@ -909,5 +1007,190 @@ pub(crate) mod tests {
             .unwrap_err();
         assert!(error.contains("could not sign"), "{error}");
         assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
+    }
+
+    /// A 2048-bit RSA key made for one test.
+    #[cfg(unix)]
+    fn throwaway_key() -> String {
+        let made = Command::new("/usr/bin/openssl")
+            .args(["genrsa", "2048"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(made.status.success());
+        String::from_utf8(made.stdout).unwrap()
+    }
+
+    fn variables(pairs: &[(&str, &Path)]) -> Inherited {
+        pairs
+            .iter()
+            .map(|(name, value)| (OsString::from(name), value.as_os_str().to_os_string()))
+            .collect()
+    }
+
+    /// Review F1: the helper that reads the key keeps only the variables it
+    /// is given leave to keep, and never a loader variable.
+    #[test]
+    fn confine_passes_on_only_the_listed_variables() {
+        let path = Path::new("/x");
+        let inherited = variables(&[
+            ("PATH", path),
+            ("HOME", path),
+            ("OPENSSL_CONF", path),
+            ("DYLD_INSERT_LIBRARIES", path),
+            ("LD_PRELOAD", path),
+            ("DBUS_SESSION_BUS_ADDRESS", path),
+        ]);
+        let mut command = Command::new("/usr/bin/true");
+        confine(
+            &mut command,
+            &inherited,
+            &["DBUS_SESSION_BUS_ADDRESS", "LD_PRELOAD"],
+        );
+        let kept: Vec<_> = command
+            .get_envs()
+            .filter_map(|(name, value)| {
+                value.map(|value| (name.to_os_string(), value.to_os_string()))
+            })
+            .collect();
+        assert_eq!(
+            kept,
+            vec![(
+                OsString::from("DBUS_SESSION_BUS_ADDRESS"),
+                OsString::from("/x")
+            )]
+        );
+    }
+
+    /// Review F1: an `openssl` placed first on `PATH`, with `OPENSSL_CONF`
+    /// and loader variables set, never runs and never sees the key; the
+    /// control shows that a bare `openssl` under that `PATH` runs the fake.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_prefixed_openssl_never_receives_the_key() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = tempfile::tempdir().unwrap();
+        if OpensslSigner::discover(scratch.path()).is_err() {
+            eprintln!("/usr/bin/openssl not installed; skipped");
+            return;
+        }
+        let fake = tempfile::tempdir().unwrap();
+        let caught = fake.path().join("caught");
+        let script = fake.path().join("openssl");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\ncat > '{}'\nexit 0\n", caught.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let control = Command::new("openssl")
+            .env_clear()
+            .env("PATH", fake.path())
+            .stdin(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(control.success() && caught.exists());
+        std::fs::remove_file(&caught).unwrap();
+        let evil = fake.path().join("evil");
+        let signer = OpensslSigner {
+            scratch: scratch.path().to_path_buf(),
+            inherited: Some(variables(&[
+                ("PATH", fake.path()),
+                ("OPENSSL_CONF", &evil),
+                ("DYLD_INSERT_LIBRARIES", &evil),
+                ("LD_PRELOAD", &evil),
+            ])),
+        };
+        let signature = signer
+            .sign_rs256(&throwaway_key(), b"header.payload")
+            .unwrap();
+        assert_eq!(signature.len(), 256);
+        assert!(!caught.exists(), "the PATH-prefixed openssl ran");
+    }
+
+    /// Review F2: a `.curlrc` (in `HOME`, `CURL_HOME` or the XDG folder)
+    /// that sets a proxy and a trace, and proxy variables, do not reach the
+    /// call that carries the App's token. The control shows the same
+    /// environment does apply them to a plain curl.
+    #[cfg(unix)]
+    #[test]
+    fn curl_applies_no_curlrc_proxy_or_trace() {
+        use std::io::{Read as _, Write as _};
+        if CurlHttp::discover().is_err() {
+            eprintln!("/usr/bin/curl not installed; skipped");
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let trace = home.path().join("trace");
+        let rc = format!(
+            "proxy = \"http://127.0.0.1:9\"\ntrace = \"{}\"\n",
+            trace.display()
+        );
+        std::fs::write(home.path().join(".curlrc"), &rc).unwrap();
+        std::fs::write(home.path().join("curlrc"), &rc).unwrap();
+        let proxy = Path::new("http://127.0.0.1:9");
+        let inherited = variables(&[
+            ("HOME", home.path()),
+            ("CURL_HOME", home.path()),
+            ("XDG_CONFIG_HOME", home.path()),
+            ("http_proxy", proxy),
+            ("ALL_PROXY", proxy),
+        ]);
+        let control = Command::new("/usr/bin/curl")
+            .env_clear()
+            .envs(inherited.iter().cloned())
+            .args(["-sS", "--max-time", "5", "http://127.0.0.1:1/control"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(!control.status.success());
+        assert!(trace.exists(), "the control curl did not read the curlrc");
+        std::fs::remove_file(&trace).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .unwrap();
+        });
+        let http = CurlHttp {
+            inherited: Some(inherited),
+        };
+        let answer = http
+            .call(
+                "GET",
+                &format!("http://127.0.0.1:{port}/app"),
+                "jwt-not-for-a-trace",
+                None,
+            )
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(answer, "ok");
+        assert!(!trace.exists(), "curl applied the curlrc trace");
+    }
+
+    /// Review nit 5: the git credential helper answers only
+    /// `https://github.com`, so an `insteadOf` rewrite to another host
+    /// gets nothing.
+    #[test]
+    fn the_credential_helper_answers_only_github() {
+        assert!(credential_request_is_github(
+            "protocol=https\nhost=github.com\npath=o/r.git\n\n"
+        ));
+        assert!(credential_request_is_github(
+            "protocol=https\r\nhost=github.com\r\n"
+        ));
+        for other in [
+            "protocol=https\nhost=evil.example\n",
+            "protocol=http\nhost=github.com\n",
+            "host=github.com\n",
+            "protocol=https\nhost=github.com.evil.example\n",
+            "",
+        ] {
+            assert!(!credential_request_is_github(other), "{other:?}");
+        }
     }
 }

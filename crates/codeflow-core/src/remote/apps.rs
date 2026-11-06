@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::agent_key::{AgentApp, KeyStore};
+use super::agent_key::{redact, signed_app_jwt, AgentApp, AppHttp, KeyStore, Signer, API_ROOT};
 
 /// The environment that holds the authority App's key; only the default
 /// branch may deploy to it.
@@ -200,6 +200,18 @@ pub trait ManifestBrowser {
     ) -> Result<String, String>;
 }
 
+/// How a just-created App is asked, as itself, where its webhook points:
+/// its JSON Web Token is signed with the key GitHub returned and sent to
+/// `GET /app/hook/config`.
+pub struct AppAuth<'a> {
+    /// Signs the App's JSON Web Token.
+    pub signer: &'a dyn Signer,
+    /// Sends the call.
+    pub http: &'a dyn AppHttp,
+    /// Seconds since 1970, for the token's times.
+    pub now: u64,
+}
+
 /// What to set up.
 #[derive(Clone, Debug, Default)]
 pub struct SetupOptions {
@@ -260,10 +272,11 @@ pub fn setup(
     gh: Gh<'_>,
     browser: &mut dyn ManifestBrowser,
     store: &dyn KeyStore,
+    auth: &AppAuth<'_>,
     options: &SetupOptions,
 ) -> SetupReport {
     let mut report = SetupReport::default();
-    if let Err(why) = run_setup(gh, browser, store, options, &mut report) {
+    if let Err(why) = run_setup(gh, browser, store, auth, options, &mut report) {
         report.failure = Some(why);
     }
     report
@@ -273,6 +286,7 @@ fn run_setup(
     gh: Gh<'_>,
     browser: &mut dyn ManifestBrowser,
     store: &dyn KeyStore,
+    auth: &AppAuth<'_>,
     options: &SetupOptions,
     report: &mut SetupReport,
 ) -> Result<(), String> {
@@ -309,9 +323,9 @@ fn run_setup(
         None
     };
     environment(gh, &target, report)?;
-    authority(gh, browser, &target, &authority_name, report)?;
+    authority(gh, browser, auth, &target, &authority_name, report)?;
     match agent_name {
-        Some(name) => agent(gh, browser, store, &target, &name, report)?,
+        Some(name) => agent(gh, browser, store, auth, &target, &name, report)?,
         None => report
             .lines
             .push("agent App: not set up (--no-agent)".to_string()),
@@ -569,6 +583,15 @@ fn branch_policy(
         .get("branch_policies")
         .and_then(Value::as_array)
         .ok_or_else(|| "the deployment branch policies answer has no list".to_string())?;
+    // One page is read; more policies than it holds are refused, never read
+    // as "restricted to the default branch".
+    let total = list.get("total_count").and_then(Value::as_u64);
+    if total.is_none_or(|total| total > entries.len() as u64) {
+        return Err(format!(
+            "the environment {AUTHORITY_ENVIRONMENT} has more deployment branch policies than one page of 100 shows, or GitHub did not say how many; remove those that are not {} with `gh api -X DELETE {policies}/<id>` and run again",
+            target.default_branch
+        ));
+    }
     let is_default = |entry: &&Value| {
         entry.get("name").and_then(Value::as_str) == Some(target.default_branch.as_str())
             && entry
@@ -661,6 +684,7 @@ fn valid_code(code: &str) -> bool {
 fn create_app(
     gh: Gh<'_>,
     browser: &mut dyn ManifestBrowser,
+    auth: &AppAuth<'_>,
     target: &Target,
     kind: AppKind,
     name: &str,
@@ -747,6 +771,10 @@ fn create_app(
             json!(expected)
         ));
     }
+    wrong.extend(event_problems(&answer));
+    if wrong.is_empty() {
+        wrong.extend(hook_problems(auth, target, &client_id, &pem));
+    }
     if !wrong.is_empty() {
         return Err(format!(
             "the {label} App GitHub created is not the one asked for ({}); its key was dropped, so delete it at {} and run again",
@@ -762,10 +790,119 @@ fn create_app(
     })
 }
 
+/// What is wrong with an App's events: it must subscribe to none, and a
+/// webhook GitHub reports must be inactive.
+fn event_problems(app: &Value) -> Vec<String> {
+    let mut wrong = Vec::new();
+    match app.get("events").and_then(Value::as_array) {
+        Some(events) if events.is_empty() => {}
+        Some(events) => wrong.push(format!("events {}, not none", json!(events))),
+        None => wrong.push("no events list, so its events cannot be confirmed".to_string()),
+    }
+    if app
+        .pointer("/hook_attributes/active")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        wrong.push("an active webhook".to_string());
+    }
+    wrong
+}
+
+/// What is wrong with a just-created App's webhook, asked as the App: it
+/// must point at the repository page the manifest named, or nowhere, so no
+/// delivery leaves for a server the administrator did not choose.
+fn hook_problems(auth: &AppAuth<'_>, target: &Target, client_id: &str, pem: &str) -> Vec<String> {
+    let home = format!("https://github.com/{}", target.repository);
+    let jwt = match signed_app_jwt(client_id, pem, auth.signer, auth.now) {
+        Ok(jwt) => jwt,
+        Err(error) => {
+            return vec![format!(
+                "a webhook that can be checked (its key did not sign: {})",
+                redact(&error, &[pem])
+            )]
+        }
+    };
+    let secrets = [pem, jwt.as_str()];
+    match auth
+        .http
+        .call("GET", &format!("{API_ROOT}/app/hook/config"), &jwt, None)
+    {
+        Ok(answer) => {
+            let url = serde_json::from_str::<Value>(&answer)
+                .ok()
+                .and_then(|value| value.get("url").and_then(Value::as_str).map(str::to_string));
+            match url {
+                Some(url) if url.is_empty() || url == home => Vec::new(),
+                Some(url) => vec![format!("a webhook to '{url}', not {home}")],
+                None => vec!["a webhook configuration GitHub did not describe".to_string()],
+            }
+        }
+        Err(error) if not_found(&error) => Vec::new(),
+        Err(error) => vec![format!(
+            "a webhook that can be checked ({})",
+            first_line(&redact(&error, &secrets))
+        )],
+    }
+}
+
+/// What is missing or wrong in an App that is already set up, read from
+/// GitHub under the administrator's login: its id, permissions and events
+/// must be those the manifest asks for.
+fn existing_app_problems(gh: Gh<'_>, kind: AppKind, slug: &str, id: Option<u64>) -> Vec<String> {
+    let label = kind.label();
+    let answer = match gh(&["api", &format!("apps/{slug}")], None) {
+        Ok(answer) => answer,
+        Err(error) => {
+            return vec![format!(
+                "the {label} App {slug} on GitHub ({})",
+                first_line(&error)
+            )]
+        }
+    };
+    let Ok(app) = serde_json::from_str::<Value>(&answer) else {
+        return vec![format!(
+            "the {label} App {slug}: GitHub's answer is not JSON"
+        )];
+    };
+    let mut wrong = Vec::new();
+    let found = app.get("id").and_then(Value::as_u64);
+    if id.is_none() || found != id {
+        wrong.push(format!(
+            "the {label} App {slug} with the id kept here ({}; GitHub shows {})",
+            id.map_or_else(|| "none".to_string(), |id| id.to_string()),
+            found.map_or_else(|| "none".to_string(), |id| id.to_string())
+        ));
+    }
+    let permissions: BTreeMap<String, String> = app
+        .get("permissions")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(name, level)| (name.clone(), level.as_str().unwrap_or_default().to_string()))
+        .collect();
+    match expected_permissions(kind) {
+        Ok(expected) if expected == permissions => {}
+        Ok(expected) => wrong.push(format!(
+            "the {label} App {slug} with permissions {} (it has {})",
+            json!(expected),
+            json!(permissions)
+        )),
+        Err(why) => wrong.push(why),
+    }
+    wrong.extend(
+        event_problems(&app)
+            .into_iter()
+            .map(|why| format!("the {label} App {slug} without {why}")),
+    );
+    wrong
+}
+
 /// The authority App, its key secret and id variable.
 fn authority(
     gh: Gh<'_>,
     browser: &mut dyn ManifestBrowser,
+    auth: &AppAuth<'_>,
     target: &Target,
     name: &str,
     report: &mut SetupReport,
@@ -784,10 +921,7 @@ fn authority(
                         .map(str::to_string)
                 })
                 .unwrap_or_default();
-            report.lines.push(format!(
-                "authority App: already set up ({AUTHORITY_ID_VARIABLE} is '{value}' in {AUTHORITY_ENVIRONMENT}), nothing created; to replace it, delete that App, then `gh api -X DELETE {variable}` and `gh secret delete {AUTHORITY_KEY_SECRET} --env {AUTHORITY_ENVIRONMENT} --repo {repository}`, and run again"
-            ));
-            return Ok(());
+            return existing_authority(gh, target, name, &value, &variable, report);
         }
         Err(error) if not_found(&error) => {}
         Err(error) => {
@@ -797,12 +931,12 @@ fn authority(
             ))
         }
     }
-    let app = create_app(gh, browser, target, AppKind::Authority, name, report)?;
+    let app = create_app(gh, browser, auth, target, AppKind::Authority, name, report)?;
     let lost = |what: &str, error: &str| {
         format!(
             "the authority App {} was created, but {what}: {}; its key is not kept, so delete the App at {} and run again",
             app.slug,
-            first_line(error),
+            first_line(&redact(error, &[app.pem.as_str()])),
             target.app_settings_url(&app.slug)
         )
     };
@@ -862,25 +996,120 @@ fn authority(
     Ok(())
 }
 
+/// An authority App already recorded by its id variable: it counts as set
+/// up only when the key secret exists (its name; the value is never read)
+/// and the App GitHub shows has that id, the manifest's permissions and no
+/// events. Otherwise the run stops, naming what is present and what is
+/// missing.
+fn existing_authority(
+    gh: Gh<'_>,
+    target: &Target,
+    name: &str,
+    value: &str,
+    variable: &str,
+    report: &mut SetupReport,
+) -> Result<(), String> {
+    let repository = &target.repository;
+    let environment = format!("repos/{repository}/environments/{AUTHORITY_ENVIRONMENT}");
+    let mut present = vec![format!("{AUTHORITY_ID_VARIABLE} '{value}'")];
+    let mut missing = Vec::new();
+    match gh(
+        &[
+            "api",
+            &format!("{environment}/secrets/{AUTHORITY_KEY_SECRET}"),
+        ],
+        None,
+    ) {
+        Ok(_) => present.push(format!("the secret {AUTHORITY_KEY_SECRET}")),
+        Err(error) if not_found(&error) => {
+            missing.push(format!("the secret {AUTHORITY_KEY_SECRET}"));
+        }
+        Err(error) => missing.push(format!(
+            "the secret {AUTHORITY_KEY_SECRET} (cannot read it: {})",
+            first_line(&error)
+        )),
+    }
+    let slug = name.to_lowercase();
+    let problems = existing_app_problems(gh, AppKind::Authority, &slug, value.parse().ok());
+    if problems.is_empty() {
+        present.push(format!("the authority App {slug} as the manifest asks"));
+    }
+    missing.extend(problems);
+    let replace = format!(
+        "to set it up again, delete that App, then `gh api -X DELETE {variable}` and `gh secret delete {AUTHORITY_KEY_SECRET} --env {AUTHORITY_ENVIRONMENT} --repo {repository}`, and run again"
+    );
+    if missing.is_empty() {
+        report.lines.push(format!(
+            "authority App: already set up ({}), nothing created; {replace}",
+            present.join(", ")
+        ));
+        Ok(())
+    } else {
+        Err(format!(
+            "the authority App is not fully set up; present: {}; missing: {}; {replace}",
+            present.join(", "),
+            missing.join(", ")
+        ))
+    }
+}
+
+/// An agent App already kept in the credential store: it counts as set up
+/// only when the entry reads as an App with a key and the App GitHub shows
+/// has that id, the manifest's permissions and no events.
+fn existing_agent(
+    gh: Gh<'_>,
+    store: &dyn KeyStore,
+    target: &Target,
+    report: &mut SetupReport,
+) -> Result<(), String> {
+    let repository = &target.repository;
+    let replace = format!(
+        "to set it up again, delete that App, run `{}`, and run again",
+        store.undo(repository)
+    );
+    let entry = store
+        .load(repository)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<AgentApp>(&raw).ok())
+        .filter(|app| app.pem.contains("PRIVATE KEY") && !app.slug.is_empty());
+    let Some(app) = entry else {
+        return Err(format!(
+            "the agent App is not fully set up; present: an entry for {repository} in {}; missing: an agent App and key that entry can be read as; {replace}",
+            store.describe()
+        ));
+    };
+    let problems = existing_app_problems(gh, AppKind::Agent, &app.slug, Some(app.app_id));
+    if problems.is_empty() {
+        report.lines.push(format!(
+            "agent App: already set up (its key for {repository} in {}, and the agent App {} as the manifest asks), nothing created; {replace}",
+            store.describe(),
+            app.slug
+        ));
+        Ok(())
+    } else {
+        Err(format!(
+            "the agent App is not fully set up; present: its key for {repository} in {}; missing: {}; {replace}",
+            store.describe(),
+            problems.join(", ")
+        ))
+    }
+}
+
 /// The agent App, its key kept in the credential store.
 fn agent(
     gh: Gh<'_>,
     browser: &mut dyn ManifestBrowser,
     store: &dyn KeyStore,
+    auth: &AppAuth<'_>,
     target: &Target,
     name: &str,
     report: &mut SetupReport,
 ) -> Result<(), String> {
     let repository = &target.repository;
     if store.exists(repository)? {
-        report.lines.push(format!(
-            "agent App: a key for {repository} is already in {}, nothing created; to replace it, delete that App, run `{}`, and run again",
-            store.describe(),
-            store.undo(repository)
-        ));
-        return Ok(());
+        return existing_agent(gh, store, target, report);
     }
-    let app = create_app(gh, browser, target, AppKind::Agent, name, report)?;
+    let app = create_app(gh, browser, auth, target, AppKind::Agent, name, report)?;
     let entry = AgentApp {
         app_id: app.id,
         client_id: app.client_id.clone(),
@@ -891,9 +1120,10 @@ fn agent(
         .map_err(|error| format!("cannot encode the agent App entry: {error}"))?;
     store.store(repository, &entry).map_err(|why| {
         format!(
-            "the agent App {} was created, but {} did not keep its key ({why}); the key is not kept, so delete the App at {} and run again",
+            "the agent App {} was created, but {} did not keep its key ({}); the key is not kept, so delete the App at {} and run again",
             app.slug,
             store.describe(),
+            redact(&why, &[app.pem.as_str(), entry.as_str()]),
             target.app_settings_url(&app.slug)
         )
     })?;
@@ -1016,9 +1246,15 @@ fn request_target(stream: &mut TcpStream) -> Option<String> {
         }
         buffer.extend_from_slice(&chunk[..read]);
     }
-    let text = String::from_utf8_lossy(&buffer);
-    let mut words = text.lines().next()?.split(' ');
-    (words.next()? == "GET").then(|| words.next().map(str::to_string))?
+    // The request line, read as bytes up to its CRLF; a target that is not
+    // UTF-8 is no request this page answers.
+    let line = buffer.split(|byte| *byte == b'\n').next()?;
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    let target = line
+        .strip_prefix(b"GET ")?
+        .split(|byte| *byte == b' ')
+        .next()?;
+    String::from_utf8(target.to_vec()).ok()
 }
 
 fn respond(stream: &mut TcpStream, status: &str, kind: &str, body: &str) {
@@ -1240,8 +1476,100 @@ mod tests {
             "pem": pem,
             "owner": {"login": owner, "type": "User"},
             "permissions": serde_json::from_str::<Value>(permissions).unwrap(),
+            "events": [],
         })
         .to_string()
+    }
+
+    /// Signs anything: the webhook check only needs a token to send.
+    struct OkSigner;
+    impl Signer for OkSigner {
+        fn sign_rs256(&self, pem: &str, _: &[u8]) -> Result<Vec<u8>, String> {
+            assert!(pem == AUTHORITY_PEM || pem == AGENT_PEM, "an unknown key");
+            Ok(vec![7; 8])
+        }
+    }
+
+    /// Answers `GET /app/hook/config` as the App would.
+    struct HookHttp(Result<String, String>);
+    impl HookHttp {
+        fn repository_page() -> Self {
+            Self(Ok(
+                r#"{"content_type":"json","url":"https://github.com/o/r"}"#.to_string(),
+            ))
+        }
+    }
+    impl AppHttp for HookHttp {
+        fn call(
+            &self,
+            method: &str,
+            url: &str,
+            _: &str,
+            body: Option<&str>,
+        ) -> Result<String, String> {
+            assert_eq!(
+                (method, url, body),
+                ("GET", "https://api.github.com/app/hook/config", None)
+            );
+            self.0.clone()
+        }
+    }
+
+    fn auth<'a>(signer: &'a OkSigner, http: &'a HookHttp) -> AppAuth<'a> {
+        AppAuth {
+            signer,
+            http,
+            now: 1_800_000_000,
+        }
+    }
+
+    /// The App GitHub shows for `slug` under the administrator's login.
+    fn shown_app(id: u64, permissions: &str) -> String {
+        json!({
+            "id": id,
+            "permissions": serde_json::from_str::<Value>(permissions).unwrap(),
+            "events": [],
+        })
+        .to_string()
+    }
+
+    /// The agent App entry a first run keeps.
+    fn agent_entry() -> String {
+        serde_json::to_string(&AgentApp {
+            app_id: 202,
+            client_id: "Iv1.codeflow-agent-r".to_string(),
+            slug: "codeflow-agent-r".to_string(),
+            pem: AGENT_PEM.to_string(),
+        })
+        .unwrap()
+    }
+
+    /// A host where both Apps were set up by an earlier run.
+    fn set_up_host() -> Host {
+        fresh_host()
+            .answer(
+                "api repos/o/r/environments/codeflow-authority/variables/CODEFLOW_AUTHORITY_APP_ID",
+                Ok(r#"{"name":"CODEFLOW_AUTHORITY_APP_ID","value":"101"}"#),
+            )
+            .answer(
+                "api repos/o/r/environments/codeflow-authority/deployment-branch-policies",
+                Ok(r#"{"total_count":1,"branch_policies":[{"id":9,"name":"main","type":"branch"}]}"#),
+            )
+            .answer(
+                "api repos/o/r/environments/codeflow-authority/secrets/CODEFLOW_AUTHORITY_APP_KEY",
+                Ok(r#"{"name":"CODEFLOW_AUTHORITY_APP_KEY"}"#),
+            )
+            .answer(
+                "api apps/codeflow-authority-r",
+                Ok(&shown_app(101, r#"{"checks":"write","metadata":"read"}"#)),
+            )
+            .answer(
+                "api apps/codeflow-agent-r",
+                Ok(&shown_app(
+                    202,
+                    r#"{"contents":"write","pull_requests":"write","metadata":"read"}"#,
+                )),
+            )
     }
 
     /// A personal repository `o/r`, administrator `o`, no environment yet.
@@ -1325,8 +1653,23 @@ mod tests {
         }
     }
 
-    fn run(host: &Host, browser: &mut dyn ManifestBrowser, store: &MemoryStore) -> SetupReport {
-        setup(&|args, input| host.gh(args, input), browser, store, &both())
+    fn run(host: &Host, browser: &mut dyn ManifestBrowser, store: &dyn KeyStore) -> SetupReport {
+        run_hook(host, browser, store, &HookHttp::repository_page())
+    }
+
+    fn run_hook(
+        host: &Host,
+        browser: &mut dyn ManifestBrowser,
+        store: &dyn KeyStore,
+        hook: &HookHttp,
+    ) -> SetupReport {
+        setup(
+            &|args, input| host.gh(args, input),
+            browser,
+            store,
+            &auth(&OkSigner, hook),
+            &both(),
+        )
     }
 
     #[test]
@@ -1468,7 +1811,7 @@ mod tests {
         );
         let host = host.answer(
             "api repos/o/r/environments/codeflow-authority/deployment-branch-policies",
-            Ok(r#"{"branch_policies":[{"id":3,"name":"trunk","type":"branch"}]}"#),
+            Ok(r#"{"total_count":1,"branch_policies":[{"id":3,"name":"trunk","type":"branch"}]}"#),
         );
         let mut clicks = Clicks::default();
         let report = run(&host, &mut clicks, &MemoryStore::default());
@@ -1549,7 +1892,7 @@ mod tests {
     fn refuses_an_environment_that_admits_another_branch() {
         let host = fresh_host().answer(
             "api repos/o/r/environments/codeflow-authority/deployment-branch-policies",
-            Ok(r#"{"branch_policies":[{"id":3,"name":"main","type":"branch"},{"id":4,"name":"integration/*","type":"branch"}]}"#),
+            Ok(r#"{"total_count":2,"branch_policies":[{"id":3,"name":"main","type":"branch"},{"id":4,"name":"integration/*","type":"branch"}]}"#),
         );
         let mut clicks = Clicks::default();
         let report = run(&host, &mut clicks, &MemoryStore::default());
@@ -1623,28 +1966,249 @@ mod tests {
             .contains("https://github.com/settings/apps/codeflow-authority-r/advanced"));
     }
 
+    /// More branch policies than one page holds are refused, never read
+    /// as "restricted to the default branch" (review nit 2).
     #[test]
-    fn a_second_run_creates_nothing_already_set_up() {
+    fn a_second_page_of_branch_policies_is_refused() {
+        let host = fresh_host().answer(
+            "api repos/o/r/environments/codeflow-authority/deployment-branch-policies",
+            Ok(r#"{"total_count":101,"branch_policies":[{"id":3,"name":"main","type":"branch"}]}"#),
+        );
+        let mut clicks = Clicks::default();
+        let report = run(&host, &mut clicks, &MemoryStore::default());
+        let failure = report.failure.unwrap();
+        assert!(
+            failure.contains("more deployment branch policies"),
+            "{failure}"
+        );
+        assert!(clicks.manifests.is_empty());
+    }
+
+    /// F3: a second run calls the Apps set up only when the secret exists
+    /// and each App GitHub shows has the id kept, the manifest's
+    /// permissions and no events.
+    #[test]
+    fn a_second_run_creates_nothing_once_everything_is_in_place() {
         let store = MemoryStore::default();
-        store.store("o/r", "{}").unwrap();
-        let host = fresh_host()
-            .answer(
-                "api repos/o/r/environments/codeflow-authority/variables/CODEFLOW_AUTHORITY_APP_ID",
-                Ok(r#"{"name":"CODEFLOW_AUTHORITY_APP_ID","value":"101"}"#),
-            )
-            .answer(
-                "api repos/o/r/environments/codeflow-authority/deployment-branch-policies",
-                Ok(r#"{"branch_policies":[{"id":9,"name":"main","type":"branch"}]}"#),
-            );
+        store.store("o/r", &agent_entry()).unwrap();
+        let host = set_up_host();
         let mut clicks = Clicks::default();
         let report = run(&host, &mut clicks, &store);
-        assert_eq!(report.failure, None);
+        assert_eq!(report.failure, None, "{}", report.render().into_string());
         assert!(clicks.manifests.is_empty());
+        assert!(host
+            .writes()
+            .iter()
+            .all(|call| !call.contains("app-manifests")));
         let shown = report.render().into_string();
         assert!(
             shown.contains("authority App: already set up")
-                && shown.contains("agent App: a key for o/r is already"),
+                && shown.contains("the secret CODEFLOW_AUTHORITY_APP_KEY")
+                && shown.contains("agent App: already set up"),
             "{shown}"
+        );
+    }
+
+    /// F3: the id variable alone is not "already set up". A missing secret,
+    /// or an App with other permissions, stops the run non-zero naming what
+    /// is present and what is missing.
+    #[test]
+    fn a_partial_authority_setup_is_reported_not_called_set_up() {
+        let cases = [
+            (
+                set_up_host().answer(
+                    "api repos/o/r/environments/codeflow-authority/secrets/CODEFLOW_AUTHORITY_APP_KEY",
+                    Err("gh: Not Found (HTTP 404)"),
+                ),
+                "missing: the secret CODEFLOW_AUTHORITY_APP_KEY",
+            ),
+            (
+                set_up_host().answer(
+                    "api apps/codeflow-authority-r",
+                    Ok(&shown_app(101, r#"{"checks":"write","administration":"write","metadata":"read"}"#)),
+                ),
+                "with permissions",
+            ),
+            (
+                set_up_host().answer(
+                    "api apps/codeflow-authority-r",
+                    Ok(&shown_app(999, r#"{"checks":"write","metadata":"read"}"#)),
+                ),
+                "GitHub shows 999",
+            ),
+        ];
+        for (host, missing) in cases {
+            let store = MemoryStore::default();
+            store.store("o/r", &agent_entry()).unwrap();
+            let mut clicks = Clicks::default();
+            let report = run(&host, &mut clicks, &store);
+            let failure = report.failure.clone().unwrap();
+            assert!(
+                failure.contains("the authority App is not fully set up")
+                    && failure.contains("present: CODEFLOW_AUTHORITY_APP_ID '101'")
+                    && failure.contains(missing),
+                "{failure}"
+            );
+            assert!(!report.render().into_string().contains("already set up"));
+            assert!(clicks.manifests.is_empty());
+        }
+    }
+
+    /// F3: a credential-store entry that is not an agent App with a key, or
+    /// an App GitHub shows with other events, is not "already set up".
+    #[test]
+    fn a_partial_agent_setup_is_reported_not_called_set_up() {
+        let unreadable = MemoryStore::default();
+        unreadable.store("o/r", "{}").unwrap();
+        let report = run(&set_up_host(), &mut Clicks::default(), &unreadable);
+        let failure = report.failure.unwrap();
+        assert!(
+            failure.contains("the agent App is not fully set up")
+                && failure.contains("missing: an agent App and key"),
+            "{failure}"
+        );
+        let store = MemoryStore::default();
+        store.store("o/r", &agent_entry()).unwrap();
+        let host = set_up_host().answer(
+            "api apps/codeflow-agent-r",
+            Ok(&json!({
+                "id": 202,
+                "permissions": {"contents": "write", "pull_requests": "write", "metadata": "read"},
+                "events": ["push"],
+            })
+            .to_string()),
+        );
+        let report = run(&host, &mut Clicks::default(), &store);
+        let failure = report.failure.unwrap();
+        assert!(failure.contains(r#"events ["push"]"#), "{failure}");
+        assert!(!failure.contains("secretKEYmaterial"), "{failure}");
+    }
+
+    /// F4: a created App with the expected permissions but events, an
+    /// active webhook, or a webhook to another server is refused: its key
+    /// is dropped, the run stops non-zero and the delete page is named.
+    #[test]
+    fn an_app_with_events_or_a_foreign_webhook_is_refused() {
+        let with = |extra: Value| {
+            let mut answer: Value = serde_json::from_str(&conversion(
+                "codeflow-authority-r",
+                "codeflow-authority-r",
+                "o",
+                r#"{"checks":"write","metadata":"read"}"#,
+                AUTHORITY_PEM,
+            ))
+            .unwrap();
+            for (key, value) in extra.as_object().unwrap() {
+                answer[key] = value.clone();
+            }
+            fresh_host().answer(
+                "api -X POST app-manifests/authoritycode/conversions",
+                Ok(&answer.to_string()),
+            )
+        };
+        let cases = [
+            (
+                with(json!({"events": ["push"]})),
+                HookHttp::repository_page(),
+                "events [\"push\"]",
+            ),
+            (
+                with(
+                    json!({"hook_attributes": {"url": "https://evil.example/hook", "active": true}}),
+                ),
+                HookHttp::repository_page(),
+                "an active webhook",
+            ),
+            (
+                fresh_host(),
+                HookHttp(Ok(r#"{"url":"https://evil.example/hook"}"#.to_string())),
+                "a webhook to 'https://evil.example/hook'",
+            ),
+            (
+                fresh_host(),
+                HookHttp(Err(format!("GET failed: 500 {AUTHORITY_PEM}"))),
+                "a webhook that can be checked",
+            ),
+        ];
+        for (host, hook, why) in cases {
+            let report = run_hook(
+                &host,
+                &mut Clicks::default(),
+                &MemoryStore::default(),
+                &hook,
+            );
+            let failure = report.failure.unwrap();
+            assert!(
+                failure.contains(why)
+                    && failure.contains("its key was dropped")
+                    && failure
+                        .contains("https://github.com/settings/apps/codeflow-authority-r/advanced"),
+                "{failure}"
+            );
+            assert!(!failure.contains("secretKEYmaterial"), "{failure}");
+            assert!(!host.writes().iter().any(|call| call.starts_with("secret")));
+        }
+    }
+
+    /// A store that refuses and echoes what it was given, as a helper that
+    /// prints its standard input would.
+    struct EchoStore;
+    impl KeyStore for EchoStore {
+        fn describe(&self) -> String {
+            "an echoing store".to_string()
+        }
+        fn available(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn exists(&self, _: &str) -> Result<bool, String> {
+            Ok(false)
+        }
+        fn store(&self, _: &str, secret: &str) -> Result<(), String> {
+            Err(format!("refused: {secret}"))
+        }
+        fn load(&self, _: &str) -> Result<String, String> {
+            Err("none".to_string())
+        }
+        fn undo(&self, account: &str) -> String {
+            format!("forget {account}")
+        }
+    }
+
+    /// When the store refuses after the agent App is created, the run stops
+    /// non-zero, the key is not reported kept, and a helper's echo of the
+    /// key is redacted; so is an echo from `gh secret set` (review nit 1).
+    #[test]
+    fn a_refused_key_write_stops_the_run_and_never_shows_the_key() {
+        let refusing = MemoryStore {
+            refuse: true,
+            ..MemoryStore::default()
+        };
+        let report = run(&fresh_host(), &mut Clicks::default(), &refusing);
+        let failure = report.failure.unwrap();
+        assert!(
+            failure.contains("did not keep its key") && failure.contains("the key is not kept"),
+            "{failure}"
+        );
+        assert!(!report
+            .writes
+            .iter()
+            .any(|write| write.what.contains("kept the agent App")));
+        let report = run(&fresh_host(), &mut Clicks::default(), &EchoStore);
+        let failure = report.failure.unwrap();
+        assert!(
+            !failure.contains("secretKEYmaterial") && !failure.contains("PRIVATE KEY"),
+            "{failure}"
+        );
+        let echo = format!("gh: echoed {AUTHORITY_PEM}");
+        let host = fresh_host().answer("secret set CODEFLOW_AUTHORITY_APP_KEY", Err(&echo));
+        let failure = run(&host, &mut Clicks::default(), &MemoryStore::default())
+            .failure
+            .unwrap();
+        assert!(
+            failure.contains("its key is not kept")
+                && !failure.contains("secretKEYmaterial")
+                && !failure.contains("PRIVATE KEY"),
+            "{failure}"
         );
     }
 
@@ -1660,6 +2224,7 @@ mod tests {
             &|args, input| host.gh(args, input),
             &mut Clicks::default(),
             &MemoryStore::default(),
+            &auth(&OkSigner, &HookHttp::repository_page()),
             &options,
         );
         assert!(report.failure.unwrap().contains("--authority-name"));
@@ -1772,6 +2337,7 @@ mod tests {
             &|args, input| host.gh(args, input),
             &mut Clicks::default(),
             &MemoryStore::default(),
+            &auth(&OkSigner, &HookHttp::repository_page()),
             &both(),
         );
         assert_eq!(report.failure, None);

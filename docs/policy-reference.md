@@ -1258,7 +1258,10 @@ the default branch, in one session.
    name (`codeflow-authority-<repo>` by default, `--authority-name` to
    change it) and the permission, Checks write only, then click "Create
    GitHub App". GitHub returns to the command, which converts the code,
-   checks that the App has the name, owner and permissions asked for, stores
+   checks that the App has the name, owner and permissions asked for, no
+   events, and no webhook other than the repository page (it asks GitHub as
+   the new App), and otherwise drops the key and names the App to delete. It
+   stores
    its key as the environment secret `CODEFLOW_AUTHORITY_APP_KEY` and its id
    as the environment variable `CODEFLOW_AUTHORITY_APP_ID`.
 4. Click two: open the printed `https://github.com/apps/<slug>/installations/new`,
@@ -1281,7 +1284,12 @@ Every write is printed with what undoes it: a `gh` command for the
 environment, its branch policy, the secret and the variable, a `security`
 or `secret-tool` command for the stored key, and, for each App, its
 settings page, where "Delete GitHub App" is a web step. A second run creates
-nothing already set up. When `codeflow` cannot listen on a local port, or
+nothing for an App that is fully set up: for the authority App, the id
+variable, the key secret (checked by name only) and an App with that id, the
+manifest's permissions and no events; for the agent App, a readable entry in
+the credential store and the same checks on its App. When only part is in
+place, the command stops with a non-zero exit and lists what is present and
+what is missing. When `codeflow` cannot listen on a local port, or
 the browser cannot open the local page, `--paste` writes the page to a file
 and reads back the address GitHub opens, which holds the code.
 
@@ -1298,13 +1306,19 @@ the agent App's key from the credential store, signs the App's token with
 `openssl` reading the key from standard input, and asks GitHub for an
 installation token scoped to this repository, valid for one hour. It prints
 only that token. The key never reaches a file or a process argument list,
-and the command's errors are cleaned of the key.
+and the command's errors are cleaned of the key. The helpers that see the
+key or a token run from fixed paths, `/usr/bin/openssl`, `/usr/bin/curl`
+and `/usr/bin/secret-tool`, never through `PATH`, and with an empty
+environment, so no `OPENSSL_CONF`, preloaded library, proxy variable or
+`.curlrc` applies to them (curl also gets `-q` first). A network that needs
+a proxy to reach `api.github.com` is not supported yet.
 
 - `gh`: `GH_TOKEN="$(codeflow remote agent-token)" gh pr create ...`.
 - `git push`: name the command as the credential helper for this push only,
   `git -c credential.helper= -c 'credential.helper=!codeflow remote
-  agent-token --git-credential' push`. It answers `get` with the user
-  `x-access-token` and the token.
+  agent-token --git-credential' push`. It answers `get` for
+  `https://github.com` only, with the user `x-access-token` and the token;
+  any other host gets no answer.
 - The key's custody rests on the session's sandbox: a sandboxed session
   must not reach the credential store, and only `codeflow remote
   agent-token` runs outside the sandbox. On macOS the key is a login

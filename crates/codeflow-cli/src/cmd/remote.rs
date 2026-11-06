@@ -169,6 +169,14 @@ fn repo_root() -> anyhow::Result<std::path::PathBuf> {
         .unwrap_or(cwd))
 }
 
+/// Seconds since 1970, for an App's JSON Web Token.
+fn unix_now() -> anyhow::Result<u64> {
+    Ok(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("the system clock is before 1970")?
+        .as_secs())
+}
+
 /// `codeflow remote setup-apps`.
 fn run_setup_apps(options: &SetupOptions, paste: bool) -> anyhow::Result<()> {
     let root = repo_root()?;
@@ -194,7 +202,15 @@ fn run_setup_apps(options: &SetupOptions, paste: bool) -> anyhow::Result<()> {
         )
     };
     let store = os_store();
-    let report = apps::setup(&*gh, browser.as_mut(), store.as_ref(), options);
+    // Each new App is asked, as itself, where its webhook points.
+    let signer = OpensslSigner::discover(&std::env::temp_dir()).map_err(anyhow::Error::msg)?;
+    let http = CurlHttp::discover().map_err(anyhow::Error::msg)?;
+    let auth = apps::AppAuth {
+        signer: &signer,
+        http: &http,
+        now: unix_now()?,
+    };
+    let report = apps::setup(&*gh, browser.as_mut(), store.as_ref(), &auth, options);
     print_block!(report.render());
     if let Some(failure) = report.failure {
         anyhow::bail!("remote setup-apps stopped: {failure}");
@@ -205,10 +221,11 @@ fn run_setup_apps(options: &SetupOptions, paste: bool) -> anyhow::Result<()> {
 /// `codeflow remote agent-token`.
 fn run_agent_token(repo: Option<&str>, git_credential: Option<&str>) -> anyhow::Result<()> {
     if let Some(operation) = git_credential {
-        // Git sends the request on standard input; only `get` is answered.
+        // Git sends the request on standard input; only `get` for
+        // https://github.com is answered, and nothing is minted otherwise.
         let mut request = String::new();
         let _ = std::io::stdin().read_to_string(&mut request);
-        if operation != "get" {
+        if operation != "get" || !agent_key::credential_request_is_github(&request) {
             return Ok(());
         }
     }
@@ -225,12 +242,8 @@ fn run_agent_token(repo: Option<&str>, git_credential: Option<&str>) -> anyhow::
     }
     let signer = OpensslSigner::discover(&std::env::temp_dir()).map_err(anyhow::Error::msg)?;
     let http = CurlHttp::discover().map_err(anyhow::Error::msg)?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .context("the system clock is before 1970")?
-        .as_secs();
     let store = os_store();
-    let minted = agent_key::mint(store.as_ref(), &signer, &http, &repository, now)
+    let minted = agent_key::mint(store.as_ref(), &signer, &http, &repository, unix_now()?)
         .map_err(|error| anyhow::anyhow!("remote agent-token: {error}"))?;
     let mut out = std::io::stdout().lock();
     if git_credential.is_some() {

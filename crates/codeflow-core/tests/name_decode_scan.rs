@@ -122,6 +122,14 @@ const GIT2_TEXT: &[&str] = &["shorthand", "symbolic_target"];
 /// only reaches a person or is not a git or OS name: (file, enclosing item,
 /// call, how many, closed reason tag); the comment states the precise contract.
 const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-1348: a key helper's stderr or stdout (openssl, curl, security, secret-tool) shown in an error only, after redaction; no exit decision reads it.
+    (
+        "codeflow-core/src/remote/agent_key.rs",
+        "helper_text",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // Both startup_glob_paths callers construct pattern from Pattern.rest, a UTF-8
     // shell-word String. Only those pattern components are decoded to recognize
     // recursive stars; base and filesystem entry names are never decoded here.
@@ -1511,6 +1519,158 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-1348: an unreadable credential request reads as empty, which credential_request_is_github refuses, so nothing is minted or printed.
+    (
+        "crates/codeflow-cli/src/cmd/remote.rs",
+        "run_agent_token",
+        "obtain-absent:read_to_string",
+        1,
+        "unproven",
+    ),
+    // TSK-1348: a keychain answer whose hex is not UTF-8 decodes to None, which Keychain::load reports as an unreadable entry, never as a key.
+    (
+        "crates/codeflow-core/src/remote/agent_key.rs",
+        "decode_hex",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    // TSK-1348: trims a key helper's output for an error message only; no decision reads it.
+    (
+        "crates/codeflow-core/src/remote/agent_key.rs",
+        "helper_text",
+        "trim",
+        1,
+        "display",
+    ),
+    // TSK-1348: an installation answer that is not JSON has no id, so mint returns an error and no token.
+    (
+        "crates/codeflow-core/src/remote/agent_key.rs",
+        "mint",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // TSK-1348: splits a secret and a message into lines to replace each key line in an error shown to a person; the worst case is more text redacted.
+    (
+        "crates/codeflow-core/src/remote/agent_key.rs",
+        "redact",
+        "lines",
+        2,
+        "display",
+    ),
+    // TSK-1348: trims each key line before it is replaced in an error message; the worst case is more text redacted.
+    (
+        "crates/codeflow-core/src/remote/agent_key.rs",
+        "redact",
+        "trim",
+        1,
+        "display",
+    ),
+    // TSK-1348: the pasted address is trimmed, then callback_code accepts only this run's state and an ASCII code; trimming can only lead to a refusal.
+    (
+        "crates/codeflow-core/src/remote/apps.rs",
+        "PasteBrowser::code",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    // TSK-1348: an id variable answer that is not JSON reads as an empty id, which existing_authority reports as missing, never as set up.
+    (
+        "crates/codeflow-core/src/remote/apps.rs",
+        "authority",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // TSK-1348: an unreadable answer to the policy write shows `<id>` in the undo line only; the write's success decided.
+    (
+        "crates/codeflow-core/src/remote/apps.rs",
+        "branch_policy",
+        "obtain-absent:from_str",
+        1,
+        "display",
+    ),
+    // TSK-1348: a permission level that is not text reads as empty, so the map differs from the manifest's and the App is refused, its key dropped.
+    (
+        "crates/codeflow-core/src/remote/apps.rs",
+        "create_app",
+        "obtain-absent:as_str",
+        1,
+        "unproven",
+    ),
+    // TSK-1348: a store entry that is not an agent App stops the run as not fully set up, never as set up.
+    (
+        "crates/codeflow-core/src/remote/apps.rs",
+        "existing_agent",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // TSK-1348: a permission level that is not text reads as empty, so the App is reported as not the one the manifest asks for.
+    (
+        "crates/codeflow-core/src/remote/apps.rs",
+        "existing_app_problems",
+        "obtain-absent:as_str",
+        1,
+        "unproven",
+    ),
+    // TSK-1348: a shipped permission level that is not text reads as empty, which no App GitHub returns matches, so the App is refused.
+    (
+        "crates/codeflow-core/src/remote/apps.rs",
+        "expected_permissions",
+        "obtain-absent:as_str",
+        1,
+        "unproven",
+    ),
+    // TSK-1348: the first line of a gh failure, shown in a refusal; the failure itself decides.
+    (
+        "crates/codeflow-core/src/remote/apps.rs",
+        "first_line",
+        "lines",
+        1,
+        "display",
+    ),
+    // TSK-1348: the first line of a gh failure, shown in a refusal; the failure itself decides.
+    (
+        "crates/codeflow-core/src/remote/apps.rs",
+        "first_line",
+        "trim",
+        1,
+        "display",
+    ),
+    // TSK-1348: a webhook answer that is not JSON has no url, which is reported as a problem, so the App is refused and its key dropped.
+    (
+        "crates/codeflow-core/src/remote/apps.rs",
+        "hook_problems",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // TSK-1348: a repository answer that is not JSON names no repository, so the preflight refuses before any write.
+    (
+        "crates/codeflow-core/src/remote/apps.rs",
+        "preflight",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // TSK-1348: a browser request that cannot be read is no request; the loopback page answers it with an error and keeps waiting for this run's state.
+    (
+        "crates/codeflow-core/src/remote/apps.rs",
+        "request_target",
+        "obtain-absent:read",
+        1,
+        "unproven",
+    ),
+    // TSK-1348: a request target that is not UTF-8 is no target, so callback_code never sees it and the run keeps waiting for this run's state.
+    (
+        "crates/codeflow-core/src/remote/apps.rs",
+        "request_target",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
     // TSK-397: doctor's Claude settings reader. A layer that is not UTF-8
     // or not a JSON object is reported, never read as an absent layer. A
     // `.git` file's `gitdir:` value is trimmed as Git trims it, and the main
@@ -7007,6 +7167,12 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/remote/agent_key.rs", "CurlHttp::discover", "is_file", 1, "A missing /usr/bin/curl refuses the command (TSK-1348); a present one only lets the spawn go on, and a failed spawn is still an error."),
+    ("crates/codeflow-core/src/remote/agent_key.rs", "OpensslSigner::discover", "is_file", 1, "A missing /usr/bin/openssl refuses the command (TSK-1348); a present one only lets the spawn go on, and a failed spawn is still an error."),
+    ("crates/codeflow-core/src/remote/agent_key.rs", "SecretService::command", "is_file", 1, "A missing /usr/bin/secret-tool refuses the store (TSK-1348); a present one only lets the spawn go on, and a failed spawn is still an error."),
+    ("crates/codeflow-core/src/remote/agent_key.rs", "Keychain::available", "is_file", 1, "A missing /usr/bin/security refuses the agent App before it is created (TSK-1348); a present one only lets the spawn go on."),
+    ("crates/codeflow-core/src/remote/agent_key.rs", "Keychain::store", "exists", 1, "KeyStore::exists after the write: false or an error reports the key as not kept, so the run stops non-zero (TSK-1348)."),
+    ("crates/codeflow-core/src/remote/apps.rs", "agent", "exists", 1, "KeyStore::exists: true sends the run to existing_agent, which refuses unless the entry and its App verify; false creates the App; an error stops the run (TSK-1348)."),
     ("crates/codeflow-core/src/git/unreadable.rs", "read_regular_file", "is_file", 1, "Type check on symlink_metadata, which already succeeded; a non-file is not opened so a FIFO cannot block the scan, and it is reported as readable because only a refused stat or open counts (TSK-1315)."),
     ("crates/codeflow-core/src/git/unreadable.rs", "walk", "is_dir", 1, "Type check on a read_dir entry only chooses to descend; a non-directory entry is still read, so no file is skipped as absent (TSK-1315)."),
     ("crates/codeflow-core/src/hooks/gitleaks.rs", "private::open_folder", "is_dir", 1, "Type check on the descriptor opened without following a link; anything but a directory this user owns with mode 0700 refuses, which fails the scan as incomplete (TSK-412)."),
