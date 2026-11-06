@@ -580,9 +580,9 @@ worktree; a root checkout is refused. A head
 already contained in the target needs no new merge commit. The subject names
 both refs: `Merge branch '<branch>' into <target>`.
 
-For an `integration/` target, the diff from its pinned tip selects the gate
-(`.codeflow/rules/git-rules.md`, "Bodies of work"). The saved
-`<git-common-dir>/codeflow/landings/<candidate>.json` names the class and reason.
+An `integration/` target's gate follows the diff from its pinned tip
+(`.codeflow/rules/git-rules.md`, "Bodies of work");
+`<git-common-dir>/codeflow/landings/<candidate>.json` records the class and reason.
 
 Both modes advance the local target only after the gate and the adopted
 release structure check pass. They refuse failed, skipped or incomplete gates; a
