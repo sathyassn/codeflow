@@ -1,0 +1,11 @@
+id = "TSK-1363"
+uid = "d0675a4c-f370-4467-b0da-d2caa8dc6eaa"
+kind = "TSK"
+title = "An open task's dependency missing from the declared task graph fails validation"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-06T01:31:45Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
