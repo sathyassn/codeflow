@@ -96,6 +96,12 @@ pub const TRUSTED_PREFIX: &str = "trusted: ";
 /// The prefix of the check runs the GitHub App creates in Mode A.
 pub const AUTHORITY_PREFIX: &str = "authority: ";
 
+/// What Mode B does not do, said wherever Mode B is named (TSK-1177 F1).
+/// Its refusal step reads the producers once, when each verdict job ends,
+/// and GitHub takes the newest check run of a name, so a workflow that runs
+/// later can still satisfy a `trusted:` name pinned to GitHub Actions.
+pub const MODE_B_LIMIT: &str = "Mode B is a lower tier: it does not close forgery by a later producer, since a workflow that runs after the verdict job can still produce a trusted: check; only Mode A, the App authority, closes it";
+
 /// The `trusted:` names B and C cannot do without; `trusted: release
 /// impact` joins them where the workflow declares it.
 const REQUIRED_TRUSTED: &[&str] = &["trusted: commit standards", "trusted: secret scan"];
@@ -323,7 +329,7 @@ impl AuthorityPlan {
         match self.check_app {
             Some(app) => format!("Mode A, the authority: names pinned to GitHub App {app}"),
             None => format!(
-                "Mode B, the trusted: names pinned to GitHub Actions ({GITHUB_ACTIONS_APP_ID})"
+                "Mode B, the trusted: names pinned to GitHub Actions ({GITHUB_ACTIONS_APP_ID}); {MODE_B_LIMIT}"
             ),
         }
     }
@@ -2085,6 +2091,8 @@ printf '{}'
         let text = report.render();
         for expected in [
             "profile solo-administrator; Mode B",
+            "it does not close forgery by a later producer",
+            "only Mode A, the App authority, closes it",
             "ruleset codeflow authority updates on ~DEFAULT_BRANCH:",
             "only the administrator role (RepositoryRole 5) updates the branch",
             "ruleset codeflow authority checks on ~DEFAULT_BRANCH:",

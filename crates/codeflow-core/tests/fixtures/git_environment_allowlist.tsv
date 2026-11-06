@@ -153,6 +153,7 @@ crates/codeflow-core/src/validate/portal.rs	envs(allowed_git_environment(std::en
 crates/codeflow-core/src/validate/portal.rs	from("GIT_CONFIG_COUNT")	1	Hardened read-only Git subprocesses disable lazy fetch and optional locks; configuration literals are inert environment-filter test input.
 crates/codeflow-core/src/validate/portal.rs	from("GIT_CONFIG_KEY_0")	1	Hardened read-only Git subprocesses disable lazy fetch and optional locks; configuration literals are inert environment-filter test input.
 crates/codeflow-core/src/validate/portal.rs	from("GIT_CONFIG_VALUE_0")	1	Hardened read-only Git subprocesses disable lazy fetch and optional locks; configuration literals are inert environment-filter test input.
+crates/codeflow-core/tests/authority_job.rs	env(key,value)	1	Passes each test's step variables (HEAD_SHA, VERDICTS and the like) to a bash run of a workflow step against a fake curl; the steps run no Git and inherited Git configuration is left intact.
 crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.env(\"GIT_CONFIG_COUNT\",\n \"0\");"	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
 crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.env(\"GIT_CONFIG_\\x43OUNT\", \"0\");"	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
 crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.envs([(\"GIT_CONFIG_COUNT\",\"0\")]);"	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
