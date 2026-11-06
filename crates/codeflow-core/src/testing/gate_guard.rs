@@ -64,7 +64,8 @@
 //!
 //! **Target lifetime on Unix.** Heavy quick targets and reserved commands
 //! have a watcher that ends their process group when the controller exits;
-//! it keeps copies of the run's slot, host and fence locks, so a target that
+//! it keeps copies of the run's slot, host and fence locks until no process
+//! of that group is left (TSK-1318), so a target that
 //! outlives its run keeps its slot busy and keeps a host-exclusive target
 //! and older binaries out. Other targets can outlive a killed gate. Every
 //! target of an admitted run inherits the run's fences, and a flock belongs
@@ -78,9 +79,12 @@
 //! process group with a live process counts as busy.
 //!
 //! **On Windows they end with it** (TSK-142). Each target runs in a
-//! kill-on-close job object whose only handle the gate process holds, so
-//! the OS ends the target's tree when it closes that handle as the gate
-//! exits. No group is recorded there.
+//! kill-on-close job object, so the target's tree ends when the gate exits.
+//! A lock there belongs to the process that took it, so no target inherits
+//! a fence; while a run holds fences, a watcher process outside each
+//! target's job holds them shared too, ends the job when the gate ends, and
+//! exits, freeing them, only once the job has no process left
+//! (`watched_fence_paths`, TSK-1318). No group is recorded there.
 //!
 //! **A command under `codeflow reserve` shares its slot** (TSK-1128). On
 //! Unix, `codeflow reserve` hands a `codeflow` command duplicates of its
@@ -245,6 +249,8 @@ pub fn held_runs() -> Option<usize> {
 
 impl Drop for GateLock {
     fn drop(&mut self) {
+        #[cfg(windows)]
+        watched_fences().retain(|(id, _)| *id != self.id);
         // Deregister first, under the registry lock, so no target update can
         // rewrite a record after it is cleared. The entry's host locks
         // release when it drops, after the records are cleared.
@@ -931,6 +937,8 @@ pub fn acquire_gate_lock(
     for (_, fence) in &mut lock.fences {
         fence.armed = false;
     }
+    #[cfg(windows)]
+    watched_fences().extend(lock.fences.iter().map(|(path, _)| (lock.id, path.clone())));
     Ok(lock)
 }
 
@@ -1222,9 +1230,9 @@ pub struct HostExclusive {
     /// called this (TSK-1256). The target inherits it ([`fence_copies`]);
     /// it closes after the host, never unlocked.
     fences: Vec<(PathBuf, FenceFile)>,
-    /// This hold's entry in the registry [`fence_copies`] reads; Unix only,
-    /// since targets inherit fences only there.
-    #[cfg(unix)]
+    /// This hold's entry in the registry of its fences: the one
+    /// `fence_copies` reads on Unix, the one `watched_fence_paths` reads
+    /// on Windows.
     id: u64,
 }
 
@@ -1232,6 +1240,8 @@ impl Drop for HostExclusive {
     fn drop(&mut self) {
         #[cfg(unix)]
         host_fences().retain(|(id, _)| *id != self.id);
+        #[cfg(windows)]
+        watched_fences().retain(|(id, _)| *id != self.id);
         for (path, _) in &self.files {
             if let Err(error) = write_record(path, "") {
                 eprintln!(
@@ -1418,13 +1428,16 @@ fn held_exclusively(
     let mut hold = HostExclusive {
         files: taken,
         fences,
-        #[cfg(unix)]
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
     };
-    for (_, fence) in &mut hold.fences {
+    for (path, fence) in &mut hold.fences {
         fence.armed = false;
         #[cfg(unix)]
         host_fences().push((hold.id, std::os::fd::AsRawFd::as_raw_fd(&fence.file)));
+        #[cfg(windows)]
+        watched_fences().push((hold.id, path.clone()));
+        #[cfg(not(windows))]
+        let _ = path;
     }
     hold
 }
@@ -1744,6 +1757,60 @@ pub(crate) fn fence_copies() -> std::io::Result<Vec<File>> {
                 .map(File::from)
         })
         .collect()
+}
+
+/// The fence paths of every admission and host-exclusive hold of this
+/// process, by hold. On Windows a lock belongs to the process that took it,
+/// so no target can inherit a fence; a fence watcher outside the target's
+/// job takes each path shared for itself and keeps it until the job is
+/// empty (TSK-1318).
+#[cfg(windows)]
+static WATCHED_FENCES: Mutex<Vec<(u64, PathBuf)>> = Mutex::new(Vec::new());
+
+#[cfg(windows)]
+fn watched_fences() -> std::sync::MutexGuard<'static, Vec<(u64, PathBuf)>> {
+    WATCHED_FENCES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The paths of every fence this process holds, each once, for a target's
+/// fence watcher to hold as well (TSK-1318).
+#[cfg(windows)]
+pub(crate) fn watched_fence_paths() -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = watched_fences()
+        .iter()
+        .map(|(_, path)| path.clone())
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Whether an exclusive take of the fence at `path` would succeed now, as
+/// an older binary's would. A take that succeeds is released at once.
+#[cfg(all(windows, test))]
+pub(crate) fn fence_is_free_for_test(path: &Path) -> bool {
+    matches!(try_open_and_lock(path, false), Ok(Slot::Taken(_)))
+}
+
+/// Hold the fence at `path` shared for a fence watcher, which keeps the
+/// returned handle open, never unlocked, until it exits (TSK-1318). The
+/// gate that started the watcher holds the fence shared already, so the
+/// take succeeds unless the lock cannot be opened or checked.
+/// # Errors
+/// When the fence cannot be opened, locked or checked, or is held
+/// exclusively, naming the path.
+#[cfg(windows)]
+pub(crate) fn hold_fence_for_watcher(path: &Path) -> Result<File, String> {
+    match try_open_and_lock(path, true) {
+        Ok(Slot::Taken(file)) => Ok(file),
+        Ok(Slot::Busy) => Err(format!(
+            "the fence {} is held exclusively",
+            crate::git::display_path(path)
+        )),
+        Err(held) => Err(held.to_string()),
+    }
 }
 
 /// A fence ([`LOCK_FILE`]) held shared. Targets inherit copies of it, and
