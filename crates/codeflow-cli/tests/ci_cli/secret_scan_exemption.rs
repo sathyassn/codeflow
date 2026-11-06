@@ -321,7 +321,11 @@ fn exemption_keeps_task_identity_and_body_checks() {
     let dir = fixture(false);
     for (branch, text, expected) in [
         (BRANCH, body("EPC-999"), "work.classification"),
-        (BRANCH, body("TSK-999"), "work.stable_planning_anchor"),
+        (
+            BRANCH,
+            body("TSK-999"),
+            "has no task record on the target or at the head",
+        ),
         ("task/TSK-001-wrong", body("TSK-002"), "work.classification"),
         (
             BRANCH,
