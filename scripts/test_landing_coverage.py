@@ -19,6 +19,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parent / "landing-coverage.py"
 spec = importlib.util.spec_from_file_location("landing_coverage", SCRIPT)
@@ -130,20 +131,23 @@ class Fixture:
     def save_hosted(self, run_id: int, head: str, jobs: list[dict], total: int | None = None, **run) -> None:
         body = {"id": run_id, "path": landing.WORKFLOW, "status": "completed",
                 "conclusion": "success", "head_sha": head, "event": "workflow_dispatch",
-                "repository": {"full_name": REPO}, "head_repository": {"full_name": REPO}}
+                "repository": {"full_name": REPO, "fork": False},
+                "head_repository": {"full_name": REPO, "fork": False}}
         body.update(run)
         (self.evidence / f"run-{run_id}.json").write_text(json.dumps(body))
         (self.evidence / f"jobs-{run_id}.json").write_text(json.dumps(
             {"total_count": len(jobs) if total is None else total, "jobs": jobs}))
 
-    def run(self, record: dict | None, *extra: str, candidate: str | None = None) -> tuple[int, str, str]:
+    def run(self, record: dict | None, *extra: str, candidate: str | None = None,
+            saved: bool = True) -> tuple[int, str, str]:
         if record is not None:
             self.record_path.write_text(json.dumps(record))
         out, err = io.StringIO(), io.StringIO()
+        evidence = ["--hosted-evidence", str(self.evidence)] if saved else []
         with redirect_stdout(out), redirect_stderr(err):
             code = landing.main(["--candidate", candidate or self.candidate, "--run",
                                  str(self.record_path), "--repo", str(self.repo),
-                                 "--hosted-evidence", str(self.evidence), *extra])
+                                 *evidence, *extra])
         return code, out.getvalue(), err.getvalue()
 
 
@@ -291,6 +295,26 @@ class ForgedRecord(unittest.TestCase):
         git(self.f.repo, "checkout", "-q", "--detach", self.f.earlier)
         self.refused(self.f.record(), "this checkout is not the candidate")
 
+    def test_zero_measured_lines_are_refused(self):
+        # Grok delta finding 1 on f3119cab2: 0/0 at 100 percent everywhere,
+        # with thresholds_failed written as 0, must not cite as a passed gate.
+        record = self.f.record()
+        empty = {"count": 0, "covered": 0, "percent": 100.0}
+        self.entry(record)["totals"] = {"lines": dict(empty), "functions": dict(empty),
+                                        "regions": dict(empty)}
+        self.refused(record, "coverage measured no lines")
+
+    def test_a_skip_worktree_or_assume_unchanged_file_is_refused(self):
+        # Grok delta finding 2 on f3119cab2: git status ignores marked files.
+        for flag in ("--skip-worktree", "--assume-unchanged"):
+            with self.subTest(flag=flag):
+                git(self.f.repo, "update-index", flag, "file")
+                (self.f.repo / "file").write_text("changed under the mark")
+                self.assertEqual(git(self.f.repo, "status", "--porcelain", "--untracked-files=no"), "")
+                self.refused(self.f.record(), "skip-worktree or assume-unchanged (first: file)")
+                git(self.f.repo, "update-index", flag.replace("--", "--no-"), "file")
+                git(self.f.repo, "checkout", "-q", "--", "file")
+
     def test_a_record_outside_its_own_run_folder_is_refused(self):
         self.refused(self.f.record(run_id="run-2"), "is not in the folder its run_id")
         self.refused([], "is not a JSON object")
@@ -336,6 +360,7 @@ class HostedCredit(unittest.TestCase):
                 self.assertIn(f"not complete locally; credited to hosted jobs: present-browser by "
                               f"hosted job '{JOB}', run 7, job 70, head {head}", out)
                 self.assertNotIn("complete local full gate", out)
+                self.assertIn(f"head {head} (from saved evidence, not a live read)", out)
 
     def test_this_repositorys_workflow_scopes_the_release_present_job(self):
         text = (Path(__file__).resolve().parents[1] / landing.WORKFLOW).read_text()
@@ -349,6 +374,10 @@ class HostedCredit(unittest.TestCase):
                             ({"head_repository": {"full_name": "attacker/fork"}},
                              "head_repository is 'attacker/fork'"),
                             ({"head_repository": None}, "head_repository is None"),
+                            ({"repository": "sathyassn/codeflow"}, "repository is 'sathyassn/codeflow'"),
+                            ({"head_repository": {"full_name": REPO, "fork": True},
+                              "head_branch": "attacker:main"}, "head_repository fork is True"),
+                            ({"repository": {"full_name": REPO}}, "repository fork is None"),
                             ({"event": "pull_request"}, "started by 'pull_request'")):
             with self.subTest(run=run):
                 self.f.save_hosted(7, self.f.candidate, [job()], **run)
@@ -359,6 +388,51 @@ class HostedCredit(unittest.TestCase):
         self.refused("lists 1 jobs of total_count 250")
         (self.f.evidence / "jobs-7.json").write_text(json.dumps({"jobs": [job()]}))
         self.refused("total_count None")
+
+    def live(self, pages: list[dict]) -> tuple[int, str, str]:
+        """Run the check against a stand-in `gh api` that serves `pages`."""
+        real = subprocess.run
+        served = []
+
+        def fake(argv, *args, **kwargs):
+            if argv[0] != "gh":
+                return real(argv, *args, **kwargs)
+            path = argv[2]
+            if "/jobs?" not in path:
+                body = json.loads((self.f.evidence / "run-7.json").read_text())
+            else:
+                page = int(path.rsplit("page=", 1)[1])
+                served.append(page)
+                body = pages[page - 1] if page <= len(pages) else {"total_count": 0, "jobs": []}
+            return subprocess.CompletedProcess(argv, 0, json.dumps(body), "")
+
+        with mock.patch.object(landing.subprocess, "run", fake):
+            result = self.f.run(self.f.hosted_record(), "--hosted", "present-browser=7", saved=False)
+        self.served = served
+        return result
+
+    def test_live_reads_continue_past_an_understated_total(self):
+        # Grok delta attack log on f3119cab2: a first page of 100 jobs whose
+        # total_count says 100 stopped the read before a failed duplicate.
+        self.f.save_hosted(7, self.f.candidate, [])
+        filler = [job(f"other {n}") for n in range(99)]
+        first = {"total_count": 100, "jobs": [job(), *filler]}
+        second = {"total_count": 100, "jobs": [job(conclusion="failure")]}
+        code, out, err = self.live([first, second])
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(self.served, [1, 2])
+        self.assertIn("lists 101 jobs of total_count 100", err)
+        # Pages that disagree on the total are refused.
+        code, out, err = self.live([{"total_count": 101, "jobs": [job(), *filler]},
+                                    {"total_count": 150, "jobs": [job("last")]}])
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("pages disagree on total_count", err)
+        # An honest two-page list credits the job found on page 2.
+        code, out, err = self.live([{"total_count": 101, "jobs": [job(f"other {n}") for n in range(100)]},
+                                    {"total_count": 101, "jobs": [job()]}])
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"hosted job '{JOB}', run 7", out)
+        self.assertNotIn("saved evidence", out)
 
     def test_the_reviewed_hosted_forgery_is_refused(self):
         self.f.save_hosted(7, self.f.candidate, [job()], total=250, conclusion="failure",

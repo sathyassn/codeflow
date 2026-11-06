@@ -41,7 +41,8 @@ Usage: landing-coverage.py --candidate <commit> --run <run.json>
 
 Without --hosted-evidence the hosted run and its jobs are read with
 `gh api`; with it, DIR holds run-<id>.json and jobs-<id>.json, the same API
-responses saved earlier.
+responses saved earlier. Saved files are taken as given, so a credit read
+from them is labelled as such; cite a live read.
 """
 
 from __future__ import annotations
@@ -100,8 +101,16 @@ def tracked_digest(repo: Path, candidate: str) -> str:
     map as compact JSON in name order."""
     if commit_of(repo, "HEAD") != candidate:
         raise Refused("this checkout is not the candidate: run the check from a checkout of it")
-    if git(repo, "status", "--porcelain", "--untracked-files=no"):
+    if git(repo, "-c", "core.fsmonitor=false", "status", "--porcelain", "--untracked-files=no"):
         raise Refused("this checkout has tracked changes: run the check from a clean checkout")
+    # `git status` does not look at a file marked skip-worktree or
+    # assume-unchanged, so such a file could differ from the candidate and
+    # still read as clean. `ls-files -v` tags every other cached entry `H`.
+    marked = [line[2:] for line in git_bytes(repo, "-c", "core.fsmonitor=false", "ls-files", "-v", "-z")
+              .decode().split("\0") if line and not line.startswith("H ")]
+    if marked:
+        raise Refused(f"this checkout marks {len(marked)} tracked files skip-worktree or assume-unchanged "
+                      f"(first: {marked[0]}): clear the marks and run from a clean checkout")
     top = Path(git(repo, "rev-parse", "--show-toplevel"))
     entries = {}
     for record in git_bytes(repo, "ls-files", "-s", "-z").split(b"\0"):
@@ -213,7 +222,9 @@ def check_record(record: dict, candidate: str, tree: str, config: dict,
     if not is_count(failed) or failed != 0:
         problems.append(f"thresholds_failed is {failed!r}, expected 0")
     lines = totals.get("lines") or {}
-    if measures_ok and is_count(floor) and lines["percent"] < floor:
+    if measures_ok and lines["count"] == 0:
+        problems.append("coverage measured no lines, so it cannot meet a floor")
+    elif measures_ok and is_count(floor) and lines["percent"] < floor:
         problems.append(f"line coverage {lines['percent']:.2f}% is under the floor {floor}%")
     if problems:
         raise Refused("; ".join(problems))
@@ -266,9 +277,16 @@ def check_hosted(repo: Path, target: str, run: dict, jobs: dict, candidate: str,
     if run.get("path") != WORKFLOW:
         raise Refused(f"{target}: run {run_id} is workflow {run.get('path')!r}, expected {WORKFLOW}")
     for field in ("repository", "head_repository"):
-        name = (run.get(field) or {}).get("full_name")
+        value = run.get(field)
+        if not isinstance(value, dict):
+            raise Refused(f"{target}: run {run_id} {field} is {value!r}, expected {github}")
+        name = value.get("full_name")
         if name != github:
             raise Refused(f"{target}: run {run_id} {field} is {name!r}, expected {github}")
+        # A fork can carry the same full name in a forged or odd payload;
+        # only a repository GitHub marks as no fork counts.
+        if value.get("fork") is not False:
+            raise Refused(f"{target}: run {run_id} {field} fork is {value.get('fork')!r}, expected false")
     if run.get("event") != event:
         raise Refused(f"{target}: run {run_id} was started by {run.get('event')!r}, expected {event}")
     if run.get("status") != "completed" or run.get("conclusion") != "success":
@@ -322,16 +340,25 @@ def load_hosted(run_id: str, evidence: Path | None, github: str) -> tuple[dict, 
         if result.returncode != 0:
             raise Refused(f"gh api for run {run_id} failed: {result.stderr.strip()}")
         return json.loads(result.stdout)
+    # Read until a short page, whatever total_count says, so a total that
+    # understates the list cannot hide a later job; every page must state
+    # the same total, and `check_hosted` then requires it to match.
     jobs: list = []
-    total = None
+    totals = set()
     for page in range(1, 101):
         body = api(f"/jobs?per_page={JOBS_PAGE}&page={page}")
-        total = body.get("total_count")
-        listed = body.get("jobs") or []
+        listed = body.get("jobs")
+        if not isinstance(listed, list):
+            raise Refused(f"gh api for run {run_id} page {page} has no jobs list")
+        totals.add(json.dumps(body.get("total_count")))
         jobs.extend(listed)
-        if len(listed) < JOBS_PAGE or (is_count(total) and len(jobs) >= total):
+        if len(listed) < JOBS_PAGE:
             break
-    return api(""), {"total_count": total, "jobs": jobs}
+    else:
+        raise Refused(f"run {run_id} lists more jobs than this check reads")
+    if len(totals) != 1:
+        raise Refused(f"run {run_id} pages disagree on total_count: {sorted(totals)}")
+    return api(""), {"total_count": json.loads(totals.pop()), "jobs": jobs}
 
 
 def check(args: argparse.Namespace) -> list[str]:
@@ -366,8 +393,11 @@ def check(args: argparse.Namespace) -> list[str]:
                       f"{sorted(hosted) or 'none'}; these must match")
     if record.get("complete") is not (not hosted):
         raise Refused(f"complete is {record.get('complete')!r} with {len(hosted)} hosted targets")
+    # Saved files are taken as given, so a credit read from them says so;
+    # only a live read is evidence of what GitHub recorded.
+    source = " (from saved evidence, not a live read)" if args.hosted_evidence else ""
     credits = [check_hosted(repo, target, *load_hosted(run_id, args.hosted_evidence, args.github),
-                            candidate, tree, args.github)
+                            candidate, tree, args.github) + source
                for target, run_id in sorted(hosted.items())]
     totals = entry["totals"]
     measures = ", ".join(f"{m} {totals[m]['percent']:.2f}% ({totals[m]['covered']}/{totals[m]['count']})"
