@@ -34,27 +34,29 @@ ready. Otherwise the task targets its epic's integration line, where agents
 merge reviewed tasks in batches without waiting for a human, and the line
 reaches `main` through a checkpoint pull request that a human merges when
 available. A checkpoint pull request from the line to `main` is opened, or
-refreshed, at every green line tip; the last one carries the epic close.
-Each task or epic record has one home, its own epic's line or, for a
-record homed there, `main`, and changes only there. A line takes `main`
-only through the admitted sync route that `codeflow ci` judges (TSK-1312),
-never through a merge that needs a task of its own. That sync takes
-`main`'s version only of records homed on `main` and never changes a record
-homed on the line. The
-other landing rules stand: one pull request per task, batched candidates
-with one full gate, and only a human merges into `main`.
+refreshed, at every green line tip; the last one carries the epic close. A
+standalone task that does not target `main` lands on the line it targets, as
+its own candidate. Each task or epic record changes only in its one home. A
+task's home is the branch its `integration_target` names: its epic's line, the
+line a standalone task targets, or `main`. An epic's home is the branch its
+tasks target. A line takes `main` only through the admitted sync route that
+`codeflow ci` judges (TSK-1312), never through a merge that needs a task of
+its own. That sync takes `main`'s version only of records homed on `main` and
+never changes a record homed on the line. The other landing rules stand: one
+pull request per task, batched candidates with one full gate, and only a human
+merges into `main`.
 
 ## Consequences
 
 - Finished work reaches `main` at each green line tip instead of at epic
   close, and a project whose humans merge as work becomes ready skips lines
   entirely.
-- Unfinished user-facing work that reaches `main` through a checkpoint stays
-  switched off, and the checkpoint pull request names the switch.
+- Unfinished work that reaches `main` through a checkpoint is a risk, and
+  the epic's own criteria guard it.
 - A human reviews more, smaller pull requests to `main`; each checkpoint is
   judged as the line's own completions (TSK-433).
-- A record edit for another epic's task on the wrong line is out of bounds;
-  it goes through that epic's line or `main`.
+- A record edit on any branch other than the record's home is out of
+  bounds; it goes through that home.
 - Until TSK-1312 lands, a sync of `main` into a line still needs the carrying
   task the current checks require.
 

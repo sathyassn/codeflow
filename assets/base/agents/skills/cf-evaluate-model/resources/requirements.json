@@ -1684,7 +1684,7 @@
             "not itself a reason to share a branch",
             "One landing rule holds in every project",
             "A checkpoint PR is opened, or refreshed, at every green line tip",
-            "never unrelated standalone tasks",
+            "The branch holds one coherent epic outcome",
             "chooses this routine mechanism without an operator question",
             "cut and push `integration/<epic-id>-<slug>` off the current protected target",
             "Each task still completes its producer verification and cross-lineage review before it joins a batch",

@@ -29,10 +29,13 @@ existing one or a new one.
   and at every green line tip a checkpoint pull request from the line to
   `main` is opened or refreshed for a person to merge when available
   (ADR-0098). Only a person merges into `main`.
-- Each task or epic record changes only in its one home: its own epic's
-  line, or `main` for a record homed there. A line takes `main` only
-  through the sync that `codeflow ci` admits (TSK-1312), which never
-  changes a record homed on the line.
+- Each task or epic record changes only in its one home. A task's home is
+  the branch its `integration_target` names: its epic's line, the line a
+  standalone task targets, or `main`. An epic's home is the branch its
+  tasks target.
+- A line takes `main` only through the sync that `codeflow ci` admits
+  (TSK-1312), which never changes a record homed on the line. Until that
+  sync ships, it needs the carrying task the current checks require.
 
 This page is for the operator who runs agents and wants to know what to
 approve and merge, and for a contributor landing a change. ADR-0076 retired

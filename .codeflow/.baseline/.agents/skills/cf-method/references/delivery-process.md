@@ -68,14 +68,16 @@ its record and code land in the same reviewed PR. That PR is its own
 candidate: it lands on the integration line it targets, or, when it targets
 `main`, it is the PR the operator merges.
 
-Where a task lands follows one rule (CodeFlow ADR-0098). A task PR targets `main`
-when a human can merge it as it becomes ready. Otherwise it targets its
+Where a task lands follows one rule (CodeFlow ADR-0098). A task PR targets
+`main` when a human can merge it as it becomes ready. Otherwise it targets its
 epic's line, agents merge it there in a batch, and a checkpoint PR from the
-line to `main` is opened, or refreshed, at every green line tip for a human
-to merge when available. Each task or epic record changes only in its one
-home: its own epic's line, or `main` for a record homed there. A line takes
-`main` only through the sync route `codeflow ci` admits (TSK-1312), which
-never changes a record homed on the line.
+line to `main` is opened, or refreshed, at every green line tip for a human to
+merge when available. Each task or epic record changes only in its one home. A
+task's home is the branch its `integration_target` names: its epic's line, the
+line a standalone task targets, or `main`. An epic's home is the branch its
+tasks target. A line takes `main` only through the sync route `codeflow ci`
+admits (TSK-1312), which never changes a record homed on the line; until that
+route ships, such a sync needs the carrying task the current checks require.
 
 ## 2. From a spec to an epic and tasks
 

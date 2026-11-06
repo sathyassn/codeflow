@@ -117,15 +117,19 @@ it becomes ready. Otherwise the epic's tasks land on a non-protected
 `integration/<epic>` branch (agents merge there) in batches: every
 reviewed task head ready when the line lands goes on one candidate, gated
 once, one candidate per line at a time (see `worktrees.md`, "Parallel work
-and integration"). A red candidate is
-diagnosed first, and a member and its dependents leave it only when
-evidence attributes the failure to it. At every green line tip a
-checkpoint PR from the line to `main` is opened or refreshed, and a human
-merges it when available. Each task or epic record changes only in its
-one home: its own epic's line, or `main` for a record homed there. A line
-takes `main` only by merging it in through the sync route `codeflow ci`
-admits, which never changes a record homed on the line. See cf-method, "Managing a
-body of work" (standard and full tiers), and CodeFlow ADR-0098.
+and integration"). A red candidate is diagnosed first, and a member and
+its dependents leave it only when evidence attributes the failure to it. At
+every green line tip a checkpoint PR from the line to `main` is opened or
+refreshed, and a human merges it when available. A standalone task that
+does not target `main` lands on the line it targets, as its own candidate.
+Each task or epic record changes only in its one home. A task's home is
+the branch its `integration_target` names: its epic's line, the line a
+standalone task targets, or `main`. An epic's home is the branch its tasks
+target. A line takes `main` only by
+merging it in through the sync route `codeflow ci` admits, which never
+changes a record homed on the line; until that route ships (TSK-1312), such
+a sync needs the carrying task the current checks require. See cf-method,
+"Managing a body of work" (standard and full tiers), and CodeFlow ADR-0098.
 
 Direct commits on an epic line are refused at push. `codeflow ci` refuses
 them on a landing candidate before its gate when run with `--line-tip

@@ -149,18 +149,20 @@ standalone tasks, or both; it is not itself a reason to share a branch. Apply
 the flow below independently to each coherent multi-task epic; the delivery
 process reference draws it.
 
-One landing rule holds in every project (CodeFlow ADR-0098). A task PR targets `main`
-when a human can merge it as it becomes ready. Otherwise its epic's tasks
-land on a shared, non-protected **integration branch** (the epic line), where
-agents merge reviewed tasks in batches, and the line reaches `main` through a
-**checkpoint PR** that a human merges when available. A checkpoint PR is
-opened, or refreshed, at every green line tip. Each task or epic record
-changes only in its one home: its own epic's line, or `main` for a record
-homed there. Every other gate (commit
-standards, secret scan, destructive-op rules, the test gate) still applies on
-every branch. Each task's `integration_target` records that choice. The
-branch holds one coherent
-epic outcome, never unrelated standalone tasks. The orchestrating agent
+One landing rule holds in every project (CodeFlow ADR-0098). A task PR targets
+`main` when a human can merge it as it becomes ready. Otherwise its epic's
+tasks land on a shared, non-protected **integration branch** (the epic line),
+where agents merge reviewed tasks in batches, and the line reaches `main`
+through a **checkpoint PR** that a human merges when available. A checkpoint
+PR is opened, or refreshed, at every green line tip. A standalone task that
+does not target `main` lands on the line it targets, as its own candidate.
+Each task or epic record changes only in its one home. A task's home is the
+branch its `integration_target` names: its epic's line, the line a standalone
+task targets, or `main`. An epic's home is the branch its tasks target. Every
+other gate (commit standards, secret scan, destructive-op rules, the test
+gate) still applies on every branch. Each task's `integration_target` records
+that choice. The branch holds one coherent epic outcome; a standalone task
+that lands there adds nothing to that epic's scope. The orchestrating agent
 chooses this routine mechanism without an operator question once the outcome,
 acceptance boundaries, and dependency graph are clear. An explicit operator
 request about the landing shape is valid input and is honoured, but it cannot
@@ -210,7 +212,8 @@ waive the clarity, safety, review or protected-branch conditions.
 5. **Drift control:** a line takes `main` only by **merging** `origin/main`
    *into* the integration branch, through the sync route `codeflow ci`
    admits (TSK-1312); that sync never changes a record homed on the line.
-   Merge only: never rebase a shared branch; rebase only
+   Until that route ships, such a sync needs the carrying task the current
+   checks require. Merge only: never rebase a shared branch; rebase only
    task branches.
 6. **Finish once.** After the last batch lands, prove the epic once on the
    integration branch (the full gate over everything, `validate --docs`, the

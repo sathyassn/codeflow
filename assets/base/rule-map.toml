@@ -472,7 +472,7 @@ key = "land"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "land a batch on the integration line"
-action = "a task PR targets `main` when a human can merge it as it becomes ready, else its epic line; one candidate per line at a time, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; one full gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree and its checkpoint PR to `main` is opened or refreshed; a record changes only in its one home, its epic's line or `main`; a line takes `main` only through the admitted sync, which never changes a line-homed record"
+action = "a task PR targets `main` when a human can merge it as it becomes ready, else its epic line; one candidate per line at a time, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; one full gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree and its checkpoint PR to `main` is opened or refreshed; a record changes only in its one home, the branch its `integration_target` names (an epic: its tasks' branch); a line takes `main` only through the admitted sync, which never changes a line-homed record"
 see = [{ target = "cf-method", section = "Managing a body of work", must_open = true, reason = "landing modes and drift control" }]
 
 [[moment]]
@@ -480,7 +480,7 @@ key = "land"
 group = "delivery"
 tiers = ["minimal"]
 when = "land a batch on the integration line"
-action = "a task PR targets `main` when a human can merge it as it becomes ready, else its epic line; one candidate per line at a time, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; one full gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree and its checkpoint PR to `main` is opened or refreshed; a record changes only in its one home, its epic's line or `main`; a line takes `main` only through the admitted sync, which never changes a line-homed record"
+action = "a task PR targets `main` when a human can merge it as it becomes ready, else its epic line; one candidate per line at a time, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; one full gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree and its checkpoint PR to `main` is opened or refreshed; a record changes only in its one home, the branch its `integration_target` names (an epic: its tasks' branch); a line takes `main` only through the admitted sync, which never changes a line-homed record"
 see = [{ target = ".codeflow/rules/git-rules.md", section = "Bodies of work" }]
 
 [[moment]]
