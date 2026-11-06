@@ -220,9 +220,10 @@ fn push_budget(root: &Path) -> std::time::Duration {
     let seconds = codeflow_core::hooks::landed_policy::load_local(root)
         .ok()
         .filter(|landed| landed.authority.is_some())
-        .map_or(codeflow_core::hooks::limits::PUSH_BUDGET.default, |landed| {
-            landed.policy.git.push_budget_seconds
-        });
+        .map_or(
+            codeflow_core::hooks::limits::PUSH_BUDGET.default,
+            |landed| landed.policy.git.push_budget_seconds,
+        );
     std::time::Duration::from_secs(seconds)
 }
 
@@ -290,6 +291,19 @@ fn judging_source(target: &str, tip: &str, defaults: bool) -> String {
 /// and at what level the check gates the push, come from that authority
 /// (see [`judged_by`]). An authority whose policy cannot be read or
 /// validated refuses every pushed branch, range or not.
+/// Whether a check above already refuses the push, noted for `branch`: the
+/// first refusal stops the set (TSK-1306), since the push is refused
+/// whatever the later branches' checks find.
+fn refused_already(report: &mut StageReport, branch: &str) -> bool {
+    let refused = codeflow_core::hooks::any_blocking(&report.violations);
+    if refused {
+        report.status.push(format!(
+            "`codeflow ci` did not run for '{branch}': a check above already refuses the push"
+        ));
+    }
+    refused
+}
+
 fn run_ci_ranges(
     exe: &Path,
     root: &Path,
@@ -307,12 +321,7 @@ fn run_ci_ranges(
     for r in pushed {
         let branch = r.remote_branch().unwrap_or_default();
         let shown_branch = display_text(branch);
-        // The first refusal stops the set (TSK-1306): the push is refused
-        // whatever the other branches' checks find.
-        if codeflow_core::hooks::any_blocking(&report.violations) {
-            report.status.push(format!(
-                "`codeflow ci` did not run for '{shown_branch}': a check above already refuses the push"
-            ));
+        if refused_already(report, &shown_branch) {
             continue;
         }
         let judged = match judged_by(root, destination, steps) {
@@ -891,10 +900,7 @@ impl RulesOut {
     }
 
     fn create_named(prefix: &str) -> Option<Self> {
-        let path = std::env::temp_dir().join(format!(
-            "{prefix}-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        let path = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4().simple()));
         std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -928,9 +934,7 @@ impl RulesOut {
                 let (check, micros) = line.split_once('\t')?;
                 let plain = !check.is_empty()
                     && check.len() <= 40
-                    && check
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '-');
+                    && check.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
                 (plain && check != "total").then_some(())?;
                 let micros: u64 = micros.parse().ok()?;
                 Some((check.to_string(), std::time::Duration::from_micros(micros)))

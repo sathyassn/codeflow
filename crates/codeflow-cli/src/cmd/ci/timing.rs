@@ -7,6 +7,7 @@
 //! wall time since the previous lap, so a check's lap holds the setup it
 //! shares with nothing else. The record only reports; no verdict reads it.
 
+use std::fmt::Write as _;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -57,11 +58,10 @@ impl Timings {
     /// Best effort: a file that cannot be written leaves the hook without a
     /// breakdown, and the hook still reports its own step times.
     pub(super) fn write(&self, out: &Path) {
-        let text: String = self
-            .rows()
-            .iter()
-            .map(|(check, spent)| format!("{check}\t{}\n", spent.as_micros()))
-            .collect();
+        let mut text = String::new();
+        for (check, spent) in self.rows() {
+            let _ = writeln!(text, "{check}\t{}", spent.as_micros());
+        }
         let _ = std::fs::write(out, text);
     }
 }

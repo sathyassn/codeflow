@@ -53,6 +53,7 @@ use pr_body::find_section;
 use crate::embedded::EmbeddedAssets;
 
 #[derive(Debug, Args)]
+#[allow(clippy::struct_excessive_bools)] // independent command-line switches
 pub struct CiArgs {
     /// Base ref of the range (exclusive). When omitted: CI base metadata,
     /// `CODEFLOW_DEFAULT_BRANCH`, then --into or the branch's declared target, then policy
@@ -637,7 +638,14 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     timings.lap("path-policy");
     if args.stop_on_cheap_failure && cheap_checks_block(&tagged, args.run_level, &judging.raw) {
         skipped.push("records, work and pull request checks");
-        return stopped_early(args, &judging.raw, &mut tagged, &ran, &skipped);
+        return stopped_early(
+            args,
+            &judging.raw,
+            pr_body.as_deref(),
+            tagged,
+            &ran,
+            &skipped,
+        );
     }
 
     let destination = match args.destination.clone() {
@@ -762,7 +770,14 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     timings.lap("branch-naming");
     if args.stop_on_cheap_failure && cheap_checks_block(&tagged, args.run_level, &judging.raw) {
         skipped.push("work and pull request checks");
-        return stopped_early(args, &judging.raw, &mut tagged, &ran, &skipped);
+        return stopped_early(
+            args,
+            &judging.raw,
+            pr_body.as_deref(),
+            tagged,
+            &ran,
+            &skipped,
+        );
     }
 
     // --- pull request classification (TSK-104) -----------------------------
@@ -943,25 +958,27 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     report(&tagged, &ran, &skipped)
 }
 
-/// End a run that `--stop-on-cheap-failure` stopped: the findings so far at
-/// the level the plane prints them, the blocking rule ids for the hook, and
-/// the summary naming what was skipped. The run fails, as it would have with
-/// every check: the remaining checks could add findings, never lift one
-/// (TSK-1306).
+/// End a run that `--stop-on-cheap-failure` stopped, as a full run ends:
+/// the findings so far settled and at the level the plane prints them, the
+/// blocking rule ids for the hook, and the summary naming what was skipped.
+/// The run fails, as it would have with every check: the remaining checks
+/// could add findings, never lift one (TSK-1306).
 fn stopped_early(
     args: &CiArgs,
     raw: &Result<Option<serde_json::Value>, String>,
-    tagged: &mut [TaggedViolation],
+    pr_body: Option<&str>,
+    mut tagged: Vec<TaggedViolation>,
     ran: &[&str],
     skipped: &[&str],
 ) -> i32 {
+    settle_watched_paths(&mut tagged, pr_body);
     if let Some(running) = args.run_level {
-        run_under(running, raw, tagged);
+        run_under(running, raw, &mut tagged);
     }
     if let Some(out) = &args.blocking_rules_out {
-        write_blocking_rules(out, tagged);
+        write_blocking_rules(out, &tagged);
     }
-    let code = report(tagged, ran, skipped);
+    let code = report(&tagged, ran, skipped);
     eprintln!(
         "codeflow ci: stopped early: a check above already blocks, so these did not run: {}",
         skipped.join(", ")

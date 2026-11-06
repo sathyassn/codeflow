@@ -3809,8 +3809,14 @@ mod tests {
     fn over_budget_names_the_slowest_checks_inside_ci() {
         let mut ci = step("codeflow ci --head abc --branch feat/x", 70);
         ci.parts = vec![
-            ("acceptance".into(), std::time::Duration::from_millis(41_200)),
-            ("work-records".into(), std::time::Duration::from_millis(20_050)),
+            (
+                "acceptance".into(),
+                std::time::Duration::from_millis(41_200),
+            ),
+            (
+                "work-records".into(),
+                std::time::Duration::from_millis(20_050),
+            ),
         ];
         let steps = [ci, step("release preflight (feat/x)", 2)];
         let total = std::time::Duration::from_secs(72);
