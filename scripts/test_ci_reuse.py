@@ -947,6 +947,10 @@ class CompletionAdmissionTests(unittest.TestCase):
         code, text = run_main(AdmissionApi(runs=[run(status="queued", conclusion=None)]))
         self.assertEqual(code, 1)
         self.assertIn("runs again when that run completes", text)
+        code, text = run_main(AdmissionApi(pull=pull_record(state="closed")))
+        self.assertEqual((code, "refused: pull request #95 is closed" in text), (1, True), text)
+        with self.assertRaises(admission.Skip):
+            admission.admit("not-a-sha", 95, "main", WORKFLOW, REQUIRED, AdmissionApi())
         for broken in ("pull", "run", "timeline"):
             with self.subTest(broken=broken):
                 code, text = run_main(AdmissionApi(broken={broken}))
