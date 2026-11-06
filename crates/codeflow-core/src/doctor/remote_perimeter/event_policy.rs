@@ -33,12 +33,6 @@ use crate::remote::Declared;
 /// The event GitHub blocks by default.
 const EVENT: &str = "pull_request_target";
 
-/// Policies read per page of a policy list.
-const PAGE_SIZE: usize = 100;
-
-/// More pages than this is not a policy list doctor can judge.
-const MAX_PAGES: usize = 20;
-
 /// Whether a policy applies to a workflow.
 enum Applies {
     Yes,
@@ -353,27 +347,15 @@ fn list(
     url: &str,
     owner: &str,
 ) -> Result<Vec<Value>, String> {
-    let unread =
-        |why: &str| format!("the Actions event policies of {owner} are not readable ({why})");
-    let mut all = Vec::new();
-    for page in 1..=MAX_PAGES {
-        let text = gh(&["api", &format!("{url}?per_page={PAGE_SIZE}&page={page}")])
-            .map_err(|error| unread(super::super::first_line(&error)))?;
-        let body: Value = serde_json::from_str(&text).map_err(|_| unread("not JSON"))?;
-        let Some(rows) = body["policies"].as_array() else {
-            return Err(unread("no policy list in the answer"));
-        };
-        let total = body["total_count"].as_u64();
-        let empty = rows.is_empty();
-        all.extend(rows.iter().cloned());
-        match total {
-            Some(total) if all.len() as u64 >= total => return Ok(all),
-            None if empty || rows.len() < PAGE_SIZE => return Ok(all),
-            _ if empty => return Err(unread("the list ended before its total_count")),
-            _ => {}
+    super::paged(gh, url, "policies").map_err(|why| {
+        // Reading needs Administration write, and the host refuses a
+        // token without it.
+        if why.contains("HTTP 403") || why.contains("HTTP 404") {
+            format!("the Actions event policies of {owner} are unreadable: needs an administrator's token ({why})")
+        } else {
+            format!("the Actions event policies of {owner} are not readable ({why})")
         }
-    }
-    Err(unread(&format!("more than {MAX_PAGES} pages")))
+    })
 }
 
 #[cfg(test)]
@@ -606,7 +588,7 @@ mod tests {
         assert_eq!(out.event_unread.len(), 1, "{:?}", out.event_unread);
         let note = &out.event_unread[0];
         assert!(
-            note.contains("the Actions event policies of sathyassn/codeflow are not readable (gh: Resource not accessible by integration (HTTP 403))"),
+            note.contains("the Actions event policies of sathyassn/codeflow are unreadable: needs an administrator's token (gh: Resource not accessible by integration (HTTP 403))"),
             "{note}"
         );
         assert!(note.contains("administrator's token"), "{note}");
@@ -781,7 +763,7 @@ mod tests {
         assert!(out.event_warns.is_empty());
         assert!(
             out.event_unread[0]
-                .contains("the Actions event policies of the organization acme are not readable"),
+                .contains("the Actions event policies of the organization acme are unreadable: needs an administrator's token"),
             "{:?}",
             out.event_unread
         );
