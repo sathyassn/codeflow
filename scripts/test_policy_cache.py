@@ -21,7 +21,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / '.github/workflows/codeflow-policy.yml'
 REGISTRY = ROOT / '.github/workflows/codeflow-registry.yml'
-POLICY_SHA256 = 'a94e6882a7c32aa242d6e5d566adfda6d05f77354d0e844f9c93dfe17dbd750a'
+POLICY_SHA256 = 'e785574103ef1503942c05e04652d2258d81bf31f4f1baaf1ea63897d7426570'
 REGISTRY_SHA256 = '5c49427c230d86a88827448dd2e889c0357efba0063452908ad19cee0fb1e1dd'
 NAMESPACE = 'codeflow-policy-main-binary-v3-'
 DEPS_NAMESPACE = 'codeflow-policy-main-deps-v3'
@@ -60,6 +60,16 @@ def registry_workflow():
 def jobs_of(workflow):
     parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
     return dict(zip(parts[1::2], parts[2::2]))
+
+
+# The policy workflow's jobs that build or restore the authority binary. The
+# `authority` job (TSK-1177) only concludes checks from them.
+VERDICT_JOBS = ('commit-lint', 'release-impact')
+
+
+def verdict_jobs_of(workflow):
+    jobs = jobs_of(workflow)
+    return {name: jobs[name] for name in VERDICT_JOBS}
 
 
 def steps_of(job):
@@ -102,9 +112,13 @@ def cache_contract(policy, registry):
     for withdrawn in ('warm-target-cache:', 'build_sha:', 'dispatch-target'):
         assert withdrawn not in policy and withdrawn not in registry
 
-    # The verdict jobs read the cache and never write it.
-    verdict_jobs = jobs_of(policy)
-    assert set(verdict_jobs) == {'commit-lint', 'release-impact'}
+    # The verdict jobs read the cache and never write it. The authority job
+    # builds nothing and touches no cache.
+    jobs = jobs_of(policy)
+    assert set(jobs) == {*VERDICT_JOBS, 'authority'}
+    for word in ('rust-cache', 'actions/cache', 'authority-cache', 'cargo build'):
+        assert word not in jobs['authority'], word
+    verdict_jobs = verdict_jobs_of(policy)
     keys, verifies, builds = [], [], []
     for job in verdict_jobs.values():
         key = find_step(job, 'Identify the authority build')
@@ -549,7 +563,7 @@ class PolicyCache(unittest.TestCase):
     def test_removing_the_binary_restore_leaves_the_dependency_cache(self):
         # The removal recipe: delete the restore and verify steps and the writer's attest and save steps,
         # and the dependency steps still stand on their own with no reference to the binary entry.
-        for job in jobs_of(self.policy).values():
+        for job in verdict_jobs_of(self.policy).values():
             deps = uses_steps(job, 'Swatinem/rust-cache')[0]
             self.assertNotIn('authority-cache', deps)
             self.assertNotIn(NAMESPACE, deps)
@@ -560,7 +574,7 @@ class PolicyCache(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "the cache scripts run in Linux bash")
     def test_key_changes_with_commit_toolchain_and_image_and_refuses_a_moved_or_dirty_checkout(self):
-        scripts = [script(find_step(job, 'Identify the authority build')) for job in jobs_of(self.policy).values()]
+        scripts = [script(find_step(job, 'Identify the authority build')) for job in verdict_jobs_of(self.policy).values()]
         scripts.append(script(find_step(jobs_of(self.registry)[WRITER_JOB], 'Identify the main build')))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

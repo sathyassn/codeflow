@@ -543,6 +543,12 @@ fn criteria(
     }
     let amendable = match class {
         Some(Class::PlanningOnly { epics }) => return Ok(Criteria::Amendment(Some(epics.clone()))),
+        Some(Class::MainSync { epic, line, .. }) => {
+            return Ok(Criteria::Sync {
+                epic: epic.clone(),
+                line: line.clone(),
+            })
+        }
         Some(Class::EpicLine(_) | Class::RootBranch(_)) => true,
         Some(_) => false,
         None => {

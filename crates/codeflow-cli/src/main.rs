@@ -418,6 +418,12 @@ fn selected_tier(minimal: bool, standard: bool, full: bool) -> Option<scaffold::
 /// with status 1 as before. A path or name in the chain cannot write a
 /// terminal escape sequence or start a line of its own.
 fn main() -> std::process::ExitCode {
+    // Started by a gate as a target's fence watcher (TSK-1318): nothing
+    // else of the CLI runs.
+    #[cfg(windows)]
+    if let Some(code) = codeflow_core::testing::runner::serve_fence_watch() {
+        return code;
+    }
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
@@ -436,6 +442,8 @@ fn run() -> anyhow::Result<()> {
     // value is dropped here and no other child ever sees one.
     std::env::remove_var(codeflow_core::git::HOOK_BINARY_ENV);
     if let Ok(binary) = std::env::current_exe() {
+        #[cfg(windows)]
+        codeflow_core::testing::runner::designate_fence_watcher(binary.clone());
         codeflow_core::git::designate_calling_binary(binary);
     }
     let cli = Cli::parse();

@@ -274,8 +274,10 @@ class GateContracts(unittest.TestCase):
         self.assertIn('--pr-body-file "$BODY_FILE"', workflow)
         self.assertNotIn('CODEFLOW_PR_BODY', workflow)
         self.assertNotIn('github.event.pull_request.body', workflow)
-        actions = '      actions: read\n' if admission else ''
-        self.assertIn(f'    permissions:\n      contents: read\n      pull-requests: read\n{actions}    steps:\n', workflow)
+        # TSK-1177: the verdict jobs read actions, checks and statuses to
+        # refuse another producer of a trusted name; nothing is written.
+        self.assertIn('    permissions:\n      contents: read\n      pull-requests: read\n'
+                      '      actions: read\n      checks: read\n      statuses: read\n    steps:\n', workflow)
         self.assertEqual(workflow.split('\npermissions:\n', 1)[1].split('\nconcurrency:', 1)[0],
                          '  contents: read\n')
         self.assertNotIn(': write', workflow)
