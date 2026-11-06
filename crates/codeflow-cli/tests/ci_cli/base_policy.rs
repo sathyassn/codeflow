@@ -187,7 +187,6 @@ fn a_head_that_changes_a_line_workflow_is_warned_by_name() {
             "{text}"
         );
         assert!(text.contains("adds triggers push"), "{text}");
-
     }
 }
 
