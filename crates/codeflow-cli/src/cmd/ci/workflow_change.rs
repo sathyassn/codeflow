@@ -121,16 +121,26 @@ fn changed_workflows(root: &Path, base: &str, head: &str) -> Result<Vec<String>,
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    Ok(out
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|name| !name.is_empty())
-        .map(|name| String::from_utf8_lossy(name).into_owned())
-        .filter(|name| {
-            let lower = name.to_ascii_lowercase();
-            WORKFLOW_DIRS.iter().any(|dir| lower.starts_with(dir))
-        })
-        .collect())
+    // A name that is not UTF-8 is never decoded lossily: the listing fails,
+    // and the caller warns that every workflow file needs review.
+    let mut changed = Vec::new();
+    for name in out.stdout.split(|byte| *byte == 0) {
+        if name.is_empty() {
+            continue;
+        }
+        let lower = name.to_ascii_lowercase();
+        if !WORKFLOW_DIRS
+            .iter()
+            .any(|dir| lower.starts_with(dir.as_bytes()))
+        {
+            continue;
+        }
+        changed.push(
+            String::from_utf8(name.to_vec())
+                .map_err(|_| "a changed workflow path is not UTF-8".to_string())?,
+        );
+    }
+    Ok(changed)
 }
 
 /// The bytes of `path` at `rev`: `Ok(None)` when absent. They stay bytes,
