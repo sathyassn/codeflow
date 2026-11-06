@@ -265,18 +265,18 @@ an operator decision; agents and Coordinators never rule on it.
   may still replace a pending run in the same group.
 - Local full gates keep coverage instrumentation whatever the event.
 
-Until TSK-1321 lands, the workflows differ from the table in four places:
+The workflows apply the table as follows:
 
-- Line pull requests still run every Linux gate part and the coverage
-  shards with their report.
-- Line pull requests still run the Windows checks, the release journey and
-  the reduced tier's journey job. The reduced tier switch in
-  `codeflow-ci.yml` (`REDUCED_TIER`) skips only the Windows build, the
-  partitions and their journey job.
-- The daily run is Windows only: it runs no Linux build, lint, tests or
-  coverage.
-- The daily workflows start only from `main`, which does not hold them
-  until the EPC-022 line merges.
+- Line pull requests run the Linux build and lint parts only. The coverage
+  shards and their report skip, and the line push runs them.
+- Line pull requests run no Windows job. With the reduced tier switch in
+  `codeflow-ci.yml` (`REDUCED_TIER`) on, the `windows-tier` job skips the
+  Windows build, the partitions, the Windows checks, the release journey
+  and the journey job.
+- The daily run runs the Linux build, lint, tests and coverage as well as
+  every Windows job.
+- The daily workflows start from `main` and run `main` and each active
+  integration line at that line's own ref.
 
 ## Technical
 
