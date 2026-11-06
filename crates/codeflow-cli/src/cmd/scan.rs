@@ -219,13 +219,18 @@ pub fn run(args: &ScanArgs) -> i32 {
             return 2;
         }
     };
-    if let Err(error) = range::resolve(&root, &args.head) {
-        eprintln!("codeflow scan: --head: {error}");
-        return 2;
-    }
+    // Resolved once, so both scans judge the same commit even if the ref
+    // moves during the run.
+    let head = match range::resolve(&root, &args.head) {
+        Ok(head) => head,
+        Err(error) => {
+            eprintln!("codeflow scan: --head: {error}");
+            return 2;
+        }
+    };
     let mut blocked = false;
     if args.only.as_deref() != Some("deps") {
-        match secret_scan(&root, &base, &args.head) {
+        match secret_scan(&root, &base, &head) {
             Ok(stop) => blocked |= stop,
             Err(error) => {
                 eprintln!("codeflow scan: secret scan: {error}");
@@ -234,7 +239,7 @@ pub fn run(args: &ScanArgs) -> i32 {
         }
     }
     if args.only.as_deref() != Some("secrets") {
-        match dependency_audit(&root, &base, &args.head) {
+        match dependency_audit(&root, &base, &head) {
             Ok(stop) => blocked |= stop,
             Err(error) => {
                 eprintln!("codeflow scan: dependency audit: {error}");
