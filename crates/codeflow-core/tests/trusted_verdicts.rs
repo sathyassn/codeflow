@@ -155,7 +155,15 @@ fn the_registry_runs_in_its_own_workflow() {
             "{path}"
         );
         let names: Vec<String> = jobs(workflow).into_iter().map(|(_, n, _)| n).collect();
-        assert_eq!(names, ["registry check"], "{path}");
+        // This repository's copy adds the main-only cache writer (TSK-1240):
+        // a job that is no verdict and carries no `trusted:` name. The
+        // shipped template and its baseline keep the one registry job.
+        let expected: &[&str] = if path == ".github/workflows/codeflow-registry.yml" {
+            &["registry check", "cache main build"]
+        } else {
+            &["registry check"]
+        };
+        assert_eq!(names, expected, "{path}");
     }
     for (path, workflow) in &all {
         if jobs(workflow)

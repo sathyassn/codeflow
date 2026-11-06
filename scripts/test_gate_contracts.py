@@ -13,7 +13,19 @@ ROOT = Path(os.environ.get('CODEFLOW_GATE_CONTRACT_ROOT', Path(__file__).resolve
 _SPEC = importlib.util.spec_from_file_location('gate_parity', Path(__file__).resolve().parent / 'gate-parity.py')
 PARITY = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(PARITY)
+# Run the target-cache adversarial and shell tests with the existing gate.
+_CACHE_SPEC = importlib.util.spec_from_file_location('policy_cache', Path(__file__).resolve().parent / 'test_policy_cache.py')
+_CACHE = importlib.util.module_from_spec(_CACHE_SPEC)
+_CACHE_SPEC.loader.exec_module(_CACHE)
+_CACHE.ROOT = ROOT
+_CACHE.WORKFLOW = ROOT / '.github/workflows/codeflow-policy.yml'
+_CACHE.REGISTRY = ROOT / '.github/workflows/codeflow-registry.yml'
+PolicyCache = _CACHE.PolicyCache
 def read(path):
+    if path == '.github/workflows/codeflow-policy.yml':
+        return _CACHE.policy_workflow()
+    if path == '.github/workflows/codeflow-registry.yml':
+        return _CACHE.registry_workflow()
     return (ROOT / path).read_text()
 
 
@@ -264,6 +276,8 @@ class GateContracts(unittest.TestCase):
         self.assertNotIn('github.event.pull_request.body', workflow)
         actions = '      actions: read\n' if admission else ''
         self.assertIn(f'    permissions:\n      contents: read\n      pull-requests: read\n{actions}    steps:\n', workflow)
+        self.assertEqual(workflow.split('\npermissions:\n', 1)[1].split('\nconcurrency:', 1)[0],
+                         '  contents: read\n')
         self.assertNotIn(': write', workflow)
         self.assertIn('    timeout-minutes: 45\n' if admission else '    timeout-minutes: 20\n', workflow)
 
@@ -283,11 +297,14 @@ class GateContracts(unittest.TestCase):
         for event in ('  push:', '  schedule:', '  workflow_dispatch:'):
             self.assertNotIn(event, workflow.split('\njobs:\n', 1)[0])
         registry = read('.github/workflows/codeflow-registry.yml')
-        self.assertEqual(registry.count('cargo build --release'), 1)
+        # One build for the registry check and one for the main-only cache
+        # writer (TSK-1240), which is not a verdict and creates no `trusted:`
+        # check.
+        self.assertEqual(registry.count('cargo build --release'), 2)
         self.assertNotIn('concurrency:', registry)
-        # Its one job is the registry check, never a `trusted:` verdict; its
-        # comments may name the prefix to say why.
-        self.assertEqual(re.findall(r'^    name: (.+)$', registry, re.M), ['registry check'])
+        # Its jobs are the registry check and the cache writer, never a
+        # `trusted:` verdict; its comments may name the prefix to say why.
+        self.assertEqual(re.findall(r'^    name: (.+)$', registry, re.M), ['registry check', 'cache main build'])
         self.assertIn('run: codeflow ids check\n', registry)
 
     def test_commit_standards_admits_only_the_exact_heads_ready_run(self):
