@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 mod acceptance;
 mod adopter;
+mod authority_line;
 mod change_class;
 mod classification;
 mod conflict_markers;
@@ -354,8 +355,17 @@ fn ci_environment(
     Ok(values)
 }
 
-#[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
+/// Run `codeflow ci`, then print the hosted report's authority line when
+/// the policy workflow named its host-rules file (TSK-1177 AC-2). The line
+/// follows the content verdict on every exit and never changes the code.
 pub fn run(args: &CiArgs) -> i32 {
+    let code = run_checks(args);
+    authority_line::print_from_env();
+    code
+}
+
+#[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
+fn run_checks(args: &CiArgs) -> i32 {
     let _judgment = codeflow_core::workgraph::history::judgment();
     if args.read_release_impact {
         return read_release_impact();
@@ -1075,6 +1085,7 @@ fn work_checks<'a>(
             branch,
             range_parts.as_ref(),
             release.as_ref(),
+            names.candidate,
             tagged,
             ran,
         )
