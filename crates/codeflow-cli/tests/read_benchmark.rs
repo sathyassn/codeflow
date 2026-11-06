@@ -5,10 +5,41 @@
 //! later runs are guarded against the baseline of their own system:
 //!
 //! - git processes started: at most the baseline count (deterministic);
-//! - peak memory: at most 1.5 times the baseline, plus 16 MiB;
+//! - peak memory: at most 1.5 times the baseline, scaled by the fixture's
+//!   input size, plus 16 MiB (see below);
 //! - latency: the command's time over a calibration of plain git reads on
 //!   the same fixture, at most twice the baseline ratio, so the budget holds
 //!   on a slower or faster machine.
+//!
+//! The memory budget scales with the fixture's input. Every inventory record
+//! is the epic or task record the CLI writes, so when the record templates
+//! grow, the records the commands read grow with them. The fixture's input
+//! is the total bytes of its epic and task records, `inventory.record_bytes`
+//! in the report and the baseline, and the budget is
+//! `1.5 × baseline peak × (record_bytes now / record_bytes at baseline) + 16 MiB`.
+//! Only the input scales the budget, and the 16 MiB does not scale. A run
+//! fails when its peak is over that budget: a peak may grow up to 1.5 times
+//! as fast as its input, and growth past that fails. The same peak is held
+//! to a smaller budget on a smaller input. A command whose memory grows more
+//! slowly than its input gains headroom as the input grows, so when the
+//! templates grow a lot, the peaks are recorded again at the new input
+//! rather than left to scale. A baseline without a positive `record_bytes`
+//! fails the check.
+//!
+//! The peaks were recorded again on 2026-11-05 at an input of 48,541,777
+//! record bytes (TSK-1357). The Linux peaks come from one hosted run of the
+//! benchmark, run 42132133846 at 02e7bd904. The macOS peaks come from one
+//! local run at 0a4c91672. Both commits write the same records. The git
+//! process counts and latency ratios are those of the first recordings and
+//! did not change. Before that, both baselines dated from before the
+//! templates grew: Linux from 9f4316cae (2026-10-01, 26,676,877 bytes) and
+//! macOS from e945b5ac3 (2026-09-28, 41,042,447 bytes).
+//! `record_bytes_replay_for_the_cli_in_codeflow_bench_cli` derived those
+//! figures. Given the CLI built at a commit in `CODEFLOW_BENCH_CLI`, it has
+//! that CLI write the epic and task templates and applies this fixture's
+//! record transformations to all 10 epics and 10,000 tasks. Templates from
+//! before the `## Outcome` section have nothing for the Outcome step to fill,
+//! so the replay builds the records that commit's own fixture built.
 //!
 //! The ratio travels across machines, not across operating systems: the
 //! calibration is a few short git processes, and starting a process costs
@@ -50,8 +81,12 @@ use process_folders::isolated_home;
 mod outcome;
 
 fn with_env(command: &mut Command) -> &mut Command {
-    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
-    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
+    with_cli_env(command, Path::new(env!("CARGO_BIN_EXE_codeflow")))
+}
+
+/// The benchmark's environment, with the folder of `cli` first on `PATH`.
+fn with_cli_env<'a>(command: &'a mut Command, cli: &Path) -> &'a mut Command {
+    let path = std::env::join_paths(cli.parent().map(Path::to_path_buf).into_iter().chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
@@ -71,7 +106,17 @@ fn with_env(command: &mut Command) -> &mut Command {
 }
 
 fn run(program: &str, root: &Path, args: &[&str]) -> String {
-    let out = with_env(&mut Command::new(program))
+    run_with(
+        Path::new(env!("CARGO_BIN_EXE_codeflow")),
+        program,
+        root,
+        args,
+    )
+}
+
+/// Run `program` in the environment of the CLI at `cli`.
+fn run_with(cli: &Path, program: &str, root: &Path, args: &[&str]) -> String {
+    let out = with_cli_env(&mut Command::new(program), cli)
         .args(args)
         .current_dir(root)
         .output()
@@ -129,8 +174,16 @@ fn synthetic_uid(n: u64) -> String {
 /// then removed: every inventory record is one of these with its identity
 /// replaced. Returns `(epic, task)`.
 fn templates(root: &Path) -> (String, String) {
-    codeflow(root, &["epic", "new", "Template"]);
-    codeflow(
+    templates_from(Path::new(env!("CARGO_BIN_EXE_codeflow")), root)
+}
+
+/// [`templates`], written by the CLI at `cli`.
+fn templates_from(cli: &Path, root: &Path) -> (String, String) {
+    let program = cli.to_str().expect("UTF-8 CLI path");
+    run_with(cli, program, root, &["epic", "new", "Template"]);
+    run_with(
+        cli,
+        program,
         root,
         &[
             "task",
@@ -239,10 +292,33 @@ impl Stream {
     }
 }
 
+/// Every inventory record in order, as `(path, text)`: each line's epic,
+/// then its tasks, with synthetic uids numbered in that order.
+fn for_each_record(epic: &str, task: &str, mut each: impl FnMut(String, String)) {
+    let mut uid = 0_u64;
+    let mut next_uid = || {
+        uid += 1;
+        synthetic_uid(uid)
+    };
+    for line in 1..=LINES {
+        each(
+            format!("project-management/epics/EPC-{line:03}.md"),
+            epic_record(epic, line, &next_uid()),
+        );
+        for k in 1..=TASKS_PER_LINE {
+            each(
+                format!("project-management/tasks/{}.md", task_id(line, k)),
+                task_record(task, line, k, &next_uid()),
+            );
+        }
+    }
+}
+
 /// A fresh full-tier project holding the benchmark inventory, checked out on
-/// the first line. Returns the project and the counts it holds.
+/// the first line. Returns the project and the total bytes of its epic and
+/// task records, the input the memory budget scales with.
 #[allow(clippy::too_many_lines)] // One fixture writes the whole inventory in order.
-fn inventory() -> (tempfile::TempDir, PathBuf) {
+fn inventory() -> (tempfile::TempDir, PathBuf, u64) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("proj");
     std::fs::create_dir(&root).unwrap();
@@ -258,23 +334,13 @@ fn inventory() -> (tempfile::TempDir, PathBuf) {
         mark: 0,
         time: 1_700_000_000,
     };
-    let mut uid = 0_u64;
-    let mut next_uid = || {
-        uid += 1;
-        synthetic_uid(uid)
-    };
     let mut plan_files = Vec::new();
-    for line in 1..=LINES {
-        let blob = stream.blob(&epic_record(&epic, line, &next_uid()));
-        plan_files.push((format!("project-management/epics/EPC-{line:03}.md"), blob));
-        for k in 1..=TASKS_PER_LINE {
-            let blob = stream.blob(&task_record(&task, line, k, &next_uid()));
-            plan_files.push((
-                format!("project-management/tasks/{}.md", task_id(line, k)),
-                blob,
-            ));
-        }
-    }
+    let mut record_bytes = 0_usize;
+    for_each_record(&epic, &task, |path, text| {
+        record_bytes += text.len();
+        let blob = stream.blob(&text);
+        plan_files.push((path, blob));
+    });
     let plan = stream.commit(
         "refs/heads/plan/inventory",
         &base,
@@ -363,7 +429,7 @@ fn inventory() -> (tempfile::TempDir, PathBuf) {
     git(&root, &["switch", "-q", "--discard-changes", &line_name(1)]);
     git(&root, &["branch", "-q", "-D", "plan/inventory"]);
     let _ = default;
-    (dir, root)
+    (dir, root, u64::try_from(record_bytes).unwrap())
 }
 
 /// One measured run: wall time, peak resident memory in KiB, and the git
@@ -484,7 +550,7 @@ fn baseline_path() -> PathBuf {
 #[ignore = "benchmark: run by scripts/journey-gate.py in release mode"]
 fn read_commands_on_ten_thousand_records_stay_within_their_budgets() {
     let started = Instant::now();
-    let (dir, root) = inventory();
+    let (dir, root, record_bytes) = inventory();
     eprintln!("inventory written in {:?}", started.elapsed());
     let trace = dir.path().join("trace.json");
 
@@ -534,6 +600,7 @@ fn read_commands_on_ten_thousand_records_stay_within_their_budgets() {
             "lines": LINES,
             "task_records": LINES * TASKS_PER_LINE,
             "stale_task_branches": branches,
+            "record_bytes": record_bytes,
         },
         "calibration_ms": calibration.as_millis(),
         "commands": measured,
@@ -558,8 +625,47 @@ fn read_commands_on_ten_thousand_records_stay_within_their_budgets() {
         &std::fs::read_to_string(baseline_path()).expect("the benchmark baseline is recorded"),
     )
     .expect("baseline JSON");
-    let over = over_budget(&baseline, &measured);
+    let over = over_budget(&baseline, record_bytes, &measured);
     assert!(over.is_empty(), "over budget:\n{}", over.join("\n"));
+}
+
+/// The record bytes a CLI's templates give the inventory, for a baseline's
+/// `record_bytes` (see the module notes): the CLI at `CODEFLOW_BENCH_CLI`,
+/// or this build's when it is unset, writes the epic and task templates in a
+/// fresh full-tier project, and every inventory record is built from them.
+#[test]
+#[ignore = "replay: derives a baseline's record_bytes from the CLI of its recording commit"]
+fn record_bytes_replay_for_the_cli_in_codeflow_bench_cli() {
+    let cli = std::env::var_os("CODEFLOW_BENCH_CLI")
+        .filter(|path| !path.is_empty())
+        .map_or_else(
+            || PathBuf::from(env!("CARGO_BIN_EXE_codeflow")),
+            PathBuf::from,
+        );
+    let program = cli.to_str().expect("UTF-8 CLI path");
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    run_with(&cli, program, &root, &["init", "--yes", "--full"]);
+    let base = run_with(&cli, "git", &root, &["rev-parse", "HEAD"]);
+    run_with(&cli, program, &root, &["ids", "seed"]);
+    run_with(&cli, "git", &root, &["branch", &line_name(1), &base]);
+    let (epic, task) = templates_from(&cli, &root);
+    let (mut epics, mut tasks) = (0_usize, 0_usize);
+    for_each_record(&epic, &task, |path, text| {
+        if path.contains("/epics/") {
+            epics += text.len();
+        } else {
+            tasks += text.len();
+        }
+    });
+    eprintln!(
+        "{}: epic template {} bytes, task template {} bytes; records: epics {epics}, tasks {tasks}, record_bytes {}",
+        cli.display(),
+        epic.len(),
+        task.len(),
+        epics + tasks
+    );
 }
 
 /// The inventory's records pass `validate --docs`, which the benchmark times
@@ -663,14 +769,35 @@ fn a_wait_status_names_its_exit_code_or_signal() {
     assert_eq!(wait_status(libc::SIGKILL), "signal 9");
 }
 
+/// The peak memory budget in KiB: 1.5 times the baseline peak, scaled by the
+/// fixture's record bytes now over its record bytes at the baseline, plus
+/// 16 MiB. The 16 MiB does not scale.
+fn peak_budget_kib(peak_was: u64, record_bytes_now: u64, record_bytes_was: u64) -> u64 {
+    let scaled = u128::from(peak_was) * 3 * u128::from(record_bytes_now)
+        / (2 * u128::from(record_bytes_was));
+    u64::try_from(scaled)
+        .unwrap_or(u64::MAX)
+        .saturating_add(16 * 1024)
+}
+
 /// The budgets a run is held to, from the recorded baseline: no more git
-/// processes; peak memory at most 1.5 times plus 16 MiB; a latency ratio at
-/// most twice. Returns each command over a budget, or with no baseline.
+/// processes; peak memory at most 1.5 times, scaled by the fixture's input
+/// (`record_bytes`, this run's against the baseline's), plus 16 MiB; a
+/// latency ratio at most twice. Returns each command over a budget, or with
+/// no baseline; a baseline without its input size fails every command's
+/// memory check.
 fn over_budget(
     baseline: &serde_json::Value,
+    record_bytes: u64,
     measured: &BTreeMap<String, serde_json::Value>,
 ) -> Vec<String> {
     let mut over = Vec::new();
+    let record_bytes_was = baseline["inventory"]["record_bytes"]
+        .as_u64()
+        .filter(|bytes| *bytes > 0);
+    if record_bytes_was.is_none() {
+        over.push("inventory: no baseline record_bytes".to_string());
+    }
     for (command, now) in measured {
         let was = &baseline["commands"][command];
         let (Some(processes_budget), Some(peak_was), Some(ratio_was)) = (
@@ -687,12 +814,16 @@ fn over_budget(
                 "{command}: {processes} git processes, budget {processes_budget}"
             ));
         }
-        let peak = now["peak_kib"].as_u64().unwrap_or(u64::MAX);
-        let peak_budget = peak_was * 3 / 2 + 16 * 1024;
-        if peak > peak_budget {
-            over.push(format!(
-                "{command}: peak {peak} KiB, budget {peak_budget} KiB"
-            ));
+        if let Some(record_bytes_was) = record_bytes_was {
+            let peak = now["peak_kib"].as_u64().unwrap_or(u64::MAX);
+            let peak_budget = peak_budget_kib(peak_was, record_bytes, record_bytes_was);
+            if peak > peak_budget {
+                over.push(format!(
+                    "{command}: peak {peak} KiB, budget {peak_budget} KiB \
+                     (baseline peak {peak_was} KiB, input {record_bytes} bytes against \
+                     {record_bytes_was} at the baseline)"
+                ));
+            }
         }
         let ratio = now["latency_ratio"].as_f64().unwrap_or(f64::MAX);
         let ratio_budget = ratio_was * 2.0;
@@ -722,7 +853,10 @@ fn the_budget_check_flags_a_run_over_its_baseline() {
     let mut names: Vec<String> = COMMANDS.iter().map(|args| args.join(" ")).collect();
     names.sort();
     assert_eq!(recorded.keys().cloned().collect::<Vec<_>>(), names);
-    assert!(over_budget(&baseline, &recorded).is_empty());
+    let input = baseline["inventory"]["record_bytes"]
+        .as_u64()
+        .expect("the baseline records its input size");
+    assert!(over_budget(&baseline, input, &recorded).is_empty());
     let command = "work next".to_string();
     let was = recorded[&command].clone();
     for (field, value, named) in [
@@ -744,16 +878,103 @@ fn the_budget_check_flags_a_run_over_its_baseline() {
     ] {
         let mut run = recorded.clone();
         run.get_mut(&command).unwrap()[field] = value;
-        let over = over_budget(&baseline, &run);
+        let over = over_budget(&baseline, input, &run);
         assert!(
             over.len() == 1 && over[0].starts_with("work next: ") && over[0].contains(named),
             "{field}: {over:?}"
         );
     }
-    let mut unknown = recorded;
+    let mut unknown = recorded.clone();
     unknown.insert("work claim".to_string(), serde_json::json!({}));
     assert_eq!(
-        over_budget(&baseline, &unknown),
+        over_budget(&baseline, input, &unknown),
         ["work claim: no baseline"]
+    );
+    // A baseline that does not record its input size fails closed.
+    let mut no_input = baseline.clone();
+    no_input["inventory"]
+        .as_object_mut()
+        .unwrap()
+        .remove("record_bytes");
+    assert_eq!(
+        over_budget(&no_input, input, &recorded),
+        ["inventory: no baseline record_bytes"]
+    );
+    // A recorded size of zero cannot scale anything and fails closed too.
+    let mut zero_input = baseline.clone();
+    zero_input["inventory"]["record_bytes"] = serde_json::json!(0);
+    assert_eq!(
+        over_budget(&zero_input, input, &recorded),
+        ["inventory: no baseline record_bytes"]
+    );
+    // Without the input size, the latency and git-process budgets still hold.
+    let mut slow = recorded.clone();
+    slow.get_mut(&command).unwrap()["latency_ratio"] =
+        serde_json::json!(was["latency_ratio"].as_f64().unwrap() * 2.5);
+    slow.get_mut(&command).unwrap()["git_processes"] =
+        serde_json::json!(was["git_processes"].as_u64().unwrap() + 1);
+    let over = over_budget(&no_input, input, &slow);
+    assert!(
+        over.len() == 3
+            && over[0] == "inventory: no baseline record_bytes"
+            && over[1].starts_with("work next: ")
+            && over[1].contains("git processes")
+            && over[2].starts_with("work next: ")
+            && over[2].contains("latency ratio"),
+        "{over:?}"
+    );
+}
+
+/// The memory budget scales with the fixture's input and only with it: a
+/// fixture with 1.8 times the record bytes may use 1.8 times the scaled part
+/// of the budget and the 16 MiB stays fixed. A peak may grow up to 1.5 times
+/// as fast as its input (2.7 times here, plus the 16 MiB); one KiB past that
+/// fails, and the same peak fails against the baseline's input.
+#[test]
+fn the_memory_budget_scales_with_the_fixture_input() {
+    let baseline = serde_json::json!({
+        "inventory": { "record_bytes": 1_000_000 },
+        "commands": {
+            "validate --docs": {
+                "git_processes": 0,
+                "peak_kib": 72_000,
+                "latency_ratio": 10.0,
+            },
+        },
+    });
+    let run = |peak_kib: u64| -> BTreeMap<String, serde_json::Value> {
+        BTreeMap::from([(
+            "validate --docs".to_string(),
+            serde_json::json!({
+                "git_processes": 0,
+                "peak_kib": peak_kib,
+                "latency_ratio": 10.0,
+            }),
+        )])
+    };
+    // The same input: 1.5 × 72,000 + 16,384 KiB, as before scaling existed.
+    assert_eq!(peak_budget_kib(72_000, 1_000_000, 1_000_000), 124_384);
+    // 1.8 times the input: 1.8 × 108,000 + 16,384 KiB.
+    assert_eq!(peak_budget_kib(72_000, 1_800_000, 1_000_000), 210_784);
+    // Half the input halves the scaled part; the 16 MiB does not shrink.
+    assert_eq!(peak_budget_kib(72_000, 500_000, 1_000_000), 70_384);
+
+    // A peak that grew with its input passes on the larger fixture, and the
+    // same peak fails on the baseline's fixture.
+    assert!(over_budget(&baseline, 1_800_000, &run(129_600)).is_empty());
+    let unscaled = over_budget(&baseline, 1_000_000, &run(129_600));
+    assert!(
+        unscaled.len() == 1 && unscaled[0].contains("peak 129600 KiB, budget 124384 KiB"),
+        "{unscaled:?}"
+    );
+    // A peak 2.7 times the baseline (1.5 times the input's 1.8) plus 16 MiB
+    // is the limit; one KiB more fails.
+    assert!(over_budget(&baseline, 1_800_000, &run(210_784)).is_empty());
+    let over = over_budget(&baseline, 1_800_000, &run(210_785));
+    assert!(
+        over.len() == 1
+            && over[0].starts_with("validate --docs: peak 210785 KiB, budget 210784 KiB")
+            && over[0].contains("input 1800000 bytes against 1000000 at the baseline"),
+        "{over:?}"
     );
 }
