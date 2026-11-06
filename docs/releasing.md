@@ -218,19 +218,82 @@ Release impact rules for each PR:
   the `fix:`, `feat:` or breaking marker that describes the resulting release,
   with matching PR impact and curated pending notes.
 
-### Linux coverage measurement
+### Where CI suites run
 
-The Linux CI tier split planned by TSK-1241 takes effect only when the
-operator applies the tier-switch workflow change, after a same-commit hosted
-comparison. Integration pull requests will run the full Linux Rust suite
-without instrumentation, with Rust journey evidence and a check that every
-listed test ran exactly once. Pull requests into main and scheduled runs will
-retain the instrumented shards, aggregate coverage floor and once-each check.
-The `codeflow gates` and `windows` verdict names remain unchanged; integration
-skips must be declared in one place. Local full gates retain instrumentation.
-The tracked `scripts/operator/tsk-1241/apply-codeflow-ci.sh` and its
-`linux-measurement-job.yml` currently prepare only the manual comparison;
-applying that script does not activate the tier split.
+The event that starts a hosted run decides which suites it runs. A pull
+request into an integration line runs only the short checks. A line push,
+one per batch, runs the full Linux suites, coverage included, and no
+Windows job. A pull request into `main` runs the full Windows suites once
+and reuses Linux from the line push on the same tree. A tree that has
+passed a suite does not run it again, on a line or on `main`. [ADR-0097](decisions/ADR-0097-ci-suite-placement-by-event.md)
+records the decision and its dated history. Changing where a suite runs is
+an operator decision; agents and Coordinators never rule on it.
+
+| Event | Short checks | Linux build and lint | Linux tests | Linux coverage | Windows checks and journeys | Windows partitions | Release gates |
+|---|---|---|---|---|---|---|---|
+| Draft pull request, any base | secret scan and security review only; commit standards passes only on a ready run | no | no | no | no | no | no |
+| Pull request into an integration line | yes | yes | no | no | no | no | no |
+| Push to an integration line, one per batch | secret scan and security review | yes, or the pull request's reused verdict on an equal tree | yes | yes | no | no | no |
+| Pull request into `main` | yes | reused from the line push on the same tree, else yes | reused from the line push on the same tree, else yes | reused from the line push on the same tree, else yes | yes, once | yes, once | yes |
+| Push to `main` | secret scan and security review | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes |
+| Daily run, `main` and each active line | no | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | no |
+| Weekly run, `main` | secret scan of the full history and dependency audit | yes | yes | yes | yes | yes | yes |
+
+- The short checks are the Linux build and lint checks, the policy check
+  (`codeflow-policy.yml`, pull requests only) with its `trusted: commit
+  standards` and `trusted: release impact` jobs, and the secret scan in
+  `codeflow-ci.yml`.
+- The security review is not one of the short checks the operator named.
+  It runs on every event as a secure default; removing it from an event
+  needs its own operator decision.
+- The Linux tests run inside the coverage shards, so the Linux tests and
+  Linux coverage columns move together.
+- The decision does not mention the release gates. ADR-0097 reads them as
+  outside the full suites, so they keep their current events, which the
+  daily run is not one of.
+- A suite that is not selected for an event never counts as a pass of a
+  required check, since GitHub treats a skipped required check as a
+  success. Once the placement lands, the `integration/**` ruleset is to
+  require only the short-check names, and `codeflow gates` and `windows`
+  stay required on `main`, where they run; the operator applies that
+  change as a script. An event or base the workflow cannot read runs
+  the full suites.
+- A line pull request's verdicts come from the short checks only, so they
+  are never a landing batch's proof. Once TSK-1351 and the landing-rule ADR
+  land, a batch lands on a line as one push, and that line push is the
+  batch's hosted Linux proof. Windows proof comes from the pull request
+  into `main` or the daily run, never from a line push.
+- A reuse that cannot be proven runs the suite. A batch of several pull
+  requests pushes a tree no member tested, so only a one-member landing on
+  an equal tree reuses that member's short checks.
+- A newer push to a line cancels the older push run on that line, so the
+  newest tip's run is the evidence (TSK-1313, PR 583; the `concurrency`
+  block in `codeflow-ci.yml`). A run in progress for a push
+  to `main`, a scheduled run or a dispatched run is never cancelled; GitHub
+  may still replace a pending run in the same group.
+- Local full gates keep coverage instrumentation whatever the event.
+
+The workflows apply the table as follows:
+
+- Today a ready line pull request still runs the Linux gate parts
+  (`codeflow build` and the `present` and `checks` parts,
+  `codeflow-ci.yml:250`, `:273`, `:284-292`) and the two coverage shards
+  and their report (`:584`, `:592`, `:667`). The reduced Windows tier
+  (`REDUCED_TIER`, `:755-789`) skips the Windows test build, the twelve
+  partitions and `windows-journeys` (`:812`, `:877`, `:1010`), and still runs the
+  Windows checks, the release journey and `windows-tier-journeys` (`:946`,
+  `:993`, `:1064`). The `windows` verdict accepts exactly that result
+  (`:1132-1138`).
+- After TSK-1321 (PR 620) lands, a line pull request runs only the short
+  checks, the coverage shards and every Windows job leave it, and the line
+  push runs the Linux suites and no Windows job. Until then a line push
+  also runs the full Windows suites.
+- The daily run is Windows only today (`windows-daily.yml:1-9`). The Linux
+  build, lint, tests and coverage join it when TSK-1321 (PR 620) lands
+  (CI/CD coherence review of 2026-11-06, Grok's finding 8).
+- The daily workflows (`windows-daily.yml`) are already on `main`. They
+  start from it and run `main` and each active integration line at that
+  line's own ref.
 
 ## Technical
 
