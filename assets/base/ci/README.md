@@ -221,8 +221,10 @@ check that never runs. Nothing merges until an administrator acts. Private
 and internal repositories are not affected.
 
 The fix is one repository policy that targets `codeflow-policy.yml` alone
-and allows the events it runs on. Create it once, as a repository
-administrator, in Settings, Actions, Policies, or with:
+and allows the events it runs on. `codeflow remote protect`, run with a
+repository administrator's token, creates it when no policy named
+`codeflow policy check` exists, and leaves one that exists as it is. To
+create it by hand, use Settings, Actions, Policies, or:
 
 ```sh
 echo '{"name":"codeflow policy check","enforcement":"active",

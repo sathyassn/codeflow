@@ -31,7 +31,7 @@ use super::Perimeter;
 use crate::remote::Declared;
 
 /// The event GitHub blocks by default.
-const EVENT: &str = "pull_request_target";
+const EVENT: &str = crate::remote::GATED_EVENT;
 
 /// Whether a policy applies to a workflow.
 enum Applies {
@@ -176,18 +176,9 @@ fn judge_workflow(
 }
 
 /// The policy that allows exactly the events `path` runs on, for `path`
-/// alone.
+/// alone: the one `remote protect` creates.
 fn fix_body(path: &str, events: &[String]) -> String {
-    serde_json::json!({
-        "name": "codeflow policy check",
-        "enforcement": "active",
-        "conditions": {"workflow_path": {"include": [path], "exclude": []}},
-        "rules": [{
-            "type": "restrict_action_events",
-            "parameters": {"allowed_events": events}
-        }]
-    })
-    .to_string()
+    crate::remote::event_policy_body(path, events).to_string()
 }
 
 /// `"name" (id)`, for messages: the JSON forms, so a missing name reads
@@ -347,7 +338,7 @@ fn list(
     url: &str,
     owner: &str,
 ) -> Result<Vec<Value>, String> {
-    super::paged(gh, url, "policies").map_err(|why| {
+    crate::remote::paged_list(gh, url, "policies").map_err(|why| {
         // Reading needs Administration write, and the host refuses a
         // token without it.
         if why.contains("HTTP 403") || why.contains("HTTP 404") {

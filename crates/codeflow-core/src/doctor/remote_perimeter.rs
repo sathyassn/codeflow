@@ -64,41 +64,6 @@ const GH_TIMEOUT: Duration = Duration::from_secs(15);
 /// Rules read per page of `rules/branches/<branch>`.
 const RULES_PAGE_SIZE: usize = 100;
 
-/// Rows read per page of a host list that reports its `total_count`.
-const PAGE_SIZE: usize = 100;
-
-/// More pages than this is not a list doctor can judge.
-const MAX_PAGES: usize = 20;
-
-/// Every row under `key` of the paged list at `url` (an answer of the form
-/// `{"total_count": n, key: [...]}`), or why not. A list that ends before
-/// its count, or runs past `MAX_PAGES`, is not read.
-fn paged(
-    gh: &dyn Fn(&[&str]) -> Result<String, String>,
-    url: &str,
-    key: &str,
-) -> Result<Vec<Value>, String> {
-    let mut all = Vec::new();
-    for page in 1..=MAX_PAGES {
-        let text = gh(&["api", &format!("{url}?per_page={PAGE_SIZE}&page={page}")])
-            .map_err(|error| super::first_line(&error).to_string())?;
-        let body: Value = serde_json::from_str(&text).map_err(|_| "not JSON".to_string())?;
-        let Some(rows) = body[key].as_array() else {
-            return Err(format!("no {key} list in the answer"));
-        };
-        let total = body["total_count"].as_u64();
-        let empty = rows.is_empty();
-        all.extend(rows.iter().cloned());
-        match total {
-            Some(total) if all.len() as u64 >= total => return Ok(all),
-            None if empty || rows.len() < PAGE_SIZE => return Ok(all),
-            _ if empty => return Err("the list ended before its total_count".to_string()),
-            _ => {}
-        }
-    }
-    Err(format!("more than {MAX_PAGES} pages"))
-}
-
 /// One rule that requires status checks: a ruleset or classic protection.
 struct Source {
     label: String,

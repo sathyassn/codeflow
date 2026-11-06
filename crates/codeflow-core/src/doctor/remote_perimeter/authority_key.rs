@@ -81,7 +81,7 @@ fn names(
     key: &str,
 ) -> Result<Vec<String>, String> {
     let mut names = Vec::new();
-    for row in super::paged(gh, url, key)? {
+    for row in crate::remote::paged_list(gh, url, key)? {
         let Some(name) = row["name"].as_str() else {
             return Err(format!("a row of {key} has no name"));
         };

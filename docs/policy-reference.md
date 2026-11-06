@@ -1276,8 +1276,13 @@ repository's policy is 11322, applied by the operator on 2026-11-05.
 
 The policy keeps the existing trust design: the event still runs the
 default branch's workflow, which reads the head only as git data
-(ADR-0091). `remote protect` does not write the policy; it is a
-one-time administrator step.
+(ADR-0091). On a public repository whose policy workflow runs on
+`pull_request_target`, `codeflow remote protect` creates the policy, named
+`codeflow policy check`, when none of that name exists. It never changes
+an existing policy of that name, so it neither widens nor narrows its
+events or targets. Reading and creating policies needs an administrator's
+token; under any other token the run reports the policy as not written and
+adds it to the manual checklist.
 
 ### Recovery window
 
