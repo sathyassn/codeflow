@@ -1,6 +1,6 @@
 ---
 name: cf-model-orchestrator
-description: Coordinate the default Claude+Codex pair for routed work from Claude Code, Codex, or Grok Build. Both families independently research and analyze; Claude drafts the plan and owns design and integrated judgment, Codex challenges it; the host assigns capable production and author-relative cross-lineage review and reconciles approval with native evidence. Use for routed work (a change to an adopter-facing path, research or analysis that will drive one, or plan, design, security or irreversible work); when unsure, route. Requires native interactive sessions and degrades legibly when a seat is unavailable; never uses headless model execution.
+description: Coordinate the default Claude+Codex pair for routed work from Claude Code, Codex, or Grok Build. Both families independently research and analyze; Claude drafts the plan and owns design and integrated judgment, Codex or another family challenges it; the host assigns capable production and author-relative cross-lineage review and reconciles approval with native evidence. Use for routed work (a change to an adopter-facing path, research or analysis that will drive one, or plan, design, security or irreversible work); when unsure, route. Requires native interactive sessions and degrades legibly when a seat is unavailable; never uses headless model execution.
 ---
 
 # cf-model-orchestrator: host-neutral development duo
@@ -76,8 +76,8 @@ asks for just that.
   fixtures; scoped-qualified routes run evidenced tuples without direction or
   fidelity authority. Another family designs only with an explicit
   task-specific operator override recorded in the plan; Claude absence is not
-  one. Codex challenges feasibility, operability, security, proportionality,
-  and implementation. Design authority and UI assignment follow
+  one. The cross-family seat challenges feasibility, operability, security,
+  proportionality, and implementation. Design authority and UI assignment follow
   [design routing](resources/routing/design.md) when a task has product, UX,
   UI, interaction, or visual design work.
 - **Host routes execution.** Once the plan is approved, the host records the
@@ -97,16 +97,23 @@ asks for just that.
   Mixed authorship and discarded attempts follow the quality contract's
   independent review section. Name extra families on trigger if
   available; never a silent third vote: when a catalog family is named,
-  follow `routing-policy.json` (default review is the standing pair;
+  follow `routing-policy.json` (default review is cross-family;
   extra-family review needs a named assignment when a documented trigger
   fires and the family is available, or on operator instruction, and the host
   records available-and-named or unavailable-with-limitation; unknown does
   not skip the duty).
+- **Any other family is cross-family.** Codex is the preferred
+  cross-family seat, not a required one: a plan challenge or review by any
+  model family other than the author's counts as cross-family. When Codex
+  is unavailable, another family's seat (Grok in the current catalog) takes
+  the challenge or review as a recorded reassignment, within that family's
+  limits (a Grok seat never builds, ADR-0075 D3). Reduced assurance means
+  no other family was available, so only the same-family fallback ran.
 - **The Claude judgment primary owns integrated Claude judgment.** The directly
   invoked model qualified for `claude-judgment-primary` reviews the settled
   design and integrated diff, reruns relevant tests, and owns the final quality
-  verdict. Codex supplies independent review for a unit authored by that
-  primary: record it so, and do not label the integrated judgment an
+  verdict. The cross-family seat supplies independent review for a unit
+  authored by that primary: record it so, and do not label the integrated judgment an
   independent unit review.
 - **Accountable route use.** The active primary coordinates at its recorded
   default effort, stays the orchestrator, invokes the other-lineage primary
@@ -159,7 +166,8 @@ asks for just that.
   the assignment lives; the lost seat is recorded unavailable with reduced
   assurance, never waited on or recorded as approving, and any verdict it
   gave before the loss stays as given. Record reduced assurance only after
-  a live probe fails, naming the probe and its time. A seat recorded
+  live probes of every other family's seat fail, naming the probes and their
+  time. A seat recorded
   unavailable is probed live again before every later assignment and review
   routing; an earlier failure or usage-limit message is a lead, never a
   fact. Buying credits is spend and stays with the operator: do not
@@ -168,8 +176,8 @@ asks for just that.
   fresh-context independent review, and record reduced assurance naming the
   review that is missing: never faked, never silently waived, never turned
   into a finding, and never reported as duo completion.
-- **Loops end on evidence.** Plan settlement ends when both seats approve one
-  version, with any open reversible item settled under the plan contract's
+- **Loops end on evidence.** Plan settlement ends when the Claude primary and
+  the cross-family seat approve one version, with any open reversible item settled under the plan contract's
   `SETTLED_DISSENT` rule, or the host stops for the operator. When review
   findings are acted on, they are batched per
   [findings](resources/quality/findings.md); a repeat without a new
@@ -190,7 +198,7 @@ model identity.
 
 | Active host | Peer seats | Who designs | Default UI assignment | Fallback |
 |---|---|---|---|---|
-| Claude Code | Codex; Grok when named | Claude primary | Claude builds and runs the implementer check; Codex reviews as independent interactive QA | The ensemble's recorded same-family fallback after preflight, then recorded solo fallback |
+| Claude Code | Codex preferred; Grok when named or when Codex is unavailable | Claude primary | Claude builds and runs the implementer check; Codex reviews as independent interactive QA | Another family's available seat; then the ensemble's recorded same-family fallback after preflight, then recorded solo fallback |
 | Codex App or interactive Codex CLI | Claude; Grok when named | Claude primary, in its own native session | Same | Same |
 | Grok Build (interactive `grok` CLI) | Claude and Codex | Claude primary, natively; catalog Grok may execute or take named extra-family review | Same | Same |
 | Other harness, including Hermes | Hand the repository task to one sanctioned native host; coordinate directly only if both seats and the full contract are proven | As that host | Same | Same; no nested orchestration |
@@ -215,7 +223,7 @@ own session, never a separate CLI session or Herdr tab; the prompt limits the
 session to that assignment and forbids starting the orchestrator or
 delegating back to the host lineage. A generic same-lineage subagent never
 satisfies the named cross-lineage assignment. A Grok Build host coordinates the
-standing pair through Herdr; it does not start a nested duo.
+Claude and Codex seats through Herdr; it does not start a nested duo.
 
 ## Preflight
 
@@ -338,15 +346,15 @@ an approved epic does not repeat discovery.
 
 Claude drafts the one plan **from its native session**: the design options
 and recommendation, or the recorded constraint when the brief already
-dictates one clear direction. Codex challenges that plan against its own
-findings: feasibility, failure modes, security, testing, maintainability,
+dictates one clear direction. Codex, or another family when Codex is
+unavailable, challenges that plan against its own findings: feasibility, failure modes, security, testing, maintainability,
 fit to the existing code (the mechanism extended, what is reused, each
 departure with its reason), one failure case composing two mechanisms the
 design names, whether a criterion can pass while the outcome is missed, and
 whether a simpler proportionate design satisfies the same requirements. There
 is no second plan and no reconciliation round. A Grok host does not author
 the design pass. The plan records the fields in the quality contract's plan
-section. Settlement ends when both seats approve one version, with any open
+section. Settlement ends when Claude and the challenging seat approve one version, with any open
 reversible item settled under the plan contract's `SETTLED_DISSENT` rule, or
 the host stops for the operator; approval of an older version does not carry
 forward.

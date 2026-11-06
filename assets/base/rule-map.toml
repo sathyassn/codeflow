@@ -194,7 +194,7 @@ see = [".codeflow/rules/workflow-discipline.md"]
 id = "review"
 tiers = ["standard", "full"]
 title = "Review is independent."
-text = "A verdict needs a fresh-context independent review: one read-only pass over the whole unit on one revision by the other lineage, else `cf-reviewer` with reduced assurance recorded; never headless; self-review is not review; no round or count caps."
+text = "A verdict needs a fresh-context independent review: one read-only pass over the whole unit on one revision by another model family (any other family counts), else `cf-reviewer` with reduced assurance recorded; never headless; self-review is not review; no round or count caps."
 see = ["cf-reviewer"]
 
 [[rule]]
@@ -625,7 +625,7 @@ key = "delegate"
 group = "situation"
 tiers = ["standard", "full"]
 when = "ask another model or delegate work"
-action = "same family: a native subagent of this session; another family: an interactive seat with provenance; never headless or relayed; a lost seat gets bounded recovery, then reduced assurance, never faked"
+action = "same family: a native subagent of this session; another family: an interactive seat with provenance; never headless or relayed; a lost seat gets bounded recovery, then another family's seat, then reduced assurance, never faked"
 see = [
   { target = ".agents/skills/cf-model-orchestrator/resources/routing/transport.md" },
   { target = "cf-consult", note = "read-only" },
@@ -637,7 +637,7 @@ key = "delegate"
 group = "situation"
 tiers = ["minimal"]
 when = "ask another model or delegate work"
-action = "same family: a native subagent of this session; another family: an interactive seat with provenance; never headless or relayed; a lost seat gets bounded recovery, then reduced assurance, never faked"
+action = "same family: a native subagent of this session; another family: an interactive seat with provenance; never headless or relayed; a lost seat gets bounded recovery, then another family's seat, then reduced assurance, never faked"
 see = [{ target = ".codeflow/rules/workflow-discipline.md", section = "Guard your context" }]
 
 [[moment]]

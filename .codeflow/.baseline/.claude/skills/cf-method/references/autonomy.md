@@ -16,7 +16,8 @@ chose. Stop only at a question or gate this reference lists. Do not stop to
 offer the next step, to confirm a safe step you already have authority for,
 to report progress, or because a peer, a tool or a job is red. A stop holds
 only that one action: the rest of the work keeps moving, and the stop brings
-evidence, options and a recommendation. Record a missing seat, tool or credit
+evidence, options and a recommendation. A seat is missing only when no other
+model family's seat can take its work. Record a missing seat, tool or credit
 as reduced assurance and continue on the recorded fallback.
 
 A brief that asks for a change selects implementation through the readiness
@@ -325,7 +326,7 @@ to repair.
 | A peer, tool or job is red | 1: classify and continue; fix an assertion-red check, push and poll again | `quality-contract.md` redness classes; `cf-ship` `references/pr-evidence.md` |
 | A sandboxed command fails for a trusted installed tool that needs host state | 1: take the one classified unsandboxed retry without asking, never for an action the presets refuse | `CLAUDE.md` project preset; CodeFlow ADR-0029 |
 | A trust prompt | 1 for permitted folder trust in the task's own worktree or this run's sample; hook trust and Grok project trust stay with the operator; 3: other paths go to the operator, or a human delegate verified under Recorded rules and delegations | Trust prompts above |
-| A credit is missing, or a seat or tool is refused or unavailable after preflight | 2: do not purchase; name the gap, record reduced assurance and continue on the recorded fallback only within effective permission rules; a refused action follows Seat prompts and refusals above | `AGENTS.md` Entry points; `capability-routing.md` |
+| A credit is missing, or a seat or tool is refused or unavailable after preflight | 2: do not purchase; name the gap; a review or plan challenge moves to another family's available seat, which is not reduced assurance; otherwise record reduced assurance and continue on the recorded fallback only within effective permission rules; a refused action follows Seat prompts and refusals above | `AGENTS.md` Entry points; `capability-routing.md` |
 | A seat is lost mid-run after approval | 2: move the unit to the recorded fallback and record the reassignment where the assignment lives (an unstarted task's in the batched epic amendment); the lost seat's actual verdict stays recorded | CodeFlow ADR-0070; ADR-0076 for the reassignment |
 | Two seats still disagree once repairs stop producing evidence | 2 on a reversible item: the Claude judgment primary settles it and records `SETTLED_DISSENT`, never approval; 3 on an operator-owned item: ask; not settleable on safety, security, correctness or evidence adequacy: keep the gate closed and repair | Settled dissent above; CodeFlow ADR-0070 |
 | A green, reviewed pull request into an `integration/` branch that policy does not protect | 2: once the full gate is green on that exact candidate, the primary merges it without fast forward or with `codeflow integrate`, then confirms the landed state against the candidate's evidence with `codeflow status`; a changed candidate or a failed check gets the rerun that applies | `AGENTS.md` Git rules, Bodies of work; `codeflow integrate`; `.codeflow/policy.json` |

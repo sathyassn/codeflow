@@ -119,8 +119,10 @@ when a single outcome becomes one standalone task.
 Failure paths are explicit: repair allocation collisions and links on the
 planning branch; resolve cycles, missing parents, draft specs, and incomplete
 predecessors rather than bypassing validation; return a material discovery to
-the plan under the task-graph mutation rules; record a proved unavailable seat
-as reduced assurance, never as approval by both seats. If a CodeFlow task is
+the plan under the task-graph mutation rules; move a proved unavailable seat's
+challenge to another model family's seat when one is available, and only
+when none is, record a proved unavailable seat as reduced assurance, never
+as approval. If a CodeFlow task is
 cancelled, stop product work, preserve its evidence and cancel it as the work
 lifecycle states; never label cancellation complete or shipped. Close or
 cancel other work at its declared authority.
