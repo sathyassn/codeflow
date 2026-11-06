@@ -897,6 +897,41 @@ fn prospective_alias_unknown(tokens: &[String]) -> bool {
         || configuration_environment_trigger(tokens).is_some()
 }
 
+/// Whether a line's operands are read through [`expanded_integrity`], which
+/// resolves the values the shell fills in: a line with an expansion, a
+/// process substitution or a heredoc, or a segment whose program changes
+/// directory, links or copies, runs git or a shell, or reads a script.
+fn expands_operands(command: &str, segments: &[String]) -> bool {
+    command.contains(['$', '`', '~'])
+        || (command.contains("<(") || command.contains("=("))
+        || command.contains("<<")
+        || segments.iter().any(|segment| {
+            let words = command_argv(segment);
+            strip_launchers(&words).is_some_and(|(program, args)| {
+                matches!(
+                    crate::security::unresolved::writer_name(program),
+                    "cd" | "chdir"
+                        | "pushd"
+                        | "popd"
+                        | "eval"
+                        | "ln"
+                        | "cp"
+                        | "link"
+                        | "pax"
+                        | "cpio"
+                        | "rsync"
+                        | "alias"
+                ) || basename(program) == "git"
+                    || is_shell(basename(program))
+                    || (matches!(basename(program), "source" | ".") && !args.is_empty())
+                    || (script_reader(&words).is_some()
+                        && (shell_c_argument(args).is_some()
+                            || args.iter().any(|a| a == "-s")
+                            || command.contains(['<', '|'])))
+            })
+        })
+}
+
 #[allow(clippy::too_many_lines)] // The ordered shell tracker and dispatch share one state transition.
 fn evaluate_report_with_runners(
     command: &str,
@@ -958,34 +993,7 @@ fn evaluate_report_with_runners(
     let mut shell = ShellState::new(roles.is_some());
     let line = LineFacts::read(segments, roles.as_deref(), command);
     let run = run_dirs(segments, cwd);
-    let expanded_operands = command.contains(['$', '`', '~'])
-        || (command.contains("<(") || command.contains("=("))
-        || command.contains("<<")
-        || segments.iter().any(|segment| {
-            let words = command_argv(segment);
-            strip_launchers(&words).is_some_and(|(program, args)| {
-                matches!(
-                    crate::security::unresolved::writer_name(program),
-                    "cd" | "chdir"
-                        | "pushd"
-                        | "popd"
-                        | "eval"
-                        | "ln"
-                        | "cp"
-                        | "link"
-                        | "pax"
-                        | "cpio"
-                        | "rsync"
-                        | "alias"
-                ) || basename(program) == "git"
-                    || is_shell(basename(program))
-                    || (matches!(basename(program), "source" | ".") && !args.is_empty())
-                    || (script_reader(&words).is_some()
-                        && (shell_c_argument(args).is_some()
-                            || args.iter().any(|a| a == "-s")
-                            || command.contains(['<', '|'])))
-            })
-        });
+    let expanded_operands = expands_operands(command, segments);
     if expanded_operands {
         violations.extend(expanded_integrity(
             command,
@@ -1449,28 +1457,37 @@ fn git_config_source_variable(name: &str) -> bool {
 }
 
 /// The first configuration-source variable a simple command sets, whatever
-/// the value: an assignment prefix, an assignment carried by `env`, `export`,
-/// the declare family or `command`, or a bare name `export` or the declare
-/// family marks for export (TSK-1349). The value is not read: a file or key
-/// the guard cannot see could hold a hook path, so any setting refuses.
+/// the value (TSK-1349). The program is found the way every other check
+/// finds it, through the launchers [`strip_launchers`] removes (`builtin`,
+/// `command`, `exec`, `nohup`, the `env` family and the rest), so a wrapper
+/// cannot hide the assignment. It refuses an assignment in front of the
+/// program, one of `env`'s, and a name `export` or the declare family sets
+/// or marks for export, bare or with a value. A command whose program the
+/// reader cannot find (`env -S`, a line of assignments only) is read for any
+/// such assignment word, so it fails closed. The value is not read: a file
+/// or key the guard cannot see could hold a hook path, so any setting
+/// refuses.
 fn git_config_source_assignment(tokens: &[String]) -> Option<String> {
-    if let Some((name, _)) = leading_env_assignments(tokens)
-        .into_iter()
-        .find(|(name, _)| git_config_source_variable(name))
-    {
-        return Some(name.to_string());
+    let name_of = |word: &str| -> Option<String> {
+        let name = word.split_once('=').map_or(word, |(name, _)| name);
+        git_config_source_variable(name).then(|| name.to_string())
+    };
+    let assigned = |word: &String| {
+        word.split_once('=')
+            .filter(|(name, _)| is_identifier(name))
+            .and_then(|_| name_of(word))
+    };
+    let Some((program, args)) = strip_launchers(tokens) else {
+        return tokens.iter().find_map(assigned);
+    };
+    let at = tokens.len() - args.len() - 1;
+    if let Some(name) = tokens[..at].iter().find_map(assigned) {
+        return Some(name);
     }
-    let at = tokens
-        .iter()
-        .position(|t| !t.split_once('=').is_some_and(|(n, _)| is_identifier(n)))?;
-    let program = tokens[at].as_str();
     if program != "export" && !is_declare_builtin(program) {
         return None;
     }
-    tokens[at + 1..]
-        .iter()
-        .find(|t| git_config_source_variable(t))
-        .cloned()
+    args.iter().find_map(|word| name_of(word))
 }
 
 /// The hook-integrity finding for a configuration-source assignment.
@@ -1501,13 +1518,47 @@ pub(crate) fn line_integrity_write(
     let _facts = super::edit_guard::RepoFactsScope::enter();
     let segments = expand_shell_commands(command).segments;
     let run = run_dirs(&segments, cwd);
+    // The same two passes as git-guard's evaluation: a line whose operands
+    // the shell fills in is read with those values resolved, and each
+    // segment is judged as written unless that pass owns it.
+    let expanded = expands_operands(command, &segments);
+    if expanded {
+        if let Some(finding) = expanded_integrity(command, cwd, level, &run)
+            .into_iter()
+            .next()
+        {
+            return Some(finding);
+        }
+    }
+    let unknown = Cwd::Unknown("the directory exec-guard does not track".into());
     segments.iter().find_map(|segment| {
+        if segment == NESTING_UNREAD || segment == "__unresolved_shell_code" {
+            return Some(hook_integrity_violation(
+                level,
+                format!(
+                    "the command nests groups or substitutions more than {NESTING_LIMIT} levels deep, past what the guard reads"
+                ),
+            ));
+        }
         let mut words = shell_tokens(segment);
         strip_reserved_words(&mut words);
-        if words.is_empty() {
+        if words.is_empty()
+            || (expanded
+                && (unresolved_word(segment)
+                    || segment.contains("<<")
+                    || script_reader(&command_argv(segment)).is_some()))
+        {
             return None;
         }
-        integrity_write_in_run(&words, &redirect_writes(segment), level, &run, cwd, command)
+        integrity_write_in_dirs(
+            &words,
+            &redirect_writes(segment),
+            level,
+            cwd,
+            &unknown,
+            command,
+            &run,
+        )
     })
 }
 
@@ -8928,7 +8979,7 @@ fn reads_as_data(segment: &str) -> bool {
         "git" => {
             !args
                 .iter()
-                .any(|a| a == "-c" || a.starts_with("--config-env"))
+                .any(|a| a.starts_with("-c") || a.starts_with("--config-env"))
                 && git_subcommand(args).is_some_and(|(sub, _)| {
                     matches!(
                         sub,
@@ -10447,12 +10498,12 @@ fn expand_alias(
     let mut idx = 0;
     while idx < at {
         let t = args[idx].as_str();
-        if t == "--config-env" || t.starts_with("--config-env=") {
-            return Err("`--config-env` sets configuration from the environment".to_string());
-        }
-        if t == "-c" {
-            config.extend(args.get(idx + 1).cloned());
-            idx += 2;
+        if let Some(global) = git_config_global(args, idx) {
+            if global.from_env {
+                return Err("`--config-env` sets configuration from the environment".to_string());
+            }
+            config.extend(global.entry.map(str::to_string));
+            idx += global.words;
         } else if GLOBAL_VALUE_OPTIONS.contains(&t) {
             idx += 2;
         } else {
@@ -10990,14 +11041,15 @@ fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
     let mut retarget: Option<String> = None;
     let mut idx = 0;
     while idx < args.len() {
+        if let Some(config) = git_config_global(args, idx) {
+            if config.entry.is_some_and(mentions_hooks_path) {
+                hooks_path = true;
+            }
+            idx += config.words;
+            continue;
+        }
         let t = args[idx].as_str();
         match t {
-            "-c" | "--config-env" => {
-                if args.get(idx + 1).is_some_and(|v| mentions_hooks_path(v)) {
-                    hooks_path = true;
-                }
-                idx += 2;
-            }
             t if GLOBAL_VALUE_OPTIONS.contains(&t) => {
                 if (t == "-C" || t == "--git-dir") && retarget.is_none() {
                     retarget = args.get(idx + 1).cloned();
@@ -11005,12 +11057,7 @@ fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
                 idx += 2;
             }
             _ => {
-                if let Some(v) = t.strip_prefix("--config-env=") {
-                    if mentions_hooks_path(v) {
-                        hooks_path = true;
-                    }
-                    idx += 1;
-                } else if let Some(v) = t.strip_prefix("--git-dir=") {
+                if let Some(v) = t.strip_prefix("--git-dir=") {
                     if retarget.is_none() {
                         retarget = Some(v.to_string());
                     }
@@ -11050,27 +11097,72 @@ fn git_globals_include(args: &[String]) -> Option<&'static str> {
     };
     let mut idx = 0;
     while idx < args.len() {
+        if let Some(config) = git_config_global(args, idx) {
+            if let Some(key) = config.entry.and_then(include) {
+                return Some(key);
+            }
+            idx += config.words;
+            continue;
+        }
         let t = args[idx].as_str();
-        match t {
-            "-c" | "--config-env" => {
-                if let Some(key) = args.get(idx + 1).and_then(|v| include(v)) {
-                    return Some(key);
-                }
-                idx += 2;
-            }
-            t if GLOBAL_VALUE_OPTIONS.contains(&t) => idx += 2,
-            _ => {
-                if let Some(key) = t.strip_prefix("--config-env=").and_then(include) {
-                    return Some(key);
-                }
-                if !t.starts_with('-') {
-                    return None; // the subcommand
-                }
-                idx += 1;
-            }
+        if GLOBAL_VALUE_OPTIONS.contains(&t) {
+            idx += 2;
+        } else if t.starts_with('-') {
+            idx += 1;
+        } else {
+            return None; // the subcommand
         }
     }
     None
+}
+
+/// A git global option at `args[idx]` that sets configuration: the entry it
+/// sets (`None` when the value is missing), the words it takes, and whether
+/// the value is read from the environment.
+struct ConfigGlobal<'a> {
+    entry: Option<&'a str>,
+    words: usize,
+    from_env: bool,
+}
+
+/// Read `args[idx]` as a configuration global: `-c <entry>`, `--config-env
+/// <entry>`, `--config-env=<entry>`, or `-c<entry>` with the entry attached.
+/// Git 2.53 rejects the attached `-c` as an unknown option; the guards read
+/// it as the entry, so a git that accepts it cannot set a key past them
+/// (TSK-1349 delta review finding B). Every scanner of git's global options
+/// reads them through this one reader.
+fn git_config_global(args: &[String], idx: usize) -> Option<ConfigGlobal<'_>> {
+    let word = args.get(idx)?.as_str();
+    let next = || args.get(idx + 1).map(String::as_str);
+    match word {
+        "-c" => Some(ConfigGlobal {
+            entry: next(),
+            words: 2,
+            from_env: false,
+        }),
+        "--config-env" => Some(ConfigGlobal {
+            entry: next(),
+            words: 2,
+            from_env: true,
+        }),
+        _ => {
+            if let Some(entry) = word.strip_prefix("--config-env=") {
+                Some(ConfigGlobal {
+                    entry: Some(entry),
+                    words: 1,
+                    from_env: true,
+                })
+            } else {
+                word.strip_prefix("-c")
+                    .filter(|entry| !entry.is_empty())
+                    .map(|entry| ConfigGlobal {
+                        entry: Some(entry),
+                        words: 1,
+                        from_env: false,
+                    })
+            }
+        }
+    }
 }
 
 /// `true` when a `git config` invocation can write `core.hooksPath`: a set,
@@ -13866,16 +13958,24 @@ fn git_args_hook_skip(args: &[String], level: PolicyLevel, depth: usize) -> Opti
     let (sub, rest) = git_subcommand(args)?;
     let globals = &args[..args.len() - rest.len() - 1];
     let key = format!("alias.{}=", sub.to_ascii_lowercase());
-    let body = globals.windows(2).rev().find_map(|pair| {
-        (pair[0] == "-c")
-            .then(|| {
-                let (name, value) = pair[1].split_once('=')?;
-                format!("{}=", name.to_ascii_lowercase())
-                    .eq(&key)
-                    .then_some(value)
-            })
-            .flatten()
-    })?;
+    let mut body = None;
+    let mut idx = 0;
+    while idx < globals.len() {
+        let Some(config) = git_config_global(globals, idx) else {
+            idx += 1;
+            continue;
+        };
+        idx += config.words;
+        if config.from_env {
+            continue;
+        }
+        if let Some((name, value)) = config.entry.and_then(|entry| entry.split_once('=')) {
+            if format!("{}=", name.to_ascii_lowercase()) == key {
+                body = Some(value); // the last definition wins, as in git
+            }
+        }
+    }
+    let body = body?;
     if depth >= NESTING_LIMIT {
         return Some(hook_skip_finding(
             level,

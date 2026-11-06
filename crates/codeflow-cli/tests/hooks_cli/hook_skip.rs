@@ -215,6 +215,65 @@ const CONFIG_SOURCES: &[&str] = &[
     "export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig; git commit -m x",
     "sh -c 'export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig'",
     "true && export GIT_CONFIG_SYSTEM=/tmp/s.gitconfig",
+    // Wrapped spellings (TSK-1349 delta review finding A and its sweep).
+    "builtin export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig",
+    "builtin declare -x GIT_CONFIG_KEY_0=core.hooksPath",
+    "builtin export GIT_CONFIG_PARAMETERS=\"'core.hooksPath=/dev/null'\"",
+    "builtin export GIT_CONFIG_COUNT=1",
+    "builtin builtin export GIT_CONFIG_SYSTEM=/tmp/s.gitconfig",
+    "command export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig",
+    "command builtin export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig",
+    "builtin command export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig",
+    "command -p declare -x GIT_CONFIG_KEY_1=core.hooksPath",
+    "FOO=1 builtin export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig",
+    "builtin export GIT_CONFIG_GLOBAL",
+    "builtin typeset -x GIT_CONFIG_COUNT=1",
+    "exec builtin export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig",
+    "nohup builtin export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig",
+    "env builtin export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig",
+    "eval 'builtin export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig'",
+    "eval builtin export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig",
+    "eval 'export GIT_CONFIG_KEY_0=core.hooksPath'",
+    "sh -c 'builtin export GIT_CONFIG_GLOBAL=/tmp/g.gitconfig'",
+    "bash -c 'builtin declare -x GIT_CONFIG_KEY_0=core.hooksPath'",
+    "exec env GIT_CONFIG_GLOBAL=/tmp/g.gitconfig git commit -m x",
+    "nohup env GIT_CONFIG_GLOBAL=/tmp/g.gitconfig git commit -m x",
+    "env -S 'GIT_CONFIG_GLOBAL=/tmp/g.gitconfig git commit -m x'",
+    "env -S 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x'",
+    "nohup env GIT_CONFIG_PARAMETERS=\"'core.hooksPath=/dev/null'\" git commit -m x",
+    "command env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x",
+];
+
+/// A hook-path override on a git call's global options, in every spelling
+/// and through every wrapper (TSK-1349 delta review finding B and its
+/// sweep). Git 2.53 rejects an attached `-c<entry>` as an unknown option;
+/// the guards still refuse it, so a git that reads it cannot skip the hooks.
+const HOOKS_PATH_FLAGS: &[&str] = &[
+    "git -ccore.hooksPath=/dev/null commit -m x",
+    "git -cCore.HooksPath=/dev/null commit -m x",
+    "git -c CORE.hookspath=/dev/null commit -m x",
+    "git -c Core.HooksPath=/dev/null commit -m x",
+    "git --config-env=core.hooksPath=HP commit -m x",
+    "git --config-env=CORE.HOOKSPATH=HP commit -m x",
+    "git --config-env core.hooksPath=HP commit -m x",
+    "git -C . -ccore.hooksPath=/dev/null commit -m x",
+    "command git -c core.hooksPath=/dev/null commit -m x",
+    "command git -ccore.hooksPath=/dev/null commit -m x",
+    "exec git -c core.hooksPath=/dev/null commit -m x",
+    "exec git -ccore.hooksPath=/dev/null commit -m x",
+    "env git -c core.hooksPath=/dev/null commit -m x",
+    "env git -ccore.hooksPath=/dev/null commit -m x",
+    "env -S 'git -c core.hooksPath=/dev/null commit -m x'",
+    "env -S 'git -ccore.hooksPath=/dev/null commit -m x'",
+    "nohup git -c core.hooksPath=/dev/null commit -m x",
+    "nohup git -ccore.hooksPath=/dev/null commit -m x",
+    "eval 'git -c core.hooksPath=/dev/null commit -m x'",
+    "eval 'git -ccore.hooksPath=/dev/null commit -m x'",
+    "eval git -ccore.hooksPath=/dev/null commit -m x",
+    "sh -c 'git -c core.hooksPath=/dev/null commit -m x'",
+    "sh -c 'git -ccore.hooksPath=/dev/null commit -m x'",
+    "bash -c 'git -cCore.HooksPath=/dev/null commit -m x'",
+    "git -c \"alias.c=-ccore.hooksPath=/dev/null commit\" c -m x",
 ];
 
 /// Include flags on a git call: git reads the named file as configuration,
@@ -226,6 +285,18 @@ const INCLUDES: &[&str] = &[
     "git --config-env include.path=INC commit -m x",
     "git --config-env=includeIf.onbranch:feat/*.path=INC commit -m x",
     "sh -c 'git -c include.path=/tmp/i commit -m x'",
+    "git -cinclude.path=/tmp/i commit -m x",
+    "git -cInclude.Path=/tmp/i commit -m x",
+    "git -c INCLUDE.PATH=/tmp/i commit -m x",
+    "git -cincludeIf.gitdir:/.path=/tmp/i commit -m x",
+    "git --config-env=Include.Path=INC commit -m x",
+    "command git -cinclude.path=/tmp/i commit -m x",
+    "exec git -cinclude.path=/tmp/i commit -m x",
+    "env git -cinclude.path=/tmp/i commit -m x",
+    "env -S 'git -cinclude.path=/tmp/i commit -m x'",
+    "nohup git -cinclude.path=/tmp/i commit -m x",
+    "eval 'git -cinclude.path=/tmp/i commit -m x'",
+    "sh -c 'git -cinclude.path=/tmp/i commit -m x'",
 ];
 
 /// Findings 1 to 3 of the TSK-1349 security review: both guards refuse a
@@ -242,16 +313,32 @@ fn both_guards_refuse_configuration_sources_and_includes() {
     let mut admitted = Vec::new();
     let cases = CONFIG_SOURCES
         .iter()
+        .chain(HOOKS_PATH_FLAGS)
         .map(|command| (*command, false))
         .chain(INCLUDES.iter().map(|command| (*command, true)));
     for (command, include) in cases {
         for name in ["git-guard", "exec-guard"] {
             let out = hook(name, &worktree, command);
             let said = stderr(&out);
-            let rule = said.contains("policy rule git.hook_integrity")
+            // The refusal must name the configuration it reads: an attached
+            // `-c…/dev/null` also reads as a clustered `-n`, which is not
+            // the reason these forms refuse.
+            let reason = [
+                "another hooks path",
+                "overrides the hook path",
+                "includes a configuration file",
+            ]
+            .iter()
+            .any(|why| said.contains(why));
+            // git-guard may refuse an include as an authority change, or,
+            // behind `eval`, because git itself rejects the configuration
+            // it was asked to verify.
+            let rule = (said.contains("policy rule git.hook_integrity") && reason)
                 || (include
                     && name == "git-guard"
-                    && said.contains("policy rule git.policy_authority"));
+                    && (said.contains("policy rule git.policy_authority")
+                        || (said.contains("policy rule git.hook_integrity")
+                            && said.contains("cannot verify Git configuration"))));
             if out.status.code() != Some(2) || !rule {
                 admitted.push(format!("{name}: {command}\n{said}"));
             }

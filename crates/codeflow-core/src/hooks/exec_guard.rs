@@ -214,7 +214,7 @@ pub fn evaluate_ruled(
             violations.push(finding);
         }
     }
-    git_guard_line_checks(command, prose, cwd, integrity, &mut violations);
+    git_guard_line_checks(command, integrity, &mut violations);
     // Programs the line's Git calls and program values run are judged as
     // commands of their own after the line's own findings, so a
     // hook-integrity refusal of the line itself still names that rule.
@@ -270,6 +270,7 @@ pub fn evaluate_ruled(
             merge_strongest(&mut violations, finding);
         }
     }
+    integrity_write_check(command, prose, cwd, integrity, &mut violations);
     violations
 }
 
@@ -366,13 +367,7 @@ fn runner_violations(
 
 /// git-guard's line checks that exec-guard repeats, so neither guard admits
 /// alone what the other refuses (TSK-1349 AC-4).
-fn git_guard_line_checks(
-    command: &str,
-    prose: bool,
-    cwd: &std::path::Path,
-    integrity: PolicyLevel,
-    violations: &mut Vec<Violation>,
-) {
+fn git_guard_line_checks(command: &str, integrity: PolicyLevel, violations: &mut Vec<Violation>) {
     // A git option that skips a client hook.
     if let Some(finding) = super::git_guard::line_hook_skip(command, integrity) {
         merge_strongest(violations, finding);
@@ -382,14 +377,26 @@ fn git_guard_line_checks(
     if let Some(finding) = super::git_guard::line_config_source(command, integrity) {
         merge_strongest(violations, finding);
     }
-    // A shell write to an enforcement path, a workflow included. A command
-    // an earlier check already refuses with a blocking finding (`rm -rf /`
-    // under the catastrophic floor) keeps that one finding, as for the
-    // startup check.
-    if !prose && !violations.iter().any(|v| v.level == PolicyLevel::Block) {
-        if let Some(finding) = super::git_guard::line_integrity_write(command, cwd, integrity) {
-            merge_strongest(violations, finding);
-        }
+}
+
+/// git-guard's shell-write check on a line exec-guard would otherwise admit:
+/// a write to an enforcement path, a workflow included (TSK-1349 AC-4,
+/// AC-7). It runs last, so a line exec-guard already refuses keeps its own
+/// findings (`rm -rf /` its one catastrophic finding, an interpreter call
+/// the paths it is given), and it reads the repository only for a line
+/// nothing else refuses.
+fn integrity_write_check(
+    command: &str,
+    prose: bool,
+    cwd: &std::path::Path,
+    integrity: PolicyLevel,
+    violations: &mut Vec<Violation>,
+) {
+    if prose || violations.iter().any(|v| v.level == PolicyLevel::Block) {
+        return;
+    }
+    if let Some(finding) = super::git_guard::line_integrity_write(command, cwd, integrity) {
+        merge_strongest(violations, finding);
     }
 }
 
@@ -663,7 +670,9 @@ mod tests {
 
     /// TSK-397 design D: where the strict rule applies, a run-time word
     /// given to `rm` or `find` refuses under the directory check, never as a
-    /// dangerous deletion; the baseline allows these, as the line did.
+    /// dangerous deletion. The baseline allows these, except where git-guard
+    /// already refuses the line for a word it cannot verify in a writer:
+    /// exec-guard then gives git-guard's one finding (TSK-1349 AC-4).
     #[test]
     fn run_time_project_deletions_refuse_only_when_tightened() {
         use crate::security::guard_forms::{NESTINGS, RUN_TIME_PROJECT_DELETIONS};
@@ -673,7 +682,19 @@ mod tests {
         for command in RUN_TIME_PROJECT_DELETIONS {
             for nesting in NESTINGS {
                 let nested = nesting.replace("{}", command);
-                assert!(evaluate(&nested, &section).is_empty(), "{nested}");
+                let baseline = evaluate(&nested, &section);
+                let write = super::super::git_guard::line_integrity_write(
+                    &nested,
+                    &root,
+                    PolicyLevel::Block,
+                );
+                assert!(
+                    baseline.is_empty()
+                        || (baseline.len() == 1
+                            && baseline[0].rule == "git.hook_integrity"
+                            && write.is_some_and(|w| w.message == baseline[0].message)),
+                    "{nested}: {baseline:?}"
+                );
                 let found = evaluate_ruled(
                     &nested,
                     true,
