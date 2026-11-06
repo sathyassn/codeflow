@@ -118,6 +118,50 @@ fn ci(root: &Path, branch: &str, pr_body: &str) -> (i32, String) {
     ci_into(root, "main", branch, pr_body, None)
 }
 
+/// The commit a run judges for `branch`: the branch's own tip when the
+/// fixture has that branch, else the checkout's HEAD (a branch context with
+/// no local branch). Judging HEAD under another branch's name would test the
+/// wrong range (TSK-1040, Codex round 07).
+fn branch_head(root: &Path, branch: &str) -> String {
+    let out = Command::new("git")
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}^{{commit}}"),
+        ])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("git runs");
+    if out.status.success() {
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    } else {
+        "HEAD".to_string()
+    }
+}
+
+/// The paths `branch` changes from `main`, as `git diff --name-status`
+/// prints them.
+fn range_changes(root: &Path, branch: &str) -> String {
+    let out = Command::new("git")
+        .args(["diff", "--name-status", &format!("main...{branch}")])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("git runs");
+    assert!(out.status.success(), "git diff main...{branch}");
+    String::from_utf8(out.stdout).unwrap()
+}
+
 fn ci_into(
     root: &Path,
     base: &str,
@@ -125,6 +169,7 @@ fn ci_into(
     pr_body: &str,
     into: Option<&str>,
 ) -> (i32, String) {
+    let head = branch_head(root, branch);
     let mut command = codeflow();
     command.arg("ci");
     if let Some(into) = into {
@@ -135,11 +180,11 @@ fn ci_into(
             "--base",
             base,
             "--head",
-            "HEAD",
+            &head,
             "--branch",
             branch,
             "--pr-body",
-            &with_reviews(root, "HEAD", pr_body),
+            &with_reviews(root, &head, pr_body),
         ])
         .current_dir(root)
         .output()
@@ -165,6 +210,132 @@ fn assert_blocks(result: &(i32, String), what: &str, needle: &str) {
         "{what}: missing {needle:?} in {}",
         result.1
     );
+}
+
+/// TSK-1040: a `Task:` value the body selects is the body's own text until a
+/// record vouches for it, so no classification message or announcement
+/// repeats it. Each case is refused as before, by its fixed category, and
+/// the real binary prints the value on neither stream. The vouched task
+/// (TSK-001 on its own record) is still announced by name.
+#[test]
+fn task_line_values_the_body_selects_never_reach_the_log() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    branch_with(root, "feat/work", &[("src/lib.rs", "pub fn w() {}\n")]);
+    for (task_line, finding, canary) in [
+        (
+            "Task: CanaryUnitQ7x",
+            "neither `TSK-NNN` nor `EPC-NNN`",
+            "canaryunit",
+        ),
+        (
+            "Task: TSK-001, CanaryListQ7x",
+            "not a list of distinct epics",
+            "canarylist",
+        ),
+        ("Task: TSK-987654", "has no task record", "987654"),
+        ("Task: EPC-987654", "has no epic record", "987654"),
+        ("Task: EPC-001, EPC-987654", "has no epic record", "987654"),
+    ] {
+        let result = ci(root, "feat/work", &body(task_line));
+        assert_blocks(&result, task_line, finding);
+        assert!(
+            !result.1.to_lowercase().contains(canary),
+            "{task_line}: {}",
+            result.1
+        );
+    }
+    branch_with(
+        root,
+        "fix/TSK-001-repair",
+        &[("src/lib.rs", "pub fn r() {}\n")],
+    );
+    let result = ci(root, "fix/TSK-001-repair", &body("Task: TSK-987654"));
+    assert_blocks(&result, "mismatch", "names another task than branch");
+    assert!(!result.1.contains("987654"), "{}", result.1);
+    let result = ci(root, "feat/work", &body("Task: TSK-001"));
+    assert_passes(&result, "a vouched task");
+    assert!(result.1.contains("tracked TSK-001"), "{}", result.1);
+}
+
+/// TSK-1040 (Codex round 05): a task-named change confined to
+/// `.gitleaksignore` is a secret-scan exemption, and a deletion falls back to
+/// tracked work. Neither route may repeat a `Task:` value the body selects
+/// and no record vouches for, in an announcement, an admission error or a
+/// remedy. A recorded task still passes as an exemption.
+#[test]
+fn exemption_routes_never_repeat_an_unrecorded_task() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    std::fs::write(root.join(".gitleaksignore"), "# notes\n").unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "chore: add the scan ignore file"]);
+    branch_with(
+        root,
+        "feat/exemption",
+        &[(".gitleaksignore", "# notes changed\n")],
+    );
+    let modified = ci(root, "feat/exemption", &body("Task: TSK-987654"));
+    assert_eq!(modified.0, 1, "modified: {}", modified.1);
+    assert!(!modified.1.contains("987654"), "modified: {}", modified.1);
+    let recorded = ci(root, "feat/exemption", &body("Task: TSK-001"));
+    assert_eq!(recorded.0, 0, "a recorded exemption passes: {}", recorded.1);
+    git(root, &["switch", "-C", "feat/exemption-removed", "main"]);
+    git(root, &["rm", ".gitleaksignore"]);
+    git(root, &["commit", "-m", "chore: drop the scan ignore file"]);
+    let removed = ci(root, "feat/exemption-removed", &body("Task: TSK-987654"));
+    assert_eq!(removed.0, 1, "removed: {}", removed.1);
+    assert!(!removed.1.contains("987654"), "removed: {}", removed.1);
+}
+
+/// TSK-1040 (Codex round 06): a full-tier project tracks work durably before
+/// its first task record exists, so a `Task:` value no record vouches for is
+/// refused with the fixed diagnostic on the ordinary and the exemption
+/// routes, and no announcement, admission error or remedy repeats it.
+#[test]
+fn a_full_tier_project_without_records_never_repeats_the_task_value() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    git(root, &["rm", "-rq", "project-management"]);
+    std::fs::write(
+        root.join(".codeflow/project.toml"),
+        "schema_version = 1\ntier = \"full\"\nscaffold_version = \"3.0.0\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"wired\"\npermission_preset = \"default\"\n",
+    )
+    .unwrap();
+    std::fs::write(root.join(".gitleaksignore"), "# notes\n").unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "chore: full tier without records"]);
+    branch_with(
+        root,
+        "feat/body-canary",
+        &[("src/lib.rs", "pub fn changed() {}\n")],
+    );
+    branch_with(
+        root,
+        "feat/exemption",
+        &[(".gitleaksignore", "# notes changed\n")],
+    );
+    git(root, &["switch", "-qC", "feat/exemption-removed", "main"]);
+    git(root, &["rm", "-q", ".gitleaksignore"]);
+    git(root, &["commit", "-qm", "chore: drop the scan ignore file"]);
+    git(root, &["switch", "-q", "main"]);
+    for (branch, change) in [
+        ("feat/body-canary", "M\tsrc/lib.rs\n"),
+        ("feat/exemption", "M\t.gitleaksignore\n"),
+        ("feat/exemption-removed", "D\t.gitleaksignore\n"),
+    ] {
+        assert_eq!(range_changes(root, branch), change, "{branch}'s range");
+        let result = ci(root, branch, &body("Task: TSK-987654"));
+        assert!(
+            result
+                .1
+                .contains(&format!("head {}", branch_head(root, branch))),
+            "{branch} judged its own tip: {}",
+            result.1
+        );
+        assert_blocks(&result, branch, "has no task record");
+        assert!(!result.1.contains("987654"), "{branch}: {}", result.1);
+    }
 }
 
 /// TSK-388: the pre-push hook hands `codeflow ci` the destination's default
@@ -1388,6 +1559,7 @@ fn with_reviews(root: &Path, rev: &str, body: &str) -> String {
 
 /// `codeflow ci` as a pull request check whose draft state is `draft`.
 fn ci_draft(root: &Path, branch: &str, pr_body: &str, draft: &str) -> (i32, String) {
+    let head = branch_head(root, branch);
     let out = codeflow()
         .env("CODEFLOW_PR_DRAFT", draft)
         .env_remove("GITHUB_EVENT_PATH")
@@ -1396,11 +1568,11 @@ fn ci_draft(root: &Path, branch: &str, pr_body: &str, draft: &str) -> (i32, Stri
             "--base",
             "main",
             "--head",
-            "HEAD",
+            &head,
             "--branch",
             branch,
             "--pr-body",
-            &with_reviews(root, "HEAD", pr_body),
+            &with_reviews(root, &head, pr_body),
         ])
         .current_dir(root)
         .output()
