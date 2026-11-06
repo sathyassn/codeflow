@@ -3863,7 +3863,7 @@ fn pre_push_blocks_protected_and_honors_glob_extension() {
                 "git-hook",
                 "pre-push",
                 "origin",
-                "https://example.com/r.git",
+                "file:///nonexistent/r.git",
             ])
             .current_dir(dir.path()),
         &stdin,
@@ -6457,13 +6457,29 @@ fn push_set_never_prompts_and_bounds_the_destination_query() {
         "{err}"
     );
 
+    // The wait comes from the default branch's policy as last fetched
+    // (TSK-1301): a 2 s wait there keeps this case short.
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/h");
+    write_agent_policy(dir.path(), r#"{"git":{"remote_query_timeout_seconds":2}}"#);
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/dest/feat/h", "HEAD"],
+    );
+    git(
+        dir.path(),
+        &[
+            "symbolic-ref",
+            "refs/remotes/dest/HEAD",
+            "refs/remotes/dest/feat/h",
+        ],
+    );
     let (code, err, took) =
         push_hook_over_http(dir.path(), &http_destination(false), &askpass, &helper);
     assert_eq!(code, Some(1), "{err}");
-    assert!(err.contains("no answer within 10s"), "{err}");
+    assert!(err.contains("no answer within 2s per attempt"), "{err}");
     assert!(err.contains("3 attempts"), "{err}");
+    assert!(err.contains("git.remote_query_timeout_seconds"), "{err}");
     assert!(took < std::time::Duration::from_secs(50), "{took:?}");
 }
 

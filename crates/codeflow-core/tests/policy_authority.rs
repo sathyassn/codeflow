@@ -8,6 +8,10 @@ use git2::{Oid, Repository};
 
 const RECORD: &str = "project-management/tasks/TSK-007.md";
 
+/// A remote git cannot reach and that opens no socket and looks up no host,
+/// so a test that asks it never leaves the machine (TSK-1156).
+const UNREACHABLE_REMOTE: &str = "file:///nonexistent/codeflow-origin.git";
+
 struct Fixture {
     dir: tempfile::TempDir,
     repo: Repository,
@@ -113,7 +117,7 @@ const LINE_POLICY: &str = r#"{"git":{"force_push_unprotected":"block","blocked_n
 /// `*.pem` exception under `fixtures/` and a stricter level, with the task
 /// record on the line declaring it, and remote `HEAD` set to `main`.
 fn line_fixture() -> (Fixture, Oid, Oid) {
-    let f = Fixture::new("https://example.invalid/repo.git");
+    let f = Fixture::new(UNREACHABLE_REMOTE);
     let main = f.commit(&[(".codeflow/policy.json", MAIN_POLICY)], &[]);
     let line = f.commit(
         &[
@@ -165,7 +169,7 @@ fn a_line_exception_and_stricter_level_are_ignored() {
 /// records are no longer read, so the default branch judges.
 #[test]
 fn records_that_disagree_on_the_target_no_longer_refuse() {
-    let f = Fixture::new("https://example.invalid/repo.git");
+    let f = Fixture::new(UNREACHABLE_REMOTE);
     let main = f.commit(
         &[
             (".codeflow/policy.json", MAIN_POLICY),
@@ -196,7 +200,7 @@ fn records_that_disagree_on_the_target_no_longer_refuse() {
 /// `git.root_branch` keeps its root-checkout role and is no policy source.
 #[test]
 fn the_root_branch_is_no_policy_source() {
-    let f = Fixture::new("https://example.invalid/repo.git");
+    let f = Fixture::new(UNREACHABLE_REMOTE);
     let main = f.commit(
         &[(
             ".codeflow/policy.json",
@@ -223,7 +227,7 @@ fn the_root_branch_is_no_policy_source() {
 #[test]
 fn an_unset_remote_head_refuses_instead_of_guessing() {
     for name in ["main", "master"] {
-        let f = Fixture::new("https://example.invalid/repo.git");
+        let f = Fixture::new(UNREACHABLE_REMOTE);
         let tip = f.commit(&[(".codeflow/policy.json", MAIN_POLICY)], &[]);
         f.tracking(name, tip);
         f.on_branch(tip);
@@ -269,7 +273,7 @@ fn only_a_tracking_branch_is_an_authority() {
         }),
     ];
     for (what, set) in cases {
-        let f = Fixture::new("https://example.invalid/repo.git");
+        let f = Fixture::new(UNREACHABLE_REMOTE);
         let tip = f.commit(&[(".codeflow/policy.json", MAIN_POLICY)], &[]);
         f.tracking("main", tip);
         f.on_branch(tip);
@@ -413,18 +417,12 @@ fn no_configured_transport_command_runs_or_fabricates_initialization() {
     let touch = touch.as_str();
     let cases: [(&str, &[(&str, &str)]); 5] = [
         // An SSH command, for an SSH remote.
-        (
-            "ssh://example.invalid/repo.git",
-            &[("core.sshCommand", touch)],
-        ),
+        ("ssh://127.0.0.1:9/repo.git", &[("core.sshCommand", touch)]),
         // A proxy command, for a git:// remote.
-        (
-            "git://example.invalid/repo.git",
-            &[("core.gitProxy", touch)],
-        ),
+        ("git://127.0.0.1:9/repo.git", &[("core.gitProxy", touch)]),
         // A remote helper by a `vcs` name the configuration allows.
         (
-            "https://example.invalid/repo.git",
+            "https://127.0.0.1:9/repo.git",
             &[
                 ("remote.origin.vcs", "touchy"),
                 ("protocol.touchy.allow", "always"),
@@ -465,7 +463,7 @@ fn no_configured_transport_command_runs_or_fabricates_initialization() {
 /// working copy is weakened.
 #[test]
 fn authority_errors_refuse_and_a_proven_absence_selects_the_defaults() {
-    let f = Fixture::new("https://example.invalid/repo.git");
+    let f = Fixture::new(UNREACHABLE_REMOTE);
     let absent = f.commit(&[("README.md", "readme\n")], &[]);
     f.tracking("main", absent);
     f.remote_head("refs/remotes/origin/main");

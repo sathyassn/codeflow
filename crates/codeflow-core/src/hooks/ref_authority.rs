@@ -494,17 +494,29 @@ pub(super) fn recovery_args(root: &Path, args: &[String]) -> bool {
     configured && check(root, args).is_none()
 }
 
-/// A recovery fetch must be a single plain configured-remote fetch.
+/// Whether a command line is one plain fetch of a configured remote: `git
+/// fetch` or `git fetch <remote>`, and nothing else. Both guards let it
+/// through while the policy authority cannot be resolved, before their
+/// integrity checks run, so it is a closed form over the line as written and
+/// it never asks a shell parser. A parser removes what the shell would act
+/// on, such as redirections, launchers and quotes, and the words left would
+/// then speak for a line that does more. The line may hold only plain word
+/// characters and blanks, so anything the shell would do besides running
+/// those words fails it, and any doubt withholds the allowance.
 #[must_use]
 pub fn recovery_fetch(command: &str, root: &Path) -> bool {
-    let commands = super::git_guard::simple_commands(command);
-    if commands.len() != 1 || super::git_guard::transport_config_environment(command) {
+    let plain = |c: char| c.is_ascii_alphanumeric() || " \t._/-".contains(c);
+    if !command.chars().all(plain) || super::git_guard::transport_config_environment(command) {
         return false;
     }
-    let words = &commands[0];
-    words.first().is_some_and(|s| s == "git")
-        && words.get(1).is_some_and(|s| s == "fetch")
-        && words.len() <= 3
+    let words: Vec<String> = command
+        .split([' ', '\t'])
+        .filter(|word| !word.is_empty())
+        .map(str::to_string)
+        .collect();
+    words.len() <= 3
+        && words.first().is_some_and(|word| word == "git")
+        && words.get(1).is_some_and(|word| word == "fetch")
         && recovery_args(root, &words[1..])
 }
 
@@ -823,11 +835,18 @@ mod tests {
     /// configuration, written as bytes so the lines can hold text that is not
     /// valid UTF-8.
     fn repository_with_config(extra: &[u8]) -> tempfile::TempDir {
+        repository_with_url("https://example.invalid/origin.git", extra)
+    }
+
+    /// As [`repository_with_config`], with `url` as `origin`. A test that
+    /// lets the guard reach the remote uses a `file:` URL, so no lookup
+    /// leaves the machine (TSK-1156: a Codex builder seat's sandbox aborts
+    /// the whole process on a blocked lookup).
+    fn repository_with_url(url: &str, extra: &[u8]) -> tempfile::TempDir {
         use std::io::Write as _;
         let dir = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
-        repo.remote("origin", "https://example.invalid/origin.git")
-            .unwrap();
+        repo.remote("origin", url).unwrap();
         let mut config = std::fs::OpenOptions::new()
             .append(true)
             .open(dir.path().join(".git").join("config"))
@@ -931,16 +950,47 @@ mod tests {
 
     #[test]
     fn r20_fetch_mismatch_and_no_rewrite_controls() {
-        let rewritten = repository_with_config(
-            b"[url \"https://other.invalid/\"]\n\tinsteadOf = https://example.invalid/\n",
+        let rewritten = repository_with_url(
+            "file:///nonexistent/codeflow-origin.git",
+            b"[url \"file:///other/\"]\n\tinsteadOf = file:///nonexistent/\n",
         );
         assert!(r20_report(rewritten.path())
             .violations
             .iter()
             .any(|v| v.rule == "git.policy_authority"));
-        let plain = repository_with_config(b"");
+        // No rewrite and no lookup: the remote is a local path that does not
+        // exist, so the fetch check cannot reach any host.
+        let plain = repository_with_url("file:///nonexistent/codeflow-origin.git", b"");
         assert!(r20_report(plain.path()).violations.is_empty());
         assert!(recovery_fetch("git fetch origin", plain.path()));
+        assert!(recovery_fetch("git fetch", plain.path()));
+        for line in [
+            "",
+            "git",
+            "git fetch origin main",
+            "git fetch elsewhere",
+            "git fetch --all",
+            "git fetch origin > fetched.txt",
+            "git fetch origin 2> fetched.txt",
+            "git fetch origin < fetched.txt",
+            "git fetch origin | cat",
+            "git fetch origin; true",
+            "git fetch origin &",
+            "git fetch origin\ntrue",
+            "NAME=value git fetch origin",
+            "command git fetch origin",
+            "(git fetch origin)",
+            "git fetch \"origin\"",
+            "git fetch ori\\gin",
+            "git fetch $NAME",
+            "git fetch origin # note",
+            "git\u{a0}fetch origin",
+            "git fetch\u{2003}origin",
+            "git fetch origin\u{85}",
+            "git\u{3000}fetch\u{3000}origin",
+        ] {
+            assert!(!recovery_fetch(line, plain.path()), "{line}");
+        }
     }
 
     /// Round twelve on issue 79: an `insteadOf` rewrite that ends in a carriage

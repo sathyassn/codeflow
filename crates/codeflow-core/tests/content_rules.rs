@@ -570,7 +570,7 @@ fn a_byte_order_mark_and_decomposed_patterns_match_as_git_reads_them() {
 fn only_the_recorded_default_branch_judges_and_none_is_guessed() {
     let f = Fixture::new();
     f.repo
-        .remote("origin", "https://example.invalid/adopter.git")
+        .remote("origin", "file:///nonexistent/adopter.git")
         .unwrap();
     let main = f.authority(
         "*.bin\n",

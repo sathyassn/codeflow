@@ -82,6 +82,41 @@ SCRIPT = textwrap.dedent(
 )
 
 
+class NextestFilterTests(unittest.TestCase):
+    """The reduced Windows tier runs exactly the journey tests by this filter."""
+
+    JOURNEYS = [
+        {"text": "both", "control": ["codeflow-core --test id_registry first", "codeflow-cli --lib second"],
+         "fault": ["python scripts/test_release.py Release", "codeflow-core --test id_registry first"]},
+        {"text": "unix", "platform": "unix", "control": ["codeflow-core --test unix_only third"], "fault": []},
+        {"text": "later", "pending": "TSK-1", "control": ["codeflow-core --test later fourth"], "fault": []},
+        {"text": "bench", "benchmark": True, "control": ["codeflow-core --test bench fifth"], "fault": []},
+    ]
+
+    def test_selects_each_rust_test_by_binary_and_exact_name(self):
+        groups, _, _ = gate.plan(self.JOURNEYS, on_unix=False, with_benchmark=False)
+        self.assertEqual(gate.nextest_filter(groups),
+                         "(binary_id(=codeflow-core::id_registry) & (test(=first))) | "
+                         "(binary_id(=codeflow-cli) & (test(=second)))")
+
+    def test_a_platform_keeps_its_own_journeys(self):
+        groups, _, _ = gate.plan(self.JOURNEYS, on_unix=True, with_benchmark=False)
+        self.assertIn("binary_id(=codeflow-core::unix_only)", gate.nextest_filter(groups))
+
+    def test_no_rust_journey_is_refused(self):
+        groups, _, _ = gate.plan([self.JOURNEYS[0] | {"control": [], "fault": ["python a.py B"]}],
+                                 on_unix=False, with_benchmark=False)
+        with self.assertRaises(ValueError):
+            gate.nextest_filter(groups)
+
+    def test_the_real_map_gives_a_filter_with_no_python_clause(self):
+        groups, _, _ = gate.plan(gate.load_journeys(), on_unix=False, with_benchmark=False)
+        selected = gate.nextest_filter(groups)
+        names = sum(len(names) for key, names in groups.items() if key[0] != "python")
+        self.assertEqual(selected.count("test(="), names)
+        self.assertNotIn("python", selected)
+
+
 class PythonJourneyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

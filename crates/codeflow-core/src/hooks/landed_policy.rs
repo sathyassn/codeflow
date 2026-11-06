@@ -64,10 +64,21 @@ pub struct Authority {
 /// value from the remote, and the guards, orient and doctor print it
 /// (TSK-388).
 pub fn load(root: &Path) -> Result<LandedPolicy, String> {
-    load_raw(root).map_err(|error| crate::git::display_message(&error))
+    load_raw(root, true).map_err(|error| crate::git::display_message(&error))
 }
 
-fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
+/// [`load`] without asking the remote: where the remote's tracking refs are
+/// missing, it refuses instead of asking whether the remote holds any. The
+/// remote query limits read here (TSK-1301), so working out how long to wait
+/// for a remote never waits for one first.
+///
+/// # Errors
+/// As [`load`], and when the tracking namespace is empty.
+pub fn load_local(root: &Path) -> Result<LandedPolicy, String> {
+    load_raw(root, false).map_err(|error| crate::git::display_message(&error))
+}
+
+fn load_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
     let Some(repo) = super::repo::open(root)? else {
         return working(root, "working copy (unborn HEAD; local only: no remote)");
     };
@@ -98,6 +109,11 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
         .transpose()
         .map_err(|e| e.to_string())?
         .is_some();
+    if !populated && !ask {
+        return Err(format!(
+            "refs/remotes/{remote}/ holds no refs, and the remote was not asked"
+        ));
+    }
     if !populated {
         // The local namespace cannot tell a remote that was never fetched,
         // or whose tracking refs were deleted, from one that holds nothing
@@ -113,7 +129,7 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
                 "cannot read the policy authority: {remote} has refs but refs/remotes/{remote}/ holds none here; run git fetch {remote}"
             )),
             Err(why) => Err(format!(
-                "cannot read the policy authority: refs/remotes/{remote}/ holds no refs and {remote} could not be asked whether it has any ({why}); run git fetch {remote}"
+                "cannot read the policy authority: refs/remotes/{remote}/ holds no refs and {remote} could not be asked whether it has any ({why}); run git fetch {remote} (git waits on its own terms, outside the guard); once its refs are here the guards read the policy locally and ask {remote} nothing"
             )),
         };
     }
@@ -134,7 +150,12 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
 /// The URL comes from the repository's configuration, so the question runs
 /// no configured command (see
 /// [`crate::git::remote_query::advertises_any_ref`]); a remote with no URL,
-/// several URLs, or one that is not UTF-8 is not asked.
+/// several URLs, or one that is not UTF-8 is not asked. The session guards
+/// ask it while the tracking namespace is empty, inside the harness hook
+/// timeout, so each question runs within the guard's lookup wait
+/// ([`QueryLimits::guard`](crate::git::remote_query::QueryLimits::guard)),
+/// never a policy wait, and a remote that does not answer in time refuses
+/// with the fetch that removes the need to ask (TSK-1301).
 fn advertises_refs(repo: &Repository, root: &Path, remote: &str) -> Result<bool, String> {
     let config = repo.config().map_err(|e| e.to_string())?;
     let key = format!("remote.{remote}.url");
@@ -150,7 +171,11 @@ fn advertises_refs(repo: &Repository, root: &Path, remote: &str) -> Result<bool,
         urls.push(url.to_string());
     }
     match urls.as_slice() {
-        [url] => crate::git::remote_query::advertises_any_ref(root, url),
+        [url] => crate::git::remote_query::advertises_any_ref(
+            root,
+            url,
+            crate::git::remote_query::QueryLimits::guard(),
+        ),
         [] => Err(format!("{key} is not set")),
         _ => Err(format!("{key} has several values")),
     }
@@ -685,7 +710,7 @@ mod tests {
             .commit(Some("HEAD"), &sig, &sig, "test: seed", &tree, &[])
             .unwrap();
         drop(tree);
-        repo.remote("origin", "https://example.invalid/origin.git")
+        repo.remote("origin", "file:///nonexistent/origin.git")
             .unwrap();
         let mut config = std::fs::OpenOptions::new()
             .append(true)
