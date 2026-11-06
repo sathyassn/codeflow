@@ -767,11 +767,12 @@ impl<'r> RecordStore<'r> {
     /// Comparing decisions, rather than tips, keeps a restored version
     /// competing even after its line merged the other version.
     ///
-    /// Every commit that wrote the older version must be a proper ancestor
-    /// of every commit that wrote the newer one, so the newer edit read the
-    /// older version and a write on the other side is a real divergence. A
-    /// merge that only kept the older version from one parent must also
-    /// decide nothing against the newer one ([`Self::kept_apart`]).
+    /// The commits that wrote the older version, on either line, must come
+    /// before every commit that wrote the newer one ([`Self::writes_precede`]),
+    /// so the newer edit read the older version and a write on the other
+    /// side is a real divergence. A merge that only kept the older version
+    /// from one parent must also decide nothing against the newer one
+    /// ([`Self::kept_apart`]).
     fn yields(
         &mut self,
         task: &Identity,
@@ -786,14 +787,22 @@ impl<'r> RecordStore<'r> {
             .map_err(|reason| newer.context(&reason))?;
         let wrote_older = written(&earlier).map_err(|reason| older.context(&reason))?;
         let wrote_newer = written(&later).map_err(|reason| newer.context(&reason))?;
-        for &before in &wrote_older {
-            for &after in &wrote_newer {
-                if before == after
-                    || !super::acceptance::is_ancestor_or_same(self.repo, before, after)?
-                {
-                    return Ok(false);
-                }
+        // The older version's writes on both sides: the newer line may have
+        // read it from its own history, which the older line need not show.
+        let mut wrote_either = wrote_older.clone();
+        for introduction in self
+            .introductions(task, newer.commit, &older.version)
+            .map_err(|reason| newer.context(&reason))?
+        {
+            if introduction.wrote() && !wrote_either.contains(&introduction.commit) {
+                wrote_either.push(introduction.commit);
             }
+        }
+        if !self
+            .writes_precede(task, &wrote_either, &wrote_newer)
+            .map_err(|reason| older.context(&reason))?
+        {
+            return Ok(false);
         }
         // The newer version wherever the older line's history held it, which
         // the newer line's own history need not show.
@@ -806,6 +815,67 @@ impl<'r> RecordStore<'r> {
             }
         }
         Ok(true)
+    }
+
+    /// Whether the commits that wrote a version (`earlier`) all come before
+    /// the commits that wrote another (`later`), by ancestry alone.
+    ///
+    /// At least one write of `earlier` must be a proper ancestor of every
+    /// write of `later`, so a later edit read the earlier version. Every
+    /// other write of `earlier` must be one too, or be the record's first
+    /// appearance on its line: no commit in its history held any record of
+    /// the task, so it copied the version in and decided nothing against
+    /// another one ([`Self::first_appearance`]). A write of `earlier` with a
+    /// write of `later` in its history wrote the earlier version again after
+    /// the later one existed, which is a decision, so the versions compete.
+    /// Any history that cannot be read fails closed.
+    fn writes_precede(
+        &mut self,
+        task: &Identity,
+        earlier: &[Oid],
+        later: &[Oid],
+    ) -> Result<bool, String> {
+        let mut read = false;
+        for &before in earlier {
+            let mut before_all = true;
+            for &after in later {
+                if before == after
+                    || super::acceptance::is_ancestor_or_same(self.repo, after, before)?
+                {
+                    return Ok(false);
+                }
+                if !super::acceptance::is_ancestor_or_same(self.repo, before, after)? {
+                    before_all = false;
+                }
+            }
+            if before_all {
+                read = true;
+            } else if !self.first_appearance(task, before)? {
+                return Ok(false);
+            }
+        }
+        Ok(read)
+    }
+
+    /// Whether no commit in the history before `write` held any record of
+    /// the task, under any of its identities or paths, so `write` is the
+    /// record's first appearance on its line. A shallow cut, an overlay or
+    /// an unreadable commit is an error, never a first appearance.
+    fn first_appearance(&mut self, task: &Identity, write: Oid) -> Result<bool, String> {
+        if let Some(overlay) = &self.overlay {
+            return Err(overlay.clone());
+        }
+        let unreadable =
+            |error: git2::Error| format!("cannot read the history: {}", error.message());
+        let parents = history::parents(
+            self.repo,
+            &self.repo.find_commit(write).map_err(unreadable)?,
+        )
+        .map_err(unreadable)?;
+        if parents.is_empty() {
+            return Ok(true);
+        }
+        Ok(self.first_holder(task, &parents, &[])?.is_none())
     }
 
     /// Whether a merge that kept `older`'s version from one parent decided
@@ -875,14 +945,12 @@ impl<'r> RecordStore<'r> {
         let introductions = self
             .introductions(task, side, &version)
             .map_err(|reason| older.context(&reason))?;
-        for &write in &written(&introductions).map_err(|reason| older.context(&reason))? {
-            for &before in wrote_older {
-                if write == before
-                    || !super::acceptance::is_ancestor_or_same(self.repo, write, before)?
-                {
-                    return Ok(false);
-                }
-            }
+        let wrote_side = written(&introductions).map_err(|reason| older.context(&reason))?;
+        if !self
+            .writes_precede(task, &wrote_side, wrote_older)
+            .map_err(|reason| older.context(&reason))?
+        {
+            return Ok(false);
         }
         for &before in wrote_older {
             if super::acceptance::is_ancestor_or_same(self.repo, before, side)? {
@@ -2182,6 +2250,163 @@ mod tests {
         git(root, &["switch", "-q", LINE]);
         git(root, &["merge", "-q", "--no-ff", "-m", "sync", "main"]);
         newest_is_fast(root, LINE, "plan");
+    }
+
+    /// TSK-1132 on the main into EPC-026 sync: the line wrote v1 and then
+    /// replaced it; main, which never held the record, later wrote the same
+    /// v1 as its first appearance there. That copy decided nothing against
+    /// the line's version, so the line's version is newer.
+    fn first_appearance_on_main() -> tempfile::TempDir {
+        diverged(
+            Step::Note,
+            vec![Step::File(RECORD, record(UID))],
+            vec![
+                Step::File(RECORD, record(UID)),
+                Step::File(RECORD, with_criterion(LINE_V)),
+            ],
+        )
+    }
+
+    #[test]
+    fn a_first_appearance_of_an_older_version_yields_to_a_later_edit() {
+        let dir = first_appearance_on_main();
+        newest_is_fast(dir.path(), LINE, "main");
+    }
+
+    /// A write that follows the newer version is not a first appearance,
+    /// even when the record was deleted in between: it wrote the older
+    /// version again after the newer one existed.
+    #[test]
+    fn a_rewrite_after_deleting_the_newer_version_still_competes() {
+        let dir = first_appearance_on_main();
+        let root = dir.path();
+        git(root, &["switch", "-q", "-c", "copy", LINE]);
+        git(root, &["rm", "-q", RECORD]);
+        git(root, &["commit", "-q", "-m", "delete"]);
+        std::fs::create_dir_all(root.join(RECORD).parent().unwrap()).unwrap();
+        std::fs::write(root.join(RECORD), record(UID)).unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-q", "-m", "write v1 again"]);
+        git(root, &["branch", "-f", "main", "copy"]);
+        git(root, &["switch", "-q", LINE]);
+        save(root, "later.txt", "the line advanced\n");
+        refuses_both_orders(root, "different versions");
+    }
+
+    /// The record held at another record path (an epic's tasks folder), then
+    /// removed, is still a holding: records are matched by their parsed id or
+    /// uid, not their path, so main's later write of v1 is not a first
+    /// appearance.
+    #[test]
+    fn a_write_after_the_record_was_held_at_another_path_still_competes() {
+        let dir = diverged(
+            Step::Note,
+            vec![
+                Step::File(
+                    "project-management/epics/EPC-001/tasks/TSK-001.md",
+                    with_criterion(SIDE),
+                ),
+                Step::Note,
+            ],
+            vec![
+                Step::File(RECORD, record(UID)),
+                Step::File(RECORD, with_criterion(LINE_V)),
+            ],
+        );
+        let root = dir.path();
+        git(root, &["switch", "-q", "main"]);
+        git(
+            root,
+            &[
+                "rm",
+                "-q",
+                "project-management/epics/EPC-001/tasks/TSK-001.md",
+            ],
+        );
+        git(root, &["commit", "-q", "-m", "remove the old path"]);
+        std::fs::create_dir_all(root.join(RECORD).parent().unwrap()).unwrap();
+        save(root, RECORD, &record(UID));
+        refuses_both_orders(root, "different versions");
+    }
+
+    /// A task file in main's history that may be this task but does not
+    /// parse leaves the first appearance unproved, so the judge refuses.
+    #[test]
+    fn an_unreadable_earlier_record_fails_closed() {
+        let broken = "project-management/tasks/TSK-002.md";
+        let dir = diverged(
+            Step::Note,
+            vec![Step::File(broken, "---\nid: TSK-001\n: [\n".to_string())],
+            vec![
+                Step::File(RECORD, record(UID)),
+                Step::File(RECORD, with_criterion(LINE_V)),
+            ],
+        );
+        let root = dir.path();
+        git(root, &["switch", "-q", "main"]);
+        git(root, &["rm", "-q", broken]);
+        git(root, &["commit", "-q", "-m", "remove the broken file"]);
+        std::fs::create_dir_all(root.join(RECORD).parent().unwrap()).unwrap();
+        save(root, RECORD, &record(UID));
+        refuses_both_orders(root, "does not parse");
+    }
+
+    /// An unrelated root commit that writes the version main already holds,
+    /// merged into main, changes nothing: the line's version still wins.
+    #[test]
+    fn a_parentless_copy_merged_in_does_not_change_the_winner() {
+        let dir = positive_shape();
+        let root = dir.path();
+        git(root, &["switch", "-q", "--orphan", "fresh"]);
+        std::fs::create_dir_all(root.join(RECORD).parent().unwrap()).unwrap();
+        std::fs::write(root.join(RECORD), record(UID)).unwrap();
+        git(root, &["add", RECORD]);
+        git(root, &["commit", "-q", "-m", "fresh copy"]);
+        git(root, &["switch", "-q", "main"]);
+        git(
+            root,
+            &[
+                "merge",
+                "-q",
+                "--allow-unrelated-histories",
+                "-m",
+                "take the copy",
+                "fresh",
+            ],
+        );
+        newest_is_fast(root, LINE, "main");
+    }
+
+    /// Two concurrent amendments still compete when the line merges in a
+    /// parentless branch that wrote main's version and then the line's: the
+    /// copies it brings are not the line's own reading of main's version.
+    #[test]
+    fn a_parentless_branch_cannot_order_a_true_divergence() {
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::File(RECORD, with_criterion(SIDE))],
+            vec![Step::File(RECORD, with_criterion(LINE_V))],
+        );
+        let root = dir.path();
+        git(root, &["switch", "-q", "--orphan", "fresh"]);
+        std::fs::create_dir_all(root.join(RECORD).parent().unwrap()).unwrap();
+        std::fs::write(root.join(RECORD), with_criterion(SIDE)).unwrap();
+        git(root, &["add", RECORD]);
+        git(root, &["commit", "-q", "-m", "fresh side"]);
+        save(root, RECORD, &with_criterion(LINE_V));
+        git(root, &["switch", "-q", LINE]);
+        git(
+            root,
+            &[
+                "merge",
+                "-q",
+                "--allow-unrelated-histories",
+                "-m",
+                "take the copies",
+                "fresh",
+            ],
+        );
+        refuses_both_orders(root, "different versions");
     }
 
     /// Main rejected the side's version, and the line built on that version.
