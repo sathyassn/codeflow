@@ -4871,7 +4871,10 @@ fn serve_backend(
     body: &[u8],
 ) {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    let rest = path.strip_prefix("/owner/private.git").unwrap_or(path);
+    let rest = path
+        .strip_prefix("/owner/private.git")
+        .or_else(|| path.strip_prefix("/owner/private"))
+        .unwrap_or(path);
     let mut cgi = Command::new("git");
     cgi.arg("http-backend")
         .env_clear()
@@ -5163,4 +5166,509 @@ fn a_destination_other_than_the_run_repository_gets_no_token() {
         result.1
     );
     token_left_no_trace(&fx, &result);
+}
+
+// ---------------------------------------------------------------------------
+// TSK-1252 AC-6, AC-12: the scaffolded policy workflow, run step by step on a
+// private-style remote (a local HTTP origin that requires the run's token)
+// ---------------------------------------------------------------------------
+
+/// The policy workflow `codeflow init` writes and `codeflow update`
+/// manages; the managed baseline equals this asset byte for byte
+/// (`manifest_consistency`).
+const POLICY_WORKFLOW: &str = include_str!("../../../assets/base/ci/codeflow-policy.yml");
+
+/// The pull request the job judges: number 1, the task branch into line A,
+/// with `main` as the authority.
+struct Pull {
+    authority: String,
+    base: String,
+    head: String,
+}
+
+/// One run of the managed policy job.
+struct JobRun {
+    /// Every step's output, with the values the job masked shown as `***`.
+    log: String,
+    /// The step that failed; `None` when every step passed.
+    failed: Option<String>,
+    /// The header blocks the origin received while each step ran.
+    requests_by_step: Vec<(String, Vec<String>)>,
+    /// The runner's folder: the checkout, HOME and the runner's temp.
+    runner: PathBuf,
+    checkout: PathBuf,
+}
+
+/// The task branch on line A published as pull request 1 on a private-style
+/// origin that serves only a request carrying `FAKE_TOKEN`. Returns the
+/// pull request, the origin's server URL and what the origin receives.
+fn private_pull(fx: &Fx) -> (Pull, String, Requests) {
+    // The shared id registry a maintainer seeds once, on the origin.
+    let seed = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+        .args(["ids", "seed"])
+        .current_dir(&fx.root)
+        .output()
+        .unwrap();
+    assert!(seed.status.success(), "{}", output(&seed).1);
+    if fx
+        .git(&["ls-remote", "origin", "codeflow/registry"])
+        .is_empty()
+    {
+        fx.git(&["push", "-q", "origin", "codeflow/registry"]);
+    }
+    let head = fx.task_on_line();
+    fx.git(&[
+        "push",
+        "-q",
+        fx.origin.to_str().unwrap(),
+        "HEAD:refs/pull/1/head",
+    ]);
+    let requests = Requests::default();
+    let server = http_origin(
+        &fx.origin,
+        Origin::Requires(FAKE_TOKEN.into()),
+        requests.clone(),
+    );
+    let pull = Pull {
+        authority: fx.git(&["rev-parse", "main"]),
+        base: fx.git(&["rev-parse", LINE_A]),
+        head,
+    };
+    (pull, server, requests)
+}
+
+/// A pull-request API endpoint that answers every request with `json`, as
+/// `GET /repos/<repository>/pulls/<number>` does. Returns its base URL.
+fn api_origin(json: String) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            if read_request(&mut stream).is_none() {
+                continue;
+            }
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}",
+                    json.len()
+                )
+                .as_bytes(),
+            );
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+/// The value of one `${{ expression }}` the job uses, as GitHub fills it
+/// in for this pull request. An expression the model does not know fails
+/// the test, so a template change cannot pass unseen.
+fn expression(
+    expr: &str,
+    pull: &Pull,
+    temp: &Path,
+    token: &str,
+    outputs: &std::collections::HashMap<String, String>,
+) -> String {
+    match expr {
+        "github.event_name" => "pull_request_target".into(),
+        "github.event.repository.default_branch" => "main".into(),
+        "github.sha" => pull.authority.clone(),
+        "github.token" => token.into(),
+        "github.event.pull_request.number" => "1".into(),
+        "github.event.pull_request.base.sha" => pull.base.clone(),
+        "github.event.pull_request.base.ref" => LINE_A.into(),
+        "github.event.pull_request.head.sha" => pull.head.clone(),
+        "github.event.pull_request.head.ref" => "task/TSK-001-work".into(),
+        "runner.temp" => temp.display().to_string(),
+        // The head is in this repository, so the actor is passed.
+        "github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown'" => {
+            "fixture-actor".into()
+        }
+        other if other.starts_with("steps.") => outputs.get(other).cloned().unwrap_or_default(),
+        other => panic!("the job uses the expression `{other}`, which this runner does not model"),
+    }
+}
+
+/// `text` with every `${{ ... }}` replaced by `value(expression)`.
+fn substitute(text: &str, value: impl Fn(&str) -> String) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("${{") {
+        out.push_str(&rest[..start]);
+        let end = start + rest[start..].find("}}").unwrap();
+        out.push_str(&value(rest[start + 3..end].trim()));
+        rest = &rest[end + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The variables the runner sets for every step of this job.
+fn runner_env(runner: &Path, server: &str, api: &str, pull: &Pull) -> Vec<(String, String)> {
+    let bin = Path::new(env!("CARGO_BIN_EXE_codeflow")).parent().unwrap();
+    let event = runner.join("event.json");
+    std::fs::write(
+        &event,
+        format!(
+            "{{\"repository\": {{\"default_branch\": \"main\", \"full_name\": \"owner/private\"}}, \"pull_request\": {{\"number\": 1, \"base\": {{\"ref\": \"{LINE_A}\", \"sha\": \"{}\", \"repo\": {{\"full_name\": \"owner/private\"}}}}, \"head\": {{\"ref\": \"task/TSK-001-work\", \"sha\": \"{}\", \"repo\": {{\"full_name\": \"owner/private\"}}}}}}}}",
+            pull.base, pull.head
+        ),
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let runner_path = |name: &str| runner.join(name).display().to_string();
+    [
+        ("PATH", path),
+        ("HOME", runner_path("home")),
+        ("RUNNER_TEMP", runner_path("temp")),
+        ("GITHUB_STEP_SUMMARY", runner_path("summary.md")),
+        ("GITHUB_PATH", runner_path("path.txt")),
+        ("GITHUB_EVENT_PATH", event.display().to_string()),
+        ("CODEFLOW_HOME", isolated_home().display().to_string()),
+        ("GITHUB_ACTIONS", "true".into()),
+        ("GITHUB_EVENT_NAME", "pull_request_target".into()),
+        ("GITHUB_SERVER_URL", server.into()),
+        ("GITHUB_API_URL", api.into()),
+        ("GITHUB_REPOSITORY", "owner/private".into()),
+        ("GITHUB_ACTOR", "fixture-actor".into()),
+        ("GITHUB_REF", "refs/heads/main".into()),
+        ("GITHUB_SHA", pull.authority.clone()),
+        ("GITHUB_BASE_REF", LINE_A.into()),
+        ("GITHUB_HEAD_REF", "task/TSK-001-work".into()),
+        ("GIT_CONFIG_NOSYSTEM", "1".into()),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value))
+    .collect()
+}
+
+/// A command with only `env` set, as a runner step starts.
+fn step_command(program: &str, env: &[(String, String)], dir: &Path) -> Command {
+    let mut command = Command::new(program);
+    command
+        .env_clear()
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .current_dir(dir);
+    command
+}
+
+/// `actions/checkout` as the step's `with:` asks: every branch and tag
+/// fetched over HTTP with the run's token for that one fetch, then
+/// `with.ref` detached. A checkout that persists credentials leaves the
+/// header in the checkout's git config, as the action does.
+fn checkout(
+    step: &serde_yaml::Value,
+    dir: &Path,
+    env: &[(String, String)],
+    reference: &str,
+) -> (bool, String) {
+    let server = &env
+        .iter()
+        .find(|(k, _)| k == "GITHUB_SERVER_URL")
+        .unwrap()
+        .1;
+    let header = format!("http.{server}/.extraheader");
+    let value = format!("AUTHORIZATION: {}", basic_for(FAKE_TOKEN));
+    let parent = dir.parent().unwrap();
+    let mut log = String::new();
+    let mut git = |args: &[&str], with_header: bool| {
+        let mut command = step_command("git", env, if dir.exists() { dir } else { parent });
+        if with_header {
+            command
+                .env("GIT_CONFIG_COUNT", "1")
+                .env("GIT_CONFIG_KEY_0", &header)
+                .env("GIT_CONFIG_VALUE_0", &value);
+        }
+        let out = command.args(args).output().unwrap();
+        log.push_str(&output(&out).1);
+        out.status.success()
+    };
+    let url = format!("{server}/owner/private");
+    let ok = git(&["init", "-q", dir.to_str().unwrap()], false)
+        && git(&["remote", "add", "origin", &url], false)
+        && git(
+            &[
+                "fetch",
+                "-q",
+                "--no-tags",
+                "origin",
+                "+refs/heads/*:refs/remotes/origin/*",
+                "+refs/tags/*:refs/tags/*",
+            ],
+            true,
+        )
+        && git(&["checkout", "-q", "--detach", reference], false);
+    if ok && step["with"]["persist-credentials"].as_bool() != Some(false) {
+        git(&["config", "--local", &header, &value], false);
+    }
+    (ok, log)
+}
+
+/// Run one `run:` step as the runner's default bash shell runs it
+/// (`bash --noprofile --norc -eo pipefail`). Returns whether it passed,
+/// its output and the `key=value` lines it wrote to `GITHUB_OUTPUT`.
+fn run_step(
+    script: &str,
+    env: &[(String, String)],
+    dir: &Path,
+    runner: &Path,
+) -> (bool, String, Vec<(String, String)>) {
+    let file = runner.join("step.sh");
+    let outputs = runner.join("output.txt");
+    std::fs::write(&file, script).unwrap();
+    std::fs::write(&outputs, "").unwrap();
+    let out = step_command("bash", env, dir)
+        .env("GITHUB_OUTPUT", &outputs)
+        .args(["--noprofile", "--norc", "-eo", "pipefail"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    let written = std::fs::read_to_string(&outputs)
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    (out.status.success(), output(&out).1, written)
+}
+
+/// The step's output as the runner logs it: `::add-mask::` lines add a
+/// mask and are not shown, and every masked value reads `***`.
+fn masked(text: &str, masks: &mut Vec<String>) -> String {
+    for line in text.lines() {
+        if let Some(value) = line.trim().strip_prefix("::add-mask::") {
+            masks.push(value.to_string());
+        }
+    }
+    let mut shown = String::new();
+    for line in text
+        .lines()
+        .filter(|line| !line.trim().starts_with("::add-mask::"))
+    {
+        shown.push_str(line);
+        shown.push('\n');
+    }
+    for mask in masks.iter().filter(|mask| !mask.is_empty()) {
+        shown = shown.replace(mask.as_str(), "***");
+    }
+    shown
+}
+
+/// Run the managed policy job (`jobs.commit-lint` of the scaffolded
+/// `codeflow-policy.yml`) for `pull` against the origin at `server`, step
+/// by step, stopping at the first failed step as the runner does. Every
+/// step gets the run's token where the workflow passes `github.token`,
+/// except that `codeflow ci` gets `ci_token` (empty when `None`, as a run
+/// without the token gives it). The install step is not run: it downloads
+/// a release, so the test's own binary is on PATH instead.
+fn run_policy_job(
+    fx: &Fx,
+    server: &str,
+    requests: &Requests,
+    pull: &Pull,
+    ci_token: Option<&str>,
+) -> JobRun {
+    let workflow: serde_yaml::Value = serde_yaml::from_str(POLICY_WORKFLOW).unwrap();
+    let steps = workflow["jobs"]["commit-lint"]["steps"]
+        .as_sequence()
+        .unwrap();
+    let runner = fx.root.parent().unwrap().join("runner");
+    let checkout_dir = runner.join("work");
+    let temp = runner.join("temp");
+    // The runner's workspace exists, empty, before the first step.
+    for dir in [runner.join("home"), temp.clone(), checkout_dir.clone()] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let pull_json = format!(
+        "{{\"head\": {{\"sha\": \"{}\"}}, \"base\": {{\"ref\": \"{LINE_A}\"}}, \"body\": {}}}",
+        pull.head,
+        serde_json::to_string(&format!("{HOSTED_BODY}- Not tested: none\n")).unwrap()
+    );
+    let base_env = runner_env(&runner, server, &api_origin(pull_json), pull);
+    let mut outputs = std::collections::HashMap::new();
+    let mut masks = Vec::new();
+    let mut run = JobRun {
+        log: String::new(),
+        failed: None,
+        requests_by_step: Vec::new(),
+        runner: runner.clone(),
+        checkout: checkout_dir.clone(),
+    };
+    for step in steps {
+        let name = step["name"]
+            .as_str()
+            .or(step["uses"].as_str())
+            .unwrap()
+            .to_string();
+        if let Some(condition) = step["if"].as_str() {
+            assert_eq!(
+                condition, "github.event_name == 'pull_request_target'",
+                "{name}"
+            );
+        }
+        let mut env = base_env.clone();
+        for (key, value) in step["env"].as_mapping().into_iter().flatten() {
+            let key = key.as_str().unwrap();
+            let token = if key == "CODEFLOW_CI_TOKEN" {
+                ci_token.unwrap_or("")
+            } else {
+                FAKE_TOKEN
+            };
+            let value = substitute(value.as_str().unwrap(), |e| {
+                expression(e, pull, &temp, token, &outputs)
+            });
+            env.push((key.to_string(), value));
+        }
+        let before = requests.lock().unwrap().len();
+        let (ok, text) = if let Some(uses) = step["uses"].as_str() {
+            assert!(
+                uses.starts_with("actions/checkout@"),
+                "unmodelled action {uses}"
+            );
+            let reference = substitute(step["with"]["ref"].as_str().unwrap(), |e| {
+                expression(e, pull, &temp, FAKE_TOKEN, &outputs)
+            });
+            checkout(step, &checkout_dir, &env, &reference)
+        } else if name.starts_with("Install codeflow") {
+            (
+                true,
+                "not run: the test's codeflow is on PATH\n".to_string(),
+            )
+        } else {
+            let (ok, text, written) =
+                run_step(step["run"].as_str().unwrap(), &env, &checkout_dir, &runner);
+            if let Some(id) = step["id"].as_str() {
+                for (key, value) in written {
+                    outputs.insert(format!("steps.{id}.outputs.{key}"), value);
+                }
+            }
+            (ok, text)
+        };
+        let seen = requests.lock().unwrap()[before..].to_vec();
+        run.requests_by_step.push((name.clone(), seen));
+        run.log.push_str("== ");
+        run.log.push_str(&name);
+        run.log.push('\n');
+        run.log.push_str(&masked(&text, &mut masks));
+        if !ok {
+            run.failed = Some(name);
+            break;
+        }
+    }
+    run
+}
+
+/// The run's token, raw and as the `Authorization` value carries it.
+fn token_forms() -> [String; 2] {
+    let encoded = basic_for(FAKE_TOKEN);
+    [
+        FAKE_TOKEN.to_string(),
+        encoded.trim_start_matches("basic ").to_string(),
+    ]
+}
+
+fn carries_token(head: &str) -> bool {
+    head.lines()
+        .skip(1)
+        .any(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+}
+
+/// TSK-1252 AC-6, AC-11, AC-12 (journey): the scaffolded policy job, run
+/// step by step against a private-style origin, passes a valid pull request
+/// into an integration line with only the run's token: the checkout keeps
+/// no credential, the fetch steps and `codeflow ci` each send the token
+/// for themselves, and the token is in no log line, git config or file.
+/// Repository code that runs after the job's steps finds no checkout
+/// credential: the origin refuses it.
+#[test]
+#[cfg(unix)]
+fn the_scaffolded_policy_job_passes_a_private_remote_with_only_the_run_token() {
+    let fx = Fx::new(false);
+    let (pull, server, requests) = private_pull(&fx);
+    let run = run_policy_job(&fx, &server, &requests, &pull, Some(FAKE_TOKEN));
+    println!("{}", run.log);
+    assert_eq!(run.failed, None, "{}", run.log);
+    assert!(run.log.contains("codeflow ci: clean"), "{}", run.log);
+    for (step, heads) in &run.requests_by_step {
+        assert!(
+            heads.iter().all(|head| carries_token(head)),
+            "{step} asked the origin without the token"
+        );
+    }
+    for name in [
+        "actions/checkout",
+        "Fetch the pull request's base and head as data",
+        "codeflow ci (commit + branch + PR-body standards)",
+    ] {
+        let asked = run
+            .requests_by_step
+            .iter()
+            .any(|(step, heads)| step.starts_with(name) && !heads.is_empty());
+        assert!(asked, "{name} never asked the origin");
+    }
+    for form in token_forms() {
+        assert!(!run.log.contains(&form), "the token reached the job log");
+        let holding = files_holding(&run.runner, form.as_bytes());
+        assert!(holding.is_empty(), "the token reached files: {holding:?}");
+    }
+    // Repository code after the job: the checkout holds no credential, so
+    // the private origin refuses it and it never sends one.
+    let env = runner_env(&run.runner, &server, "http://127.0.0.1:9", &pull);
+    let config = step_command("git", &env, &run.checkout)
+        .args(["config", "--list", "--show-origin"])
+        .output()
+        .unwrap();
+    let config = output(&config).1;
+    assert!(
+        !config.to_ascii_lowercase().contains("extraheader"),
+        "{config}"
+    );
+    let before = requests.lock().unwrap().len();
+    let probe = step_command("git", &env, &run.checkout)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .args(["ls-remote", "origin"])
+        .output()
+        .unwrap();
+    assert!(
+        !probe.status.success(),
+        "repository code read the private origin"
+    );
+    let after = requests.lock().unwrap()[before..].to_vec();
+    assert!(!after.is_empty(), "the probe never asked the origin");
+    assert!(
+        !after.iter().any(|head| carries_token(head)),
+        "repository code sent a credential"
+    );
+}
+
+/// TSK-1252 AC-6, AC-2 (journey): the same job whose `codeflow ci` step
+/// receives no token fails at that step with the credential message naming
+/// the missing input, and that step sends the origin no credential.
+#[test]
+#[cfg(unix)]
+fn the_scaffolded_policy_job_refuses_when_codeflow_ci_gets_no_token() {
+    let fx = Fx::new(false);
+    let (pull, server, requests) = private_pull(&fx);
+    let run = run_policy_job(&fx, &server, &requests, &pull, None);
+    println!("{}", run.log);
+    let ci_step = "codeflow ci (commit + branch + PR-body standards)";
+    assert_eq!(run.failed.as_deref(), Some(ci_step), "{}", run.log);
+    for needle in [NEEDS_CREDENTIAL, "The missing input is CODEFLOW_CI_TOKEN"] {
+        assert!(run.log.contains(needle), "missing {needle:?}:\n{}", run.log);
+    }
+    let (_, heads) = run
+        .requests_by_step
+        .iter()
+        .find(|(step, _)| step == ci_step)
+        .unwrap();
+    assert!(!heads.is_empty(), "codeflow ci never asked the origin");
+    assert!(
+        !heads.iter().any(|head| carries_token(head)),
+        "codeflow ci sent a credential it was not given"
+    );
 }
