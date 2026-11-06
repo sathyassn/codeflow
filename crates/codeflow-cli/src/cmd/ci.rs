@@ -1071,6 +1071,7 @@ fn work_checks<'a>(
             branch,
             range_parts.as_ref(),
             release.as_ref(),
+            names.candidate,
             tagged,
             ran,
         )
