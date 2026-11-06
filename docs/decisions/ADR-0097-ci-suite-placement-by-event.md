@@ -103,8 +103,11 @@ maintainer page's table or the workflows differ; that script is not on
   The operator accepted fixing such a failure forward on the line until the
   candidate push task lands.
 - Today a line push cannot reuse a line pull request's verdict, since that
-  run skipped the suites the push needs, so every line push runs the full
-  suites (`scripts/ci-reuse.py`). TSK-1026 AC-7 and AC-12 plan per-job reuse
+  run ran the reduced Windows tier and a reduced-tier run is refused as
+  proof of the partitions, so every line push runs the full suites
+  (`scripts/ci-reuse.py:319-323`). The line pull request still runs the
+  Linux gate parts and the coverage shards today; `docs/releasing.md`,
+  "Where CI suites run", separates today from after TSK-1321. TSK-1026 AC-7 and AC-12 plan per-job reuse
   on line pushes for jobs the pull request run ran and passed, which would
   change this.
 - Moving a suite between events is one recorded operator decision, added to
@@ -168,4 +171,7 @@ success, so that text is removed. The Decision and the reading of the
 table now say that a not-selected suite never passes a required check, and
 that the `integration/**` ruleset requiring only the short-check names,
 with `codeflow gates` and `windows` required on `main`, depends on the
-operator's decision 3 in that result.
+operator's decision 3 in that result. After the PR 631 review of
+2026-11-06 (Grok, finding 1), the Consequences bullet on line-push reuse
+gives the real reason a line push runs the full suites: the pull request
+ran the reduced Windows tier, which `scripts/ci-reuse.py` refuses as proof.
