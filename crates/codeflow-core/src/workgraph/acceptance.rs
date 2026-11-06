@@ -457,6 +457,18 @@ mod authority {
                 .iter()
                 .any(|(line, judged)| line == name && *judged == tip)
         }
+
+        /// Every judged tip ([`Self::with_judged_tip`]) as its exact commit,
+        /// whatever line it was marked for.
+        pub(super) fn judged_commits(&self) -> Vec<Oid> {
+            let mut commits: Vec<Oid> = Vec::new();
+            for (_, tip) in &self.judged_tips {
+                if !commits.contains(tip) {
+                    commits.push(*tip);
+                }
+            }
+            commits
+        }
     }
 }
 pub use authority::{CriteriaBases, RunBases, StackingTips};
@@ -2370,6 +2382,11 @@ fn judge_reopened(
     judged.retain(|point| seen.insert(*point));
     tips.retain(|(_, point)| seen.insert(*point));
     let own: Vec<Oid> = own_history.iter().map(|(_, point)| *point).collect();
+    // The proved tips the run head contains are the range under judgment
+    // (TSK-433), so their history is no holder outside it either: a merge
+    // inside the line that rewrites the record is the range's own (TSK-416
+    // AC-20). Each is one exact commit; a ref is never hidden by its name.
+    let judged_tips = criteria.judged_commits();
     store.judge(
         &identity,
         &judged,
@@ -2379,6 +2396,7 @@ fn judge_reopened(
             at: Some(at),
             own: &own,
             replaced: None,
+            judged: &judged_tips,
         },
     )
 }
@@ -2440,6 +2458,7 @@ pub(super) fn judge_in_range(
             at: None,
             own: &own,
             replaced: scope.replaced,
+            judged: &[],
         },
     )
 }

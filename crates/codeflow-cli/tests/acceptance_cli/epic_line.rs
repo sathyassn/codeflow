@@ -700,3 +700,109 @@ fn a_joined_line_spelling_at_an_unproved_tip_stays_outside_evidence() {
         ],
     );
 }
+
+/// The refusal a completion outside the range gives (TSK-416 AC-20).
+const OUTSIDE_RANGE: &str = "records a completion of this task outside this range";
+
+/// TSK-416 AC-20, checkpoint 607's shape: a planning branch cut from
+/// [`LINE`] amends TSK-001's record before the task lands; the task's own
+/// pull request, reopened and re-completed, lands on the line; then the
+/// planning branch takes the line, so its merge writes a record neither
+/// parent holds that still shows the completion. Returns that merge, with
+/// the planning branch checked out at it and not yet landed.
+fn amended_by_a_planning_merge(root: &Path) -> String {
+    git(root, &["switch", "-q", "-c", "plan/amend-seats", LINE]);
+    let record = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    write(
+        root,
+        &record_path("TSK-001"),
+        &record.replace(
+            "# TSK-001: work\n",
+            "# TSK-001: work\n\n- Reassigned: the reviewer is another seat.\n",
+        ),
+    );
+    commit(root, "docs(records): reassign TSK-001's reviewer");
+    reopened_in_its_own_pull_request(root);
+    git(root, &["switch", "-q", "plan/amend-seats"]);
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore(merge): take the line",
+            LINE,
+        ],
+    );
+    let merge = head(root);
+    let merged = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    assert!(
+        merged.contains("Reassigned") && merged.contains("status: complete"),
+        "{merged}"
+    );
+    merge
+}
+
+/// TSK-416 AC-20: once the planning branch lands, its merge is in the range
+/// the line's judged tip holds, so the line into `main` binds the
+/// completion at its own commit. Before the fix the walk for a holder
+/// outside the range hid only the completion's commit, reached the merge
+/// through the line and the planning branch, and refused.
+#[test]
+fn tsk416_a_record_rewritten_by_an_in_range_merge_is_no_outside_completion() {
+    let dir = planned_line();
+    let root = dir.path();
+    amended_by_a_planning_merge(root);
+    let completion = git_out(root, &["rev-parse", "task/TSK-001-work"]);
+    land(root, "plan/amend-seats");
+    let result = ci_on(root, "main", LINE, "");
+    assert!(!result.1.contains(OUTSIDE_RANGE), "{}", result.1);
+    assert!(
+        !result.1.contains("work.acceptance_binding (block)"),
+        "{}",
+        result.1
+    );
+    assert_bound_at(&result, "TSK-001", &completion);
+}
+
+/// TSK-416 AC-20: the same merge on a ref that is no judged tip, the
+/// planning branch before it lands, is outside the range and still refuses.
+#[test]
+fn tsk416_the_same_merge_on_a_ref_that_is_no_judged_tip_still_refuses() {
+    let dir = planned_line();
+    let root = dir.path();
+    let merge = amended_by_a_planning_merge(root);
+    git(root, &["switch", "-q", LINE]);
+    assert_blocks(
+        &ci_on(root, "main", LINE, ""),
+        "the merge on the planning branch only",
+        &[
+            "work.acceptance_binding",
+            "TSK-001",
+            &format!("`plan/amend-seats` {OUTSIDE_RANGE} (commit {}", &merge[..9]),
+        ],
+    );
+}
+
+/// TSK-416 AC-20: a ref named like the line at another commit is no judged
+/// tip: judged tips bind by exact commit, never by name, so the merge it
+/// holds still refuses.
+#[test]
+fn tsk416_a_ref_named_like_the_line_at_another_commit_still_refuses() {
+    let dir = planned_line();
+    let root = dir.path();
+    let merge = amended_by_a_planning_merge(root);
+    git(root, &["switch", "-q", LINE]);
+    let named = format!("refs/heads/origin/{LINE}");
+    git(root, &["update-ref", &named, &merge]);
+    git(root, &["branch", "-q", "-D", "plan/amend-seats"]);
+    assert_blocks(
+        &ci_on(root, "main", LINE, ""),
+        "a ref named like the line",
+        &[
+            "work.acceptance_binding",
+            "TSK-001",
+            &format!("`origin/{LINE}` {OUTSIDE_RANGE} (commit {}", &merge[..9]),
+        ],
+    );
+}
