@@ -1,0 +1,11 @@
+id = "TSK-1372"
+uid = "677d307c-e3e2-49a3-a2f9-1eff09e11f16"
+kind = "TSK"
+title = "Projects can check commit author and committer identity, off by default"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-06T19:10:42Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
