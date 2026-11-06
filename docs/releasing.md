@@ -237,7 +237,7 @@ an operator decision; agents and Coordinators never rule on it.
 | Pull request into `main` | yes | reused from the line push on the same tree, else yes | reused from the line push on the same tree, else yes | reused from the line push on the same tree, else yes | yes, once | yes, once | yes |
 | Push to `main` | secret scan and security review | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes |
 | Daily run, `main` and each active line | no | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | no |
-| Weekly run, `main` | secret scan of the full history and dependency audit | yes, skipped on a Monday tip the daily run already tested | yes, skipped on a Monday tip the daily run already tested | yes, skipped on a Monday tip the daily run already tested | yes, skipped on a Monday tip the daily run already tested | yes, skipped on a Monday tip the daily run already tested | yes |
+| Weekly run, `main` | secret scan of the full history and dependency audit | yes | yes | yes | yes | yes | yes |
 
 - The short checks are the Linux build and lint checks, the policy check
   (`codeflow-policy.yml`, pull requests only) with its `commit standards` and `trusted: release impact` jobs, and the secret scan in
@@ -262,8 +262,6 @@ an operator decision; agents and Coordinators never rule on it.
   land, a batch lands on a line as one push, and that line push is the
   batch's hosted Linux proof. Windows proof comes from the pull request
   into `main` or the daily run, never from a line push.
-- Until the daily run has Linux suites, the Monday weekly run still runs
-  Linux, because no daily run has tested that tip.
 - A reuse that cannot be proven runs the suite. A batch of several pull
   requests pushes a tree no member tested, so only a one-member landing on
   an equal tree reuses that member's short checks.

@@ -39,8 +39,7 @@ coverage included, and no Windows job. A pull request into `main` runs the
 full Windows suites once and reuses Linux from the line push on the same
 tree. A push to `main` reuses when the tree matches. The daily run on `main`
 and each active line runs Linux and Windows, skipped when that tip was
-already tested. The weekly run keeps its job set and, like every event,
-skips a suite that tip already passed. The rule across events: a
+already tested, and the weekly run is unchanged. The rule across events: a
 tree that has passed a suite does not run it again, on a line or on `main`.
 A reuse that cannot be proven runs the suite. A suite that is not selected for
 an event never counts as a pass of a required check: GitHub treats a
@@ -68,7 +67,7 @@ Placement as decided on 2026-11-05 and amended on 2026-11-06:
 | Pull request into `main` | yes | reused from the line push on the same tree, else yes | reused from the line push on the same tree, else yes | reused from the line push on the same tree, else yes | yes, once | yes, once | yes |
 | Push to `main` | secret scan and security review | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes | reused when the tree matches, else yes |
 | Daily run, `main` and each active line | no | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | yes, skipped when that tip was already tested | no |
-| Weekly run, `main` | secret scan of the full history and dependency audit | yes, skipped on a Monday tip the daily run already tested | yes, skipped on a Monday tip the daily run already tested | yes, skipped on a Monday tip the daily run already tested | yes, skipped on a Monday tip the daily run already tested | yes, skipped on a Monday tip the daily run already tested | yes |
+| Weekly run, `main` | secret scan of the full history and dependency audit | yes | yes | yes | yes | yes | yes |
 
 How to read the table:
 
@@ -109,8 +108,10 @@ maintainer page's table or the workflows differ; that script is not on
   pull request into `main`, so Windows proof of a change comes from one of
   those two, never from a line push. The operator accepted fixing such a
   failure forward on the line until the candidate push task lands.
-- Until the daily run has Linux suites, the Monday weekly run still runs
-  Linux, because no daily run has tested that tip.
+- The weekly run is unchanged, so a Monday tip the daily run already tested
+  runs those suites again. That sits against the rule across events. Changing
+  it is a change to where a suite runs, so it waits for the operator's
+  decision; TSK-1026 AC-17 holds the proposal.
 - A batch of several pull requests pushes a tree no member tested, so its
   line push reuses nothing from them; a one-member landing on an equal tree
   reuses that member's short checks.
