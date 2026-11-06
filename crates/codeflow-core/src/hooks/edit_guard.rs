@@ -734,12 +734,14 @@ fn non_ascii_below(path: &Path, dir: &Path) -> bool {
             .any(|part| !part.as_os_str().as_encoded_bytes().is_ascii())
 }
 
-/// `path` is a checkout's `.github/workflows` or `.github/actions`. Its code
-/// runs with the workflow's token, and a spelling in another case names the
-/// same directory wherever the checkout's disk ignores case, so it is matched
-/// the same on every disk (TSK-1349 AC-7).
-fn workflow_directory(path: &Path) -> bool {
-    path.ends_with(".github/workflows") || path.ends_with(".github/actions")
+/// `base` is a checkout's dot directory, such as `.github` or `.codeflow`, so
+/// the entry is one of the action table's. A spelling in another case names
+/// the same file wherever a checkout's disk ignores case, and a commit carries
+/// it to such a disk, so it is matched the same on every disk (TSK-1349 AC-7).
+/// A registered checkout root is not one: its name is the operator's.
+fn dot_directory(base: &Path) -> bool {
+    base.file_name()
+        .is_some_and(|name| name.as_encoded_bytes().starts_with(b"."))
 }
 
 /// `a` and `b` name one path, components compared as [`under_ignoring_case`]
@@ -974,7 +976,7 @@ struct ProtectedPath {
     /// is judged protected ([`non_ascii_below`]).
     git_owned: bool,
     /// Compared without ASCII case ([`under_ignoring_case`]): a git-owned
-    /// path, or a workflow directory ([`workflow_directory`]).
+    /// path, or one in a checkout's dot directory ([`dot_directory`]).
     fold_case: bool,
     base: PathBuf,
     resolved_base: [std::cell::OnceCell<Result<PathBuf, String>>; 2],
@@ -1165,7 +1167,7 @@ fn protected_at(root: &Path) -> Result<Option<Protected>, String> {
                 path: both(path),
                 directory: *directory,
                 git_owned: path.starts_with(repo.commondir()),
-                fold_case: path.starts_with(repo.commondir()) || workflow_directory(path),
+                fold_case: path.starts_with(repo.commondir()) || dot_directory(base),
                 base: base.clone(),
                 resolved_base: Default::default(),
             })

@@ -261,6 +261,12 @@ fn the_guards_fold_letter_case_without_the_disk() {
             "echo x > .github/Workflows/new.yml",
             "echo x > .GitHub/Actions/build/action.yml",
             "touch .GitHub/Workflows/new.yml",
+            "echo x > .CodeFlow/policy.json",
+            "echo x > .CODEFLOW/git-hooks/pre-commit",
+            "echo x > .Claude/settings.json",
+            "echo x > .claude/Settings.json",
+            "echo x > .Codex/hooks.json",
+            "echo x > .Grok/sandbox.toml",
         ] {
             let out = hook(name, &root, command);
             if out.status.code() != Some(2)
@@ -272,6 +278,8 @@ fn the_guards_fold_letter_case_without_the_disk() {
         for command in [
             "echo x > .GitHub/notes.md",
             "echo x > .GitHub/Workflows-old/new.yml",
+            "echo x > .Claude/notes.md",
+            "echo x > .CodeFlow/notes.md",
         ] {
             let out = hook(name, &root, command);
             if out.status.code() != Some(0) {
@@ -283,6 +291,7 @@ fn the_guards_fold_letter_case_without_the_disk() {
     for (path, code) in [
         (".GitHub/Workflows/new.yml", 2),
         (".GitHub/Actions/build/action.yml", 2),
+        (".Claude/settings.json", 2),
         (".GitHub/notes.md", 0),
     ] {
         let payload = serde_json::json!({
