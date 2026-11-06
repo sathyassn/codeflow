@@ -566,23 +566,17 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
 `block`.
 
 - The range is bound to what is pushed.
-- Cheap checks come first, and the first refusal stops the set. The hook's
-  own ref rules run before any `codeflow ci`. Each `codeflow ci` stops after
-  its commit, added-line, conflict-marker, workflow and path checks when one
-  of them blocks, and skips the record, work and pull request checks. It
-  stops again after the record and branch-name checks when one of those
-  blocks, and skips the work and pull request checks. A refusal skips the
-  later branches' checks and the release preflight; the id sync still runs,
-  so a pending reservation is published. The printed rerun runs every check.
-  A push that passes runs every check, as before.
-- The set is timed. Over `git.push_budget_seconds` (default 60) the hook
-  names the slowest step and, for a `codeflow ci` step, its three slowest
-  checks. The budget only reports; it never refuses a push. `codeflow ci
-  --timings` prints the time of every check.
 - An existing protected or `integration/` branch starts at its advertised tip.
 - A branch with a declared target starts at the merge base with that target's
   advertised tip, read from the task record.
 - The hook names what it left to CI, such as an unresolved range.
+
+| Push set | What happens |
+|---|---|
+| Order | The hook's own ref rules run before any `codeflow ci`. Each `codeflow ci` stops after its commit, added-line, conflict-marker, workflow and path checks, or after its record and branch-name checks, when one of them blocks, and names the checks it did not run. |
+| After a refusal | The later branches' checks and the release preflight do not run. The id sync still runs, so a pending reservation is published. The printed rerun runs every check. |
+| A passing push | Every check runs, as before. |
+| Time | Over `git.push_budget_seconds` (default 60) the hook names the slowest step and, for a `codeflow ci` step, its three slowest checks. The budget only reports; it never refuses a push. `codeflow ci --timings` prints the time of every check. |
 
 `codeflow integrate` is the local landing path for protected branches. It
 rebases the branch onto the target by default, runs every full-gate target, then
