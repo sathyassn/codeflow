@@ -1385,7 +1385,12 @@ fn landed_record_problem(
 ) -> Option<String> {
     let check = || -> Result<(), String> {
         let planned = blob_at(repo, merge, &task.path)?
-            .ok_or_else(|| format!("{} is missing at completion {merge}", task.path))?;
+            .ok_or_else(|| {
+                format!(
+                    "{} is missing at completion: neither the reviewed commit {reviewed} nor the landing merge has it, so the line never planned it",
+                    task.path
+                )
+            })?;
         let parent = first_parent(repo, merge)?.ok_or("the landing merge has no first parent")?;
         if blob_at(repo, parent, &task.path)?.as_deref() != Some(planned.as_str()) {
             return Err(format!(
@@ -1399,7 +1404,10 @@ fn landed_record_problem(
             Landing::Worktree { .. } => task.content.clone(),
         };
         if reviewed_part(&planned) != reviewed_part(&completed) {
-            return Err("the record changed outside its status and Closeout after the landing merge; review the result again".into());
+            // The caller adds the one instruction to review what landed.
+            return Err(
+                "the record changed outside its status and Closeout after the landing merge".into(),
+            );
         }
         // The record may be absent at both ends. Do not let that skip the
         // comparison of the reviewed work with the second parent that landed.
@@ -6483,6 +6491,7 @@ mod tests {
             problem.contains("outside its status and Closeout"),
             "{problem}"
         );
+        assert_eq!(problem.matches("review the result").count(), 1, "{problem}");
     }
 
     #[test]
@@ -6501,7 +6510,20 @@ mod tests {
 
     #[test]
     fn line_record_refuses_a_record_missing_at_the_landing_merge() {
-        line_record_refusal(LineRecordCase::MissingAtMerge, "is missing at completion");
+        let f = AdoptionFixture::line_record(LineRecordCase::MissingAtMerge);
+        f.complete();
+        let problem = f
+            .line_record_source(Transport::TaskLanding, true, false)
+            .unwrap_err();
+        assert!(problem.contains("is missing at completion"), "{problem}");
+        assert!(
+            problem.contains(&format!("the reviewed commit {}", f.reviewed)),
+            "{problem}"
+        );
+        assert!(
+            !problem.contains(&format!("completion {}", f.merge)),
+            "{problem}"
+        );
     }
 
     #[test]
