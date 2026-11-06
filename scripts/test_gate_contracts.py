@@ -16,6 +16,109 @@ _SPEC.loader.exec_module(PARITY)
 def read(path):
     return (ROOT / path).read_text()
 
+
+def github_expression(text, context):
+    """Evaluate a GitHub Actions expression in the small subset the workflow
+    concurrency block uses, with GitHub's rules for that subset: `||` and `&&`
+    return an operand; `==` and `!=` compare two strings without regard to
+    case and convert other mixed types to numbers; `startsWith` ignores case;
+    `format` fills `{n}` placeholders. `context` maps the `github.*` names the
+    expression may read. Any other token, name or function is refused, so a
+    widened expression fails the test instead of being guessed at. This is a
+    model of GitHub's documented rules, not GitHub itself."""
+    tokens = re.findall(r"\s*(\|\||&&|==|!=|\(|\)|,|'(?:[^']|'')*'|[0-9]+|[A-Za-z_][A-Za-z0-9_.]*|\S)", text)
+    position = 0
+
+    def peek():
+        return tokens[position] if position < len(tokens) else None
+
+    def take(expected=None):
+        nonlocal position
+        token = peek()
+        if token is None or (expected is not None and token != expected):
+            raise AssertionError(f'expected {expected or "a token"} at {token!r} in: {text}')
+        position += 1
+        return token
+
+    def truthy(value):
+        return value not in (False, 0, '', None)
+
+    def number(value):
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            return float(value.strip()) if value.strip() else 0.0
+        except ValueError:
+            return float('nan')
+
+    def equal(left, right):
+        if isinstance(left, str) and isinstance(right, str):
+            return left.casefold() == right.casefold()
+        return number(left) == number(right)
+
+    def call(name, args):
+        if name == 'startsWith' and len(args) == 2:
+            return str(args[0]).casefold().startswith(str(args[1]).casefold())
+        if name == 'format' and args:
+            template = args[0]
+            if re.search(r'[{}]', re.sub(r'\{[0-9]+\}', '', template)):
+                raise AssertionError(f'unsupported format template {template!r} in: {text}')
+            return re.sub(r'\{([0-9]+)\}', lambda found: str(args[1 + int(found.group(1))]), template)
+        raise AssertionError(f'function {name}({len(args)} arguments) is outside the modelled subset: {text}')
+
+    def operand():
+        token = take()
+        if token == '(':
+            value = either()
+            take(')')
+            return value
+        if token.startswith("'"):
+            return token[1:-1].replace("''", "'")
+        if token.isdigit():
+            return int(token)
+        if token in context:
+            return context[token]
+        if re.fullmatch(r'[A-Za-z]+', token) and peek() == '(':
+            take('(')
+            args = [either()]
+            while peek() == ',':
+                take(',')
+                args.append(either())
+            take(')')
+            return call(token, args)
+        raise AssertionError(f'{token!r} is outside the modelled subset: {text}')
+
+    def comparison():
+        left = operand()
+        if peek() in ('==', '!='):
+            operator = take()
+            right = operand()
+            return equal(left, right) if operator == '==' else not equal(left, right)
+        return left
+
+    def both():
+        value = comparison()
+        while peek() == '&&':
+            take()
+            right = comparison()
+            value = right if truthy(value) else value
+        return value
+
+    def either():
+        value = both()
+        while peek() == '||':
+            take()
+            right = both()
+            value = value if truthy(value) else right
+        return value
+
+    result = either()
+    if peek() is not None:
+        raise AssertionError(f'unexpected {peek()!r} in: {text}')
+    return result
+
 class GateContracts(unittest.TestCase):
     def test_publication_requires_the_five_existing_floors(self):
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
@@ -261,6 +364,141 @@ class GateContracts(unittest.TestCase):
         self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
         self.assertIn("github.event_name == 'pull_request' && github.ref || github.run_id", workflow)
         self.assertIn('cargo build --release --locked -p codeflow-cli', workflow)
+
+    # TSK-1313: a newer first-attempt push to an integration line cancels the
+    # older push run on that line, because no check requires a superseded line
+    # commit's verdict. Pull request runs, reruns included, keep one group per
+    # ref and cancel. Main and master pushes, schedule and dispatch runs are
+    # never cancelled in progress and cancel nothing. The event is in the
+    # group, so a dispatch on a line shares no group with that line's pushes.
+    # A push rerun (run_attempt above 1) gets a group of its own run id and
+    # attempt and cancels nothing. The exact text is pinned so a later edit
+    # cannot widen what cancels, and each case is evaluated from the
+    # workflow's own text with GitHub's rules for the subset it uses.
+    CI_CONCURRENCY = (
+        "\nconcurrency:\n"
+        "  group: ${{ (github.event_name != 'push' || github.run_attempt == 1) && "
+        "format('{0}-{1}-{2}', github.workflow, github.event_name, github.ref) || "
+        "format('{0}-push-rerun-{1}-{2}', github.workflow, github.run_id, github.run_attempt) }}\n"
+        "  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && "
+        "github.run_attempt == 1 && startsWith(github.ref, 'refs/heads/integration/')) }}\n\n"
+    )
+    LINE = 'refs/heads/integration/EPC-001-a-line'
+
+    def ci_concurrency(self, event, ref, run_id='42', run_attempt='1'):
+        """The group and the cancel value for one run, from the workflow's own
+        text. `run_attempt` is a string, as in GitHub's `github` context."""
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        self.assertEqual(len(re.findall(r'^\s*concurrency:', workflow, re.M)), 1,
+                         'one top-level concurrency block and no job-level one')
+        self.assertIn(self.CI_CONCURRENCY, workflow)
+        self.assertLess(workflow.index(self.CI_CONCURRENCY), workflow.index('\njobs:\n'))
+        name = re.search(r'^name: (\S+)$', workflow, re.M).group(1)
+        context = {'github.workflow': name, 'github.event_name': event, 'github.ref': ref,
+                   'github.run_id': run_id, 'github.run_attempt': run_attempt}
+        group = re.search(r'^  group: \$\{\{ (.+) \}\}$', workflow, re.M).group(1)
+        cancel = re.search(r'^  cancel-in-progress: \$\{\{ (.+) \}\}$', workflow, re.M).group(1)
+        return github_expression(group, context), github_expression(cancel, context)
+
+    def test_the_expression_model_follows_githubs_rules_for_its_subset(self):
+        context = {'github.ref': 'refs/heads/Integration/x', 'github.event_name': 'push',
+                   'github.run_attempt': '1', 'github.workflow': 'codeflow-ci'}
+        evaluate = github_expression
+        # Strings compare and startsWith matches without regard to case.
+        self.assertIs(evaluate("startsWith(github.ref, 'refs/heads/integration/')", context), True)
+        self.assertIs(evaluate("github.event_name == 'PUSH'", context), True)
+        self.assertIs(evaluate("github.event_name != 'Push'", context), False)
+        # A string and a number compare as numbers.
+        self.assertIs(evaluate('github.run_attempt == 1', context), True)
+        self.assertIs(evaluate('github.run_attempt == 1', {**context, 'github.run_attempt': '2'}), False)
+        # && and || return an operand.
+        self.assertEqual(evaluate("github.event_name == 'push' && 'b' || 'c'", context), 'b')
+        self.assertEqual(evaluate("github.event_name == 'schedule' && 'b' || 'c'", context), 'c')
+        self.assertEqual(evaluate("format('{0}-{1}', github.workflow, github.run_attempt)", context), 'codeflow-ci-1')
+        # Anything outside the subset is refused, never guessed.
+        for outside in ("contains(github.ref, 'x')", 'github.run_attempt > 1', 'github.run_attempt == 1 + 1',
+                        "github.head_ref == 'x'", "!startsWith(github.ref, 'x')", "format('{0:>3}', 'x')",
+                        "github.ref == 'x' 'y'"):
+            with self.subTest(outside=outside), self.assertRaises(AssertionError):
+                evaluate(outside, context)
+
+    def test_ci_cancels_only_pull_request_runs_and_superseded_line_pushes(self):
+        cases = (
+            ('push', self.LINE, True),
+            ('push', 'refs/heads/integration/EPC-002-another-line', True),
+            ('pull_request', 'refs/pull/7/merge', True),
+            ('push', 'refs/heads/main', False),
+            ('push', 'refs/heads/master', False),
+            ('push', 'refs/heads/integration', False),
+            ('push', 'refs/heads/integration-not-a-line', False),
+            ('schedule', 'refs/heads/main', False),
+            ('workflow_dispatch', 'refs/heads/main', False),
+            ('workflow_dispatch', self.LINE, False),
+        )
+        groups = {}
+        for event, ref, cancels in cases:
+            with self.subTest(event=event, ref=ref):
+                group, cancel = self.ci_concurrency(event, ref)
+                self.assertIs(cancel, cancels)
+                self.assertEqual(group, f'codeflow-ci-{event}-{ref}')
+                # GitHub compares groups without regard to case; no two of
+                # these cases can replace each other's runs.
+                self.assertNotIn(group.casefold(), groups)
+                groups[group.casefold()] = (event, ref)
+        # Two first-attempt pushes to one line share its group, and the newer cancels.
+        older, newer = self.ci_concurrency('push', self.LINE, '1'), self.ci_concurrency('push', self.LINE, '2')
+        self.assertEqual(older[0], newer[0])
+        self.assertIs(newer[1], True)
+
+    def test_a_push_rerun_runs_alone_and_cancels_nothing(self):
+        for ref in (self.LINE, 'refs/heads/main'):
+            newest = self.ci_concurrency('push', ref, '9', '1')
+            for attempt in ('2', '3'):
+                with self.subTest(ref=ref, attempt=attempt):
+                    group, cancel = self.ci_concurrency('push', ref, '5', attempt)
+                    self.assertIs(cancel, False)
+                    self.assertEqual(group, f'codeflow-ci-push-rerun-5-{attempt}')
+                    self.assertNotEqual(group.casefold(), newest[0].casefold(),
+                                        'a rerun in the line group could cancel or replace the newest run')
+                    self.assertNotEqual(group, self.ci_concurrency('push', ref, '6', attempt)[0])
+        # A pull request rerun keeps the pull request rule.
+        self.assertEqual(self.ci_concurrency('pull_request', 'refs/pull/7/merge', '5', '2'),
+                         ('codeflow-ci-pull_request-refs/pull/7/merge', True))
+        # A dispatch rerun is not a push rerun: its group and rule do not change.
+        self.assertEqual(self.ci_concurrency('workflow_dispatch', self.LINE, '5', '2'),
+                         (f'codeflow-ci-workflow_dispatch-{self.LINE}', False))
+
+    def test_integration_line_names_never_differ_only_in_case(self):
+        # GitHub compares group names without regard to case, and no function
+        # available to a top-level concurrency group can keep case, so two
+        # lines whose names differ only in case would cancel each other's
+        # runs. `codeflow epic new --integration` names a line
+        # `integration/EPC-NNN-<lower-case slug>`, so two lines it makes
+        # never form such a pair. This checks the lines the records name.
+        lower = 'refs/heads/integration/epc-001-a-line'
+        self.assertNotEqual(self.ci_concurrency('push', lower)[0], self.ci_concurrency('push', self.LINE)[0])
+        self.assertEqual(self.ci_concurrency('push', lower)[0].casefold(),
+                         self.ci_concurrency('push', self.LINE)[0].casefold(), 'GitHub treats them as one group')
+        lines = set()
+        for path in sorted((ROOT / 'project-management').rglob('*.md')):
+            lines.update(re.findall(r'(?m)^(?:integration_target|parent_line):\s*"?(integration/[^"\s#]+)',
+                                    path.read_text()))
+        self.assertIn('integration/EPC-022-the-3-2-0-milestone-fixes', lines, 'the scan must find the records')
+        by_folded = {}
+        for line in sorted(lines):
+            by_folded.setdefault(line.casefold(), []).append(line)
+        self.assertEqual([names for names in by_folded.values() if len(names) > 1], [],
+                         'integration lines that differ only in case share a concurrency group')
+
+    def test_the_ci_concurrency_comment_states_the_rule_and_its_limits(self):
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        block = workflow.split('\nconcurrency:\n', 1)[0].rsplit('\n\n', 1)[1]
+        comment = ' '.join(line.removeprefix('#').strip() for line in block.splitlines())
+        for needle in ('newer push to an integration line', 'push rerun', 'run_attempt',
+                       'does not promise that runs start in push order', "Recovery: rerun the newest tip's run",
+                       'without regard to case', 'must not form such a pair', 'never a reuse source'):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, comment)
 
     def test_every_workflow_action_is_pinned_to_a_commit(self):
         # Issue 148: a tag can be moved, so a workflow with repository write
