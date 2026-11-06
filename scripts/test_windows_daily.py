@@ -1110,7 +1110,7 @@ class SkipTests(unittest.TestCase):
         out, summary, request = self.discover([recorded_run(head_branch="main", created_at=stamp)])
         self.assertIn("runs=false", out)
         self.assertIn('matrix={"include":[]}', out)
-        self.assertIn("Skipped: a passing run within 7 days", summary)
+        self.assertIn("Skipped: a passing daily or full run within 7 days", summary)
         self.assertEqual(request["include"], [])
         self.assertEqual(request["skipped"], [{"ref": daily.MAIN, "sha": SHA, "run_id": 7}])
         self.assertEqual(request["max_age_days"], 7)
@@ -1277,13 +1277,14 @@ class FullRunCreditTests(unittest.TestCase):
         def api(path):
             return {"workflow_runs": [dispatcher]} if "windows-daily.yml/runs" in path else answer(path)
 
-        request = {"include": [], "skipped": [{**self.ROW, "run_id": 9, "full_run": True}], "left_out": [],
+        request = {"include": [], "skipped": [{"ref": daily.MAIN, "sha": SHA, "run_id": 9, "full_run": True}],
+                   "left_out": [],
                    "max_age_days": 7, "runner_sha256": RUNNER_HASH, "full_sha256": self.MAIN_FULL}
         return daily.read_evidence(api, lambda run_id: request, lambda sha, path: "the full workflow\n",
                                    datetime(2026, 11, 6, 12, tzinfo=timezone.utc))
 
     def test_the_verdict_checks_a_full_run_again(self):
-        self.assertEqual(self.verdict([self.full()])["result"], "success")
+        self.assertEqual(self.verdict([self.full(head_branch="main", event="push")])["result"], "success")
         result = self.verdict([])
         self.assertEqual(result["result"], "failure")
         self.assertIn("no longer stands", daily.verdict_report(result))
