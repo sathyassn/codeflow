@@ -275,8 +275,9 @@ The workflows apply the table as follows:
 - The same switch keeps every Windows build, test and journey job off line
   pull requests: the Windows build, the partitions, the Windows checks, the
   release journey and the journey job skip.
-- The daily run runs the Linux build, lint, tests and coverage as well as
-  every Windows job.
+- The daily run is Windows only today (`windows-daily.yml:1-9`). The Linux
+  build, lint, tests and coverage join it when TSK-1321 (PR 620) lands
+  (CI/CD coherence review of 2026-11-06, Grok's finding 8).
 - The daily workflows (`windows-daily.yml`) are already on `main`. They
   start from it and run `main` and each active integration line at that
   line's own ref.

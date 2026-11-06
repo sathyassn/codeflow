@@ -87,9 +87,10 @@ How to read the table:
   current events, which the daily run is not one of; moving them is an
   operator decision.
 
-TSK-1321 brings the workflows to this table, and
-`scripts/test_ci_placement.py` fails when the table, the maintainer page's
-table or the workflows differ. The daily workflows start from `main`
+TSK-1321 brings the workflows to this table. Its AC-12 adds a parity
+check, `scripts/test_ci_placement.py`, that fails when the table, the
+maintainer page's table or the workflows differ; that script is not on
+`main` or the EPC-022 line until TSK-1321 (PR 620) lands. The daily workflows start from `main`
 (`windows-daily.yml`, the `sources` job), and PR 597 (TSK-1314, merge
 `df718e015`) moved each line's daily run under that line's own ref.
 
