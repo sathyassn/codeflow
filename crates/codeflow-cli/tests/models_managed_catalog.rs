@@ -446,7 +446,7 @@ fn catalog_data_alone_moves_resolution_fallback_and_open_duties() {
 }
 
 #[test]
-fn bucket_exclusion_moves_the_fallback_and_no_codex_leaves_review_open() {
+fn bucket_exclusion_moves_the_fallback_and_no_codex_moves_review_to_grok() {
     let catalog = managed();
     let codex = seat_of_lineage(&catalog, "codex");
     // A usage-bucket exclusion moves bounded execution to its next alternative.
@@ -481,8 +481,8 @@ fn bucket_exclusion_moves_the_fallback_and_no_codex_leaves_review_open() {
         .unwrap();
     assert_eq!(after["participants"][0]["line"], fallback);
 
-    // With no eligible Codex version, the Claude-authored unit review stays
-    // open; the Claude seat never substitutes for the opposite lineage.
+    // With no eligible Codex version, the Claude-authored unit review falls to
+    // the next other-family seat; the Claude seat never substitutes for it.
     let codex_versions: Vec<String> = catalog["lines"]
         .as_array()
         .unwrap()
@@ -496,12 +496,244 @@ fn bucket_exclusion_moves_the_fallback_and_no_codex_leaves_review_open() {
         "model-catalog.local.json",
         &json!({"schema_version": 1, "additions": [], "exclusions": codex_versions}).to_string(),
     );
-    let open = repo.resolved("unit-review", "claude-code", "claude", &[], false);
-    assert!(
-        open["participants"].as_array().unwrap().is_empty(),
-        "{open}"
+    let grok = seat_of_lineage(&catalog, "grok");
+    let review = repo.resolved("unit-review", "claude-code", "claude", &[], true);
+    assert_eq!(review["participants"][0]["seat"], grok["id"], "{review}");
+    assert_eq!(review["participants"][0]["reduced_assurance"], false);
+}
+
+/// Every version of every line whose family is not `lineage`.
+fn versions_outside(catalog: &Value, lineage: &str) -> Vec<String> {
+    catalog["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| family(catalog, l["family"].as_str().unwrap())["lineage"] != lineage)
+        .flat_map(|l| l["versions"].as_array().unwrap())
+        .map(|v| v["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// The usage-bucket exclusion for one lineage's family.
+fn bucket_of(catalog: &Value, lineage: &str) -> String {
+    let seat = seat_of_lineage(catalog, lineage);
+    let bucket = family(catalog, seat["family"].as_str().unwrap())["usage_bucket"]
+        .as_str()
+        .unwrap();
+    format!("bucket:{bucket}")
+}
+
+/// The cross-family review participants of the managed catalog: plan
+/// challenge, unit review and body review.
+const CROSS_FAMILY_REVIEWS: [(&str, &str); 3] = [
+    ("independent-plan", "engineering-primary"),
+    ("unit-review", "independent"),
+    ("body-review", "engineering-primary"),
+];
+
+fn participant<'a>(result: &'a Value, id: &str) -> &'a Value {
+    result["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["participant"] == id)
+        .unwrap_or_else(|| panic!("no participant {id}: {result}"))
+}
+
+#[test]
+fn cross_family_reviews_list_codex_then_grok() {
+    let catalog = managed();
+    let codex = seat_of_lineage(&catalog, "codex");
+    let grok = seat_of_lineage(&catalog, "grok");
+    let repo = Repo::new(&catalog);
+    for (duty, id) in CROSS_FAMILY_REVIEWS {
+        // The catalog order: Codex's seat before Grok's.
+        let entry = catalog["duties"][duty]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["participant"] == id || p["id"] == id)
+            .unwrap();
+        let seats: Vec<&str> = entry["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|a| a["target"]["id"].as_str())
+            .collect();
+        let at = |seat: &Value| seats.iter().position(|s| *s == seat["id"]).unwrap();
+        assert!(at(&codex) < at(&grok), "{duty}: {seats:?}");
+
+        // Resolve prints that order: Codex chosen, Grok listed after every
+        // Codex line.
+        let result = repo.resolved(duty, "claude-code", "claude", &[], true);
+        let chosen = participant(&result, id);
+        assert_eq!(chosen["seat"], codex["id"], "{duty}: {result}");
+        let remaining: Vec<&str> = chosen["remaining_alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["seat"].as_str().unwrap())
+            .collect();
+        assert_eq!(remaining.last(), grok["id"].as_str().as_ref(), "{duty}");
+        let first_grok = remaining
+            .iter()
+            .position(|s| Some(*s) == grok["id"].as_str());
+        assert!(
+            remaining[first_grok.unwrap()..]
+                .iter()
+                .all(|s| Some(*s) == grok["id"].as_str()),
+            "{duty}: {remaining:?}"
+        );
+    }
+}
+
+#[test]
+fn an_absent_codex_moves_each_cross_family_review_to_grok() {
+    let catalog = managed();
+    let grok = seat_of_lineage(&catalog, "grok");
+    let repo = Repo::new(&catalog);
+    let no_codex = bucket_of(&catalog, "codex");
+    for (duty, id) in CROSS_FAMILY_REVIEWS {
+        let result = repo.resolved(
+            duty,
+            "claude-code",
+            "claude",
+            &["--exclude", &no_codex],
+            true,
+        );
+        let chosen = participant(&result, id);
+        assert_eq!(chosen["seat"], grok["id"], "{duty}: {result}");
+        // Another family's seat is a full cross-family review.
+        assert_eq!(chosen["reduced_assurance"], false, "{duty}");
+        assert!(
+            !chosen["limitations"]
+                .to_string()
+                .contains("reduced assurance"),
+            "{duty}: {chosen}"
+        );
+    }
+    // A triggered extra-family review that Grok already gives is not asked twice.
+    let trigger = catalog["named_policies"]["extra-family-review"][0]
+        .as_str()
+        .unwrap();
+    let result = repo.resolved(
+        "unit-review",
+        "claude-code",
+        "claude",
+        &["--exclude", &no_codex, "--trigger", trigger],
+        true,
     );
-    assert_eq!(open["open"][0]["participant"], "independent");
+    let seats: Vec<&Value> = result["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| &p["seat"])
+        .collect();
+    assert_eq!(seats, [&grok["id"]], "{result}");
+}
+
+#[test]
+fn no_other_family_leaves_each_cross_family_review_open_with_reduced_assurance() {
+    let catalog = managed();
+    let repo = Repo::new(&catalog);
+    write(
+        &repo.home(),
+        "model-catalog.local.json",
+        &json!({
+            "schema_version": 1,
+            "additions": [],
+            "exclusions": versions_outside(&catalog, "claude"),
+        })
+        .to_string(),
+    );
+    for (duty, id) in CROSS_FAMILY_REVIEWS {
+        let result = repo.resolved(duty, "claude-code", "claude", &[], false);
+        let gap = result["open"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["participant"] == id)
+            .unwrap_or_else(|| panic!("{duty}: {result}"));
+        assert_eq!(gap["label"], "required");
+        assert!(
+            gap["reasons"]
+                .to_string()
+                .contains("reduced assurance: no other-family seat is available"),
+            "{duty}: {gap}"
+        );
+        // The author's own family never fills the cross-family seat.
+        assert!(
+            result["participants"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|p| p["participant"] != id),
+            "{duty}: {result}"
+        );
+    }
+}
+
+/// ADR-0075 D3: a review seat is not a builder. No build or design duty
+/// names the Grok seat or a Grok line, so Grok never builds or designs.
+#[test]
+fn grok_fills_no_build_or_design_duty() {
+    let catalog = managed();
+    let grok = seat_of_lineage(&catalog, "grok");
+    let grok_lines: Vec<&str> = catalog["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["family"] == grok["family"])
+        .map(|l| l["id"].as_str().unwrap())
+        .collect();
+    for duty in [
+        "design",
+        "engineering-implementation",
+        "bounded-execution",
+        "light-execution",
+    ] {
+        let entry = &catalog["duties"][duty];
+        assert!(entry.is_object(), "managed catalog lost duty {duty}");
+        let participants = entry["required"].as_array().unwrap().iter().chain(
+            entry["triggered"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| &t["participant"]),
+        );
+        for participant in participants {
+            for alternative in participant["alternatives"].as_array().unwrap() {
+                let target = alternative["target"]["id"].as_str().unwrap_or_default();
+                assert!(
+                    target != grok["id"] && !grok_lines.contains(&target),
+                    "{duty} names Grok target {target}"
+                );
+            }
+        }
+        // Even with every other family excluded, resolve never picks Grok.
+        let repo = Repo::new(&catalog);
+        let result = repo.run(
+            duty,
+            "claude-code",
+            "none",
+            &[
+                "--exclude",
+                &bucket_of(&catalog, "claude"),
+                "--exclude",
+                &bucket_of(&catalog, "codex"),
+            ],
+        );
+        let value: Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert!(
+            value["participants"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|p| p["seat"] != grok["id"]
+                    && !grok_lines.contains(&p["line"].as_str().unwrap_or_default())),
+            "{duty}: {value}"
+        );
+    }
 }
 
 #[test]

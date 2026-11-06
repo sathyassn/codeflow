@@ -402,6 +402,14 @@
               },
               "harness": null,
               "effort": "high"
+            },
+            {
+              "target": {
+                "kind": "seat",
+                "id": "grok-primary"
+              },
+              "harness": null,
+              "effort": "high"
             }
           ],
           "relation": "any",
@@ -638,6 +646,14 @@
               },
               "harness": null,
               "effort": "high"
+            },
+            {
+              "target": {
+                "kind": "seat",
+                "id": "grok-primary"
+              },
+              "harness": null,
+              "effort": "high"
             }
           ],
           "relation": "opposite-author",
@@ -675,6 +691,14 @@
               "target": {
                 "kind": "seat",
                 "id": "codex-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            },
+            {
+              "target": {
+                "kind": "seat",
+                "id": "grok-primary"
               },
               "harness": null,
               "effort": "high"

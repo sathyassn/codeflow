@@ -107,8 +107,13 @@ asks for just that.
   model family other than the author's counts as cross-family. When Codex
   is unavailable, another family's seat (Grok in the current catalog) takes
   the challenge or review as a recorded reassignment, within that family's
-  limits (a Grok seat never builds, ADR-0075 D3). Reduced assurance means
-  no other family was available, so only the same-family fallback ran.
+  limits (a Grok seat never builds or designs, ADR-0075 D3; a review seat
+  is not a builder). For `independent-plan`, `unit-review` and
+  `body-review`, `codeflow models resolve` prints the eligible other-family
+  seats in preference order, Codex first, then Grok; take the first one a
+  live probe finds available. Reduced assurance means no other family was
+  available, so only the same-family fallback ran; resolve then reports the
+  review open with that reason.
 - **The Claude judgment primary owns integrated Claude judgment.** The directly
   invoked model qualified for `claude-judgment-primary` reviews the settled
   design and integrated diff, reruns relevant tests, and owns the final quality
