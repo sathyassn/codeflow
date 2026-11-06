@@ -24,11 +24,12 @@ WORKFLOWS = ROOT / ".github/workflows"
 SAME_COMMIT = "${{ github.sha }}"
 # Git commands that replace the working tree with another commit. `git fetch` is
 # allowed: it brings another ref in as data, and these then find any step using it.
-# An option's value never starts with "-", so each word reads one way only and a
-# long line of options cannot make the match backtrack exponentially.
+# An option's value is a word that does not start with "-", or a lone "-". An
+# option is "-" plus at least one more character, so each word reads one way only
+# and a long line of options cannot make the match backtrack exponentially.
 SWITCHES_TREE = re.compile(
-    r"\bgit\b(?:[ \t]+-\S+(?:[ \t]+[^-\s]\S*)?)*[ \t]+(?:checkout|switch|worktree|pull|restore)\b"
-    r"|\bgit\b(?:[ \t]+-\S+(?:[ \t]+[^-\s]\S*)?)*[ \t]+reset[ \t]+--hard\b"
+    r"\bgit\b(?:[ \t]+-\S+(?:[ \t]+(?:[^-\s]\S*|-(?!\S)))?)*[ \t]+(?:checkout|switch|worktree|pull|restore)\b"
+    r"|\bgit\b(?:[ \t]+-\S+(?:[ \t]+(?:[^-\s]\S*|-(?!\S)))?)*[ \t]+reset[ \t]+--hard\b"
     r"|\bgh[ \t]+pr[ \t]+checkout\b"
     r"|\bgit\b[^\n]*\bclone\b"
 )
@@ -130,7 +131,8 @@ class CrossingTests(unittest.TestCase):
     def test_commands_that_replace_the_tree_are_refused(self):
         for command in ('git checkout "$SHA"', "git -C source checkout abc", "git switch -d abc",
                         "git worktree add ../x abc", "git pull origin main", "git reset --hard abc",
-                        "gh pr checkout 1", "git clone https://example.invalid/x", "git restore --source=abc ."):
+                        "gh pr checkout 1", "git clone https://example.invalid/x", "git restore --source=abc .",
+                        "git -C - checkout main", "git -c - -C - reset --hard abc"):
             with self.subTest(command=command):
                 self.assertEqual(len(crossings(f"        run: {command}\n")), 1)
 
