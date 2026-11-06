@@ -3,6 +3,7 @@
 //! tail repair, damage, discovery, privacy, streams and the permission
 //! matrix, and the due and fulfilment rules over a fake observer.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -17,6 +18,7 @@ use codeflow_core::coord::schema::{
 use codeflow_core::coord::store::{self, Draft, Paths, ReadOutcome, SubjectId};
 use codeflow_core::coord::transition::ItemState;
 use codeflow_core::coord::{self as coord, CoordError};
+use codeflow_core::workgraph::readiness::{target_tasks, target_tasks_judging};
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -718,6 +720,7 @@ fn task_view(status: &str, claimed: bool, tip: &str) -> TaskView {
         tip: tip.into(),
         claimed,
         accepted: status == "complete",
+        judged: true,
     }
 }
 
@@ -1600,6 +1603,74 @@ fn a_work_branch_named_as_target_is_never_a_target() {
     assert!(codeflow_core::workgraph::readiness::is_landing_target(
         "integration/EPC-025-x"
     ));
+}
+
+/// TSK-1095: a reader that shows a few tasks judges only those. Both tasks
+/// land with a bound, approved completion, so the full read accepts both;
+/// the scoped read judges and accepts only the named one, and the other
+/// reads not judged and not accepted, never accepted unseen.
+#[test]
+fn only_the_named_tasks_are_judged() {
+    let dir = repo();
+    let root = dir.path();
+    let record = |id: &str, status: &str| {
+        format!("---\nid: {id}\nuid: uid-{id}\nepic_id: null\nstandalone_reason: bounded outcome\nintegration_target: main\ntitle: t\nstatus: {status}\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-10-01\n---\n\n## Description\nWork.\n\n## Acceptance Criteria\n- AC-1 When run, the command shall succeed. (journey)\n")
+    };
+    std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+    for id in ["TSK-001", "TSK-002"] {
+        std::fs::write(
+            root.join(format!("project-management/tasks/{id}.md")),
+            record(id, "todo"),
+        )
+        .unwrap();
+    }
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: plan"]);
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+    git(
+        root,
+        &["remote", "add", "origin", origin.path().to_str().unwrap()],
+    );
+    git(root, &["push", "-q", "-u", "origin", "main"]);
+    // Land each task as a pull request does: reviewed work, then the
+    // completion bound to it, merged into `main` and pushed.
+    for id in ["TSK-001", "TSK-002"] {
+        let branch = format!("task/{id}-landing");
+        git(root, &["checkout", "-qb", &branch]);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join(format!("src/{id}.txt")), "work\n").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "feat: the reviewed work"]);
+        let reviewed = git(root, &["rev-parse", "HEAD"]);
+        std::fs::write(
+            root.join(format!("project-management/tasks/{id}.md")),
+            format!(
+                "{}\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {}\n  review: \"reviewed by the fixture\"\n  criteria:\n    AC-1: verified | the fixture ran the command\n  journey: verified | the fixture journey\n  not_verified: \"nothing\"\n  follow_ups: \"none: nothing left\"\n  verdict: approved\n```\n",
+                record(id, "complete"),
+                reviewed.trim()
+            ),
+        )
+        .unwrap();
+        git(root, &["commit", "-qam", "docs(tasks): complete the task"]);
+        git(root, &["checkout", "-q", "main"]);
+        git(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "Merge the task", &branch],
+        );
+        git(root, &["push", "-q", "origin", "main"]);
+    }
+    let all = target_tasks(root).unwrap();
+    assert!(all.values().all(|task| task.judged));
+    assert!(all["TSK-001"].accepted, "{:?}", all["TSK-001"]);
+    assert!(all["TSK-002"].accepted, "{:?}", all["TSK-002"]);
+    let some =
+        target_tasks_judging(root, Some(BTreeSet::default()), &|id| id == "TSK-001").unwrap();
+    assert!(some["TSK-001"].judged);
+    assert!(some["TSK-001"].accepted);
+    assert!(!some["TSK-002"].judged);
+    assert!(!some["TSK-002"].accepted);
+    assert_eq!(some["TSK-002"].status, "complete");
 }
 
 // ---------------------------------------------------------------------------

@@ -2816,6 +2816,18 @@
       "sha256": "07ce3f87d460da5b834be48e72cfabb7c5a67139994755255fe02d34dad048ff",
       "exec": false
     },
+    ".codeflow/schemas/status/report-v1.schema.json": {
+      "src": "status/schemas/report-v1.schema.json",
+      "ownership": "managed",
+      "sha256": "388be9f57494d046a63a1db1ec38aa8fc3b216fea7462af430dd509db22f0fd5",
+      "exec": false
+    },
+    ".codeflow/schemas/status/session-v1.schema.json": {
+      "src": "status/schemas/session-v1.schema.json",
+      "ownership": "managed",
+      "sha256": "0fdc01469ad21b219c0537186739cb1d21e1e368311c431807debd0734edf316",
+      "exec": false
+    },
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",

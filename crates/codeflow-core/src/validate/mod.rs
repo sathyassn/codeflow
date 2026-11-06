@@ -558,7 +558,8 @@ pub(crate) fn canonical_identity(
 
 const TASK_REQUIRED_FIELDS: &[&str] = &["id", "title", "status", "work_type"];
 
-const TASK_STATUS_VALUES: &[&str] = &["todo", "blocked", "in_progress", "complete", "cancelled"];
+pub(crate) const TASK_STATUS_VALUES: &[&str] =
+    &["todo", "blocked", "in_progress", "complete", "cancelled"];
 
 const TASK_ARRAY_FIELDS: &[&str] = &["acceptance", "tests", "specs", "depends_on"];
 

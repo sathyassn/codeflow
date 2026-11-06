@@ -646,7 +646,7 @@ pub fn outcome_line(body: &str) -> OutcomeLine {
 
 /// The Markdown of a section as written, with its comment lines blank;
 /// inline HTML stays, so a placeholder such as `<path>` is still seen.
-fn section_markdown(body: &str, heading: &str) -> Option<String> {
+pub(crate) fn section_markdown(body: &str, heading: &str) -> Option<String> {
     let lines: Vec<&str> = body.lines().collect();
     let scanned = scan(&lines);
     let (start, end) = section_span(&scanned, heading)?;
