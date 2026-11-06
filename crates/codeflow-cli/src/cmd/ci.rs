@@ -4124,6 +4124,29 @@ mod tests {
             )],
         );
         assert!(present.is_empty(), "{}", present.len());
+        // Review F1: the one-parent exempt prefixes and a blank message do
+        // not exempt a merge.
+        for subject in [
+            "fixup! land x",
+            "squash! land x",
+            "Revert \"feat: x\"",
+            "Reapply \"feat: x\"",
+            "",
+            "  ",
+        ] {
+            let missing = evaluate_commits(&g, &[merge("abab4444", subject)]);
+            assert!(
+                missing
+                    .iter()
+                    .any(|t| t.violation.rule == "git.commit_ticket_merges"),
+                "{subject:?}"
+            );
+            let present = evaluate_commits(
+                &g,
+                &[merge("abab5555", &format!("{subject}\n\nRefs: TSK-1"))],
+            );
+            assert!(present.is_empty(), "{subject:?}: {}", present.len());
+        }
         g.commit_ticket_merges = PolicyLevel::Off;
         let off = evaluate_commits(
             &g,

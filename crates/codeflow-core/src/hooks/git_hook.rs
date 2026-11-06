@@ -569,7 +569,14 @@ pub fn commit_msg_from(
         .extend(policy_characters_in_message(policy, message, source));
     let cleaned = strip_commit_comments(message);
     let Some(subject) = cleaned.lines().find(|l| !l.trim().is_empty()) else {
-        return report; // git rejects empty messages itself
+        // Git rejects an empty message itself, unless told to allow one; a
+        // blank merge message still has no ticket (TSK-1350 review F1).
+        if is_merge {
+            report
+                .violations
+                .extend(merge_ticket_violation(policy, &cleaned));
+        }
+        return report;
     };
 
     // A genuine merge commit carries a git-authored subject/body — exempt it
@@ -676,26 +683,30 @@ pub fn commit_msg_from(
 /// names the merge commit, the rule and the keys that satisfy it, at the
 /// rule's level; a malformed present ticket blocks, as on any commit. Both
 /// the commit-msg hook and `codeflow ci` call this, so the two planes judge a
-/// landing merge alike.
+/// landing merge alike. The one-parent subject exemptions (`fixup!`,
+/// `squash!`, `Revert `, `Reapply `) do not apply, and a blank message is a
+/// missing ticket, so the rule fails closed (review F1).
 #[must_use]
 pub fn merge_ticket_violation(policy: &GitPolicy, message: &str) -> Option<Violation> {
     if !policy.commit_ticket_merges.is_active() || policy.commit_ticket_keys.is_empty() {
         return None;
     }
     let cleaned = strip_commit_comments(message);
-    let subject = cleaned.lines().find(|l| !l.trim().is_empty())?;
-    let (level, reason) = standards::check_commit_ticket(
-        subject,
+    let (level, reason) = standards::check_ticket_trailers(
         &cleaned,
         &policy.commit_ticket_keys,
         policy.commit_ticket_merges,
         &policy.commit_ticket_pattern,
     )?;
+    let named = match cleaned.lines().find(|l| !l.trim().is_empty()) {
+        Some(subject) => format!("merge commit '{subject}'"),
+        None => "merge commit with an empty message".to_string(),
+    };
     let keys = policy.commit_ticket_keys.join(", ");
     Some(Violation::new(
         "git.commit_ticket_merges",
         level,
-        format!("merge commit '{subject}': {reason}"),
+        format!("{named}: {reason}"),
         crate::remedy::COMMIT_TICKET.with(&[("keys", &keys)]),
     ))
 }
@@ -2699,6 +2710,45 @@ mod tests {
         // A one-parent commit keeps the ordinary ticket rule.
         let plain = commit_msg(&policy, "feat: land the parser\n\n- merge it\n", false);
         assert!(merge_ticket_finding(&plain).is_none());
+    }
+
+    #[test]
+    fn merge_ticket_rule_has_no_subject_prefix_exemption() {
+        // TSK-1350 review F1: a merge whose subject starts with one of the
+        // one-parent exempt prefixes is still judged; a blank merge message
+        // is a missing ticket. A one-parent commit keeps the exemption.
+        let policy = merge_ticket_policy(PolicyLevel::Block);
+        for subject in [
+            "fixup! land the thing",
+            "squash! land the thing",
+            "Revert \"feat: x\"",
+            "Reapply \"feat: x\"",
+        ] {
+            let missing = commit_msg(&policy, &format!("{subject}\n"), true);
+            assert!(
+                merge_ticket_finding(&missing).is_some(),
+                "{subject}: {:?}",
+                missing.violations
+            );
+            let present = commit_msg(&policy, &format!("{subject}\n\nRefs: TSK-1\n"), true);
+            assert!(
+                merge_ticket_finding(&present).is_none(),
+                "{subject}: {:?}",
+                present.violations
+            );
+            let plain = commit_msg(&policy, &format!("{subject}\n"), false);
+            assert!(merge_ticket_finding(&plain).is_none(), "{subject}");
+            assert!(!plain
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.commit_ticket"));
+        }
+        for blank in ["", "   \n\t\n", "# only a comment\n"] {
+            let report = commit_msg(&policy, blank, true);
+            let v = merge_ticket_finding(&report).expect("a blank merge is refused");
+            assert!(v.message.contains("empty message"), "{}", v.message);
+            assert!(commit_msg(&policy, blank, false).violations.is_empty());
+        }
     }
 
     #[test]

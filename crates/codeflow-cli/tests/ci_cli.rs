@@ -1175,6 +1175,13 @@ fn ci_judges_a_landing_merge_for_its_ticket_footer() {
     assert!(all.contains(&format!("merge commit '{subject}'")), "{all}");
     assert!(all.contains("keys: Refs"), "{all}");
 
+    // Review F1: a `fixup!` subject does not exempt the merge.
+    git(d, &["reset", "--hard", "main"]);
+    git(d, &["merge", "--no-ff", "feat/y", "-m", "fixup! land y"]);
+    let (code, all) = ci_range_output(d);
+    assert_eq!(code, Some(1), "{all}");
+    assert!(all.contains("merge commit 'fixup! land y'"), "{all}");
+
     // The same landing with its footer passes.
     git(d, &["reset", "--hard", "main"]);
     git(

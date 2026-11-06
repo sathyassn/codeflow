@@ -11643,7 +11643,15 @@ fn a_landing_merge_without_its_ticket_footer_is_refused() {
     git(d, &["checkout", "-q", "integration/line"]);
     wire_scan_hooks(d);
 
-    for subject in [None, Some("feat: land the thing")] {
+    // Review F1: the one-parent exempt prefixes do not exempt a merge.
+    for subject in [
+        None,
+        Some("feat: land the thing"),
+        Some("fixup! land the thing"),
+        Some("squash! land the thing"),
+        Some("Revert \"feat: add thing\""),
+        Some("Reapply \"feat: add thing\""),
+    ] {
         let mut args = vec!["merge", "--no-ff", "--no-edit", "task/x"];
         if let Some(s) = subject {
             args.extend(["-m", s]);
@@ -11692,6 +11700,25 @@ fn a_landing_merge_without_its_ticket_footer_is_refused() {
             "task/x",
             "-m",
             "feat: land the thing",
+            "-m",
+            "Refs: TSK-1",
+        ],
+        None,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(d, &["reset", "-q", "--hard", "HEAD~1"]);
+    let out = run_wired_git(
+        d,
+        &[
+            "merge",
+            "--no-ff",
+            "task/x",
+            "-m",
+            "fixup! land the thing",
             "-m",
             "Refs: TSK-1",
         ],

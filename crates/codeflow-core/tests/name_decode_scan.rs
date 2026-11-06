@@ -3330,7 +3330,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Owns physical text-line framing for this complete message/document reader. Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
-        "check_commit_ticket",
+        "check_ticket_trailers",
         "lines",
         1,
         "framing:conventional-commits-lines",
@@ -3338,7 +3338,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
-        "check_commit_ticket",
+        "check_ticket_trailers",
         "trim_end",
         1,
         "grammar:conventional-commits",
@@ -6514,7 +6514,7 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
     (
         "conventional-commits-lines",
         "crates/codeflow-core/src/hooks/standards.rs",
-        "check_commit_ticket",
+        "check_ticket_trailers",
     ),
     (
         "conventional-commits-lines",
