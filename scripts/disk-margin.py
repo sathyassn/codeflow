@@ -8,17 +8,20 @@ close each shard comes.
 
 `watch` runs in the background from the start of the job. It samples the
 free space of the file system holding `--path` every `--interval` seconds and
-rewrites `--out` (JSON) whenever it sees a new low. The background process
-ends with the job.
+rewrites `--out` (JSON) after every sample, with the low point and the time of
+the latest sample. The background process ends with the job.
 
 `report` runs at the end of the job. It prints the free space now, the low
 point and when it was seen, and the size of each `--size` directory. It fails
-when the low point is under `--min-free-gib`, or when the watch left no record
-(it did not run, or it could not write), because a missing measurement is
-never a pass.
+when the free space now or the recorded low point is under `--min-free-gib`,
+when the watch left no record (it did not run, or it could not write), and
+when the latest sample is older than STALE_INTERVALS times `--interval` (the
+watch died or stopped writing). A missing or stale measurement is never a
+pass, and the live sample is judged on its own, so a record that says more
+than the disk has cannot pass a disk under the margin.
 
 Usage: disk-margin.py watch --out <json> [--path <dir>] [--interval <seconds>]
-       disk-margin.py report --low <json> --min-free-gib <n> [--path <dir>] [--size <dir>...]
+       disk-margin.py report --low <json> --min-free-gib <n> [--path <dir>] [--size <dir>...] [--interval <seconds>]
 """
 
 from __future__ import annotations
@@ -33,6 +36,8 @@ from pathlib import Path
 
 NAME = "disk-margin"
 GIB = 1024 ** 3
+# A record whose latest sample is older than this many intervals is stale.
+STALE_INTERVALS = 3
 
 
 def sample(path: Path) -> dict:
@@ -55,9 +60,9 @@ def watch(out: Path, path: Path, interval: float, samples: int | None = None) ->
         now = sample(path)
         taken += 1
         if low is None or now["free"] < low["free"]:
-            low = {**now, "path": str(path), "samples": taken}
-        else:
-            low["samples"] = taken
+            low = {**now, "path": str(path)}
+        low["samples"] = taken
+        low["latest"] = now["at"]
         write_low(out, low)
         if samples is None or taken < samples:
             time.sleep(interval)
@@ -80,11 +85,17 @@ def gib(value: float) -> str:
     return f"{value / GIB:.1f} GiB"
 
 
-def report(low_file: Path, min_free_gib: float, path: Path, sizes: list[Path]) -> tuple[list[str], list[str]]:
+def report(low_file: Path, min_free_gib: float, path: Path, sizes: list[Path],
+           interval: float = 5.0) -> tuple[list[str], list[str]]:
     """(problems, lines) for the end of a job."""
     lines, problems = [], []
+    margin = min_free_gib * GIB
+    remedy = ("free disk before the build (unused preinstalled toolchains) or shrink the instrumented build, so "
+              "the next run does not link on a disk this full")
     now = sample(path)
     lines.append(f"free now {gib(now['free'])} of {gib(now['total'])} on the file system of {path}")
+    if now["free"] < margin:
+        problems.append(f"the free disk now is {gib(now['free'])}, under the {min_free_gib:g} GiB margin: {remedy}")
     for directory in sizes:
         if directory.is_dir():
             lines.append(f"{directory} takes {gib(tree_size(directory))}")
@@ -92,18 +103,24 @@ def report(low_file: Path, min_free_gib: float, path: Path, sizes: list[Path]) -
             lines.append(f"{directory} does not exist")
     try:
         low = json.loads(low_file.read_text(encoding="utf-8"))
-        free, total, at, count = int(low["free"]), int(low["total"]), float(low["at"]), int(low["samples"])
+        values = [low[key] for key in ("free", "total", "at", "samples", "latest")]
+        if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
+            raise TypeError("a field is not a number")
+        free, total, at, count, latest = (float(value) for value in values)
     except (OSError, ValueError, KeyError, TypeError) as error:
         problems.append(f"no low-point record at {low_file} ({error}): the watch did not run or could not write, "
                         "so the margin is not measured")
         return problems, lines
     share = free / total * 100 if total else 0.0
+    age = now["at"] - latest
     lines.append(f"lowest free {gib(free)} ({share:.1f} percent of {gib(total)}), "
-                 f"{time.time() - at:.0f} s before this report, over {count} samples; "
+                 f"{now['at'] - at:.0f} s before this report, over {count:.0f} samples, the latest {age:.0f} s ago; "
                  f"the margin is {min_free_gib:g} GiB")
-    if free < min_free_gib * GIB:
-        problems.append(f"the lowest free disk was {gib(free)}, under the {min_free_gib:g} GiB margin: free disk "
-                        "before the build (unused preinstalled toolchains) or shrink the instrumented build")
+    if age > STALE_INTERVALS * interval:
+        problems.append(f"the latest sample is {age:.0f} s old, more than {STALE_INTERVALS} intervals of "
+                        f"{interval:g} s: the watch stopped, so the low point since then is not measured")
+    if free < margin:
+        problems.append(f"the lowest free disk was {gib(free)}, under the {min_free_gib:g} GiB margin: {remedy}")
     return problems, lines
 
 
@@ -119,15 +136,16 @@ def main(argv: list[str] | None = None) -> int:
     show.add_argument("--min-free-gib", type=float, required=True)
     show.add_argument("--path", type=Path, default=Path("."))
     show.add_argument("--size", type=Path, nargs="*", default=[])
+    show.add_argument("--interval", type=float, default=5.0, help="the watch's interval, which sets when a sample is stale")
     args = parser.parse_args(argv)
     if args.command == "watch":
         if args.interval <= 0:
             raise SystemExit(f"{NAME}: --interval must be above 0")
         watch(args.out, args.path, args.interval)
         return 0
-    if args.min_free_gib <= 0:
-        raise SystemExit(f"{NAME}: --min-free-gib must be above 0")
-    problems, lines = report(args.low, args.min_free_gib, args.path, args.size)
+    if not args.min_free_gib > 0 or not args.interval > 0:
+        raise SystemExit(f"{NAME}: --min-free-gib and --interval must be above 0")
+    problems, lines = report(args.low, args.min_free_gib, args.path, args.size, args.interval)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     for line in lines:
         print(f"{NAME}: {line}")
