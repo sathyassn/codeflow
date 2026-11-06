@@ -3411,6 +3411,9 @@ fn record_change(before: &RecordView, after: Option<&RecordView>) -> String {
         Some(record) if before.criteria.signature() != record.criteria.signature() => {
             format!("{} changes its criteria", record.id)
         }
+        Some(record) if before.path != record.path => {
+            format!("{} moves its record to {}", record.id, record.path)
+        }
         Some(record) => format!("{} changes its record", record.id),
     }
 }
@@ -3418,7 +3421,9 @@ fn record_change(before: &RecordView, after: Option<&RecordView>) -> String {
 /// What a sync of the default branch changes in the records whose home is
 /// `line`, which only a planning amendment on the line may change (TSK-1312):
 /// the record of `epic`, of an epic that lands on the line, and of a task
-/// that targets the line, imported from the default branch or not. Each
+/// that targets the line or declares no target and names a line epic or an
+/// epic the line does not hold, imported from the default branch or not. A
+/// removal or a move to another path is a change. Each
 /// record has one home, so the default branch never holds a newer change to
 /// one of these. Records whose home is elsewhere, a task of `epic` that
 /// targets the default branch included, come along at the default branch's
@@ -3444,14 +3449,16 @@ fn line_records_changed(
         let line_record = match before.kind {
             RecordKind::Epic => line_epic(before),
             // A task's home is the target it declares. One that declares
-            // none is judged by its epic, so an unknown home stays frozen.
+            // none is judged by its epic: a line epic, or an epic the line
+            // does not hold, keeps it frozen, so an unknown home fails
+            // closed. A task with neither a target nor an epic is
+            // standalone, homed on the default branch.
             RecordKind::Task => match before.integration_target {
                 Some(_) => on_line(before.integration_target.as_ref()),
                 None => before
                     .epic_id
                     .as_deref()
-                    .and_then(|id| target.records.get(id))
-                    .is_some_and(line_epic),
+                    .is_some_and(|id| target.records.get(id).is_none_or(line_epic)),
             },
             RecordKind::Spec => false,
         };
@@ -3461,7 +3468,10 @@ fn line_records_changed(
         let after = head.records.get(&before.id);
         let touched = changed_paths.contains(&before.path)
             || after.is_some_and(|record| changed_paths.contains(&record.path));
-        if !touched || after.is_some_and(|record| record.content == before.content) {
+        // A move to another path is a change even with the same content.
+        let unchanged = after
+            .is_some_and(|record| record.content == before.content && record.path == before.path);
+        if !touched || unchanged {
             continue;
         }
         let change = record_change(before, after);

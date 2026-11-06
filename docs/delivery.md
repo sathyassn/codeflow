@@ -276,7 +276,9 @@ Each task or epic record has one home, where it changes:
 A sync takes `main`'s version only of records whose home is not the line,
 and never changes a record whose home is the line: the epic's record, the
 record of an epic that lands on the line, or the record of a task that
-targets the line. A task with no declared target is judged by its epic.
+targets the line. A task with no declared target is judged by its epic, and
+stays frozen when the line does not hold that epic's record. Removing or
+moving such a record is a change too.
 Because each record changes only at its home, `main` never holds a newer
 change to a record whose home is the line, so the refusal applies only when
 that rule was broken. A records-only sync that already passes as a planning

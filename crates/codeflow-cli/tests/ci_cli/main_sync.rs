@@ -399,7 +399,140 @@ fn a_clean_sync_cannot_change_the_lines_records() {
             "{what} is judged as a sync: {said}"
         );
         blocks(&refused, what, "work.criteria_frozen");
+        blocks(&refused, what, "whose home is the line");
     }
+}
+
+/// AC-2 and the security review of 8d63ebc28: main re-homing a line task to
+/// itself cannot carry main's version through. The home is read from the
+/// line's version, and the import check refuses a landing that changes a
+/// task's declared home before the sync is judged.
+#[test]
+fn a_clean_sync_cannot_re_home_a_line_task() {
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &task("TSK-001", "main").replace("Work.", "Other work."),
+    );
+    commit(root, "docs: main re-homes a line task");
+    sync_branch(root);
+    let refused = ci(root, "Task: EPC-001", None);
+    blocks(&refused, "a re-homed line task", "work.import_authority");
+    blocks(
+        &refused,
+        "a re-homed line task",
+        "changes the task's declared home",
+    );
+}
+
+/// A task with no `integration_target`, as a hand-written record may be.
+fn untargeted_task(id: &str, epic: &str) -> String {
+    task(id, LINE)
+        .replace(&format!("integration_target: {LINE}\n"), "")
+        .replace("epic_id: EPC-001", &format!("epic_id: {epic}"))
+}
+
+/// AC-2 as amended 2026-11-05: the line first takes `setup` from main, then
+/// main makes `change` (a write, or a removal for `None`) beside a release
+/// note, against the one-home rule. The sync is refused for changing a
+/// record whose home is the line.
+fn refused_as_line_homed(setup: &[(&str, String)], change: &[(&str, Option<String>)], what: &str) {
+    let dir = fixture();
+    let root = dir.path();
+    for (path, content) in setup {
+        write(root, path, content);
+    }
+    if !setup.is_empty() {
+        commit(root, "docs: plan records the line takes");
+        super::git(root, &["switch", "-q", LINE]);
+        super::git(root, &["merge", "--no-ff", "-q", "--no-edit", "main"]);
+        super::git(root, &["switch", "-q", "main"]);
+    }
+    for (path, content) in change {
+        match content {
+            Some(content) => write(root, path, content),
+            None => std::fs::remove_file(root.join(path)).unwrap(),
+        }
+    }
+    write(root, "changelog.d/TSK-099.md", FRAGMENT);
+    commit(root, "docs: main changes a line-homed record");
+    sync_branch(root);
+    let refused = ci(root, "Task: EPC-001", None);
+    let said = text(&refused);
+    assert!(
+        said.contains("pull request class: sync"),
+        "{what} is judged as a sync: {said}"
+    );
+    blocks(&refused, what, "work.criteria_frozen");
+    blocks(&refused, what, "whose home is the line");
+}
+
+/// AC-2 as amended 2026-11-05, and the security review of 8d63ebc28: an
+/// unknown home stays frozen, a child epic on the line and its tasks are
+/// homed on the line, and a removal or a move counts as a change.
+#[test]
+fn a_clean_sync_cannot_change_other_line_homed_records() {
+    let child_epic = EPIC.replace("EPC-001", "EPC-003").replace(
+        "created: 2026-09-26\n",
+        &format!("created: 2026-09-26\nparent_line: {LINE}\n"),
+    );
+    let tasks = "project-management/tasks";
+    let untargeted = untargeted_task("TSK-006", "EPC-001");
+    let orphan = untargeted_task("TSK-007", "EPC-009");
+    let child_task = untargeted_task("TSK-008", "EPC-003");
+    refused_as_line_homed(
+        &[(&format!("{tasks}/TSK-006.md"), untargeted.clone())],
+        &[(
+            &format!("{tasks}/TSK-006.md"),
+            Some(untargeted.replace("Work.", "Other work.")),
+        )],
+        "a task of the line's epic with no target",
+    );
+    refused_as_line_homed(
+        &[(&format!("{tasks}/TSK-007.md"), orphan.clone())],
+        &[(
+            &format!("{tasks}/TSK-007.md"),
+            Some(orphan.replace("Work.", "Other work.")),
+        )],
+        "a task with no target whose epic the line does not hold",
+    );
+    refused_as_line_homed(
+        &[("project-management/epics/EPC-003.md", child_epic.clone())],
+        &[(
+            "project-management/epics/EPC-003.md",
+            Some(child_epic.replace("An outcome.", "Another outcome.")),
+        )],
+        "a child epic whose parent_line is the line",
+    );
+    refused_as_line_homed(
+        &[
+            ("project-management/epics/EPC-003.md", child_epic.clone()),
+            (&format!("{tasks}/TSK-008.md"), child_task.clone()),
+        ],
+        &[(
+            &format!("{tasks}/TSK-008.md"),
+            Some(child_task.replace("Work.", "Other work.")),
+        )],
+        "a task with no target of a child epic on the line",
+    );
+    refused_as_line_homed(
+        &[],
+        &[(&format!("{tasks}/TSK-001.md"), None)],
+        "a removed line task",
+    );
+    refused_as_line_homed(
+        &[],
+        &[
+            (&format!("{tasks}/TSK-001.md"), None),
+            (
+                &format!("{tasks}/TSK-001-moved.md"),
+                Some(task("TSK-001", LINE)),
+            ),
+        ],
+        "a moved line task",
+    );
 }
 
 /// AC-2: the freeze covers records whose home is the line, so another
