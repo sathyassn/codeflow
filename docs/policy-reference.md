@@ -1377,14 +1377,16 @@ is a provenance record, not proof: git lets anyone set it, and proof of who
 pushed is the token. GitHub records the agent App as `<slug>[bot]` on what it
 does through its token:
 
-| Action under the agent App's token | GitHub shows |
-|---|---|
-| A pull request it opens | author `<slug>[bot]` |
-| A merge it makes | merged by `<slug>[bot]` |
-| A merge commit GitHub makes for that merge | author `<slug>[bot]`; accepted by the operator on 2026-11-05; not yet observed, until TSK-1177's AC-3 fixture records it |
-| A push | the pusher is not yet observed (TSK-1348 AC-1, on the scratch repository) |
-| A commit made in an agent session and pushed | author: the human; committer: `<slug>[bot]`; not yet observed, until TSK-1348 AC-7 records it |
-| A commit made without the two variables | the human author and committer |
+- A pull request it opens: author `<slug>[bot]`.
+- A merge it makes: merged by `<slug>[bot]`.
+- A merge commit GitHub makes for that merge: author `<slug>[bot]`; accepted
+  by the operator on 2026-11-05; not yet observed, until TSK-1177's AC-3
+  fixture records it.
+- A push: the pusher is not yet observed (TSK-1348 AC-1, on the scratch
+  repository).
+- A commit made in an agent session and pushed: author the human, committer
+  `<slug>[bot]`; not yet observed, until TSK-1348 AC-7 records it.
+- A commit made without the two variables: the human author and committer.
 
 **Why a separate identity.** Rulesets, environments and Actions actor rules
 can tell agents from the human only when agents act under an identity of
