@@ -5194,6 +5194,8 @@ struct JobRun {
     failed: Option<String>,
     /// The header blocks the origin received while each step ran.
     requests_by_step: Vec<(String, Vec<String>)>,
+    /// The header blocks the API received while each step ran.
+    api_by_step: Vec<(String, Vec<String>)>,
     /// The runner's folder: the checkout, HOME and the runner's temp.
     runner: PathBuf,
     checkout: PathBuf,
@@ -5237,11 +5239,14 @@ fn private_pull(fx: &Fx) -> (Pull, String, Requests) {
     (pull, server, requests)
 }
 
-/// A pull-request API endpoint that answers a request carrying the run's
-/// token (`Authorization: Bearer`) with `json`, as
-/// `GET /repos/<repository>/pulls/<number>` does, and refuses any other
-/// with `401`. Returns its base URL.
-fn api_origin(json: String) -> String {
+/// The repository's API, as the policy job reads it: a request carrying
+/// the run's token (`Authorization: Bearer`) is answered by path, and any
+/// other is refused with `401`. The pull request read gets `json`, as
+/// `GET /repos/<repository>/pulls/<number>` does; the host rules and
+/// rulesets reads get empty lists; the head's check runs and commit
+/// statuses are empty, so no other producer of a trusted name is on it.
+/// Every request's header block is kept in `requests`. Returns its base URL.
+fn api_origin(json: String, requests: Requests) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
@@ -5250,6 +5255,9 @@ fn api_origin(json: String) -> String {
             let Some((head, _)) = read_request(&mut stream) else {
                 continue;
             };
+            requests.lock().unwrap().push(head.clone());
+            let path = head.split_whitespace().nth(1).unwrap_or_default();
+            let path = path.split('?').next().unwrap_or_default();
             // As the API of a private repository: a read without the run's
             // token is refused, so a step that stops sending it fails.
             let bearer = format!("bearer {FAKE_TOKEN}");
@@ -5265,10 +5273,20 @@ fn api_origin(json: String) -> String {
                 );
                 continue;
             }
+            let body = if path.ends_with("/check-runs") {
+                "{\"total_count\": 0, \"check_runs\": []}"
+            } else if path.ends_with("/statuses")
+                || path.contains("/rules/branches/")
+                || path.ends_with("/rulesets")
+            {
+                "[]"
+            } else {
+                json.as_str()
+            };
             let _ = stream.write_all(
                 format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}",
-                    json.len()
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
                 )
                 .as_bytes(),
             );
@@ -5352,6 +5370,10 @@ fn runner_env(runner: &Path, server: &str, api: &str, pull: &Pull) -> Vec<(Strin
         ("GITHUB_SERVER_URL", server.into()),
         ("GITHUB_API_URL", api.into()),
         ("GITHUB_REPOSITORY", "owner/private".into()),
+        (
+            "GITHUB_WORKFLOW_REF",
+            "owner/private/.github/workflows/codeflow-policy.yml@refs/heads/main".into(),
+        ),
         ("GITHUB_ACTOR", "fixture-actor".into()),
         ("GITHUB_REF", "refs/heads/main".into()),
         ("GITHUB_SHA", pull.authority.clone()),
@@ -5506,13 +5528,20 @@ fn run_policy_job(
         pull.head,
         serde_json::to_string(&format!("{HOSTED_BODY}- Not tested: none\n")).unwrap()
     );
-    let base_env = runner_env(&runner, server, &api_origin(pull_json), pull);
+    let api_requests = Requests::default();
+    let base_env = runner_env(
+        &runner,
+        server,
+        &api_origin(pull_json, api_requests.clone()),
+        pull,
+    );
     let mut outputs = std::collections::HashMap::new();
     let mut masks = Vec::new();
     let mut run = JobRun {
         log: String::new(),
         failed: None,
         requests_by_step: Vec::new(),
+        api_by_step: Vec::new(),
         runner: runner.clone(),
         checkout: checkout_dir.clone(),
     };
@@ -5542,6 +5571,7 @@ fn run_policy_job(
             env.push((key.to_string(), value));
         }
         let before = requests.lock().unwrap().len();
+        let api_before = api_requests.lock().unwrap().len();
         let (ok, text) = if let Some(uses) = step["uses"].as_str() {
             assert!(
                 uses.starts_with("actions/checkout@"),
@@ -5568,6 +5598,8 @@ fn run_policy_job(
         };
         let seen = requests.lock().unwrap()[before..].to_vec();
         run.requests_by_step.push((name.clone(), seen));
+        let api_seen = api_requests.lock().unwrap()[api_before..].to_vec();
+        run.api_by_step.push((name.clone(), api_seen));
         run.log.push_str("== ");
         run.log.push_str(&name);
         run.log.push('\n');
@@ -5599,7 +5631,9 @@ fn carries_token(head: &str) -> bool {
 /// step by step against a private-style origin, passes a valid pull request
 /// into an integration line with only the run's token: the checkout keeps
 /// no credential, the fetch steps and `codeflow ci` each send the token
-/// for themselves, and the token is in no log line, git config or file.
+/// for themselves, the host-rules and producer-refusal steps (TSK-1177)
+/// read the API with it, and the token is in no log line, git config or
+/// file.
 /// Repository code that runs after the job's steps finds no checkout
 /// credential: the origin refuses it.
 #[test]
@@ -5627,6 +5661,31 @@ fn the_scaffolded_policy_job_passes_a_private_remote_with_only_the_run_token() {
             .iter()
             .any(|(step, heads)| step.starts_with(name) && !heads.is_empty());
         assert!(asked, "{name} never asked the origin");
+    }
+    // Every API read carries the run's token, and each step that the
+    // workflow gives `github.token` for the API asks it.
+    for (step, heads) in &run.api_by_step {
+        assert!(
+            heads.iter().all(|head| carries_token(head)),
+            "{step} asked the API without the token"
+        );
+    }
+    for name in [
+        "Read the pull request's current body",
+        "Read the host rules for the authority line",
+        "Refuse another producer of a trusted name",
+    ] {
+        let asked = run
+            .api_by_step
+            .iter()
+            .any(|(step, heads)| step == name && !heads.is_empty());
+        assert!(asked, "{name} never asked the API");
+    }
+    for needle in [
+        "host rules read for main",
+        "no other producer of a trusted or authority name is on",
+    ] {
+        assert!(run.log.contains(needle), "missing {needle:?}:\n{}", run.log);
     }
     for form in token_forms() {
         assert!(!run.log.contains(&form), "the token reached the job log");

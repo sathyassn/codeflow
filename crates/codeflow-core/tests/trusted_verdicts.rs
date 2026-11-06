@@ -294,8 +294,9 @@ fn shipped_workflows() -> Vec<(String, Value)> {
 
 /// TSK-1252 AC-11 (was TSK-1175 AC-1): every shipped checkout disables
 /// credential persistence, and the only steps that receive the run's
-/// token are the fetch steps and the `codeflow ci` step, each in its own
-/// environment.
+/// token, each in its own environment, are the fetch steps, the pull
+/// request body reads, the `codeflow ci` step and TSK-1177's host-rules
+/// read and producer refusal.
 #[test]
 fn every_shipped_checkout_keeps_no_credential() {
     let shipped = shipped_workflows();
@@ -323,6 +324,11 @@ fn every_shipped_checkout_keeps_no_credential() {
                             "Fetch the pull request's base and head as data",
                             "Fetch the shared registry",
                             "codeflow ci (commit + branch + PR-body standards)",
+                            // TSK-1177: read with the read-only token for
+                            // the report's authority line and the Mode B
+                            // refusal, in the verdict and authority jobs.
+                            "Read the host rules for the authority line",
+                            "Refuse another producer of a trusted name",
                         ]
                         .contains(&name),
                         "{path} {id}: step {name:?} receives the run's token"

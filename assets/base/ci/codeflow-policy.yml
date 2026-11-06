@@ -14,9 +14,11 @@
 # After every step the job asserts that the checkout is still the authority.
 # The verdict job's token is read-only and the job uses no secret; only the
 # `authority` job below holds one. The checkout keeps no credential
-# (`persist-credentials: false`); the fetch steps and the `codeflow ci`
-# step each receive the run's token in their own env. Builds and tests of
-# the head run in codeflow-ci.yml on `pull_request`.
+# (`persist-credentials: false`). Only these steps receive the run's
+# token, each in its own env: the base and head fetch, the registry fetch,
+# the two pull request body reads, the host-rules read, `codeflow ci` and
+# the producer refusal (also run by the `authority` job). Builds and tests
+# of the head run in codeflow-ci.yml on `pull_request`.
 #
 # `codeflow ci` runs the SAME commit-format, no-AI-attribution, no-emoji,
 # breaking-footer, branch-naming and PR-body checks as the git hooks and the
