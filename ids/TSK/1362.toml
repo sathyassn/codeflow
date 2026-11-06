@@ -1,0 +1,11 @@
+id = "TSK-1362"
+uid = "f212184a-35cb-4a94-a770-07ac225db0de"
+kind = "TSK"
+title = "Task and epic records can name areas that are checked against the project"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-06T01:30:49Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
