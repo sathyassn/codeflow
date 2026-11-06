@@ -628,6 +628,58 @@ fn a_clean_sync_cannot_change_another_epics_task_homed_on_the_line() {
     blocks(&refused, "a line-homed task", "whose home is the line");
 }
 
+/// The line moves on after the fixture: L2 changes product code and a line
+/// task, neither of which main holds.
+fn line_moves_again(root: &Path) {
+    super::git(root, &["switch", "-q", LINE]);
+    write(root, "src/line.rs", "pub fn line() {}\npub fn newer() {}\n");
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &task("TSK-001", LINE).replace("Work.", "Newer work."),
+    );
+    commit(root, "feat: the line moves again");
+    super::git(root, &["switch", "-q", "main"]);
+}
+
+fn refused_without_the_line_tip(out: &Output, what: &str) {
+    let said = text(out);
+    assert!(
+        !said.contains("pull request class: sync"),
+        "{what} is not a sync: {said}"
+    );
+    blocks(out, what, "does not contain the line tip");
+}
+
+/// AC-3 and the security review of fb50f8d0f: a clean merge of main into
+/// the line tip's parent would drop the tip's work, so it is no sync.
+#[test]
+fn a_merge_of_main_into_an_older_line_commit_is_refused() {
+    let dir = fixture();
+    let root = dir.path();
+    let older = stdout_of(root, &["rev-parse", LINE]);
+    line_moves_again(root);
+    super::git(root, &["switch", "-q", "-C", SYNC, &older]);
+    super::git(root, &["merge", "--no-ff", "-q", "--no-edit", "main"]);
+    refused_without_the_line_tip(&ci(root, "Task: EPC-001", None), "a sync of an older tip");
+}
+
+/// AC-3 and the security review of fb50f8d0f: a sync left behind after the
+/// line moved no longer holds the tip it is judged against.
+#[test]
+fn a_sync_left_behind_by_the_line_is_refused() {
+    let dir = fixture();
+    let root = dir.path();
+    sync_branch(root);
+    passes(
+        &ci(root, "Task: EPC-001", None),
+        "the sync before the line moves",
+    );
+    line_moves_again(root);
+    super::git(root, &["switch", "-q", SYNC]);
+    refused_without_the_line_tip(&ci(root, "Task: EPC-001", None), "a stale sync");
+}
+
 /// AC-3: a merge whose tree is not the clean merge of its parents carries
 /// a hunk of its own, which a sync cannot hold.
 #[test]

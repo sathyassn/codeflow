@@ -1,6 +1,7 @@
 //! A sync of the default branch into an integration line (TSK-1312).
 //!
-//! The route is proven from the history, never claimed by a name: every
+//! The route is proven from the history, never claimed by a name: the head
+//! contains the line's tip, and every
 //! commit the head brings beyond the line's base and the default branch's
 //! trusted commit is a two-parent merge whose second parent is on that
 //! commit and whose tree is the clean automatic merge of its parents
@@ -24,8 +25,9 @@ use super::history;
 ///
 /// # Errors
 ///
-/// The reason the range is not a sync of `trusted`: no merge at all, a
-/// commit that is not a two-parent merge, a second parent that is not on
+/// The reason the range is not a sync of `trusted`: a head that does not
+/// descend from `base`, no merge at all, a commit that is not a two-parent
+/// merge, a second parent that is not on
 /// `trusted`, a merge whose tree differs from the clean merge of its
 /// parents, or a history that cannot be read.
 pub fn sync_merges(
@@ -44,12 +46,22 @@ pub fn sync_merges(
     };
     let unreadable = |error: git2::Error| format!("cannot read the range: {}", error.message());
     let trusted = oid(trusted)?;
+    let (head, base) = (oid(head)?, oid(base)?);
+    // The head must hold the line tip it is judged against. A merge of the
+    // default branch into an older line commit, or a sync left behind after
+    // the line moved, would otherwise pass while dropping the line's newer
+    // work, which the record freeze never sees.
+    if !history::descendant_of(&repo, head, base).map_err(unreadable)? {
+        return Err(format!(
+            "head {head:.9} does not contain the line tip {base:.9}; a sync merges the default branch into the line's current tip, so redo it from that tip"
+        ));
+    }
     let mut walk = history::revwalk(&repo).map_err(unreadable)?;
     // Newest first, so a refusal names the commit nearest the head.
     walk.set_sorting(git2::Sort::TOPOLOGICAL)
         .map_err(unreadable)?;
-    walk.push(oid(head)?).map_err(unreadable)?;
-    walk.hide(oid(base)?).map_err(unreadable)?;
+    walk.push(head).map_err(unreadable)?;
+    walk.hide(base).map_err(unreadable)?;
     walk.hide(trusted).map_err(unreadable)?;
     let mut merges = Vec::new();
     for id in walk {

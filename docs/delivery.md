@@ -257,6 +257,7 @@ a branch that carries no task, such as `chore/sync-main-into-epc-022`, with
 `Task: EPC-NNN` naming the line's epic. No task is filed for it. `codeflow
 ci` admits it as a sync when its history proves one:
 
+- the head contains the line's current tip, the base the run judges;
 - every commit the head brings beyond the line and `main` is a merge with
   exactly two parents;
 - each merge's second parent is on `main`'s commit that the run trusts: the
@@ -289,6 +290,7 @@ Refused, naming the cause:
 | What the range holds | Why |
 |---|---|
 | A merge of a commit that is not on `main`'s trusted commit, such as a local branch or a ref named like `origin/main` | The second parent is not reviewed default-branch history |
+| A merge of `main` into an older line commit, or a sync left behind after the line moved | The head does not contain the line's tip, so it would drop the line's newer work; redo the sync from the line's current tip |
 | A merge of the line into the sync branch, after the line moved | Its second parent is the line's, not `main`'s; redo the sync from the line's new tip |
 | A run with no `--policy-from` | No default-branch commit to trust |
 | A change to a record whose home is the line | It changes only on the line, through a planning amendment that names the epic |
