@@ -1,0 +1,11 @@
+id = "TSK-1366"
+uid = "d2ee408b-7b71-4237-bd14-e66a38fb0f18"
+kind = "TSK"
+title = "The trusted gitleaks canary and one verdict per head commit"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-06T03:26:37Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
