@@ -179,7 +179,10 @@ fn symlinks_are_judged_by_objects_without_following_them() {
         ("ordinary", "private/data", true),
         ("id_rsa", "ordinary", true),
         ("ordinary", "missing-public-file", false),
-        ("ordinary", "x:public", false),
+        // A letter and a colon start a Windows drive-relative path.
+        ("ordinary", "x:public", true),
+        ("links/ordinary", "C:Windows/Temp/payload", true),
+        ("ordinary", "ab:public", false),
         ("links/ordinary", "public", false),
         ("ordinary", "./docs", false),
         ("ordinary", "docs/", false),
@@ -194,6 +197,15 @@ fn symlinks_are_judged_by_objects_without_following_them() {
         let head = f.commit(&[base]);
         assert_eq!(!staged.violations.is_empty(), blocked, "{name} -> {target}");
         assert_eq!(!f.range(base, head, &p).violations.is_empty(), blocked);
+    }
+    // The drive rule reads link targets only; a file with that name passes.
+    for report in judge_one(
+        "x:public",
+        0o100_644,
+        Some(b"public"),
+        &Fixture::policy(json!({})),
+    ) {
+        assert!(report.violations.is_empty(), "{report:?}");
     }
 }
 
@@ -267,10 +279,18 @@ fn landed_authority_refuses_branch_waivers_and_unreadable_sources() {
     let base = f.commit(&[]);
     f.head(base);
     f.repo
-        .remote("origin", "https://example.invalid/project.git")
+        .remote("origin", "file:///nonexistent/project.git")
         .unwrap();
     f.repo
         .reference("refs/remotes/origin/main", base, true, "fixture")
+        .unwrap();
+    f.repo
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "fixture",
+        )
         .unwrap();
     let local: GitPolicy = serde_json::from_value(json!({"path_policy":"off", "blocked_names":[{"pattern":"*.pem","except_under":["/"],"reason":"branch only"}],
         "protected_paths":[{"prefix":"private","allow":[{"path":"/","reason":"branch only"}]}]})).unwrap();
@@ -281,7 +301,7 @@ fn landed_authority_refuses_branch_waivers_and_unreadable_sources() {
         .unwrap()
         .violations
         .is_empty());
-    // Before first fetch / no remote, HEAD still supplies the policy.
+    // No remote (local only): HEAD still supplies the policy.
     f.repo.remote_delete("origin").unwrap();
     assert_eq!(
         codeflow_core::hooks::landed_policy::staged_paths(f.dir.path(), &local)
@@ -290,7 +310,7 @@ fn landed_authority_refuses_branch_waivers_and_unreadable_sources() {
         PolicyLevel::Block
     );
     f.repo
-        .remote("origin", "https://example.invalid/project.git")
+        .remote("origin", "file:///nonexistent/project.git")
         .unwrap();
     f.repo
         .reference_symbolic(
@@ -333,8 +353,10 @@ fn all_gate_inputs_remain_exempt_under_hostile_policy() {
     assert!(f.range(base, head, &p).violations.is_empty());
 }
 
+/// TSK-1077: a line a landed task record declares contributes neither
+/// denials nor exceptions; the default branch alone decides.
 #[test]
-fn declared_integration_target_contributes_denials_and_intersects_waivers() {
+fn a_declared_integration_line_contributes_nothing() {
     let f = Fixture::new();
     f.stage(".codeflow/policy.json", 0o100_644, br#"{"git":{"blocked_names":[{"pattern":"*.pem","except_under":["fixtures"],"reason":"public"}]}}"#);
     f.stage(
@@ -346,7 +368,7 @@ fn declared_integration_target_contributes_denials_and_intersects_waivers() {
     f.stage(".codeflow/policy.json", 0o100_644, br#"{"git":{"blocked_names":[{"pattern":"*.pem","except_under":["fixtures/narrow"],"reason":"narrow"},"target-only"],"protected_paths":[{"prefix":"private","allow":[]}]}}"#);
     let line = f.commit(&[main]);
     f.repo
-        .remote("origin", "https://example.invalid/repo.git")
+        .remote("origin", "file:///nonexistent/repo.git")
         .unwrap();
     for (name, id) in [("main", main), ("integration/paths", line)] {
         f.repo
@@ -354,17 +376,26 @@ fn declared_integration_target_contributes_denials_and_intersects_waivers() {
             .unwrap();
     }
     f.repo
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "fixture",
+        )
+        .unwrap();
+    f.repo
         .reference("refs/heads/task/TSK-007-paths", line, true, "fixture")
         .unwrap();
     f.repo.set_head("refs/heads/task/TSK-007-paths").unwrap();
     let landed = codeflow_core::hooks::landed_policy::load(f.dir.path()).unwrap();
-    assert!(landed.source.contains("integration/paths"));
+    assert_eq!(landed.source, "refs/remotes/origin/main");
     let p = PathPolicy::from_git(&landed.policy.git).unwrap();
     for (path, blocked) in [
-        ("target-only", true),
-        ("private/file", true),
-        ("fixtures/cert.pem", true),
+        ("target-only", false),
+        ("private/file", false),
+        ("fixtures/cert.pem", false),
         ("fixtures/narrow/cert.pem", false),
+        ("other/cert.pem", true),
     ] {
         f.stage(path, 0o100_644, b"public");
         let report = path_policy::staged(&f.repo, &p).unwrap();
@@ -387,13 +418,21 @@ fn line_fixture(main: &str, line: &str) -> Fixture {
     f.stage(".codeflow/policy.json", 0o100_644, line.as_bytes());
     let line_id = f.commit(&[main_id]);
     f.repo
-        .remote("origin", "https://example.invalid/repo.git")
+        .remote("origin", "file:///nonexistent/repo.git")
         .unwrap();
     for (name, id) in [("main", main_id), ("integration/paths", line_id)] {
         f.repo
             .reference(&format!("refs/remotes/origin/{name}"), id, true, "fixture")
             .unwrap();
     }
+    f.repo
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "fixture",
+        )
+        .unwrap();
     f.repo
         .reference("refs/heads/task/TSK-007-paths", line_id, true, "fixture")
         .unwrap();
@@ -403,8 +442,10 @@ fn line_fixture(main: &str, line: &str) -> Fixture {
     f
 }
 
+/// TSK-1077: the line's exceptions grant nothing, and the line's working
+/// copy may add denials only.
 #[test]
-fn line_exceptions_stand_and_a_line_cannot_remove_a_main_denial() {
+fn line_exceptions_are_ignored_and_main_denials_stand() {
     let f = line_fixture(
         r#"{"git":{"blocked_names":["main-only"],"protected_paths":[{"prefix":"vault","allow":[]}]}}"#,
         r#"{"git":{"blocked_names":[{"pattern":"*.pem","except_under":["fixtures"],"reason":"public"}],
@@ -415,8 +456,8 @@ fn line_exceptions_stand_and_a_line_cannot_remove_a_main_denial() {
         .git;
     let p = codeflow_core::hooks::landed_policy::staged_paths(f.dir.path(), &local).unwrap();
     for (path, blocked) in [
-        ("fixtures/cert.pem", false),
-        ("private/examples/x", false),
+        ("fixtures/cert.pem", true),
+        ("private/examples/x", true),
         ("other/cert.pem", true),
         ("private/x", true),
         ("main-only", true),
@@ -435,11 +476,7 @@ fn identical_policies_with_explicit_rules_report_no_local_difference() {
         "protected_paths":[{"prefix":"private","allow":[{"path":"private/examples","reason":"public"}]}]}}"#;
     let f = line_fixture(policy, policy);
     let landed = codeflow_core::hooks::landed_policy::load(f.dir.path()).unwrap();
-    assert!(
-        landed.source.contains("integration/paths"),
-        "{}",
-        landed.source
-    );
+    assert_eq!(landed.source, "refs/remotes/origin/main");
     assert!(!landed.local_differs);
     std::fs::write(
         f.dir.path().join(".codeflow/policy.json"),
@@ -469,8 +506,148 @@ fn schema_rejects_invalid_declarations_and_keeps_new_keys_out_of_shipped_policy(
         assert!(shipped["git"].get(key).is_none());
     }
     let note = include_str!("../../../changelog.d/TSK-322.md");
+    // A name added after TSK-322 is named by the release note that added it.
+    let later = include_str!("../../../changelog.d/TSK-1079.md");
     for name in path_policy::DEFAULT_NAMES {
-        assert!(note.contains(name), "{name}");
+        assert!(note.contains(name) || later.contains(name), "{name}");
     }
+    assert!(later.contains("`credentials.json`"));
+    assert!(later.contains("`.credentials.json`"));
     assert!(note.contains("except_under"));
+}
+
+/// Every gate input the exemption admits (`path_policy::exempt`).
+const GATE_INPUTS: [&str; 10] = [
+    ".gitignore",
+    "deep/.gitignore",
+    ".codeflow/policy.json",
+    ".codeflow/project.toml",
+    ".codeflow/bootstrap.sh",
+    ".codeflow/bootstrap.ps1",
+    ".codeflow/ci-setup.sh",
+    ".codeflow/git-hooks/pre-commit",
+    ".github/workflows/codeflow-policy.yml",
+    ".github/workflows/codeflow-ci.yml",
+];
+
+/// Stage one entry on an empty base and return the staged and range reports.
+fn judge_one(
+    path: &str,
+    mode: u32,
+    contents: Option<&[u8]>,
+    p: &PathPolicy,
+) -> [path_policy::Report; 2] {
+    let f = Fixture::new();
+    let base = f.commit(&[]);
+    f.head(base);
+    let gitlink = base.to_string();
+    f.stage(path, mode, contents.unwrap_or(gitlink.as_bytes()));
+    let staged = path_policy::staged(&f.repo, p).unwrap();
+    let head = f.commit(&[base]);
+    [staged, f.range(base, head, p)]
+}
+
+#[test]
+fn links_and_gitlinks_at_gate_inputs_refuse_while_files_stay_exempt() {
+    let default = Fixture::policy(json!({}));
+    let hostile = Fixture::policy(
+        json!({"blocked_names":["*"],"protected_paths":[{"prefix":"/", "allow":[]}]}),
+    );
+    // Every case is judged and every wrong verdict is listed, so a failure
+    // names each exempt path and mode it affects.
+    let mut wrong = Vec::new();
+    let mut expect = |case: String, reports: [path_policy::Report; 2], blocked: bool| {
+        for (mode, report) in ["staged", "range"].into_iter().zip(reports) {
+            if report.violations.is_empty() == blocked {
+                wrong.push(format!("{case} ({mode}): {report:?}"));
+            }
+        }
+    };
+    for path in GATE_INPUTS {
+        for (what, mode, contents) in [
+            ("absolute link", 0o120_000, Some(b"/tmp/payload".as_slice())),
+            ("drive link", 0o120_000, Some(b"C:/payload".as_slice())),
+            (
+                "drive-relative link",
+                0o120_000,
+                Some(b"C:Windows/Temp/payload".as_slice()),
+            ),
+            ("parent link", 0o120_000, Some(b"../outside".as_slice())),
+            ("invalid link", 0o120_000, Some(b"a//b".as_slice())),
+            // Resolved beside the link; a target that is itself a gate input
+            // passes, so the blocked name sits one directory down.
+            (
+                "link to a blocked name",
+                0o120_000,
+                Some(b"keys/id_rsa".as_slice()),
+            ),
+            ("gitlink", 0o160_000, None),
+        ] {
+            let reports = judge_one(path, mode, contents, &default);
+            expect(format!("{path} {what}"), reports, true);
+        }
+        for (name, p) in [("default", &default), ("hostile", &hostile)] {
+            let upper = path.to_uppercase();
+            let reports = judge_one(&upper, 0o100_644, Some(b"public"), p);
+            expect(format!("{upper} file, {name} policy"), reports, false);
+            let reports = judge_one(path, 0o100_755, Some(b"#!/bin/sh\n"), p);
+            expect(format!("{path} executable, {name} policy"), reports, false);
+        }
+        // A safe in-tree link is judged by its target, which here is ordinary.
+        let reports = judge_one(path, 0o120_000, Some(b"ordinary"), &default);
+        expect(format!("{path} safe link"), reports, false);
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} wrong:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+}
+
+#[test]
+fn removing_a_link_or_gitlink_from_a_gate_input_passes() {
+    for (mode, contents) in [(0o120_000, "/tmp/payload"), (0o160_000, "")] {
+        let f = Fixture::new();
+        let root = f.commit(&[]);
+        let contents = if contents.is_empty() {
+            root.to_string()
+        } else {
+            contents.to_string()
+        };
+        f.stage(".codeflow/bootstrap.sh", mode, contents.as_bytes());
+        let base = f.commit(&[root]);
+        f.head(base);
+        f.delete(".codeflow/bootstrap.sh");
+        f.stage(".codeflow/bootstrap.sh", 0o100_755, b"#!/bin/sh\n");
+        let p = Fixture::policy(json!({}));
+        assert!(path_policy::staged(&f.repo, &p)
+            .unwrap()
+            .violations
+            .is_empty());
+        let head = f.commit(&[base]);
+        assert!(f.range(base, head, &p).violations.is_empty());
+        f.delete(".codeflow/bootstrap.sh");
+        let gone = f.commit(&[head]);
+        assert!(f.range(head, gone, &p).violations.is_empty());
+    }
+}
+
+#[test]
+fn credentials_json_is_a_shipped_blocked_name_at_any_depth_and_case() {
+    let p = Fixture::policy(json!({}));
+    for (path, blocked) in [
+        ("credentials.json", true),
+        ("config/service/credentials.json", true),
+        ("Deploy/CREDENTIALS.JSON", true),
+        (".credentials.json", true),
+        ("home/.claude/.credentials.json", true),
+        ("Backup/.CREDENTIALS.JSON", true),
+        ("credentials.json.example", false),
+        ("docs/credentials.md", false),
+    ] {
+        for report in judge_one(path, 0o100_644, Some(b"{}"), &p) {
+            assert_eq!(!report.violations.is_empty(), blocked, "{path}: {report:?}");
+        }
+    }
 }

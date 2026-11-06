@@ -102,7 +102,10 @@ const ROWS: &[(&str, Proof)] = &[
     ("FEEDBACK_INDEX_STALE", Runs),
     ("DOCS_CAPABILITIES_UNCHECKED", Runs),
     ("WORK_START_RECONCILE", Runs),
+    ("WORK_TARGET_TIP", Runs),
+    ("WORK_TARGET_UNVERIFIED", Runs),
     ("WORK_START_MERGE_PLANNING", Runs),
+    ("WORK_START_UNBLOCK", Runs),
     ("WORK_CLASSIFICATION", Runs),
     ("TASK_RECORD_MISSING", Runs),
     ("WORKGRAPH_INVALID", Runs),
@@ -119,6 +122,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("UNVERIFIED_LINE_FROZEN", Excluded(HumanAuthority)),
     ("CRITERIA_DELTA", Excluded(HumanAuthority)),
     ("CRITERIA_AUTHORITY", Excluded(HumanAuthority)),
+    ("RECORD_UNBLOCKED", Excluded(HumanAuthority)),
     ("CRITERIA_CORRECTION", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_CHANGE", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_RECORD", Excluded(HumanAuthority)),
@@ -173,11 +177,13 @@ const ROWS: &[(&str, Proof)] = &[
     ("CI_BODY_UNSUPPLIED", Runs),
     ("CI_SECURITY_LEVEL_LOWERED", Runs),
     ("CI_SETUP_HOOK_CHANGED", Runs),
+    ("CI_WORKFLOW_CHANGED", Runs),
     ("SCAFFOLD_MANIFEST_BROKEN", Excluded(Network)),
     ("PATH_POLICY", Runs),
     ("ENV_FILE_STAGED", Runs),
     ("SECRET_SCAN_INCOMPLETE", Runs),
     ("SECRET_STAGED", Runs),
+    ("SECRET_ENGINE_UNAVAILABLE", Excluded(Network)),
     ("PUSH_SET_CI", Runs),
     ("PUSH_SET_BY_HAND", Runs),
     ("PUSH_RANGE_UNRESOLVED", Runs),
@@ -237,6 +243,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_STARTUP_RELOCATED", Excluded(HumanAuthority)),
     // The operator decides which configuration inputs to repair or remove.
     ("DOCTOR_GIT_CONFIG_INCLUDES", Excluded(HumanAuthority)),
+    // Settings the guard cannot read are the operator's to confirm.
+    ("DOCTOR_TEXT_RULE_UNSEEN", Excluded(HumanAuthority)),
     ("GUARD_UNCLASSIFIABLE", Runs),
     ("GUARD_UNRESOLVED", Runs),
     ("GUARD_ALIAS", Runs),
@@ -309,7 +317,11 @@ fn every_catalogued_row_is_proven_or_excluded_at_a_boundary() {
 // ---------------------------------------------------------------------------
 
 fn exe() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_codeflow"))
+    // Exercise the same proof against a preserved baseline for fail-before.
+    std::env::var_os("CODEFLOW_TEST_BINARY").map_or_else(
+        || PathBuf::from(env!("CARGO_BIN_EXE_codeflow")),
+        PathBuf::from,
+    )
 }
 
 fn home() -> &'static Path {
@@ -538,6 +550,20 @@ fn ci(root: &Path, extra: &[&str]) -> String {
     codeflow(root, &args)
 }
 
+/// [`ci`] with the exit status kept, for a test that must tell a clean run
+/// from one that stopped early.
+fn ci_status(root: &Path, extra: &[&str]) -> (Option<i32>, String) {
+    let mut args = vec![
+        "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x",
+    ];
+    args.extend(extra);
+    let out = command(exe().to_str().unwrap(), root)
+        .args(&args)
+        .output()
+        .unwrap();
+    (out.status.code(), text(&out))
+}
+
 /// A fresh `codeflow init --yes <tier>` project, made once per tier, kept
 /// until the process exits, and copied for each test.
 fn scaffolded(tier: &str) -> tempfile::TempDir {
@@ -598,6 +624,8 @@ fn with_destination(root: &Path) -> PathBuf {
     );
     git(root, &["remote", "add", "origin", dest.to_str().unwrap()]);
     git(root, &["fetch", "-q", "origin"]);
+    // TSK-1077: record the policy authority on every git version.
+    git(root, &["remote", "set-head", "origin", &target]);
     git(
         root,
         &["switch", "-q", "-c", "feat/x", &format!("origin/{target}")],
@@ -1140,6 +1168,71 @@ fn clears_ci_setup_hook_changed() {
         git(root, &["commit", "-q", "-m", "ci: restore the setup hook"]);
         let after = ci(root, &[]);
         assert!(!after.contains("codeflow ci: note: this change"), "{after}");
+    }
+}
+
+#[test]
+fn clears_ci_workflow_changed() {
+    const WORKFLOW: &str = ".github/workflows/codeflow-policy.yml";
+    const TARGET: &str = "on:\n  pull_request_target:\njobs:\n  verdict:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: exit 1\n";
+    for verb in ["adds", "edits", "removes"] {
+        let dir = ci_repo(DEFAULTS);
+        let root = dir.path();
+        if verb != "adds" {
+            git(root, &["switch", "-q", "main"]);
+            write(root, WORKFLOW, TARGET);
+            git(root, &["add", WORKFLOW]);
+            git(
+                root,
+                &["commit", "-q", "-m", "ci: seed the policy workflow"],
+            );
+            git(root, &["switch", "-q", "feat/x"]);
+            git(root, &["merge", "--ff-only", "main"]);
+        }
+        if verb == "removes" {
+            std::fs::remove_file(root.join(WORKFLOW)).unwrap();
+        } else {
+            write(
+                root,
+                WORKFLOW,
+                "on:\n  push:\njobs:\n  verdict:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: exit 0\n",
+            );
+        }
+        git(root, &["add", WORKFLOW]);
+        git(
+            root,
+            &["commit", "-q", "-m", "ci: change the policy workflow"],
+        );
+        let before = ci(root, &[]);
+        let finding = format!("this change edits {WORKFLOW}");
+        assert_prints_row(block(&before, &finding), "CI_WORKFLOW_CHANGED");
+        // The printed step: restore the workflow to its target state,
+        // including absence for a new one.
+        if verb == "adds" {
+            std::fs::remove_file(root.join(WORKFLOW)).unwrap();
+        } else {
+            write(root, WORKFLOW, TARGET);
+        }
+        git(root, &["add", WORKFLOW]);
+        git(
+            root,
+            &["commit", "-q", "-m", "ci: restore the policy workflow"],
+        );
+        // The after run must succeed and name the workflow check among the
+        // checks it ran, so an early error or an empty run cannot pass.
+        let (status, after) = ci_status(root, &[]);
+        assert_eq!(status, Some(0), "{after}");
+        assert!(!after.contains("ci.workflow_change"), "{after}");
+        let clean = after
+            .lines()
+            .find(|line| line.starts_with("codeflow ci: clean — "))
+            .unwrap_or_else(|| panic!("no clean report in:\n{after}"));
+        assert!(
+            clean
+                .split(['—', ','])
+                .any(|check| check.trim().starts_with("workflow-change")),
+            "the workflow check did not run: {clean}"
+        );
     }
 }
 

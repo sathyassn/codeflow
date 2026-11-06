@@ -79,6 +79,42 @@ pub(crate) fn relative_to(root: &Path, path: &Path) -> io::Result<String> {
     Ok(parts.join("/"))
 }
 
+/// `path` split into its parent folder, the trusted root a [`Tree`] opens,
+/// and its last component as the `/`-free name the walk then enters without
+/// following, so a link or junction at `path` itself is refused rather than
+/// trusted as a root (TSK-1044).
+///
+/// # Errors
+///
+/// When `path` has no parent or its last component is not a UTF-8 name.
+pub(crate) fn split_leaf(path: &Path) -> io::Result<(&Path, String)> {
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+    match (parent, path.components().next_back()) {
+        (Some(parent), Some(Component::Normal(name))) => {
+            Ok((parent, name.to_str().ok_or_else(invalid)?.to_string()))
+        }
+        _ => Err(invalid()),
+    }
+}
+
+/// Refuse an opened file with more than one name: a hard link planted at a
+/// path `CodeFlow` copies from would bring a file from elsewhere with it.
+/// Read from the opened handle on every platform.
+///
+/// # Errors
+///
+/// When the file has another name, or its link count cannot be read.
+pub(crate) fn single_name(file: &File) -> io::Result<()> {
+    if platform::link_count(file)? == 1 {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "a file with more than one name (a hard link) is never copied",
+        ))
+    }
+}
+
 /// Create `relative` under `root`, as [`Tree::create_new`] does.
 ///
 /// # Errors
@@ -100,6 +136,37 @@ impl Tree {
         Ok(Self { path, anchor })
     }
 
+    /// Hold the folder `relative` beneath this root, entered by no-follow
+    /// steps from the held handle, so its identity is the object found there
+    /// now and not a path resolved again later.
+    ///
+    /// # Errors
+    ///
+    /// When a component is a link, missing, or not a folder.
+    pub(crate) fn subtree(&self, relative: &str) -> io::Result<Self> {
+        let path = checked(relative)?;
+        let directory = self.explained(relative, || self.walk(path, false))?;
+        Ok(Self {
+            path: self.path.join(path),
+            anchor: ConfinedRoot::from_directory(directory),
+        })
+    }
+
+    /// Whether both trees are the same folder object, by the identity of the
+    /// held handles. Where the platform gives no handle identity here, by
+    /// the canonical paths, which held Windows handles keep from being
+    /// renamed.
+    ///
+    /// # Errors
+    ///
+    /// When a handle cannot be inspected.
+    pub(crate) fn same_directory(&self, other: &Self) -> io::Result<bool> {
+        Ok(self
+            .anchor
+            .same_object(&other.anchor)?
+            .unwrap_or_else(|| self.path == other.path))
+    }
+
     /// The canonical root.
     pub(crate) fn path(&self) -> &Path {
         &self.path
@@ -117,7 +184,7 @@ impl Tree {
                 error.kind(),
                 format!(
                     "{link} is a symbolic link or junction; CodeFlow never reads or writes \
-                     repository files through one"
+                     files through one"
                 ),
             ),
             None => error,
@@ -285,6 +352,22 @@ impl Tree {
         bytes: &[u8],
         permissions: Option<&std::fs::Permissions>,
     ) -> io::Result<()> {
+        self.create_new_with(relative, permissions, |file| file.write_all(bytes))
+    }
+
+    /// [`Tree::create_new_keeping`], where `write` fills the new file through
+    /// its own descriptor, so a large file can be streamed in rather than
+    /// held in memory.
+    ///
+    /// # Errors
+    ///
+    /// As [`Tree::create_new`], and whatever `write` returns.
+    pub(crate) fn create_new_with(
+        &self,
+        relative: &str,
+        permissions: Option<&std::fs::Permissions>,
+        write: impl FnOnce(&mut File) -> io::Result<()>,
+    ) -> io::Result<()> {
         self.explained(relative, || {
             let (parent, name) = self.parent(relative, true)?;
             let mut file = platform::create_file(&parent, &name, true)?;
@@ -298,7 +381,7 @@ impl Tree {
                 Ok(())
             };
             let written = kept
-                .and_then(|()| file.write_all(bytes))
+                .and_then(|()| write(&mut file))
                 .and_then(|()| file.sync_all());
             #[cfg(test)]
             let written = written.and_then(|()| fault::check(fault::Point::AfterCreate, relative));
@@ -458,15 +541,19 @@ impl Tree {
         })
     }
 
-    /// Open (creating if needed) a regular file to hold a lock on.
+    /// Open an existing regular file for appending, to learn whether this
+    /// process may write it: never created, truncated or written, never
+    /// opened through a link or a reparse point, without blocking on a
+    /// special file, and the type is checked on the opened descriptor.
     ///
     /// # Errors
     ///
-    /// When a component is a link or the leaf is not a regular file.
-    pub(crate) fn lock_file(&self, relative: &str) -> io::Result<File> {
+    /// When a component is a link, the leaf is missing, it is not a regular
+    /// file, or the system refuses write access.
+    pub(crate) fn open_regular_for_append(&self, relative: &str) -> io::Result<File> {
         self.explained(relative, || {
-            let (parent, name) = self.parent(relative, true)?;
-            platform::create_file(&parent, &name, false)
+            let (parent, name) = self.parent(relative, false)?;
+            platform::open_regular_for_append(&parent, &name)
         })
     }
 }
@@ -686,6 +773,31 @@ mod platform {
         Ok(file)
     }
 
+    /// Open an existing regular file for appending: never created or
+    /// truncated, never through a link, without blocking on a special file;
+    /// the type is checked on the opened descriptor.
+    pub(super) fn open_regular_for_append(
+        parent: &ConfinedDirectory,
+        leaf: &OsStr,
+    ) -> io::Result<File> {
+        let name = name(leaf)?;
+        let flags =
+            libc::O_WRONLY | libc::O_APPEND | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
+        // SAFETY: live directory descriptor and NUL-terminated basename; no
+        // O_CREAT or O_TRUNC, so no mode is needed. A successful descriptor
+        // is owned once.
+        let descriptor = unsafe { libc::openat(parent.file.as_raw_fd(), name.as_ptr(), flags) };
+        if descriptor == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: openat returned this owned descriptor.
+        let file = unsafe { File::from_raw_fd(descriptor) };
+        if !file.metadata()?.is_file() {
+            return Err(invalid());
+        }
+        Ok(file)
+    }
+
     pub(super) fn metadata(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<Metadata> {
         let name = name(leaf)?;
         let mut info = std::mem::MaybeUninit::<libc::stat>::uninit();
@@ -763,6 +875,11 @@ mod platform {
 
     pub(super) fn sync(parent: &ConfinedDirectory) -> io::Result<()> {
         parent.file.sync_all()
+    }
+
+    pub(super) fn link_count(file: &File) -> io::Result<u64> {
+        use std::os::unix::fs::MetadataExt as _;
+        Ok(file.metadata()?.nlink())
     }
 
     pub(super) fn entries(parent: &ConfinedDirectory, maximum: usize) -> io::Result<Vec<OsString>> {
@@ -857,9 +974,9 @@ mod platform {
     use windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES;
     use windows_sys::Win32::Storage::FileSystem::{
         FileDispositionInfo, FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo,
-        GetFileInformationByHandleEx, SetFileInformationByHandle, DELETE, FILE_DISPOSITION_INFO,
-        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_BOTH_DIR_INFO, FILE_LIST_DIRECTORY,
-        FILE_READ_ATTRIBUTES, FILE_TRAVERSE,
+        GetFileInformationByHandleEx, SetFileInformationByHandle, DELETE, FILE_APPEND_DATA,
+        FILE_DISPOSITION_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_BOTH_DIR_INFO,
+        FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_TRAVERSE,
     };
     use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
@@ -918,6 +1035,23 @@ mod platform {
 
     pub(super) fn open_regular(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<File> {
         let file = open(parent, leaf, FILE_GENERIC_READ, false)?;
+        if !file.metadata()?.is_file() {
+            return Err(invalid());
+        }
+        Ok(file)
+    }
+
+    /// Open an existing regular file for appending: never created, never
+    /// through a reparse point (the confined open refuses them), and the
+    /// type is checked on the opened handle.
+    pub(super) fn open_regular_for_append(
+        parent: &ConfinedDirectory,
+        leaf: &OsStr,
+    ) -> io::Result<File> {
+        // `FILE_READ_ATTRIBUTES` is required: the confined open and the type
+        // check below read the handle's attributes, and a handle without that
+        // right is refused with "Access is denied" (os error 5).
+        let file = open(parent, leaf, FILE_APPEND_DATA | FILE_READ_ATTRIBUTES, false)?;
         if !file.metadata()?.is_file() {
             return Err(invalid());
         }
@@ -1009,6 +1143,21 @@ mod platform {
             return Err(io::Error::last_os_error());
         }
         Ok(())
+    }
+
+    pub(super) fn link_count(file: &File) -> io::Result<u64> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+        let mut info = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+        // SAFETY: a live handle and writable storage sized for the structure.
+        let success =
+            unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) };
+        if success == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the call succeeded and initialized the structure.
+        Ok(u64::from(unsafe { info.assume_init() }.nNumberOfLinks))
     }
 
     // Windows has no directory-fsync parity here. File contents are flushed
@@ -1211,14 +1360,14 @@ mod tests {
         for path in ["redirect/sentinel", "leaf"] {
             assert!(io.write(path, b"bad").is_err());
             assert!(io.remove(path).is_err());
-            assert!(io.lock_file(path).is_err());
+            assert!(io.create_read_only(path).is_err());
         }
         let pipe = std::ffi::CString::new(root.path().join("pipe").as_os_str().as_bytes()).unwrap();
         // SAFETY: valid NUL-terminated fixture pathname.
         assert_eq!(unsafe { libc::mkfifo(pipe.as_ptr(), 0o600) }, 0);
         assert!(io.write("pipe", b"bad").is_err());
         assert!(io.remove("pipe").is_err());
-        assert!(io.lock_file("pipe").is_err());
+        assert!(io.create_read_only("pipe").is_err());
         assert_eq!(
             std::fs::read(outside.path().join("sentinel")).unwrap(),
             b"outside"
@@ -1528,5 +1677,31 @@ mod tests {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod leaf_tests {
+    use super::{single_name, split_leaf};
+    use std::path::Path;
+
+    #[test]
+    fn a_path_splits_into_its_parent_and_a_name() {
+        let (parent, leaf) = split_leaf(Path::new("/home/user/.codeflow")).unwrap();
+        assert_eq!(parent, Path::new("/home/user"));
+        assert_eq!(leaf, ".codeflow");
+        for bad in ["/", "", ".codeflow", "/home/.."] {
+            assert!(split_leaf(Path::new(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_file_with_a_second_name_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let one = dir.path().join("one");
+        std::fs::write(&one, "x").unwrap();
+        single_name(&std::fs::File::open(&one).unwrap()).unwrap();
+        std::fs::hard_link(&one, dir.path().join("two")).unwrap();
+        assert!(single_name(&std::fs::File::open(&one).unwrap()).is_err());
     }
 }

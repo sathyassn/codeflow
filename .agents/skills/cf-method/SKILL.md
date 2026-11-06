@@ -105,9 +105,21 @@ facts yourself and make reversible, outcome-preserving implementation choices
 from evidence; do not offload research to the operator.
 
 An epic is one outcome. When its criteria describe two outcomes, it is two
-epics on one integration line. Size tasks by the rule in the orchestrator's
-task-graph contract: one observable outcome per task, split only for a
-written reason. For an explicit estimate, capacity or deadline request, use
+epics on one integration line; the epic that does not own the line declares
+it with `parent_line: integration/<epic-id>-<slug>`. Size tasks by the
+sizing test, which is guidance and matches the orchestrator's task-graph
+contract (one observable outcome per task, split only for a written reason): a task is one noticeable outcome with its own proof; siblings that
+share a cause, a code path or a proof merge, keeping every criterion; a
+helper-only task folds into the task it helps; a misfiled task moves to the
+epic that owns its outcome. No number caps a task's size or a plan's task
+count, so each merge, fold or split is a stated judgement. An epic is one
+coherent outcome built from meaningful Medium-to-Hard tasks, small enough that
+its finished part reaches main within a few days through checkpoint PRs; about
+5 to 10 tasks is a reference point for that, not a rule. Grade tasks by
+judgement: most are Medium or Hard, an Easy task usually belongs with a
+sibling that shares its cause, code path or proof, and a Very Hard task is
+split before claim. Every task carries its own outcome and proof.
+For an explicit estimate, capacity or deadline request, use
 `cf-estimate`. For a durable repository guide, `cf-docs-portal` owns the
 opt-in lifecycle; Markdown stays authoritative.
 
@@ -163,8 +175,11 @@ waive the clarity, safety, review or protected-branch conditions.
    into the task branch and resolves conflicts there. Each task still
    completes its producer verification and cross-lineage review before it
    joins a batch.
-3. **Land in batches.** The primary assembles reviewed heads into a small
-   batch candidate in dependency order, inspects each landing merge (a clean
+3. **Land in batches.** When a line lands, the primary puts every PR
+   reviewed and ready at that moment on one candidate in dependency order; a
+   PR that becomes ready later joins the next candidate, never held behind
+   another PR's landing or hosted run. Each line has one candidate at a time,
+   and lines land in parallel. It inspects each landing merge (a clean
    merge, its tree equal to the re-merge of its parents, does not reopen
    unit review and carries it as `codeflow ci` binds it; a hand-resolved
    product hunk is that task's own work and returns it to a whole-unit
@@ -172,7 +187,7 @@ waive the clarity, safety, review or protected-branch conditions.
    candidate, and that look is not a unit review), and runs one full gate on
    that exact candidate. It lands through one of two
    sanctioned modes: **Local**, `codeflow integrate <candidate> --into
-   integration/<…>` on a candidate cut from the current line tip (serialized,
+   integration/<…>` on a candidate cut from the current line tip (one per line at a time,
    runs the non-selective full gate, keeps the tested tip); or **PR** into the
    integration branch, merged by the primary once the candidate's
    `codeflow test --mode full --all` gate is complete and green and the PR's
@@ -193,7 +208,13 @@ waive the clarity, safety, review or protected-branch conditions.
 6. **Finish once.** After the last batch lands, prove the epic once on the
    integration branch (the full gate over everything, `validate --docs`, the
    capability, doc and epic-record updates), close the epic, and raise
-   **one** PR `integration -> main`. The human reviews and merges; cleanup
+   **one** PR `integration -> main`. Where the project adopted the
+   `cf-estimate` time-box profile, the epic close on the line also runs
+   `codeflow estimate outcomes --epic <id>` at the line tip, commits the
+   result as the epic's outcome record
+   (`<estimate root>/outcomes/<epic id>.md`) and closes the epic's Estimate
+   section with the comparison, so the record reaches `main` in that PR
+   before the line ref is deleted. The human reviews and merges; cleanup
    follows the worktree rules' "Cleanup" section, merge proof first. That
    PR's `codeflow ci` judges each task of the line, and of a verified epic
    line that joined it, at the task's landing on its line, so a task

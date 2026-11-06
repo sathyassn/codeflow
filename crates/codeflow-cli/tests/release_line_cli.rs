@@ -318,10 +318,19 @@ impl Fx {
         output(&out)
     }
 
-    /// The release push as CI judges it: from the published release tip.
+    /// The release push as CI judges it: from the published release tip,
+    /// with the push hand-off the hook passes (`--pushed-ref`), so a base
+    /// that fresh lines share is not read as a line's tip (TSK-1155).
     fn ci_release(&self) -> (i32, String) {
         let published = self.git(&["rev-parse", &format!("origin/{RELEASE}")]);
-        self.ci(&published, "HEAD", RELEASE, None)
+        let pushed = format!("refs/heads/{RELEASE}");
+        self.ci_with(
+            &published,
+            "HEAD",
+            RELEASE,
+            None,
+            &["--pushed-ref", &pushed],
+        )
     }
 
     /// The pre-push hook for pushing `local` to `branch`, which the
@@ -1850,7 +1859,7 @@ fn a_late_completion_binds_through_a_closeout_only_ancestor() {
             .replace("Reviewed; waiting for the gate.\n", &block(&reviewed));
         fx.write(&path("TSK-001"), &done);
         fx.commit("docs(records): complete TSK-001");
-        let on_line = fx.ci(LINE_A, "HEAD", "plan/complete-tsk001", None);
+        let on_line = fx.ci(LINE_A, "HEAD", "plan/complete-tsk001", Some(LINE_A));
         fx.land(LINE_A, "plan/complete-tsk001");
         fx.cut_release();
         fx.import(LINE_A);
@@ -2756,7 +2765,7 @@ fn a_records_only_criterion_is_frozen_on_every_release_path() {
     fx.git(&["switch", "-q", "-C", "plan/amend", LINE_A]);
     loosen(&fx);
     fx.commit("docs(records): loosen a criterion");
-    let line = fx.ci(LINE_A, "HEAD", "plan/amend", None);
+    let line = fx.ci(LINE_A, "HEAD", "plan/amend", Some(LINE_A));
     passes(&line, "an ordinary amendment on an epic line");
     assert!(!line.1.contains(SCOPE_LINE), "{}", line.1);
 }
@@ -4495,4 +4504,213 @@ fn with_reviews(root: &Path, rev: &str, body: &str) -> String {
     } else {
         format!("{body}\n\n## Reviews\n\n| Reviewer | Scope | Verdict |\n|---|---|---|\n{rows}\n")
     }
+}
+
+// ---------------------------------------------------------------------------
+// TSK-1267: destination lookup on a private repository
+// ---------------------------------------------------------------------------
+
+/// The header blocks a private origin received, one per request.
+type Requests = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+/// A private repository's HTTP endpoint: every request is answered `401`,
+/// as GitHub answers a run whose checkout kept no credential
+/// (`persist-credentials: false`). Returns its URL and every request's
+/// complete header block, read up to the blank line that ends it; the
+/// server lives as long as the test process.
+fn private_origin() -> (String, Requests) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let requests = Requests::default();
+    let seen = requests.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut head = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                match std::io::Read::read(&mut stream, &mut byte) {
+                    Ok(1) => head.push(byte[0]),
+                    _ => break,
+                }
+            }
+            seen.lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&head).into_owned());
+            let _ = stream.write_all(
+                b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"private\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+    (
+        format!("http://127.0.0.1:{port}/owner/private.git"),
+        requests,
+    )
+}
+
+/// Every header name in `requests`, lowercased.
+fn header_names(requests: &Requests) -> Vec<String> {
+    requests
+        .lock()
+        .unwrap()
+        .iter()
+        .flat_map(|head| {
+            head.lines()
+                .skip(1)
+                .filter_map(|line| line.split_once(':'))
+                .map(|(name, _)| name.trim().to_ascii_lowercase())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// A GitHub event file naming `default` as the repository's default branch.
+fn event_file(fx: &Fx, default: &str) -> PathBuf {
+    let path = fx.root.parent().unwrap().join("event.json");
+    std::fs::write(
+        &path,
+        format!("{{\"repository\": {{\"default_branch\": \"{default}\"}}}}"),
+    )
+    .unwrap();
+    path
+}
+
+impl Fx {
+    /// The fixture as a hosted checkout of a private repository sees it:
+    /// every branch fetched into `refs/remotes/origin/*` (fetch-depth: 0),
+    /// then `origin` pointed at an endpoint that refuses without a
+    /// credential. Returns what that endpoint receives.
+    fn make_private(&self) -> Requests {
+        self.git(&["fetch", "-q", "origin"]);
+        let (url, requests) = private_origin();
+        self.git(&["remote", "set-url", "origin", &url]);
+        requests
+    }
+
+    /// `codeflow ci` with `origin` as the destination (no `--destination`),
+    /// under GitHub Actions values a caller sets (`event`, and the event
+    /// file at `event_path`), with the git config environment set as an
+    /// adopter's masked-header workaround sets it, which the judging git
+    /// scrubs.
+    fn ci_hosted(&self, event: &str, event_path: &Path, args: &[&str]) -> (i32, String) {
+        let out = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+            .arg("ci")
+            .args(args)
+            .env("GITHUB_ACTIONS", "true")
+            .env("GITHUB_EVENT_NAME", event)
+            .env("GITHUB_EVENT_PATH", event_path)
+            .env("CODEFLOW_PR_BODY", HOSTED_BODY)
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "http.extraHeader")
+            .env("GIT_CONFIG_VALUE_0", "AUTHORIZATION: basic eDp5")
+            .current_dir(&self.root)
+            .output()
+            .unwrap();
+        output(&out)
+    }
+
+    /// A task branch on line A carrying a code change; returns its head.
+    fn task_on_line(&self) -> String {
+        self.git(&["switch", "-q", "-C", "task/TSK-001-work", LINE_A]);
+        self.write("src/one.rs", "// TSK-001\n");
+        self.commit("feat: build the work")
+    }
+}
+
+/// The pull request body the managed workflow hands over.
+const HOSTED_BODY: &str = "## Summary\nA change.\n\n- one change\n\nTask: TSK-001\n\n## Changes\n- one\n\n## Testing\n- test\n";
+
+/// The scope-neutral fix a credential refusal names.
+const NEEDS_CREDENTIAL: &str = "The destination requires a credential this run does not have. Codeflow needs its default branch and policy to determine release scope. Give the job read access to the destination.";
+
+/// Asserts a run asked the private destination, sent it no credential and
+/// refused naming the fix (TSK-1267 AC-2, AC-4).
+fn refuses_for_the_credential(result: &(i32, String), requests: &Requests) {
+    assert_ne!(result.0, 0, "{}", result.1);
+    assert!(
+        !requests.lock().unwrap().is_empty(),
+        "the destination was never asked:\n{}",
+        result.1
+    );
+    assert!(
+        !header_names(requests)
+            .iter()
+            .any(|name| name == "authorization"),
+        "a credential reached the destination: {:?}",
+        requests.lock().unwrap()
+    );
+    for needle in ["remote authentication failed", NEEDS_CREDENTIAL] {
+        assert!(
+            result.1.contains(needle),
+            "missing {needle:?}:\n{}",
+            result.1
+        );
+    }
+}
+
+/// TSK-1267 AC-2 and AC-4: on a private repository whose checkout kept no
+/// credential, with an `Authorization` header injected through the git
+/// config environment, the release-scope lookup asks the destination
+/// without that header and refuses with an error that names the fix.
+#[test]
+fn a_private_repository_lookup_refuses_and_names_the_credential() {
+    let fx = Fx::new(false);
+    let head = fx.task_on_line();
+    let requests = fx.make_private();
+    let event = event_file(&fx, "main");
+    let base = fx.git(&["rev-parse", LINE_A]);
+    let result = fx.ci_hosted(
+        "pull_request_target",
+        &event,
+        &[
+            "--base",
+            &base,
+            "--head",
+            &head,
+            "--branch",
+            "task/TSK-001-work",
+            "--into",
+            LINE_A,
+        ],
+    );
+    println!("{}", result.1);
+    refuses_for_the_credential(&result, &requests);
+}
+
+/// TSK-1267 F1: GitHub Actions values are set by whoever runs `codeflow
+/// ci`, so a forged `pull_request_target` event naming the caller's own
+/// release branch as the default never excludes that branch from release
+/// scope or skips the destination.
+#[test]
+fn a_forged_event_cannot_exclude_a_release_branch_from_release_scope() {
+    let fx = Fx::new(false);
+    fx.cut_release();
+    fx.write("src/release.rs", "// release\n");
+    let head = fx.commit("feat: release work");
+    let requests = fx.make_private();
+    let event = event_file(&fx, RELEASE);
+    let base = fx.git(&["rev-parse", "main"]);
+    let result = fx.ci_hosted(
+        "pull_request_target",
+        &event,
+        &[
+            "--base", &base, "--head", &head, "--branch", RELEASE, "--into", "main",
+        ],
+    );
+    println!("{}", result.1);
+    refuses_for_the_credential(&result, &requests);
+}
+
+/// TSK-1267 F1: the removed `--default-branch` flag is not accepted.
+#[test]
+fn the_removed_default_branch_flag_is_rejected() {
+    let fx = Fx::new(false);
+    let out = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+        .args(["ci", "--default-branch", "main"])
+        .current_dir(&fx.root)
+        .output()
+        .unwrap();
+    let result = output(&out);
+    assert_eq!(result.0, 2, "{}", result.1);
+    assert!(result.1.contains("--default-branch"), "{}", result.1);
 }

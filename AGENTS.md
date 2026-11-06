@@ -12,7 +12,7 @@ This file is the canonical instruction set for any agent or human working in thi
 repo. The block between the codeflow markers below is maintained by
 `codeflow update`; everything outside it is project-owned — extend freely.
 
-<!-- codeflow:managed:begin scaffold=3.2.0 -->
+<!-- codeflow:managed:begin scaffold=4.0.0 -->
 <!-- Owned by `codeflow update`; project text goes below the end marker. -->
 
 ## How to use this map
@@ -33,6 +33,7 @@ floors and [enforced] rules hold under all.
 - **Find broadly; act by materiality.** Cosmetics never displace consequential work. A finding inside open work is fixed in its PR; a material issue nothing open covers gets one tracked item; nits are recorded, never farmed.
 - **Prove it where it runs.** Verify at the surface the change affects and what it touches upstream and downstream; disclose a mocked boundary.
 - **Plan once, at the breakdown.** A brief or spec is shaped once into an epic and outcome-sized tasks, or one standalone task (CodeFlow ADR-0076); work attaches to a task first and reuses the plan unless its outcome, interface, dependencies or safety change; one task is one PR. See `/cf-plan`, `/cf-method`.
+- **Change only work you own.** Every change that goes into a repository is part of a task, made by the session that owns that work; no ad hoc edits. A session that sees a needed change in work it does not own tells the owner.
 - **Review is independent.** A verdict needs a fresh-context independent review: one read-only pass over the whole unit on one revision by the other lineage, else `cf-reviewer` with reduced assurance recorded; never headless; self-review is not review; no round or count caps. See `cf-reviewer`.
 - **Git floor [enforced].** Conventional commits on a prefixed branch; no AI attribution, emoji or staged secrets; never commit, merge, push, force-push or delete on a protected branch; never bypass a gate; fix the cause a refusal names. See `.codeflow/rules/git-rules.md`.
 - **Only the operator adds process.** A rule adding a PR, approval, round or record to every piece of work, or a numeric cap, needs the operator's explicit approval with its protection and cost stated; reviewer agreement is never enough. Ranges here are orientation.
@@ -52,12 +53,12 @@ Delivery, in the order work moves:
 | shape a brief or spec into an epic and tasks | both lineages discover independently; one planning PR creates the epic and its tasks with criteria, edges, builders and reviewers; one other-lineage review; `codeflow validate --docs` green | MUST OPEN `/cf-plan` (allocation verbs and the graph) |
 | settle product, UX, UI or visual direction | settle direction with evidence before building; a bounded change records `conform` or `N/A` | MUST OPEN `/cf-design` for a new user-facing surface (the DESIGN_INTENT record) |
 | start a task | work-start check first (identity, intent-match, currency); one worktree per session; no task work at the root checkout; `codeflow work claim <id>` then `work start <id>` before edits; on an unlanded predecessor only at its reviewed SHA | `.codeflow/rules/worktrees.md` "Work-start check"; MUST OPEN `.codeflow/rules/git-rules.md` (the commit rules) |
-| build | planned work moves at speed, at least one task per lane per hour; the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; merge the current line in before review; cite targeted tests and `codeflow test --mode quick` once before ready; the full gate belongs to the landing candidate | MUST OPEN `/cf-develop` (the build and verify loop; its naming step for every string a reader sees); `.agents/skills/cf-method/references/workflow-lifecycle.md` "Planned work moves at speed" |
+| build | an adopted time-box profile holds each task to its band; the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; merge the current line in before review; cite targeted tests and `codeflow test --mode quick` once before ready; the full gate belongs to the landing candidate | MUST OPEN `/cf-develop` (the build and verify loop; its naming step for every string a reader sees); `.agents/skills/cf-method/references/workflow-lifecycle.md` "Planned work keeps to its band" |
 | verify before asking for review | drive the real path of a changed journey; name what was not exercised; `codeflow validate --docs` for records or docs | `.codeflow/rules/workflow-discipline.md` "Prove it at every surface" |
 | open the PR | one PR per task: code, tests, docs, criteria changes (a reason per removal), the acceptance completion last; update the truth it makes stale; checks follow effects, never labels; `Task: TSK-NNN` (the PR to main: its epic; planning PRs: epics); the PR stays draft until its required evidence exists; include the standing reviews `codeflow models resolve` owes for touched areas | MUST OPEN `/cf-ship` steps 2 to 4 (truth updates and release impact); MUST OPEN `.agents/skills/cf-ship/references/pr-evidence.md` (the body `codeflow ci` reads) |
 | give a review | review at four stages (plan settlement, PR ready, a landing candidate with a hand-resolved hunk, epic close); verdict: criteria with file:line, gates, findings by consequence (effort never lowers severity), nits with a disposition, what was not verified; only material findings block; include the standing reviews `codeflow models resolve` owes for touched areas | `.codeflow/rules/workflow-discipline.md` "Review verdicts" for the stages, the sibling sweep and the security lens; MUST OPEN `cf-reviewer` (the verdict format); `cf-security-reviewer` for the checklist that is the attacker lens on hooks, guards, policy, CI, credentials, untrusted input or dependencies; `/cf-consult` for the other lineage |
 | receive findings | material findings are fixed in one batch in the open PR and confirmed by the finder; nits: `fix now`, `track once` (revisit event) or `drop` (reason); continue while repairs produce relevant evidence; diagnose a stalled mechanism, an invalid assumption or a materially changed scope | `.agents/skills/cf-model-orchestrator/resources/quality/findings.md` "Review rounds" |
-| land a batch on the integration line | reviewed heads go on a candidate in dependency order; a hand-resolved product hunk reopens that task's whole-unit review; one full gate on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree | MUST OPEN `/cf-method` "Managing a body of work" (landing modes and drift control) |
+| land a batch on the integration line | one candidate per line at a time, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; one full gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree | MUST OPEN `/cf-method` "Managing a body of work" (landing modes and drift control) |
 | close an epic and open the PR to main | prove the epic's criteria and journeys once on the final candidate, from task evidence; qualify once; `codeflow epic status <id> complete`; one PR to `main` naming the epic; the operator merges, never an agent | `/cf-ship` steps 5 to 9 |
 | release or assess release impact | follow the project's release policy and its one authoritative input; a reviewed merge is not publication; agents never publish or move tags | `.agents/skills/cf-ship/references/release-policy.md` before impact, notes or publication |
 | clean up after a landing | whoever landed it cleans up in the same step; cleanup needs merge proof, an inactive owner and a clean worktree; remove the pushed branch and build output; never force-remove a dirty one; once a seat tab's unit lands, record its native resume id and close that tab only if this run created it | MUST OPEN `.codeflow/rules/worktrees.md` "Cleanup" (what counts as proof and what to remove); `/cf-herdr` "Cleanup" |
@@ -132,23 +133,31 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
     not cover a target defined only in essential. Workspace lints: clippy all
     = deny, pedantic = warn. Edition 2021, workspace-managed dependency
     versions in the root `Cargo.toml`.
-- **Hosted green before the next landing.** An ordinary landing on an
-  integration line waits until the line's current tip has green hosted
-  "codeflow gates" and "windows" verdicts.
-  - Recovery exception: while the tip is red or lacks evidence, the only
-    landings allowed are the repair of the failure and work needed to produce
-    the evidence, such as a workflow fix without which the jobs cannot run.
-    Such a fix does not skip, weaken or remove the failing check, and it
-    still takes its own review and its landing candidate's full gate. After
-    such a landing, ordinary landings wait for green verdicts on the new tip.
+- **Landings batch, with hosted green once per candidate.** When a line
+  lands, every pull request into it that is reviewed and ready at that
+  moment goes onto one landing candidate, in dependency order, with one full
+  gate and one hosted run for the whole batch. Each line has one candidate
+  at a time, and different lines land in parallel. A pull request that
+  becomes ready later joins the next candidate; it is never held behind
+  another pull request's landing or hosted run.
+  - The candidate lands when its own hosted "codeflow gates" and "windows"
+    verdicts are green and the line's current tip, which it was built on,
+    has green verdicts too.
+  - Recovery exception: while the tip is red or lacks evidence, a candidate
+    may carry only the repair of the failure and the work needed to produce
+    the evidence, such as a workflow fix without which the jobs cannot run;
+    other ready pull requests wait for the next candidate. Such a fix does
+    not skip, weaken or remove the failing check, and it still takes its own
+    review and its candidate's full gate. After such a landing, the next
+    candidate waits for green verdicts on the new tip.
   - Pending (a run still in progress) is not green: wait for it.
-  - Cancelled, skipped and missing (no run for the tip) are not green: start
-    or rerun the run. A skip counts only when it is a reuse that names a
-    green run (TSK-359).
-  - Stale (a green verdict for an earlier tip) is not evidence for the
-    current tip.
+  - Cancelled, skipped and missing (no run for the candidate or the tip) are
+    not green: start or rerun the run. A skip counts only when it is a reuse
+    that names a green run (TSK-359).
+  - Stale (a green verdict for an earlier tip or candidate) is not evidence
+    for the current one.
   - A failure shown to come from runner infrastructure is rerun, never read
-    as a pass. A failure shown to be unrelated to the next landing still
+    as a pass. A failure shown to be unrelated to the candidate still
     blocks it until repaired, under the recovery exception.
   - Once TSK-358 lands, a pull request into a line also needs its own green
     "codeflow gates" and "windows" verdicts at the exact head that lands;

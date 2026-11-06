@@ -10,6 +10,7 @@
 pub mod acceptance;
 pub mod allocate;
 pub mod amendment;
+pub mod claim_base;
 pub mod classify;
 pub mod deps;
 mod format_id;
@@ -27,6 +28,7 @@ pub mod record_template;
 pub mod record_text;
 pub(crate) mod redaction;
 pub mod release_line;
+pub mod status_steps;
 pub mod status_verb;
 pub mod store;
 pub mod work_start;
@@ -44,8 +46,9 @@ pub use work_start::{
     check_work_start_anchored, check_work_start_for_branch, declared_work_target,
     declared_work_target_at_revision, default_work_target, default_work_target_ref,
     durable_work_tracking_enabled, durable_work_tracking_enabled_at, epic_line_binding,
-    is_stable_work_target, resolve_work_target, resolve_work_target_checked, task_id_from_branch,
-    task_id_from_branch_at, work_target_resolves, DurableTrackingError, EpicLineBinding,
+    epic_line_bound_at, is_stable_work_target, judged_task_id, resolve_work_target,
+    resolve_work_target_checked, task_id_from_branch, task_id_from_branch_at, task_line_binding,
+    task_target_at_revision, work_target_resolves, DurableTrackingError, EpicLineBinding,
     RecordKind, ResolvedWorkTarget, WorkStartError, WorkStartReport,
 };
 

@@ -6,6 +6,14 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
+#[cfg(test)]
+thread_local! {
+    /// Seconds a test's watcher waits before it reads the lifetime pipe,
+    /// standing in for the slow descriptor loop seen with a limit of 1048576
+    /// on a loaded host.
+    pub(super) static SLOW_WATCHER_START: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 pub(super) struct GroupWatch {
     controller: UnixStream,
     child_end: Option<UnixStream>,
@@ -13,7 +21,10 @@ pub(super) struct GroupWatch {
 }
 
 impl GroupWatch {
-    pub(super) fn prepare(command: &mut Command) -> io::Result<Self> {
+    /// With `hand_over`, the command itself also keeps the lock copies
+    /// across exec and finds their numbers in `RESERVED_LOCKS_ENV`, so a
+    /// nested `codeflow` run can use the reservation (TSK-1128).
+    pub(super) fn prepare(command: &mut Command, hand_over: bool) -> io::Result<Self> {
         // SAFETY: sysconf reads the descriptor limit and changes no process state.
         let limit = i32::try_from(unsafe { libc::sysconf(libc::_SC_OPEN_MAX) })
             .ok()
@@ -23,8 +34,17 @@ impl GroupWatch {
         let (controller, child_end) = UnixStream::pair()?;
         let locks = crate::testing::gate_guard::inherited_gate_locks()?;
         let lock_descriptors: Vec<_> = locks.iter().map(AsRawFd::as_raw_fd).collect();
+        if hand_over && !lock_descriptors.is_empty() {
+            let names: Vec<_> = lock_descriptors.iter().map(ToString::to_string).collect();
+            command.env(
+                crate::testing::gate_guard::RESERVED_LOCKS_ENV,
+                names.join(","),
+            );
+        }
         let writer = controller.as_raw_fd();
         let reader = child_end.as_raw_fd();
+        #[cfg(test)]
+        let slow_start = SLOW_WATCHER_START.with(std::cell::Cell::get);
         // SAFETY: the closure uses only async-signal-safe libc operations and
         // constructs errors from errno. No allocation, locks or Rust I/O run after fork.
         unsafe {
@@ -52,6 +72,10 @@ impl GroupWatch {
                             libc::close(fd);
                         }
                     }
+                    // After the loop, so only the watcher's own exit is slow,
+                    // never the spawn that waits for exec.
+                    #[cfg(test)]
+                    libc::sleep(slow_start);
                     let mut byte = 0_u8;
                     loop {
                         if libc::read(reader, (&raw mut byte).cast(), 1) == 0 {
@@ -77,6 +101,18 @@ impl GroupWatch {
                 }
                 libc::close(reader);
                 libc::close(writer);
+                if hand_over {
+                    // Only this command keeps the copies across exec; the
+                    // receiving `codeflow` makes them close-on-exec again.
+                    for &fd in &lock_descriptors {
+                        let flags = libc::fcntl(fd, libc::F_GETFD);
+                        if flags < 0
+                            || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) != 0
+                        {
+                            return Err(io::Error::last_os_error());
+                        }
+                    }
+                }
                 Ok(())
             });
         }
@@ -93,20 +129,36 @@ impl GroupWatch {
         self.locks.clear();
         drop(self.child_end.take());
     }
+
+    pub(super) fn signal(&mut self) -> io::Result<()> {
+        drop(self.child_end.take());
+        self.controller.set_nonblocking(true)?;
+        self.controller.shutdown(std::net::Shutdown::Write)
+    }
+
+    pub(super) fn finished(&mut self) -> io::Result<bool> {
+        let mut byte = [0];
+        match self.controller.read(&mut byte) {
+            Ok(0) => Ok(true),
+            Ok(_) => Ok(false),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
 }
 
 impl Drop for GroupWatch {
     fn drop(&mut self) {
-        // Close our spare child endpoint even when spawn failed. Half-close the
-        // lifetime pipe, then wait for the watcher to close its end as it exits.
+        // A Drop must never block the controller on a surviving descendant.
+        // Explicit cleanup polls finished() under the shared cleanup deadline.
         drop(self.child_end.take());
         let _ = self.controller.shutdown(std::net::Shutdown::Write);
-        let mut byte = [0];
-        loop {
-            match self.controller.read(&mut byte) {
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                _ => break,
-            }
-        }
     }
 }

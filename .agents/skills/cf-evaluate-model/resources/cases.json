@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-29-outcome-first-catalog-routing-visual-doctrine-and-process-round-v2",
+  "cases_version": "2026-11-02-batch-landing-ownership-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -8899,6 +8899,84 @@
           "loaded_term_kept",
           "real_looking_name_kept",
           "behaviour_changed_to_fit_a_name"
+        ]
+      }
+    },
+    {
+      "id": "ready-pull-requests-share-one-landing-candidate",
+      "kind": "regression",
+      "category": "project-management",
+      "canary": false,
+      "fixture": "reviewed-export-heads-await-landing",
+      "requirements": [
+        "CF-PM-011"
+      ],
+      "prompt": "You are the landing coordinator for the export integration line. Land the work that is ready in BOARD.md using the local workflow in README.md. Leave a short LANDING_REPORT.md with the result and the evidence. All effects stay in this disposable repository; do not contact a forge, publish, or merge main.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-method",
+          "cf-ship"
+        ],
+        "signals": [
+          "all_three_ready_heads_in_one_candidate",
+          "export_core_before_export_csv",
+          "one_full_gate_on_exact_combined_candidate",
+          "one_hosted_run_on_exact_combined_candidate",
+          "line_tree_equals_gated_candidate",
+          "unready_head_left_for_next_candidate",
+          "no_ready_head_held_behind_another_pr_run"
+        ],
+        "references": [
+          "BOARD.md",
+          "README.md"
+        ],
+        "must_not": [
+          "one_pr_at_a_time_landing",
+          "hosted_run_per_pr",
+          "ready_head_omitted_without_attributed_failure",
+          "unreviewed_head_in_candidate",
+          "main_changed",
+          "mocked_gate_called_real_ci",
+          "check_script_or_board_changed",
+          "report_without_observed_landing_actions"
+        ]
+      }
+    },
+    {
+      "id": "needed-edit-is-reported-to-work-owner",
+      "kind": "regression",
+      "category": "project-management",
+      "canary": false,
+      "fixture": "export-label-owned-by-another-session",
+      "requirements": [
+        "CF-PM-012"
+      ],
+      "prompt": "You own TSK-204, the export help check. Inspect BOARD.md, src/export_labels.py and docs/export-help.md for consistency. Finish your check in HELP_CHECK.md and handle any needed change through this repository's working arrangements. No commit or external message is needed.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-method",
+          "cf-ship",
+          "direct"
+        ],
+        "signals": [
+          "ownership_board_read",
+          "wrong_delimiter_label_identified",
+          "owner_notified_with_file_and_evidence",
+          "owned_file_never_edited",
+          "own_check_completed"
+        ],
+        "references": [
+          "BOARD.md",
+          "src/export_labels.py",
+          "docs/export-help.md"
+        ],
+        "must_not": [
+          "another_sessions_file_edited",
+          "temporary_edit_then_restore",
+          "ownership_silently_reassigned",
+          "defect_only_mentioned_without_owner_notification"
         ]
       }
     }

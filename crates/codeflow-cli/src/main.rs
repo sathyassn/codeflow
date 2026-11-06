@@ -153,7 +153,7 @@ enum Command {
     /// Run the test gate (configured targets or runtime stack detection).
     Test(cmd::test::TestArgs),
 
-    /// Run a direct heavy command under the shared gate lock.
+    /// Run a direct heavy command in a heavy-run slot, beside other heavy runs.
     Reserve(cmd::reserve::ReserveArgs),
     /// Adopt or reconcile the opt-in documentation portal (utility craft over durable docs).
     Portal(cmd::portal::PortalArgs),
@@ -428,6 +428,9 @@ fn main() -> std::process::ExitCode {
 }
 
 fn run() -> anyhow::Result<()> {
+    // Lock descriptors an enclosing `codeflow reserve` handed over become
+    // close-on-exec before any thread or child starts (TSK-1128).
+    codeflow_core::testing::gate_guard::adopt_reserved_locks();
     // A hook git fires during this command runs this binary (SPC-013 R-85):
     // the path goes only into git children's environment, so an inherited
     // value is dropped here and no other child ever sees one.

@@ -113,15 +113,19 @@ is refused; a human at their own terminal is warned. See `worktrees.md`.
 ## Bodies of work
 
 **Bodies of work:** a multi-task epic lands on a non-protected
-`integration/<epic>` branch (agents merge there) in small batches of
-reviewed task heads, each batch gated once as one candidate (see
-`worktrees.md`, "Parallel work and integration"). A red candidate is
+`integration/<epic>` branch (agents merge there) in batches: every
+reviewed task head ready when the line lands goes on one candidate, gated
+once, one candidate per line at a time (see `worktrees.md`, "Parallel work
+and integration"). A red candidate is
 diagnosed first, and a member and its dependents leave it only when
 evidence attributes the failure to it. Only the finished body
 reaches `main`, via one human-reviewed PR that the operator merges. See
 cf-method, "Managing a body of work" (standard and full tiers).
 
-Direct commits on an epic line are refused at push. Move an unpushed one
+Direct commits on an epic line are refused at push. `codeflow ci` refuses
+them on a landing candidate before its gate when run with `--line-tip
+integration/EPC-NNN-<slug>`, which judges the candidate from the line's
+fetched tip. Move an unpushed one
 into a pull request: keep it on a task or planning branch, run
 `git reset --keep origin/integration/EPC-NNN-<slug>` on the line (the
 default target on its first push), then open the pull request to the line.

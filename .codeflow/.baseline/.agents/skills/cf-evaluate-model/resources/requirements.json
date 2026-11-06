@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-29-outcome-first-autonomy-visual-doctrine-and-process-round-v2",
+  "requirements_version": "2026-11-02-batch-landing-ownership-v1",
   "requirements": [
     {
       "id": "CF-REL-004",
@@ -746,7 +746,7 @@
             "**INTENT-MATCH:** confirm this is the worktree and branch *this task* was assigned",
             "stop and surface it; never silently adapt",
             "never accept name resemblance as a match",
-            "**CURRENCY:** fetch, then check the base against the repository's configured target branch",
+            "**CURRENCY:** `codeflow work claim <id>` fetches and selects the live",
             "assignment explicitly calls for creating a worktree",
             "Absence alone never authorizes repair",
             "rerun all three assertions inside the new worktree"
@@ -1463,7 +1463,7 @@
           "markers": [
             "bounded concurrency cap",
             "one owner, branch, and worktree",
-            "serialize each landing"
+            "one landing candidate at a time on a line tip"
           ]
         },
         {
@@ -1688,7 +1688,7 @@
             "chooses this routine mechanism without an operator question",
             "cut and push `integration/<epic-id>-<slug>` off the current protected target",
             "Each task still completes its producer verification and cross-lineage review before it joins a batch",
-            "assembles reviewed heads into a small batch candidate in dependency order",
+            "every PR reviewed and ready at that moment on one candidate in dependency order",
             "one full gate on that exact candidate",
             "does not reopen unit review",
             "Boundaries are unchanged",
@@ -3133,6 +3133,43 @@
           "path": ".agents/skills/cf-design/references/design-choice-audit.md",
           "markers": [
             "### Implied meaning the subject does not carry"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PM-011",
+      "level": "hard",
+      "statement": "Every PR reviewed and ready when an integration line lands joins one candidate in dependency order, with one full gate and one hosted run on that exact combined candidate. Later-ready PRs join the next candidate. Never serialize ready PRs behind each other's landing or hosted run; serialize candidates on a line, while different lines may land in parallel.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-method/SKILL.md",
+          "markers": [
+            "every PR",
+            "reviewed and ready at that moment on one candidate in dependency order",
+            "another PR's landing or hosted run",
+            "one full gate on that exact candidate"
+          ]
+        },
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "one full gate and one hosted run on the exact candidate"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PM-012",
+      "level": "hard",
+      "statement": "Repository changes belong to a task and are made by the session owning that work. A session finding a needed change in work another session owns tells that owner with evidence and leaves the edit to the owner; it does not make an ad hoc edit or silently take ownership.",
+      "sources": [
+        {
+          "path": ".codeflow/rules/workflow-discipline.md",
+          "markers": [
+            "Change only work you own.",
+            "tells the owner,",
+            "the owner makes it in that task."
           ]
         }
       ]

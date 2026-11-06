@@ -349,8 +349,20 @@ pub fn builder_launch_root(project: &Path) -> std::path::PathBuf {
 /// The probe creates and removes disposable files in the folders it probes
 /// and writes nothing else.
 #[must_use]
-pub fn probe_codex_builder_grants(launch_root: &Path, codex: &Path, codeflow: &Path) -> GrantCheck {
+pub fn probe_codex_builder_grants(launch_root: &Path, codex: &Path, codeflow: &Path) -> GrantProbe {
     grants_with_timeout(launch_root, codex, codeflow, LOAD_TIMEOUT)
+}
+
+/// What the builder write probe reported: the folders a builder seat has to
+/// write, and, apart from them, the shared git config file (TSK-1156).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantProbe {
+    /// The verdict on the folders; only these decide the preflight's exit.
+    pub grants: GrantCheck,
+    /// The probe's `git-config` line: `Some(Ok(path))` when the file was
+    /// writable, `Some(Err(line))` when it was denied, `None` when the
+    /// probe printed no such line (an older `codeflow`, or no run).
+    pub git_config: Option<Result<String, String>>,
 }
 
 fn grants_with_timeout(
@@ -358,6 +370,18 @@ fn grants_with_timeout(
     codex: &Path,
     codeflow: &Path,
     timeout: Duration,
+) -> GrantProbe {
+    let mut git_config = None;
+    let grants = folder_grants(launch_root, codex, codeflow, timeout, &mut git_config);
+    GrantProbe { grants, git_config }
+}
+
+fn folder_grants(
+    launch_root: &Path,
+    codex: &Path,
+    codeflow: &Path,
+    timeout: Duration,
+    git_config: &mut Option<Result<String, String>>,
 ) -> GrantCheck {
     let (Some(program), Some(root), Some(check)) =
         (codex.to_str(), launch_root.to_str(), codeflow.to_str())
@@ -385,6 +409,14 @@ fn grants_with_timeout(
                 return GrantCheck::NotRun(format!("codex sandbox did not run: {reason}"))
             }
         };
+    *git_config = run.stdout.split('\n').find_map(|line| {
+        if let Some(path) = line.strip_prefix("git-config writable ") {
+            Some(Ok(path.to_string()))
+        } else {
+            line.strip_prefix("git-config denied ")
+                .map(|denied| Err(denied.chars().take(300).collect()))
+        }
+    });
     let lines = probe_lines(&run.stdout);
     match (run.code, lines) {
         (Some(0), Some(lines))
@@ -419,7 +451,7 @@ fn grants_with_timeout(
 fn probe_lines(stdout: &str) -> Option<Vec<(bool, String)>> {
     stdout
         .lines()
-        .filter(|line| !line.is_empty())
+        .filter(|line| !line.is_empty() && !line.starts_with("git-config "))
         .map(|line| {
             if let Some(dir) = line.strip_prefix("writable ") {
                 Some((true, dir.to_string()))
@@ -687,8 +719,9 @@ mod tests {
             ),
         );
         let check = Path::new("/opt/codeflow");
-        let run =
-            |codex: &Path| grants_with_timeout(root.path(), codex, check, Duration::from_secs(10));
+        let run = |codex: &Path| {
+            grants_with_timeout(root.path(), codex, check, Duration::from_secs(10)).grants
+        };
         assert_eq!(
             run(&codex),
             GrantCheck::Effective(vec![
@@ -746,5 +779,34 @@ mod tests {
             run(&silent),
             GrantCheck::NotRun(reason) if reason.contains("exit code 2") && reason.contains("--include-managed-config")
         ));
+    }
+    /// TSK-1156: the probe's `git-config` line is read apart from the folders:
+    /// it never changes the verdict, and a denial is kept with its message.
+    #[test]
+    fn the_git_config_line_is_reported_apart_from_the_folder_verdict() {
+        let bin = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let check = Path::new("/opt/codeflow");
+        let run = |body: &str| {
+            let codex = script(bin.path(), body);
+            grants_with_timeout(root.path(), &codex, check, Duration::from_secs(10))
+        };
+        let folders = "printf 'writable /l1\\nwritable /l2\\nwritable /o\\nwritable /r\\n'\n";
+        let denied = run(&format!(
+            "{folders}printf 'git-config denied /g/config: Operation not permitted\\n'\n"
+        ));
+        assert!(
+            matches!(denied.grants, GrantCheck::Effective(_)),
+            "{denied:?}"
+        );
+        assert_eq!(
+            denied.git_config,
+            Some(Err("/g/config: Operation not permitted".to_string()))
+        );
+        let writable = run(&format!(
+            "{folders}printf 'git-config writable /g/config\\n'\n"
+        ));
+        assert_eq!(writable.git_config, Some(Ok("/g/config".to_string())));
+        assert_eq!(run(folders).git_config, None);
     }
 }

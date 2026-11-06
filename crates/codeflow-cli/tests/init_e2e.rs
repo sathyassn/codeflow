@@ -12,27 +12,70 @@ use std::process::{Command, Output};
 
 const PRESENT_SKILL_FILES: &[&str] = &[
     "SKILL.md",
+    "agents/openai.yaml",
+    "assets/config.example.toml",
+    "assets/primitive-tokens.example.json",
+    "assets/review-document.example.json",
     "references/document-authoring.md",
     "references/feedback-loop.md",
     "references/visual-craft.md",
-    "resources/explanation-method.md",
-    "resources/how-presentation-works.md",
-    "resources/utility-presentation-system.md",
-    "resources/figure-grammar.md",
-    "resources/figure-grammar-specimens.md",
-    "resources/present-document.example.json",
     "resources/design-system/README.md",
-    "resources/design-system/tokens.json",
-    "resources/design-system/tokens.css",
     "resources/design-system/chrome.css",
-    "resources/design-system/figure.css",
     "resources/design-system/chrome.js",
+    "resources/design-system/count-charts.js",
+    "resources/design-system/counts.reference.html",
+    "resources/design-system/export-fallback.css",
+    "resources/design-system/figure-roles.css",
+    "resources/design-system/figure.css",
+    "resources/design-system/portal.css",
     "resources/design-system/portal.reference.html",
+    "resources/design-system/present.css",
     "resources/design-system/present.reference.html",
-    "assets/review-document.example.json",
-    "assets/config.example.toml",
-    "assets/primitive-tokens.example.json",
-    "agents/openai.yaml",
+    "resources/design-system/settings.js",
+    "resources/design-system/source/accent.ts",
+    "resources/design-system/source/colour.json",
+    "resources/design-system/source/colour.test.ts",
+    "resources/design-system/source/colour.ts",
+    "resources/design-system/source/count-charts.ts",
+    "resources/design-system/source/elevation.json",
+    "resources/design-system/source/floors.json",
+    "resources/design-system/source/generate.test.ts",
+    "resources/design-system/source/generate.ts",
+    "resources/design-system/source/geometry.json",
+    "resources/design-system/source/layout.json",
+    "resources/design-system/source/lint.test.ts",
+    "resources/design-system/source/lint.ts",
+    "resources/design-system/source/matrices.json",
+    "resources/design-system/source/measure.ts",
+    "resources/design-system/source/motion.json",
+    "resources/design-system/source/named-colours.json",
+    "resources/design-system/source/radius.json",
+    "resources/design-system/source/space.json",
+    "resources/design-system/source/stage-geometry.test.ts",
+    "resources/design-system/source/stage-geometry.ts",
+    "resources/design-system/source/stages.json",
+    "resources/design-system/source/styles/chrome.css.in",
+    "resources/design-system/source/styles/export-fallback.css.in",
+    "resources/design-system/source/styles/figure-roles.css.in",
+    "resources/design-system/source/styles/figure.css.in",
+    "resources/design-system/source/styles/portal.css.in",
+    "resources/design-system/source/styles/present.css.in",
+    "resources/design-system/source/styles/utility-tokens.css.in",
+    "resources/design-system/source/type.json",
+    "resources/design-system/source/validate.test.ts",
+    "resources/design-system/source/validate.ts",
+    "resources/design-system/stage-geometry.js",
+    "resources/design-system/tokens.css",
+    "resources/design-system/tokens.js",
+    "resources/design-system/tokens.json",
+    "resources/design-system/tokens.ts",
+    "resources/design-system/utility-tokens.css",
+    "resources/explanation-method.md",
+    "resources/figure-grammar-specimens.md",
+    "resources/figure-grammar.md",
+    "resources/how-presentation-works.md",
+    "resources/present-document.example.json",
+    "resources/utility-presentation-system.md",
 ];
 const PRESENT_SCHEMAS: &[&str] = &[
     "document-v1.schema.json",
@@ -245,7 +288,10 @@ fn assert_design_kit_matches_in_docs_portal(root: &Path) {
         }
         checked += 1;
     }
-    assert_eq!(checked, 8, "the design kit is eight files");
+    assert_eq!(
+        checked, 51,
+        "the design kit ships 51 source and generated files"
+    );
 }
 
 /// Placeholders: everything the engine substitutes must be gone. Scoped to
@@ -610,7 +656,7 @@ fn init_full_tier_preserves_representative_brownfield_present_files() {
 /// gate while another holds the gate lock.
 #[test]
 fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
-    use codeflow_core::testing::gate_guard::{acquire_full_gate_lock, lock_dirs};
+    use codeflow_core::testing::gate_guard::{hold_host_exclusive_in, lock_dirs};
 
     for tier in ["--minimal", "--standard", "--full"] {
         let tmp = tempfile::tempdir().unwrap();
@@ -643,14 +689,16 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
         assert_eq!(warned.status.code(), Some(0), "{tier}: {err}");
         assert!(err.contains("warning: CARGO_TARGET_DIR="), "{tier}: {err}");
 
-        let held = acquire_full_gate_lock(&lock_dirs(&root, Some(&home)).unwrap(), &root).unwrap();
+        let held = hold_host_exclusive_in(
+            &lock_dirs(&root, Some(&home)).unwrap(),
+            &root,
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
         let locked = gate(None);
         let err = String::from_utf8_lossy(&locked.stderr).to_string();
         assert_eq!(locked.status.code(), Some(1), "{tier}: {err}");
-        assert!(
-            err.contains("another heavy gate is running"),
-            "{tier}: {err}"
-        );
+        assert!(err.contains("host-exclusive"), "{tier}: {err}");
         drop(held);
 
         // A child forked by a sibling test can hold the released descriptor
@@ -662,7 +710,7 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
                 false
             }
         });
-        assert!(passed, "{tier}: the gate runs once the lock is free");
+        assert!(passed, "{tier}: the gate runs once the host is free");
     }
 }
 
@@ -2427,11 +2475,15 @@ fn a_fresh_standard_project_prints_steps_that_clear_each_finding() {
 }
 
 /// Let the destination take `chore/seed` as `target` by fetching, so no
-/// client hook runs on the protected branch, and refresh `origin`.
+/// client hook runs on the protected branch, refresh `origin` and record
+/// `target` as its default branch.
 fn seed(root: &Path, dest: &Path, target: &str) {
     let refspec = format!("chore/seed:{target}");
     git_stdout(dest, &["fetch", "-q", root.to_str().unwrap(), &refspec]);
     git_with_binary(root, &["fetch", "-q", "origin"]);
+    // Git before 2.48 does not record origin/HEAD on fetch, and the policy
+    // authority is the remote default branch alone (ADR-0091).
+    git_with_binary(root, &["remote", "set-head", "origin", target]);
 }
 
 fn stderr_text(out: &Output) -> String {

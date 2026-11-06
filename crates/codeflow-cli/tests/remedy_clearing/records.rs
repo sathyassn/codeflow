@@ -76,9 +76,9 @@ impl Hosted {
         commit_all(&self.root, "docs: plan the work");
     }
 
-    /// Land `branch` on the destination's target, as a reviewed merge on
-    /// the platform does, then fast-forward the local target to it.
-    fn land(&self, branch: &str) {
+    /// Land `branch` on the destination and fetch its remote-tracking refs.
+    /// The local target branch stays where it was.
+    fn land_on_destination(&self, branch: &str) {
         git(
             &self.dest,
             &[
@@ -89,6 +89,11 @@ impl Hosted {
             ],
         );
         git(&self.root, &["fetch", "-q", "origin"]);
+    }
+
+    /// Land `branch`, then fast-forward the local target to it.
+    fn land(&self, branch: &str) {
+        self.land_on_destination(branch);
         git(
             &self.root,
             &[
@@ -577,6 +582,63 @@ fn clears_work_start_reconcile() {
 }
 
 #[test]
+fn clears_work_target_tip() {
+    const BRANCH: &str = "task/TSK-001-work";
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    hosted.plan_task("plan/work");
+    hosted.land("plan/work");
+    let old_target = rev(root, &hosted.target);
+    hosted.branch(BRANCH);
+    commit(root, "x.txt", "feat: add x");
+    hosted.branch("plan/advance");
+    commit(root, "target.txt", "docs: advance target");
+    hosted.land_on_destination("plan/advance");
+    git(root, &["switch", "-q", BRANCH]);
+    // Fetching the remote does not keep the local target branch current.
+    // The printed fix must merge the verified remote commit, not this ref.
+    assert_eq!(rev(root, &hosted.target), old_target);
+    prove(
+        "WORK_TARGET_TIP",
+        "work.target_tip",
+        || hosted.ci(BRANCH, &["--into", &hosted.target]),
+        |printed| {
+            let step = printed_command(printed, "WORK_TARGET_TIP", None);
+            run_printed(root, &step, &[], &[]);
+        },
+    );
+}
+
+#[test]
+fn clears_work_target_unverified() {
+    const LINE: &str = "integration/x";
+    let dir = ci_repo("{}");
+    let root = dir.path();
+    git(root, &["branch", LINE, "main"]);
+    commit(root, "x.txt", "feat: add x");
+    // The target's tip cannot be read here, so containment is unverified.
+    git(root, &["branch", "-D", LINE]);
+    let args = [
+        "--base", "main", "--head", "HEAD", "--branch", "feat/x", "--into", LINE,
+    ];
+    prove(
+        "WORK_TARGET_UNVERIFIED",
+        "work.target_tip",
+        || {
+            let mut full = vec!["ci"];
+            full.extend(args);
+            codeflow(root, &full)
+        },
+        |printed| {
+            // Repair the target read as the finding says, then rerun.
+            git(root, &["branch", LINE, "main"]);
+            let step = printed_command(printed, "WORK_TARGET_UNVERIFIED", None);
+            run_printed(root, &step, &[], &args);
+        },
+    );
+}
+
+#[test]
 fn clears_work_start_merge_planning() {
     let hosted = Hosted::new();
     let root = &hosted.root;
@@ -600,6 +662,44 @@ fn clears_work_start_merge_planning() {
             hosted.land("plan/work");
             let step = printed_command(printed, "WORK_START_MERGE_PLANNING", None);
             run_printed(root, &step, &[], &[]);
+        },
+    );
+}
+
+/// TSK-1036: a task blocked on the target is unblocked in its own pull
+/// request by the printed `task status` step.
+#[test]
+fn clears_work_start_unblock() {
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    hosted.plan_task("plan/work");
+    let block = [
+        "task",
+        "status",
+        "TSK-001",
+        "blocked",
+        "--reason",
+        "waits on the host",
+        "--owner",
+        "ops",
+        "--revisit",
+        "the host is ready",
+    ];
+    let out = codeflow(root, &block);
+    assert!(out.contains("blocked"), "{out}");
+    commit_all(root, "docs: block the work");
+    hosted.seed();
+    hosted.land("plan/work");
+    hosted.branch("task/TSK-001-work");
+    commit(root, "x.txt", "feat: add x");
+    prove(
+        "WORK_START_UNBLOCK",
+        "is blocked",
+        || hosted.ci("task/TSK-001-work", &[]),
+        |printed| {
+            let step = printed_command(printed, "WORK_START_UNBLOCK", None);
+            run_printed(root, &step, &[], &[]);
+            commit_all(root, "chore: unblock the work");
         },
     );
 }

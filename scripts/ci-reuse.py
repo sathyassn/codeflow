@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
-"""Decide whether a push to main reuses a pull request run's verdict (TSK-265).
+"""Decide whether a push to main or an integration line reuses a pull request
+run's verdict (TSK-265, TSK-359).
 
-A pull request run of codeflow-ci tests the merge of its head into main. When
+A pull request run of codeflow-ci tests the merge of its head into its base. When
 the merge commit a push brings has exactly the tree of that head, and the
 head's codeflow-ci pull request run passed every job, the push run would test
 the same tree again. The operator approved reusing that verdict on
-2026-10-11, only on an exact match. The push run then skips the gate and
+2026-10-11 for main and on 2026-10-17 for integration lines, only on an
+exact match. The push run then skips the gate and
 Windows jobs, and its `codeflow gates` and `windows` verdicts pass and name
 the reused run.
 
 Reuse needs every one of these, read from git objects and GitHub's records,
 never from a pull request's branch name or other text it controls:
 
-1. the event is a push to `refs/heads/main`, the ref GitHub records for the
-   push; a push to master, an integration line or any other ref runs every
-   job;
-2. exactly one merged pull request has the pushed commit as its merge commit;
+1. the event is a push to `refs/heads/main` or `refs/heads/integration/**`,
+   the ref GitHub records for the push; a push to master or any other ref
+   runs every job;
+2. exactly one merged pull request has the pushed commit as its merge commit,
+   and its base is the pushed line;
 3. the pushed commit and the pull request head have the same tree id;
 4. the pushed commit's first parent (main before the merge) is an ancestor of
    the head, so every pull request run against main tested the head's own
@@ -23,19 +26,43 @@ never from a pull request's branch name or other text it controls:
    head, and main only moves forward;
 5. the push changes none of the build cache inputs (the toolchain, the cargo
    and npm lock files, the manifests, and this workflow, which names the
-   cache keys and what each job builds), so a push that invalidates the
+   cache keys and what each job builds) and does not change this decider,
+   whose hash the workflow also pins, so a push that invalidates the
    caches, or adds a job whose cache main lacks, still runs and saves them on
    main for later pull requests;
-6. main already holds the present part's apt cache for this runner image
-   and the locked Playwright version, keyed exactly as the workflow keys it.
-   That key names the runner image and has no fallback, and only a run on
-   main saves the copy later pull requests restore; when it is missing (a
-   new runner image), this push runs every job so the present part saves it;
+6. the pushed line or main already holds the present part's apt cache for
+   this runner image and the locked Playwright version, keyed exactly as the
+   workflow keys it (a pull request restores from its base and from main).
+   That key names the runner image and has no fallback; when it is missing
+   (a new runner image), this push runs every job. The normal present part
+   prepares it on integration pushes; the release present part prepares it
+   on main. A successful job saves the cache;
 7. the newest codeflow-ci run with event pull_request, that head commit and
-   this workflow file names the merged pull request with base main,
-   concluded success, and every job of its latest attempt
-   concluded success, apart from the jobs that only run on a push (this
-   decision), which must be skipped; the named verdicts must be among them.
+   this workflow file that names the merged pull request (by number) with
+   the pushed line as its base, concluded success, and every job of its
+   latest attempt concluded success, apart from the jobs that only run on a
+   push (this decision), which must be skipped, and the jobs a line push
+   skips as well (the release parts), which may be skipped; the verdict jobs
+   of the pushed workflow must be among them;
+8. the run's own `ci-provenance` (Ubuntu) and `ci-provenance-windows`
+   artifacts, written by the run's provenance jobs and listed under that
+   run, each record the same pull request number, base line, head, merge
+   tree (equal to the pushed tree), workflow file blob (equal to the pushed
+   commit's) and runner image (ImageOS and exactly equal ImageVersion) as
+   this push's Ubuntu reuse job and Windows image job, and a base commit
+   that the destination line already held before the push (the push's
+   first parent or an ancestor of it). A run without either artifact, or
+   with any other value, is not reused;
+9. every job of that run that the push would skip and that ran, ran on the same runner image as this push for its runner label.
+   Both sides read the image from the `Runner Image` block GitHub writes at
+   the top of each job's log before any step runs: for the run, each such
+   job's own log; for the push, the logs of this run's push-only image jobs,
+   one per runner label. A job with another image, an unknown label, or a
+   log without that block, is not reused;
+10. that run is a full-tier run: every Windows test partition from 1 to the
+   count its names give ran, and the reduced tier's journey job did not. A
+   reduced-tier run proves less than this push's verdict claims, so the push
+   runs every job, the partitions included, and a Windows break shows there.
 
 Anything else, an API or git error included, runs every job.
 
@@ -55,6 +82,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import io
 import json
 import os
 import re
@@ -63,10 +91,28 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import zipfile
 from pathlib import Path
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 MAIN = "refs/heads/main"
+LINE_PREFIX = "refs/heads/integration/"
+PROVENANCE = "ci-provenance"
+PROVENANCE_WINDOWS = "ci-provenance-windows"
+PROVENANCE_FIELDS = ("pull", "base_ref", "base_commit", "head_commit", "merge_commit", "merge_tree",
+                     "workflow", "workflow_blob", "image_os", "image_version")
+MAX_PROVENANCE_BYTES = 65536
+# The push-only jobs whose logs name this push's runner image, by the one
+# runner label each runs on (TSK-359).
+PUSH_IMAGE_JOBS = {"read the Ubuntu runner image": "ubuntu-24.04",
+                   "read the Windows runner image": "windows-latest"}
+# The job log's head holds the runner's set-up block; nothing past it is read.
+LOG_HEAD_BYTES = 65536
+# A push-only image job has just finished when the reuse job reads its log,
+# which GitHub may not serve yet: a bounded retry, then every job runs.
+LOG_ATTEMPTS = 3
+LOG_RETRY_SECONDS = 10
+TIMESTAMP = re.compile(r"^\ufeff?\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ")
 # Paths whose change invalidates a build cache that later pull request runs
 # restore from main (rust-cache keys on the toolchain, the cargo config and
 # every Cargo.lock and Cargo.toml; setup-node keys on the npm lock files).
@@ -75,7 +121,18 @@ MAIN = "refs/heads/main"
 # coverage shards' cache).
 CACHE_INPUTS = ("rust-toolchain", "rust-toolchain.toml", ".cargo/config.toml",
                 "*Cargo.toml", "*Cargo.lock", "*package-lock.json", "*.node-version",
-                ".github/workflows/codeflow-ci.yml")
+                ".github/workflows/codeflow-ci.yml", "scripts/ci-reuse.py")
+# The release parts are skipped in a pull request run into an integration line
+# and in a push to it. GitHub records a skipped matrix job under its unexpanded
+# `name:` text, so this is that text exactly (a test reads it from the
+# workflow); handling it here keeps `${{ }}` out of the workflow's shell
+# arguments, which Actions would evaluate before the script saw them.
+LINE_SKIPS = frozenset({"codeflow gates (release ${{ matrix.part }})"})
+# The Windows tier a run ran, read from GitHub's job records. A partition
+# that ran is recorded under its expanded name; a skipped matrix job only under
+# the unexpanded one, which this pattern does not match.
+PARTITION_JOB = re.compile(r"windows tests \((\d+) of (\d+)\)")
+TIER_JOURNEYS_JOB = "windows tier journeys"
 
 
 # The Playwright version the present part reads, and the lock it must equal
@@ -112,14 +169,224 @@ def apt_cache_key(image_os: str, image_version: str, version: str) -> str:
     return f"playwright-apt-{image_os or 'unknown'}-{image_version or 'unknown'}-{version}"
 
 
+def line_of(ref: str) -> str:
+    """The branch a reusable push names: main or an integration line."""
+    if ref != MAIN and not (ref.startswith(LINE_PREFIX) and len(ref) > len(LINE_PREFIX)):
+        raise Skip(f"only a push to {MAIN} or {LINE_PREFIX}* reuses a verdict; {ref!r} runs every job")
+    return ref[len("refs/heads/"):]
+
+
+def verdict_jobs(workflow_text: str) -> set[str]:
+    """The names of the jobs the pushed workflow runs `always()`: its verdict
+    jobs, which carry the reuse contract, so a verdict added later joins it."""
+    names: set[str] = set()
+    in_jobs, name, always = False, None, False
+
+    def close() -> None:
+        if name and always:
+            names.add(name)
+
+    for line in workflow_text.splitlines():
+        if re.match(r"^\S", line):
+            close()
+            in_jobs, name, always = line.rstrip() == "jobs:", None, False
+            continue
+        if not in_jobs:
+            continue
+        if re.match(r"^  [A-Za-z0-9_-]+:\s*(#.*)?$", line):
+            close()
+            name, always = None, False
+        elif (found := re.match(r"^    name:\s*(.+?)\s*$", line)):
+            name = found.group(1).strip("\"'")
+        elif re.match(r"^    if:\s*\$\{\{\s*always\(\)", line):
+            always = True
+    close()
+    return names
+
+
+def reused_jobs(workflow_text: str) -> list[re.Pattern[str]]:
+    """Full-match patterns for the display names of the jobs the push skips
+    when it reuses a verdict, read from the pushed workflow: a job whose
+    `if:` reads the reuse output, and any job that needs one of those,
+    apart from the verdict jobs (`if: ${{ always()`, which run on the push
+    too). Counting a job in when unsure only adds a comparison. A `${{ }}` part of a name (a
+    matrix value) matches any text."""
+    jobs: dict[str, dict] = {}
+    in_jobs, current = False, None
+    for line in workflow_text.splitlines():
+        if re.match(r"^\S", line):
+            in_jobs, current = line.rstrip() == "jobs:", None
+            continue
+        if not in_jobs:
+            continue
+        if (found := re.match(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$", line)):
+            current = jobs.setdefault(found.group(1), {"name": None, "if": "", "needs": set()})
+        elif current is None:
+            continue
+        elif (found := re.match(r"^    name:\s*(.+?)\s*$", line)):
+            current["name"] = found.group(1).strip("\"'")
+        elif (found := re.match(r"^    if:\s*(.*)$", line)):
+            current["if"] = found.group(1)
+        elif (found := re.match(r"^    needs:\s*(.*?)\s*$", line)):
+            current["needs"] = {item.strip() for item in found.group(1).strip("[]").split(",") if item.strip()}
+    reused = {key for key, job in jobs.items() if "needs.reuse.outputs.run == ''" in job["if"]}
+    grew = True
+    while grew:
+        grew = False
+        for key, job in jobs.items():
+            if key not in reused and job["needs"] & reused and not re.match(r"\$\{\{\s*always\(\)", job["if"]):
+                reused.add(key)
+                grew = True
+    patterns = []
+    for key in sorted(reused):
+        name = jobs[key]["name"] or key
+        parts = re.split(r"\$\{\{.*?\}\}", name)
+        patterns.append(re.compile(".+?".join(re.escape(part) for part in parts)))
+    return patterns
+
+
+def runner_image(log: str) -> tuple[str, str]:
+    """The (image, version) pair of the `Runner Image` block GitHub's runner
+    writes before the first step. A block that only appears after a step
+    started is output the job printed, never the runner's record."""
+    image = version = None
+    inside = False
+    for raw in log.splitlines():
+        line = TIMESTAMP.sub("", raw.lstrip("\ufeff"))
+        if line.startswith("##[group]Run "):
+            break
+        if line == "##[group]Runner Image":
+            inside = True
+            continue
+        if inside:
+            if line.startswith("##[endgroup]"):
+                if image and version:
+                    return image, version
+                break
+            if line.startswith("Image: "):
+                image = line[len("Image: "):].strip()
+            elif line.startswith("Version: "):
+                version = line[len("Version: "):].strip()
+    raise Skip("the job log has no Runner Image block before its first step")
+
+
+def push_images(api, run_id: int, sleep=time.sleep) -> dict[str, tuple[str, str]]:
+    """This push's runner image per label, from the logs of this run's
+    push-only image jobs."""
+    found: dict[str, tuple[str, str]] = {}
+    for job in api.jobs(run_id):
+        label = PUSH_IMAGE_JOBS.get(job.get("name"))
+        if label is None:
+            continue
+        if label in found or job.get("conclusion") != "success" or job.get("labels") != [label]:
+            raise Skip(f"push image job {job.get('name')!r} is repeated, did not succeed or ran off {label}")
+        for attempt in range(LOG_ATTEMPTS):
+            try:
+                found[label] = runner_image(api.job_log_head(job["id"]))
+                break
+            except Exception as error:  # noqa: BLE001 - retried, then every job runs
+                if attempt + 1 == LOG_ATTEMPTS:
+                    raise Skip(f"the log of push image job {job.get('name')!r} gave no runner image "
+                               f"({type(error).__name__}: {error})") from error
+                sleep(LOG_RETRY_SECONDS)
+    missing = sorted(set(PUSH_IMAGE_JOBS.values()) - set(found))
+    if missing:
+        raise Skip(f"this run has no push image job for {', '.join(missing)}")
+    return found
+
+
+def check_job_images(api, jobs: list[dict], workflow_text: str, push: dict[str, tuple[str, str]]) -> None:
+    """Raises Skip unless every reused job that ran used the push's image for
+    its runner label."""
+    patterns = reused_jobs(workflow_text)
+    checked = 0
+    for job in jobs:
+        name = job.get("name") or ""
+        if job.get("conclusion") != "success" or not any(p.fullmatch(name) for p in patterns):
+            continue
+        labels = job.get("labels")
+        if not isinstance(labels, list) or len(labels) != 1 or labels[0] not in push:
+            raise Skip(f"job {name!r} ran on labels {labels!r}; reuse knows the image of {sorted(push)} only")
+        got = runner_image(api.job_log_head(job["id"]))
+        if got != push[labels[0]]:
+            raise Skip(f"job {name!r} ran on image {got[0]} {got[1]}; this push's {labels[0]} runners are "
+                       f"{push[labels[0]][0]} {push[labels[0]][1]}")
+        checked += 1
+    if not checked:
+        raise Skip("no job of the run is one the push would skip, so no image was compared")
+
+
+def check_not_reduced(jobs: list[dict], run_id: int) -> None:
+    """Raises Skip when the run ran the reduced Windows tier: a reduced-tier
+    result never counts as full-tier evidence."""
+    if any(job.get("name") == TIER_JOURNEYS_JOB and job.get("conclusion") != "skipped" for job in jobs):
+        raise Skip(f"run {run_id} ran the reduced Windows tier; every job runs so the partitions run on this push")
+
+
+def check_every_partition(jobs: list[dict], run_id: int) -> None:
+    """Raises Skip unless the run holds each Windows test partition exactly
+    once. The caller has already required each listed job to have succeeded."""
+    found = [match for job in jobs if (match := PARTITION_JOB.fullmatch(job.get("name") or ""))]
+    counts = {int(match.group(2)) for match in found}
+    numbers = sorted(int(match.group(1)) for match in found)
+    if len(counts) != 1 or numbers != list(range(1, max(counts) + 1)):
+        raise Skip(f"run {run_id} did not run every Windows test partition (found {numbers} of {sorted(counts)}); "
+                   "every job runs so the partitions run on this push")
+
+
+def check_provenance(record: object, *, pull: int, line: str, head: str, tree: str, workflow: str, blob: str,
+                     image: tuple[str, str], git, first_parent: str | None = None) -> None:
+    """Raises Skip unless the run's recorded provenance is the push's."""
+    if not isinstance(record, dict) or set(record) != set(PROVENANCE_FIELDS) | {"schema"} or record["schema"] != 1:
+        raise Skip("the run's provenance record is not the expected schema 1")
+    expected = {"pull": pull, "base_ref": line, "head_commit": head, "merge_tree": tree, "workflow": workflow,
+                "workflow_blob": blob, "image_os": image[0], "image_version": image[1]}
+    for key, want in expected.items():
+        if not want or record[key] != want:
+            raise Skip(f"the run recorded {key} {record[key]!r}; this push needs {want!r}")
+    for key in ("base_commit", "merge_commit"):
+        if not isinstance(record[key], str) or not SHA.match(record[key]):
+            raise Skip(f"the run recorded no valid {key}")
+    if not git.is_ancestor(record["base_commit"], head):
+        raise Skip(f"head {head} does not contain the base {record['base_commit']} the run merged with, so the "
+                   "tested merge may differ from the head")
+    if not first_parent or not git.is_ancestor(record["base_commit"], first_parent):
+        raise Skip(f"the base {record['base_commit']} the run merged with is not {line} before this push "
+                   f"({first_parent}) or an ancestor of it")
+
+
+def read_provenance(api, run: dict, head: str, name: str = PROVENANCE):
+    """The run's one unexpired artifact called `name`, parsed."""
+    listed = [a for a in api.artifacts(run["id"]) if a.get("name") == name]
+    if len(listed) != 1:
+        raise Skip(f"run {run['id']} has {len(listed)} {name} artifacts; reuse needs exactly one")
+    artifact = listed[0]
+    owner = artifact.get("workflow_run") or {}
+    if artifact.get("expired") or owner.get("id") != run["id"] or owner.get("head_sha") != head:
+        raise Skip(f"the {name} artifact of run {run['id']} is expired or belongs to another run")
+    if not isinstance(artifact.get("id"), int) or artifact.get("size_in_bytes", 0) > MAX_PROVENANCE_BYTES:
+        raise Skip(f"the {name} artifact of run {run['id']} is missing an id or too large")
+    try:
+        with zipfile.ZipFile(io.BytesIO(api.artifact_zip(artifact["id"]))) as archive:
+            info = archive.getinfo("provenance.json")
+            if info.file_size > MAX_PROVENANCE_BYTES or len(archive.namelist()) != 1:
+                raise Skip("the provenance archive holds more than provenance.json")
+            return json.loads(archive.read(info))
+    except Skip:
+        raise
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
+        raise Skip(f"the {name} artifact of run {run['id']} is unreadable ({type(error).__name__})") from error
+
+
 def decide(event: str, sha: str, workflow_path: str, push_only: set[str], required: set[str], git, api,
-           apt_key: str, ref: str) -> int:
+           apt_key: str, ref: str, images: dict[str, tuple[str, str]] | None = None,
+           workflow_text: str | None = None,
+           line_skips: frozenset[str] = LINE_SKIPS, run_id: int | None = None) -> int:
     """The id of the pull request run whose verdict the push reuses; raises
     Skip with the reason when the push must run every job."""
     if event != "push":
         raise Skip(f"a {event} run never reuses a verdict")
-    if ref != MAIN:
-        raise Skip(f"only a push to {MAIN} reuses a verdict; {ref!r} runs every job")
+    line = line_of(ref)
     if not SHA.match(sha):
         raise Skip(f"the pushed commit {sha!r} is not a commit id")
     pulls = [pull for pull in api.pulls(sha)
@@ -127,6 +394,9 @@ def decide(event: str, sha: str, workflow_path: str, push_only: set[str], requir
     if len(pulls) != 1:
         raise Skip(f"{len(pulls)} merged pull requests have {sha} as their merge commit; reuse needs exactly one")
     pull = pulls[0]
+    if (pull.get("base") or {}).get("ref") != line:
+        raise Skip(f"pull request #{pull.get('number')} merged into {(pull.get('base') or {}).get('ref')!r}, "
+                   f"not {line!r}")
     head = (pull.get("head") or {}).get("sha", "")
     if not SHA.match(head):
         raise Skip(f"pull request #{pull.get('number')} names no head commit")
@@ -145,33 +415,55 @@ def decide(event: str, sha: str, workflow_path: str, push_only: set[str], requir
         raise Skip(f"the push changes build cache inputs ({', '.join(changed)}); every job runs so main's "
                    "caches are saved for later pull requests")
     try:
-        caches = api.caches(apt_key, ref)
+        caches = api.caches(apt_key, ref) + (api.caches(apt_key, MAIN) if ref != MAIN else [])
     except Exception as error:  # noqa: BLE001 - a failed lookup runs every job
         raise Skip(f"the apt cache lookup failed ({type(error).__name__}: {error})") from error
-    if not any(cache.get("key") == apt_key and cache.get("ref") == ref for cache in caches):
-        raise Skip(f"{ref} holds no apt cache {apt_key!r}; every job runs so the present part saves it")
+    if not any(cache.get("key") == apt_key and cache.get("ref") in (ref, MAIN) for cache in caches):
+        raise Skip(f"neither {ref} nor {MAIN} holds apt cache {apt_key!r}; every job runs so the present part "
+                   "can prepare it; saving the cache requires that job to succeed")
     runs = [run for run in api.runs(head)
             if run.get("event") == "pull_request" and run.get("head_sha") == head
-            and run.get("path") == workflow_path and isinstance(run.get("id"), int)]
+            and run.get("path") == workflow_path and isinstance(run.get("id"), int)
+            and any(pr.get("number") == pull["number"] and (pr.get("base") or {}).get("ref") == line
+                    for pr in run.get("pull_requests") or [])]
     if not runs:
-        raise Skip(f"no {workflow_path} pull_request run exists for head {head}")
+        raise Skip(f"no {workflow_path} pull_request run of #{pull['number']} into {line} exists for head {head}")
     run = max(runs, key=lambda r: (r.get("run_number", 0), r.get("run_attempt", 0), r["id"]))
     if run.get("status") != "completed" or run.get("conclusion") != "success":
         raise Skip(f"run {run['id']} for head {head} is {run.get('status')} with conclusion {run.get('conclusion')}")
-    if not any(pr.get("number") == pull["number"] and (pr.get("base") or {}).get("ref") == "main"
-               for pr in run.get("pull_requests") or []):
-        raise Skip(f"run {run['id']} is not associated with merged pull request #{pull['number']} into main")
     jobs = api.jobs(run["id"])
     if not jobs:
         raise Skip(f"run {run['id']} lists no jobs")
+    check_not_reduced(jobs, run["id"])
+    skippable = line_skips if ref != MAIN else frozenset()
     for job in jobs:
         name, conclusion = job.get("name"), job.get("conclusion")
-        expected = "skipped" if name in push_only else "success"
-        if conclusion != expected:
-            raise Skip(f"job {name!r} of run {run['id']} concluded {conclusion}; reuse needs {expected}")
+        if name in push_only or name == TIER_JOURNEYS_JOB:
+            allowed = {"skipped"}
+        elif name in skippable:
+            allowed = {"success", "skipped"}
+        else:
+            allowed = {"success"}
+        if conclusion not in allowed:
+            raise Skip(f"job {name!r} of run {run['id']} concluded {conclusion}; reuse needs "
+                       f"{' or '.join(sorted(allowed))}")
+    if workflow_text is not None:
+        pushed_verdicts = verdict_jobs(workflow_text)
+        if not required <= pushed_verdicts:
+            raise Skip("the pushed workflow no longer has the verdict job(s) "
+                       f"{', '.join(sorted(required - pushed_verdicts))}")
+        required = required | pushed_verdicts
     missing = sorted(required - {job.get("name") for job in jobs})
     if missing:
         raise Skip(f"run {run['id']} has no job named {', '.join(missing)}")
+    for name in (PROVENANCE, PROVENANCE_WINDOWS):
+        check_provenance(read_provenance(api, run, head, name), pull=pull["number"], line=line, head=head,
+                         tree=pushed_tree, workflow=workflow_path, blob=git.blob(sha, workflow_path),
+                         image=(images or {}).get(name, ("", "")), git=git, first_parent=parents[0])
+    if workflow_text is None or not isinstance(run_id, int) or run_id <= 0:
+        raise Skip("no pushed workflow or no id for this run, so the jobs' runner images cannot be compared")
+    check_job_images(api, jobs, workflow_text, push_images(api, run_id))
+    check_every_partition(jobs, run["id"])
     return run["id"]
 
 
@@ -262,6 +554,10 @@ class Git:
         self.ensure(commit)
         return self.run("rev-parse", "--verify", f"{commit}^{{tree}}")
 
+    def blob(self, commit: str, path: str) -> str:
+        self.ensure(commit)
+        return self.run("rev-parse", "--verify", f"{commit}:{path}")
+
     def parents(self, commit: str) -> list[str]:
         self.ensure(commit)
         return self.run("rev-list", "--parents", "-n", "1", commit).split()[1:]
@@ -310,6 +606,40 @@ class Api:
     def jobs(self, run: int) -> list[dict]:
         return self.pages(f"actions/runs/{run}/jobs?filter=latest", "jobs")
 
+    def artifacts(self, run: int) -> list[dict]:
+        return self.pages(f"actions/runs/{run}/artifacts", "artifacts")
+
+    def artifact_zip(self, artifact: int) -> bytes:
+        """The artifact's archive. GitHub answers with a redirect to storage;
+        the token goes to GitHub only, never to the storage host."""
+        class Bare(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+                if not newurl.startswith("https://"):
+                    return None
+                return urllib.request.Request(newurl, headers={"Accept": "application/octet-stream"})
+        request = urllib.request.Request(f"{self.url}/repos/{self.repo}/actions/artifacts/{artifact}/zip", headers={
+            "Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}",
+            "X-GitHub-Api-Version": "2022-11-28"})
+        with urllib.request.build_opener(Bare).open(request, timeout=60) as response:
+            data = response.read(MAX_PROVENANCE_BYTES + 1)
+        if len(data) > MAX_PROVENANCE_BYTES:
+            raise Skip("the provenance archive is too large")
+        return data
+
+    def job_log_head(self, job: int) -> str:
+        """The first LOG_HEAD_BYTES of a job's log. GitHub answers with a
+        redirect to storage; the token goes to GitHub only."""
+        class Bare(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+                if not newurl.startswith("https://"):
+                    return None
+                return urllib.request.Request(newurl, headers={"Accept": "text/plain"})
+        request = urllib.request.Request(f"{self.url}/repos/{self.repo}/actions/jobs/{job}/logs", headers={
+            "Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}",
+            "X-GitHub-Api-Version": "2022-11-28"})
+        with urllib.request.build_opener(Bare).open(request, timeout=60) as response:
+            return response.read(LOG_HEAD_BYTES).decode("utf-8", errors="replace")
+
     def caches(self, key: str, ref: str) -> list[dict]:
         query = urllib.parse.urlencode({"key": key, "ref": ref})
         return self.pages(f"actions/caches?{query}", "actions_caches")
@@ -334,6 +664,8 @@ def main() -> int:
     parser.add_argument("--ref", required=True, help="the pushed ref, whose caches later runs restore")
     parser.add_argument("--image-os", default="", help="the runner's ImageOS")
     parser.add_argument("--image-version", default="", help="the runner's ImageVersion")
+    parser.add_argument("--windows-image-os", default="", help="the Windows runner's ImageOS")
+    parser.add_argument("--windows-image-version", default="", help="the Windows runner's ImageVersion")
     parser.add_argument("--push-only", action="append", default=[], help="a job that runs only on a push")
     parser.add_argument("--require", action="append", default=[], help="a verdict job the reused run must have")
     parser.add_argument("--api", default=os.environ.get("GITHUB_API_URL", "https://api.github.com"))
@@ -341,8 +673,12 @@ def main() -> int:
     try:
         path = workflow_path(args.workflow_ref, args.repo)
         key = apt_cache_key(args.image_os, args.image_version, playwright_version(Path.cwd()))
+        text = Path(path).read_text(encoding="utf-8")
         run = decide(args.event, args.sha, path, set(args.push_only), set(args.require), Git(),
-                     Api(args.api, args.repo, os.environ.get("GH_TOKEN", "")), key, args.ref)
+                     Api(args.api, args.repo, os.environ.get("GH_TOKEN", "")), key, args.ref,
+                     {PROVENANCE: (args.image_os, args.image_version),
+                      PROVENANCE_WINDOWS: (args.windows_image_os, args.windows_image_version)}, text,
+                     run_id=int(os.environ.get("GITHUB_RUN_ID", "0") or "0"))
     except Skip as reason:
         print(f"ci-reuse: every job runs: {reason}")
         return 0

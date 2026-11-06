@@ -695,7 +695,7 @@ class VerdictOutcomeControls(unittest.TestCase):
     def test_both_verdicts_fail_clearly_when_the_gates_did_not_run(self):
         env = {"PATH": os.environ.get("PATH", ""), "REUSE": "skipped", "REUSED": ""}
         env.update({key: "skipped" for key in (
-            "PARTS", "SHARDS", "REPORT", "CHECKS", "BUILD", "TESTS", "JOURNEYS", "RELEASE")})
+            "PARTS", "SHARDS", "REPORT", "CHECKS", "BUILD", "TESTS", "JOURNEYS", "RELEASE", "TIER_JOURNEYS")})
         for name in ("gates-verdict", "windows-verdict"):
             with self.subTest(verdict=name):
                 result = subprocess.run(["bash", "-c", verdict_script(name=name)], env=env,
@@ -775,6 +775,57 @@ class HostedEventParityControls(unittest.TestCase):
         self.assertNotEqual(job, narrowed)
         problems = parity.windows_verdict_problems(workflow.replace(job, narrowed))
         self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)
+
+
+class WindowsTierControls(unittest.TestCase):
+    """TSK-1242: the tier jobs are pinned, off or on, and only the build job
+    leaves the full tier."""
+
+    SWITCH_OFF = '          REDUCED_TIER: "off"\n'
+    SWITCH_ON = '          REDUCED_TIER: "on"\n'
+
+    def problems(self, workflow):
+        return parity.windows_tier_problems(workflow)
+
+    def turned_on(self):
+        current = self.SWITCH_ON if self.SWITCH_ON in WORKFLOW else self.SWITCH_OFF
+        return WORKFLOW.replace(current, self.SWITCH_ON)
+
+    def test_either_switch_state_is_the_pinned_form(self):
+        self.assertEqual(self.problems(WORKFLOW), [])
+        self.assertEqual(self.problems(self.turned_on()), [])
+        self.assertEqual(self.problems(self.turned_on().replace(self.SWITCH_ON, self.SWITCH_OFF)), [])
+
+    def test_another_switch_value_is_refused(self):
+        changed = self.turned_on().replace(self.SWITCH_ON, '          REDUCED_TIER: "yes"\n')
+        self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)))
+
+    def test_widening_the_tier_to_another_base_is_refused(self):
+        self.assertIn("integration/*) tier=reduced ;;", WORKFLOW)
+        changed = WORKFLOW.replace("integration/*) tier=reduced ;;", "*) tier=reduced ;;")
+        self.assertTrue(any("`windows-tier` must be exactly" in p for p in self.problems(changed)))
+
+    def test_a_tier_journey_job_with_another_test_run_is_refused(self):
+        self.assertIn(parity.TIER_RUN, WORKFLOW)
+        changed = WORKFLOW.replace("--nextest-filter --skip-benchmark", "--skip-benchmark")
+        self.assertTrue(any("`windows-tier-journeys` must be exactly" in p for p in self.problems(changed)))
+
+    def test_a_build_job_that_ignores_the_tier_is_refused(self):
+        self.assertIn(parity.BUILD_TIER_CLAUSE, WORKFLOW)
+        changed = WORKFLOW.replace(parity.BUILD_TIER_CLAUSE, "!cancelled() && needs.reuse.outputs.run == ''", 1)
+        self.assertTrue(any("`windows-build` must need" in p for p in self.problems(changed)))
+
+    def test_another_job_reading_the_tier_is_refused(self):
+        job = parity.workflow_jobs(WORKFLOW)["windows"]
+        changed = WORKFLOW.replace(job, job.replace("!cancelled() &&", "needs.windows-tier.outputs.tier != 'reduced' && !cancelled() &&", 1))
+        self.assertNotEqual(changed, WORKFLOW)
+        self.assertTrue(any("only windows-build may leave" in p for p in self.problems(changed)))
+
+    def test_the_tier_run_is_the_only_subset_the_local_parity_forgives(self):
+        self.assertNotIn(parity.TIER_RUN, parity.ci_rust_job_commands(WORKFLOW))
+        job = parity.workflow_jobs(WORKFLOW)["windows"]
+        extra = job.rstrip("\n") + f"\n      - name: subset\n        run: {parity.TIER_RUN}\n"
+        self.assertIn(parity.TIER_RUN, parity.ci_rust_job_commands(WORKFLOW.replace(job, extra)))
 
 
 class CoverageShardControls(unittest.TestCase):
@@ -982,9 +1033,14 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
             self.BROWSERS, "if timeout --kill-after=30s 10m echo skip; npx playwright install chromium"))
 
     def test_an_added_install_through_a_variable_is_refused(self):
-        self.assertEqual(WORKFLOW.count(self.CLI), 1)
-        self.assert_unpinned(WORKFLOW.replace(
-            self.CLI, self.CLI + '          PW=playwright\n          npx "$PW" install chromium\n'))
+        jobs = parity.jobs_section(WORKFLOW)
+        for name in ("gates", "gates-release"):
+            with self.subTest(job=name):
+                job = jobs[name]
+                self.assertEqual(job.count(self.CLI), 1)
+                changed = job.replace(
+                    self.CLI, self.CLI + '          PW=playwright\n          npx "$PW" install chromium\n')
+                self.assert_unpinned(WORKFLOW.replace(job, changed))
 
     def test_a_new_step_naming_playwright_is_refused(self):
         step = ("      - name: Warm the Playwright cache\n        if: matrix.part == 'present'\n"
@@ -1051,24 +1107,68 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
                             "job 'windows-tests'", "Playwright step")
 
 
+class LineAptCacheControls(unittest.TestCase):
+    """TSK-1263: the line produces the exact apt cache the decider needs."""
+
+    def test_line_present_produces_the_release_apt_key(self):
+        jobs = parity.jobs_section(WORKFLOW)
+        line = jobs["gates"]
+        release = jobs["gates-release"]
+        key = "key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}"
+        self.assertIn(key, line)
+        self.assertIn(key, release)
+        self.assertIn("path: ~/.cache/playwright-apt", line)
+        self.assertIn('echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}"', line)
+        self.assertIn("packages['node_modules/playwright-core'].version", line)
+        self.assertEqual(parity.playwright_problems(WORKFLOW), [])
+
+    def test_line_install_is_bounded_and_installs_only_system_dependencies(self):
+        steps = parity.LINE_APT_STEPS
+        self.assertEqual(len(steps), 3)
+        for step in steps:
+            self.assertIn("matrix.part == 'present' && github.event_name == 'push'", step)
+            self.assertIn("startsWith(github.ref, 'refs/heads/integration/')", step)
+            self.assertNotIn("restore-keys:", step)
+        install = steps[-1]
+        self.assertIn("steps.line-apt.outputs.cache-hit != 'true'", install)
+        self.assertIn("timeout-minutes: 25", install)
+        self.assertIn("for attempt in 1 2; do", install)
+        self.assertIn('sudo timeout --kill-after=30s 10m "$node" "$cli" install-deps chromium firefox webkit', install)
+        self.assertNotIn('"$cli" install ', install)
+        self.assertNotIn('--with-deps', install)
+        self.assertIn('sudo chown -R', install)
+
+    def test_missing_or_broadened_line_cache_preparation_is_refused(self):
+        step = parity.LINE_APT_STEPS[-1]
+        self.assertIn(step, WORKFLOW)
+        for replacement in ("", step.replace("github.event_name == 'push'", "true"),
+                            step.replace("10m", "60m"),
+                            step.replace("install-deps", "install")):
+            with self.subTest(replacement=replacement):
+                self.assertTrue(parity.playwright_problems(WORKFLOW.replace(step, replacement)))
+
+
 class EveryWorkflowTimeoutControls(unittest.TestCase):
     """TSK-254: the timeout rule covers every workflow the repository runs
     or ships, not only codeflow-ci.yml."""
 
     OWN = {
         ".github/workflows/codeflow-ci.yml", ".github/workflows/codeflow-policy.yml",
-        ".github/workflows/codeflow-release.yml",
+        ".github/workflows/codeflow-registry.yml", ".github/workflows/codeflow-release.yml",
         ".github/workflows/portal-pages.yml", ".github/workflows/release.yml",
         ".github/workflows/release-main-recheck.yml", ".github/workflows/release-plan-authority.yml",
         ".github/workflows/release-post-announce.yml",
+        ".github/workflows/windows-daily.yml", ".github/workflows/windows-daily-run.yml",
+        ".github/workflows/windows-daily-verdict.yml",
     }
-    SHIPPED = {"assets/base/ci/codeflow-ci.yml", "assets/base/ci/codeflow-policy.yml"}
+    SHIPPED = {"assets/base/ci/codeflow-ci.yml", "assets/base/ci/codeflow-policy.yml",
+               "assets/base/ci/codeflow-registry.yml"}
 
     def files(self) -> dict[str, str]:
         return {path.as_posix(): (parity.ROOT / path).read_text(encoding="utf-8") for path in parity.workflow_files()}
 
     def problems(self, path: str, text: str) -> list[str]:
-        return parity.timeout_problems(text, path, parity.UNBOUNDED_BY_DESIGN.get(path))
+        return parity.timeout_problems(text, path)
 
     def test_every_workflow_file_is_found_and_none_is_unbounded(self):
         files = self.files()
@@ -1146,14 +1246,16 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
             ".github/workflows/loop.yml": self.CALLER.format(target="./.github/workflows/loop.yml")})
         self.assertTrue(any("calls itself again" in p for p in loop), loop)
 
-    def test_the_adopter_template_exempts_only_its_named_jobs(self):
+    def test_the_adopter_template_requires_a_timeout_on_every_job(self):
         path = "assets/base/ci/codeflow-ci.yml"
         text = self.files()[path]
         self.assertEqual(self.problems(path, text), [])
         self.assertTrue(self.problems(path, text.replace("    timeout-minutes: 30\n", "", 1)))
-        self.assertTrue(parity.timeout_problems(text), "without the exemptions the unbounded jobs are named")
-        stale = parity.timeout_problems("jobs:\n  other:\n    timeout-minutes: 5\n", path, {"gates": "x"})
-        self.assertTrue(any("exempts job 'gates'" in p for p in stale), stale)
+        self.assertEqual(parity.timeout_problems(text), [])
+        unbounded = re.sub(r"^    timeout-minutes: \d+\n", "", text, flags=re.M)
+        problems = self.problems(path, unbounded)
+        for name in parity.jobs_section(text):
+            self.assertTrue(any(f"job '{name}'" in p for p in problems), problems)
 
     def test_a_new_workflow_without_timeouts_is_found_and_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1205,7 +1307,7 @@ class JobHeaderControls(unittest.TestCase):
         return {path.as_posix(): (parity.ROOT / path).read_text(encoding="utf-8") for path in parity.workflow_files()}
 
     def problems(self, path: str, text: str) -> list[str]:
-        return parity.timeout_problems(text, path, parity.UNBOUNDED_BY_DESIGN.get(path))
+        return parity.timeout_problems(text, path)
 
     def drop_timeout(self, text: str, job: str, header: str | None = None) -> str:
         """`text` with the job's header rewritten as `header` and its timeout removed."""

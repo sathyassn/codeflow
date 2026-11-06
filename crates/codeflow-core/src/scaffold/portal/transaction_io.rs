@@ -77,7 +77,10 @@ impl PortalIo {
         self.0.entries(relative, maximum)
     }
 
+    /// Open, creating if needed, a lock file with read access only, so a
+    /// second process's open never fails with a Windows sharing violation
+    /// and reaches the OS lock instead.
     pub(super) fn lock_file(&self, relative: &str) -> io::Result<File> {
-        self.0.lock_file(relative)
+        self.0.create_read_only(relative)
     }
 }

@@ -28,11 +28,12 @@ mod git_config;
 mod grok_hooks;
 mod guard_timeouts;
 mod remote_perimeter;
+mod sandbox;
 mod startup_files;
 
 pub use codex_profile::{
     builder_launch_root, probe_codex_builder_grants, probe_codex_builder_profile,
-    CodexBuilderProbe, CodexLoad, GrantCheck, ProjectLayer, CODEX_BUILDER_OVERRIDES,
+    CodexBuilderProbe, CodexLoad, GrantCheck, GrantProbe, ProjectLayer, CODEX_BUILDER_OVERRIDES,
 };
 
 /// Outcome of a health check.
@@ -165,6 +166,10 @@ pub struct Options {
     /// `GROK_HOME`, `GROK_FOLDER_TRUST`); `None` reads the process
     /// environment.
     pub env_var: Option<EnvVarFn>,
+    /// The branch-protection profile `remote-perimeter` compares the owned
+    /// rulesets with (`solo-administrator` or `independent-review`);
+    /// `None` compares none, and the security floor is judged either way.
+    pub remote_profile: Option<String>,
 }
 
 impl Options {
@@ -298,10 +303,12 @@ const CHECK_NAMES: &[&str] = &[
     "grok",
     "guard-timeouts",
     "startup-files",
+    "sandbox",
     "git-config-includes",
     "config",
     "permissions",
     "policy-source",
+    "secret-engine",
     "network",
     "delegates",
     "model-bindings",
@@ -332,11 +339,13 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     let mut m: HashMap<&'static str, CheckFn> = HashMap::new();
     m.insert("hooks", check_hooks);
     m.insert("policy-source", check_policy_source);
+    m.insert("secret-engine", check_secret_engine);
     m.insert("claude", check_claude);
     m.insert("codex", check_codex);
     m.insert("grok", check_grok);
     m.insert("guard-timeouts", guard_timeouts::check);
     m.insert("startup-files", startup_files::check);
+    m.insert("sandbox", sandbox::check);
     m.insert("git-config-includes", git_config::check);
     m.insert("config", check_config);
     m.insert("permissions", check_permissions);
@@ -2329,11 +2338,12 @@ fn check_permissions(opts: &Options) -> CheckResult {
     let in_codex = opts
         .env("CODEX_SANDBOX")
         .is_some_and(|value| !value.is_empty());
-    let by_design = if in_codex {
-        codex_evidence_by_design(opts.codeflow_home.as_deref(), &mut unwritable)
-    } else {
-        String::new()
-    };
+    // In a Codex seat the check names what a builder seat can and cannot do
+    // (TSK-1156), so the seat reads its limits before it hits one.
+    let limits = builder_limits_note(in_codex);
+    let by_design = evidence_seat(opts, in_codex).map_or_else(String::new, |seat| {
+        evidence_by_design(opts.codeflow_home.as_deref(), &mut unwritable, seat)
+    });
     if !unwritable.is_empty() {
         let paths: Vec<String> = unwritable
             .iter()
@@ -2358,7 +2368,7 @@ fn check_permissions(opts: &Options) -> CheckResult {
             name: "permissions".into(),
             status: Status::Warn(step.with(&[("paths", &paths.join(", "))])),
             message: format!(
-                "essential and full gates cannot write their lock or evidence directories, so `codeflow test --mode essential` or `--mode full` refuses or fails here ({}){sandbox}{by_design}{codex}",
+                "the gate lock directories (essential and full gates) or the evidence directory (full gates only) cannot be written, so `codeflow test --mode essential` or `--mode full` refuses or fails here ({}){sandbox}{by_design}{limits}{codex}",
                 errors.join("; ")
             ),
             duration: start.elapsed(),
@@ -2373,18 +2383,33 @@ fn check_permissions(opts: &Options) -> CheckResult {
     CheckResult {
         name: "permissions".into(),
         status: Status::Pass,
-        message: format!("file permissions correct; {writable}{sandbox}{by_design}{codex}"),
+        message: format!("file permissions correct; {writable}{sandbox}{by_design}{limits}{codex}"),
         duration: start.elapsed(),
     }
 }
 
-/// No Codex seat writes the gate evidence folder (TSK-337 AC-5): full gates
-/// and their evidence stay with the primary. So inside a Codex sandbox an
-/// unwritable evidence folder under `home` is taken out of `unwritable` and
-/// reported instead, as this note; nothing when it was writable.
-fn codex_evidence_by_design(
+/// The sandbox this runs in where the evidence folder is unwritable by
+/// design: a Codex seat, else the Claude Code sandbox; `None` outside both.
+fn evidence_seat(opts: &Options, in_codex: bool) -> Option<&'static str> {
+    if in_codex {
+        Some("a Codex seat")
+    } else {
+        sandboxed(opts).then_some("the Claude Code sandbox")
+    }
+}
+
+/// No Codex seat (TSK-337 AC-5) and no sandboxed Claude session (TSK-1044
+/// AC-4) is granted the gate evidence folder, and only a full gate copies
+/// its record there (`testing/gate.rs`, the `effective_mode == "full"`
+/// copy); quick and essential runs keep theirs under the worktree. So inside
+/// either sandbox an unwritable evidence folder under `home` is taken out of
+/// `unwritable` and reported instead, as this note naming `seat`, stating
+/// what is refused and not who must run what (TSK-1156); nothing when it
+/// was writable.
+fn evidence_by_design(
     home: Option<&Path>,
     unwritable: &mut Vec<(PathBuf, std::io::Error)>,
+    seat: &str,
 ) -> String {
     let Some(evidence) = home.map(|home| home.join(crate::testing::gate_guard::HOME_EVIDENCE_DIR))
     else {
@@ -2395,9 +2420,25 @@ fn codex_evidence_by_design(
     }
     unwritable.retain(|(dir, _)| *dir != evidence);
     format!(
-        "; `{}` is not writable in a Codex seat, by design: full gates and their evidence stay with the primary",
+        "; `{}` is not writable in {seat}: only a full gate copies its record there, so quick and essential gates are not stopped (a grant on it is the operator's decision)",
         crate::git::display_path(&evidence)
     )
+}
+
+/// What a Codex builder seat can and cannot do under the shipped `cf-builder`
+/// profile (TSK-1156), named by `codeflow doctor --preflight` and
+/// `--check permissions`. It states the refusals, not who must work around
+/// them; the git config probe in `doctor --builder-write-probe` observes the
+/// second sentence's first item live.
+pub const BUILDER_SEAT_LIMITS: &str = "shipped defaults, not measured for this seat (the measured results own what it can do; an adopter may have changed the profile); can: write its worktree, commit, create and push branches, claim a task (`codeflow work claim` writes no git config), take the gate lock folders, and run `codeflow reserve`, quick and essential gates; cannot: write the shared git config file (so `git config`, `git push -u` and `git branch -m` of a branch that has tracking settings are refused) or ~/.codeflow/gate-runs (only a full run copies its record there; quick and essential runs keep theirs under the worktree); a grant on either is the operator's decision";
+
+/// The note naming a builder seat's limits, for a check run in a Codex seat.
+fn builder_limits_note(in_codex: bool) -> String {
+    if in_codex {
+        format!("; for a Codex builder seat under the {BUILDER_SEAT_LIMITS}")
+    } else {
+        String::new()
+    }
 }
 
 /// The two home folders a gate writes, under the home folder.
@@ -2583,7 +2624,7 @@ fn codex_gate_grants(project: &Path, home: Option<&Path>) -> Option<String> {
         .any(|grants| grants[1] != CodexGrant::NotWrite)
     {
         report.push_str(
-            " (the shipped profiles leave ~/.codeflow/gate-runs unwritable: full gates and their evidence stay with the primary)",
+            " (the shipped profiles leave ~/.codeflow/gate-runs unwritable; only a full run copies its record there)",
         );
     }
     Some(report)
@@ -3043,7 +3084,32 @@ fn exec_doctor_step(
 ///    remedy: switch that worktree to its feature branch.
 ///
 /// Passes when every input is proven; unreadable repository evidence fails.
+///
+/// A file the process is refused is named here too, on every outcome, so a
+/// sandbox's refusal is never read as damage (see [`crate::git::unreadable`]).
 fn check_repo_integrity(opts: &Options) -> CheckResult {
+    let mut result = check_repo_layout(opts);
+    let here = if opts.project_dir.is_empty() {
+        "."
+    } else {
+        opts.project_dir.as_str()
+    };
+    let Ok(repo) = git2::Repository::open(here) else {
+        return result;
+    };
+    let found = crate::git::unreadable::scan(&repo);
+    for line in found.report_lines() {
+        result.message.push_str("\n      ");
+        result.message.push_str(&line);
+    }
+    if found.needs_action() && result.status == Status::Pass {
+        result.status = Status::Warn(crate::remedy::DOCTOR_ROOT_CHECKOUT.remedy());
+    }
+    result
+}
+
+/// The bare state, linked worktrees and root checkout of the repository.
+fn check_repo_layout(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
     let pass = |msg: &str| CheckResult {
@@ -4271,6 +4337,87 @@ fn check_policy_source(opts: &Options) -> CheckResult {
     }
 }
 
+/// The commit-time secret scan's engine (TSK-412): with
+/// `git.secret_scan_engine: gitleaks`, the folders searched, the binary
+/// found with its checksum and version, and the pin expected. It runs the
+/// binary, to read its version, only when its checksum is the pinned one.
+/// Unusable is a failure at `block` and a warning at `warn`, as the hook
+/// judges it.
+fn check_secret_engine(opts: &Options) -> CheckResult {
+    use crate::hooks::gitleaks::Engine;
+    use crate::hooks::policy::{Policy, SecretScanEngine};
+    let start = Instant::now();
+    let result = |status, message| CheckResult {
+        name: "secret-engine".into(),
+        status,
+        message,
+        duration: start.elapsed(),
+    };
+    let policy = match Policy::load_effective(Path::new(&opts.project_dir)) {
+        Ok((policy, _)) => policy.git,
+        Err(error) => return result(Status::Fail, format!("cannot read policy: {error}")),
+    };
+    if policy.secret_scan_engine == SecretScanEngine::Builtin {
+        return result(
+            Status::Pass,
+            "the staged secret scan runs the built-in patterns only (git.secret_scan_engine is builtin)".into(),
+        );
+    }
+    if !policy.secret_scan.is_active() {
+        return result(
+            Status::Pass,
+            format!(
+                "git.secret_scan is {}, so the staged scan and its gitleaks engine do not run",
+                policy.secret_scan
+            ),
+        );
+    }
+    let engine = Engine::with_path(opts.env("PATH").as_deref());
+    let searched = if engine.search.is_empty() {
+        "searched no folder (PATH has no absolute entry)".to_string()
+    } else {
+        format!(
+            "searched {}",
+            engine
+                .search
+                .iter()
+                .map(|dir| crate::git::display_path(dir))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let pin = engine.expected.describe();
+    match engine.verify() {
+        Ok(verified) => result(
+            Status::Pass,
+            format!(
+                "gitleaks {} at {} with sha256 {}; the pin is {pin}; {searched}",
+                engine.expected.version,
+                crate::git::display_path(&verified.path),
+                verified.sha256
+            ),
+        ),
+        Err(unusable) => {
+            let message = format!("{}; the pin is {pin}; {searched}", unusable.describe());
+            if policy.secret_scan == crate::hooks::PolicyLevel::Block {
+                result(Status::Fail, message)
+            } else {
+                let archive = engine
+                    .expected
+                    .archive
+                    .clone()
+                    .unwrap_or_else(|| "none is pinned for this platform".to_string());
+                result(
+                    Status::Warn(
+                        crate::remedy::SECRET_ENGINE_UNAVAILABLE.with(&[("archive", &archive)]),
+                    ),
+                    message,
+                )
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// The step a warning names, or "" for any other status.
@@ -4332,7 +4479,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 24);
+        assert_eq!(check_names().len(), 26);
     }
 
     #[test]
@@ -6279,6 +6426,7 @@ mod tests {
             permission_preset: "acceptEdits".into(),
             product_one_liner: "x".into(),
             release_rules: None,
+            file_size_rule: None,
         }
         .store(dir.path())
         .unwrap();
@@ -6575,11 +6723,21 @@ mod tests {
         let Status::Warn(remedy) = &result.status else {
             panic!("{:?} {}", result.status, result.message);
         };
-        for dir in [blocked.join("locks"), blocked.join("gate-runs")] {
-            let shown = dir.display().to_string();
-            assert!(result.message.contains(&shown), "{}", result.message);
-            assert!(remedy.to_string().contains(&shown), "{remedy}");
-        }
+        let locks = blocked.join("locks").display().to_string();
+        assert!(result.message.contains(&locks), "{}", result.message);
+        assert!(remedy.to_string().contains(&locks), "{remedy}");
+        // TSK-1044 AC-4: no shipped preset grants the evidence folder, so
+        // in the Claude sandbox it is unwritable by design and never asked
+        // for in the remedy.
+        let evidence = blocked.join("gate-runs").display().to_string();
+        assert!(!remedy.to_string().contains(&evidence), "{remedy}");
+        assert!(
+            result.message.contains(
+                "not writable in the Claude Code sandbox: only a full gate copies its record there"
+            ),
+            "{}",
+            result.message
+        );
         assert!(result.message.contains(SANDBOX_NOTE), "{}", result.message);
         assert!(remedy.to_string().contains("allowWrite"), "{remedy}");
     }
@@ -6787,12 +6945,32 @@ mod tests {
         assert!(
             result
                 .message
-                .contains("not writable in a Codex seat, by design"),
+                .contains("not writable in a Codex seat: only a full gate copies its record there"),
             "{}",
             result.message
         );
         assert!(
             result.message.contains("lock directories are writable"),
+            "{}",
+            result.message
+        );
+        // TSK-1156: the check names what a builder seat can and cannot do,
+        // and no longer tells the seat who must run gates.
+        assert!(
+            result.message.contains(BUILDER_SEAT_LIMITS),
+            "{}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains("cannot: write the shared git config file"),
+            "{}",
+            result.message
+        );
+        assert!(!result.message.contains("by design"), "{}", result.message);
+        assert!(
+            !result.message.contains("stay with the primary"),
             "{}",
             result.message
         );
@@ -6803,7 +6981,11 @@ mod tests {
             "{}",
             result.message
         );
-        assert!(!result.message.contains("by design"), "{}", result.message);
+        assert!(
+            !result.message.contains("only a full gate copies"),
+            "{}",
+            result.message
+        );
     }
 
     /// TSK-216 AC-3: in the sandbox the network probe is an HTTPS request,

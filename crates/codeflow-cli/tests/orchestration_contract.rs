@@ -937,18 +937,18 @@ fn independent_discovery_precedes_the_one_challenged_plan() {
         "the orchestrator skill must expose independent discovery in its description"
     );
     assert!(
-        normalize_whitespace(&capabilities).contains("twenty-four health checks"),
+        normalize_whitespace(&capabilities).contains("twenty-six health checks"),
         "CAP-008 must count the policy-source doctor check"
     );
     let readme = normalize_whitespace(&read("README.md"));
     let architecture = normalize_whitespace(&read("docs/architecture.md"));
     assert!(
-        readme.contains("Health checks (24): hooks, claude, codex, grok, guard-timeouts, startup-files, git-config-includes, config"),
+        readme.contains("Health checks (26): hooks, claude, codex, grok, guard-timeouts, startup-files, sandbox, git-config-includes, config"),
         "README must list the grok doctor check"
     );
     assert!(
         architecture.contains(
-            "24 checks: hooks, claude, codex, grok, guard-timeouts, startup-files, git-config-includes, config"
+            "26 checks: hooks, claude, codex, grok, guard-timeouts, startup-files, sandbox, git-config-includes, config"
         ),
         "architecture must list the grok doctor check"
     );
@@ -2645,22 +2645,24 @@ fn review_and_research_briefs_name_the_whole_unit_and_no_fence() {
     }
 }
 
-/// TSK-452 AC-9 and AC-10: the pace of planned work has one canonical home,
-/// the cf-method workflow lifecycle reference, and each other home points
-/// there instead of restating it.
+/// TSK-452 AC-9 and AC-10, as TSK-1013 AC-12 replaced the pace rule: the
+/// pace of planned work has one canonical home, the cf-method workflow
+/// lifecycle reference, where each task keeps to its frozen band; each other
+/// home points there instead of restating it, and the retired per-hour
+/// throughput rule is gone from every home.
 #[test]
-fn planned_work_speed_rule_has_one_home_and_pointers() {
+fn planned_work_band_rule_has_one_home_and_pointers() {
     const HOME: &str = "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md";
     const CANONICAL: [&str; 9] = [
-        "## Planned work moves at speed",
+        "## Planned work keeps to its band",
         "Once work is planned into an epic and tasks with criteria, builders execute it without re-planning, re-litigating settled decisions or confirmation work for its own sake.",
-        "The operator set the throughput expectation as an explicit decision of 2026-10-23: each build lane delivers at least one planned task to ready-for-review per hour, preferably two.",
+        "Where the project adopted the `cf-estimate` time-box profile, each task's budget is its band, frozen at breakdown:",
         "Quality is not traded for speed: the criteria, the tests that prove them and real security stay.",
-        "run targeted tests in the worktree and the quick gate once before ready, and never run the full gate locally;",
+        "A claim means work begins now.",
+        "An abandoned claim is handed over on its branch, never deleted.",
         "push once, at ready, and never rerun a check on an unchanged tree;",
-        "report any stop longer than 15 minutes at once;",
-        "The coordinator starts every task whose edges allow, up to host capacity, measures each lane's time on its task at every sweep and acts on any lane past an hour.",
-        "Estimates come from this planned throughput and are never extrapolated from a slow pace (`cf-estimate`).",
+        "Where the profile is adopted, it reads each lane's time on its task against its band at every sweep and acts on any task past its band top.",
+        "Estimates come from the `cf-estimate` scenarios and, where adopted, the task's band, never extrapolated from a slow pace.",
     ];
     let home = normalize_whitespace(&read(HOME));
     for sentence in CANONICAL {
@@ -2670,28 +2672,30 @@ fn planned_work_speed_rule_has_one_home_and_pointers() {
             "{HOME} must state once: {sentence}"
         );
     }
-    let pointers: [(&str, &[&str]); 4] = [
+    let pointers: [(&str, &[&str]); 6] = [
         (
             "assets/base/agents/skills/cf-develop/SKILL.md",
-            &["\"Planned work moves at speed\"", "push once, at ready"],
+            &["\"Planned work keeps to its band\"", "push once, at ready"],
         ),
         (
             "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
             &[
-                "\"Planned work moves at speed\": the coordinator starts every task whose edges allow, up to host capacity, measures each lane's time on its task at every sweep and acts on any lane past an hour.",
+                "\"Planned work keeps to its band\": the coordinator starts every task whose edges allow, up to host capacity, and, where the time-box profile is adopted, reads each lane's time on its task against its band at every sweep and acts on any task past its band top.",
             ],
         ),
         (
             "assets/base/agents/skills/cf-estimate/SKILL.md",
             &[
-                "Base every estimate of planned work on planned throughput, the pace the `cf-method` workflow lifecycle reference sets in \"Planned work moves at speed\"",
+                "each planned task's budget is its frozen band (the `cf-method` workflow lifecycle reference, \"Planned work keeps to its band\")",
                 "never extrapolate from a slow pace.",
             ],
         ),
         (
             "assets/base/rule-map.toml",
-            &["planned work moves at speed, at least one task per lane per hour", "section = \"Planned work moves at speed\""],
+            &["an adopted time-box profile holds each task to its band;", "section = \"Planned work keeps to its band\""],
         ),
+        ("assets/base/AGENTS.md.tmpl", &["an adopted time-box profile holds each task to its band;"]),
+        ("assets/base/AGENTS.full.md.tmpl", &["an adopted time-box profile holds each task to its band;"]),
     ];
     for (path, required) in pointers {
         let text = normalize_whitespace(&read(path));
@@ -2701,11 +2705,37 @@ fn planned_work_speed_rule_has_one_home_and_pointers() {
                 "{path} lost its pointer: {sentence}"
             );
         }
-        // A pointer never restates the operator's decision in full.
+        // A pointer never restates the retired decision.
         assert!(
             !text.contains("explicit decision of 2026-10-23"),
-            "{path} restates the speed rule instead of pointing to {HOME}"
+            "{path} restates the pace rule instead of pointing to {HOME}"
         );
+    }
+    for path in [
+        HOME,
+        "assets/base/agents/skills/cf-develop/SKILL.md",
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+        "assets/base/agents/skills/cf-estimate/SKILL.md",
+        "assets/base/rule-map.toml",
+        "assets/base/AGENTS.md.tmpl",
+        "assets/base/AGENTS.full.md.tmpl",
+        "assets/base/rules/workflow-discipline.md",
+    ] {
+        let text = normalize_whitespace(&read(path));
+        // Split so the AC-12 grep over the tests stays empty.
+        for retired in [
+            concat!("moves at ", "speed"),
+            concat!("task per ", "lane"),
+            concat!("per lane ", "per hour"),
+            concat!("preferably ", "two"),
+            concat!("planned ", "throughput"),
+            concat!("past an ", "hour"),
+        ] {
+            assert!(
+                !text.contains(retired),
+                "{path} keeps the retired pace rule: {retired:?}"
+            );
+        }
     }
 }
 

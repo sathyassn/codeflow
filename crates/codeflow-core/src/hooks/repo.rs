@@ -179,12 +179,63 @@ fn branch_rule_text(name: Option<&GitName>) -> String {
     })
 }
 
+/// Refuse a repository whose `config` or `config.worktree`, in the git
+/// directory or the common directory it names, exists as anything but a
+/// regular file of bounded size. libgit2 reads those files with a blocking
+/// read, so a fifo would hold the caller with no answer. A file a config
+/// `include` names is read by libgit2 and is not checked here.
+fn config_files_readable(git_dir: &Path) -> Result<(), String> {
+    const LIMIT: u64 = super::policy::SETTINGS_READ_LIMIT;
+    let mut dirs = vec![git_dir.to_path_buf()];
+    let common = git_dir.join("commondir");
+    if !crate::absence::proven_absent(&common)
+        .map_err(|error| format!("cannot inspect {}: {error}", common.display()))?
+    {
+        let bytes = crate::bounded_file::read_bounded_following(&common, 4096)
+            .map_err(|error| format!("cannot read {}: {error}", common.display()))?;
+        let text = String::from_utf8(bytes)
+            .map_err(|_| format!("cannot read {}: not UTF-8", common.display()))?;
+        let line = text.strip_suffix('\n').unwrap_or(&text);
+        dirs.push(git_dir.join(line.strip_suffix('\r').unwrap_or(line)));
+    }
+    for dir in dirs {
+        for name in ["config", "config.worktree"] {
+            let path = dir.join(name);
+            match std::fs::metadata(&path) {
+                Ok(meta) if !meta.is_file() => {
+                    return Err(format!(
+                        "repository configuration {} is not a regular file",
+                        path.display()
+                    ))
+                }
+                Ok(meta) if meta.len() > LIMIT => {
+                    return Err(format!(
+                        "repository configuration {} is larger than {LIMIT} bytes",
+                        path.display()
+                    ))
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("cannot inspect {}: {error}", path.display())),
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Open the repository at or above `start`; only a proven non-repository is absent.
 ///
 /// # Errors
 /// Discovery fails, including an existing repository marker with malformed metadata.
 pub fn open(start: &Path) -> Result<Option<Repository>, String> {
-    match Repository::discover(crate::portable_path::without_verbatim(start.to_path_buf())) {
+    let start_path = crate::portable_path::without_verbatim(start.to_path_buf());
+    // libgit2 opens the repository's configuration with a blocking read, so
+    // a fifo there would hold the hook: check the files first (TSK-397
+    // security review SEC01-3).
+    if let Ok(git_dir) = Repository::discover_path(&start_path, std::iter::empty::<&Path>()) {
+        config_files_readable(&git_dir)?;
+    }
+    match Repository::discover(start_path) {
         Ok(repo) => {
             // Derive repository claims from the physical metadata. On Windows,
             // opening a directory symlink can otherwise report its alias as
@@ -499,7 +550,15 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
     for resolve in [false, true] {
         let target =
             super::edit_guard::normalized(target, resolve).map_err(|error| error.to_string())?;
-        for ancestor in target.ancestors() {
+        // A name that holds nothing holds no marker, and probing one per
+        // missing ancestor made this walk quadratic in depth (TSK-1258).
+        let present = crate::absence::deepest_entry(&target).map_err(|error| {
+            format!(
+                "cannot inspect target repository {}: {error}",
+                target.display()
+            )
+        })?;
+        for ancestor in present.ancestors() {
             let marker = ancestor.join(".git");
             if (!crate::absence::cannot_exist(&marker).map_err(|error| {
                 format!(
@@ -842,6 +901,170 @@ fn check_common_directory(repo: &Repository) -> Result<(), String> {
     Ok(())
 }
 
+/// The text of a small marker file in `tree`, read through the held handle:
+/// at most 4 KiB, never through a link, never blocking on a special file, and
+/// the type checked on the opened descriptor.
+fn small_marker(tree: &crate::contained::Tree, name: &str, what: &str) -> Result<String, String> {
+    let bytes = tree
+        .read(name, 4096)
+        .map_err(|error| format!("cannot read {what}: {error}"))?;
+    String::from_utf8(bytes.trim_ascii_end().to_vec())
+        .map_err(|_| format!("{what} is not valid text"))
+}
+
+/// Whether the held directory is a git directory: a `HEAD` file and
+/// `objects` and `refs` folders, checked on the handle that is returned.
+fn require_repository(tree: &crate::contained::Tree) -> Result<(), String> {
+    if !tree.metadata("HEAD").is_ok_and(|m| m.is_file()) {
+        return Err("git directory has no `HEAD` file".into());
+    }
+    for folder in ["objects", "refs"] {
+        if !tree.metadata(folder).is_ok_and(|m| m.is_dir()) {
+            return Err(format!("git directory has no `{folder}` folder"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+type Interleave = Box<dyn FnMut(&str)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Runs at the named points inside [`shared_git_tree`] so a test can
+    /// swap a folder exactly there.
+    pub(crate) static INTERLEAVE: std::cell::RefCell<Option<Interleave>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn interleave(stage: &str) {
+    if let Some(mut hook) = INTERLEAVE.with(|slot| slot.borrow_mut().take()) {
+        hook(stage);
+        INTERLEAVE.with(|slot| *slot.borrow_mut() = Some(hook));
+    }
+}
+
+/// The tree that holds the shared config for the checkout holding
+/// `project_dir`, found without opening the repository (opening reads its
+/// config, which can block on a pipe in its place).
+///
+/// An ordinary git directory is its own shared root. A linked worktree's
+/// administrative directory is accepted only when its registration is real:
+///
+/// - its `commondir` file names a common directory that is physically the
+///   grandparent of the administrative directory (`<common>/worktrees/<name>`
+///   with the middle folder named `worktrees`), so an alias cannot stand in;
+/// - its `gitdir` file names the checkout's `.git` marker;
+/// - that checkout's marker names this administrative directory.
+///
+/// The returned tree is the handle opened here: the caller works through it
+/// and never re-resolves a path, so a rename or link swapped in afterwards
+/// cannot move the work to another directory. Every marker is read through a
+/// held handle, bounded, without following a link or blocking on a pipe.
+/// Any disagreement refuses before a caller creates a file.
+///
+/// # Errors
+///
+/// When no git directory is found, a marker is not a small regular file, or
+/// the registration, common directory and checkout disagree.
+pub(crate) fn shared_git_tree(project_dir: &Path) -> Result<crate::contained::Tree, String> {
+    use crate::contained::Tree;
+    let found = Repository::discover_path(project_dir, [] as [&Path; 0])
+        .map_err(|error| error.message().to_string())?;
+    #[cfg(test)]
+    interleave("before-admin");
+    let admin =
+        Tree::open(&found).map_err(|error| format!("cannot open git directory: {error}"))?;
+    match admin.metadata("commondir") {
+        Ok(_) => {}
+        // No commondir in the held directory: an ordinary git directory,
+        // which is accepted only when this handle itself holds a repository.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            require_repository(&admin)?;
+            return Ok(admin);
+        }
+        Err(error) => return Err(format!("cannot inspect commondir: {error}")),
+    }
+    let named = small_marker(&admin, "commondir", "commondir")?;
+    if named.is_empty() {
+        return Err("commondir is empty".into());
+    }
+    let registrations = admin
+        .path()
+        .parent()
+        .filter(|parent| parent.file_name().is_some_and(|name| name == "worktrees"))
+        .ok_or("worktree administrative directory is not under `worktrees`")?;
+    let physical = registrations
+        .parent()
+        .ok_or("worktree registration has no common directory")?;
+    let admin_name = admin
+        .path()
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or("worktree administrative directory has no usable name")?;
+    #[cfg(test)]
+    interleave("before-common");
+    let common = Tree::open(&admin.path().join(&named))
+        .map_err(|error| format!("cannot open common directory: {error}"))?;
+    if common.path() != physical {
+        return Err("worktree common directory disagrees with its registration".into());
+    }
+    // The registration, found again beneath the common directory that was
+    // just opened, must be the very folder held as `admin`: a common
+    // directory swapped in after `admin` was opened holds a different one.
+    let registered_here = common
+        .subtree(&format!("worktrees/{admin_name}"))
+        .map_err(|error| format!("common directory does not hold the registration: {error}"))?;
+    if !registered_here
+        .same_directory(&admin)
+        .map_err(|error| format!("cannot compare the registration: {error}"))?
+    {
+        return Err("common directory holds a different registration than the one read".into());
+    }
+    require_repository(&common)?;
+    // The registration names the checkout's marker, and that marker names
+    // this administrative directory.
+    let registered = registered_marker_from(
+        admin.path(),
+        small_marker(&admin, "gitdir", "worktree registration")?.as_bytes(),
+    )?;
+    let mut checkout = None;
+    for dir in project_dir.ancestors() {
+        if std::fs::symlink_metadata(dir.join(".git")).is_ok() {
+            checkout = Some(
+                Tree::open(dir).map_err(|error| format!("cannot open the checkout: {error}"))?,
+            );
+            break;
+        }
+    }
+    let checkout = checkout.ok_or("no checkout marker above the project")?;
+    if registered != checkout.path().join(".git") {
+        return Err("worktree registration names a different checkout".into());
+    }
+    let text = small_marker(&checkout, ".git", "checkout marker")?;
+    let target = text
+        .strip_prefix("gitdir:")
+        .map(str::trim_ascii)
+        .filter(|target| !target.is_empty())
+        .ok_or("checkout marker does not name a git directory")?;
+    let named = checkout.path().join(target);
+    #[cfg(test)]
+    interleave("before-checkout-target");
+    let named = Tree::open(&named)
+        .map_err(|error| format!("cannot open checkout git directory: {error}"))?;
+    if named.path() != admin.path()
+        || !named
+            .same_directory(&admin)
+            .map_err(|error| format!("cannot compare the checkout marker's target: {error}"))?
+    {
+        return Err("checkout marker names a different git directory".into());
+    }
+    // The same objects must still be what the held common directory lists.
+    require_repository(&common)?;
+    Ok(common)
+}
+
 // Inventory the administrative names before interpreting their pointers. A
 // relative missing leaf is prunable too; the generic worktree reader requires
 // a checkout parent in the raw text before it can represent that checkout.
@@ -861,14 +1084,17 @@ pub(super) fn registrations(repo: &Repository) -> Result<Vec<PathBuf>, String> {
 
 /// The normalized marker named by a regular registration file.
 pub(super) fn registered_marker(admin: &Path) -> Result<PathBuf, String> {
-    let file = admin.join("gitdir");
-    let metadata = std::fs::symlink_metadata(&file)
-        .map_err(|error| format!("cannot inspect worktree registration: {error}"))?;
-    if !metadata.file_type().is_file() {
-        return Err("worktree registration must be a regular file".into());
-    }
-    let text = std::fs::read(&file)
+    // One bounded read: no link followed, no wait on a pipe, the type checked
+    // on the opened descriptor (a path inspected and then reopened could be
+    // swapped in between).
+    let text = crate::bounded_file::read_bounded_regular(&admin.join("gitdir"), 4096)
         .map_err(|error| format!("cannot read worktree registration: {error}"))?;
+    registered_marker_from(admin, &text)
+}
+
+/// The normalized marker a registration's text names, relative to `admin`
+/// when the text is relative.
+fn registered_marker_from(admin: &Path, text: &[u8]) -> Result<PathBuf, String> {
     let text = text.trim_ascii_end();
     let root = text
         .strip_suffix(b"/.git")

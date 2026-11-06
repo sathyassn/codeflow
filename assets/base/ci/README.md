@@ -155,10 +155,18 @@ when the checkout changes the table. Requiring the
 table there would leave a fresh `codeflow init`, and the first upgrade that
 adds it, unable to pass, since the target they are judged by has no table
 yet. A missing checksum file, a missing entry or a mismatch fails the job;
-nothing unverified is installed. The enforcing jobs run on
-`pull_request_target`, which takes the workflow from the default branch; they
-check out the pull request's base commit, so the target's pin and policy
-apply, and read the pull request head only as git data.
+nothing unverified is installed. The verdict job, `trusted: commit
+standards`, runs on `pull_request_target`, which takes the workflow from the
+default branch for every pull request whatever it targets. It checks that
+the run is for the default branch, checks out exactly that commit
+(`github.sha`), so the default branch's pin and policy apply to a pull
+request into a line too (ADR-0091), fetches the pull request's base and head
+only as git data, and asserts after every step that the checkout has not
+moved, and it refuses when that commit has no `.codeflow/policy.json`.
+Push, schedule and dispatch runs only check the id registry, in their own
+workflow, `codeflow-registry.yml`, under the name `registry check`: a
+workflow those events start creates no check under a `trusted:` name, not
+even a skipped one, which GitHub would count as passing.
 
 The GitLab, Bitbucket and generic wrappers run one shared script (the text
 between the `codeflow pinned run` markers is the same in all three). It reads
@@ -231,18 +239,50 @@ job has no cap, because it runs your own suite, whose length only you know;
 add one to your copy when you know it (`codeflow update` keeps your edit).
 
 `codeflow-policy.yml` runs once per pull request event, and a push followed
-by a body edit sends two events seconds apart. Pull request runs share one
-concurrency group per pull request, so the newer run cancels the older one.
-The run that judges reads the pull request's body from the API when it runs,
-not from its event, so the newest body is judged whichever run survives; for
-that, the job's token gains `pull-requests: read` and stays read-only. Push,
-schedule and dispatch runs each get a group of their own and are never
-cancelled, so a registry check is never replaced by a newer event.
-Concurrency groups are shared across the repository, so any workflow that
-names the same group can cancel the policy check; that fails closed, since
-a cancelled check never passes, and requiring approval to run workflows
-from outside collaborators (the repository's Actions settings) limits who
-can start such a workflow.
+by a body edit sends two events seconds apart. No event cancels or replaces a
+run: the workflow sets `cancel-in-progress: false` and `queue: max`, so every
+pending run in the pull request's concurrency group waits its turn and
+finishes, and the push's required "commit standards" check ends completed,
+never cancelled. `cancel-in-progress: false` alone does not do this: the
+default queue holds one pending run and cancels it when a newer run arrives.
+`codeflow-registry.yml` has no concurrency group, so a registry check is
+never replaced by a newer event.
+
+The event pins the head and the base commit: the job fetches both as data
+and refuses a head that is not the event's. Only the body comes from the API,
+read when the run executes (the job's token gains `pull-requests: read` and
+stays read-only), so a queued run can judge a newer body than its event. The
+body is written to a file in the runner's temp directory and given to
+`codeflow ci` with `--pr-body-file`, never through `env:` or an argument,
+because the runner prints a step's `env:` values; the log carries only the
+body's sha256 digest. After the checks the run reads the pull request a
+second time. That last read fails the run, with its own message, when the
+head, the base branch or the body differs from what the run judged, and
+fails closed when the read fails. The run queued by the change decides. The
+base commit is not compared, since a push to the base branch fires no pull
+request event.
+
+Limits:
+
+- A concurrency group queues at most 100 runs. A run that arrives past that
+  is cancelled, so the newest push fails closed until someone re-runs the
+  check.
+- A change made after the last read and before the run ends is not seen by
+  that run. The run that change queued judges it.
+- Each run makes two reads of the pull request on the job's shared token,
+  which counts against the repository's API rate limit.
+- `queue` is a 2026 key. actionlint releases up to 1.7.12 reject it as an
+  unexpected key; ignore that message in `.github/actionlint.yml` and keep the
+  key. Check your linter's release notes before upgrading it.
+- Concurrency groups are shared across the repository, so any workflow that
+  names the same group can cancel a run of this check by using
+  `cancel-in-progress: true`. Cancelling a running job, or the run for a new
+  head, fails closed, since a cancelled check never passes. A pending run
+  cancelled before its job starts may leave no check at all, so an earlier
+  pass on the same head can stand for a body that run never judged. Requiring
+  approval to run workflows from outside
+  collaborators (the repository's Actions settings) limits who can start such
+  a workflow.
 
 ## Project setup hook
 
@@ -312,6 +352,65 @@ from before 3.0.0 and does not restore a key a later policy deleted. A first Cod
 review fails until the policy lands; merge that pull request over the
 failing check, or land the policy alone first.
 
+## Project exception hook
+
+A project that records dependency-audit exceptions in its own reviewed
+register, with an owner, an expiry and a reason per row, commits
+`.codeflow/audit-exceptions.sh` instead of editing the managed step. The
+hook is optional, project-owned, and never written by `codeflow update`. It
+runs in the GitHub `security review` job after the managed audit, only when
+the audit finds advisories, and may accept findings that a trusted file
+records.
+
+- **Trusted commit only.** The step reads the hook from the trusted commit
+  (the pull request's base, or the pushed commit) and exports that commit's
+  files to a folder outside the checkout. The hook runs there with `bash`,
+  so a path it reads, such as `docs/dependency-register.csv`, is the trusted
+  commit's copy. A pull request that adds or changes the hook or the
+  register is judged by the base, and takes effect once it lands; the step
+  prints a notice when the change holds a hook the trusted commit does not.
+  A hook that is not a regular file on the trusted commit fails the job.
+- **Inputs.** The working folder is the exported trusted commit.
+  `CODEFLOW_AUDIT_FINDINGS` is the path of a file with one finding per line,
+  tab separated: advisory id, package, version, ecosystem, lockfile path,
+  and the advisory's aliases joined by commas. `CODEFLOW_TRUSTED_SHA` is the
+  trusted commit and `CODEFLOW_TRUSTED_ROOT` is the exported folder. The
+  scan runs with `--verbosity error --format json` when the trusted commit
+  holds the hook, so its log holds only errors.
+- **Exit contract.** The hook prints the findings it accepts to standard
+  output, one per line, copied unchanged from the findings file. Exit 0 with
+  those lines is a verdict; any other exit status makes the hook accept
+  nothing, as does a printed line that is not a finding. The step passes
+  when every finding is accepted and lists each as `accepted by the project
+  exception hook: <finding>`; otherwise it lists the rest as `not accepted:
+  <finding>` and applies the policy level as before (`block` fails, `warn`
+  reports). The hook runs only when osv-scanner exits 1 for advisories and
+  logged no error. osv-scanner exits 1 even when it could not read a
+  lockfile, so any logged error means the scan may be incomplete: the hook
+  is not run, the logged errors are printed, and the policy level applies as
+  if nothing were accepted.
+- **Advice.** When the trusted commit holds the hook, the failure message
+  tells the reader to accept a justified finding through it. Without the
+  hook, the message and the `osv-scanner.toml` route are as in 3.1.0, and
+  the `osv-scanner.toml` suppressions still come from the trusted commit.
+- **Match on the advisory, not the path.** The lockfile path is chosen by
+  the change under test. Key a register row on the advisory id, package and
+  version, and check its expiry in the hook.
+
+Example: accept the advisories whose id is the first column of a register
+row that has not expired (`docs/dependency-register.tsv`, columns id, owner,
+expiry as `YYYY-MM-DD`, reason):
+
+```sh
+today=$(date -u +%Y-%m-%d)
+awk -F'\t' -v today="$today" \
+  'NR == FNR { if ($3 >= today) ok[$1] = 1; next } ($1 in ok)' \
+  docs/dependency-register.tsv "$CODEFLOW_AUDIT_FINDINGS"
+```
+
+Only the GitHub workflow runs the hook. The GitLab, Bitbucket and generic
+wrappers carry the audit only as an optional add-on you run yourself.
+
 ## Two planes, deliberately
 
 `codeflow ci` is the **portable, host-agnostic** verification plane. The
@@ -322,11 +421,35 @@ API — see CodeFlow ADR-0017.
 A pull request's checks test the merge of its branch with the base as it was
 when the run started, and a later landing does not run them again. Two pull
 requests each green on an older base can therefore both merge and leave the
-base red. Close that on the host: `codeflow remote protect` requires the
-checks in `git.required_checks` on a branch that is up to date with its base,
-and `codeflow doctor --check remote-perimeter` warns when the live rules do
-not. Without that host rule, whoever merges updates the branch from the base
-and waits for the fresh run first.
+base red. Close that on the host: `codeflow remote protect` writes rulesets
+it owns that require the checks on a branch that is up to date with its
+base, and `codeflow doctor --check remote-perimeter` warns when the live
+rules do not. Without that host rule, whoever merges updates the branch from
+the base and waits for the fresh run first.
+
+`remote protect` writes three rulesets on GitHub, by name:
+
+- "codeflow authority updates" on the default branch: only the
+  administrator role (`--profile solo-administrator`, the default) or the
+  maintain role (`--profile independent-review`) moves it.
+- "codeflow authority checks" on the default branch: a pull request with
+  the profile's approvals, and strict checks pinned to the identity that
+  must produce them: the GitHub App given by `--check-app <id>` for the
+  `authority:` names (Mode A), else GitHub Actions for the `trusted:` names
+  (Mode B). No force push, no deletion, no bypass.
+- "codeflow line checks" on the integration lines (`--lines`, default
+  `integration/**`): a pull request, the `trusted:` names and the test
+  verdicts pinned to GitHub Actions and strict, no force push, no deletion,
+  no bypass, and line creation left open.
+
+It never writes a ruleset with another name, and an update never lowers an
+approval count, removes a rule or widens a bypass list; reducing a rule is
+an administrator's edit on the host. It refuses the checks rulesets until
+the default branch's `codeflow-policy.yml` declares the `trusted:` names,
+then the operator retires any older ruleset that requires the old names
+(`commit standards`, `secret scan`, `release impact`), which `doctor`
+names. The Mode A App and environment setup, the enablement order and the
+recovery window are in the policy reference's "Remote protection" section.
 
 ## Optional external add-ons
 

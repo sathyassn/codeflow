@@ -122,6 +122,12 @@ each batch.
   ```
 
   The Blocker that `task status` writes and removes is not reviewed scope.
+  A task already blocked on the target is unblocked the same way in its
+  own pull request, and `codeflow ci` shows the Blocker the range removes.
+  Each status step is judged on its own commit and each merge against
+  every parent, so a sync of `main` that brings legal steps passes in one
+  merge or several, and a terminal status left inside one range is
+  refused (TSK-1036).
   Each reopen appends the block it supersedes to one chronological
   archive, so the record reads the same against the line and against
   `main`. Archived blocks stay byte for byte (only a validated redaction
@@ -220,6 +226,19 @@ A receiver's first push still proves its own task landings.
   The receiver's own completion still binds all its product work. A line
   merge that adds product changes outside verified source history and
   reviewed task heads refuses even when no task completes in that range.
+  A pull request from a task branch into an epic line judges the merges
+  it carries against that line in the same way, so a sync that hand-edits
+  a source task's file blocks there too. A merge that edits a completed
+  task's acceptance block, which neither of its parents holds, is refused
+  for that edit.
+  The push of that task branch is the one exception: a merge whose other
+  parents are all already on the line's tip, as the destination
+  advertises it, is the branch's own sync of its line, and its
+  hand-resolved hunks do not stop the push. The pull request check at
+  ready and at landing still refuses them until a review of the head is
+  recorded. A sync of anything the line does not hold, a branch that
+  carries no task, a protected branch and the line's own push are judged
+  as before.
   A line push after landing work whose completion is still pending waits
   until the completion record lands, even if the work was reviewed earlier.
 
@@ -250,10 +269,20 @@ original SHA-256 digest, source commit and separate redaction review.
 A waiver is different: `AC-N: waived | <full amendment commit SHA>` under
 `acceptance.criteria` records a changed criterion result. The amendment
 changes that criterion and planning records only, and the completion
-contains it. A task may name an amendment on its target. Before its first
-landing, its own record-only amendment may also be after the range's
+contains it. Other planning records in the same commit, such as the epic
+record, the epic plan or other task records, do not disqualify it. A
+planning record is a file under `project-management/` or `docs/plan/` that
+is not hidden, not a harness instruction file and not an adopter-facing path
+under the target's policy. The waiver accepts the commit for this criterion
+only: its other changes stay under their own rules, so a task pull request
+still changes no other task's criteria. A criterion the amendment removes
+leaves the record, so the completion has no row for it and needs no waiver.
+A task may name an amendment on its target. Before its first landing, its
+own amendment, under the same test, may also be after the range's
 merge-base and strictly before `reviewed` in ancestry, never equal to either
-endpoint. A range that reopens a completion that never landed keeps that
+endpoint. In `codeflow task status`, a task whose declared integration line
+is not recorded at the default target's tip has no own range unless `--base`
+and `--into` pin that line. A range that reopens a completion that never landed keeps that
 own-range allowance, whatever caused the reopen; a range that reopens a
 landed completion does not. A waiver refused as not on the target says what
 that requires: a receiving line the run pins holds the commit (the pull

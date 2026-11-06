@@ -31,7 +31,7 @@ fn hand_complete_ci(root: &Path, branch: &str, block_file: &str) -> Output {
 }
 
 /// TSK-001's acceptance block with both criteria verified at `reviewed`.
-fn task_block(dir: &Path, name: &str, reviewed: &str, ac1: &str) -> String {
+pub(super) fn task_block(dir: &Path, name: &str, reviewed: &str, ac1: &str) -> String {
     let body = format!(
         "acceptance:\n  reviewed: {reviewed}\n  review: session:sequence@sha256:00\n  criteria:\n    AC-1: {ac1}\n    AC-2: verified | the journey ran\n  journey: verified | crates/codeflow-cli/tests/acceptance_journey/sequence.rs\n  not_verified: none\n  follow_ups: none: journey fixture\n  verdict: approved\n"
     );
@@ -50,7 +50,7 @@ fn epic_block(dir: &Path, reviewed: &str) -> String {
     path.to_string_lossy().to_string()
 }
 
-fn status(root: &Path, kind: &str, id: &str, args: &[&str]) -> Output {
+pub(super) fn status(root: &Path, kind: &str, id: &str, args: &[&str]) -> Output {
     let mut all = vec![kind, "status", id];
     all.extend_from_slice(args);
     codeflow(root, &all)
@@ -113,7 +113,7 @@ fn line_ci(root: &Path, main: &str) -> Output {
     )
 }
 
-fn merge(root: &Path, into: &str, branch: &str, message: &str) {
+pub(super) fn merge(root: &Path, into: &str, branch: &str, message: &str) {
     git(root, &["switch", "-q", into]);
     git(root, &["merge", "-q", "--no-ff", branch, "-m", message]);
 }
@@ -143,7 +143,7 @@ pub(super) fn host_merge(root: &Path, main: &str, branch: &str) {
 
 /// A fresh project with an epic line, its plan landed, and `src/**` as
 /// product code. With `second`, the epic has two tasks. Returns the default branch's name.
-fn planned_project(root: &Path, second: bool) -> String {
+pub(super) fn planned_project(root: &Path, second: bool) -> String {
     ok(&codeflow(root, &["init", "--yes", "--full"]), "init --full");
     let main = git(root, &["branch", "--show-current"]);
     git(root, &["switch", "-q", "-c", LINE]);
@@ -185,7 +185,7 @@ fn set_policy(root: &Path, change: impl FnOnce(&mut serde_json::Value)) {
     std::fs::write(path, serde_json::to_string_pretty(&policy).unwrap() + "\n").unwrap();
 }
 
-fn write(root: &Path, relative: &str, content: &str) {
+pub(super) fn write(root: &Path, relative: &str, content: &str) {
     let path = root.join(relative);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, content).unwrap();
@@ -904,7 +904,9 @@ fn waived_block(dir: &Path, name: &str, reviewed: &str, waiver: &str) -> String 
 /// verb and CI accept the waiver before and after a reopen in that range,
 /// with or without a merge of the line. A reopen of a landed completion
 /// keeps its criteria frozen, and the refusal names the planning commit on
-/// the target that the waiver needs.
+/// the target that the waiver needs. The line's plan landed only on the
+/// line, so `main` does not record it, and each completion pins it with
+/// `--base` and `--into` to have an own range (issue 465).
 #[test]
 #[allow(clippy::too_many_lines)] // The three #278 branches share one planned line.
 fn a_waiver_in_the_tasks_own_range_follows_its_completion_span() {
@@ -931,7 +933,15 @@ fn a_waiver_in_the_tasks_own_range_follows_its_completion_span() {
             &root,
             "task",
             "TSK-001",
-            &["complete", "--acceptance", &block],
+            &[
+                "complete",
+                "--acceptance",
+                &block,
+                "--base",
+                LINE,
+                "--into",
+                LINE,
+            ],
         ),
         "an in-branch waiver on a branch without the task id",
     );
@@ -961,7 +971,15 @@ fn a_waiver_in_the_tasks_own_range_follows_its_completion_span() {
             &root,
             "task",
             "TSK-002",
-            &["complete", "--acceptance", &block],
+            &[
+                "complete",
+                "--acceptance",
+                &block,
+                "--base",
+                LINE,
+                "--into",
+                LINE,
+            ],
         ),
         "the pre-reopen control",
     );
@@ -1024,7 +1042,15 @@ fn a_waiver_in_the_tasks_own_range_follows_its_completion_span() {
                     &root,
                     "task",
                     "TSK-002",
-                    &["complete", "--acceptance", &block],
+                    &[
+                        "complete",
+                        "--acceptance",
+                        &block,
+                        "--base",
+                        LINE,
+                        "--into",
+                        LINE,
+                    ],
                 ),
                 &format!("the {name} waiver inside a reopened, unlanded range"),
             );
@@ -1074,7 +1100,15 @@ fn a_waiver_in_the_tasks_own_range_follows_its_completion_span() {
             &root,
             "task",
             "TSK-002",
-            &["complete", "--acceptance", &block],
+            &[
+                "complete",
+                "--acceptance",
+                &block,
+                "--base",
+                LINE,
+                "--into",
+                LINE,
+            ],
         ),
         "an in-branch waiver after a landed reopen",
         named,
@@ -1113,7 +1147,8 @@ const ROUTE: &str = "amend the criterion through a planning pull request into th
 /// "on the target" requires and naming the pins; pinned, it accepts. Once a
 /// completion landed, the original waiver is on the target and still
 /// counts, while a new in-branch waiver is refused, naming the planning
-/// route.
+/// route. Each completion pins the line, which `main` does not record
+/// (issue 465).
 #[test]
 #[allow(clippy::too_many_lines)] // One fixture keeps the #354 sequence and its controls in order.
 fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
@@ -1152,7 +1187,15 @@ fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
             &root,
             "task",
             "TSK-002",
-            &["complete", "--acceptance", &block],
+            &[
+                "complete",
+                "--acceptance",
+                &block,
+                "--base",
+                LINE,
+                "--into",
+                LINE,
+            ],
         ),
         "the first completion with an in-branch waiver",
     );
@@ -1205,14 +1248,22 @@ fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
             &reopened,
             "strictly before the reviewed revision",
         ),
-        ("filed", &filed, "must change only this task's record"),
+        ("filed", &filed, "which does not amend AC-1 of TSK-002"),
     ] {
         let block = waived_block(dir.path(), name, &reopened, named);
         let refused = status(
             &root,
             "task",
             "TSK-002",
-            &["complete", "--acceptance", &block],
+            &[
+                "complete",
+                "--acceptance",
+                &block,
+                "--base",
+                LINE,
+                "--into",
+                LINE,
+            ],
         );
         for expected in [reason, ON_TARGET, ROUTE] {
             fails(
@@ -1231,7 +1282,15 @@ fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
             &root,
             "task",
             "TSK-002",
-            &["complete", "--acceptance", &block],
+            &[
+                "complete",
+                "--acceptance",
+                &block,
+                "--base",
+                LINE,
+                "--into",
+                LINE,
+            ],
         ),
         "the same waiver after the reopen (issue #354)",
     );
@@ -1263,6 +1322,8 @@ fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
         &["remote", "add", "origin", &origin.to_string_lossy()],
     );
     git(&root, &["fetch", "-q", "origin"]);
+    // Git before 2.48 records no remote HEAD on fetch (ADR-0091).
+    git(&root, &["remote", "set-head", "origin", "-a"]);
     let unpinned = status(
         &root,
         "task",

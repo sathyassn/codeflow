@@ -66,11 +66,47 @@ dated evidence.
 | Native Windows, Codex | its elevated Windows sandbox, selected by default | the scaffolded deterministic guard recognizes both Bash and PowerShell command events and Windows drive, system, profile, disk, recovery, and permission operations |
 | Native Windows, Claude Code | none; Git Bash or PowerShell work, but Claude's OS sandbox is not available | settings and hooks still apply, but they are not equivalent containment: move catastrophic or otherwise high-blast-radius work to WSL2 or a container, and if that boundary is unavailable, stop (ADR-0033) |
 
+### The exec guard's text rule
+
+The exec guard applies one of two text rules to each shell call (ADR-0088):
+
+- **Strict**, the default: judges every word after a program the guard cannot read through, with no program exempt by name.
+- **Relaxed:** the previous rule, chosen by landing `security.text_guard: relaxed` on the protected refs the hook reads; the guard verifies no sandbox and does not authenticate those refs ([`security.text_guard`](policy-reference.md)).
+- **Always strict:** a recognized marked retry (`dangerouslyDisableSandbox`), and every call on native Windows.
+
+Neither rule sees the environment a command inherits ([what the startup backstop leaves open](policy-reference.md#what-the-startup-backstop-leaves-open)). `codeflow doctor --check sandbox` prints the rule in force.
+
 The test runner's per-target `shell` is `auto` by default (`sh` on
 macOS/Linux/WSL2, `cmd.exe` on native Windows). This keeps generated `&&`
 command chains compatible with the shells built into each OS. Set it to `sh`,
 `powershell`, or `cmd` only when the consuming project's toolchain requires a
 specific shell. `/cf-customize` must canary the selected shell and commands.
+
+### Gate evidence in a Claude session
+
+The shipped Claude presets let a sandboxed session write
+`~/.codeflow/locks`, so `codeflow reserve` and quick-mode heavy targets can
+take their locks. No preset grants `~/.codeflow/gate-runs`: the operator
+decided on 2026-10-30 to drop that grant and add no local recorder
+(TSK-1044 AC-4).
+
+- **Full gates run outside the sandbox.** A full gate in a sandboxed
+  session fails its evidence preflight, so the primary runs it in the
+  operator's terminal or as an approved unsandboxed run. Only the primary
+  runs full gates. `codeflow doctor --check permissions` reports the
+  evidence folder as unwritable by design inside the sandbox.
+- **Writable reports earn no credit.** Any process of the user can still
+  write `gate-runs`, the candidate's tests included, so no run record
+  removes a target from any run (ADR-0089).
+- **Writes never follow a planted link.** The preflight, the lock files,
+  the run record, each target's logs and report copies, the stale-report
+  cleanup, the producer-output check and the durable copy refuse a link,
+  junction or planted name at the build-output folder, the CodeFlow home
+  or anything beneath them, so a session that plants one cannot redirect
+  a later gate's writes, even one run outside the sandbox. The project
+  folder, the parent of an absolute `CARGO_TARGET_DIR` and the parent of
+  the CodeFlow home are trusted as roots; a session that cannot write
+  those parents cannot replace them.
 
 ### Codex permission profile
 
@@ -91,7 +127,7 @@ The `cf-guard` permission profile in `.codex/config.toml` is selected via
 | egress | broad public egress, exact loopback for local UI tests, live search | private, link-local and cloud metadata destinations and arbitrary Unix sockets stay closed under `cf-guard` and `cf-builder`; neither seat can serve on a local port, so local server tests run on the primary (TSK-337) |
 | `approval_policy` | `never`; a reviewer or consult seat launches with no `--sandbox` flag, a builder seat with `-c 'permissions.cf-builder.description="CodeFlow builder seat"' -c 'permissions.cf-builder.filesystem={"~/.codeflow/locks"="write"}' -c permissions.cf-builder.network.allow_local_binding=false -c default_permissions="cf-builder"` and no `--sandbox` flag (ADR-0055, ADR-0075 D1 as amended on 2026-10-05; the description override lets Codex 0.163 and later open the seat, TSK-1003; the filesystem override carries the profile's home grants to a main checkout whose profile predates them, TSK-337) | under `cf-guard` the seat gets workspace writes and deletes, read-only enforcement and shell startup files, no Unix sockets and no local binding; a `--sandbox` flag would replace the profile, and full access would leave only git-guard, exec-guard, edit-guard, git hooks and CI |
 | secret-file denies | `.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `.netrc`, `id_rsa*`, `id_ed25519*`, at the workspace root only | the recursive `**/` forms made Codex refuse every directory delete, so a nested secret file, such as `sub/.env` or a linked worktree's `.env`, stays readable, changeable and deletable by the seat |
-| `cf-builder` profile | selected for builder seats, launched from the main checkout root (ADR-0075 D1 as amended on 2026-10-05) | it extends `cf-guard` with the common `.git` writable, its hooks and config read only, `~/.codeflow/locks` writable for `codeflow reserve` and heavy quick targets (TSK-1003), and the same network table as `cf-guard`, local binding off (TSK-337: with it on, Codex skips the proxy's private-network checks, so a builder reached private and metadata addresses; a builder seat now cannot serve on a local port, so tests that do run on the primary); `~/.codeflow/gate-runs` stays unwritable, since full gates and their evidence stay with the primary (TSK-337: the gate copies run artifacts there and later gates trust its run records without authenticating them); `cf-guard` writes neither home folder, since review seats run no gate; its spike ran fetch, worktree add, commit and builds unattended, a push to a remote outside the workspace root is denied, and a push to a hosted remote is not yet verified, so a builder whose push fails reports it and the caller pushes |
+| `cf-builder` profile | selected for builder seats, launched from the main checkout root (ADR-0075 D1 as amended on 2026-10-05) | it extends `cf-guard` with the common `.git` writable, its hooks and config read only, `~/.codeflow/locks` writable for `codeflow reserve` and heavy quick targets (TSK-1003), and the same network table as `cf-guard`, local binding off (TSK-337: with it on, Codex skips the proxy's private-network checks, so a builder reached private and metadata addresses; a builder seat now cannot serve on a local port, so tests that do run on the primary); `~/.codeflow/gate-runs` stays unwritable, since full gates and their evidence stay with the primary (TSK-337; since TSK-1044 no run record earns selection credit, so the store only holds reports); `cf-guard` writes neither home folder, since review seats run no gate; its spike ran fetch, worktree add, commit and builds unattended, a push to a remote outside the workspace root is denied, and a push to a hosted remote is not yet verified, so a builder whose push fails reports it and the caller pushes |
 | shell startup files | read only in `cf-guard`, so in `cf-builder` too: every home and `/etc` entry of the action table's `startup_paths`, and the workspace root's `.envrc` (TSK-242) | a nested `.envrc`, such as one in a linked worktree, stays writable to the profile, since a wildcard directory part makes Codex refuse every directory delete; exec-guard and edit-guard refuse it. The entries name the default locations, so a `ZDOTDIR` or `XDG_CONFIG_HOME` moved elsewhere is writable; `codeflow doctor` reports one |
 | environment | Codex's default `KEY`/`SECRET`/`TOKEN` scrub is kept (ADR-0025, ADR-0026) | the shell does not inherit provider secrets |
 | `approvals_reviewer` | `approvals_reviewer = "auto_review"` | vestigial under `never`: it is not a human gate and does not fire on-request prompts |

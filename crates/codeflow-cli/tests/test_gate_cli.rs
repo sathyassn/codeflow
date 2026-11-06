@@ -1,15 +1,19 @@
 //! `codeflow test` gate guards and progress, driven through the real binary
-//! (TSK-134, TSK-094): a start line per target on stderr, one full gate at a
-//! time on a machine, and a warning for a cargo target directory outside the
+//! (TSK-134, TSK-094): a start line per target on stderr, heavy runs side by
+//! side by host capacity (TSK-1145), and a warning for a cargo target directory outside the
 //! worktree.
 
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc::Receiver;
-use std::time::Duration;
-#[cfg(unix)]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+#[path = "test_gate_cli/capacity.rs"]
+mod capacity;
+#[cfg(unix)]
+#[path = "test_gate_cli/containment.rs"]
+mod containment;
 #[path = "support/drain_pipe.rs"]
 mod drain_pipe;
 #[path = "test_gate_cli/evidence.rs"]
@@ -18,6 +22,9 @@ mod evidence;
 mod named_config;
 #[path = "support/own_repository.rs"]
 mod own_repository;
+#[cfg(unix)]
+#[path = "test_gate_cli/reserved_lock.rs"]
+mod reserved_lock;
 use drain_pipe::{drain_lines, drain_pipe};
 
 fn git(dir: &Path, args: &[&str]) {
@@ -71,57 +78,40 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).to_string()
 }
 
+/// TSK-1044: quick runs no longer compare with the task line, since no
+/// record earns selection credit; each control names why every target runs.
 #[test]
-fn default_comparison_names_the_task_line_and_explicit_controls_override_it() {
+fn every_selection_control_names_why_every_target_runs() {
     let dir = repo(
         r#"{"schema_version":"1.0","targets":[{"name":"check","runner":"custom","modes":{"quick":{"command":"echo checked"}}}]}"#,
     );
     let home = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join("project-management/tasks")).unwrap();
-    std::fs::write(
-        dir.path().join("project-management/tasks/TSK-001.md"),
-        "---\nid: TSK-001\nintegration_target: integration/test-line\n---\n",
-    )
-    .unwrap();
     std::fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
     git(dir.path(), &["add", "."]);
-    git(dir.path(), &["commit", "-qm", "test: declare task line"]);
-    git(dir.path(), &["branch", "integration/test-line"]);
-    git(dir.path(), &["switch", "-c", "task/TSK-001-selection"]);
-    let base = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    let base = String::from_utf8(base.stdout).unwrap();
-    let output = run(dir.path(), home.path(), &["test", "--mode", "quick"]);
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stderr(&output).contains(base.trim()), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("TSK-001 integration target integration/test-line"),
-        "{}",
-        stderr(&output)
-    );
-    let output = run(
-        dir.path(),
-        home.path(),
-        &["test", "--mode", "quick", "--since", "HEAD"],
-    );
-    assert!(
-        stderr(&output).contains("explicit --since HEAD"),
-        "{}",
-        stderr(&output)
-    );
-    let output = run(
-        dir.path(),
-        home.path(),
-        &["test", "--mode", "quick", "--all"],
-    );
-    assert!(
-        stderr(&output).contains("--all: every target"),
-        "{}",
-        stderr(&output)
-    );
+    git(dir.path(), &["commit", "-qm", "test: one check"]);
+    for (args, reason) in [
+        (
+            vec!["test", "--mode", "quick"],
+            "every target: no local run record earns selection credit (ADR-0089)",
+        ),
+        (
+            vec!["test", "--mode", "quick", "--since", "HEAD"],
+            "every target: --since HEAD narrows nothing",
+        ),
+        (
+            vec!["test", "--mode", "quick", "--all"],
+            "--all: every target",
+        ),
+    ] {
+        let output = run(dir.path(), home.path(), &args);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(stderr(&output).contains(reason), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("starting target 'check'"),
+            "{}",
+            stderr(&output)
+        );
+    }
 }
 
 /// What a spawned gate has written to stdout, read to the end on its own
@@ -311,7 +301,7 @@ const QUICK_PASS: &str = r#"{"schema_version": "1.0", "targets": [
 
 #[cfg(unix)]
 #[test]
-fn a_second_full_gate_is_refused_naming_the_holder() {
+fn a_second_full_gate_runs_beside_the_first() {
     let home = tempfile::tempdir().unwrap();
     let first = repo(HOLDER);
     let (mut child, rx, _stdout) = spawn(command(
@@ -319,25 +309,23 @@ fn a_second_full_gate_is_refused_naming_the_holder() {
         home.path(),
         &["test", "--mode", "full"],
     ));
-    // The lock is taken before any target starts.
+    // The slot is taken before any target starts.
     wait_for(&rx, "starting target 'holder'");
 
-    // Another repository on the same machine: the machine-wide lock refuses.
+    // Another repository on the same machine runs at once (TSK-1145).
     let other = repo(QUICK_PASS);
-    let refused = run(other.path(), home.path(), &["test", "--mode", "full"]);
-    let err = stderr(&refused);
-    assert_eq!(refused.status.code(), Some(1), "{err}");
-    assert!(err.contains("another heavy gate is running"), "{err}");
-    assert!(err.contains(&format!("pid {}", child.id())), "{err}");
-    assert!(!err.contains("starting target"), "no target ran: {err}");
+    let beside = run(other.path(), home.path(), &["test", "--mode", "full"]);
+    let err = stderr(&beside);
+    assert_eq!(beside.status.code(), Some(0), "{err}");
+    assert!(err.contains("starting target 'pass'"), "{err}");
 
-    // The same repository from a sandbox without the home lock: the
-    // repository lock under the git common dir still refuses.
+    // The same repository from a sandbox without the home folder: the
+    // repository folder admits it beside the first gate too.
     let other_home = tempfile::tempdir().unwrap();
     let same_repo = run(first.path(), other_home.path(), &["test"]);
-    assert_eq!(same_repo.status.code(), Some(1), "{}", stderr(&same_repo));
+    assert_eq!(same_repo.status.code(), Some(0), "{}", stderr(&same_repo));
 
-    // Quick mode takes no lock.
+    // Quick mode with only light work takes no slot.
     let quick = repo(
         r#"{"schema_version": "1.0", "targets": [
   {"name": "q", "runner": "custom", "modes": {"quick": {"command": "exit 0"}}}]}"#,
@@ -347,8 +335,6 @@ fn a_second_full_gate_is_refused_naming_the_holder() {
 
     let done = child.wait().unwrap();
     assert_eq!(done.code(), Some(0));
-    let after = run(other.path(), home.path(), &["test", "--mode", "full"]);
-    assert_eq!(after.status.code(), Some(0), "{}", stderr(&after));
 }
 
 #[cfg(unix)]
@@ -356,6 +342,395 @@ fn a_second_full_gate_is_refused_naming_the_holder() {
 fn a_killed_gate_keeps_its_lock_until_its_target_exits() {
     killed_gate_keeps_its_lock_until_its_target_exits("full");
     killed_gate_keeps_its_lock_until_its_target_exits("essential");
+}
+
+/// TSK-1256: a full-gate target that outlives its killed gate keeps an older
+/// binary's exclusive take of `full-gate.lock` refused until its process
+/// group ends. The older take is simulated as 3.1 makes it: `flock`
+/// exclusive, without waiting.
+#[cfg(unix)]
+#[test]
+fn a_killed_gates_surviving_target_keeps_older_binaries_out() {
+    use std::os::fd::AsRawFd;
+    let home = tempfile::tempdir().unwrap();
+    let first = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "survivor", "runner": "custom",
+   "modes": {"full": {"command": "echo $$ > group.txt; sleep 30"}}}
+]}"#,
+    );
+    let (mut gate, rx, _stdout) = spawn(command(
+        first.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx, "starting target 'survivor'");
+    let group_file = first.path().join("group.txt");
+    let group = (0..200)
+        .find_map(|_| {
+            let text = std::fs::read_to_string(&group_file).unwrap_or_default();
+            let parsed = text.trim().parse::<u32>().ok();
+            if parsed.is_none() {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            parsed
+        })
+        .expect("the target wrote its group");
+    gate.kill().unwrap();
+    gate.wait().unwrap();
+    let alive = |g: u32| {
+        Command::new("kill")
+            .args(["-0", "--", &format!("-{g}")])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    assert!(alive(group), "the target outlived its gate");
+
+    let fence = home.path().join("locks/full-gate.lock");
+    let older_take = || {
+        let file = std::fs::File::open(&fence).unwrap();
+        // SAFETY: flock on a descriptor this closure owns; it closes on drop.
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
+    };
+    assert!(
+        !older_take(),
+        "an older binary's gate must stay out while the killed gate's target runs"
+    );
+
+    Command::new("kill")
+        .args(["-KILL", "--", &format!("-{group}")])
+        .status()
+        .unwrap();
+    let freed = (0..100).any(|_| {
+        if older_take() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        false
+    });
+    assert!(freed, "the fence frees once the target's group ends");
+}
+
+/// TSK-1256 R1: an older binary's gate that was killed while its target ran
+/// leaves the target's group in its record. That target runs alone, as its
+/// gate did, so a new full gate refuses at once and starts no target until
+/// the group ends.
+#[cfg(unix)]
+#[test]
+fn an_older_gates_surviving_target_keeps_a_new_gate_out() {
+    use std::os::unix::process::CommandExt;
+    let home = tempfile::tempdir().unwrap();
+    let root = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "marker", "runner": "custom",
+   "modes": {"full": {"command": "touch ran"}}}
+]}"#,
+    );
+    let mut survivor = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = survivor.id();
+    // The record a 3.1 gate keeps inside its lock file; its pid is gone.
+    let locks = home.path().join("locks");
+    std::fs::create_dir_all(&locks).unwrap();
+    std::fs::write(
+        locks.join("full-gate.lock"),
+        format!("pid=999999\nstarted=1\nmode=full\ngroup={group}\n"),
+    )
+    .unwrap();
+    let refused = run(root.path(), home.path(), &["test", "--mode", "full"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    let message = stderr(&refused);
+    assert!(message.contains("older CodeFlow binary"), "{message}");
+    assert!(
+        message.contains(&format!("process groups {group}")),
+        "{message}"
+    );
+    assert!(message.contains("last recorded holder"), "{message}");
+    assert!(
+        !root.path().join("ran").exists(),
+        "no target starts while the survivor lives"
+    );
+    assert!(!locks.join("full-gate-1.lock").exists(), "no slot is taken");
+
+    survivor.kill().unwrap();
+    survivor.wait().unwrap();
+    let admitted = run(root.path(), home.path(), &["test", "--mode", "full"]);
+    assert!(admitted.status.success(), "{}", stderr(&admitted));
+    assert!(
+        root.path().join("ran").exists(),
+        "the target runs once it ends"
+    );
+}
+
+/// An older binary's take of the fence in `home`: a fresh open of
+/// `full-gate.lock`, locked exclusively without waiting, then released.
+#[cfg(unix)]
+fn older_take(home: &Path) -> bool {
+    use std::os::fd::AsRawFd;
+    let file = std::fs::File::open(home.join("locks/full-gate.lock")).unwrap();
+    // SAFETY: flock on a descriptor this function owns; it closes on drop.
+    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
+}
+
+/// The pid a target wrote to `file`, waiting for it.
+#[cfg(unix)]
+fn written_pid(file: &Path) -> u32 {
+    (0..400)
+        .find_map(|_| {
+            let parsed = std::fs::read_to_string(file)
+                .unwrap_or_default()
+                .trim()
+                .parse::<u32>()
+                .ok();
+            if parsed.is_none() {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            parsed
+        })
+        .expect("the target wrote the pid")
+}
+
+/// Whether process `pid` still runs.
+#[cfg(unix)]
+fn pid_runs(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// Ends process `pid` and asserts the fence frees once it has ended.
+#[cfg(unix)]
+fn end_and_expect_the_fence_free(home: &Path, pid: u32) {
+    Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .status()
+        .unwrap();
+    let freed = (0..200).any(|_| {
+        if older_take(home) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+        false
+    });
+    assert!(freed, "the fence frees once the descendant ends");
+}
+
+/// TSK-1256 R1-B: the target's shell exits and leaves a grandchild that
+/// keeps the output pipes, and the gate is killed while it drains them.
+/// The grandchild inherited the fence, so older binaries stay out until it
+/// ends, with no process of the gate left.
+#[cfg(unix)]
+#[test]
+fn a_grandchild_that_outlives_its_shell_and_a_killed_gate_keeps_older_binaries_out() {
+    let home = tempfile::tempdir().unwrap();
+    let root = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "parent", "runner": "custom",
+   "modes": {"full": {"command": "sleep 30 & echo $! > grandchild.txt; exit 0"}}}
+]}"#,
+    );
+    let (mut gate, rx, _stdout) = spawn(command(
+        root.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx, &start("parent", "full"));
+    let grandchild = written_pid(&root.path().join("grandchild.txt"));
+    // The shell has exited; the gate waits for the pipes the grandchild
+    // still holds.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(gate.try_wait().unwrap().is_none(), "the gate is draining");
+    gate.kill().unwrap();
+    gate.wait().unwrap();
+    assert!(pid_runs(grandchild), "the grandchild outlived its gate");
+    assert!(
+        !older_take(home.path()),
+        "an older gate must stay out while the grandchild runs"
+    );
+    end_and_expect_the_fence_free(home.path(), grandchild);
+}
+
+/// TSK-1256 R1-B: a gate that completes normally while a descendant with
+/// redirected output still runs leaves the fence held by that descendant.
+#[cfg(unix)]
+#[test]
+fn a_descendant_that_outlives_a_completed_gate_keeps_older_binaries_out() {
+    let home = tempfile::tempdir().unwrap();
+    let root = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "parent", "runner": "custom",
+   "modes": {"full": {"command": "sleep 30 > /dev/null 2>&1 & echo $! > grandchild.txt; exit 0"}}}
+]}"#,
+    );
+    let done = run(root.path(), home.path(), &["test", "--mode", "full"]);
+    assert!(done.status.success(), "{}", stderr(&done));
+    let grandchild = written_pid(&root.path().join("grandchild.txt"));
+    assert!(pid_runs(grandchild), "the descendant outlived its gate");
+    assert!(
+        !older_take(home.path()),
+        "an older gate must stay out while the descendant runs"
+    );
+    end_and_expect_the_fence_free(home.path(), grandchild);
+}
+
+/// TSK-1256 R1-A: a completed new run leaves `full-gate.record`; a 3.1
+/// gate killed afterwards leaves its surviving target's group only in the
+/// record inside `full-gate.lock`. A reserve is still refused before it
+/// takes a slot or the host, and starts nothing.
+#[cfg(unix)]
+#[test]
+fn a_3_1_orphan_behind_a_completed_runs_record_refuses_a_reserve() {
+    use std::os::unix::process::CommandExt;
+    let home = tempfile::tempdir().unwrap();
+    let root = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "quick", "runner": "custom", "modes": {"full": {"command": "true"}}}
+]}"#,
+    );
+    let done = run(root.path(), home.path(), &["test", "--mode", "full"]);
+    assert!(done.status.success(), "{}", stderr(&done));
+    let locks = home.path().join("locks");
+    assert!(
+        std::fs::read_to_string(locks.join("full-gate.record"))
+            .unwrap()
+            .contains("pid="),
+        "the completed run's record stays"
+    );
+    let slot_record = std::fs::read_to_string(locks.join("full-gate-1.record")).unwrap();
+    let mut survivor = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = survivor.id();
+    std::fs::write(
+        locks.join("full-gate.lock"),
+        format!("pid=999999\nstarted=1\ngroup={group}\n"),
+    )
+    .unwrap();
+    let refused = run(
+        root.path(),
+        home.path(),
+        &["reserve", "--", "touch", "reserved-ran"],
+    );
+    assert_ne!(refused.status.code(), Some(0), "{}", stderr(&refused));
+    let message = stderr(&refused);
+    assert!(message.contains("older CodeFlow binary"), "{message}");
+    assert!(
+        message.contains(&format!("process groups {group}")),
+        "{message}"
+    );
+    assert!(!root.path().join("reserved-ran").exists());
+    assert_eq!(
+        std::fs::read_to_string(locks.join("full-gate-1.record")).unwrap(),
+        slot_record,
+        "no slot was taken"
+    );
+    assert!(
+        !locks.join("full-gate-2.lock").exists(),
+        "no slot was taken"
+    );
+    survivor.kill().unwrap();
+    survivor.wait().unwrap();
+    let admitted = run(
+        root.path(),
+        home.path(),
+        &["reserve", "--", "touch", "reserved-ran"],
+    );
+    assert!(admitted.status.success(), "{}", stderr(&admitted));
+    assert!(root.path().join("reserved-ran").exists());
+}
+
+/// TSK-1256, Windows: a killed gate's target and its grandchild end with
+/// the gate (the kill-on-close job), and an older binary's exclusive take
+/// of `full-gate.lock` succeeds only once both are gone, never while one
+/// still runs.
+#[cfg(windows)]
+#[test]
+fn a_killed_gates_target_tree_ends_before_older_binaries_get_in() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        LockFileEx, UnlockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+    };
+    use windows_sys::Win32::System::IO::OVERLAPPED;
+    // An older binary's take: the byte at offset 1 << 40, exclusively.
+    let older_take = |path: &Path| -> bool {
+        let Ok(file) = std::fs::File::open(path) else {
+            return false;
+        };
+        // SAFETY: OVERLAPPED is plain data; zero is a valid start.
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        overlapped.Anonymous.Anonymous.OffsetHigh = 1 << 8;
+        // SAFETY: the handle is open for this call and the OVERLAPPED
+        // outlives it; FAIL_IMMEDIATELY makes the call synchronous.
+        let taken = unsafe {
+            LockFileEx(
+                file.as_raw_handle(),
+                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                0,
+                1,
+                0,
+                &raw mut overlapped,
+            )
+        } != 0;
+        if taken {
+            // SAFETY: as above; this releases the byte just locked.
+            unsafe { UnlockFileEx(file.as_raw_handle(), 0, 1, 0, &raw mut overlapped) };
+        }
+        taken
+    };
+    let home = tempfile::tempdir().unwrap();
+    let root = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "tree", "runner": "custom",
+   "modes": {"full": {"command": "powershell -NoProfile -NonInteractive -Command \"Set-Content -Path pid.txt -Value $PID; $c = Start-Process -PassThru -NoNewWindow powershell -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 120'; Set-Content -Path grandchild.txt -Value $c.Id; Start-Sleep -Seconds 120\""}}}
+]}"#,
+    );
+    let (child, rx, _stdout) = spawn(command(
+        root.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    let mut gate = EndGate(child);
+    let target = wait_for_target_pid(&mut gate.0, &rx, &root.path().join("pid.txt"));
+    let grandchild = wait_for_target_pid(&mut gate.0, &rx, &root.path().join("grandchild.txt"));
+    let _end = (EndTarget(Some(target)), EndTarget(Some(grandchild)));
+    let fence = home.path().join("locks").join("full-gate.lock");
+    assert!(still_runs(target) && still_runs(grandchild));
+    assert!(
+        !older_take(&fence),
+        "the running gate keeps older binaries out"
+    );
+    gate.0.kill().unwrap();
+    gate.0.wait().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let alive_before = still_runs(target) || still_runs(grandchild);
+        let taken = older_take(&fence);
+        let alive_after = still_runs(target) || still_runs(grandchild);
+        if taken {
+            assert!(
+                !alive_after,
+                "an older take succeeded while the killed gate's target tree still ran \
+                 (alive before the take: {alive_before})"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the fence never freed after the gate was killed (tree alive: {alive_after})"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!still_runs(target) && !still_runs(grandchild));
 }
 
 #[cfg(unix)]
@@ -390,7 +765,7 @@ fn killed_gate_keeps_its_lock_until_its_target_exits(mode: &str) {
     // The gate records the group in its holder record just after the target
     // starts, and the target can write its file first: wait for the record
     // before killing the gate, or the kill can land between the two.
-    let lock_file = home.path().join("locks/full-gate.record");
+    let lock_file = home.path().join("locks/full-gate-1.record");
     let recorded = (0..200).any(|_| {
         let text = std::fs::read_to_string(&lock_file).unwrap_or_default();
         let found = text.lines().any(|l| l == format!("group={group}"));
@@ -413,16 +788,21 @@ fn killed_gate_keeps_its_lock_until_its_target_exits(mode: &str) {
     };
     assert!(alive(group), "the target outlived its gate");
 
-    // Its gate process is gone, so the OS released the lock, but its target
-    // still runs: a second full gate refuses, from any repository.
+    // Its gate process is gone, so the OS released its slot, but its target
+    // still runs: the slot counts as busy, so a second run takes the next
+    // slot and counts two heavy runs on the host, from any repository.
     let other = repo(&QUICK_PASS.replace("full", mode));
     for dir in [other.path(), first.path()] {
-        let refused = run(dir, home.path(), &["test", "--mode", mode]);
-        let err = stderr(&refused);
-        assert_eq!(refused.status.code(), Some(1), "{err}");
-        assert!(err.contains("targets are still running"), "{err}");
-        assert!(err.contains(&format!("process group {group}")), "{err}");
-        assert!(!err.contains("starting target"), "no target ran: {err}");
+        let beside = run(dir, home.path(), &["test", "--mode", mode]);
+        let err = stderr(&beside);
+        assert_eq!(beside.status.code(), Some(0), "{err}");
+        assert!(home.path().join("locks/full-gate-2.lock").exists(), "{err}");
+        assert!(
+            std::fs::read_to_string(&lock_file)
+                .unwrap()
+                .contains(&format!("group={group}")),
+            "the surviving target's record stays"
+        );
     }
 
     // Once the group exits, the lock is stale and is reclaimed.
@@ -476,11 +856,162 @@ fn still_runs(pid: u32) -> bool {
     }
 }
 
+/// A spawned gate that the test ends on every exit path, a panic included, so
+/// a failed wait leaves no gate running (on Windows its target tree ends with
+/// it).
+struct EndGate(Child);
+
+impl Drop for EndGate {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// How long [`wait_for_target_pid`] waits for the target to record its pid.
+/// It is a backstop: the wait ends sooner when the gate exits.
+const TARGET_PID_BOUND: Duration = Duration::from_secs(60);
+
+/// The stderr lines still arriving from a gate that has exited, read until
+/// its drain thread ends (or, at most, a few seconds without a line).
+fn stderr_after_exit(rx: &Receiver<String>) -> String {
+    let mut lines = Vec::new();
+    while let Ok(line) = rx.recv_timeout(Duration::from_secs(5)) {
+        lines.push(line);
+    }
+    lines.join("\n")
+}
+
+/// Wait for the target of `gate` to record its pid in `pid_file`. A gate that
+/// exits first fails the wait at once with its status, whether a pid had
+/// been recorded, and its stderr; the bound fails it with what was not
+/// observed.
+fn target_pid(
+    gate: &mut Child,
+    rx: &Receiver<String>,
+    pid_file: &Path,
+    bound: Duration,
+) -> Result<u32, String> {
+    let started = Instant::now();
+    loop {
+        // The exit is read first, so the pid file read after it is final.
+        let exited = gate.try_wait().map_err(|error| error.to_string())?;
+        let held = std::fs::read_to_string(pid_file);
+        let pid = held
+            .as_ref()
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok());
+        if let Some(status) = exited {
+            let recorded = pid.map_or_else(
+                || "before its target recorded a pid".to_string(),
+                |pid| format!("after its target recorded pid {pid}"),
+            );
+            return Err(format!(
+                "the gate ended ({status}) {recorded}; {} held {held:?}; its stderr:\n{}",
+                pid_file.display(),
+                stderr_after_exit(rx)
+            ));
+        }
+        if let Some(pid) = pid {
+            return Ok(pid);
+        }
+        if started.elapsed() >= bound {
+            let stderr: Vec<String> = rx.try_iter().collect();
+            return Err(format!(
+                "no pid after {bound:?} and the gate was still running; {} held {held:?}; its stderr so far:\n{}\nnot observed: whether the target's start or PowerShell's start was the slow step",
+                pid_file.display(),
+                stderr.join("\n")
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_target_pid(gate: &mut Child, rx: &Receiver<String>, pid_file: &Path) -> u32 {
+    target_pid(gate, rx, pid_file, TARGET_PID_BOUND).unwrap_or_else(|message| panic!("{message}"))
+}
+
+/// Ends the recorded target (its process group on Unix, its process tree on
+/// Windows) when a test fails after the pid was read, unless the test saw it
+/// end.
+struct EndTarget(Option<u32>);
+
+impl Drop for EndTarget {
+    fn drop(&mut self) {
+        let Some(pid) = self.0.take() else { return };
+        let _ = if cfg!(windows) {
+            Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .output()
+        } else {
+            Command::new("kill")
+                .args(["-KILL", "--", &format!("-{pid}")])
+                .output()
+        };
+    }
+}
+
+/// A gate that writes a pid, one stderr line and exits at once is reported
+/// with that pid and that line, never as ended before the pid.
+#[cfg(unix)]
+#[test]
+fn a_gate_that_exits_after_its_pid_reports_the_pid_and_its_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", "echo 4242 > pid.txt; echo gate-said-boom >&2; exit 3"])
+        .current_dir(dir.path());
+    let (child, rx, _stdout) = spawn(cmd);
+    let mut gate = EndGate(child);
+    // The wait reports an exit only once it sees one, so let the gate finish
+    // first; a gate still running with its pid written is correctly answered
+    // with that pid.
+    gate.0.wait().unwrap();
+    let message = target_pid(
+        &mut gate.0,
+        &rx,
+        &dir.path().join("pid.txt"),
+        Duration::from_secs(120),
+    )
+    .unwrap_err();
+    assert!(
+        message.contains("after its target recorded pid 4242"),
+        "{message}"
+    );
+    assert!(message.contains("4242"), "the pid file text: {message}");
+    assert!(message.contains("gate-said-boom"), "{message}");
+    assert!(message.contains("exit status: 3"), "{message}");
+}
+
+/// A gate that exits before any pid fails the wait at once, with its stderr.
+#[cfg(unix)]
+#[test]
+fn a_gate_that_exits_before_a_pid_fails_the_wait_with_its_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", "echo gate-said-boom >&2; exit 3"])
+        .current_dir(dir.path());
+    let (child, rx, _stdout) = spawn(cmd);
+    let mut gate = EndGate(child);
+    let message = target_pid(
+        &mut gate.0,
+        &rx,
+        &dir.path().join("pid.txt"),
+        Duration::from_secs(120),
+    )
+    .unwrap_err();
+    assert!(
+        message.contains("before its target recorded a pid"),
+        "{message}"
+    );
+    assert!(message.contains("gate-said-boom"), "{message}");
+    assert!(!message.contains("still running"), "{message}");
+}
+
 /// TSK-142 AC-5 (journey): in a freshly scaffolded project driven by the
-/// real binary, a full gate killed during a long target never lets a second
-/// full gate run beside that target. On Windows the target's tree ends with
-/// the gate; on Unix the lock stays held until the target's process group
-/// exits (TSK-134). The next full gate then takes the lock.
+/// real binary, a full gate killed during a long target: on Windows the
+/// target's tree ends with the gate; on Unix the target's slot stays busy
+/// until its process group exits, so a second gate counts it (TSK-1145).
+/// The next full gate then runs.
 #[test]
 fn a_killed_full_gate_never_runs_beside_its_target_in_a_fresh_scaffold() {
     let home = tempfile::tempdir().unwrap();
@@ -492,32 +1023,39 @@ fn a_killed_full_gate_never_runs_beside_its_target_in_a_fresh_scaffold() {
     assert!(init.status.success(), "init: {}", stderr(&init));
     std::fs::write(root.join(".codeflow/test-config.json"), LONG_TARGET).unwrap();
 
-    let (mut gate, rx, _stdout) = spawn(command(&root, home.path(), &["test", "--mode", "full"]));
+    let (gate, rx, _stdout) = spawn(command(&root, home.path(), &["test", "--mode", "full"]));
+    let mut gate = EndGate(gate);
     wait_for(&rx, "starting target 'long'");
-    let pid_file = root.join("pid.txt");
-    let pid = (0..1200)
-        .find_map(|_| {
-            let text = std::fs::read_to_string(&pid_file).unwrap_or_default();
-            let parsed = text.trim().parse::<u32>().ok();
-            if parsed.is_none() {
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            parsed
-        })
-        .expect("the target recorded its pid");
+    let pid = wait_for_target_pid(&mut gate.0, &rx, &root.join("pid.txt"));
+    let mut target = EndTarget(Some(pid));
     assert!(still_runs(pid), "the target runs under its gate");
-    gate.kill().unwrap();
-    gate.wait().unwrap();
+    if cfg!(unix) {
+        // The gate records the target's group just after it starts, and
+        // the target can write its pid first: wait for the record before
+        // the kill, or the kill can land between the two.
+        let record = home.path().join("locks/full-gate-1.record");
+        let recorded = (0..400).any(|_| {
+            let text = std::fs::read_to_string(&record).unwrap_or_default();
+            let found = text.lines().any(|line| line == format!("group={pid}"));
+            if !found {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            found
+        });
+        assert!(recorded, "the gate recorded the target's group");
+    }
+    gate.0.kill().unwrap();
+    gate.0.wait().unwrap();
 
     let other = repo(QUICK_PASS);
     if cfg!(unix) {
-        // The target outlives its gate, and no second gate runs beside it.
+        // The target outlives its gate; a second gate runs beside it and
+        // counts it as a heavy run on the host (TSK-1145).
         assert!(still_runs(pid), "the target outlived its gate");
-        let refused = run(other.path(), home.path(), &["test", "--mode", "full"]);
-        let err = stderr(&refused);
-        assert_eq!(refused.status.code(), Some(1), "{err}");
-        assert!(err.contains("targets are still running"), "{err}");
-        assert!(!err.contains("starting target"), "no target ran: {err}");
+        let beside = run(other.path(), home.path(), &["test", "--mode", "full"]);
+        let err = stderr(&beside);
+        assert_eq!(beside.status.code(), Some(0), "{err}");
+        assert!(home.path().join("locks/full-gate-2.lock").exists(), "{err}");
         Command::new("kill")
             .args(["-KILL", "--", &format!("-{pid}")])
             .status()
@@ -533,6 +1071,7 @@ fn a_killed_full_gate_never_runs_beside_its_target_in_a_fresh_scaffold() {
         !alive
     });
     assert!(gone, "the target ended");
+    target.0 = None;
 
     // The next full gate takes the lock, from the scaffold and elsewhere.
     std::fs::write(root.join(".codeflow/test-config.json"), QUICK_PASS).unwrap();
@@ -549,7 +1088,7 @@ fn a_stale_lock_from_a_dead_gate_is_reclaimed() {
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(home.path().join("locks")).unwrap();
     std::fs::write(
-        home.path().join("locks/full-gate.lock"),
+        home.path().join("locks/full-gate-1.record"),
         "pid=999999\nstarted=1\ndir=/gone\n",
     )
     .unwrap();
@@ -695,27 +1234,7 @@ fn unavailable_gate_lock_refuses_before_start() {
 }
 
 #[cfg(unix)]
-struct SelectionHome {
-    path: std::path::PathBuf,
-    evidence: std::path::PathBuf,
-}
-
-#[cfg(unix)]
-impl SelectionHome {
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-#[cfg(unix)]
-impl Drop for SelectionHome {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.evidence).unwrap();
-    }
-}
-
-#[cfg(unix)]
-fn selection_repo() -> (tempfile::TempDir, SelectionHome, String) {
+fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
     let dir = repo(
         r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":2,"run_everything":["crates/**","assets/**","Cargo.*",".codeflow/**"]},"targets":[
       {"name":"producer","runner":"custom","narrow":["crates/**"],"modes":{"full":{"command":"echo producer >> runs"}}},
@@ -752,11 +1271,11 @@ fn selection_repo() -> (tempfile::TempDir, SelectionHome, String) {
         .output()
         .unwrap();
     let base = String::from_utf8(base.stdout).unwrap().trim().to_owned();
-    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    let home = tempfile::tempdir().unwrap();
     git(dir.path(), &["branch", "fixture-base"]);
     let output = evidence::run(
         dir.path(),
-        &home,
+        home.path(),
         &["integrate", "main", "--into", "fixture-base"],
     );
     assert!(output.status.success(), "{}", stderr(&output));
@@ -769,25 +1288,15 @@ fn selection_repo() -> (tempfile::TempDir, SelectionHome, String) {
     assert_eq!(raw["clean"], true, "{raw}");
     assert_eq!(raw["complete"], true, "{raw}");
     std::fs::remove_file(dir.path().join("runs")).unwrap();
-    let evidence = Path::new(artifact)
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_owned();
-    (
-        dir,
-        SelectionHome {
-            path: home,
-            evidence,
-        },
-        base,
-    )
+    (dir, home, base)
 }
 
+/// TSK-1044 AC-3: a green full record of the base used to narrow this run
+/// to `producer` and `docs`, skipping `present` and `release`. No record
+/// earns that credit now, so every target runs.
 #[cfg(unix)]
 #[test]
-fn selection_narrows_only_with_green_base_and_keeps_prerequisite_closure() {
+fn a_green_base_record_no_longer_narrows_a_since_run() {
     let (dir, home, base) = selection_repo();
     std::fs::write(dir.path().join("docs/guide.md"), "changed\n").unwrap();
     let output = evidence::run(
@@ -797,8 +1306,10 @@ fn selection_narrows_only_with_green_base_and_keeps_prerequisite_closure() {
     );
     assert!(output.status.success(), "{}", stderr(&output));
     let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
-    assert_eq!(runs, "producer\ndocs\n", "{}", stderr(&output));
-    assert!(stderr(&output).contains("skipped present"));
+    for target in ["producer", "docs", "present", "release"] {
+        assert!(runs.lines().any(|line| line == target), "{runs}");
+    }
+    assert!(!stderr(&output).contains("skipped "), "{}", stderr(&output));
     let isolated = tempfile::tempdir().unwrap();
     let output = evidence::run(dir.path(), isolated.path(), &["test", "--all"]);
     assert!(output.status.success(), "{}", stderr(&output));
@@ -1209,11 +1720,11 @@ fn held_until_released_anywhere(mode: &str) -> tempfile::TempDir {
 }
 
 /// TSK-1021 AC-1 (journey), on Linux, macOS and Windows: the built binary
-/// takes the gate lock only after the lock path's file and the locked handle
-/// compare equal by `FileIdentity`; a second gate is refused naming the
-/// holder, and once the holder ends the next gate takes the lock again.
+/// takes a slot only after the slot path's file and the locked handle
+/// compare equal by `FileIdentity`; a second gate takes the next slot beside
+/// the holder (TSK-1145), and once the holder ends the next gate runs.
 #[test]
-fn a_gate_takes_the_lock_through_the_identity_check_and_refuses_a_contender() {
+fn a_gate_takes_a_slot_through_the_identity_check_beside_a_contender() {
     let home = tempfile::tempdir().unwrap();
     let repo = held_until_released_anywhere("essential");
     let (mut holder, rx, _stdout) = spawn(command(
@@ -1222,10 +1733,14 @@ fn a_gate_takes_the_lock_through_the_identity_check_and_refuses_a_contender() {
         &["test", "--mode", "essential"],
     ));
     wait_for(&rx, "starting target 'holder'");
-    let contender = run(repo.path(), home.path(), &["test", "--mode", "essential"]);
+    let other = crate::repo(QUICK_PASS);
+    let contender = run(other.path(), home.path(), &["test"]);
     let error = stderr(&contender);
-    assert_eq!(contender.status.code(), Some(1), "{error}");
-    assert!(error.contains(&format!("pid {}", holder.id())), "{error}");
+    assert_eq!(contender.status.code(), Some(0), "{error}");
+    assert!(
+        home.path().join("locks/full-gate-2.lock").exists(),
+        "{error}"
+    );
     std::fs::write(repo.path().join("release"), "").unwrap();
     assert!(holder.wait().unwrap().success(), "the holder's gate passes");
     let next = run(repo.path(), home.path(), &["test", "--mode", "essential"]);
@@ -1242,7 +1757,7 @@ fn held_until_released(mode: &str) -> tempfile::TempDir {
 
 #[cfg(unix)]
 #[test]
-fn essential_and_full_refuse_every_mode_pair_across_worktrees_and_repositories() {
+fn essential_and_full_run_together_in_every_mode_pair_across_worktrees_and_repositories() {
     for holder in ["essential", "full"] {
         let home = tempfile::tempdir().unwrap();
         let first = held_until_released(holder);
@@ -1260,42 +1775,28 @@ fn essential_and_full_refuse_every_mode_pair_across_worktrees_and_repositories()
         wait_for(&rx, "starting target 'holder'");
         for contender in ["essential", "full"] {
             for directory in [other.path(), linked.as_path()] {
+                let config = directory.join(".codeflow/test-config.json");
+                std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+                std::fs::write(&config, QUICK_PASS.replace("full", contender)).unwrap();
                 let output = run(directory, home.path(), &["test", "--mode", contender]);
                 let error = stderr(&output);
                 assert_eq!(
                     output.status.code(),
-                    Some(1),
+                    Some(0),
                     "{holder}/{contender}: {error}"
                 );
-                assert!(error.contains(&format!("pid {}", child.id())), "{error}");
-                assert!(error.contains(&format!("{holder} mode")), "{error}");
-                // The holder's folder is shown only to a gate that trusts
-                // it: a worktree of the same repository. Another repository
-                // sees an unknown directory (TSK-1003).
-                if directory == linked.as_path() {
-                    assert!(error.contains(first.path().to_str().unwrap()), "{error}");
-                } else {
-                    assert!(error.contains("in an unknown directory"), "{error}");
-                    assert!(!error.contains(first.path().to_str().unwrap()), "{error}");
-                }
-                assert!(!error.contains("starting target"), "{error}");
+                assert!(error.contains("starting target 'pass'"), "{error}");
             }
         }
+        assert!(child.try_wait().unwrap().is_none(), "the holder still runs");
         std::fs::write(first.path().join("release"), "done").unwrap();
         assert!(child.wait().unwrap().success());
-        std::fs::write(
-            first.path().join(".codeflow/test-config.json"),
-            QUICK_PASS.replace("full", holder),
-        )
-        .unwrap();
-        let after = run(first.path(), home.path(), &["test", "--mode", holder]);
-        assert!(after.status.success(), "{}", stderr(&after));
     }
 }
 
 #[cfg(unix)]
 #[test]
-fn quick_runs_light_targets_but_refuses_declared_and_fallback_heavy_targets() {
+fn quick_runs_light_declared_and_fallback_heavy_targets_beside_a_gate() {
     for fallback in [false, true] {
         let home = tempfile::tempdir().unwrap();
         let first = held_until_released("full");
@@ -1307,35 +1808,26 @@ fn quick_runs_light_targets_but_refuses_declared_and_fallback_heavy_targets() {
         let mode = if fallback { "essential" } else { "quick" };
         let declaration = if fallback { "" } else { "\"heavy\":true," };
         std::fs::create_dir_all(linked.join(".codeflow")).unwrap();
-        std::fs::write(linked.join(".codeflow/test-config.json"), format!(r#"{{"schema_version":"1.0","execution":{{"parallel":true,"max_parallel":2,"heavy_wait_seconds":1}},"targets":[
+        std::fs::write(linked.join(".codeflow/test-config.json"), format!(r#"{{"schema_version":"1.0","execution":{{"parallel":true,"max_parallel":2}},"targets":[
           {{"name":"workspace-clippy","runner":"custom",{declaration}"modes":{{"{mode}":{{"command":"touch heavy-ran"}}}}}},
           {{"name":"light","timeout_seconds":5,"heavy":false,"runner":"custom","modes":{{"{mode}":{{"command":"touch light-ran"}}}}}}
         ]}}"#)).unwrap();
         let (mut child, rx, _stdout) = spawn(command(first.path(), home.path(), &["test"]));
         wait_for(&rx, "starting target 'holder'");
-        let start = Instant::now();
         let output = run(&linked, home.path(), &["test", "--mode", "quick"]);
         let error = stderr(&output);
-        assert_eq!(output.status.code(), Some(1), "{error}");
-        assert!(start.elapsed() >= Duration::from_secs(1));
-        assert!(start.elapsed() < Duration::from_secs(3));
+        assert_eq!(output.status.code(), Some(0), "{error}");
         assert!(linked.join("light-ran").exists());
-        assert!(!linked.join("heavy-ran").exists());
-        assert!(error.contains(&format!("pid {}", child.id())), "{error}");
-        assert!(error.contains("full mode"), "{error}");
-        assert!(String::from_utf8_lossy(&output.stdout).contains("target light: ok"));
+        assert!(linked.join("heavy-ran").exists(), "{error}");
+        assert!(!error.contains("not run"), "{error}");
         std::fs::write(first.path().join("release"), "done").unwrap();
         assert!(child.wait().unwrap().success());
-        assert!(run(&linked, home.path(), &["test", "--mode", "quick"])
-            .status
-            .success());
-        assert!(linked.join("heavy-ran").exists());
     }
 }
 
 #[cfg(unix)]
 #[test]
-fn reserve_refuses_beside_a_gate_then_runs_exact_arguments() {
+fn reserve_runs_exact_arguments_beside_a_gate() {
     let home = tempfile::tempdir().unwrap();
     let first = held_until_released("full");
     let linked = first.path().join("linked");
@@ -1354,25 +1846,21 @@ fn reserve_refuses_beside_a_gate_then_runs_exact_arguments() {
     ];
     let (mut child, rx, _stdout) = spawn(command(first.path(), home.path(), &["test"]));
     wait_for(&rx, "starting target 'holder'");
-    let refused = run(&linked, home.path(), &args);
-    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
-    assert!(!linked.join("result").exists());
-    assert!(stderr(&refused).contains(&format!("pid {}", child.id())));
-    std::fs::write(first.path().join("release"), "done").unwrap();
-    assert!(child.wait().unwrap().success());
-    let after = run(&linked, home.path(), &args);
-    assert!(after.status.success(), "{}", stderr(&after));
+    let beside = run(&linked, home.path(), &args);
+    assert!(beside.status.success(), "{}", stderr(&beside));
     assert_eq!(
         std::fs::read_to_string(linked.join("result")).unwrap(),
         "literal $value; spaces"
     );
+    std::fs::write(first.path().join("release"), "done").unwrap();
+    assert!(child.wait().unwrap().success());
 }
 
 #[cfg(unix)]
 #[test]
 fn concurrent_heavy_targets_share_the_configured_workers_while_light_work_runs() {
     let dir = repo(
-        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":3,"worker_budget":8},"targets":[
+        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":3,"host_jobs":8,"worker_budget":8},"targets":[
       {"name":"a","timeout_seconds":5,"heavy":true,"runner":"custom","modes":{"quick":{"command":"echo $CARGO_BUILD_JOBS:$NEXTEST_TEST_THREADS:$RUST_TEST_THREADS:$CODEFLOW_ORACLE_WORKERS > a; while ! test -f b; do sleep 0.01; done; test -f light || sleep 0.2"}}},
       {"name":"b","timeout_seconds":5,"heavy":true,"runner":"custom","modes":{"quick":{"command":"echo $CARGO_BUILD_JOBS:$NEXTEST_TEST_THREADS:$RUST_TEST_THREADS:$CODEFLOW_ORACLE_WORKERS > b; while ! test -f a; do sleep 0.01; done; test -f light || sleep 0.2"}}},
       {"name":"light","timeout_seconds":5,"heavy":false,"runner":"custom","modes":{"quick":{"command":"touch light"}}}
@@ -1478,7 +1966,7 @@ fn killing_heavy_quick_fallback_and_reservation_reaps_each_command_group() {
 #[test]
 fn a_heavy_target_waits_for_its_requested_share_without_blocking_light_work() {
     let dir = repo(
-        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":3,"worker_budget":8},"targets":[
+        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":3,"host_jobs":8,"worker_budget":8},"targets":[
       {"name":"first","timeout_seconds":5,"heavy":true,"workers":8,"runner":"custom","modes":{"quick":{"command":"test \"$CARGO_BUILD_JOBS\" = 8 && touch first-start && sleep 0.3 && touch first-done"}}},
       {"name":"second","timeout_seconds":5,"heavy":true,"workers":4,"runner":"custom","modes":{"quick":{"command":"test -f first-done && test \"$CARGO_BUILD_JOBS\" = 4"}}},
       {"name":"light","timeout_seconds":5,"heavy":false,"runner":"custom","modes":{"quick":{"command":"while ! test -f first-start; do sleep 0.01; done; test ! -f first-done"}}}
@@ -1539,6 +2027,8 @@ fn reserve_refuses_when_the_holder_record_cannot_be_written() {
     let locks = home.path().join("locks");
     std::fs::create_dir(&locks).unwrap();
     std::fs::write(locks.join("full-gate.lock"), "").unwrap();
+    std::fs::write(locks.join("full-gate-1.lock"), "").unwrap();
+    std::fs::write(locks.join("host.lock"), "").unwrap();
     std::fs::set_permissions(&locks, std::fs::Permissions::from_mode(0o500)).unwrap();
     let reserved = run(
         dir.path(),
@@ -1582,33 +2072,25 @@ fn quick_default_class_controls_undeclared_targets_and_keeps_explicit_light_work
             &["worktree", "add", "--detach", linked.to_str().unwrap()],
         );
         std::fs::create_dir_all(linked.join(".codeflow")).unwrap();
-        std::fs::write(linked.join(".codeflow/test-config.json"), format!(r#"{{"schema_version":"1.0","execution":{{"quick_default_class":"{class}","heavy_wait_seconds":1}},"targets":[
+        std::fs::write(linked.join(".codeflow/test-config.json"), format!(r#"{{"schema_version":"1.0","execution":{{"quick_default_class":"{class}","host_jobs":4,"worker_budget":4}},"targets":[
           {{"name":"undeclared","runner":"custom","modes":{{"quick":{{"command":"touch default-ran"}}}}}},
           {{"name":"light","runner":"custom","heavy":false,"modes":{{"quick":{{"command":"touch light-ran"}}}}}}
         ]}}"#)).unwrap();
         let (mut child, rx, _stdout) = spawn(command(holder.path(), home.path(), &["test"]));
         wait_for(&rx, "starting target 'holder'");
-        let start = Instant::now();
         let output = run(&linked, home.path(), &["test", "--mode", "quick"]);
         let error = stderr(&output);
+        assert!(output.status.success(), "{error}");
         assert!(linked.join("light-ran").exists());
-        if class == "heavy" {
-            assert_eq!(output.status.code(), Some(1), "{error}");
-            assert!(start.elapsed() >= Duration::from_secs(1));
-            assert!(!linked.join("default-ran").exists());
-            assert!(error.contains("waiting up to 1s"), "{error}");
-            assert!(error.contains(&format!("pid {}", child.id())), "{error}");
-            assert!(error.contains("full mode"), "{error}");
-            assert!(error.contains(holder.path().to_str().unwrap()), "{error}");
-        } else {
-            assert!(output.status.success(), "{error}");
-            assert!(linked.join("default-ran").exists());
-        }
+        assert!(linked.join("default-ran").exists());
+        // Only heavy work takes a slot and counts the gate beside it.
+        assert_eq!(
+            error.contains("2 heavy runs share this host"),
+            class == "heavy",
+            "{error}"
+        );
         std::fs::write(holder.path().join("release"), "done").unwrap();
         assert!(child.wait().unwrap().success());
-        let after = run(&linked, home.path(), &["test", "--mode", "quick"]);
-        assert!(after.status.success(), "{}", stderr(&after));
-        assert!(linked.join("default-ran").exists());
     }
 }
 
@@ -1617,7 +2099,7 @@ fn quick_default_class_controls_undeclared_targets_and_keeps_explicit_light_work
 fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
     let home = tempfile::tempdir().unwrap();
     let root = held_until_released("essential");
-    let path = home.path().join("locks/full-gate.record");
+    let path = home.path().join("locks/full-gate-1.record");
     let empty = run(root.path(), home.path(), &["test", "--lock-status"]);
     assert!(empty.status.success(), "{}", stderr(&empty));
     assert!(String::from_utf8_lossy(&empty.stdout).contains("no recorded holder"));
@@ -1648,7 +2130,17 @@ fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
     let status = run(root.path(), home.path(), &["test", "--lock-status"]);
     assert!(status.status.success(), "{}", stderr(&status));
     let text = String::from_utf8_lossy(&status.stdout);
-    assert_eq!(text.matches("recorded holder:").count(), 2, "{text}");
+    // Slot 1 of both folders names the run, and the fence of both names it
+    // as the last recorded holder (TSK-1256).
+    assert_eq!(text.matches(": recorded holder:").count(), 2, "{text}");
+    assert_eq!(
+        text.matches(
+            ": last recorded holder (may have ended; the slot lines show the recorded slots and target groups): "
+        )
+        .count(),
+        2,
+        "{text}"
+    );
     for value in [
         format!("pid {}", child.id()),
         "essential mode".into(),
@@ -1659,19 +2151,23 @@ fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
     }
     assert!(!stderr(&status).contains("starting target"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
-    assert_eq!(
-        run(root.path(), home.path(), &["test"]).status.code(),
-        Some(1)
-    );
     std::fs::write(root.path().join("release"), "done").unwrap();
     assert!(child.wait().unwrap().success());
     let after = run(root.path(), home.path(), &["test", "--lock-status"]);
     assert!(after.status.success());
+    let after = String::from_utf8_lossy(&after.stdout);
     assert_eq!(
-        String::from_utf8_lossy(&after.stdout)
-            .matches("no recorded holder")
+        after.matches("no recorded holder").count(),
+        4,
+        "the host lock and slot 1 of both folders: {after}"
+    );
+    // The fence record names the last admitted run, which has ended.
+    assert_eq!(
+        after
+            .matches(": last recorded holder (may have ended")
             .count(),
-        2
+        2,
+        "{after}"
     );
 }
 

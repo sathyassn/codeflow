@@ -220,7 +220,12 @@ impl Fx {
 
     /// Judge the release push with `approved` as the approved cutoffs.
     fn judged(&self, approved: &[(&str, &str)]) -> Result<Judgement, String> {
-        let destination = ask_destination(&self.root, Some(self.origin.to_str().unwrap())).unwrap();
+        let destination = ask_destination(
+            &self.root,
+            Some(self.origin.to_str().unwrap()),
+            QueryLimits::default(),
+        )
+        .unwrap();
         let published = self.git(&["rev-parse", &format!("origin/{RELEASE}")]);
         judge(&self.root, &destination, &published, "HEAD", approved)
     }
@@ -711,7 +716,7 @@ fn a_release_scope_refuses_a_checked_out_branch_that_is_not_utf8() {
         b"ref: refs/heads/integration/release-\xe9\n",
     )
     .unwrap();
-    let error = checkout_scope(dir.path(), None).unwrap_err();
+    let error = checkout_scope(dir.path(), None, QueryLimits::default()).unwrap_err();
     let reason = if cfg!(windows) {
         "cannot read current branch"
     } else {
@@ -783,7 +788,7 @@ fn a_release_scope_refuses_an_origin_url_that_is_not_utf8() {
     config
         .write_all(b"[remote \"origin\"]\n\turl = file:///caf\xff\n")
         .unwrap();
-    let error = checkout_scope(dir.path(), None).unwrap_err();
+    let error = checkout_scope(dir.path(), None, QueryLimits::default()).unwrap_err();
     assert!(error.contains("not valid UTF-8"), "{error}");
 }
 
@@ -848,7 +853,7 @@ fn r22_advertisement_refuses_invalid_oid_and_keeps_empty_remote() {
 fn r22_checkout_scope_refuses_remote_lookup_error_and_keeps_absence() {
     let dir = tempfile::tempdir().unwrap();
     let (repo, _) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
-    assert!(checkout_scope(dir.path(), None).is_ok());
+    assert!(checkout_scope(dir.path(), None, QueryLimits::default()).is_ok());
     let mut config = repo.config().unwrap();
     config.set_str("remote.origin.url", "unused").unwrap();
     config
@@ -858,7 +863,7 @@ fn r22_checkout_scope_refuses_remote_lookup_error_and_keeps_absence() {
         )
         .unwrap();
     assert!(repo.find_remote("origin").is_err());
-    assert!(checkout_scope(dir.path(), None).is_err());
+    assert!(checkout_scope(dir.path(), None, QueryLimits::default()).is_err());
 }
 
 #[test]
@@ -896,6 +901,7 @@ fn named_default(name: &str, tip: Oid) -> Destination {
         url: None,
         default: Some((name.to_string(), tip)),
         heads: vec![(name.to_string(), tip)],
+        limits: QueryLimits::default(),
     }
 }
 
@@ -1023,7 +1029,7 @@ fn a_release_judgement_names_the_default_branch_escaped() {
         &fx.origin,
         &["symbolic-ref", "HEAD", &format!("refs/heads/{name}")],
     );
-    let destination = ask_destination(&fx.root, Some(origin)).unwrap();
+    let destination = ask_destination(&fx.root, Some(origin), QueryLimits::default()).unwrap();
     assert_eq!(destination.default.as_ref().unwrap().0, name);
     let published = fx.git(&["rev-parse", &format!("origin/{RELEASE}")]);
     for approved in [&[(LINE_A, landing.as_str())][..], &[]] {
@@ -1033,4 +1039,211 @@ fn a_release_judgement_names_the_default_branch_escaped() {
             "{refused:?}"
         );
     }
+}
+
+/// A working repository whose `main` holds one initial commit with a README
+/// and no `CodeFlow` files, as a new hosted repository starts (TSK-338).
+fn adoption_repo() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("work");
+    std::fs::create_dir_all(&root).unwrap();
+    git_in(&root, &["init", "-q", "-b", "main"]);
+    adoption_commit(&root, "README.md", Some("# project\n"), "Initial commit");
+    (dir, root)
+}
+
+/// Write `content` to `file` (or remove it, for `None`) and commit on the
+/// checked-out branch; returns the commit.
+fn adoption_commit(root: &Path, file: &str, content: Option<&str>, message: &str) -> Oid {
+    let full = root.join(file);
+    match content {
+        Some(content) => {
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, content).unwrap();
+        }
+        None => std::fs::remove_file(full).unwrap(),
+    }
+    git_in(root, &["add", "-A"]);
+    git_in(root, &["commit", "-q", "-m", message]);
+    Oid::from_str(&git_in(root, &["rev-parse", "HEAD"])).unwrap()
+}
+
+/// The scope of `head` under a destination whose default `main` is at `tip`.
+fn adoption_scope(root: &Path, tip: Oid, head: &str) -> Result<Scope, String> {
+    scope(root, &named_default("main", tip), head, None)
+}
+
+const ADOPTED_POLICY: &str = "{\"schema_version\": 1}\n";
+
+#[test]
+fn a_default_target_that_never_carried_a_policy_is_an_initial_adoption() {
+    let (_dir, root) = adoption_repo();
+    // A `.codeflow` folder without a policy is still no policy.
+    let tip = adoption_commit(
+        &root,
+        ".codeflow/project.toml",
+        Some("schema_version = 1\n"),
+        "chore: notes",
+    );
+    let scope = adoption_scope(&root, tip, "task/TSK-001-adopt").unwrap();
+    assert!(!scope.release(), "{scope:?}");
+    assert_eq!(scope.pattern, BUILTIN_PATTERN);
+    assert_eq!(
+        scope.source,
+        format!(
+            "built in (initial adoption: no commit of main up to {} has carried .codeflow/policy.json)",
+            short(tip)
+        )
+    );
+    // The built-in pattern still names release branches.
+    assert!(
+        adoption_scope(&root, tip, "integration/release-2")
+            .unwrap()
+            .head
+    );
+}
+
+#[test]
+fn a_removed_default_target_policy_still_refuses() {
+    let (_dir, root) = adoption_repo();
+    let carried = adoption_commit(
+        &root,
+        ".codeflow/policy.json",
+        Some(ADOPTED_POLICY),
+        "chore: adopt",
+    );
+    let tip = adoption_commit(&root, ".codeflow/policy.json", None, "chore: drop it");
+    let error = adoption_scope(&root, tip, "task/TSK-001-x").unwrap_err();
+    assert!(
+        error.contains(&format!(
+            ".codeflow/policy.json is missing, and {} in its history carried one, so the policy was removed",
+            short(carried)
+        )),
+        "{error}"
+    );
+}
+
+/// A policy that reached the default target only through a merge's second
+/// parent was still held there: the whole ancestry is read.
+#[test]
+fn a_policy_carried_only_by_a_merged_branch_still_refuses() {
+    let (_dir, root) = adoption_repo();
+    git_in(&root, &["switch", "-q", "-c", "side"]);
+    let carried = adoption_commit(
+        &root,
+        ".codeflow/policy.json",
+        Some(ADOPTED_POLICY),
+        "chore: adopt on a side branch",
+    );
+    git_in(&root, &["switch", "-q", "main"]);
+    git_in(
+        &root,
+        &[
+            "merge",
+            "-q",
+            "-s",
+            "ours",
+            "-m",
+            "merge: keep main",
+            "side",
+        ],
+    );
+    let tip = Oid::from_str(&git_in(&root, &["rev-parse", "HEAD"])).unwrap();
+    let error = adoption_scope(&root, tip, "task/TSK-001-x").unwrap_err();
+    assert!(
+        error.contains(&format!("{} in its history carried one", short(carried))),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_unprovable_history_is_not_an_initial_adoption() {
+    let not_proven = "whether its history ever carried one cannot be proven";
+    // A shallow clone: the walk reaches its boundary.
+    let (dir, root) = adoption_repo();
+    adoption_commit(&root, "src/lib.rs", Some("// one\n"), "feat: one");
+    let shallow = dir.path().join("shallow");
+    codeflow_fixture::clone(dir.path(), &root, &shallow)
+        .depth(1)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
+    let tip = Oid::from_str(&git_in(&shallow, &["rev-parse", "HEAD"])).unwrap();
+    let error = adoption_scope(&shallow, tip, "task/TSK-001-x").unwrap_err();
+    assert!(
+        error.contains(not_proven) && error.contains("shallow"),
+        "{error}"
+    );
+
+    // A replace ref overlays the recorded history.
+    let first = git_in(&root, &["rev-parse", "HEAD~1"]);
+    git_in(
+        &root,
+        &["update-ref", &format!("refs/replace/{first}"), &first],
+    );
+    let tip = Oid::from_str(&git_in(&root, &["rev-parse", "HEAD"])).unwrap();
+    let error = adoption_scope(&root, tip, "task/TSK-001-x").unwrap_err();
+    assert!(
+        error.contains(not_proven) && error.contains("replace ref"),
+        "{error}"
+    );
+    git_in(
+        &root,
+        &["update-ref", "-d", &format!("refs/replace/{first}")],
+    );
+    assert!(adoption_scope(&root, tip, "task/TSK-001-x").is_ok());
+
+    // A parent this clone lacks.
+    let repo = Repository::open(&root).unwrap();
+    let tree = repo.find_commit(tip).unwrap().tree_id();
+    let raw = format!(
+        "tree {tree}\nparent {}\nauthor t <t@example.com> 0 +0000\ncommitter t <t@example.com> 0 +0000\n\norphaned\n",
+        "a".repeat(40)
+    );
+    let orphan = repo
+        .odb()
+        .unwrap()
+        .write(git2::ObjectType::Commit, raw.as_bytes())
+        .unwrap();
+    let error = adoption_scope(&root, orphan, "task/TSK-001-x").unwrap_err();
+    assert!(error.contains(not_proven), "{error}");
+}
+
+/// An ancestor's `.codeflow` tree that this clone lacks cannot prove the
+/// policy absent there.
+#[test]
+fn an_unreadable_ancestor_tree_is_not_an_initial_adoption() {
+    let (_dir, root) = adoption_repo();
+    adoption_commit(
+        &root,
+        ".codeflow/project.toml",
+        Some("schema_version = 7\n"),
+        "chore: notes",
+    );
+    let repo = Repository::open(&root).unwrap();
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    let folder = head.tree().unwrap().get_name(".codeflow").unwrap().id();
+    let tip = adoption_commit(&root, ".codeflow/project.toml", None, "chore: drop notes");
+    let hex = folder.to_string();
+    std::fs::remove_file(root.join(".git/objects").join(&hex[..2]).join(&hex[2..])).unwrap();
+    let error = adoption_scope(&root, tip, "task/TSK-001-x").unwrap_err();
+    assert!(
+        error.contains("cannot be proven")
+            && error.contains(&format!(
+                "the .codeflow tree of {} cannot be read",
+                short(head.id())
+            )),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_invalid_default_target_policy_is_not_an_initial_adoption() {
+    let (_dir, root) = adoption_repo();
+    let tip = adoption_commit(&root, ".codeflow/policy.json", Some("{\n"), "chore: bad");
+    let error = adoption_scope(&root, tip, "task/TSK-001-x").unwrap_err();
+    assert!(
+        error.contains(".codeflow/policy.json is not valid JSON"),
+        "{error}"
+    );
 }

@@ -36,15 +36,18 @@ pub mod git_discard;
 pub mod git_guard;
 pub mod git_hook;
 mod git_target;
+pub mod gitleaks;
 pub mod guard_deadline;
 pub mod guidance;
 pub mod landed_policy;
+pub mod limits;
 pub mod orient;
 pub mod path_policy;
 pub mod policy;
 pub mod policy_schema;
 pub mod ref_authority;
 pub mod repo;
+pub mod sandbox_state;
 pub mod scan;
 pub mod session_summary;
 pub mod source_identity;
@@ -170,6 +173,25 @@ impl Violation {
         )
     }
 
+    /// Render a finding that has no policy key and names the authority that
+    /// judges it, for a rule that is neither a policy rule nor a lifecycle
+    /// invariant.
+    #[must_use]
+    pub fn render_with_authority(&self, plane: &str, authority: &str) -> String {
+        let verdict = match self.level {
+            PolicyLevel::Block => "BLOCKED",
+            PolicyLevel::Warn => "warning",
+            PolicyLevel::Allow | PolicyLevel::Off => "note",
+        };
+        format!(
+            "codeflow {plane}: {verdict} — {rule} ({level})\n  {msg}\n  sanctioned: {remedy}\n  authority: {authority}",
+            rule = self.rule,
+            level = self.level,
+            msg = crate::git::display_message(&self.message),
+            remedy = crate::git::display_message(&self.remedy),
+        )
+    }
+
     /// Render a non-configurable lifecycle invariant without falsely
     /// attributing it to `policy.json`.
     #[must_use]
@@ -190,9 +212,12 @@ impl Violation {
 }
 
 /// The `git` rules whose levels enclosing planes cannot lower (R-80):
-/// secret and path scans, protected branches and hook integrity.
+/// secret and path scans (the gitleaks engine finding included: it prints at
+/// the `secret_scan` level and has no key of its own), protected branches and
+/// hook integrity.
 const ALWAYS_BLOCKING_GIT: &[&str] = &[
     "secret_scan",
+    "secret_scan_engine",
     "path_policy",
     "commit_to_protected",
     "push_to_protected",

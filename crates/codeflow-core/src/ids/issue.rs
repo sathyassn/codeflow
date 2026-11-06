@@ -201,6 +201,59 @@ fn read_back(git: &Git, entry: &Entry, commit: &str, why: &str) -> Result<Reserv
     }
 }
 
+/// Reserve exactly `id` for a record written with `uid`, without asking the
+/// authority: a commit on the local registry, as an offline `new` makes.
+/// It is pending until the next push or `ids sync` publishes it, or local
+/// when there is no authority remote. `None` when a registry here already
+/// binds `uid`, so nothing is written twice (TSK-338).
+///
+/// # Errors
+///
+/// Returns an error when another record holds `id` here, or the registry
+/// cannot be read or committed (an unseeded registry among them).
+pub fn reserve_exact_offline(
+    root: &Path,
+    id: &RegId,
+    uid: &str,
+    title: &str,
+) -> Result<Option<Standing>, IdsError> {
+    let git = Git::new(root);
+    let _lock = state::lock(&git)?;
+    let ledgers = [
+        Ledger::read(&git, REGISTRY_REF)?,
+        Ledger::read(&git, &tracking_ref(AUTHORITY))?,
+    ];
+    if ledgers
+        .iter()
+        .any(|ledger| !ledger.ids_for_uid(uid).is_empty())
+    {
+        return Ok(None);
+    }
+    if ledgers.iter().any(|ledger| ledger.holds(id)) {
+        return Err(IdsError::Invalid(format!(
+            "{id} is already held in the registry by another record"
+        )));
+    }
+    let standing = if git.has_remote(AUTHORITY)? {
+        Standing::Pending
+    } else {
+        Standing::Local
+    };
+    let request = Request {
+        kind: id.kind(),
+        title: title.to_string(),
+        target: "none".to_string(),
+        uid: Some(uid.to_string()),
+        wanted: Some(id.clone()),
+        issuer: None,
+        verb: "issue",
+        resume: None,
+    };
+    let issuer = git.user_email()?;
+    let reservation = commit_local(&git, &request, uid, &issuer, standing, None)?;
+    Ok(Some(reservation.standing))
+}
+
 /// Commit a reservation on the local registry (offline, or no authority).
 fn commit_local(
     git: &Git,
@@ -397,7 +450,12 @@ pub(super) fn fetch(git: &Git, remote: &str) -> Result<Fetched, IdsError> {
     let lower = raw_stderr.to_lowercase();
     if lower.contains("couldn't find remote ref") || lower.contains("could not find remote ref") {
         let name = format!("refs/heads/{}", super::REGISTRY_BRANCH);
-        match crate::git::remote_query::ls_remote(git.root(), &["--exit-code", remote, &name]) {
+        let limits = crate::git::remote_query::QueryLimits::from_authority_or_default(git.root());
+        match crate::git::remote_query::ls_remote(
+            git.root(),
+            &["--exit-code", remote, &name],
+            limits,
+        ) {
             Ok(answer) if answer.is_empty() => {}
             Ok(_) => return Ok(Fetched::Offline(stderr)),
             Err(error) => {
@@ -1076,7 +1134,9 @@ mod tests {
         if std::env::var_os(CHILD).is_some() {
             let root = tempfile::tempdir().unwrap();
             let repo = git2::Repository::init(root.path()).unwrap();
-            repo.remote("origin", "https://example.invalid/repo")
+            // A local path that does not exist: the fetch fails without a
+            // lookup, so the test needs no network (TSK-1156).
+            repo.remote("origin", "file:///nonexistent/codeflow-repo")
                 .unwrap();
             assert!(super::sync(root.path()).is_err());
             return;

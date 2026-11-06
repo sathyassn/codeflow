@@ -177,6 +177,20 @@ text = "A request is shaped once into outcome-sized units with criteria in the h
 see = [".codeflow/rules/workflow-discipline.md"]
 
 [[rule]]
+id = "owned"
+tiers = ["full"]
+title = "Change only work you own."
+text = "Every change that goes into a repository is part of a task, made by the session that owns that work; no ad hoc edits. A session that sees a needed change in work it does not own tells the owner."
+see = [".codeflow/rules/workflow-discipline.md"]
+
+[[rule]]
+id = "owned"
+tiers = ["standard", "minimal"]
+title = "Change only work you own."
+text = "Every change that goes into a repository is part of a tracked unit of work, made by the session that owns that work; no ad hoc edits. A session that sees a needed change in work it does not own tells the owner."
+see = [".codeflow/rules/workflow-discipline.md"]
+
+[[rule]]
 id = "review"
 tiers = ["standard", "full"]
 title = "Review is independent."
@@ -348,10 +362,10 @@ key = "build"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "build"
-action = "planned work moves at speed, at least one task per lane per hour; the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; merge the current line in before review; cite targeted tests and `codeflow test --mode quick` once before ready; the full gate belongs to the landing candidate"
+action = "an adopted time-box profile holds each task to its band; the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; merge the current line in before review; cite targeted tests and `codeflow test --mode quick` once before ready; the full gate belongs to the landing candidate"
 see = [
   { target = "cf-develop", must_open = true, reason = "the build and verify loop; its naming step for every string a reader sees" },
-  { target = "cf-method/references/workflow-lifecycle.md", section = "Planned work moves at speed" },
+  { target = "cf-method/references/workflow-lifecycle.md", section = "Planned work keeps to its band" },
 ]
 
 [[moment]]
@@ -458,7 +472,7 @@ key = "land"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "land a batch on the integration line"
-action = "reviewed heads go on a candidate in dependency order; a hand-resolved product hunk reopens that task's whole-unit review; one full gate on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
+action = "one candidate per line at a time, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; one full gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
 see = [{ target = "cf-method", section = "Managing a body of work", must_open = true, reason = "landing modes and drift control" }]
 
 [[moment]]
@@ -466,7 +480,7 @@ key = "land"
 group = "delivery"
 tiers = ["minimal"]
 when = "land a batch on the integration line"
-action = "reviewed heads go on a candidate in dependency order; a hand-resolved product hunk reopens that task's whole-unit review; one full gate on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
+action = "one candidate per line at a time, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; one full gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
 see = [{ target = ".codeflow/rules/git-rules.md", section = "Bodies of work" }]
 
 [[moment]]
@@ -740,7 +754,7 @@ check; when unsure, route.
 | Row | Claude mechanism |
 |---|---|
 | take a new request (routed work; when unsure, route) | `/cf-model-orchestrator` once per brief, with the seat selectors and efforts in `.claude/skills/cf-model-orchestrator/resources/current-ensemble.json`; the other lineage through an interactive seat as `.claude/skills/cf-model-orchestrator/resources/routing/transport.md` states; the Claude seat owns design and the integrated verdict; a missing seat degrades legibly after preflight and is recorded; after mode selection, follow `.claude/skills/cf-method/references/workflow-lifecycle.md`. Read `.claude/skills/cf-method/references/autonomy.md` for what to settle yourself and what to escalate. `/cf-plan` and `/cf-develop` are supporting or solo flows, not alternate entry points |
-| build | this session stays the orchestrator; wide search goes to the `Explore` subagent, bounded routine work to a capable worker as a native subagent of this session, never a separate CLI session or Herdr tab; parallel branches use separate worktrees, bounded fan-out from host memory and CPU, explicit file ownership and serialized landing |
+| build | this session stays the orchestrator; wide search goes to the `Explore` subagent, bounded routine work to a capable worker as a native subagent of this session, never a separate CLI session or Herdr tab; parallel branches use separate worktrees, bounded fan-out from host memory and CPU, explicit file ownership and batched landing, one candidate per line at a time |
 | give or ask for a review | the other lineage reviews, at the stages "Review verdicts" in `.codeflow/rules/workflow-discipline.md` names; `cf-reviewer` runs only as the same-family fallback when no other-lineage seat exists, in the foreground (`run_in_background: false`) so its verdict lands before the turn ends; on a security trigger the other-lineage review carries the `cf-security-reviewer` checklist, and that agent runs as its own pass only inside the fallback |
 | show something complex | a short answer's figure goes in the reply as an inline HTML widget when the session offers `show_widget`, or as fenced ASCII in the terminal; anything beyond an inline reply opens `/cf-present` by default; an Artifact page, or a widget beyond a short answer, is used only when the operator asks for one or the content must be shared, since `cf-present` is local |
 | unattended, batch or parallel runs | `.claude/workflows/pipeline.workflow.js`, composed through `args.stages` and `args.models`, never hardcoded; the pipeline is single-vendor and never substitutes for the interactive duo; the file is user-owned and `codeflow update` never touches it |

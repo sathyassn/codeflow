@@ -1253,6 +1253,35 @@ def validate_published_sections(
         fail("published changelog sections differ from their exact public source")
 
 
+STALE = "PR base is stale relative to current target; refresh and recompute"
+
+
+def current_base(event_base: str, target: str, head: str, *, cwd: Path) -> str:
+    """The base a pull request is judged against: always the current target.
+
+    A head that does not contain the target tip is judged against that tip
+    and the exact merge it would produce, so pull requests landed together on
+    a line need no refresh after each other's landing. `commit_impact` and
+    `changed_paths` read only the head's own commits and paths against it.
+    It refuses, as stale, a base the target no longer contains (rewritten
+    history or a retarget) and a target whose release record moved since the
+    head's fork point: the written changelog or the release configuration.
+    An unclean merge is refused where the merge tree is built."""
+    contained = run(["git", "merge-base", "--is-ancestor", event_base, target], cwd=cwd, check=False)
+    if contained.returncode != 0:
+        fail(f"{STALE}: the target no longer contains the base")
+    fork = git("merge-base", target, head, cwd=cwd)
+    if fork != target:
+        moved = [
+            path
+            for path in ["CHANGELOG.md", CONFIG_PATH]
+            if file_at_optional(fork, path, cwd=cwd) != file_at_optional(target, path, cwd=cwd)
+        ]
+        if moved:
+            fail(f"{STALE}: the target changed {', '.join(moved)} since the head's fork point")
+    return target
+
+
 def check_pr(args: argparse.Namespace) -> None:
     print(json.dumps(pr_verdict(args), sort_keys=True))
 
@@ -1265,12 +1294,11 @@ def pr_verdict(
     if state is None:
         state = get_host_state(args)
     target = git("rev-parse", f"{args.target_ref or args.base}^{{commit}}", cwd=args.root)
-    base = git("rev-parse", f"{args.base}^{{commit}}", cwd=args.root)
+    event_base = git("rev-parse", f"{args.base}^{{commit}}", cwd=args.root)
     head = git("rev-parse", f"{args.head}^{{commit}}", cwd=args.root)
-    if base != target or git("merge-base", base, head, cwd=args.root) != base:
-        fail("PR base is stale relative to current target; refresh and recompute")
+    base = current_base(event_base, target, head, cwd=args.root)
     body = (
-        args.body_file.read_text(encoding="utf-8")
+        read_source(args.body_file)
         if args.body_file
         else os.getenv(args.body_env, "")
     )
@@ -1895,7 +1923,7 @@ def preflight(args: argparse.Namespace) -> None:
             notes.append("marker floor and entry equality not checked: no PR body; set CODEFLOW_PR_DRAFT")
         else:
             try:
-                intent = parse_release_impact(draft.read_text(encoding="utf-8"), codeflow_bin(args))["impact"]
+                intent = parse_release_impact(read_source(draft), codeflow_bin(args))["impact"]
                 verdict_args = argparse.Namespace(**{
                     **vars(args), "base": base, "target_ref": base, "body_file": draft,
                 })

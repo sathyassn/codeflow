@@ -1,9 +1,9 @@
 //! A kill-on-close job object for each target on Windows (TSK-142 AC-3).
 //!
-//! Unix runs each target in its own process group, and the gate lock stays
-//! held while that group outlives a killed gate (TSK-134). Windows has no
-//! such group, so a killed gate used to leave its target running while the
-//! OS freed the lock, and a second full gate could start beside it.
+//! Unix runs each target in its own process group, and the gate's slot
+//! counts as busy while that group outlives a killed gate (TSK-134,
+//! TSK-1145). Windows has no such group, so a killed gate used to leave its
+//! target running while the OS freed the lock, unseen by later runs.
 //!
 //! Here the runner starts the target suspended, places it in a new job
 //! object whose only handle this process holds, and then lets it run. The
@@ -54,6 +54,33 @@ pub const CREATE_SUSPENDED: u32 = windows_sys::Win32::System::Threading::CREATE_
 pub struct TargetJob(OwnedHandle);
 
 impl TargetJob {
+    pub(super) fn accounting(&self) -> std::io::Result<(u64, u32)> {
+        use windows_sys::Win32::System::JobObjects::{
+            JobObjectBasicAccountingInformation, QueryInformationJobObject,
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+        };
+        let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: the job is owned and the output buffer has the API's exact size.
+        let ok = unsafe {
+            QueryInformationJobObject(
+                self.handle(),
+                JobObjectBasicAccountingInformation,
+                std::ptr::from_mut(&mut info).cast(),
+                u32::try_from(std::mem::size_of_val(&info)).expect("accounting size fits"),
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let user = u64::try_from(info.TotalUserTime).map_err(std::io::Error::other)?;
+        let kernel = u64::try_from(info.TotalKernelTime).map_err(std::io::Error::other)?;
+        let ticks = user
+            .checked_add(kernel)
+            .ok_or_else(|| std::io::Error::other("CPU total overflow"))?;
+        Ok((ticks / 10, info.ActiveProcesses))
+    }
+
     /// Place `child`, started with [`CREATE_SUSPENDED`], in a new
     /// kill-on-close job, then resume it. A job failure leaves the child
     /// suspended for the caller to end before it can run a command.

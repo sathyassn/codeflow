@@ -100,6 +100,18 @@ fn imported_twice() -> tempfile::TempDir {
 }
 
 fn check(root: &Path, base: &str, branch: Option<&str>, body: bool) -> (i32, String) {
+    check_as(root, base, branch, body, &[])
+}
+
+/// `check` with extra `codeflow ci` arguments, such as the `--into` that
+/// says the head is a pull request head landing on the line by merge.
+fn check_as(
+    root: &Path,
+    base: &str,
+    branch: Option<&str>,
+    body: bool,
+    extra: &[&str],
+) -> (i32, String) {
     if body {
         return ci_on(root, base, RECEIVER, "Task: TSK-002");
     }
@@ -108,6 +120,7 @@ fn check(root: &Path, base: &str, branch: Option<&str>, body: bool) -> (i32, Str
     if let Some(branch) = branch {
         command.args(["--branch", branch]);
     }
+    command.args(extra);
     let out = command.current_dir(root).output().unwrap();
     (
         out.status.code().unwrap_or(-1),
@@ -821,11 +834,22 @@ fn deleted_home_imports_are_proven_at_the_published_default_landing() {
         write(root, "src/lib.rs", "pub fn receiving_work() {}\n");
         commit(root, "feat: receiving work after the retired home sync");
         let mut failures = Vec::new();
-        for branch in [None, Some(RECEIVER), Some(LINE)] {
-            let result = check(root, LINE, branch, false);
+        // The receiving work is a pull request head on the line (TSK-1155):
+        // with `--into` it lands by merge. Offered under the line's own name
+        // with no role, the run cannot tell how it reaches the line, so its
+        // own commit refuses and the remedy names both routes.
+        for branch in [None, Some(RECEIVER)] {
+            let result = check_as(root, LINE, branch, false, &["--into", LINE]);
             if result.0 != 0 {
                 failures.push(result.1);
             }
+        }
+        let unnamed = check(root, LINE, Some(LINE), false);
+        if unnamed.0 != 1
+            || !unnamed.1.contains("work.epic_line")
+            || !unnamed.1.contains("cannot tell how the head reaches it")
+        {
+            failures.push(unnamed.1);
         }
         for result in [
             check(root, LINE, Some(RECEIVER), true),

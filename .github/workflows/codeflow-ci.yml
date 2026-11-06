@@ -27,9 +27,30 @@ on:
     - cron: "37 5 * * 1"
   workflow_dispatch:
 
+# A newer push to an integration line cancels the older push run of that
+# line, running or pending (TSK-1313). Only the current tip's verdicts count
+# for the next landing, so an older tip's run is never that evidence. The
+# event is part of the group, so a dispatch on a line shares no group with
+# that line's pushes. Pull request runs, reruns included, keep one group per
+# ref and cancel as before. A push to main or master and every schedule or
+# dispatch run is never cancelled in progress and cancels nothing; GitHub may
+# still replace a pending run in the same group.
+# A push rerun (run_attempt above 1) gets a group of its own run id and
+# attempt and cancels nothing, so rerunning an old push cannot cancel or
+# replace a newer run.
+# Limits: GitHub does not promise that runs start in push order, so an older
+# tip's run that starts late can cancel the newest tip's run. Recovery: rerun
+# the newest tip's run. GitHub compares group names without regard to case,
+# so two integration lines whose names differ only in case would share a
+# group; line names must not form such a pair. `codeflow epic new
+# --integration` names a line `integration/EPC-NNN-<lower-case slug>`, so two
+# lines it makes never differ only in case, and
+# scripts/test_gate_contracts.py fails if the recorded lines form a pair.
+# A cancelled push run is never a reuse source: scripts/ci-reuse.py reads
+# only pull_request runs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ (github.event_name != 'push' || github.run_attempt == 1) && format('{0}-{1}-{2}', github.workflow, github.event_name, github.ref) || format('{0}-push-rerun-{1}-{2}', github.workflow, github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.run_attempt == 1 && startsWith(github.ref, 'refs/heads/integration/')) }}
 
 permissions:
   contents: read
@@ -76,9 +97,49 @@ jobs:
   # part's apt cache for this runner image, so main's caches stay current.
   # Pull request runs skip this job and are never affected. Its token reads
   # runs, caches and pull requests and writes nothing.
+  #
+  # TSK-359: the same reuse covers pushes to integration/** lines, and every
+  # pull request run records what it tested (the `provenance` job below, one
+  # record from an Ubuntu runner and one from a Windows runner). The push
+  # reuses a run only when its pull request number, base line, head, merge
+  # tree, this workflow file's blob and both runner images equal the push's;
+  # the Windows image of the push comes from the `windows-image` job. The
+  # `reuse` job runs scripts/ci-reuse.py only when its SHA-256 equals the
+  # pin below, so a change to the decider needs the same reviewed edit to
+  # this workflow (scripts/gate-parity.py checks the pin against the file).
+  # Each job the push would skip must also have run on the push's image for
+  # its runner label. The decider reads that image from the `Runner Image`
+  # block GitHub writes at the top of each job's log, for every such job of
+  # the pull request run and for the two push-only image jobs here.
+  ubuntu-image:
+    if: github.event_name == 'push'
+    name: read the Ubuntu runner image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Name the runner image
+        run: echo "${ImageOS:-unknown} ${ImageVersion:-unknown}"
+
+  windows-image:
+    if: github.event_name == 'push'
+    name: read the Windows runner image
+    runs-on: windows-latest
+    timeout-minutes: 5
+    outputs:
+      os: ${{ steps.image.outputs.os }}
+      version: ${{ steps.image.outputs.version }}
+    steps:
+      - name: Name the runner image
+        id: image
+        shell: bash
+        run: |
+          echo "os=${ImageOS:-}" >> "$GITHUB_OUTPUT"
+          echo "version=${ImageVersion:-}" >> "$GITHUB_OUTPUT"
+
   reuse:
     if: github.event_name == 'push'
     name: reuse a pull request verdict
+    needs: [ubuntu-image, windows-image]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -101,11 +162,86 @@ jobs:
           PUSHED_REF: ${{ github.ref }}
           EVENT: ${{ github.event_name }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
-        run: >-
-          python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT"
-          --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF"
-          --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}"
-          --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
+          WINDOWS_IMAGE_OS: ${{ needs.windows-image.outputs.os }}
+          WINDOWS_IMAGE_VERSION: ${{ needs.windows-image.outputs.version }}
+          DECIDER_SHA256: 4d3b132da04ce6cbb3bc3a0ffd2e1978603f52a4462b93064889fffc44059d24
+        run: |
+          actual=$(sha256sum scripts/ci-reuse.py | cut -d ' ' -f 1)
+          if [ "$actual" != "$DECIDER_SHA256" ]; then
+            echo "ci-reuse: every job runs: scripts/ci-reuse.py ($actual) is not the script this workflow pins ($DECIDER_SHA256); changing it needs the same reviewed edit to this workflow"
+            exit 0
+          fi
+          python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT" \
+            --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF" \
+            --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}" \
+            --windows-image-os "$WINDOWS_IMAGE_OS" --windows-image-version "$WINDOWS_IMAGE_VERSION" \
+            --push-only "reuse a pull request verdict" --push-only "read the Windows runner image" \
+            --push-only "read the Ubuntu runner image" \
+            --require "codeflow gates" --require windows
+
+  # The pull request run records what it tested, in artifacts of its own run,
+  # for the reuse job above (TSK-359): the pull request number, the base
+  # line, the merge commit and its tree, the base and head commits, the blob
+  # of this workflow file and the runner image of the job that wrote it.
+  # Reuse reads each record from GitHub's list of this run's artifacts and
+  # refuses any value that differs from the push. Push runs skip this job.
+  provenance:
+    if: github.event_name == 'pull_request'
+    name: record the tested merge (${{ matrix.artifact }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact: ci-provenance
+            runner: ubuntu-24.04
+            python: python3
+          - artifact: ci-provenance-windows
+            runner: windows-latest
+            python: python
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 2
+      - name: Write what this run tested
+        shell: bash
+        env:
+          PULL: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          REPOSITORY: ${{ github.repository }}
+          PYTHON: ${{ matrix.python }}
+        run: |
+          set -eu
+          path="${WORKFLOW_REF#"$REPOSITORY"/}"
+          path="${path%%@*}"
+          mkdir -p "$RUNNER_TEMP/provenance"
+          "$PYTHON" -I - "$RUNNER_TEMP/provenance/provenance.json" "$path" <<'PY'
+          import json, os, subprocess, sys
+          def git(*args):
+              return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
+          parents = git("rev-list", "--parents", "-n", "1", "HEAD").split()[1:]
+          if len(parents) != 2:
+              sys.exit(f"the tested commit is not a merge of a base and a head: {parents}")
+          record = {"schema": 1, "pull": int(os.environ["PULL"]), "base_ref": os.environ["BASE_REF"],
+                    "base_commit": parents[0], "head_commit": parents[1], "merge_commit": git("rev-parse", "HEAD"),
+                    "merge_tree": git("rev-parse", "HEAD^{tree}"), "workflow": sys.argv[2],
+                    "workflow_blob": git("rev-parse", f"HEAD:{sys.argv[2]}"),
+                    "image_os": os.environ.get("ImageOS", ""), "image_version": os.environ.get("ImageVersion", "")}
+          with open(sys.argv[1], "w", encoding="utf-8") as handle:
+              json.dump(record, handle, indent=2)
+          PY
+          cat "$RUNNER_TEMP/provenance/provenance.json"
+      - name: Keep the record with this run
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/provenance/provenance.json
+          retention-days: 14
+          if-no-files-found: error
 
   # The release binary every gate part runs `codeflow test` with is built
   # once here and shared as an artifact, never rebuilt per part (TSK-449).
@@ -191,6 +327,49 @@ jobs:
 
       - name: Install exact npm for the owned presentation renderer
         run: npm install --global npm@11.17.0
+
+      # Line pushes skip gates-release. Prepare its apt cache here so a
+      # later push can reuse a verdict. No browser binaries are installed.
+      - name: Read the locked Playwright version
+        if: matrix.part == 'present' && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/')
+        id: playwright
+        run: |
+          present=$(node -p "require('./crates/codeflow-present/web/package-lock.json').packages['node_modules/playwright-core'].version")
+          portal=$(node -p "require('./docs-portal/package-lock.json').packages['node_modules/playwright-core'].version")
+          test "$present" = "$portal" || { echo "playwright-core differs: present $present, portal $portal"; exit 1; }
+          echo "version=$present" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright apt archives on the integration line
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: matrix.part == 'present' && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/')
+        id: line-apt
+        with:
+          path: ~/.cache/playwright-apt
+          key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}
+      - name: Prepare Playwright apt archives for line verdict reuse
+        if: matrix.part == 'present' && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/') && steps.line-apt.outputs.cache-hit != 'true'
+        timeout-minutes: 25
+        run: |
+          npm ci --ignore-scripts --prefix crates/codeflow-present/web
+          node=$(command -v node)
+          cli=crates/codeflow-present/web/node_modules/playwright-core/cli.js
+          archives="$HOME/.cache/playwright-apt"
+          mkdir -p "$archives/partial"
+          printf 'Dir::Cache::Archives "%s/";\nAPT::Keep-Downloaded-Packages "true";\n' "$archives" |
+            sudo tee /etc/apt/apt.conf.d/90codeflow-playwright-archives >/dev/null
+          echo "apt archives restored: $(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)"
+          for attempt in 1 2; do
+            if sudo timeout --kill-after=30s 10m "$node" "$cli" install-deps chromium firefox webkit; then
+              sudo apt-get autoclean || echo "::warning::apt-get autoclean failed; the cache keeps stale archives"
+              sudo chown -R "$(id -u):$(id -g)" "$archives" || echo "::warning::the apt archives may not be saved"
+              echo "apt archives kept: $(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)"
+              exit 0
+            fi
+            echo "::warning::Playwright install attempt ${attempt} failed or ran past 10 minutes"
+            sudo dpkg --configure -a || true
+          done
+          echo "::error::the Playwright install failed twice; see the attempts above"
+          exit 1
 
       - name: Fetch the codeflow build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -573,6 +752,42 @@ jobs:
           fi
           echo "every part of the full gate passed"
 
+  # The reduced Windows tier (TSK-1242). Its switch is the REDUCED_TIER value in
+  # this job, off until a manual run of this workflow on the integration line
+  # has passed all twelve partitions at an exact commit (operator decision,
+  # 2026-11-03). With it on, a pull request into an integration line skips the
+  # test build, the twelve partitions and their journeys job, and runs the
+  # supported Windows journey tests in `windows-tier-journeys` beside the checks
+  # and the release journey. Pull requests into main, pushes, and scheduled and
+  # manual runs keep every partition. The `windows` verdict accepts exactly those
+  # skips, and scripts/ci-reuse.py refuses a reduced-tier run, so the push to the
+  # line runs every job. Until the daily run reaches main, those pushes are the
+  # only partition coverage of a line. scripts/gate-parity.py pins both jobs and
+  # accepts the switch only off or on.
+  windows-tier:
+    if: github.event_name == 'pull_request'
+    name: windows tier
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tier: ${{ steps.tier.outputs.tier }}
+    steps:
+      - name: Choose the Windows tier
+        id: tier
+        shell: bash
+        env:
+          REDUCED_TIER: "on"
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          tier=full
+          if [ "$REDUCED_TIER" = on ]; then
+            case "$BASE" in
+              integration/*) tier=reduced ;;
+            esac
+          fi
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          echo "Windows tier: $tier (reduced tier switch: $REDUCED_TIER, base: $BASE)"
+
   # Native Windows is a release target again (TSK-197). The raw referee is
   # split up so the longest path is short (TSK-265): one job builds the test
   # binaries once into a nextest archive; the partitions run that archive
@@ -594,9 +809,9 @@ jobs:
   # partition took more than the margin, and names a partition that ended
   # without its report (a timeout or a cancellation) as not finished.
   windows-build:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows test build
-    needs: reuse
+    needs: [reuse, windows-tier]
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -842,14 +1057,59 @@ jobs:
         shell: bash
         run: python scripts/test_windows_partitions.py && python scripts/windows-partitions.py check --list target/nextest/list/windows-tests.json --results target/nextest/partitions
 
+  # The reduced tier's runtime journeys: the same journey map and results check
+  # as the windows-journeys job, on tests this job runs itself. Its compile
+  # shares the test build's dependency cache and gets the 45 minute job limit.
+  windows-tier-journeys:
+    if: ${{ !cancelled() && needs.windows-tier.outputs.tier == 'reduced' && !github.event.pull_request.draft }}
+    name: windows tier journeys
+    needs: windows-tier
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Install the differential shells
+        id: shells
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: MSYS
+          install: bash zsh dash
+      - name: Select the differential shell directory
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.shells.outputs.msys2-location }}
+        run: Add-Content -Path $env:GITHUB_ENV -Value "CODEFLOW_DIFFERENTIAL_SHELL_DIR=$env:MSYS2_LOCATION\usr\bin"
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: windows-tests
+          cache-on-failure: true
+      - name: Install nextest
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest@0.9.129
+      - name: Begin journey check
+        shell: bash
+        run: |
+          rm -rf target/nextest/codeflow
+          echo "CODEFLOW_GATE_STARTED_AT=$(python -c 'import time; print(time.time())')" >> "$GITHUB_ENV"
+      - name: Run every supported Windows journey test
+        shell: bash
+        run: cargo nextest run --workspace --no-fail-fast --profile codeflow -E "$(python -B scripts/journey-gate.py --nextest-filter --skip-benchmark)"
+      - name: journey gate
+        shell: bash
+        run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/codeflow/junit.xml --skip-benchmark --part results
+
   # The required Windows check runs on every event, even
   # when a job fails, is cancelled or did not run. Draft integration pull
   # requests and unsupported bases fail. It passes only when all Windows
-  # jobs passed, or reuse named a run and all were skipped.
+  # jobs passed, reuse named a run and all were skipped, or the reduced tier
+  # took exactly its declared skips on a pull request into an integration line.
   windows-verdict:
     if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
     name: windows
-    needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
+    needs: [reuse, windows-tier, windows, windows-build, windows-tests, windows-journeys, windows-release-journey, windows-tier-journeys]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -864,7 +1124,26 @@ jobs:
           JOURNEYS: ${{ needs.windows-journeys.result }}
           RELEASE: ${{ needs.windows-release-journey.result }}
           MISSING: ${{ needs.windows-journeys.outputs.missing }}
+          TIER: ${{ needs.windows-tier.outputs.tier }}
+          TIER_JOURNEYS: ${{ needs.windows-tier-journeys.result }}
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.ref }}
         run: |
+          if [ "$TIER" = reduced ]; then
+            if [ "$EVENT" = pull_request ] && [ "${BASE#integration/}" != "$BASE" ] \
+              && [ "$BUILD $TESTS $JOURNEYS" = "skipped skipped skipped" ] \
+              && [ "$CHECKS $RELEASE $TIER_JOURNEYS" = "success success success" ]; then
+              echo "Windows reduced tier passed at ${GITHUB_SHA}: the twelve test partitions were skipped by tier"
+              echo "Windows reduced tier at ${GITHUB_SHA}: the twelve test partitions were skipped by tier. This is not full Windows evidence; the push to the line runs them." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::error::the reduced Windows tier accepts only the skipped build, partitions and partition journeys on a pull request into an integration line; event=${EVENT} base=${BASE} checks=${CHECKS} build=${BUILD} tests=${TESTS} journeys=${JOURNEYS} release journey=${RELEASE} tier journeys=${TIER_JOURNEYS}"
+            exit 1
+          fi
+          if [ "$TIER_JOURNEYS" != skipped ]; then
+            echo "::error::the reduced tier's journey job concluded ${TIER_JOURNEYS} outside the reduced tier"
+            exit 1
+          fi
           if [ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ] \
             && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "Windows passed on pull request run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSED}, which tested this exact tree"
@@ -1538,6 +1817,16 @@ jobs:
       # new suppression takes effect once its own pull request lands.
       # osv-scanner runs with --no-ignore, so a .gitignore the change edits
       # cannot hide a lockfile from the audit.
+      #
+      # A project that records audit exceptions in its own reviewed register
+      # commits .codeflow/audit-exceptions.sh. When the trusted commit holds
+      # it, the scan reports JSON and, if it finds advisories, the step lists
+      # them in a file, exports the trusted commit's files to a folder outside
+      # the checkout and runs the hook there with bash. The hook prints the
+      # findings it accepts, one per line, unchanged; the step passes only when
+      # every finding is accepted, and a hook that fails or prints nothing
+      # accepts nothing. The hook and the files it reads are the trusted
+      # commit's, so a pull request cannot accept its own findings.
       - name: dependency audit (osv-scanner)
         env:
           TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
@@ -1597,6 +1886,23 @@ jobs:
                   out.write(data)
               print(f"osv-scanner suppressions from trusted commit: {shown}")
           ' "$TRUSTED_SHA"
+          # The project exception hook counts only when the trusted commit
+          # holds it as a regular file.
+          hook=.codeflow/audit-exceptions.sh
+          if ! entry=$(git ls-tree "$TRUSTED_SHA" -- "$hook"); then
+            echo "::error::cannot read the tree of the trusted commit ${TRUSTED_SHA}; failing closed"
+            exit 1
+          fi
+          hook_mode=${entry%% *}
+          case $hook_mode in
+            '') ;;
+            100644|100755) ;;
+            *) echo "::error::${hook} on trusted commit ${TRUSTED_SHA} is not a regular file; failing closed"
+               exit 1 ;;
+          esac
+          if [ -z "$hook_mode" ] && { [ -e "$hook" ] || [ -L "$hook" ]; }; then
+            echo "::notice::this change holds ${hook}, but the trusted commit does not; it takes effect once the change lands."
+          fi
           if [ "$sr" = "block" ] || [ "$da" = "block" ]; then
             level=block
           elif [ "$sr" = "off" ] && [ "$da" = "off" ]; then
@@ -1615,10 +1921,62 @@ jobs:
           printf '%s  %s\n' "$OSV_SHA256" "$tool/osv-scanner" | sha256sum -c -
           chmod +x "$tool/osv-scanner"
 
+          # With the project exception hook the scan reports JSON on stdout and
+          # its log on stderr; without it the run is unchanged. osv-scanner
+          # exits 1 for advisories even when it logged an error, such as a
+          # lockfile it could not read, and it sends every log level to stderr
+          # when the format is JSON. --verbosity error keeps only the errors,
+          # so any text on stderr means the scan may be incomplete and the hook
+          # is not run.
           set +e
-          out=$("$tool/osv-scanner" scan -r --no-ignore . 2>&1); rc=$?
+          if [ -n "$hook_mode" ]; then
+            out=$("$tool/osv-scanner" scan -r --no-ignore --verbosity error --format json . 2>"$tool/scan.err"); rc=$?
+            diag=$(cat "$tool/scan.err")
+          else
+            out=$("$tool/osv-scanner" scan -r --no-ignore . 2>&1); rc=$?
+            diag=$out
+          fi
           set -e
-          printf '%s\n' "$out"
+          printf '%s\n' "$diag"
+
+          # The project exception hook judges the findings of a scan that
+          # found advisories (exit 1) and nothing else. It runs from the
+          # trusted commit's files, outside the checkout.
+          accepted_all=
+          if [ "$rc" -eq 1 ] && [ -n "$hook_mode" ]; then
+            findings="$tool/findings.tsv"
+            accepted="$tool/accepted.tsv"
+            valid="$tool/valid.tsv"
+            tree="$tool/trusted-tree"
+            : >"$findings"; : >"$accepted"; : >"$valid"
+            # One line per finding: id, package, version, ecosystem, lockfile
+            # and the advisory's aliases, tab separated. @tsv escapes tabs and
+            # line breaks, so a name the change chooses stays on its line.
+            if printf '%s' "$out" | jq -r --arg here "$PWD/" '.results[]? | .source.path as $s | .packages[]? | .package as $p | .vulnerabilities[]? | [.id, $p.name, $p.version, $p.ecosystem, ($s | ltrimstr($here)), ((.aliases // []) | join(","))] | @tsv' >"$tool/findings.raw"; then
+              LC_ALL=C sort -u "$tool/findings.raw" >"$findings"
+            fi
+            if [ -s "$tool/scan.err" ]; then
+              echo "::error::osv-scanner logged errors, so its scan may be incomplete; no project exception applies"
+            elif [ ! -s "$findings" ]; then
+              echo "::error::osv-scanner reported advisories but none could be listed from its JSON report; no project exception applies"
+            elif ! { mkdir "$tree" && git archive -o "$tool/trusted.tar" "$TRUSTED_SHA" && tar -xf "$tool/trusted.tar" -C "$tree" && [ -f "$tree/$hook" ]; }; then
+              echo "::error::cannot export ${hook} and the project files from the trusted commit ${TRUSTED_SHA}; no project exception applies"
+            else
+              hook_rc=0
+              (cd "$tree" && CODEFLOW_AUDIT_FINDINGS="$findings" CODEFLOW_TRUSTED_SHA="$TRUSTED_SHA" CODEFLOW_TRUSTED_ROOT="$tree" bash "$hook" </dev/null) >"$accepted" || hook_rc=$?
+              if [ "$hook_rc" -ne 0 ]; then
+                echo "::error::the project exception hook ${hook} failed (exit ${hook_rc}); it accepts nothing"
+                : >"$accepted"
+              fi
+              grep -Fxf "$findings" "$accepted" >"$valid" || true
+              sed 's/^/accepted by the project exception hook: /' "$valid"
+              grep -vFxf "$valid" "$findings" >"$tool/remaining.tsv" || true
+              sed 's/^/not accepted: /' "$tool/remaining.tsv"
+              if [ ! -s "$tool/remaining.tsv" ]; then
+                accepted_all=1
+              fi
+            fi
+          fi
 
           # The verdict comes from osv-scanner's exit status (0 no advisories,
           # 1 advisories, 127 error, 128 no package sources), never from its
@@ -1626,10 +1984,17 @@ jobs:
           # also reports a file it could not extract is a scan error.
           if [ "$rc" -eq 0 ]; then
             echo "No known advisories."
-          elif [ "$rc" -eq 128 ] && ! printf '%s' "$out" | grep -qi 'error during extraction'; then
+          elif [ "$rc" -eq 128 ] && ! printf '%s\n%s' "$diag" "$out" | grep -qi 'error during extraction'; then
             echo "No scannable manifests found — nothing to audit."
+          elif [ -n "$accepted_all" ]; then
+            echo "Every dependency advisory is accepted by the project exception hook ${hook}."
           elif [ "$level" = "block" ]; then
-            echo "::error::dependency advisories found (or scan error, exit ${rc}) and policy git.security_review=${sr} / git.dep_audit=${da} (either is block) — failing. Triage, or record a justified suppression in an osv-scanner.toml beside the lockfile."
+            if [ -n "$hook_mode" ]; then
+              advice="accept a justified finding through the project exception hook ${hook}"
+            else
+              advice="record a justified suppression in an osv-scanner.toml beside the lockfile"
+            fi
+            echo "::error::dependency advisories found (or scan error, exit ${rc}) and policy git.security_review=${sr} / git.dep_audit=${da} (either is block) — failing. Triage, or ${advice}."
             exit 1
           else
             echo "::warning::dependency advisories found (or scan error, exit ${rc}); policy git.security_review=${sr} / git.dep_audit=${da} → reporting only. Harden either to block once triaged."

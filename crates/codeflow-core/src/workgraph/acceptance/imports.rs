@@ -809,6 +809,7 @@ fn verify_record_home(
                 tips: &[],
                 at: None,
                 own: &[],
+                replaced: None,
             },
         );
         match judged.criteria {
