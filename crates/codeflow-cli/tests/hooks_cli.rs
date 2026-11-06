@@ -6451,7 +6451,10 @@ fn push_set_never_prompts_and_bounds_the_destination_query() {
         .unwrap()
         .lines()
         .any(|line| line == "get"));
-    assert!(took < std::time::Duration::from_secs(10), "{took:?}: {err}");
+    // The destination answered, so no attempt waited out its timeout: the
+    // refusal is the authentication answer, never a "no answer" (TSK-1253:
+    // this was a 10 s wall-clock bound, which a loaded runner can pass).
+    assert!(!err.contains("no answer within"), "{took:?}: {err}");
     assert!(
         err.contains("cannot prove push inputs") && err.contains("remote authentication failed"),
         "{err}"
