@@ -16,7 +16,7 @@ run("npx", ["tsc", "--noEmit"]);
 checkBinaryAttributes();
 const tokenTests = (await readdir(join(repoRoot, "assets/base/agents/skills/cf-present/resources/design-system/source"))).filter(name => name.endsWith(".test.ts")).map(name => join(repoRoot, "assets/base/agents/skills/cf-present/resources/design-system/source", name));
 run("node", ["--test", ...tokenTests]);
-run("node", ["--test", "scripts/toolchain.test.mjs", "scripts/token-lint.test.mjs", "scripts/likeness.test.mjs", "scripts/codeflow-binary.test.mjs", "scripts/browser-close-bound.test.mjs", "scripts/export-stages.test.mjs", "scripts/export-paint.test.mjs", "scripts/export-capture.test.mjs"]);
+run("node", ["--test", "scripts/toolchain.test.mjs", "scripts/token-lint.test.mjs", "scripts/likeness.test.mjs", "scripts/codeflow-binary.test.mjs", "scripts/browser-close-bound.test.mjs", "scripts/atomic-write.test.mjs", "scripts/export-stages.test.mjs", "scripts/export-paint.test.mjs", "scripts/export-capture.test.mjs"]);
 await checkSelectorOffsets();
 await checkEntityLabelParity();
 await checkAnswerRuleParity();
