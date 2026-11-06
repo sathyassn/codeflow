@@ -1,0 +1,11 @@
+id = "TSK-1361"
+uid = "efcf8448-296b-4a63-87ba-dc1240ea2a25"
+kind = "TSK"
+title = "Code scanning stays clean on main after the 3.2.0 checkpoint"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-06T01:28:29Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
