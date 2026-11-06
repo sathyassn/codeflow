@@ -340,8 +340,8 @@ fn each_authority_check_is_concluded_from_its_verdict_job() {
     }
 }
 
-/// AC-1, Mode B: the last step of every verdict job (before its closing
-/// checkout assertion), and the authority job's step just before it
+/// AC-1, Mode B: the step of every verdict job just before its last read
+/// of the pull request, and the authority job's step just before it
 /// creates any check (TSK-1177 review nit: a refusal there leaves the
 /// `authority:` checks uncreated), is the same refusal over the trusted
 /// names the workflow declares.
@@ -363,11 +363,23 @@ fn every_policy_job_runs_the_same_refusal() {
                     .unwrap();
                 all[create - 1].clone()
             } else {
+                // The verdict job ends with the refusal, then the last read
+                // of the pull request (TSK-1040), each followed by the
+                // checkout assertion.
+                let n = all.len();
+                for at in [n - 1, n - 3] {
+                    assert_eq!(
+                        str_of(&all[at], "name"),
+                        "Assert the authority checkout",
+                        "{path} {id}"
+                    );
+                }
                 assert_eq!(
-                    str_of(all.last().unwrap(), "name"),
-                    "Assert the authority checkout"
+                    str_of(&all[n - 2], "name"),
+                    "the pull request is unchanged since it was judged",
+                    "{path} {id}"
                 );
-                all[all.len() - 2].clone()
+                all[n - 4].clone()
             };
             assert_eq!(str_of(&last, "name"), GUARD, "{path} {id}");
             assert_eq!(

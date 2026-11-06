@@ -30,15 +30,35 @@
 # in codeflow-registry.yml, so they create no check under a `trusted:` name,
 # not even a skipped one, which GitHub would count as passing.
 #
-# Runs share one concurrency group per pull request, so a newer event (a
-# push, then a body edit seconds later) cancels the run it supersedes. The
-# judging run reads the pull request's body from the API when it runs,
-# never from its event, so the newest body is judged whichever run survives.
+# Pull request runs share one concurrency group per pull request, and no
+# event cancels or replaces a run: `cancel-in-progress` is false and
+# `queue: max` keeps every pending run, so a push followed by a body edit
+# seconds later leaves both runs to finish and the push's required "commit
+# standards" check completed, never cancelled. (`cancel-in-progress: false`
+# alone is not enough: the default queue holds one pending run and cancels
+# it when a newer one arrives.) Limits: a group queues at most 100 runs, and
+# a run that arrives past that is cancelled, so the newest push fails closed
+# until the check is re-run; `queue` is a 2026 key that some linters reject
+# (actionlint releases up to 1.7.12), so ignore that message in the linter's
+# configuration rather than removing the key.
 #
-# Each verdict job ends by refusing another producer of a trusted name that
-# is on the head when the job ends: a check run of that name from another
-# workflow, event or app, or a commit status of a trusted or authority name
-# (Mode B). Mode B is a lower tier: it does not close forgery by a later
+# The event pins the head and the base commit: the job fetches both as data
+# and refuses a head that is not the event's. Only the body comes from the
+# API, read when the job runs, so a queued run can judge a newer body than
+# its event. The job's last read of the pull request, after the checks, fails
+# the run, with its own message, when the head, the base branch or the body
+# differs from what the run judged; the run queued by that change decides. It
+# fails closed when that read fails. A change made after that last read,
+# before the run ends, is judged by the run that change queued.
+# The body is logged as a sha256 digest, never as text: it is written to a
+# file in the runner's temp directory and handed to `codeflow ci` as a file,
+# never through `env:` or an argument, because the runner prints a step's
+# `env:` values in its log. Each run makes two API reads on the job's token.
+#
+# Each verdict job, just before its last read, refuses another producer of
+# a trusted name that is on the head at that moment: a check run of that
+# name from another workflow, event or app, or a commit status of a trusted
+# or authority name (Mode B). Mode B is a lower tier: it does not close forgery by a later
 # producer. GitHub takes the newest check run of a name, so a workflow that
 # runs after the verdict job, for example on an event this file does not
 # run on, can still satisfy a trusted: name pinned to GitHub Actions. Only
@@ -52,8 +72,9 @@
 # jobs build the authority's own source in place of the pinned release, and
 # a second verdict job, `trusted: release impact`, runs scripts/release.py
 # check-pr from the authority with the authority's binary, the pull request
-# body and its range as data. `codeflow update` keeps it as a user-modified
-# file.
+# body and its range as data. That job reads, logs and rechecks the body as the
+# commit standards job does, with its own two API reads. `codeflow update` keeps
+# it as a user-modified file.
 name: codeflow-policy
 
 on:
@@ -65,7 +86,8 @@ permissions:
 
 concurrency:
   group: ${{ format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) }}
-  cancel-in-progress: true
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   commit-lint:
@@ -193,11 +215,13 @@ jobs:
           fi
 
       # The body is read when the job runs, never taken from the event. An
-      # event carries the body as it was when the event fired, and the run
-      # that survives the concurrency group can belong to an older event (one
-      # delivered late, or a re-run), so only the current body is the newest.
-      # The text is written as a step output under a random delimiter and is
-      # never interpolated into a script.
+      # event carries the body as it was when the event fired, and a run can
+      # start long after that (one that waited in the queue, one delivered
+      # late, or a re-run), so only the current body is the newest.
+      # The text is written to a file in the runner's temp directory, never to
+      # a step output, an `env:` value or an argument, so it cannot reach the
+      # log. The path is fixed (`pr-body.md` in the runner's temp directory)
+      # and the step's only output is the file's sha256 digest.
       - name: Read the pull request's current body
         id: body
         if: github.event_name == 'pull_request_target'
@@ -209,12 +233,16 @@ jobs:
           curl -fsSL --retry 3 --max-time 60 \
             -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
             "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull.json"
-          delimiter="codeflow_body_$(openssl rand -hex 16)"
-          {
-            echo "text<<${delimiter}"
-            jq -r '.body // ""' "${RUNNER_TEMP}/pull.json"
-            echo "${delimiter}"
-          } >> "$GITHUB_OUTPUT"
+          jq -r '.body // ""' "${RUNNER_TEMP}/pull.json" > "${RUNNER_TEMP}/pr-body.md"
+          # The body is logged as a digest of the file's bytes, never as
+          # text; the last read compares a new digest with this one.
+          if command -v sha256sum >/dev/null 2>&1; then
+            digest=$(sha256sum "${RUNNER_TEMP}/pr-body.md" | cut -d ' ' -f 1)
+          else
+            digest=$(shasum -a 256 "${RUNNER_TEMP}/pr-body.md" | cut -d ' ' -f 1)
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "pull request body judged: sha256 ${digest}"
 
       - name: Assert the authority checkout
         env:
@@ -267,8 +295,9 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
-      # The PR body reaches `codeflow ci` through `env:`, never interpolated
-      # into the script, so an untrusted body cannot inject shell. The
+      # The PR body reaches `codeflow ci` as a file, never interpolated into
+      # the script and never through `env:` (the runner logs those values), so
+      # an untrusted body can neither inject shell nor reach the log. The
       # policy and the work-record baseline are the authority's
       # (--policy-from, --baseline-from), never the target's.
       - name: codeflow ci (commit + branch + PR-body standards)
@@ -277,7 +306,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}
+          BODY_FILE: ${{ runner.temp }}/pr-body.md
           ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
           CODEFLOW_HOST_RULES: ${{ runner.temp }}/codeflow-host-rules.json
         # The authority must carry its policy: judging with defaults where it
@@ -287,7 +316,7 @@ jobs:
             echo "::error::the default branch at ${AUTHORITY_SHA} has no .codeflow/policy.json, so nothing is judged; land the policy on the default branch first (the adoption pull request that adds it fails this check by design)"
             exit 1
           fi
-          codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR" --policy-from "$AUTHORITY_SHA" --baseline-from "$AUTHORITY_SHA"
+          codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR" --policy-from "$AUTHORITY_SHA" --baseline-from "$AUTHORITY_SHA" --pr-body-file "$BODY_FILE"
 
       - name: Assert the authority checkout
         env:
@@ -370,8 +399,8 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
-      # The last check refuses another producer of a trusted name that is on
-      # the head when it runs (ADR-0091, Mode B). It reads once: a producer
+      # Just before the last read, this step refuses another producer of a
+      # trusted name that is on the head when it runs (ADR-0091, Mode B). It reads once: a producer
       # that runs later is not seen, and GitHub takes the newest check run
       # of a name, so Mode B does not close forgery by a later producer;
       # only Mode A, the App authority, does.
@@ -458,6 +487,55 @@ jobs:
             exit 1
           fi
           echo "no other producer of a trusted or authority name is on ${HEAD_SHA} now; Mode B does not see one that runs later"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      # The last read. The run judged the head, base branch and body it read
+      # above; if any changed while it ran, this run fails with its own
+      # message and the run queued by that change decides. The base commit is
+      # not compared, since a push to the base branch fires no pull request
+      # event. A failed or unreadable read fails the run, never passes it.
+      - name: the pull request is unchanged since it was judged
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          JUDGED_HEAD: ${{ github.event.pull_request.head.sha }}
+          JUDGED_BASE: ${{ github.event.pull_request.base.ref }}
+          JUDGED_DIGEST: ${{ steps.body.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if ! curl -fsSL --retry 3 --max-time 60 \
+            -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull-after.json"; then
+            echo "::error::cannot read the pull request again, so this run cannot show that what it judged is current; it fails closed; re-run the check"; exit 1
+          fi
+          if ! head=$(jq -er '.head.sha' "${RUNNER_TEMP}/pull-after.json") \
+            || ! base=$(jq -er '.base.ref' "${RUNNER_TEMP}/pull-after.json") \
+            || ! body=$(jq -r '.body // ""' "${RUNNER_TEMP}/pull-after.json" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d ' ' -f 1); then
+            echo "::error::the pull request read at the end of this run is unreadable, so this run fails closed; re-run the check"; exit 1
+          fi
+          if [ -z "$JUDGED_DIGEST" ]; then
+            echo "::error::this run recorded no body digest, so it cannot show that the body is unchanged; it fails closed; re-run the check"; exit 1
+          fi
+          if [ "$head" != "$JUDGED_HEAD" ]; then
+            echo "::error::the pull request head changed while this run judged it (judged ${JUDGED_HEAD}, now ${head}); the run queued by the new head decides"; exit 1
+          fi
+          if [ "$base" != "$JUDGED_BASE" ]; then
+            echo "::error::the pull request base branch changed while this run judged it (judged ${JUDGED_BASE}, now ${base}); the run queued by that change decides"; exit 1
+          fi
+          if [ "$body" != "$JUDGED_DIGEST" ]; then
+            echo "::error::the pull request body changed while this run judged it (judged sha256 ${JUDGED_DIGEST}, now ${body}); the run queued by that edit decides"; exit 1
+          fi
+          echo "the pull request head, base branch and body are unchanged since this run judged them"
 
       - name: Assert the authority checkout
         env:
@@ -614,11 +692,13 @@ jobs:
           fi
 
       # The body is read when the job runs, never taken from the event. An
-      # event carries the body as it was when the event fired, and the run
-      # that survives the concurrency group can belong to an older event (one
-      # delivered late, or a re-run), so only the current body is the newest.
-      # The text is written as a step output under a random delimiter and is
-      # never interpolated into a script.
+      # event carries the body as it was when the event fired, and a run can
+      # start long after that (one that waited in the queue, one delivered
+      # late, or a re-run), so only the current body is the newest.
+      # The text is written to a file in the runner's temp directory, never to
+      # a step output, an `env:` value or an argument, so it cannot reach the
+      # log. The path is fixed (`pr-body.md` in the runner's temp directory)
+      # and the step's only output is the file's sha256 digest.
       - name: Read the pull request's current body
         id: body
         if: github.event_name == 'pull_request_target'
@@ -630,12 +710,16 @@ jobs:
           curl -fsSL --retry 3 --max-time 60 \
             -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
             "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull.json"
-          delimiter="codeflow_body_$(openssl rand -hex 16)"
-          {
-            echo "text<<${delimiter}"
-            jq -r '.body // ""' "${RUNNER_TEMP}/pull.json"
-            echo "${delimiter}"
-          } >> "$GITHUB_OUTPUT"
+          jq -r '.body // ""' "${RUNNER_TEMP}/pull.json" > "${RUNNER_TEMP}/pr-body.md"
+          # The body is logged as a digest of the file's bytes, never as
+          # text; the last read compares a new digest with this one.
+          if command -v sha256sum >/dev/null 2>&1; then
+            digest=$(sha256sum "${RUNNER_TEMP}/pr-body.md" | cut -d ' ' -f 1)
+          else
+            digest=$(shasum -a 256 "${RUNNER_TEMP}/pr-body.md" | cut -d ' ' -f 1)
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "pull request body judged: sha256 ${digest}"
 
       - name: Assert the authority checkout
         env:
@@ -647,17 +731,20 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
+      # The PR body reaches the script as a file, never interpolated into the
+      # script and never through `env:` (the runner logs those values), so an
+      # untrusted body can neither inject shell nor reach the log.
       - name: Validate reviewed release intent
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
-          CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}
+          BODY_FILE: ${{ runner.temp }}/pr-body.md
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 -I scripts/release.py check-pr \
             --base "$BASE_SHA" --head "$HEAD_SHA" \
-            --target-ref "origin/$BASE_REF" --body-env CODEFLOW_PR_BODY \
+            --target-ref "origin/$BASE_REF" --body-file "$BODY_FILE" \
             --codeflow-bin target/release/codeflow
 
       - name: Assert the authority checkout
@@ -670,8 +757,8 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
-      # The last check refuses another producer of a trusted name that is on
-      # the head when it runs (ADR-0091, Mode B). It reads once: a producer
+      # Just before the last read, this step refuses another producer of a
+      # trusted name that is on the head when it runs (ADR-0091, Mode B). It reads once: a producer
       # that runs later is not seen, and GitHub takes the newest check run
       # of a name, so Mode B does not close forgery by a later producer;
       # only Mode A, the App authority, does.
@@ -758,6 +845,53 @@ jobs:
             exit 1
           fi
           echo "no other producer of a trusted or authority name is on ${HEAD_SHA} now; Mode B does not see one that runs later"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      # The last read, as in the commit standards job: this job read the body
+      # and judged the event's head and base branch, so it fails when any of
+      # them changed while it ran, and the run queued by that change decides.
+      - name: the pull request is unchanged since it was judged
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          JUDGED_HEAD: ${{ github.event.pull_request.head.sha }}
+          JUDGED_BASE: ${{ github.event.pull_request.base.ref }}
+          JUDGED_DIGEST: ${{ steps.body.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if ! curl -fsSL --retry 3 --max-time 60 \
+            -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull-after.json"; then
+            echo "::error::cannot read the pull request again, so this run cannot show that what it judged is current; it fails closed; re-run the check"; exit 1
+          fi
+          if ! head=$(jq -er '.head.sha' "${RUNNER_TEMP}/pull-after.json") \
+            || ! base=$(jq -er '.base.ref' "${RUNNER_TEMP}/pull-after.json") \
+            || ! body=$(jq -r '.body // ""' "${RUNNER_TEMP}/pull-after.json" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d ' ' -f 1); then
+            echo "::error::the pull request read at the end of this run is unreadable, so this run fails closed; re-run the check"; exit 1
+          fi
+          if [ -z "$JUDGED_DIGEST" ]; then
+            echo "::error::this run recorded no body digest, so it cannot show that the body is unchanged; it fails closed; re-run the check"; exit 1
+          fi
+          if [ "$head" != "$JUDGED_HEAD" ]; then
+            echo "::error::the pull request head changed while this run judged it (judged ${JUDGED_HEAD}, now ${head}); the run queued by the new head decides"; exit 1
+          fi
+          if [ "$base" != "$JUDGED_BASE" ]; then
+            echo "::error::the pull request base branch changed while this run judged it (judged ${JUDGED_BASE}, now ${base}); the run queued by that change decides"; exit 1
+          fi
+          if [ "$body" != "$JUDGED_DIGEST" ]; then
+            echo "::error::the pull request body changed while this run judged it (judged sha256 ${JUDGED_DIGEST}, now ${body}); the run queued by that edit decides"; exit 1
+          fi
+          echo "the pull request head, base branch and body are unchanged since this run judged them"
 
       - name: Assert the authority checkout
         env:
