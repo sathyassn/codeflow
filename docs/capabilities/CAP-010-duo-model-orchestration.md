@@ -287,6 +287,13 @@ With tracking on, `codeflow ci` classifies every pull request as one of:
   anchor epic itself declares a `parent_line`, a declaring epic's task is
   refused, and once the anchor holds such a task the whole line refuses,
   its own epic's tasks included (TSK-1286)
+- a sync of the default branch into a line: `Task: EPC-NNN` naming the
+  epic of the integration line it targets, from a branch that carries no
+  task, when every commit beyond the line and the default branch's trusted
+  commit is a two-parent merge whose second parent is on that commit and
+  whose tree is the clean merge of its parents; its criteria stay frozen,
+  it takes the default branch's version of records whose home is not the
+  line, and it never changes a record whose home is the line (TSK-1312)
 - an automation profile
 
 Related rules:
