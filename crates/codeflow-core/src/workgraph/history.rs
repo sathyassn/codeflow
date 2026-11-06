@@ -50,6 +50,7 @@ impl Drop for Judgment {
             super::acceptance::clear_import_cache();
             super::acceptance::clear_presence_cache();
             super::status_steps::clear_memo();
+            super::work_start::clear_parse_memo();
         }
     }
 }
@@ -66,6 +67,7 @@ pub(super) fn refresh(repo: &Repository) {
     super::acceptance::clear_import_cache();
     super::acceptance::clear_presence_cache();
     super::status_steps::clear_memo();
+    super::work_start::clear_parse_memo();
     JUDGMENT.with(|memo| {
         if let Some(memo) = memo.borrow_mut().as_mut() {
             memo.remove(repo.path());

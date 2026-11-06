@@ -600,7 +600,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // commit subjects (message text) searched for a task id
     (
         "codeflow-core/src/validate/mod.rs",
-        "landed_pull_requests",
+        "merge_sources",
         "from_utf8_lossy",
         1,
         "grammar:merge-subject",
@@ -4561,7 +4561,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Git log emits one merge subject per LF record; subjects are metadata with newline already collapsed by Git, and branch extraction uses literal markers.
     (
         "crates/codeflow-core/src/validate/mod.rs",
-        "landed_pull_requests",
+        "merge_sources",
         "lines",
         1,
         "framing:validate-mod-landed-pull-requests-records",
@@ -6774,7 +6774,7 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
     (
         "validate-mod-landed-pull-requests-records",
         "crates/codeflow-core/src/validate/mod.rs",
-        "landed_pull_requests",
+        "merge_sources",
     ),
     (
         "validate-portal-lookups-hook-stage-names-records",
