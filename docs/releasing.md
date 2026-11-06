@@ -253,30 +253,44 @@ an operator decision; agents and Coordinators never rule on it.
 - The decision does not mention the release gates. ADR-0097 reads them as
   outside the full suites, so they keep their current events, which the
   daily run is not one of.
-- A required check passes when its suite is not selected for the event,
-  and an event or base the workflow cannot read runs the full suites.
+- A suite that is not selected for an event never counts as a pass of a
+  required check, since GitHub treats a skipped required check as a
+  success. Once the placement lands, the `integration/**` ruleset is to
+  require only the short-check names, and `codeflow gates` and `windows`
+  stay required on `main`, where they run; that ruleset change waits for
+  the operator's decision. An event or base the workflow cannot read runs
+  the full suites.
 - A line pull request's verdicts come from the short checks only, so they
   are never a landing batch's proof. Once TSK-1351 and the landing-rule ADR
   land, a batch lands on a line as one push, and that line push is the
   batch's hosted proof.
 - A newer push to a line cancels the older push run on that line, so the
-  newest tip's run is the evidence (TSK-1313). A run in progress for a push
+  newest tip's run is the evidence (TSK-1313, PR 583; the `concurrency`
+  block in `codeflow-ci.yml`). A run in progress for a push
   to `main`, a scheduled run or a dispatched run is never cancelled; GitHub
   may still replace a pending run in the same group.
 - Local full gates keep coverage instrumentation whatever the event.
 
 The workflows apply the table as follows:
 
-- With the reduced tier switch in `codeflow-ci.yml` (`REDUCED_TIER`) on,
-  line pull requests run the Linux build and lint parts only. The coverage
-  shards and their report skip, and the line push runs them.
-- The same switch keeps every Windows build, test and journey job off line
-  pull requests: the Windows build, the partitions, the Windows checks, the
-  release journey and the journey job skip.
-- The daily run runs the Linux build, lint, tests and coverage as well as
-  every Windows job.
-- The daily workflows start from `main` and run `main` and each active
-  integration line at that line's own ref.
+- Today a ready line pull request still runs the Linux gate parts
+  (`codeflow build` and the `present` and `checks` parts,
+  `codeflow-ci.yml:250`, `:273`, `:284-292`) and the two coverage shards
+  and their report (`:584`, `:592`, `:667`). The reduced Windows tier
+  (`REDUCED_TIER`, `:755-789`) skips the Windows test build, the twelve
+  partitions and `windows-journeys` (`:812`, `:877`, `:1010`), and still runs the
+  Windows checks, the release journey and `windows-tier-journeys` (`:946`,
+  `:993`, `:1064`). The `windows` verdict accepts exactly that result
+  (`:1132-1138`).
+- After TSK-1321 (PR 620) lands, a line pull request runs only the short
+  checks. The coverage shards and every Windows job leave it, and the line
+  push runs them.
+- The daily run is Windows only today (`windows-daily.yml:1-9`). The Linux
+  build, lint, tests and coverage join it when TSK-1321 (PR 620) lands
+  (CI/CD coherence review of 2026-11-06, Grok's finding 8).
+- The daily workflows (`windows-daily.yml`) are already on `main`. They
+  start from it and run `main` and each active integration line at that
+  line's own ref.
 
 ## Technical
 

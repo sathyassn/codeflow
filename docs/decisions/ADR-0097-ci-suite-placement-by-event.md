@@ -36,10 +36,15 @@ lint checks, the policy check, commit standards, secret scan and release
 impact. The Linux tests, Linux coverage and every Windows job leave line
 pull requests. Line pushes, which are the landing batch's hosted proof,
 pull requests into `main`, and the daily and weekly runs keep the full Linux
-and Windows suites, coverage included. A required check passes when its
-suite is not selected for the event, through the reserved "not selected"
-result (TSK-1259, TSK-1190), and an event or base the workflow cannot read
-fails closed to the full run. Building this placement, the daily Linux
+and Windows suites, coverage included. A suite that is not selected for
+an event never counts as a pass of a required check: GitHub treats a
+skipped required check as a success, so a skip cannot stand in for one,
+and TSK-1259 AC-9 holds that a not-selected result never satisfies a
+required check. Once this placement lands, the `integration/**` ruleset is
+to require only the short-check names, and `codeflow gates` and `windows`
+stay required on `main`, where they run. That ruleset change waits for the
+operator's decision. An event or base the workflow cannot read fails
+closed to the full run. Building this placement, the daily Linux
 suites included, is assigned to TSK-1321 (PR 620); coord/ci amends that
 task's criteria to it.
 
@@ -69,6 +74,11 @@ How to read the table:
   event, line pull requests included, as a secure-default reading: the job
   has no event condition today (`codeflow-ci.yml`, `security-review`), and
   removing a security check needs its own operator decision.
+- A "no" cell means the suite does not run for that event. It never means
+  the suite's required check reports a pass. Which checks each base
+  requires follows the ruleset change in the Decision, which waits for the
+  operator's decision. A "not selected" result exists only as a reported,
+  non-evidence outcome where TSK-1259 and TSK-1190 define it.
 - On this repository the Linux tests run inside the coverage shards, so the
   Linux tests and Linux coverage columns move together.
 - The decision does not mention the release gates (the benchmark, the
@@ -77,9 +87,10 @@ How to read the table:
   current events, which the daily run is not one of; moving them is an
   operator decision.
 
-TSK-1321 brings the workflows to this table, and
-`scripts/test_ci_placement.py` fails when the table, the maintainer page's
-table or the workflows differ. The daily workflows start from `main`
+TSK-1321 brings the workflows to this table. Its AC-12 adds a parity
+check, `scripts/test_ci_placement.py`, that fails when the table, the
+maintainer page's table or the workflows differ; that script is not on
+`main` or the EPC-022 line until TSK-1321 (PR 620) lands. The daily workflows start from `main`
 (`windows-daily.yml`, the `sources` job), and PR 597 (TSK-1314, merge
 `df718e015`) moved each line's daily run under that line's own ref.
 
@@ -92,8 +103,11 @@ table or the workflows differ. The daily workflows start from `main`
   The operator accepted fixing such a failure forward on the line until the
   candidate push task lands.
 - Today a line push cannot reuse a line pull request's verdict, since that
-  run skipped the suites the push needs, so every line push runs the full
-  suites (`scripts/ci-reuse.py`). TSK-1026 AC-7 and AC-12 plan per-job reuse
+  run ran the reduced Windows tier and a reduced-tier run is refused as
+  proof of the partitions, so every line push runs the full suites
+  (`scripts/ci-reuse.py:319-323`). The line pull request still runs the
+  Linux gate parts and the coverage shards today; `docs/releasing.md`,
+  "Where CI suites run", separates today from after TSK-1321. TSK-1026 AC-7 and AC-12 plan per-job reuse
   on line pushes for jobs the pull request run ran and passed, which would
   change this.
 - Moving a suite between events is one recorded operator decision, added to
@@ -145,3 +159,19 @@ numbers move.
 
 None. The maintainer page for this placement is the "Where CI suites run"
 section of `docs/releasing.md`.
+
+## Note, 2026-11-06
+
+Amended 2026-11-06 before this record landed, from the CI/CD coherence
+result of 2026-11-06 (workspace
+`coordination/briefs/cicd-coherence-result-2026-11-06.md`, finding 3, and
+Grok's finding 9). The Decision said a required check passes when its
+suite is not selected; GitHub treats a skipped required check as a
+success, so that text is removed. The Decision and the reading of the
+table now say that a not-selected suite never passes a required check, and
+that the `integration/**` ruleset requiring only the short-check names,
+with `codeflow gates` and `windows` required on `main`, depends on the
+operator's decision 3 in that result. After the PR 631 review of
+2026-11-06 (Grok, finding 1), the Consequences bullet on line-push reuse
+gives the real reason a line push runs the full suites: the pull request
+ran the reduced Windows tier, which `scripts/ci-reuse.py` refuses as proof.
