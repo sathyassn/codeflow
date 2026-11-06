@@ -27,9 +27,30 @@ on:
     - cron: "37 5 * * 1"
   workflow_dispatch:
 
+# A newer push to an integration line cancels the older push run of that
+# line, running or pending (TSK-1313). Only the current tip's verdicts count
+# for the next landing, so an older tip's run is never that evidence. The
+# event is part of the group, so a dispatch on a line shares no group with
+# that line's pushes. Pull request runs, reruns included, keep one group per
+# ref and cancel as before. A push to main or master and every schedule or
+# dispatch run is never cancelled in progress and cancels nothing; GitHub may
+# still replace a pending run in the same group.
+# A push rerun (run_attempt above 1) gets a group of its own run id and
+# attempt and cancels nothing, so rerunning an old push cannot cancel or
+# replace a newer run.
+# Limits: GitHub does not promise that runs start in push order, so an older
+# tip's run that starts late can cancel the newest tip's run. Recovery: rerun
+# the newest tip's run. GitHub compares group names without regard to case,
+# so two integration lines whose names differ only in case would share a
+# group; line names must not form such a pair. `codeflow epic new
+# --integration` names a line `integration/EPC-NNN-<lower-case slug>`, so two
+# lines it makes never differ only in case, and
+# scripts/test_gate_contracts.py fails if the recorded lines form a pair.
+# A cancelled push run is never a reuse source: scripts/ci-reuse.py reads
+# only pull_request runs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ (github.event_name != 'push' || github.run_attempt == 1) && format('{0}-{1}-{2}', github.workflow, github.event_name, github.ref) || format('{0}-push-rerun-{1}-{2}', github.workflow, github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.run_attempt == 1 && startsWith(github.ref, 'refs/heads/integration/')) }}
 
 permissions:
   contents: read
