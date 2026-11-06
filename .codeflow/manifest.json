@@ -2843,13 +2843,13 @@
     ".github/workflows/codeflow-ci.yml": {
       "src": "ci/codeflow-ci.yml",
       "ownership": "managed",
-      "sha256": "d054eda771d53335f0e1bf7481ea75700afca511156390595f0ef96d1d59a271",
+      "sha256": "1d413dd1d1c29cd081fd918aa43e1b84ad5193681af44eb6bf5e0c1af1cb6d66",
       "exec": false
     },
     ".github/workflows/codeflow-policy.yml": {
       "src": "ci/codeflow-policy.yml",
       "ownership": "managed",
-      "sha256": "d8d1be8a897adbbf4bb82a97101feab8a761eec92ac9f3befbe7fc3784f24e8e",
+      "sha256": "d8554b75d18574f93e574e3fb766a98adc6ab7d17ba5483499382331dad7e98a",
       "exec": false
     },
     ".github/workflows/codeflow-registry.yml": {

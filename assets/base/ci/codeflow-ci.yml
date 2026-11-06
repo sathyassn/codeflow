@@ -389,10 +389,10 @@ jobs:
       # No step before this one runs code from the checkout: a step that
       # did could write GITHUB_ENV or GITHUB_PATH for this one, so
       # GITLEAKS_CONFIG and GITLEAKS_CONFIG_TOML here can only come from
-      # this workflow's own env. Keep it that way when you add steps. A
-      # workflow you customised before this protection may already run such
-      # a step; codeflow update keeps it and warns until you move it after
-      # this step or into another job.
+      # this workflow's own env. Keep it that way when you add steps. In
+      # codeflow-ci.yml, a workflow you customised before this protection
+      # may already run such a step; codeflow update keeps it and warns
+      # until you move it after this step or into another job.
       #
       # gitleaks' default git log leaves out what a merge itself adds, any
       # file whose type changes and any file git judges binary, so a secret
