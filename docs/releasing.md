@@ -249,14 +249,20 @@ an operator decision; agents and Coordinators never rule on it.
 - The decision does not mention the release gates. ADR-0097 reads them as
   outside the full suites, so they keep their current events, which the
   daily run is not one of.
-- A required check passes when its suite is not selected for the event,
-  and an event or base the workflow cannot read runs the full suites.
+- A suite that is not selected for an event never counts as a pass of a
+  required check, since GitHub treats a skipped required check as a
+  success. Once the placement lands, the `integration/**` ruleset is to
+  require only the short-check names, and `codeflow gates` and `windows`
+  stay required on `main`, where they run; that ruleset change waits for
+  the operator's decision. An event or base the workflow cannot read runs
+  the full suites.
 - A line pull request's verdicts come from the short checks only, so they
   are never a landing batch's proof. Once TSK-1351 and the landing-rule ADR
   land, a batch lands on a line as one push, and that line push is the
   batch's hosted proof.
 - A newer push to a line cancels the older push run on that line, so the
-  newest tip's run is the evidence (TSK-1313). A run in progress for a push
+  newest tip's run is the evidence (TSK-1313, PR 583; the `concurrency`
+  block in `codeflow-ci.yml`). A run in progress for a push
   to `main`, a scheduled run or a dispatched run is never cancelled; GitHub
   may still replace a pending run in the same group.
 - Local full gates keep coverage instrumentation whatever the event.
@@ -271,8 +277,9 @@ The workflows apply the table as follows:
   release journey and the journey job skip.
 - The daily run runs the Linux build, lint, tests and coverage as well as
   every Windows job.
-- The daily workflows start from `main` and run `main` and each active
-  integration line at that line's own ref.
+- The daily workflows (`windows-daily.yml`) are already on `main`. They
+  start from it and run `main` and each active integration line at that
+  line's own ref.
 
 ## Technical
 

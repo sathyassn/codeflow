@@ -36,10 +36,15 @@ lint checks, the policy check, commit standards, secret scan and release
 impact. The Linux tests, Linux coverage and every Windows job leave line
 pull requests. Line pushes, which are the landing batch's hosted proof,
 pull requests into `main`, and the daily and weekly runs keep the full Linux
-and Windows suites, coverage included. A required check passes when its
-suite is not selected for the event, through the reserved "not selected"
-result (TSK-1259, TSK-1190), and an event or base the workflow cannot read
-fails closed to the full run. Building this placement, the daily Linux
+and Windows suites, coverage included. A suite that is not selected for
+an event never counts as a pass of a required check: GitHub treats a
+skipped required check as a success, so a skip cannot stand in for one,
+and TSK-1259 AC-9 holds that a not-selected result never satisfies a
+required check. Once this placement lands, the `integration/**` ruleset is
+to require only the short-check names, and `codeflow gates` and `windows`
+stay required on `main`, where they run. That ruleset change waits for the
+operator's decision. An event or base the workflow cannot read fails
+closed to the full run. Building this placement, the daily Linux
 suites included, is assigned to TSK-1321 (PR 620); coord/ci amends that
 task's criteria to it.
 
@@ -69,6 +74,11 @@ How to read the table:
   event, line pull requests included, as a secure-default reading: the job
   has no event condition today (`codeflow-ci.yml`, `security-review`), and
   removing a security check needs its own operator decision.
+- A "no" cell means the suite does not run for that event. It never means
+  the suite's required check reports a pass. Which checks each base
+  requires follows the ruleset change in the Decision, which waits for the
+  operator's decision. A "not selected" result exists only as a reported,
+  non-evidence outcome where TSK-1259 and TSK-1190 define it.
 - On this repository the Linux tests run inside the coverage shards, so the
   Linux tests and Linux coverage columns move together.
 - The decision does not mention the release gates (the benchmark, the
@@ -145,3 +155,16 @@ numbers move.
 
 None. The maintainer page for this placement is the "Where CI suites run"
 section of `docs/releasing.md`.
+
+## Note, 2026-11-06
+
+Amended 2026-11-06 before this record landed, from the CI/CD coherence
+result of 2026-11-06 (workspace
+`coordination/briefs/cicd-coherence-result-2026-11-06.md`, finding 3, and
+Grok's finding 9). The Decision said a required check passes when its
+suite is not selected; GitHub treats a skipped required check as a
+success, so that text is removed. The Decision and the reading of the
+table now say that a not-selected suite never passes a required check, and
+that the `integration/**` ruleset requiring only the short-check names,
+with `codeflow gates` and `windows` required on `main`, depends on the
+operator's decision 3 in that result.
