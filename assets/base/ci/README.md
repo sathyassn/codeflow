@@ -232,7 +232,7 @@ it through the "ended before codeflow test ran" check.
 ## Timeouts and superseded runs
 
 A job with no `timeout-minutes` runs for up to GitHub's default six hours
-when a step stalls, and holds a runner while it does. The `history scan`, `trusted: secret scan` and
+when a step stalls, and holds a runner while it does. The `history scan`, `secret scan` and
 `security review` jobs stop after 30 minutes and the enforcing `commit
 standards` job after 20; a timed-out job fails, never passes. The `gates`
 job has no cap, because it runs your own suite, whose length only you know;
@@ -448,9 +448,9 @@ the base and waits for the fresh run first.
 It never writes a ruleset with another name, and an update never lowers an
 approval count, removes a rule or widens a bypass list; reducing a rule is
 an administrator's edit on the host. It refuses the checks rulesets until
-the default branch's `codeflow-policy.yml` declares the `trusted:` names,
+the default branch's `codeflow-policy.yml` declares the trusted verdicts,
 then the operator retires any older ruleset that requires the old names
-(`commit standards`, `secret scan`, `release impact`), which `doctor`
+(`commit standards`, `release impact`), which `doctor`
 names. The Mode A App and environment setup, the enablement order and the
 recovery window are in the policy reference's "Remote protection" section.
 
@@ -494,13 +494,18 @@ as extra steps when your stack warrants:
   change the scan. A change scans its own commits; a schedule scans the
   full history reachable from its resolved head.
   A wrapper can run `gitleaks detect --source . --redact --no-banner --exit-code 1 --log-opts "<base-sha>..<head-sha> --"` with resolved commit ids.
-  The `trusted: secret scan` job runs in `codeflow-policy.yml` on
+  The `secret scan` job runs in `codeflow-policy.yml` on
   `pull_request_target`, from the default branch's authority commit. It
   keeps that commit checked out and fetches the pull request as Git data.
   The head cannot replace its judge or supply its configuration. Push,
-  scheduled and manual scans run separately as `history scan`; the old
-  `secret scan` name has no producer. Required checks must migrate to
-  `trusted: secret scan` once the policy workflow reaches the default branch.
+  scheduled and manual scans run separately as `history scan`, and no
+  workflow a pull request can edit may carry the name `secret scan`: the
+  verdict jobs fail on a head-run job of that name. A rule that requires
+  `secret scan` keeps working. GitHub runs this job from the default branch,
+  so the pull request that first adds it has no `secret scan` check of its
+  own; where the check is required, an administrator merges that one pull
+  request with a bypass, or lifts the requirement for that merge, and the
+  default branch then goes into each integration line at once.
   Every exemption comes from the authority commit, or the pushed commit
   for a push scan. A new exemption takes effect once it lands there.
   The step leaves the checkout intact and gives gitleaks explicit copies

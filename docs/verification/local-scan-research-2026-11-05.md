@@ -90,7 +90,7 @@ implements. Checked on 2026-11-05 against gitleaks 8.30.1 and osv-scanner
 - A range holding a merge commit is refused on Windows, because the remerge
   header filter is a Unix shell wrapper.
 - The local secret scan follows `git.secret_scan`: it only warns at `warn`
-  and skips at `off` or `allow`, while the hosted `trusted: secret scan`
+  and skips at `off` or `allow`, while the hosted `secret scan`
   job always blocks. The
   local scan can be laxer than the hosted job, never stricter.
 - Parity with the hosted job is shown by tests on fixtures here. A hosted
