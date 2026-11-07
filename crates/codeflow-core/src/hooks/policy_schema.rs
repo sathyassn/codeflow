@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 84] = [
+pub const SCHEMA: [KeySpec; 85] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -1028,6 +1028,13 @@ pub const SCHEMA: [KeySpec; 84] = [
         valid: "an array of entry objects, each naming its `program`",
         purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
         notes: "There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value.",
+    },
+    KeySpec {
+        path: "security.monitor_extra_fields",
+        kind: KeyKind::StringList,
+        valid: "an array of input field names",
+        purpose: "Extra input fields a Claude Code `Monitor` tool call may carry beyond the built-in list (`command`, `description`, `timeout_ms`, `persistent`, `allowed_domains`, `ws`) (TSK-1058).",
+        notes: "Default empty. The `Monitor` tool runs shell text, so the guards refuse an input with a field they do not recognise as an unreadable hook payload that names the field. A harness update that adds a field is refused until the project owner lists it here; a CodeFlow release can add it to the built-in list. The list is read only from the policy published on the remote's default branch (plain remote-tracking refs, as `security.text_guard: relaxed` is), never from a working copy, a local branch or a repository with no remote, so a session cannot widen it. It only adds names: `command` is still judged, and a call must carry `command` or a `ws` socket watch. The shipped policy file does not list it, so an older binary never meets the key.",
     },
     // ---- guidance ----------------------------------------------------------
     KeySpec {

@@ -292,6 +292,19 @@ pub struct HookPayload {
     pub cwd: Option<PathBuf>,
 }
 
+/// The fields a `Monitor` call may carry: the Claude Code 2.1.317 tool
+/// schema, which allows no additional properties, plus `persistent`, which
+/// the shape record saw in the same build (TSK-1058). The project policy adds
+/// to this list with `security.monitor_extra_fields`.
+pub const MONITOR_FIELDS: &[&str] = &[
+    "command",
+    "description",
+    "timeout_ms",
+    "persistent",
+    "allowed_domains",
+    "ws",
+];
+
 /// `tool_input` for shell invocations.
 #[derive(Debug, Default, Deserialize)]
 pub struct ToolInput {
@@ -301,6 +314,13 @@ pub struct ToolInput {
     /// Code 2.1.312, TSK-397 design D Part B).
     #[serde(default, rename = "dangerouslyDisableSandbox")]
     pub dangerously_disable_sandbox: Option<serde_json::Value>,
+    /// A `Monitor` socket watch (`ws.url`), which carries no shell text.
+    #[serde(default)]
+    pub ws: Option<serde_json::Value>,
+    /// Every other field of the input, kept so the `Monitor` check can name
+    /// one it does not recognise (TSK-1058).
+    #[serde(flatten)]
+    pub other: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl ToolInput {
@@ -376,6 +396,49 @@ impl HookPayload {
         serde_json::from_value(value).map_err(|e| PayloadError::Malformed(e.to_string()))
     }
 
+    /// Whether this is a call to the `Monitor` tool.
+    #[must_use]
+    pub fn is_monitor(&self) -> bool {
+        self.tool_name == "Monitor"
+    }
+
+    /// Why this `Monitor` call's input is not a shape the judge recognises,
+    /// or `None` when it is (TSK-1058). The tool runs shell text, so an input
+    /// with neither a `command` string to judge nor a `ws` socket watch, or
+    /// with a field the judge does not know, cannot be shown to hold no shell
+    /// text: the caller refuses it. `extra_fields` are the names the project
+    /// policy adds to [`MONITOR_FIELDS`]. Other tools return `None`.
+    #[must_use]
+    pub fn monitor_problem(&self, extra_fields: &[String]) -> Option<String> {
+        if !self.is_monitor() {
+            return None;
+        }
+        let input = &self.tool_input;
+        let known = |name: &str| {
+            MONITOR_FIELDS.contains(&name) || extra_fields.iter().any(|extra| extra == name)
+        };
+        if let Some(unknown) = input.other.keys().find(|key| !known(key)) {
+            return Some(format!("the field `{unknown}`"));
+        }
+        let command = input.command.is_some();
+        match (command, input.ws.as_ref().filter(|ws| !ws.is_null())) {
+            (true, None) => None,
+            (false, Some(serde_json::Value::Object(socket))) => {
+                if socket.get("url").is_some_and(serde_json::Value::is_string) {
+                    socket
+                        .keys()
+                        .find(|key| !matches!(key.as_str(), "url" | "protocols"))
+                        .map(|extra| format!("the field `ws.{extra}`"))
+                } else {
+                    Some("a `ws` socket watch with no `url` string".to_string())
+                }
+            }
+            (false, Some(_)) => Some("a `ws` field that is not an object".to_string()),
+            (true, Some(_)) => Some("both `command` and `ws`".to_string()),
+            (false, None) => Some("neither a `command` string nor a `ws` socket watch".to_string()),
+        }
+    }
+
     /// The command to evaluate when this is a shell tool call.
     /// Claude exposes `PowerShell` as a distinct tool on native Windows; Codex
     /// currently sends the same command shape under its shell hook; Grok Build
@@ -384,7 +447,7 @@ impl HookPayload {
     pub fn shell_command(&self) -> Option<&str> {
         if matches!(
             self.tool_name.as_str(),
-            "Bash" | "PowerShell" | "run_terminal_command"
+            "Bash" | "PowerShell" | "Monitor" | "run_terminal_command"
         ) {
             self.tool_input.command.as_deref()
         } else {
@@ -15757,6 +15820,93 @@ mod tests {
         let p = HookPayload::parse(json).unwrap();
         assert_eq!(p.shell_command(), Some("git status"));
         assert_eq!(p.cwd.as_deref(), Some(std::path::Path::new("/repo")));
+    }
+
+    #[test]
+    fn test_payload_parse_monitor_command_and_socket_forms() {
+        let json = r#"{"tool_name":"Monitor","tool_input":{"command":"git status","description":"d","timeout_ms":1000,"persistent":false},"cwd":"/x"}"#;
+        let p = HookPayload::parse(json).unwrap();
+        assert_eq!(p.shell_command(), Some("git status"));
+        // A socket watch carries no shell text. The `ws.url` field is the
+        // one the Claude Code 2.1.317 tool schema reports.
+        let json = r#"{"tool_name":"Monitor","tool_input":{"ws":{"url":"wss://x.invalid/e","protocols":["v1"]},"description":"d","timeout_ms":1000},"cwd":"/x"}"#;
+        assert_eq!(HookPayload::parse(json).unwrap().shell_command(), None);
+        // Grok-style camelCase envelope.
+        let json = r#"{"toolName":"Monitor","toolInput":{"command":"git status"}}"#;
+        assert_eq!(
+            HookPayload::parse(json).unwrap().shell_command(),
+            Some("git status")
+        );
+    }
+
+    #[test]
+    fn test_monitor_problem_refuses_unrecognised_shapes() {
+        // A Monitor input the judge does not recognise cannot be shown to
+        // carry no shell text, so it is reported rather than passed.
+        let problem = |json: &str, extra: &[&str]| {
+            let extra: Vec<String> = extra.iter().map(|name| (*name).to_string()).collect();
+            HookPayload::parse(json).unwrap().monitor_problem(&extra)
+        };
+        for input in [
+            r"{}",
+            r#"{"description":"d"}"#,
+            r#"{"script":"sudo true"}"#,
+            r#"{"command":"git status","script":"sudo true"}"#,
+            r#"{"command":null}"#,
+            r#"{"command":"git status","ws":{"url":"wss://x.invalid/e"}}"#,
+            r#"{"ws":{}}"#,
+            r#"{"ws":{"url":1}}"#,
+            r#"{"ws":"wss://x.invalid/e"}"#,
+            r#"{"ws":{"url":"wss://x.invalid/e","command":"sudo true"}}"#,
+        ] {
+            let json = format!(r#"{{"tool_name":"Monitor","tool_input":{input},"cwd":"/x"}}"#);
+            assert!(problem(&json, &[]).is_some(), "should refuse: {input}");
+        }
+        let no_input = r#"{"tool_name":"Monitor","cwd":"/x"}"#;
+        assert!(problem(no_input, &[]).is_some());
+        let camel = r#"{"toolName":"Monitor","toolInput":{"script":"sudo true"}}"#;
+        assert!(problem(camel, &[]).is_some());
+        // Other shell tools keep their lenient reading.
+        let bash = r#"{"tool_name":"Bash","tool_input":{"command":"git status","extra":1}}"#;
+        assert!(problem(bash, &[]).is_none());
+    }
+
+    #[test]
+    fn test_monitor_problem_accepts_the_native_payload_shape() {
+        // The PreToolUse payload Claude Code 2.1.318 sent for a Monitor call,
+        // captured natively on 2026-11-03 (TSK-1058). The harness adds
+        // `timeout_ms` although the request did not ask for it.
+        let native = r#"{"session_id":"3dc9e626-7a06-4cb9-93db-72898a73e9b9","transcript_path":"/Users/sathya/.claude/projects/-private-tmp-tsk1058-capture/3dc9e626-7a06-4cb9-93db-72898a73e9b9.jsonl","cwd":"/private/tmp/tsk1058-capture","scratchpad_dir":"/private/tmp/claude-501/-private-tmp-tsk1058-capture/3dc9e626-7a06-4cb9-93db-72898a73e9b9/scratchpad","prompt_id":"308a16c7-ef1d-4fa5-8349-68ed41bbbb64","permission_mode":"bypassPermissions","effort":{"level":"medium"},"hook_event_name":"PreToolUse","tool_name":"Monitor","tool_input":{"description":"capture","timeout_ms":300000,"command":"echo tsk1058-marker"},"tool_use_id":"toolu_01Y2idKi6V2z2nQLNstyZkUk"}"#;
+        let payload = HookPayload::parse(native).unwrap();
+        assert_eq!(payload.shell_command(), Some("echo tsk1058-marker"));
+        assert_eq!(payload.monitor_problem(&[]), None);
+    }
+
+    #[test]
+    fn test_monitor_problem_names_the_field_and_honours_listed_extras() {
+        let json = r#"{"tool_name":"Monitor","tool_input":{"command":"git status","script":"x"}}"#;
+        let payload = HookPayload::parse(json).unwrap();
+        assert_eq!(
+            payload.monitor_problem(&[]).as_deref(),
+            Some("the field `script`")
+        );
+        // A listed name is accepted; another is still named.
+        let listed = vec!["script".to_string()];
+        assert_eq!(payload.monitor_problem(&listed), None);
+        let other = r#"{"tool_name":"Monitor","tool_input":{"command":"git status","script":"x","more":1}}"#;
+        assert_eq!(
+            HookPayload::parse(other)
+                .unwrap()
+                .monitor_problem(&listed)
+                .as_deref(),
+            Some("the field `more`")
+        );
+        // A list never replaces the need for a command or a socket watch.
+        let bare = r#"{"tool_name":"Monitor","tool_input":{"script":"x"}}"#;
+        assert!(HookPayload::parse(bare)
+            .unwrap()
+            .monitor_problem(&listed)
+            .is_some());
     }
 
     #[test]

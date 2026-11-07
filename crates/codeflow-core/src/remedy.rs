@@ -846,6 +846,10 @@ catalog! {
     /// does not pass the payload through unchanged.
     GUARD_PAYLOAD_MALFORMED = Step::Edit("{path}"),
         "make the hook entry that runs `codeflow hook {guard}` pass the harness payload on stdin unchanged, in {path}; the next tool call is then read";
+    /// A `Monitor` tool call whose input the guards do not recognise: an
+    /// unrecognised payload, not a bad command (TSK-1058).
+    GUARD_MONITOR_UNRECOGNISED = Step::Edit(".codeflow/policy.json"),
+        "the command was not judged, because this is an unrecognised payload rather than a bad command; if the harness added the field, the operator lists it in `security.monitor_extra_fields` in `.codeflow/policy.json` and lands that on the default branch (a session cannot widen it), or an update of codeflow whose built-in list has the field is installed";
     /// A session guard that reached no decision before its own deadline,
     /// so it refused rather than let the harness time it out (TSK-1082).
     GUARD_DEADLINE = Step::Codeflow("codeflow doctor"),

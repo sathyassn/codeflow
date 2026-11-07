@@ -255,6 +255,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("GUARD_PAYLOAD_MALFORMED", Runs),
     // The operator repairs or removes the input the guard waits on.
     ("GUARD_DEADLINE", Excluded(HumanAuthority)),
+    ("GUARD_MONITOR_UNRECOGNISED", Excluded(HumanAuthority)),
     ("SESSION_SUMMARY_UNWRITTEN", Runs),
     ("REFUSAL_UNRECORDED", Runs),
     ("REGISTRY_UNWRITTEN", Runs),

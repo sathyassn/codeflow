@@ -976,6 +976,11 @@ pub struct SecuritySection {
     /// operator's choice, applies the line's rule and verifies nothing.
     #[serde(skip_serializing_if = "TextGuard::is_strict")]
     pub text_guard: TextGuard,
+    /// Extra input fields a `Monitor` tool call may carry beyond the built-in
+    /// list (TSK-1058). The `Monitor` tool runs shell text, so the guards
+    /// refuse an input they do not recognise rather than pass it. Default
+    /// empty. Read from the landed policy, so a session cannot widen it.
+    pub monitor_extra_fields: Vec<String>,
 }
 
 /// The `security.text_guard` values.
@@ -1013,6 +1018,7 @@ impl Default for SecuritySection {
             sandbox_retry: None,
             sandbox_retry_allow: None,
             text_guard: TextGuard::Strict,
+            monitor_extra_fields: Vec::new(),
         }
     }
 }

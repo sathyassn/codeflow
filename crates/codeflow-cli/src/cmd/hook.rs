@@ -385,15 +385,25 @@ fn inspect_discard(
     codeflow_core::hooks::git_discard::inspect(cwd, query.target, query.intent)
 }
 
+/// Parse the git-guard payload, or print why it is refused. The error is the
+/// exit code the hook returns: a bad payload and an unrecognised `Monitor`
+/// payload both refuse before any command is judged.
+fn git_guard_payload(stdin: &str) -> Result<git_guard::HookPayload, i32> {
+    let payload = git_guard::HookPayload::parse(stdin).map_err(|e| {
+        let finding = payload_finding("git-guard", &e);
+        eprintln!("{}", finding.line("codeflow git-guard", "error"));
+        2
+    })?;
+    if monitor_refusal("git-guard", stdin, &mut std::io::stderr()) {
+        return Err(2);
+    }
+    Ok(payload)
+}
+
 fn git_guard(stdin: &str) -> i32 {
     let _facts = edit_guard::RepoFactsScope::enter();
-    let payload = match git_guard::HookPayload::parse(stdin) {
-        Ok(p) => p,
-        Err(e) => {
-            let finding = payload_finding("git-guard", &e);
-            eprintln!("{}", finding.line("codeflow git-guard", "error"));
-            return 2;
-        }
+    let Ok(payload) = git_guard_payload(stdin) else {
+        return 2;
     };
     let Some(command) = payload.shell_command() else {
         return 0; // not a supported shell tool call
@@ -574,6 +584,47 @@ fn payload_finding(guard: &str, error: &git_guard::PayloadError) -> codeflow_cor
     )
 }
 
+/// Refuse a `Monitor` call whose input the judge does not recognise
+/// (TSK-1058). The tool runs shell text, so an input that cannot be shown to
+/// hold none is refused whichever guard sees it. The extra field names come
+/// from the landed policy of the call's repository, and only when it is read
+/// from plain remote-tracking refs; when that policy cannot be read or comes
+/// from anywhere else, only the built-in list applies, the stricter reading.
+/// Returns whether it refused; a payload that does not parse is left to the
+/// guard's own refusal.
+fn monitor_refusal(guard: &str, stdin: &str, err: &mut dyn Write) -> bool {
+    let Ok(payload) = git_guard::HookPayload::parse(stdin) else {
+        return false;
+    };
+    if !payload.is_monitor() {
+        return false;
+    }
+    let extra_fields = payload
+        .cwd
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .and_then(|cwd| super::project_root(&cwd).ok())
+        .and_then(|root| codeflow_core::hooks::landed_policy::load(&root).ok())
+        // Widening is a relaxation, so it is honoured only from plain
+        // remote-tracking refs, as `security.text_guard: relaxed` is.
+        .filter(|authority| authority.remote_tracked && authority.tracking_doubt.is_none())
+        .map(|authority| authority.policy.security.monitor_extra_fields)
+        .unwrap_or_default();
+    let Some(problem) = payload.monitor_problem(&extra_fields) else {
+        return false;
+    };
+    let finding = codeflow_core::remedy::Finding::new(
+        format!("unrecognised Monitor payload, not a bad command: it carries {problem}; refusing"),
+        codeflow_core::remedy::GUARD_MONITOR_UNRECOGNISED.remedy(),
+    );
+    let _ = term_writeln!(
+        err,
+        "{}",
+        finding.line(&format!("codeflow {guard}"), "error")
+    );
+    true
+}
+
 /// Where each harness wires the guards.
 const HARNESS_HOOK_FILES: &str = "`.claude/settings.json`, `.codex/hooks.json` or `.grok/hooks/`";
 
@@ -657,6 +708,9 @@ fn exec_guard_answer(
 
 fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let _facts = edit_guard::RepoFactsScope::enter();
+    if monitor_refusal("exec-guard", stdin, err) {
+        return 2;
+    }
     let (payload, command) = match shell_call(stdin, err) {
         Ok(Some(call)) => call,
         Ok(None) => return 0,
