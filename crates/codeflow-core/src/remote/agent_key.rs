@@ -126,9 +126,10 @@ fn inherited(fixed: Option<&Inherited>) -> Inherited {
 
 /// Start a helper that sees a key or a token with an empty environment plus
 /// only the variables in `keep`. A variable that changes what the helper
-/// loads or reads (`PATH`, `DYLD_INSERT_LIBRARIES`, `LD_PRELOAD`,
-/// `LD_LIBRARY_PATH`, `OPENSSL_CONF`, `CURL_HOME`, `HOME`) never reaches it,
-/// and the helper itself is an absolute path, never found through `PATH`.
+/// loads, reads or trusts (`PATH`, `DYLD_INSERT_LIBRARIES`, `LD_PRELOAD`,
+/// `LD_LIBRARY_PATH`, `OPENSSL_CONF`, `CURL_HOME`, `HOME`, `SSL_CERT_FILE`,
+/// `CURL_CA_BUNDLE`) never reaches it, and the helper itself is an absolute
+/// path, never found through `PATH`.
 fn confine(command: &mut Command, inherited: &[(OsString, OsString)], keep: &[&str]) {
     command.env_clear();
     for (name, value) in inherited {
@@ -271,11 +272,7 @@ impl KeyStore for Keychain {
     fn load(&self, account: &str) -> Result<String, String> {
         let output = run(&mut self.find(account, true), None)?;
         if !output.status.success() {
-            return Err(format!(
-                "no agent App entry for {account} in {} ({})",
-                self.describe(),
-                helper_text(&output.stderr)
-            ));
+            return Err(keychain_load_failure(&output, account, &self.describe()));
         }
         let text = String::from_utf8(output.stdout)
             .map_err(|_| format!("the entry for {account} is not text"))?;
@@ -295,6 +292,20 @@ impl KeyStore for Keychain {
             .as_ref()
             .map_or_else(String::new, |path| format!(" {}", path.display()));
         format!("security delete-generic-password -s {AGENT_KEY_SERVICE} -a {account}{keychain}")
+    }
+}
+
+/// Why `security find-generic-password -w` gave no key. Only exit 44
+/// (errSecItemNotFound) means there is no entry, as in `exists`; any other
+/// status is a store failure, such as a locked keychain or a refused prompt.
+/// Standard output can hold the key, so it never reaches a message.
+#[cfg(any(target_os = "macos", test))]
+fn keychain_load_failure(output: &Output, account: &str, store: &str) -> String {
+    let detail = helper_text(&output.stderr);
+    if output.status.code() == Some(44) {
+        format!("no agent App entry for {account} in {store} ({detail})")
+    } else {
+        format!("cannot read {store} ({}): {detail}", output.status)
     }
 }
 
@@ -342,6 +353,32 @@ fn search_answer(output: &Output, store: &str) -> Result<bool, String> {
         Ok(false)
     } else {
         Err(unread())
+    }
+}
+
+/// Why `secret-tool lookup` gave no key. The lookup exits 1 for an error and
+/// for no entry alike, and gives no value and no error for an entry left
+/// locked (libsecret `on_lookup_unlocked`). So anything it wrote is the cause,
+/// and with nothing written `search` decides: only a search that finds
+/// nothing means there is no entry. Standard output can hold the key, so it
+/// never reaches a message.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn lookup_failure(
+    lookup: &Output,
+    search: Result<bool, String>,
+    account: &str,
+    store: &str,
+) -> String {
+    let detail = helper_text(&lookup.stderr);
+    if !detail.is_empty() {
+        return format!("cannot read {store} ({}): {detail}", lookup.status);
+    }
+    match search {
+        Ok(false) => format!("no agent App entry for {account} in {store}"),
+        Ok(true) => format!(
+            "{store} holds an entry for {account} but did not give its value; unlock the keyring and run this again"
+        ),
+        Err(why) => why,
     }
 }
 
@@ -414,10 +451,8 @@ impl KeyStore for SecretService {
             None,
         )?;
         if !output.status.success() || output.stdout.is_empty() {
-            return Err(format!(
-                "no agent App entry for {account} in {}",
-                self.describe()
-            ));
+            let search = self.exists(account);
+            return Err(lookup_failure(&output, search, account, &self.describe()));
         }
         String::from_utf8(output.stdout).map_err(|_| format!("the entry for {account} is not text"))
     }
@@ -540,11 +575,31 @@ pub trait AppHttp {
     ) -> Result<String, String>;
 }
 
+/// The variables curl may keep: only those that choose a proxy. A session
+/// behind a proxy, such as a sandboxed one, reaches GitHub through them.
+///
+/// The call to GitHub is HTTPS, so curl asks a proxy for a tunnel and runs TLS
+/// to GitHub through it, and the token in the headers never reaches the proxy.
+/// That holds only while curl's certificate trust is its own: a variable that
+/// changes it, such as `SSL_CERT_FILE` or `CURL_CA_BUNDLE`, would let a proxy
+/// answer as GitHub and read the token, so none may be added here.
+const CURL_PROXY_VARIABLES: [&str; 8] = [
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+];
+
 /// `/usr/bin/curl -q`, with the headers on standard input (`-H @-`). The
 /// program is never found through `PATH`; `-q` comes first, so no `.curlrc`
-/// is read, and curl runs with an empty environment, so no `CURL_HOME`,
-/// `HOME` or proxy variable can add a proxy or a trace that would record
-/// the App's JSON Web Token or the installation token.
+/// is read, and curl's environment holds only the proxy variables, so no
+/// `CURL_HOME` or `HOME` can add a trace that would record the App's JSON Web
+/// Token or the installation token, and nothing changes which certificates
+/// curl trusts.
 pub struct CurlHttp {
     inherited: Option<Inherited>,
 }
@@ -560,6 +615,17 @@ impl CurlHttp {
             return Err("/usr/bin/curl is not installed".to_string());
         }
         Ok(Self { inherited: None })
+    }
+
+    /// `/usr/bin/curl` in its confined environment, with no arguments yet.
+    fn program(&self) -> Command {
+        let mut command = Command::new("/usr/bin/curl");
+        confine(
+            &mut command,
+            &inherited(self.inherited.as_ref()),
+            &CURL_PROXY_VARIABLES,
+        );
+        command
     }
 }
 
@@ -580,8 +646,7 @@ impl AppHttp for CurlHttp {
         let headers = format!(
             "{authorization}Accept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\nUser-Agent: codeflow\n"
         );
-        let mut command = Command::new("/usr/bin/curl");
-        confine(&mut command, &inherited(self.inherited.as_ref()), &[]);
+        let mut command = self.program();
         command.args([
             "-q",
             "-sS",
@@ -611,6 +676,109 @@ impl AppHttp for CurlHttp {
                 &[bearer],
             ))
         }
+    }
+}
+
+/// What a failed [`AppHttp`] call shows about its cause.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CallFailure {
+    /// No answer came from GitHub: DNS, connection, proxy, TLS or a timeout.
+    Unreachable,
+    /// GitHub answered with this HTTP status.
+    Status(u16),
+    /// Anything else, which says nothing about GitHub.
+    Unclear,
+}
+
+/// The curl exit codes that mean no answer came from GitHub: a proxy or host
+/// not resolved (5, 6), no connection (7), a broken or empty exchange (16, 18,
+/// 52, 55, 56, 92), a timeout (28), too many redirects (47), TLS (35, 60) and
+/// a proxy handshake (97).
+const CURL_NO_ANSWER: [&str; 14] = [
+    "5", "6", "7", "16", "18", "28", "35", "47", "52", "55", "56", "60", "92", "97",
+];
+
+/// The cause of a failed call. `curl` prints its own line after the response
+/// body, so the last such line is the real answer, and a body that mentions a
+/// status or imitates curl does not count. A proxy that refuses a tunnel is
+/// exit 56, never exit 22, so its status does not read as GitHub's.
+pub(crate) fn call_failure(error: &str) -> CallFailure {
+    let Some(at) = error.rfind("curl: (") else {
+        return CallFailure::Unclear;
+    };
+    let Some((code, text)) = error[at + "curl: (".len()..].split_once(')') else {
+        return CallFailure::Unclear;
+    };
+    if code == "22" {
+        let status = text
+            .strip_prefix(" The requested URL returned error: ")
+            .unwrap_or_default();
+        let digits = status
+            .find(|next: char| !next.is_ascii_digit())
+            .unwrap_or(status.len());
+        match status[..digits].parse() {
+            Ok(status) if digits == 3 => CallFailure::Status(status),
+            _ => CallFailure::Unclear,
+        }
+    } else if CURL_NO_ANSWER.contains(&code) {
+        CallFailure::Unreachable
+    } else {
+        CallFailure::Unclear
+    }
+}
+
+/// A failed call by its cause, for a status with no meaning of its own to the
+/// caller. `unknown` says what the failure leaves open. Callers redact it.
+fn call_problem(error: &str, unknown: &str) -> String {
+    match call_failure(error) {
+        CallFailure::Unreachable => format!("cannot reach GitHub, so {unknown}: {error}"),
+        CallFailure::Status(401) => format!(
+            "GitHub rejected the request (check the key, the client id and this computer's clock), so {unknown}: {error}"
+        ),
+        CallFailure::Status(403) => format!("GitHub forbids this request, so {unknown}: {error}"),
+        CallFailure::Status(status @ 500..=599) => {
+            format!("GitHub failed with {status}, so {unknown}: {error}")
+        }
+        CallFailure::Status(status) => format!("GitHub answered {status}, so {unknown}: {error}"),
+        CallFailure::Unclear => format!("cannot tell why the request failed, so {unknown}: {error}"),
+    }
+}
+
+/// Why the installation lookup failed: only a 404 says the App is not
+/// installed.
+fn installation_problem(slug: &str, repository: &str, error: &str) -> String {
+    if call_failure(error) == CallFailure::Status(404) {
+        format!(
+            "the agent App {slug} has no installation on {repository} that GitHub shows: {error}"
+        )
+    } else {
+        call_problem(
+            error,
+            &format!("it is not known whether the agent App {slug} is installed on {repository}"),
+        )
+    }
+}
+
+/// Why the request for an installation token failed: only a 4xx from GitHub
+/// is a refusal.
+fn token_problem(error: &str) -> String {
+    match call_failure(error) {
+        CallFailure::Status(400..=499) => {
+            format!("GitHub refused the installation token: {error}")
+        }
+        _ => call_problem(error, "no installation token was made"),
+    }
+}
+
+/// Why `import_agent_key` could not prove a key. A 401 is GitHub rejecting the
+/// signed token, and a 404 is GitHub knowing no such App; anything else says
+/// nothing against the key.
+fn key_check_problem(error: &str) -> String {
+    match call_failure(error) {
+        CallFailure::Status(401 | 404) => {
+            format!("refused: GitHub did not accept this key for that client id: {error}")
+        }
+        _ => call_problem(error, "this key is not proved"),
     }
 }
 
@@ -740,7 +908,13 @@ pub(crate) fn committer_for_slug(slug: &str, http: &dyn AppHttp) -> Result<BotCo
     let name = format!("{slug}[bot]");
     let answer = http
         .call("GET", &format!("{API}/users/{slug}%5Bbot%5D"), "", None)
-        .map_err(|error| format!("GitHub does not show the bot user {name}: {error}"))?;
+        .map_err(|error| {
+            if call_failure(&error) == CallFailure::Status(404) {
+                format!("GitHub does not show the bot user {name}: {error}")
+            } else {
+                call_problem(&error, &format!("the bot user {name} cannot be confirmed"))
+            }
+        })?;
     let user: Value = serde_json::from_str(&answer)
         .map_err(|_| format!("GitHub's answer for the bot user {name} is not JSON"))?;
     let id = user.get("id").and_then(Value::as_u64).filter(|id| *id > 0);
@@ -940,18 +1114,25 @@ pub fn import_agent_key(
         ));
     }
     let pem = read_key_file(key_file)?;
-    let answer = app_as_itself(client_id, &pem, signer, http, now).map_err(|error| {
-        format!("refused: GitHub did not accept this key for that client id, or could not be reached: {error}; nothing stored")
-    })?;
+    let answer = app_as_itself(client_id, &pem, signer, http, now)
+        .map_err(|error| format!("{}; nothing stored", key_check_problem(&error)))?;
     let (app_id, slug, page) = confirmed_agent_app(&answer, repository)?;
     let jwt = signed_app_jwt(client_id, &pem, signer, now)
         .map_err(|error| redact(&error, &[pem.as_str()]))?;
     let secrets = [pem.as_str(), jwt.as_str()];
     let installation = http
-        .call("GET", &format!("{API}/repos/{repository}/installation"), &jwt, None)
+        .call(
+            "GET",
+            &format!("{API}/repos/{repository}/installation"),
+            &jwt,
+            None,
+        )
         .map_err(|error| {
             redact(
-                &format!("refused: the agent App {slug} has no installation on {repository} that GitHub shows: {error}; nothing stored"),
+                &format!(
+                    "{}; nothing stored",
+                    installation_problem(&slug, repository, &error)
+                ),
                 &secrets,
             )
         })?;
@@ -1011,7 +1192,8 @@ pub fn import_agent_key(
 /// # Errors
 ///
 /// When there is no entry, the key cannot sign, the App is not installed on
-/// the repository, or GitHub refuses.
+/// the repository, GitHub refuses or fails, or GitHub cannot be reached. The
+/// message names which.
 pub fn mint(
     store: &dyn KeyStore,
     signer: &dyn Signer,
@@ -1026,15 +1208,23 @@ pub fn mint(
     let jwt = app_jwt(&app, signer, now).map_err(|error| redact(&error, &[&app.pem]))?;
     let secrets = [app.pem.as_str(), jwt.as_str()];
     let installation = http
-        .call("GET", &format!("{API}/repos/{repository}/installation"), &jwt, None)
+        .call(
+            "GET",
+            &format!("{API}/repos/{repository}/installation"),
+            &jwt,
+            None,
+        )
         .map_err(|error| {
-            redact(
-                &format!(
-                    "the agent App {} has no installation on {repository} that GitHub shows: {error}; install it at https://github.com/apps/{}/installations/new",
-                    app.slug, app.slug
-                ),
-                &secrets,
-            )
+            let problem = installation_problem(&app.slug, repository, &error);
+            let problem = if call_failure(&error) == CallFailure::Status(404) {
+                format!(
+                    "{problem}; install it at https://github.com/apps/{}/installations/new",
+                    app.slug
+                )
+            } else {
+                problem
+            };
+            redact(&problem, &secrets)
         })?;
     let id = serde_json::from_str::<Value>(&installation)
         .ok()
@@ -1048,12 +1238,7 @@ pub fn mint(
             &jwt,
             Some(&body),
         )
-        .map_err(|error| {
-            redact(
-                &format!("GitHub refused the installation token: {error}"),
-                &secrets,
-            )
-        })?;
+        .map_err(|error| redact(&token_problem(&error), &secrets))?;
     let answer: Value = serde_json::from_str(&answer)
         .map_err(|_| "GitHub's installation token answer is not JSON".to_string())?;
     let token = answer
@@ -1269,7 +1454,10 @@ pub(crate) mod tests {
         let header = b64url(json!({"alg": "RS256", "typ": "JWT"}).to_string().as_bytes());
         assert!(!error.contains(&header), "{error}");
 
-        let refused = http(Ok(r#"{"id":77}"#), Err("403 nope"));
+        let refused = http(
+            Ok(r#"{"id":77}"#),
+            Err("POST failed: curl: (22) The requested URL returned error: 403"),
+        );
         let error = mint(
             &store,
             &FakeSigner(Ok(vec![9; 8])),
@@ -1462,10 +1650,14 @@ pub(crate) mod tests {
         assert!(!caught.exists(), "the PATH-prefixed openssl ran");
     }
 
-    /// Review F2: a `.curlrc` (in `HOME`, `CURL_HOME` or the XDG folder)
-    /// that sets a proxy and a trace, and proxy variables, do not reach the
-    /// call that carries the App's token. The control shows the same
-    /// environment does apply them to a plain curl.
+    /// Review F2: a `.curlrc` (in `HOME`, `CURL_HOME` or the XDG folder) that
+    /// sets a proxy and a trace does not reach the call that carries the
+    /// App's token; the control shows the same environment does apply it to a
+    /// plain curl. Of the environment, curl keeps exactly the proxy
+    /// variables: nothing that changes which certificates it trusts, what it
+    /// loads or what it reads. A proxy with its own certificate authority
+    /// therefore cannot read the call, and `a_proxy_gets_a_tunnel_and_no_token`
+    /// shows what one does see.
     #[cfg(unix)]
     #[test]
     fn curl_applies_no_curlrc_proxy_or_trace() {
@@ -1482,13 +1674,11 @@ pub(crate) mod tests {
         );
         std::fs::write(home.path().join(".curlrc"), &rc).unwrap();
         std::fs::write(home.path().join("curlrc"), &rc).unwrap();
-        let proxy = Path::new("http://127.0.0.1:9");
-        let inherited = variables(&[
+        let elsewhere = home.path().join("elsewhere");
+        let mut inherited = variables(&[
             ("HOME", home.path()),
             ("CURL_HOME", home.path()),
             ("XDG_CONFIG_HOME", home.path()),
-            ("http_proxy", proxy),
-            ("ALL_PROXY", proxy),
         ]);
         let control = Command::new("/usr/bin/curl")
             .env_clear()
@@ -1500,6 +1690,46 @@ pub(crate) mod tests {
         assert!(!control.status.success());
         assert!(trace.exists(), "the control curl did not read the curlrc");
         std::fs::remove_file(&trace).unwrap();
+
+        for name in [
+            "CURL_CA_BUNDLE",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "NODE_EXTRA_CA_CERTS",
+            "REQUESTS_CA_BUNDLE",
+            "PATH",
+            "OPENSSL_CONF",
+            "SSLKEYLOGFILE",
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+        ] {
+            inherited.extend(variables(&[(name, &elsewhere)]));
+        }
+        for name in CURL_PROXY_VARIABLES {
+            inherited.extend(variables(&[(name, Path::new("http://127.0.0.1:9"))]));
+        }
+        let kept = |inherited: Inherited| {
+            let http = CurlHttp {
+                inherited: Some(inherited),
+            };
+            let mut names: Vec<_> = http
+                .program()
+                .get_envs()
+                .filter(|(_, value)| value.is_some())
+                .map(|(name, _)| name.to_string_lossy().to_string())
+                .collect();
+            names.sort();
+            names
+        };
+        let mut wanted = CURL_PROXY_VARIABLES.map(str::to_string).to_vec();
+        wanted.sort();
+        assert_eq!(kept(inherited.clone()), wanted);
+
+        // With the proxy variables set aside, the same call goes straight to
+        // the listener: the `.curlrc` proxy is not applied, and neither is
+        // its trace.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = std::thread::spawn(move || {
@@ -1510,6 +1740,7 @@ pub(crate) mod tests {
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
                 .unwrap();
         });
+        inherited.retain(|(name, _)| !CURL_PROXY_VARIABLES.iter().any(|proxy| name == proxy));
         let http = CurlHttp {
             inherited: Some(inherited),
         };
@@ -1524,6 +1755,95 @@ pub(crate) mod tests {
         server.join().unwrap();
         assert_eq!(answer, "ok");
         assert!(!trace.exists(), "curl applied the curlrc trace");
+    }
+
+    /// What a proxy gets from the real curl, by a local listener standing in
+    /// for one. It is asked for a tunnel, with no token in that request, and
+    /// the next bytes are the start of TLS, so the token never crosses in the
+    /// clear. A proxy that refuses the tunnel is a network failure, even when
+    /// its status is one GitHub could have sent. The host is `.invalid` and
+    /// the listener gives up, so a curl that ignored the proxy reaches no one
+    /// and fails this test without hanging.
+    #[cfg(unix)]
+    #[test]
+    fn a_proxy_gets_a_tunnel_and_no_token() {
+        use std::io::{Read as _, Write as _};
+        if CurlHttp::discover().is_err() {
+            eprintln!("/usr/bin/curl not installed; skipped");
+            return;
+        }
+        let through = |answer: &'static [u8]| {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            listener.set_nonblocking(true).unwrap();
+            let server = std::thread::spawn(move || {
+                let give_up = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(_) if std::time::Instant::now() > give_up => {
+                            return (Vec::new(), Vec::new());
+                        }
+                        Err(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                let mut seen = Vec::new();
+                let mut chunk = [0_u8; 4096];
+                while !seen.windows(4).any(|end| end == b"\r\n\r\n") {
+                    let read = stream.read(&mut chunk).unwrap();
+                    assert!(read > 0, "the request ended early");
+                    seen.extend_from_slice(&chunk[..read]);
+                }
+                stream.write_all(answer).unwrap();
+                // After a tunnel opens, curl speaks first.
+                let read = stream.read(&mut chunk).unwrap_or(0);
+                (seen, chunk[..read].to_vec())
+            });
+            let proxy = format!("http://127.0.0.1:{port}");
+            let http = CurlHttp {
+                inherited: Some(variables(&[("HTTPS_PROXY", Path::new(&proxy))])),
+            };
+            let error = http
+                .call(
+                    "GET",
+                    "https://github.invalid/app",
+                    "jwt-not-for-a-proxy",
+                    None,
+                )
+                .unwrap_err();
+            let (request, tunnel) = server.join().unwrap();
+            (String::from_utf8_lossy(&request).to_string(), tunnel, error)
+        };
+
+        let (request, tunnel, error) = through(b"HTTP/1.1 200 Connection Established\r\n\r\n");
+        assert!(
+            request.starts_with("CONNECT github.invalid:443 "),
+            "{request}"
+        );
+        assert!(!request.contains("jwt-not-for-a-proxy"), "{request}");
+        assert!(
+            !request.to_lowercase().contains("authorization"),
+            "{request}"
+        );
+        assert_eq!(
+            tunnel.first(),
+            Some(&0x16),
+            "not a TLS handshake: {tunnel:?}"
+        );
+        let text = String::from_utf8_lossy(&tunnel);
+        assert!(!text.contains("jwt-not-for-a-proxy"), "{text}");
+        assert_eq!(call_failure(&error), CallFailure::Unreachable, "{error}");
+
+        for answer in [
+            &b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"[..],
+            &b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"[..],
+        ] {
+            let (request, tunnel, error) = through(answer);
+            assert!(!request.contains("jwt-not-for-a-proxy"), "{request}");
+            assert!(tunnel.is_empty(), "{tunnel:?}");
+            assert_eq!(call_failure(&error), CallFailure::Unreachable, "{error}");
+        }
     }
 
     /// Answers by path; a path it does not know is a test failure. Each
@@ -1839,7 +2159,13 @@ pub(crate) mod tests {
             (routes(Ok(&events), installed), "events"),
             (routes(Ok(&slug), installed), "Odd Slug"),
             (routes(Ok(&no_id), installed), "nothing stored"),
-            (routes(Ok(&good), Err("404")), "no installation on o/r"),
+            (
+                routes(
+                    Ok(&good),
+                    Err("curl: (22) The requested URL returned error: 404"),
+                ),
+                "no installation on o/r",
+            ),
             (routes(Ok(&good), Ok("{}")), "has no id"),
         ];
         for (http, named) in cases {
@@ -1920,13 +2246,311 @@ pub(crate) mod tests {
     }
 
     /// A real exit status and real output, from a shell standing in for
-    /// `secret-tool`, which this host does not have.
+    /// `secret-tool`, which this host does not have, or for `security`,
+    /// which no test runs.
     #[cfg(unix)]
     fn stub_tool(script: &str) -> Output {
         Command::new("/bin/sh")
             .args(["-c", script])
             .output()
             .unwrap()
+    }
+
+    /// What curl writes when it never gets an answer from GitHub, whatever
+    /// the cause, and each is the network's fault: a proxy's own 403 is not
+    /// GitHub's.
+    const NO_ANSWER: [&str; 5] = [
+        "GET failed: curl: (6) Could not resolve host: api.github.com",
+        "GET failed: curl: (7) Failed to connect to api.github.com port 443",
+        "GET failed: curl: (28) Operation timed out after 30002 milliseconds",
+        "GET failed: curl: (35) TLS connect error",
+        "GET failed: curl: (56) CONNECT tunnel failed, response 403",
+    ];
+
+    fn github_said(status: &str) -> String {
+        format!(
+            r#"GET failed: {{"message":"Not Found"}}curl: (22) The requested URL returned error: {status}"#
+        )
+    }
+
+    /// Only curl's own last line decides, on every route: GitHub's answer
+    /// comes before it and can say anything.
+    #[test]
+    fn a_failed_call_is_read_from_curls_own_line() {
+        for text in NO_ANSWER {
+            assert_eq!(call_failure(text), CallFailure::Unreachable, "{text}");
+        }
+        assert_eq!(call_failure(&github_said("404")), CallFailure::Status(404));
+        assert_eq!(
+            call_failure(&github_said("404 Not Found")),
+            CallFailure::Status(404)
+        );
+        assert_eq!(call_failure(&github_said("502")), CallFailure::Status(502));
+        for text in [
+            github_said("4040"),
+            github_said("40"),
+            github_said(""),
+            "404".to_string(),
+            "GET failed: Could not resolve host".to_string(),
+            "cannot run /usr/bin/curl: no such file".to_string(),
+            "curl: (x) odd".to_string(),
+            // curl's own trouble, not the network's.
+            "curl: (3) URL rejected: Bad hostname".to_string(),
+            "curl: (23) Failure writing output to destination".to_string(),
+        ] {
+            assert_eq!(call_failure(&text), CallFailure::Unclear, "{text}");
+        }
+        // A body that imitates curl comes before the real line.
+        assert_eq!(
+            call_failure(
+                "GET failed: curl: (22) The requested URL returned error: 404curl: (28) timed out"
+            ),
+            CallFailure::Unreachable
+        );
+    }
+
+    /// The real curl's words for each class, from a local listener and a
+    /// closed port: the classes above are read from what it prints.
+    #[cfg(unix)]
+    #[test]
+    fn the_real_curl_failures_keep_their_class() {
+        use std::io::{Read as _, Write as _};
+        if CurlHttp::discover().is_err() {
+            eprintln!("/usr/bin/curl not installed; skipped");
+            return;
+        }
+        let http = CurlHttp {
+            inherited: Some(Vec::new()),
+        };
+        for status in [401_u16, 403, 404, 422, 500, 503] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request);
+                let body = r#"{"message":"returned error: 404"}"#;
+                let answer = format!(
+                    "HTTP/1.1 {status} Whatever\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(answer.as_bytes()).unwrap();
+            });
+            let error = http
+                .call("GET", &format!("http://127.0.0.1:{port}/app"), "b", None)
+                .unwrap_err();
+            server.join().unwrap();
+            assert_eq!(call_failure(&error), CallFailure::Status(status), "{error}");
+        }
+        let closed = http
+            .call("GET", "http://127.0.0.1:1/app", "b", None)
+            .unwrap_err();
+        assert_eq!(call_failure(&closed), CallFailure::Unreachable, "{closed}");
+        let unknown = http
+            .call("GET", "http://no-such-host.invalid/app", "b", None)
+            .unwrap_err();
+        assert_eq!(
+            call_failure(&unknown),
+            CallFailure::Unreachable,
+            "{unknown}"
+        );
+    }
+
+    fn mint_with(http: &FakeHttp) -> String {
+        mint(&stored(), &signs(), http, "o/r", 1_000_000).unwrap_err()
+    }
+
+    /// The installation lookup, which `mint` and an import share: only a 404
+    /// says the App is not installed. Each other class names its own cause.
+    fn lookup_cases() -> Vec<(String, &'static str)> {
+        let mut cases: Vec<_> = NO_ANSWER
+            .iter()
+            .map(|text| ((*text).to_string(), "cannot reach GitHub"))
+            .collect();
+        cases.extend([
+            (github_said("401"), "rejected the request"),
+            (github_said("403"), "forbids"),
+            (github_said("500"), "GitHub failed"),
+            // The body says "Not Found"; the status is what GitHub answered.
+            (github_said("503"), "GitHub failed"),
+            (github_said("422"), "answered 422"),
+            ("an odd failure".to_string(), "cannot tell why"),
+        ]);
+        cases
+    }
+
+    #[test]
+    fn mint_says_no_installation_only_for_a_404() {
+        for (error, named) in lookup_cases() {
+            let shown = mint_with(&http(Err(&error), Ok("{}")));
+            assert!(shown.contains(named), "{error}: {shown}");
+            assert!(!shown.contains("has no installation"), "{error}: {shown}");
+            assert!(!shown.contains("installations/new"), "{error}: {shown}");
+            assert!(shown.contains("not known whether"), "{error}: {shown}");
+        }
+        let shown = mint_with(&http(Err(&github_said("404")), Ok("{}")));
+        assert!(
+            shown.contains("has no installation on o/r")
+                && shown.contains("apps/codeflow-agent-r/installations/new"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn mint_calls_only_a_github_4xx_a_refusal() {
+        let installed = Ok(r#"{"id":77}"#);
+        for status in ["403", "404", "422"] {
+            let shown = mint_with(&http(installed, Err(&github_said(status))));
+            assert!(
+                shown.contains("GitHub refused the installation token"),
+                "{shown}"
+            );
+        }
+        for (error, named) in NO_ANSWER
+            .iter()
+            .map(|text| ((*text).to_string(), "cannot reach GitHub"))
+            .chain([
+                (github_said("500"), "GitHub failed"),
+                (github_said("503"), "GitHub failed"),
+                ("an odd failure".to_string(), "no installation token"),
+            ])
+        {
+            let shown = mint_with(&http(installed, Err(&error)));
+            assert!(shown.contains(named), "{error}: {shown}");
+            assert!(!shown.contains("refused"), "{error}: {shown}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn import_says_no_installation_only_for_a_404_and_stores_nothing() {
+        let (_dir, path) = key_file();
+        let app = app_answer(&json!({}));
+        let routes = |error: &str| Routes::new(&[("/app", Ok(&app)), (INSTALLATION, Err(error))]);
+        for (error, named) in lookup_cases() {
+            let store = MemoryStore::default();
+            let shown = import(&store, &routes(&error), &signs(), &path).unwrap_err();
+            assert!(shown.contains(named), "{error}: {shown}");
+            assert!(!shown.contains("has no installation"), "{error}: {shown}");
+            assert!(shown.ends_with("nothing stored"), "{error}: {shown}");
+            assert!(store.entries.borrow().is_empty(), "{error}");
+            assert!(!shown.contains("secretkeymaterial"), "{shown}");
+        }
+    }
+
+    /// The check of the key itself: the class comes from the inner error, so
+    /// a network failure says nothing against the key, and a 401 says the key
+    /// was rejected.
+    #[cfg(unix)]
+    #[test]
+    fn import_takes_the_key_checks_class_from_the_failure() {
+        let (_dir, path) = key_file();
+        let rejected = "did not accept this key";
+        let cases = NO_ANSWER
+            .iter()
+            .map(|text| ((*text).to_string(), "cannot reach GitHub"))
+            .chain([
+                (github_said("401"), rejected),
+                (github_said("404"), rejected),
+                (github_said("403"), "forbids"),
+                (github_said("500"), "GitHub failed"),
+                ("an odd failure".to_string(), "cannot tell why"),
+            ]);
+        for (error, named) in cases {
+            let store = MemoryStore::default();
+            let http = Routes::new(&[("/app", Err(&error))]);
+            let shown = import(&store, &http, &signs(), &path).unwrap_err();
+            assert!(shown.contains(named), "{error}: {shown}");
+            assert!(shown.ends_with("nothing stored"), "{error}: {shown}");
+            assert!(!shown.contains("or could not be reached"), "{shown}");
+            if named != rejected {
+                assert!(!shown.contains(rejected), "{error}: {shown}");
+            }
+            assert!(store.entries.borrow().is_empty(), "{error}");
+        }
+    }
+
+    /// The public read of the bot user: only a 404 says GitHub does not show
+    /// it.
+    #[test]
+    fn a_bot_user_read_says_missing_only_for_a_404() {
+        let read = |error: &str| {
+            let http = Routes::new(&[(USER_PATH, Err(error))]);
+            committer_for_slug("codeflow-agent-r", &http).unwrap_err()
+        };
+        let missing = read(&github_said("404"));
+        assert!(missing.contains("does not show the bot user"), "{missing}");
+        let cases = NO_ANSWER
+            .iter()
+            .map(|text| ((*text).to_string(), "cannot reach GitHub"))
+            .chain([
+                (github_said("403"), "forbids"),
+                (github_said("502"), "GitHub failed"),
+            ]);
+        for (error, named) in cases {
+            let shown = read(&error);
+            assert!(shown.contains(named), "{error}: {shown}");
+            assert!(!shown.contains("does not show"), "{error}: {shown}");
+        }
+    }
+
+    /// `security` exits 44 for no such entry, as [`KeyStore::exists`] reads
+    /// it. Any other status, such as a locked keychain or a refused prompt,
+    /// is a store failure with its cause.
+    #[cfg(unix)]
+    #[test]
+    fn a_keychain_read_proves_absence_only_by_exit_44() {
+        let failure =
+            |script: &str| keychain_load_failure(&stub_tool(script), "o/r", "the keychain");
+        let absent = failure("printf 'item not found\\n' >&2; exit 44");
+        assert!(absent.contains("no agent App entry for o/r"), "{absent}");
+        for script in [
+            "printf 'User interaction is not allowed.\\n' >&2; exit 36",
+            "printf 'keychain cannot be found\\n' >&2; exit 1",
+            "exit 51",
+            "kill -9 $$",
+        ] {
+            let shown = failure(script);
+            assert!(
+                shown.contains("cannot read the keychain"),
+                "{script}: {shown}"
+            );
+            assert!(!shown.contains("no agent App entry"), "{script}: {shown}");
+        }
+        assert!(failure("printf 'not allowed\\n' >&2; exit 36").contains("not allowed"));
+        // Standard output can hold the key, and it never reaches a message.
+        let shown = failure("printf 'hunter2\\n'; exit 36");
+        assert!(!shown.contains("hunter2"), "{shown}");
+    }
+
+    /// `secret-tool lookup` exits 1 for an error and for no entry alike, and
+    /// gives no value and no error for an entry left locked, so the search
+    /// decides when the lookup itself names no cause.
+    #[cfg(unix)]
+    #[test]
+    fn a_store_read_says_missing_only_when_the_search_finds_nothing() {
+        let failure = |script: &str, search: Result<bool, String>| {
+            lookup_failure(&stub_tool(script), search, "o/r", "the store")
+        };
+        for script in ["exit 1", "exit 0"] {
+            let absent = failure(script, Ok(false));
+            assert!(absent.contains("no agent App entry for o/r"), "{absent}");
+            let locked = failure(script, Ok(true));
+            assert!(locked.contains("holds an entry for o/r"), "{locked}");
+            assert!(locked.contains("unlock"), "{locked}");
+            assert!(!locked.contains("no agent App entry"), "{locked}");
+            let unread = failure(script, Err("cannot read the store: bus".to_string()));
+            assert_eq!(unread, "cannot read the store: bus");
+        }
+        let bus = "printf 'secret-tool: Cannot autolaunch D-Bus\\n' >&2; exit 1";
+        for search in [Ok(false), Ok(true), Err("the search failed".to_string())] {
+            let shown = failure(bus, search);
+            assert!(shown.contains("cannot read the store"), "{shown}");
+            assert!(shown.contains("Cannot autolaunch D-Bus"), "{shown}");
+            assert!(!shown.contains("no agent App entry"), "{shown}");
+        }
+        let shown = failure("printf 'hunter2\\n'; exit 1", Ok(false));
+        assert!(!shown.contains("hunter2"), "{shown}");
     }
 
     /// `secret-tool search` exits 0 for an answer and 1 for an error

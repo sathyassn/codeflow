@@ -24,8 +24,8 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use super::agent_key::{
-    app_as_itself, committer_for_slug, redact, signed_app_jwt, AgentApp, AppHttp, BotCommitter,
-    KeyStore, Signer, API_ROOT,
+    app_as_itself, call_failure, committer_for_slug, redact, signed_app_jwt, AgentApp, AppHttp,
+    BotCommitter, CallFailure, KeyStore, Signer, API_ROOT,
 };
 use super::status_is_404;
 
@@ -384,17 +384,6 @@ pub fn valid_repository(repository: &str) -> bool {
 
 fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or_default().trim()
-}
-
-/// Whether a failure of [`AppHttp`] is an HTTP 404. `curl` prints its own
-/// line after the response body, so the last such line is the real answer,
-/// and a body that holds "404" under another status does not count.
-fn curl_status_is_404(error: &str) -> bool {
-    error.rfind("curl: (").is_some_and(|at| {
-        error[at..]
-            .strip_prefix("curl: (22) The requested URL returned error: 404")
-            .is_some_and(|rest| !rest.starts_with(|next: char| next.is_ascii_digit()))
-    })
 }
 
 fn forbidden(error: &str) -> bool {
@@ -868,7 +857,7 @@ fn hook_problems(auth: &AppAuth<'_>, target: &Target, client_id: &str, pem: &str
                 None => vec!["a webhook configuration GitHub did not describe".to_string()],
             }
         }
-        Err(error) if curl_status_is_404(&error) => Vec::new(),
+        Err(error) if call_failure(&error) == CallFailure::Status(404) => Vec::new(),
         Err(error) => vec![format!(
             "a webhook that can be checked ({})",
             first_line(&redact(&error, &secrets))
@@ -1172,12 +1161,24 @@ fn harness_lines(committer: &BotCommitter) -> Vec<String> {
 }
 
 /// Report the committer lines of the App `slug`. A bot user GitHub does not
-/// show yet is said so; the run neither guesses the values nor stops.
+/// show yet is said so, and a call that got no such answer says its own cause;
+/// the run neither guesses the values nor stops.
 fn report_committer(auth: &AppAuth<'_>, slug: &str, report: &mut SetupReport) {
     match committer_for_slug(slug, auth.http) {
         Ok(committer) => report.lines.extend(harness_lines(&committer)),
-        Err(_) => report.lines.push(format!(
-            "committer lines: not printed, because GitHub does not show {slug}[bot] yet; install the App and run `codeflow remote setup-apps` again"
+        Err(why)
+            if matches!(
+                call_failure(&why),
+                CallFailure::Status(404) | CallFailure::Unclear
+            ) =>
+        {
+            report.lines.push(format!(
+                "committer lines: not printed, because GitHub does not show {slug}[bot] yet; install the App and run `codeflow remote setup-apps` again"
+            ));
+        }
+        Err(why) => report.lines.push(format!(
+            "committer lines: not printed: {}; run `codeflow remote setup-apps` again",
+            first_line(&why)
         )),
     }
 }
@@ -2801,6 +2802,35 @@ mod tests {
                 "{shown}"
             );
             assert!(!shown.contains("GIT_COMMITTER"), "{shown}");
+        }
+    }
+
+    /// A failure that says nothing about the bot user is not reported as a
+    /// bot user GitHub does not show, and no one is told to install the App.
+    #[test]
+    fn a_bot_user_github_did_not_answer_for_is_not_called_missing() {
+        for (error, named) in [
+            (
+                "GET failed: curl: (6) Could not resolve host: api.github.com",
+                "cannot reach GitHub",
+            ),
+            (
+                "GET failed: curl: (22) The requested URL returned error: 502",
+                "GitHub failed",
+            ),
+        ] {
+            let report = run_hook(
+                &fresh_host(),
+                &mut Clicks::default(),
+                &MemoryStore::default(),
+                &HookHttp::bot(Err(error.to_string())),
+            );
+            let shown = report.render().into_string();
+            assert_eq!(report.failure, None, "{shown}");
+            assert!(shown.contains("committer lines: not printed"), "{shown}");
+            assert!(shown.contains(named), "{shown}");
+            assert!(!shown.contains("does not show"), "{shown}");
+            assert!(!shown.contains("install the App and run"), "{shown}");
         }
     }
 

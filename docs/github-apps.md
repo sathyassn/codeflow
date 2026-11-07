@@ -302,7 +302,8 @@ terminal, in a clone of the repository. Before it stores anything, it signs a
 token with the key and asks GitHub, as the App, which App this is. The key is
 refused, and nothing is stored, when:
 
-- GitHub does not accept the key for that Client ID;
+- GitHub does not accept the key for that Client ID, or cannot be reached or
+  fails, in which case the message says which and the key is not judged;
 - the App's owner differs from the repository's owner, or its permissions or
   events differ from the agent App's manifest;
 - the App is not installed on this repository;

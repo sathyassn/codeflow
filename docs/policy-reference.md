@@ -1329,9 +1329,14 @@ only that token. The key never reaches a file or a process argument list,
 and the command's errors are cleaned of the key. The helpers that see the
 key or a token run from fixed paths, `/usr/bin/openssl`, `/usr/bin/curl`
 and `/usr/bin/secret-tool`, never through `PATH`, and with an empty
-environment, so no `OPENSSL_CONF`, preloaded library, proxy variable or
-`.curlrc` applies to them (curl also gets `-q` first). A network that needs
-a proxy to reach `api.github.com` is not supported yet. The agent App is
+environment, so no `OPENSSL_CONF`, preloaded library or `.curlrc` applies to
+them (curl also gets `-q` first). curl keeps only the proxy variables
+(`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY` and their lower-case
+forms), so a network or sandbox that needs a proxy to reach `api.github.com`
+works. Its certificate trust does not change: no variable such as
+`SSL_CERT_FILE` reaches it, so the proxy carries a TLS tunnel to GitHub and
+never sees the token. A proxy that must read that traffic with its own
+certificate authority is not supported. The agent App is
 optional: nothing in `codeflow doctor`, the hooks, the policy or `codeflow ci`
 requires it or its key, and the [GitHub Apps guide](github-apps.md) gives the
 three levels a computer can sit at.
