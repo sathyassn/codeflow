@@ -528,7 +528,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Only the stderr of a failed `git remote get-url --push` is shown in the refusal; the exit status decides, and the push URLs on stdout are decoded strictly.
     (
         "codeflow-core/src/remote.rs",
-        "origin_repository",
+        "origin_on",
         "from_utf8_lossy",
         1,
         "display",
@@ -1863,7 +1863,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Trims the stderr of a failed `git remote get-url --push` only to show it in the refusal; the exit status decides.
     (
         "crates/codeflow-core/src/remote.rs",
-        "origin_repository",
+        "origin_on",
         "trim",
         1,
         "display",

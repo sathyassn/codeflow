@@ -3566,7 +3566,7 @@ esac
         let expected = input.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = sender.send(run_gh(Path::new("cat"), &repo, &[], Some(&input)));
+            let _ = sender.send(run_gh(Path::new("cat"), &repo, None, &[], Some(&input)));
         });
         let out = receiver
             .recv_timeout(std::time::Duration::from_secs(60))
@@ -4799,13 +4799,16 @@ esac
         wait_until_executable(&shim);
         let policy = write_policy(dir.path(), r#"["main"]"#);
         let plan = ProtectionPlan::from_policy_file(&policy).unwrap();
+        // The readiness probe runs the stub once; only the provider's calls
+        // count.
         let calls = dir.path().join("calls");
+        let _ = std::fs::remove_file(&calls);
 
         let report = GithubProvider::with_gh(&shim, dir.path())
             .preview(&plan)
             .render();
         let seen = std::fs::read_to_string(&calls).unwrap();
-        assert!(seen.lines().count() > 2, "{seen}\n{report}");
+        assert!(seen.lines().count() > 2, "{seen}\n{report:?}");
         assert!(
             seen.lines()
                 .all(|line| line.starts_with("ghe.example.invalid ")),
@@ -4815,7 +4818,7 @@ esac
             seen.contains("repo view ghe.example.invalid/o/r --json"),
             "{seen}"
         );
-        assert!(!report.contains("the host was not read"), "{report}");
+        assert!(!report.contains("the host was not read"), "{report:?}");
 
         std::fs::write(dir.path().join("logged-out"), "").unwrap();
         std::fs::remove_file(&calls).unwrap();
@@ -4824,7 +4827,7 @@ esac
             .render();
         assert!(
             report.contains("gh has no working login for ghe.example.invalid"),
-            "{report}"
+            "{report:?}"
         );
         assert_eq!(
             std::fs::read_to_string(&calls).unwrap(),

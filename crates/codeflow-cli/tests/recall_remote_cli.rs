@@ -430,6 +430,9 @@ fn remote_protect_degrades_legibly_on_free_plan_403() {
     fs::write(
         &gh,
         "#!/bin/sh\n\
+         if [ \"$1\" = \"auth\" ]; then\n\
+           exit 0\n\
+         fi\n\
          if [ \"$1\" = \"repo\" ]; then\n\
            printf '%s' '{\"nameWithOwner\":\"sathyassn/private-free\",\"isPrivate\":true}'\n\
            exit 0\n\
@@ -505,6 +508,9 @@ fn r21_remote_protect_refuses_undecodable_identity_before_api() {
     fs::write(
         &gh,
         r#"#!/bin/sh
+if [ "$1" = "auth" ]; then
+  exit 0
+fi
 if [ "$1" = "repo" ]; then
   printf '{"nameWithOwner":"owner/caf'
   printf '\377'
