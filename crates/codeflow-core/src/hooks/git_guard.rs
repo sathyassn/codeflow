@@ -512,6 +512,7 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
     // A name the disk folds onto a protected one reaches every check of this
     // guard in the spelling they compare (TSK-1349 AC-7).
     if let Some(spelled) = super::repo::ascii_spelling(command) {
+        let _reading = super::policy::SpelledReadingScope::enter();
         let other = evaluate_report_with_runners(&spelled, ctx, cwd, true);
         report.violations.extend(other.violations);
         report.notes.extend(other.notes);
@@ -10078,6 +10079,12 @@ fn check_git(
         let mut case = Vec::new();
         judge_git_sub(sub, rest, branch, &view, &mut case);
         case.extend(root_checkout_case(sub, rest, branch, rules, root.as_ref()));
+        // The written line was judged first. A ref store that does not fold
+        // keeps a non-ASCII name apart from its ASCII spelling, so that
+        // spelling adds no finding about a ref name (TSK-381 SF-3).
+        if super::policy::spelled_reading() && !super::policy::non_ascii_aliasing() {
+            case.retain(|v| !REF_NAME_RULES.iter().any(|rule| v.rule == *rule));
+        }
         for v in case {
             if !found
                 .iter()
@@ -10297,6 +10304,17 @@ fn unclassifiable_git(args: &[String]) -> Option<Unclassified> {
     }
     None
 }
+
+/// The rules that judge a branch or ref by its name.
+const REF_NAME_RULES: [&str; 7] = [
+    "git.commit_to_protected",
+    "git.merge_to_protected",
+    "git.push_to_protected",
+    "git.force_push_protected",
+    "git.delete_protected",
+    "git.hard_reset_protected",
+    "git.local_ref_protection",
+];
 
 /// The rules an unknown part of a git invocation could break: every branch
 /// rule when the subcommand is unknown (`None`), else the rules of `sub`.
@@ -20665,6 +20683,33 @@ mod tests {
             ),
             "git.policy_authority"
         ));
+    }
+
+    /// TSK-1349: the ASCII spelling of a line adds no ref-name finding where
+    /// the ref store keeps the names apart, and still adds every other one.
+    #[test]
+    fn test_the_ascii_spelling_judges_ref_names_only_where_they_fold() {
+        let p = default_policy();
+        let ref_lines = [
+            "git branch -f ma\u{17f}ter HEAD~1",
+            "git branch -D ma\u{17f}ter",
+            "git push origin ma\u{17f}ter",
+            "git push --force origin ma\u{17f}ter",
+            "git checkout -B ma\u{17f}ter",
+        ];
+        {
+            let _sensitive = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+            for cmd in ref_lines {
+                let v = evaluate(cmd, &ctx(&p, "feat/x"));
+                assert!(v.is_empty(), "{cmd}: {v:?}");
+            }
+            let hooks = evaluate("git config core.hook\u{17f}Path /tmp/x", &ctx(&p, "feat/x"));
+            assert!(has_rule(&hooks, "git.hook_integrity"), "{hooks:?}");
+        }
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        for cmd in ref_lines {
+            assert!(!evaluate(cmd, &ctx(&p, "feat/x")).is_empty(), "{cmd}");
+        }
     }
 
     /// TSK-381 SF-5 and Codex F1: a retargeted command is judged by the

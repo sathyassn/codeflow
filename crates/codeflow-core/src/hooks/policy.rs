@@ -612,6 +612,39 @@ pub fn non_ascii_aliasing() -> bool {
         .unwrap_or(true)
 }
 
+thread_local! {
+    static SPELLED_READING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks a command line as judged in its ASCII spelling
+/// ([`crate::hooks::repo::ascii_spelling`]) until the scope ends. A ref name
+/// in that spelling is one the agent did not type, so a repository that does
+/// not fold ref names drops the findings it produced.
+pub struct SpelledReadingScope {
+    previous: bool,
+}
+
+impl SpelledReadingScope {
+    /// Enter the spelled reading until the scope ends.
+    #[must_use]
+    pub fn enter() -> Self {
+        let previous = SPELLED_READING.with(|cell| cell.replace(true));
+        Self { previous }
+    }
+}
+
+impl Drop for SpelledReadingScope {
+    fn drop(&mut self) {
+        SPELLED_READING.with(|cell| cell.set(self.previous));
+    }
+}
+
+/// Whether the line being judged is the ASCII spelling of what was typed.
+#[must_use]
+pub fn spelled_reading() -> bool {
+    SPELLED_READING.with(std::cell::Cell::get)
+}
+
 const DEFAULT_BRANCH_PREFIXES: &[&str] = &[
     "feat/",
     "fix/",
