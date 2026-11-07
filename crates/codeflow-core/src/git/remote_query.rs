@@ -92,13 +92,13 @@ impl QueryLimits {
     }
 
     /// A session guard's limits: one attempt within
-    /// [`GUARD_REMOTE_QUERY_SECS`](crate::hooks::guard_deadline::GUARD_REMOTE_QUERY_SECS),
+    /// [`codeflow_limits::GUARD_REMOTE_QUERY_WAIT`],
     /// which fits inside the guard's own deadline and the harness hook
     /// timeout, whatever the policy keys say. A guard that cannot get an
     /// answer in time refuses; it never waits for the harness to kill it.
     #[must_use]
     pub fn guard() -> Self {
-        let wait = Duration::from_secs(crate::hooks::guard_deadline::GUARD_REMOTE_QUERY_SECS);
+        let wait = Duration::from_secs(codeflow_limits::GUARD_REMOTE_QUERY_WAIT.value());
         Self {
             timeout: wait,
             attempts: 1,
@@ -176,16 +176,13 @@ impl QueryLimits {
             }
             Source::Guard => format!(
                 "a session guard waits at most {}s for each such lookup, whatever {TIMEOUT_KEY} says, and its {}s deadline bounds the whole command inside the harness's {}s hook timeout",
-                crate::hooks::guard_deadline::GUARD_REMOTE_QUERY_SECS,
+                codeflow_limits::GUARD_REMOTE_QUERY_WAIT.value(),
                 crate::hooks::guard_deadline::GUARD_DEADLINE_SECS,
                 crate::hooks::guard_deadline::GUARD_HOOK_TIMEOUT_SECS,
             ),
         }
     }
 }
-
-/// How much a remote may say.
-pub const MAX_ANSWER_BYTES: usize = 16 << 20;
 
 /// `url` as it may be shown: the userinfo of a `scheme://` URL (a user, or
 /// `user:token`) becomes `***`, keeping the scheme, host and path. A URL may
@@ -236,7 +233,7 @@ pub fn display_urls(text: &str) -> String {
 pub const AUTHENTICATION_FAILED: &str = "remote authentication failed";
 
 /// `git ls-remote <args>`, never interactive and bounded by `limits` per
-/// attempt and by [`MAX_ANSWER_BYTES`]. Only a timeout is retried, up to
+/// attempt and by [`codeflow_limits::REMOTE_ANSWER_BYTES`]. Only a timeout is retried, up to
 /// the attempts `limits` allows, with a 100 ms backoff; every other
 /// failure returns at once, and a destination that never answers still
 /// refuses once the waits run out. A wait too large for the clock never runs
@@ -273,7 +270,7 @@ fn ls_remote_attempts(
     for number in 1..=attempts {
         match attempt() {
             Err(Failure::Timeout(_)) if number < attempts => {
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(codeflow_limits::REMOTE_RETRY_PAUSE_MILLIS.wait());
             }
             Err(Failure::Timeout(deadline)) => {
                 return Err(format!(
@@ -340,6 +337,61 @@ pub fn fetch_objects(
             ),
             Failure::Other(why) => why,
         })
+}
+
+/// Run `command` within `deadline`, and return its output whatever its exit
+/// status, or `None` when the deadline passed and its process group was
+/// killed. For a caller that reads git's own diagnostics, which
+/// [`fetch_objects`] never returns.
+///
+/// # Errors
+///
+/// Returns why the command could not be started or waited for.
+pub fn output_within(
+    mut command: std::process::Command,
+    deadline: Duration,
+) -> std::io::Result<Option<std::process::Output>> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+    let mut child = command.spawn()?;
+    let drain = |mut stream: Box<dyn std::io::Read + Send>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).map(|_| bytes)
+        })
+    };
+    let stdout = child.stdout.take().map(|out| drain(Box::new(out)));
+    let stderr = child.stderr.take().map(|err| drain(Box::new(err)));
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() >= deadline {
+            kill_group(&mut child);
+            return Ok(None);
+        }
+        std::thread::sleep(codeflow_limits::POLL_WAIT_MILLIS.wait());
+    };
+    let collect = |reader: Option<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>| {
+        reader.map_or_else(
+            || Ok(Vec::new()),
+            |reader| {
+                reader
+                    .join()
+                    .map_err(|_| std::io::Error::other("the output reader stopped"))?
+            },
+        )
+    };
+    Ok(Some(std::process::Output {
+        status,
+        stdout: collect(stdout)?,
+        stderr: collect(stderr)?,
+    }))
 }
 
 enum Failure {
@@ -496,7 +548,7 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
 }
 
 /// Run `command` with no input, within `deadline` (then its whole process
-/// group is killed) and [`MAX_ANSWER_BYTES`], and return its answer.
+/// group is killed) and [`codeflow_limits::REMOTE_ANSWER_BYTES`], and return its answer.
 fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<String, Failure> {
     command
         .stdin(Stdio::null())
@@ -529,7 +581,7 @@ fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<Str
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
         let read = stdout
-            .take(MAX_ANSWER_BYTES as u64 + 1)
+            .take(codeflow_limits::REMOTE_ANSWER_BYTES.count() as u64 + 1)
             .read_to_end(&mut bytes);
         let _ = sender.send(read.map(|_| bytes));
     });
@@ -540,7 +592,7 @@ fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<Str
     let expired = || until.is_some_and(|until| Instant::now() >= until);
     let timed_out = || Failure::Timeout(deadline);
     let bytes = loop {
-        match receiver.recv_timeout(Duration::from_millis(20)) {
+        match receiver.recv_timeout(codeflow_limits::POLL_LOCK_MILLIS.wait()) {
             Ok(Ok(bytes)) => break bytes,
             Ok(Err(error)) => {
                 kill_group(&mut child);
@@ -555,11 +607,11 @@ fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<Str
             }
         }
     };
-    if bytes.len() > MAX_ANSWER_BYTES {
+    if bytes.len() > codeflow_limits::REMOTE_ANSWER_BYTES.count() {
         kill_group(&mut child);
         return Err(Failure::Other(format!(
             "its answer is over {} MiB",
-            MAX_ANSWER_BYTES >> 20
+            codeflow_limits::REMOTE_ANSWER_BYTES.count() >> 20
         )));
     }
     // A descendant may retain stderr after git exits. Keep git unreaped
@@ -570,7 +622,7 @@ fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<Str
             kill_group(&mut child);
             return Err(timed_out());
         }
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(codeflow_limits::POLL_LOCK_MILLIS.wait());
     }
     // Unreadable diagnostics cannot prove an authentication failure, so a
     // failed exit is then reported as a plain one, which still refuses.
@@ -581,7 +633,7 @@ fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<Str
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if !expired() => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) if !expired() => std::thread::sleep(codeflow_limits::POLL_LOCK_MILLIS.wait()),
             _ => {
                 kill_group(&mut child);
                 return Err(timed_out());
@@ -710,6 +762,30 @@ fn kill_group(child: &mut std::process::Child) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn output_within_stops_a_command_past_its_deadline() {
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", "sleep 30"]);
+        let started = std::time::Instant::now();
+        let output = super::output_within(command, Duration::from_millis(100)).unwrap();
+        assert!(output.is_none());
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_within_returns_a_finished_commands_output_and_status() {
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", "echo out; echo err >&2; exit 3"]);
+        let output = super::output_within(command, Duration::from_secs(30))
+            .unwrap()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(output.stdout, b"out\n");
+        assert_eq!(output.stderr, b"err\n");
+    }
+
     use super::*;
 
     #[test]

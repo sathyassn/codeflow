@@ -355,7 +355,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use codeflow_core::validate::portal::lookups::{
-        self, page_with_title, verify_lookup_page, LookupInputs, POLICY_REFERENCE, SKILL_CATALOG,
+        self, page_with_title, verify_lookup_page, LookupInputs, LIMITS_PAGE, POLICY_REFERENCE,
+        SKILL_CATALOG,
     };
 
     use crate::embedded::EmbeddedAssets;
@@ -378,6 +379,7 @@ mod tests {
         for (path, derive) in [
             ("docs/skills.md", SKILL_CATALOG),
             ("docs/policy-reference.md", POLICY_REFERENCE),
+            ("docs/limits.md", LIMITS_PAGE),
         ] {
             let file = repository().join(path);
             if std::env::var_os("CODEFLOW_REGENERATE_LOOKUPS").is_some() {
@@ -386,10 +388,10 @@ mod tests {
                 let authored = current
                     .split_once(&end)
                     .map_or(String::new(), |(_, rest)| rest.to_string());
-                let generated = if derive == SKILL_CATALOG {
-                    lookups::skill_catalog(&EmbeddedAssets).unwrap()
-                } else {
-                    lookups::policy_reference()
+                let generated = match derive {
+                    SKILL_CATALOG => lookups::skill_catalog(&EmbeddedAssets).unwrap(),
+                    LIMITS_PAGE => lookups::limits_page(),
+                    _ => lookups::policy_reference(),
                 };
                 let title = lookups::title_of(derive).unwrap();
                 std::fs::write(

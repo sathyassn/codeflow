@@ -126,9 +126,11 @@ paths to repair.
 The busy slots tell a run how many heavy runs share the host. The host has
 a job budget: its logical cores, lowered to its available memory divided by
 1 GiB per job, or `execution.host_jobs` when the project sets it. A run
-uses its `execution.worker_budget`, capped at the host budget (else the
-whole budget), while the active runs fit the budget at that width; the
-first run on an idle host is held to the budget too. A run that finds more runs active
+uses its `execution.worker_budget` (else the whole budget) while the active
+runs fit the budget at that width. A `worker_budget` above a budget computed
+from memory is used as set, with a warning; only a `host_jobs` the project
+set bounds it. A run with no `worker_budget`, or under a project's
+`host_jobs`, that finds more runs active
 starts at once with the budget divided among them, at least one job, and
 prints `N heavy runs share this host's J jobs; this run uses K`. The
 count is divided among the run's concurrent heavy targets through

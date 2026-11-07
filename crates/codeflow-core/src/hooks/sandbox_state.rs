@@ -312,9 +312,6 @@ impl<T> Read<T> {
     }
 }
 
-/// The most bytes read from one settings file.
-const READ_LIMIT: u64 = 16 * 1024 * 1024;
-
 /// A settings file's text. It must be a regular file (a link to one is
 /// followed); it is opened without blocking, so a FIFO cannot stall the
 /// reader, checked again on the open handle, and read up to the limit.
@@ -345,11 +342,17 @@ fn read_text(path: &Path) -> Read<String> {
         Err(error) => return Read::Unreadable(error.to_string()),
     }
     let mut bytes = Vec::new();
-    if let Err(error) = file.take(READ_LIMIT + 1).read_to_end(&mut bytes) {
+    if let Err(error) = file
+        .take(codeflow_limits::SANDBOX_SETTINGS_READ_BYTES.value() + 1)
+        .read_to_end(&mut bytes)
+    {
         return Read::Unreadable(error.to_string());
     }
-    if bytes.len() as u64 > READ_LIMIT {
-        return Read::Unreadable(format!("larger than {READ_LIMIT} bytes"));
+    if bytes.len() as u64 > codeflow_limits::SANDBOX_SETTINGS_READ_BYTES.value() {
+        return Read::Unreadable(format!(
+            "larger than {} bytes",
+            codeflow_limits::SANDBOX_SETTINGS_READ_BYTES.value()
+        ));
     }
     match String::from_utf8(bytes) {
         Ok(text) => Read::Parsed(text),

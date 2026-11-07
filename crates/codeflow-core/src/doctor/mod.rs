@@ -290,10 +290,6 @@ const CI_PLACEHOLDER_MARKS: [&str; 2] = [
     "install step is an unwired PLACEHOLDER",
     "PLACEHOLDER: install the codeflow binary",
 ];
-const MAX_SETTINGS_BYTES: u64 = 16 * 1024 * 1024;
-const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-const VERSION_PROBE_OUTPUT_BYTES: usize = 64 * 1024;
-const VERSION_PROBE_POLL: Duration = Duration::from_millis(10);
 
 /// Ordered list of all check names.
 const CHECK_NAMES: &[&str] = &[
@@ -1891,7 +1887,11 @@ fn observe_binding_drift(
                 .expect("validated embedded harness probe");
             match opts.do_look_path(probe.command) {
                 Ok(command) => {
-                    match opts.do_exec_bounded(&command, probe.args, VERSION_PROBE_TIMEOUT) {
+                    match opts.do_exec_bounded(
+                        &command,
+                        probe.args,
+                        codeflow_limits::DOCTOR_VERSION_PROBE_TIMEOUT_SECONDS.wait(),
+                    ) {
                         Ok(observed)
                             if probe_version(
                                 probe_id,
@@ -1930,7 +1930,10 @@ fn observe_binding_drift(
             ));
         }
         for source in &record.settings_sources {
-            match read_bounded(&source.path, MAX_SETTINGS_BYTES) {
+            match read_bounded(
+                &source.path,
+                codeflow_limits::DOCTOR_MAX_SETTINGS_BYTES.value(),
+            ) {
                 Ok(bytes) => {
                     let observed = format!("sha256:{}", sha256_hex(&bytes));
                     if observed != source.digest {
@@ -1988,7 +1991,7 @@ fn probe_version<'a>(probe_id: &str, observed: &'a str) -> Option<&'a str> {
 }
 
 struct ProbeCapture {
-    /// The last [`VERSION_PROBE_OUTPUT_BYTES`] bytes read.
+    /// The last [`codeflow_limits::DOCTOR_VERSION_PROBE_OUTPUT_BYTES`] bytes read.
     bytes: Vec<u8>,
     /// How many earlier bytes were dropped to keep that bound.
     dropped: usize,
@@ -2018,7 +2021,7 @@ fn run_bounded_command(cmd: &str, args: &[&str], timeout: Duration) -> Result<St
 }
 
 /// [`run_captured_with`], keeping only the last
-/// [`VERSION_PROBE_OUTPUT_BYTES`] of each stream, as a version or canary
+/// [`codeflow_limits::DOCTOR_VERSION_PROBE_OUTPUT_BYTES`] of each stream, as a version or canary
 /// probe needs.
 fn run_captured(
     cmd: &str,
@@ -2047,7 +2050,7 @@ fn run_captured_complete(
     if loss.stdout_dropped > 0 || loss.stderr_dropped > 0 {
         return Err(format!(
             "it printed more than {} KiB on a stream, so its output was not judged",
-            VERSION_PROBE_OUTPUT_BYTES / 1024
+            codeflow_limits::DOCTOR_VERSION_PROBE_OUTPUT_BYTES.count() / 1024
         ));
     }
     if !loss.stdout_utf8 {
@@ -2110,7 +2113,7 @@ fn run_captured_with(
             let _ = child.wait();
             return Err(probe_timeout_message(timeout));
         }
-        std::thread::sleep(VERSION_PROBE_POLL);
+        std::thread::sleep(codeflow_limits::POLL_LEDGER_LOCK_MILLIS.wait());
     };
     let stdout = receive_probe_reader(stdout, started, timeout).map_err(|error| {
         terminate_process_tree(&mut child);
@@ -2134,7 +2137,7 @@ fn run_captured_with(
                 terminate_process_tree(&mut child);
                 return Err(probe_timeout_message(timeout));
             }
-            std::thread::sleep(VERSION_PROBE_POLL);
+            std::thread::sleep(codeflow_limits::POLL_LEDGER_LOCK_MILLIS.wait());
         }
     }
     let loss = CaptureLoss {
@@ -2189,7 +2192,8 @@ fn spawn_probe_reader<R: Read + Send + 'static>(
 ) -> std::sync::mpsc::Receiver<ProbeCapture> {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mut retained = Vec::with_capacity(VERSION_PROBE_OUTPUT_BYTES);
+        let mut retained =
+            Vec::with_capacity(codeflow_limits::DOCTOR_VERSION_PROBE_OUTPUT_BYTES.count());
         let mut dropped = 0;
         let mut error = None;
         let mut chunk = [0_u8; 8192];
@@ -2206,8 +2210,9 @@ fn spawn_probe_reader<R: Read + Send + 'static>(
                 break;
             }
             retained.extend_from_slice(&chunk[..read]);
-            if retained.len() > VERSION_PROBE_OUTPUT_BYTES {
-                let excess = retained.len() - VERSION_PROBE_OUTPUT_BYTES;
+            if retained.len() > codeflow_limits::DOCTOR_VERSION_PROBE_OUTPUT_BYTES.count() {
+                let excess =
+                    retained.len() - codeflow_limits::DOCTOR_VERSION_PROBE_OUTPUT_BYTES.count();
                 retained.drain(..excess);
                 dropped += excess;
             }
@@ -4174,9 +4179,6 @@ fn check_reading(opts: &Options) -> CheckResult {
     }
 }
 
-/// Directory depth past which the instruction walk stops.
-const INSTRUCTION_WALK_DEPTH: usize = 16;
-
 /// Collect `(instruction file, chain bytes)` for every directory under
 /// `root` that holds a non-empty instruction file, where the chain is that
 /// file plus the files of its ancestors up to `root`, as Codex loads them.
@@ -4196,7 +4198,7 @@ fn instruction_chains(
         total += bytes;
         chains.push((crate::portable_path::slashed(&relative.join(name)), total));
     }
-    if depth >= INSTRUCTION_WALK_DEPTH {
+    if depth >= codeflow_limits::DOCTOR_INSTRUCTION_WALK_DEPTH.count() {
         return Err(std::io::Error::other(
             "instruction walk depth limit reached",
         ));
@@ -4749,7 +4751,8 @@ mod tests {
         let directory = workspace.path().join("qualified-bindings");
         let settings = workspace.path().join("settings.json");
         let file = std::fs::File::create(&settings).unwrap();
-        file.set_len(MAX_SETTINGS_BYTES + 1).unwrap();
+        file.set_len(codeflow_limits::DOCTOR_MAX_SETTINGS_BYTES.value() + 1)
+            .unwrap();
         write_binding(&directory, "high");
         let record_path = directory.join("orchid-approved-high.json");
         let mut record: serde_json::Value =

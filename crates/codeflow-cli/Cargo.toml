@@ -10,6 +10,7 @@ name = "codeflow"
 path = "src/main.rs"
 
 [dependencies]
+codeflow-limits = { path = "../codeflow-limits" }
 codeflow-core = { path = "../codeflow-core" }
 codeflow-present = { path = "../codeflow-present" }
 anyhow.workspace = true

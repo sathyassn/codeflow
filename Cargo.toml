@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/codeflow-core", "crates/codeflow-cli", "crates/codeflow-present", "crates/codeflow-fixture"]
+members = ["crates/codeflow-core", "crates/codeflow-cli", "crates/codeflow-present", "crates/codeflow-fixture", "crates/codeflow-limits"]
 
 [workspace.package]
 version = "4.0.0"

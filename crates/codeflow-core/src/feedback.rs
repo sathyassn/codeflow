@@ -639,13 +639,10 @@ pub fn create_with(
     Ok(NewRecord { id, uid, path })
 }
 
-/// The largest project template [`read_project_template`] reads.
-pub const TEMPLATE_MAX_BYTES: u64 = 64 * 1024;
-
 /// The project's own feedback template ([`PROJECT_TEMPLATE`]): `Ok(None)`
 /// when it is absent; refused when a part of its path is a symbolic link,
 /// when it is not a regular file, or when it is larger than
-/// [`TEMPLATE_MAX_BYTES`].
+/// [`codeflow_limits::FEEDBACK_TEMPLATE_MAX_BYTES`].
 ///
 /// # Errors
 ///
@@ -660,10 +657,11 @@ pub fn read_project_template(root: &Path) -> Result<Option<String>, String> {
     if !meta.is_file() {
         return Err(format!("{PROJECT_TEMPLATE} is not a regular file"));
     }
-    if meta.len() > TEMPLATE_MAX_BYTES {
+    if meta.len() > codeflow_limits::FEEDBACK_TEMPLATE_MAX_BYTES.value() {
         return Err(format!(
-            "{PROJECT_TEMPLATE} is {} bytes, over the {TEMPLATE_MAX_BYTES}-byte limit",
-            meta.len()
+            "{PROJECT_TEMPLATE} is {} bytes, over the {feedback_template_max_bytes}-byte limit",
+            meta.len(),
+            feedback_template_max_bytes = codeflow_limits::FEEDBACK_TEMPLATE_MAX_BYTES.value()
         ));
     }
     std::fs::read_to_string(&path)

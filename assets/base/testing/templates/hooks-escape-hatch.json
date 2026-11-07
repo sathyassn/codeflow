@@ -21,7 +21,8 @@
         "full": {
           "command": "bash scripts/run-tests.sh full"
         }
-      }
+      },
+      "timeout_seconds": 600
     }
   ]
 }

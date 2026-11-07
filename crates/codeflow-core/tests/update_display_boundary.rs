@@ -310,11 +310,19 @@ const RUNTIME: &[&str] = &["path", "iso_date"];
 
 /// `leak` calls allowed in production code, with why none reaches a
 /// `Shown`: file, enclosing function and reason.
-const LEAKS: &[(&str, &str, &str)] = &[(
-    "crates/codeflow-core/src/security/prose.rs",
-    "",
-    "a guard's word list for its own matching; the security module builds no Shown",
-)];
+const LEAKS: &[(&str, &str, &str)] = &[
+    (
+        "crates/codeflow-core/src/security/prose.rs",
+        "",
+        "a guard's word list for its own matching; the security module builds no Shown",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/policy_schema.rs",
+        "",
+        "the schema entries generated once from the compiled-in limits registry; \
+         every input is a constant, so the text is as fixed as SCHEMA's",
+    ),
+];
 
 /// The CLI functions `update` and `update --pin` start from.
 const ROOTS: &[&str] = &[

@@ -24,9 +24,6 @@ pub const REFUSAL: &str = "refusal";
 pub const RECORDING_STARTED: &str = "refusal_recording_started";
 /// The level a refused operation is written at.
 pub const BLOCK: &str = "block";
-/// How long a hook or guard waits for another writer's lock on this
-/// ledger before it gives up on the record and keeps its verdict.
-pub const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Write the recording marker unless the refusals ledger already exists.
 /// A second marker from a racing plane is harmless: readers take the
@@ -69,7 +66,7 @@ fn append(
     data: HashMap<String, serde_json::Value>,
 ) -> Result<(), LedgerError> {
     JsonlWriter::new(ledger_dir)?
-        .with_lock_wait(LOCK_WAIT)
+        .with_lock_wait(codeflow_limits::LEDGER_REFUSAL_LOCK_WAIT_SECONDS.wait())
         .append_event(Event {
             event_type: event_type.to_string(),
             timestamp: timestamp.to_string(),
@@ -209,7 +206,10 @@ mod tests {
             match attempt {
                 Err(LedgerError::LockTimeout { path, waited }) => {
                     assert_eq!(path, lock_path);
-                    assert_eq!(waited, LOCK_WAIT);
+                    assert_eq!(
+                        waited,
+                        codeflow_limits::LEDGER_REFUSAL_LOCK_WAIT_SECONDS.wait()
+                    );
                 }
                 other => panic!("expected a lock timeout, got {other:?}"),
             }

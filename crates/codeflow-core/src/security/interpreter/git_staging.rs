@@ -17,7 +17,7 @@
 use crate::security::outward;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Which files a staging call takes under its pathspecs.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -291,7 +291,7 @@ fn listed_secret(
             .args(kind)
             .arg("--")
             .args(&pathspecs);
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + codeflow_limits::GUARD_GIT_READ_SECONDS.wait();
         let bytes = crate::security::git_config::bounded_output(&mut command, deadline)
             .map_err(|_| UNREAD)?;
         for path in bytes

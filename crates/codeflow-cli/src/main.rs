@@ -441,6 +441,16 @@ fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
 
+    // Hooks and `ci` take limits from the authority they resolve, never from
+    // a working tree a pushed head could have changed. Every other command
+    // reads the project's policy file, as it does for its rules.
+    if !matches!(
+        cli.command,
+        Command::Hook(_) | Command::GitHook(_) | Command::Ci(_)
+    ) {
+        codeflow_core::hooks::policy::install_project_limits(&cwd);
+    }
+
     // Update itself is the cure, so it skips the nag. Read-only resolvers
     // skip unrelated project-state reads to remain isolated.
     if !matches!(

@@ -31,7 +31,8 @@
             "minimum": 85
           }
         ]
-      }
+      },
+      "timeout_seconds": 1800
     },
     {
       "name": "rust-lint",
@@ -47,7 +48,8 @@
         "quick": {
           "command": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings"
         }
-      }
+      },
+      "timeout_seconds": 900
     }
   ]
 }

@@ -39,13 +39,6 @@ pub(super) const DERIVED_LOOKUPS: [&str; 3] = [
 const ALTITUDE_PANELS: [&str; 3] = ["concept", "architecture", "technical"];
 const EXPLANATORY: &str = "explanatory";
 const CAPABILITY_REGISTRY: &str = "docs/capabilities.md";
-const MAX_PAGE_CLASSES: usize = 256;
-const MAX_FIGURE_BINDINGS: usize = 512;
-const MAX_FACTS: usize = 32;
-const MAX_DECLARATION_BYTES: u64 = 256 * 1024;
-const MAX_TOTAL_DECLARATION_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_FACT_SOURCE_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_TOTAL_FACT_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 const DRAWN_VALUE_TOLERANCE: f64 = 1e-3;
 const SOURCE_END_MARKER: &str = "\n<!-- codeflow-source-end -->\n";
 const COMPANION_END: &str = "\n\n<!-- codeflow-companion-end -->\n";
@@ -215,35 +208,56 @@ pub(super) fn deserialize_figures<'de, D>(
 where
     D: Deserializer<'de>,
 {
-    deserialize_bounded_sequence(deserializer, MAX_FIGURE_BINDINGS, "portal figures").map(Some)
+    deserialize_bounded_sequence(
+        deserializer,
+        codeflow_limits::FIGURES_MAX_FIGURE_BINDINGS.count(),
+        "portal figures",
+    )
+    .map(Some)
 }
 
 pub(super) fn deserialize_page_figures<'de, D>(deserializer: D) -> Result<Vec<PageFigure>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    deserialize_bounded_sequence(deserializer, MAX_FIGURE_BINDINGS, "page figures")
+    deserialize_bounded_sequence(
+        deserializer,
+        codeflow_limits::FIGURES_MAX_FIGURE_BINDINGS.count(),
+        "page figures",
+    )
 }
 
 fn deserialize_routes<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    deserialize_bounded_sequence(deserializer, MAX_FIGURE_BINDINGS, "figure routes")
+    deserialize_bounded_sequence(
+        deserializer,
+        codeflow_limits::FIGURES_MAX_FIGURE_BINDINGS.count(),
+        "figure routes",
+    )
 }
 
 fn deserialize_facts<'de, D>(deserializer: D) -> Result<Vec<FactEvidence>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    deserialize_bounded_sequence(deserializer, MAX_FACTS, "figure facts")
+    deserialize_bounded_sequence(
+        deserializer,
+        codeflow_limits::FIGURES_MAX_FACTS.count(),
+        "figure facts",
+    )
 }
 
 fn deserialize_inserts<'de, D>(deserializer: D) -> Result<Vec<Insert>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    deserialize_bounded_sequence(deserializer, MAX_FIGURE_BINDINGS, "source region inserts")
+    deserialize_bounded_sequence(
+        deserializer,
+        codeflow_limits::FIGURES_MAX_FIGURE_BINDINGS.count(),
+        "source region inserts",
+    )
 }
 
 /// One `page_classes` entry: a source or a prefix, its class, and the reason a
@@ -323,11 +337,10 @@ pub(super) fn configured_page_classes(
     };
     let Some(entries) = value
         .as_array()
-        .filter(|entries| entries.len() <= MAX_PAGE_CLASSES)
+        .filter(|entries| entries.len() <= codeflow_limits::FIGURES_MAX_PAGE_CLASSES.count())
     else {
         report.issues.push(format!(
-            "portal configuration page_classes is not an array of at most {MAX_PAGE_CLASSES} entries"
-        ));
+            "portal configuration page_classes is not an array of at most {figures_max_page_classes} entries", figures_max_page_classes = codeflow_limits::FIGURES_MAX_PAGE_CLASSES.count()));
         return None;
     };
     let mut seen = BTreeSet::new();
@@ -410,11 +423,10 @@ pub(super) fn configured_figure_bindings(
     };
     let Some(entries) = value
         .as_array()
-        .filter(|entries| entries.len() <= MAX_FIGURE_BINDINGS)
+        .filter(|entries| entries.len() <= codeflow_limits::FIGURES_MAX_FIGURE_BINDINGS.count())
     else {
         report.issues.push(format!(
-            "portal configuration figures is not an array of at most {MAX_FIGURE_BINDINGS} bindings"
-        ));
+            "portal configuration figures is not an array of at most {figures_max_figure_bindings} bindings", figures_max_figure_bindings = codeflow_limits::FIGURES_MAX_FIGURE_BINDINGS.count()));
         return None;
     };
     let mut seen = BTreeSet::new();
@@ -607,8 +619,8 @@ fn verify_declarations(
         context.repository,
         &evidence.repository.commit,
         &paths,
-        MAX_DECLARATION_BYTES,
-        MAX_TOTAL_DECLARATION_BYTES,
+        codeflow_limits::FIGURES_MAX_DECLARATION_BYTES.value(),
+        codeflow_limits::FIGURES_MAX_TOTAL_DECLARATION_BYTES.value(),
     ) {
         Ok(blobs) => blobs,
         Err(error) => {
@@ -755,8 +767,8 @@ fn verify_facts(
         context.repository,
         &evidence.repository.commit,
         &paths,
-        MAX_FACT_SOURCE_BYTES,
-        MAX_TOTAL_FACT_SOURCE_BYTES,
+        codeflow_limits::FIGURES_MAX_FACT_SOURCE_BYTES.value(),
+        codeflow_limits::FIGURES_MAX_TOTAL_FACT_SOURCE_BYTES.value(),
     ) {
         Ok(blobs) => blobs,
         Err(error) => {

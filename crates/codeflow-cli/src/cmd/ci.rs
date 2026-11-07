@@ -3106,7 +3106,7 @@ fn shipped_scaffold() -> Option<ScaffoldManifest> {
 
 /// Git's own binary heuristic, applied to content instead of attributes: a
 /// NUL byte in the first 8000 bytes of the blob.
-const BINARY_SNIFF_BYTES: usize = 8000;
+const BINARY_SNIFF_BYTES: usize = codeflow_limits::GIT_BINARY_SNIFF_BYTES.default_count();
 
 fn is_binary(content: &[u8]) -> bool {
     content

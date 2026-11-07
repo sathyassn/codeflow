@@ -1,6 +1,6 @@
 //! A bounded controller for execution, process-tree termination and pipe collection.
 use super::deadline::{Deadline, TargetStatus};
-use super::{CommandOutcome, TestingError, POLL_INTERVAL};
+use super::{CommandOutcome, TestingError};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -249,7 +249,7 @@ pub(super) fn run_observed(
                     }
                 }
             }
-            next_sample = now.saturating_add(Duration::from_secs(1));
+            next_sample = now.saturating_add(codeflow_limits::RUNNER_CPU_SAMPLE_SECONDS.wait());
         }
         if let Some(cause) = deadline
             .decision(now)
@@ -394,7 +394,7 @@ pub(super) fn run_observed(
                 break;
             }
         }
-        std::thread::sleep(POLL_INTERVAL);
+        std::thread::sleep(codeflow_limits::POLL_WAIT_MILLIS.wait());
     }
     stdout.cancel();
     stderr.cancel();
@@ -484,7 +484,7 @@ pub(super) fn run_observed(
         std::thread::spawn(move || loop {
             match child.try_wait() {
                 Ok(Some(_)) | Err(_) => break,
-                Ok(None) => std::thread::sleep(POLL_INTERVAL),
+                Ok(None) => std::thread::sleep(codeflow_limits::POLL_WAIT_MILLIS.wait()),
             }
         });
     }

@@ -1242,7 +1242,7 @@ impl Drop for HostExclusive {
             }
         }
         release_exclusive(std::mem::take(&mut self.files));
-        retake_shared(std::time::Duration::from_secs(5));
+        retake_shared(codeflow_limits::GATE_LOCK_RETAKE_SECONDS.wait());
         self.fences.clear();
     }
 }
@@ -1384,11 +1384,11 @@ pub fn hold_host_exclusive_in(
                 crate::git::display_path(&path)
             ));
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(codeflow_limits::POLL_WAIT_MILLIS.wait());
     };
     if let Err(message) = result {
         release_exclusive(taken);
-        retake_shared(wait.max(std::time::Duration::from_secs(5)));
+        retake_shared(wait.max(codeflow_limits::GATE_LOCK_RETAKE_SECONDS.wait()));
         return Err(message);
     }
     let record = holder_record(root, "exclusive");
@@ -1399,7 +1399,7 @@ pub fn hold_host_exclusive_in(
     });
     if let Some((path, error)) = unwritten {
         release_exclusive(taken);
-        retake_shared(std::time::Duration::from_secs(5));
+        retake_shared(codeflow_limits::GATE_LOCK_RETAKE_SECONDS.wait());
         return Err(format!(
             "gate lock unavailable: the host-exclusive record beside {} cannot be written: {error}",
             crate::git::display_path(&path)
@@ -1488,7 +1488,7 @@ fn retake_shared(wait: std::time::Duration) {
     for lock in held.iter() {
         for (_, file) in &lock.host {
             while os_lock::try_lock_shared(&file.0).is_err() && start.elapsed() < wait {
-                std::thread::sleep(std::time::Duration::from_millis(20));
+                std::thread::sleep(codeflow_limits::POLL_LOCK_MILLIS.wait());
             }
         }
     }
@@ -1502,7 +1502,7 @@ pub const RESERVED_LOCKS_ENV: &str = "CODEFLOW_RESERVED_LOCK_FDS";
 
 /// The most descriptors one hand-over names: a slot, the host lock and the
 /// fence in each of the two lock directories.
-const MOST_RESERVED_LOCKS: usize = 6;
+const MOST_RESERVED_LOCKS: usize = codeflow_limits::GATE_MOST_RESERVED_LOCKS.default_count();
 
 #[cfg(unix)]
 static ADOPTED: Mutex<Vec<std::os::fd::RawFd>> = Mutex::new(Vec::new());
@@ -1848,7 +1848,8 @@ fn update_groups_before(
             Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
             Err(std::sync::TryLockError::WouldBlock) => {
                 std::thread::sleep(
-                    std::time::Duration::from_millis(2)
+                    codeflow_limits::POLL_GATE_RECORD_MILLIS
+                        .wait()
                         .min(finish_by.saturating_duration_since(std::time::Instant::now())),
                 );
             }
@@ -1968,7 +1969,7 @@ fn rewrite_serialized(lock: &Held, path: &Path) -> Vec<String> {
 fn with_record_lock<T>(lock: &Path, rewrite: impl FnOnce() -> T) -> std::io::Result<T> {
     with_record_lock_before(
         lock,
-        std::time::Instant::now() + std::time::Duration::from_secs(5),
+        std::time::Instant::now() + codeflow_limits::GATE_LOCK_RETAKE_SECONDS.wait(),
         rewrite,
     )
 }
@@ -2000,7 +2001,8 @@ fn with_record_lock_before<T>(
             Ok(()) => break,
             Err(error) if os_lock::is_contended(&error) => {
                 std::thread::sleep(
-                    std::time::Duration::from_millis(2)
+                    codeflow_limits::POLL_GATE_RECORD_MILLIS
+                        .wait()
                         .min(finish_by.saturating_duration_since(std::time::Instant::now())),
                 );
             }
@@ -2446,7 +2448,7 @@ fn write_record(lock: &Path, text: &str) -> std::io::Result<()> {
         match tree.write(&relative, text.as_bytes()) {
             Err(error) if cfg!(windows) && attempts < 20 && is_sharing_violation(&error) => {
                 attempts += 1;
-                std::thread::sleep(std::time::Duration::from_millis(25));
+                std::thread::sleep(codeflow_limits::POLL_PROCESS_MILLIS.wait());
             }
             result => return result,
         }

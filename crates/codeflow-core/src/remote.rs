@@ -100,7 +100,7 @@ const LINE_TEST_VERDICTS: &[&str] = &["codeflow gates", "windows"];
 const REQUIRED_TEST_VERDICT: &str = "codeflow gates";
 
 /// Rulesets read per page.
-const RULESET_PAGE_SIZE: usize = 100;
+const RULESET_PAGE_SIZE: usize = codeflow_limits::GITHUB_PAGE_SIZE.default_count();
 
 /// The repository role ids GitHub uses for `RepositoryRole` bypass actors.
 /// GitHub's REST reference does not list them; these are the values its

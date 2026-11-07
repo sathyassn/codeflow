@@ -253,7 +253,8 @@ fn commit_on_target(root: &Path, sha: &str) -> Option<(bool, String, String)> {
 }
 
 /// How long one network observation may take before it counts as unknown.
-pub const OBSERVATION_TIMEOUT: std::time::Duration = super::observe::NETWORK_TIMEOUT;
+pub const OBSERVATION_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(codeflow_limits::COORD_NETWORK_TIMEOUT_SECONDS.default);
 
 fn gh_pull(
     root: &Path,
@@ -406,7 +407,9 @@ fn lane_state(
             .filter_map(|live| super::parse_time(&live.last_seen).ok())
             .max()
     });
-    if seen.is_some_and(|seen| now.saturating_sub(seen) > super::HEARTBEAT_TIMEOUT_SECS) {
+    if seen.is_some_and(|seen| {
+        now.saturating_sub(seen) > codeflow_limits::COORD_HEARTBEAT_TIMEOUT.value()
+    }) {
         return ("stale".into(), None);
     }
     match &lane.reported_at {
@@ -775,7 +778,7 @@ pub fn capped_next_check(item: &Item, requested: u64, now: u64) -> u64 {
             .iter()
             .any(|link| link.kind == LinkKind::Prerequisite);
     if waits {
-        requested.min(now + super::MAX_RECHECK_SECS)
+        requested.min(now + codeflow_limits::COORD_MAX_RECHECK.value())
     } else {
         requested
     }

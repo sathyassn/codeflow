@@ -14,9 +14,6 @@ use crate::workgraph::{MarkdownStore, RecordStore};
 use super::policy::Policy;
 use super::repo::RepoInfo;
 
-/// Base digest guideline from the charter; line and epic inventories are complete.
-pub const MAX_LINES: usize = 30;
-
 /// Generate the orient digest for the project at `root`.
 ///
 /// Returns an empty string when orient is disabled in `project.toml`.
@@ -703,7 +700,10 @@ mod tests {
         full_fixture(dir.path());
         let digest = generate(dir.path());
 
-        assert!(digest.lines().count() <= MAX_LINES, "{digest:?}");
+        assert!(
+            digest.lines().count() <= codeflow_limits::ORIENT_MAX_LINES.count(),
+            "{digest:?}"
+        );
         // <500 token budget: chars/4 is a generous proxy.
         assert!(
             digest.len() < 2000,
@@ -732,7 +732,7 @@ mod tests {
         assert!(digest.starts_with("# orient —"));
         assert!(!digest.contains("capabilities:"));
         assert!(!digest.contains("recent decisions:"));
-        assert!(digest.lines().count() <= MAX_LINES);
+        assert!(digest.lines().count() <= codeflow_limits::ORIENT_MAX_LINES.count());
     }
 
     #[test]

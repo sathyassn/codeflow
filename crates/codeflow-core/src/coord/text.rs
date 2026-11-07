@@ -6,13 +6,6 @@
 //! percent-decoded form as well. A refusal names the field and the kind of
 //! finding, never the text.
 
-/// The bound for a short field: a title, a reason, a reference.
-pub const SHORT: usize = 200;
-/// The bound for a condition or an observation.
-pub const MEDIUM: usize = 1000;
-/// The bound for a description.
-pub const LONG: usize = 4000;
-
 /// Check one free-text field.
 ///
 /// `multiline` allows line breaks and tabs; every other control or format
@@ -209,7 +202,13 @@ mod tests {
     #[test]
     fn a_planted_token_is_refused_without_its_text() {
         let token = format!("ghp_{}", "a".repeat(36));
-        let error = check("description", &format!("use {token} here"), LONG, true).unwrap_err();
+        let error = check(
+            "description",
+            &format!("use {token} here"),
+            codeflow_limits::COORD_TEXT_LONG.count(),
+            true,
+        )
+        .unwrap_err();
         assert!(error.contains("secret"), "{error}");
         assert!(!error.contains(&token), "the refusal echoed the secret");
     }
@@ -217,23 +216,65 @@ mod tests {
     #[test]
     fn a_percent_encoded_token_is_refused() {
         let encoded = format!("%67hp_{}", "b".repeat(36));
-        let error = check("title", &encoded, SHORT, false).unwrap_err();
+        let error = check(
+            "title",
+            &encoded,
+            codeflow_limits::COORD_TEXT_SHORT.count(),
+            false,
+        )
+        .unwrap_err();
         assert!(error.contains("secret"), "{error}");
     }
 
     #[test]
     fn control_and_bidi_characters_are_refused() {
-        assert!(check("title", "a\u{1b}[31mred", SHORT, false).is_err());
-        assert!(check("title", "a\u{202e}b", SHORT, false).is_err());
-        assert!(check("title", "two\nlines", SHORT, false).is_err());
-        assert!(check("description", "two\nlines\tok", LONG, true).is_ok());
+        assert!(check(
+            "title",
+            "a\u{1b}[31mred",
+            codeflow_limits::COORD_TEXT_SHORT.count(),
+            false
+        )
+        .is_err());
+        assert!(check(
+            "title",
+            "a\u{202e}b",
+            codeflow_limits::COORD_TEXT_SHORT.count(),
+            false
+        )
+        .is_err());
+        assert!(check(
+            "title",
+            "two\nlines",
+            codeflow_limits::COORD_TEXT_SHORT.count(),
+            false
+        )
+        .is_err());
+        assert!(check(
+            "description",
+            "two\nlines\tok",
+            codeflow_limits::COORD_TEXT_LONG.count(),
+            true
+        )
+        .is_ok());
     }
 
     #[test]
     fn an_oversized_field_is_refused() {
-        let error = check("title", &"x".repeat(SHORT + 1), SHORT, false).unwrap_err();
+        let error = check(
+            "title",
+            &"x".repeat(codeflow_limits::COORD_TEXT_SHORT.count() + 1),
+            codeflow_limits::COORD_TEXT_SHORT.count(),
+            false,
+        )
+        .unwrap_err();
         assert!(error.contains("limit is 200"), "{error}");
-        assert!(check_required("title", "  ", SHORT, false).is_err());
+        assert!(check_required(
+            "title",
+            "  ",
+            codeflow_limits::COORD_TEXT_SHORT.count(),
+            false
+        )
+        .is_err());
     }
 
     #[test]

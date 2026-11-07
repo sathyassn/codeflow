@@ -91,7 +91,7 @@ pub fn launch_application(
 
 /// How long the second launch a window opening makes may take to hand its
 /// window to the running browser and exit.
-const WINDOW_HANDOFF_SECONDS: u64 = 10;
+const WINDOW_HANDOFF_SECONDS: u64 = codeflow_limits::PRESENT_WINDOW_HANDOFF.default;
 
 /// Open a new review window in the session's running isolated browser, as
 /// `present show` does once every window was closed and the browser is still
@@ -155,7 +155,7 @@ pub fn open_window(
                 cleanup.err().map_or_else(String::new, |error| format!("; cleanup: {error}"))
             )));
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(codeflow_limits::PRESENT_BROWSER_POLL.wait());
     }
 }
 
@@ -185,7 +185,7 @@ fn open_test_window(port: u16, url: &str) -> Result<()> {
     // The debugging server may hold the connection open: the status line
     // is all this needs.
     stream
-        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .set_read_timeout(Some(codeflow_limits::PRESENT_BROWSER_READ_TIMEOUT.wait()))
         .map_err(unavailable)?;
     let mut buffer = [0_u8; 512];
     let read = stream.read(&mut buffer).map_err(unavailable)?;
@@ -623,12 +623,12 @@ fn terminate_qualified_process(pid: u32, instance_id: Uuid, profile_dir: &Path) 
         }
         return Ok(());
     }
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + codeflow_limits::PRESENT_BROWSER_EXIT.wait();
     while Instant::now() < deadline {
         if unsafe { libc::kill(-pid, 0) } != 0 || process_group_holds_only_exited_members(pid)? {
             return Ok(());
         }
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(codeflow_limits::PRESENT_BROWSER_POLL.wait());
     }
     let raw_pid = u32::try_from(pid).map_err(|_| {
         PresentError::BrowserUnavailable("browser PID is outside the platform range".to_string())
@@ -651,12 +651,12 @@ fn terminate_qualified_process(pid: u32, instance_id: Uuid, profile_dir: &Path) 
         }
         return Ok(());
     }
-    let kill_deadline = Instant::now() + Duration::from_secs(1);
+    let kill_deadline = Instant::now() + codeflow_limits::PRESENT_BROWSER_KILL.wait();
     while Instant::now() < kill_deadline {
         if process_group_is_absent(pid)? || process_group_holds_only_exited_members(pid)? {
             return Ok(());
         }
-        thread::sleep(Duration::from_millis(25));
+        thread::sleep(codeflow_limits::PRESENT_BROWSER_KILL_POLL.wait());
     }
     Err(PresentError::BrowserUnavailable(
         "the reverified owned presentation browser process group did not exit after SIGKILL"
@@ -818,7 +818,8 @@ fn process_group_is_absent(pid: i32) -> Result<bool> {
 /// finish exiting. A closed browser's helper processes exit after its main
 /// process, so the group can outlive the leader by a moment.
 #[cfg(unix)]
-const LEADERLESS_GROUP_EXIT_WAIT: Duration = Duration::from_secs(2);
+const LEADERLESS_GROUP_EXIT_WAIT: Duration =
+    Duration::from_secs(codeflow_limits::PRESENT_LEADERLESS_GROUP_EXIT.default);
 
 /// Whether a process group whose leader is gone finishes exiting within
 /// [`LEADERLESS_GROUP_EXIT_WAIT`], polling `has_exited`. A group that still
@@ -834,7 +835,7 @@ fn leaderless_group_exits(mut has_exited: impl FnMut() -> Result<bool>) -> Resul
         if Instant::now() >= deadline {
             return Ok(false);
         }
-        thread::sleep(Duration::from_millis(25));
+        thread::sleep(codeflow_limits::PRESENT_BROWSER_KILL_POLL.wait());
     }
 }
 
@@ -1087,13 +1088,15 @@ fn owned_process_candidates_from_proc(
 /// The longest command line that is parsed into arguments for one process of
 /// the inventory.
 #[cfg(any(all(unix, not(target_os = "macos")), test))]
-const PROCESS_COMMAND_LINE_BOUND: usize = 64 * 1024;
+const PROCESS_COMMAND_LINE_BOUND: usize =
+    codeflow_limits::PRESENT_COMMAND_LINE_BYTES.default_count();
 
 /// The most bytes inspected of one command line. The kernel limits the
 /// arguments and environment of a new process to 6 MiB, so a longer one is
 /// not a process this scan can have met by launching it.
 #[cfg(all(unix, not(target_os = "macos")))]
-const PROCESS_COMMAND_LINE_SCAN_BOUND: u64 = 8 * 1024 * 1024;
+const PROCESS_COMMAND_LINE_SCAN_BOUND: u64 =
+    codeflow_limits::PRESENT_COMMAND_LINE_SCAN_BYTES.default;
 
 /// What one pass over the raw bytes of a command line found.
 #[cfg(any(all(unix, not(target_os = "macos")), test))]
@@ -1488,7 +1491,7 @@ where
     Terminate: FnMut(u32) -> Result<()>,
     Released: FnMut() -> Result<bool>,
 {
-    const MAX_VISITED_PROCESSES: usize = 64;
+    const MAX_VISITED_PROCESSES: usize = codeflow_limits::PRESENT_VISITED_PROCESSES.default_count();
 
     let mut pending = vec![pid];
     let mut scheduled = BTreeSet::from([pid]);
@@ -1533,11 +1536,11 @@ fn terminate_owned_windows_process(pid: u32, instance_id: Uuid, profile_dir: &Pa
             "the owned presentation browser process tree did not terminate".to_string(),
         ));
     }
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + codeflow_limits::PRESENT_BROWSER_EXIT.wait();
     while Instant::now() < deadline {
         match process_identity(pid, instance_id, profile_dir)? {
             ProcessIdentity::Absent | ProcessIdentity::Reused => return Ok(()),
-            ProcessIdentity::Owned => thread::sleep(Duration::from_millis(50)),
+            ProcessIdentity::Owned => thread::sleep(codeflow_limits::PRESENT_BROWSER_POLL.wait()),
         }
     }
     Err(PresentError::BrowserUnavailable(orphan_recovery_message(

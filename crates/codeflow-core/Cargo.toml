@@ -16,6 +16,7 @@ publish = false
 structural-check = []
 
 [dependencies]
+codeflow-limits = { path = "../codeflow-limits" }
 thiserror.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }

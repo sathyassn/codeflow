@@ -84,22 +84,16 @@ pub fn is_path_targeted(cmd: &str, path: &str) -> bool {
 }
 
 /// Most compiled glob patterns kept at once.
-pub(crate) const GLOB_CACHE_ENTRIES: usize = 128;
+pub(crate) const GLOB_CACHE_ENTRIES: usize = codeflow_limits::GLOB_CACHE_ENTRIES.default_count();
 
 /// Longest glob pattern the matcher compiles. Shipped policy patterns are far
 /// shorter; a longer one is refused, never compiled.
-pub const MAX_GLOB_PATTERN_BYTES: usize = 1024;
-/// Longest path the matcher scans against one pattern. It sits under the
-/// Windows path limit: a read of a 32,767-character path fails there with
-/// `os error 206`. A UTF-16 path never has more units than UTF-8 bytes, so a
-/// path inside this bound stays readable with a namespace prefix and a marker
-/// name added, and every host gives the same refusal past it (TSK-1258).
-pub const MAX_GLOB_PATH_BYTES: usize = 32_000;
+pub const MAX_GLOB_PATTERN_BYTES: usize = codeflow_limits::GLOB_PATTERN_BYTES.default_count();
 /// Largest compiled program, in bytes, for one glob. Compile work grows with
 /// this size, so it is the step bound for compilation.
-const GLOB_COMPILED_BYTES: usize = 256 * 1024;
+const GLOB_COMPILED_BYTES: usize = codeflow_limits::GLOB_COMPILED_BYTES.default_count();
 
-/// The cause a guard names when a path is past [`MAX_GLOB_PATH_BYTES`].
+/// The cause a guard names when a path is past [`codeflow_limits::GLOB_PATH_BYTES`].
 pub const PATH_PAST_BOUND: &str = "a path is longer than the glob matcher's bound";
 
 /// The result of matching a path against a glob under the bound.
@@ -140,7 +134,7 @@ impl GlobCache {
         if pattern.len() > MAX_GLOB_PATTERN_BYTES {
             return GlobMatch::Unbounded("a glob pattern is longer than the matcher's bound");
         }
-        if path.len() > MAX_GLOB_PATH_BYTES {
+        if path.len() > codeflow_limits::GLOB_PATH_BYTES.count() {
             return GlobMatch::Unbounded(PATH_PAST_BOUND);
         }
         let found = self
@@ -406,7 +400,7 @@ mod tests {
     #[test]
     fn glob_past_the_bound_refuses_with_a_cause() {
         let long_pattern = "a".repeat(MAX_GLOB_PATTERN_BYTES + 1);
-        let long_path = "a".repeat(MAX_GLOB_PATH_BYTES + 1);
+        let long_path = "a".repeat(codeflow_limits::GLOB_PATH_BYTES.count() + 1);
         for (path, pattern) in [("a", long_pattern.as_str()), (long_path.as_str(), "**/a")] {
             let result = match_extended_glob(path, pattern);
             assert!(matches!(result, GlobMatch::Unbounded(cause) if !cause.is_empty()));

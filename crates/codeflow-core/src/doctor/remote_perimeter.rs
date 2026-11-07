@@ -31,7 +31,7 @@
 //! workflow on the default branch produces.
 
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde_json::Value;
 
@@ -47,11 +47,8 @@ const AUTHORITY_ENVIRONMENT: &str = "codeflow-authority";
 
 const NAME: &str = "remote-perimeter";
 
-/// Each `gh` call is bounded, so an unreachable host cannot hang doctor.
-const GH_TIMEOUT: Duration = Duration::from_secs(15);
-
 /// Rules read per page of `rules/branches/<branch>`.
-const RULES_PAGE_SIZE: usize = 100;
+const RULES_PAGE_SIZE: usize = codeflow_limits::GITHUB_PAGE_SIZE.default_count();
 
 /// One rule that requires status checks: a ruleset or classic protection.
 struct Source {
@@ -101,7 +98,13 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         Ok((required, _)) => required,
         Err(why) => return note(why.clone()),
     };
-    let gh = |args: &[&str]| opts.do_exec_bounded("gh", args, GH_TIMEOUT);
+    let gh = |args: &[&str]| {
+        opts.do_exec_bounded(
+            "gh",
+            args,
+            codeflow_limits::DOCTOR_GH_TIMEOUT_SECONDS.wait(),
+        )
+    };
     let parse = |text: &str| serde_json::from_str::<Value>(text).unwrap_or(Value::Null);
 
     let repo = match gh(&["api", &format!("repos/{nwo}")]) {
@@ -973,7 +976,7 @@ fn bypass_of(opts: &Options, nwo: &str, source: &Source) -> Bypass {
     match opts.do_exec_bounded(
         "gh",
         &["api", &format!("repos/{nwo}/rulesets/{id}")],
-        GH_TIMEOUT,
+        codeflow_limits::DOCTOR_GH_TIMEOUT_SECONDS.wait(),
     ) {
         Ok(text) => {
             let ruleset = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);

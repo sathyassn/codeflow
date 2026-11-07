@@ -1043,13 +1043,40 @@ pub const SCHEMA: [KeySpec; 84] = [
 /// The full schema, for callers that render or validate it.
 #[must_use]
 pub fn schema() -> &'static [KeySpec] {
-    &SCHEMA
+    &GENERATED
 }
+
+/// [`SCHEMA`] with one generated entry per limit a project sets in policy.
+/// A limit is declared once, in [`super::limits`]; its key, bounds and notes
+/// reach `codeflow policy explain` and the policy reference from there.
+static GENERATED: std::sync::LazyLock<Vec<KeySpec>> = std::sync::LazyLock::new(|| {
+    let mut specs = SCHEMA.to_vec();
+    let leak = |text: String| -> &'static str { Box::leak(text.into_boxed_str()) };
+    for limit in super::limits::LIMITS {
+        let Some(path) = limit.key else { continue };
+        if limit.route != super::limits::Route::Policy || SCHEMA.iter().any(|s| s.path == path) {
+            continue;
+        }
+        specs.push(KeySpec {
+            path,
+            kind: KeyKind::UInt,
+            valid: leak(limit.valid_text()),
+            purpose: leak(format!("Limit: {}.", limit.name)),
+            notes: leak(format!(
+                "Class: {}. {}. The shipped policy file does not list it, so an older binary \
+                 never meets the key.",
+                limit.class.label(),
+                limit.reason.trim_end_matches('.')
+            )),
+        });
+    }
+    specs
+});
 
 /// Find one key's spec by its dotted leaf path.
 #[must_use]
 pub fn spec_for(path: &str) -> Option<&'static KeySpec> {
-    SCHEMA.iter().find(|s| s.path == path)
+    schema().iter().find(|s| s.path == path)
 }
 
 /// [`Policy::default`] serialized to JSON — the live source `explain`/`show`
@@ -1290,7 +1317,9 @@ pub fn validate_policy_str(data: &str) -> Result<(), Vec<PolicyError>> {
         }
         match key.as_str() {
             // The two object sections: walk their leaves with the prefix.
-            section @ ("git" | "security" | "guidance") => match value.as_object() {
+            section @ ("git" | "security" | "guidance" | "coord" | "limits") => match value
+                .as_object()
+            {
                 Some(section_obj) => {
                     for (leaf, leaf_value) in section_obj {
                         validate_leaf(&format!("{section}.{leaf}"), leaf_value, &mut errors);
@@ -1560,7 +1589,7 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
                     errors.push(PolicyError::invalid_value(
                         path,
                         value,
-                        &super::limits::bounds_text(limit),
+                        &limit.bounds_text(),
                     ));
                 }
             } else if value.as_u64().is_none_or(|n| u32::try_from(n).is_err()) {
@@ -1876,6 +1905,87 @@ fn validate_mapping(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
 mod tests {
     use super::*;
 
+    /// One key's policy text.
+    fn limit_policy(key: &str, value: &str) -> String {
+        let (section, leaf) = key.split_once('.').unwrap();
+        format!(r#"{{"{section}":{{"{leaf}":{value}}}}}"#)
+    }
+
+    fn read_limit(policy: &Policy, key: &str) -> u64 {
+        let (section, leaf) = key.split_once('.').unwrap();
+        serde_json::to_value(policy).unwrap()[section][leaf]
+            .as_u64()
+            .unwrap_or_else(|| panic!("{key} is not read"))
+    }
+
+    fn policy_limits() -> impl Iterator<Item = (&'static super::super::limits::Limit, &'static str)>
+    {
+        super::super::limits::LIMITS
+            .iter()
+            .filter(|limit| limit.route == super::super::limits::Route::Policy)
+            .filter_map(|limit| Some((limit, limit.key?)))
+    }
+
+    #[test]
+    fn every_policy_limit_is_read_when_set_and_defaults_when_absent() {
+        for (limit, key) in policy_limits() {
+            assert_eq!(read_limit(&Policy::default(), key), limit.default, "{key}");
+            let absent: Policy = serde_json::from_str("{}").unwrap();
+            assert_eq!(read_limit(&absent, key), limit.default, "{key}");
+            let set = limit.max.unwrap_or(limit.default + 1).max(limit.min);
+            let text = limit_policy(key, &set.to_string());
+            assert!(validate_policy_str(&text).is_ok(), "{text}");
+            let policy: Policy = serde_json::from_str(&text).unwrap();
+            assert_eq!(read_limit(&policy, key), set, "{key}");
+        }
+    }
+
+    #[test]
+    fn every_policy_limit_refuses_out_of_bounds_and_the_wrong_type_by_name() {
+        for (limit, key) in policy_limits() {
+            let mut bad = vec!["\"30\"".to_string(), "1.5".to_string(), "-1".to_string()];
+            if limit.min > 0 {
+                bad.push((limit.min - 1).to_string());
+            }
+            if let Some(max) = limit.max.filter(|max| *max < u64::MAX) {
+                bad.push((max + 1).to_string());
+            }
+            for value in bad {
+                let text = limit_policy(key, &value);
+                let errors = validate_policy_str(&text).expect_err(&text);
+                assert!(
+                    errors.iter().any(|error| error.to_string().contains(key)),
+                    "{text}: {errors:?}"
+                );
+                if key.starts_with("coord.") || key.starts_with("limits.") {
+                    assert!(serde_json::from_str::<Policy>(&text).is_err(), "{text}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_large_operational_or_guidance_value_is_accepted() {
+        for (limit, key) in policy_limits() {
+            if limit.max.is_none() {
+                let text = limit_policy(key, &u64::MAX.to_string());
+                assert!(validate_policy_str(&text).is_ok(), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_limit_key_refuses_naming_it() {
+        let text = r#"{"limits":{"no_such_limit":1}}"#;
+        let errors = validate_policy_str(text).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.to_string().contains("limits.no_such_limit")),
+            "{errors:?}"
+        );
+    }
+
     #[test]
     fn automation_profile_schema_names_the_task_field() {
         assert!(schema()
@@ -1926,7 +2036,7 @@ mod tests {
         // field (or a renamed one) fails this test until the registry follows.
         let mut struct_paths = Vec::new();
         leaf_paths(&default_policy_value(), "", &mut struct_paths);
-        let schema_paths: Vec<&str> = SCHEMA.iter().map(|s| s.path).collect();
+        let schema_paths: Vec<&str> = schema().iter().map(|s| s.path).collect();
         for p in &struct_paths {
             assert!(
                 schema_paths.contains(&p.as_str()),
@@ -1941,7 +2051,7 @@ mod tests {
         }
         assert_eq!(
             struct_paths.len() + OPTIONAL.len(),
-            SCHEMA.len(),
+            schema().len(),
             "one spec per leaf"
         );
     }
@@ -2197,7 +2307,8 @@ mod tests {
     fn test_validate_wrong_types_name_key() {
         let errs = validate_policy_str(r#"{"git":{"commit_desc_max_len":"fifty"}}"#).unwrap_err();
         assert!(errs[0].message.contains("git.commit_desc_max_len"));
-        assert!(errs[0].message.contains("non-negative integer"));
+        let bounds = codeflow_limits::GIT_COMMIT_DESC_MAX_LEN.bounds_text();
+        assert!(errs[0].message.contains(&bounds));
         let errs =
             validate_policy_str(r#"{"git":{"commit_footer_tokens":"Signed-off-by"}}"#).unwrap_err();
         assert!(errs[0].message.contains("array of strings"));

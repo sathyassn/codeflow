@@ -2,11 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-pub(super) const MAX_INPUT_BYTES: u64 = 1024 * 1024;
-pub(super) const MAX_SOURCE_BYTES: u64 = 1024 * 1024;
-pub(super) const MAX_TOTAL_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
-pub(super) const MAX_HORIZON: u64 = 366 * 24 * 60 * 60;
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Forecast {

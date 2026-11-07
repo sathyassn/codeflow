@@ -2661,22 +2661,6 @@ pub(crate) fn word_readings(word: &str) -> Option<Vec<String>> {
     Some(words)
 }
 
-/// The most words one brace expansion yields before the guard stops
-/// reading it and refuses instead.
-const BRACE_WORD_LIMIT: usize = 64;
-/// Most brace groups one word may nest or chain before expansion gives up
-/// (`None`, a refusal): bounds the recursion depth of `brace_expand`.
-const BRACE_DEPTH_LIMIT: usize = 256;
-/// Longest word `brace_expand` reads (`None`, a refusal, past it). It is the
-/// longest path the supported systems open, and small enough that the
-/// nested-group scan (the square of the length) stays cheap.
-const BRACE_WORD_BYTES: usize = 4096;
-
-/// The most `{`, `}` and `,` characters a word may hold for the guard to
-/// read its braces; each may have been quoted or escaped (see
-/// [`brace_words`]).
-const BRACE_CHAR_LIMIT: usize = 10;
-
 /// What a word with braces that the guard does not read is reported as.
 const BRACE_UNREAD: &str = "repository enforcement files (a brace expansion too large to read)";
 
@@ -2687,7 +2671,7 @@ const BRACE_UNREAD: &str = "repository enforcement files (a brace expansion too 
 /// been literal: the words of every such reading are kept, which can only
 /// add words. A comma list or a sequence (`{1..3}`, `{a..e..2}`) expands,
 /// nested groups included; `${...}` is a parameter, not a brace group. A
-/// sequence longer than [`BRACE_WORD_LIMIT`] becomes `*`, which matches at
+/// sequence longer than [`codeflow_limits::GUARD_BRACE_WORD_LIMIT`] becomes `*`, which matches at
 /// least every word it yields.
 fn brace_words(word: &str) -> Option<Vec<String>> {
     if !word.contains('{') {
@@ -2698,7 +2682,7 @@ fn brace_words(word: &str) -> Option<Vec<String>> {
         .filter(|(_, c)| matches!(c, '{' | '}' | ','))
         .map(|(at, _)| at)
         .collect();
-    if marks.len() > BRACE_CHAR_LIMIT {
+    if marks.len() > codeflow_limits::GUARD_BRACE_CHAR_LIMIT.count() {
         return None;
     }
     let mut out: Vec<String> = Vec::new();
@@ -2713,7 +2697,7 @@ fn brace_words(word: &str) -> Option<Vec<String>> {
         for expanded in brace_expand(&reading)? {
             let expanded: String = expanded.chars().map(plain_brace_char).collect();
             if !out.contains(&expanded) {
-                if out.len() >= BRACE_WORD_LIMIT * 4 {
+                if out.len() >= codeflow_limits::GUARD_BRACE_WORD_LIMIT.count() * 4 {
                     return None;
                 }
                 out.push(expanded);
@@ -2744,16 +2728,16 @@ fn plain_brace_char(c: char) -> char {
 
 /// Brace expansion of a word whose `{`, `}` and `,` all count, as Bash
 /// reads them: the first group from the left expands, then each result in
-/// turn. `None` past [`BRACE_WORD_LIMIT`] words.
+/// turn. `None` past [`codeflow_limits::GUARD_BRACE_WORD_LIMIT`] words.
 pub(crate) fn brace_expand(word: &str) -> Option<Vec<String>> {
     fn into(word: &str, out: &mut Vec<String>, depth: usize) -> Option<()> {
         // Each level removes one group, so a word of many groups would
         // recurse as deep as it has groups; past the cap it cannot be read.
-        if depth > BRACE_DEPTH_LIMIT {
+        if depth > codeflow_limits::GUARD_BRACE_DEPTH_LIMIT.count() {
             return None;
         }
         let Some((open, close, alternatives)) = brace_group(word) else {
-            if out.len() >= BRACE_WORD_LIMIT {
+            if out.len() >= codeflow_limits::GUARD_BRACE_WORD_LIMIT.count() {
                 return None;
             }
             out.push(word.to_string());
@@ -2770,7 +2754,7 @@ pub(crate) fn brace_expand(word: &str) -> Option<Vec<String>> {
     }
     // Each group's interior is scanned again for every nested group, so the
     // work grows with the square of the word; a longer word cannot be read.
-    if word.len() > BRACE_WORD_BYTES {
+    if word.len() > codeflow_limits::GUARD_BRACE_WORD_BYTES.count() {
         return None;
     }
     let mut out = Vec::new();
@@ -2841,7 +2825,7 @@ fn brace_group(word: &str) -> Option<(usize, usize, Vec<String>)> {
 
 /// The words of a sequence expression (`1..5`, `05..10..2`, `a..e`), or
 /// `None` when `inner` is not one. A sequence of more than
-/// [`BRACE_WORD_LIMIT`] words is `*`.
+/// [`codeflow_limits::GUARD_BRACE_WORD_LIMIT`] words is `*`.
 fn brace_sequence(inner: &str) -> Option<Vec<String>> {
     let parts: Vec<&str> = inner.split("..").collect();
     if !(2..=3).contains(&parts.len()) {
@@ -2871,7 +2855,7 @@ fn brace_sequence(inner: &str) -> Option<Vec<String>> {
     };
     let (from, to) = (words[0], words[1]);
     let count = from.abs_diff(to) / step + 1;
-    if count > BRACE_WORD_LIMIT as u64 {
+    if count > codeflow_limits::GUARD_BRACE_WORD_LIMIT.count() as u64 {
         return Some(vec!["*".to_string()]);
     }
     let letters = padded.is_none() && parts[0].parse::<i64>().is_err();
@@ -2917,16 +2901,10 @@ fn unknown_tilde_rest(word: &str) -> Option<&str> {
     (!head.is_empty() && head != "+").then_some(tail)
 }
 
-/// The most directory entries one glob expansion reads before it stops. It
-/// bounds the expanded candidate list. At the limit, only a pattern proved
-/// contained in an unprotected directory can use that directory instead.
-const GLOB_ENTRY_LIMIT: usize = 4096;
-pub(crate) const SECRET_ENTRY_LIMIT: usize = 65_536;
-
 /// Why a glob expansion stopped before it read every entry.
 #[derive(Debug, PartialEq, Eq)]
 enum GlobStop {
-    /// It would read more than [`GLOB_ENTRY_LIMIT`] entries.
+    /// It would read more than [`codeflow_limits::GUARD_GLOB_ENTRY_LIMIT`] entries.
     TooManyEntries,
     /// An existing path could not be classified or enumerated.
     Unreadable,
@@ -2935,7 +2913,9 @@ enum GlobStop {
 impl GlobStop {
     fn reason(&self) -> &'static str {
         match self {
-            Self::TooManyEntries => "cannot inspect every glob path: more than 4096 entries",
+            Self::TooManyEntries => {
+                "cannot inspect every glob path: past limits.guard_glob_entry_limit"
+            }
             Self::Unreadable => "cannot read paths reached through a glob",
         }
     }
@@ -3149,7 +3129,7 @@ impl WordGlob {
     /// joined as written, so a symbolic link in them is resolved by the
     /// caller's file-system-aware check.
     fn expand(&self) -> Result<Vec<PathBuf>, GlobStop> {
-        self.expand_with_limit(GLOB_ENTRY_LIMIT)
+        self.expand_with_limit(codeflow_limits::GUARD_GLOB_ENTRY_LIMIT.count())
     }
 
     /// Whole-component `**` can recurse while retaining the remaining leaf
@@ -3231,13 +3211,15 @@ pub(crate) fn secret_glob_paths(word: &str, cwd: &Path) -> Result<Vec<PathBuf>, 
             false,
             false,
             &mut 0,
-            SECRET_ENTRY_LIMIT,
+            codeflow_limits::GUARD_SECRET_ENTRY_LIMIT.count(),
         )
     } else {
-        glob.expand_with_limit(SECRET_ENTRY_LIMIT)
+        glob.expand_with_limit(codeflow_limits::GUARD_SECRET_ENTRY_LIMIT.count())
     };
     paths.map_err(|stop| match stop {
-        GlobStop::TooManyEntries => "cannot inspect every glob path: more than 65536 entries",
+        GlobStop::TooManyEntries => {
+            "cannot inspect every glob path: past limits.guard_secret_entry_limit"
+        }
         GlobStop::Unreadable => stop.reason(),
     })
 }
@@ -3249,11 +3231,16 @@ pub(crate) fn secret_search_paths(
     read: &mut usize,
     skip: impl Fn(&Path) -> Result<bool, &'static str>,
 ) -> Result<Vec<PathBuf>, &'static str> {
-    every_path_below_filtered(root, read, SECRET_ENTRY_LIMIT, &|path| {
-        skip(path).map_err(|_| GlobStop::Unreadable)
-    })
+    every_path_below_filtered(
+        root,
+        read,
+        codeflow_limits::GUARD_SECRET_ENTRY_LIMIT.count(),
+        &|path| skip(path).map_err(|_| GlobStop::Unreadable),
+    )
     .map_err(|stop| match stop {
-        GlobStop::TooManyEntries => "cannot inspect every search path: more than 65536 entries",
+        GlobStop::TooManyEntries => {
+            "cannot inspect every search path: past limits.guard_secret_entry_limit"
+        }
         GlobStop::Unreadable => stop.reason(),
     })
 }
@@ -3279,7 +3266,7 @@ fn glob_prefix_is_contained(prefix: &Path, protected_name: impl Fn(&str) -> bool
         if !entered.insert(dir.clone()) {
             continue;
         }
-        if entered.len() > GLOB_ENTRY_LIMIT {
+        if entered.len() > codeflow_limits::GUARD_GLOB_ENTRY_LIMIT.count() {
             return false;
         }
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -3316,7 +3303,7 @@ fn glob_prefix_is_contained(prefix: &Path, protected_name: impl Fn(&str) -> bool
                 // Contained symbolic links point into the physical tree
                 // already being read; do not follow them around a cycle.
                 if kind.is_dir() && !entered.contains(&real) {
-                    if pending.len() >= GLOB_ENTRY_LIMIT {
+                    if pending.len() >= codeflow_limits::GUARD_GLOB_ENTRY_LIMIT.count() {
                         return false;
                     }
                     pending.push(real);
@@ -3414,7 +3401,7 @@ pub(crate) fn startup_glob_paths(
         false,
         match_hidden,
         &mut 0,
-        GLOB_ENTRY_LIMIT,
+        codeflow_limits::GUARD_GLOB_ENTRY_LIMIT.count(),
     ) {
         // Preserve the startup reader's recursive-glob boundary. A single
         // ordinary component can use its prefix when no class path or
@@ -3668,10 +3655,6 @@ fn word_could_name_spelled(value: &str) -> Option<&'static str> {
 const EVERY_PATH_PATTERN: &str =
     "repository enforcement files (a pattern the guard reads as every path)";
 
-/// The most directories [`run_dirs`] lists before it gives up and reports
-/// the directory as unknown.
-const RUN_DIR_LIMIT: usize = 64;
-
 /// Every directory the commands of a script can run in (TSK-216 round 5).
 pub(crate) struct RunDirs {
     /// The starting directory and each one a literal `cd`, `pushd` or
@@ -3796,14 +3779,15 @@ pub(crate) fn run_dirs_from_home(
 
 /// Add a directory to the list, unless it is there already. `false`, with
 /// the directory marked unknown, once the list is full: it never grows past
-/// [`RUN_DIR_LIMIT`] (TSK-216 round 6).
+/// [`codeflow_limits::GUARD_RUN_DIR_LIMIT`] (TSK-216 round 6).
 fn add_run_dir(run: &mut RunDirs, dir: PathBuf) -> bool {
     if run.dirs.contains(&dir) {
         return true;
     }
-    if run.dirs.len() >= RUN_DIR_LIMIT {
+    if run.dirs.len() >= codeflow_limits::GUARD_RUN_DIR_LIMIT.count() {
         run.unknown = Some(format!(
-            "more than {RUN_DIR_LIMIT} directories the line can move to"
+            "more than {} directories the line can move to",
+            codeflow_limits::GUARD_RUN_DIR_LIMIT.count()
         ));
         return false;
     }
@@ -3813,7 +3797,7 @@ fn add_run_dir(run: &mut RunDirs, dir: PathBuf) -> bool {
 
 /// The directories a literal move to `target` reaches from each listed
 /// directory. A glob, brace or value filled in at run time marks the
-/// directory unknown. At most [`RUN_DIR_LIMIT`] are returned.
+/// directory unknown. At most [`codeflow_limits::GUARD_RUN_DIR_LIMIT`] are returned.
 fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
     if unresolved_word(target) || has_glob(target) || target.contains(['{', '}']) {
         run.unknown.get_or_insert_with(|| {
@@ -3838,11 +3822,12 @@ fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
             shell_path_with_home(target, dir, run.home.as_deref())
         };
         reached.push(path);
-        if reached.len() > RUN_DIR_LIMIT {
+        if reached.len() > codeflow_limits::GUARD_RUN_DIR_LIMIT.count() {
             run.unknown = Some(format!(
-                "more than {RUN_DIR_LIMIT} directories the line can move to"
+                "more than {} directories the line can move to",
+                codeflow_limits::GUARD_RUN_DIR_LIMIT.count()
             ));
-            reached.truncate(RUN_DIR_LIMIT);
+            reached.truncate(codeflow_limits::GUARD_RUN_DIR_LIMIT.count());
             break;
         }
     }
@@ -5202,9 +5187,6 @@ fn sed_operands_in<'a>(args: &'a [String], spec: &OptionSpec) -> Vec<&'a str> {
     let skip = usize::from(!scripted);
     parsed.operands.into_iter().skip(skip).collect()
 }
-
-/// The largest `sed -f` script the guard reads; a larger one is refused.
-const SED_SCRIPT_LIMIT: u64 = 1 << 24;
 
 /// Whether the shell fills in part of each argument of the `sed` command on
 /// `line` that has these arguments: `None` when the command cannot be
@@ -8848,7 +8830,7 @@ fn substitution_output_runs(prefix: &str) -> bool {
 
 /// The deepest nesting of substitutions, shell bodies and word groups the
 /// command reader follows; deeper text refuses the line ([`NESTING_UNREAD`]).
-const NESTING_LIMIT: usize = 8;
+const NESTING_LIMIT: usize = codeflow_limits::GUARD_NESTING_LIMIT.default_count();
 
 /// The segment that stands for text nested deeper than [`NESTING_LIMIT`].
 /// It is not a command any shell runs, and the integrity check refuses it.
@@ -10289,7 +10271,7 @@ pub(crate) const GIT_BUILTINS: &[&str] = &[
 ];
 
 /// How deep an alias may expand into further aliases before the guard stops.
-const MAX_ALIAS_DEPTH: usize = 8;
+const MAX_ALIAS_DEPTH: usize = codeflow_limits::GUARD_ALIAS_DEPTH.default_count();
 
 /// Expand `sub`, a subcommand that is not a builtin, through the alias it
 /// names in every repository the op could target (TSK-112). Each result is
@@ -12880,8 +12862,11 @@ fn read_sed_script(file: &str, cwd: &Path) -> SedRead<String> {
     if !metadata.is_file() {
         return unreadable("not a regular script file".into());
     }
-    if metadata.len() > SED_SCRIPT_LIMIT {
-        return unreadable(format!("exceeds {SED_SCRIPT_LIMIT} byte limit"));
+    if metadata.len() > codeflow_limits::GUARD_SED_SCRIPT_BYTES.value() {
+        return unreadable(format!(
+            "exceeds {} byte limit",
+            codeflow_limits::GUARD_SED_SCRIPT_BYTES.value()
+        ));
     }
     let input = match std::fs::File::open(cwd.join(file)) {
         Ok(input) => input,
@@ -12891,18 +12876,27 @@ fn read_sed_script(file: &str, cwd: &Path) -> SedRead<String> {
         Ok(metadata) if !metadata.is_file() => {
             return unreadable("script is no longer a regular file".into())
         }
-        Ok(metadata) if metadata.len() > SED_SCRIPT_LIMIT => {
-            return unreadable(format!("exceeds {SED_SCRIPT_LIMIT} byte limit"))
+        Ok(metadata) if metadata.len() > codeflow_limits::GUARD_SED_SCRIPT_BYTES.value() => {
+            return unreadable(format!(
+                "exceeds {} byte limit",
+                codeflow_limits::GUARD_SED_SCRIPT_BYTES.value()
+            ))
         }
         Ok(_) => {}
         Err(error) => return unreadable(error.to_string()),
     }
     let mut bytes = Vec::new();
-    if let Err(error) = input.take(SED_SCRIPT_LIMIT + 1).read_to_end(&mut bytes) {
+    if let Err(error) = input
+        .take(codeflow_limits::GUARD_SED_SCRIPT_BYTES.value() + 1)
+        .read_to_end(&mut bytes)
+    {
         return unreadable(error.to_string());
     }
-    if bytes.len() as u64 > SED_SCRIPT_LIMIT {
-        return unreadable(format!("exceeds {SED_SCRIPT_LIMIT} byte limit"));
+    if bytes.len() as u64 > codeflow_limits::GUARD_SED_SCRIPT_BYTES.value() {
+        return unreadable(format!(
+            "exceeds {} byte limit",
+            codeflow_limits::GUARD_SED_SCRIPT_BYTES.value()
+        ));
     }
     match String::from_utf8(bytes) {
         Ok(text) => SedRead::Read(text),
@@ -14980,7 +14974,7 @@ mod tests {
     fn brace_expansion_stays_bounded_on_long_words() {
         let started = std::time::Instant::now();
         // Unmatched `{` inside the length bound read as text, in one pass.
-        let unmatched = "{".repeat(BRACE_WORD_BYTES);
+        let unmatched = "{".repeat(codeflow_limits::GUARD_BRACE_WORD_BYTES.count());
         assert_eq!(brace_expand(&unmatched), Some(vec![unmatched.clone()]));
         // Past the length bound a word cannot be read: a refusal, at once,
         // for unmatched braces and for nested balanced ones (each group's
@@ -14988,7 +14982,10 @@ mod tests {
         assert_eq!(brace_expand(&"{".repeat(200_000)), None);
         let nested = format!("{}x{}", "{".repeat(100_000), "}".repeat(100_000));
         assert_eq!(brace_expand(&nested), None);
-        assert_eq!(brace_expand(&"{1..1}".repeat(BRACE_DEPTH_LIMIT + 1)), None);
+        assert_eq!(
+            brace_expand(&"{1..1}".repeat(codeflow_limits::GUARD_BRACE_DEPTH_LIMIT.count() + 1)),
+            None
+        );
         assert_eq!(
             brace_expand("a{b,c}d"),
             Some(vec!["abd".into(), "acd".into()])
@@ -15099,7 +15096,7 @@ mod tests {
             super::every_path_below_with_limit(
                 &dir.path().join("tree"),
                 &mut 0,
-                super::GLOB_ENTRY_LIMIT
+                codeflow_limits::GUARD_GLOB_ENTRY_LIMIT.count()
             ),
             Err(super::GlobStop::Unreadable)
         );
@@ -15228,7 +15225,7 @@ mod tests {
         let path = dir.path().join("large.sed");
         std::fs::File::create(&path)
             .unwrap()
-            .set_len(SED_SCRIPT_LIMIT + 1)
+            .set_len(codeflow_limits::GUARD_SED_SCRIPT_BYTES.value() + 1)
             .unwrap();
         assert!(matches!(
             read_sed_script("large.sed", dir.path()),
@@ -17919,7 +17916,11 @@ mod tests {
         let line = commands.join("; ");
         let started = std::time::Instant::now();
         let run = run_dirs(&expand_commands(&line), Path::new("/r"));
-        assert!(run.dirs.len() <= RUN_DIR_LIMIT, "{}", run.dirs.len());
+        assert!(
+            run.dirs.len() <= codeflow_limits::GUARD_RUN_DIR_LIMIT.count(),
+            "{}",
+            run.dirs.len()
+        );
         assert!(run.unknown.is_some());
         assert!(
             started.elapsed() < std::time::Duration::from_secs(2),
@@ -18996,7 +18997,7 @@ mod tests {
         git2::Repository::init(dir.path()).unwrap();
         let many = dir.path().join("many");
         std::fs::create_dir_all(&many).unwrap();
-        for n in 0..=GLOB_ENTRY_LIMIT {
+        for n in 0..=codeflow_limits::GUARD_GLOB_ENTRY_LIMIT.count() {
             std::fs::write(many.join(format!("f{n}")), "").unwrap();
         }
         assert_eq!(

@@ -31,7 +31,8 @@
             "minimum": 85
           }
         ]
-      }
+      },
+      "timeout_seconds": 600
     },
     {
       "name": "go-lint",
@@ -47,7 +48,8 @@
         "quick": {
           "command": "go vet ./..."
         }
-      }
+      },
+      "timeout_seconds": 300
     }
   ]
 }

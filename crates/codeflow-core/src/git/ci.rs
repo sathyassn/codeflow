@@ -78,10 +78,10 @@ pub struct CiWaitConfig {
 }
 
 fn default_timeout_minutes() -> u64 {
-    30
+    codeflow_limits::CI_WAIT_TIMEOUT.default
 }
 fn default_poll_interval_seconds() -> u64 {
-    30
+    codeflow_limits::CI_WAIT_POLL_INTERVAL.default
 }
 fn default_fall_back_to_all() -> bool {
     true
@@ -99,27 +99,15 @@ impl Default for CiWaitConfig {
     }
 }
 
-/// Accepted range for [`CiWaitConfig::timeout_minutes`]. Zero would make
-/// the gate always fail immediately; astronomical values produce indefinite
-/// blocking and risk `Duration::from_secs` overflow when multiplied by 60.
-/// One day is a safe upper bound for a CI wait.
-const TIMEOUT_MINUTES_MIN: u64 = 1;
-const TIMEOUT_MINUTES_MAX: u64 = 1440; // 24 hours
-
-/// Accepted range for [`CiWaitConfig::poll_interval_seconds`] — too-short
-/// values hammer the GitHub API (rate-limit risk); too-long values hide
-/// CI outcomes well past their conclusion.
-const POLL_INTERVAL_SECS_MIN: u64 = 5;
-const POLL_INTERVAL_SECS_MAX: u64 = 300; // 5 minutes
-
 impl CiWaitConfig {
     /// Load [`CiWaitConfig`] from `.codeflow/ci-wait.json` under the
     /// project root. Missing file returns defaults (safe fallback for repos
     /// that have not opted in).
     ///
     /// The loaded config is validated after deserialization;
-    /// `timeout_minutes` must be in `[1, 1440]` and `poll_interval_seconds`
-    /// in `[5, 300]`. Out-of-range values are rejected via [`CiWaitError::ParseConfig`].
+    /// `timeout_minutes` and `poll_interval_seconds` must meet their floors in
+    /// the limits registry. Values below them are rejected via
+    /// [`CiWaitError::ParseConfig`]; a large value is the project's choice.
     ///
     /// # Errors
     ///
@@ -150,18 +138,20 @@ impl CiWaitConfig {
     ///
     /// Returns a human-readable message naming the first out-of-range field.
     pub(crate) fn validate_bounds(&self) -> Result<(), String> {
-        if !(TIMEOUT_MINUTES_MIN..=TIMEOUT_MINUTES_MAX).contains(&self.timeout_minutes) {
-            return Err(format!(
-                "timeout_minutes {} out of range [{TIMEOUT_MINUTES_MIN}, {TIMEOUT_MINUTES_MAX}]",
-                self.timeout_minutes
-            ));
-        }
-        if !(POLL_INTERVAL_SECS_MIN..=POLL_INTERVAL_SECS_MAX).contains(&self.poll_interval_seconds)
-        {
-            return Err(format!(
-                "poll_interval_seconds {} out of range [{POLL_INTERVAL_SECS_MIN}, {POLL_INTERVAL_SECS_MAX}]",
-                self.poll_interval_seconds
-            ));
+        for (limit, value) in [
+            (codeflow_limits::CI_WAIT_TIMEOUT, self.timeout_minutes),
+            (
+                codeflow_limits::CI_WAIT_POLL_INTERVAL,
+                self.poll_interval_seconds,
+            ),
+        ] {
+            if !limit.accepts(value) {
+                return Err(format!(
+                    "{} {value} out of range; expected {}",
+                    limit.key.unwrap_or(limit.name),
+                    limit.bounds_text()
+                ));
+            }
         }
         Ok(())
     }
@@ -767,18 +757,14 @@ mod tests {
     }
 
     #[test]
-    fn test_load_rejects_timeout_astronomical() {
+    fn test_load_accepts_a_large_timeout() {
         let tmp = tempfile::tempdir().unwrap();
         write_ci_wait_config(
             tmp.path(),
             r#"{"timeout_minutes": 1441, "poll_interval_seconds": 30}"#,
         );
-        let err = CiWaitConfig::load(tmp.path()).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("timeout_minutes 1441 out of range"),
-            "expected out-of-range error, got: {msg}"
-        );
+        let cfg = CiWaitConfig::load(tmp.path()).unwrap();
+        assert_eq!(cfg.timeout_minutes, 1441);
     }
 
     #[test]
@@ -797,23 +783,19 @@ mod tests {
     }
 
     #[test]
-    fn test_load_rejects_poll_too_long() {
+    fn test_load_accepts_a_long_poll() {
         let tmp = tempfile::tempdir().unwrap();
         write_ci_wait_config(
             tmp.path(),
             r#"{"timeout_minutes": 30, "poll_interval_seconds": 301}"#,
         );
-        let err = CiWaitConfig::load(tmp.path()).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("poll_interval_seconds 301 out of range"),
-            "expected out-of-range error, got: {msg}"
-        );
+        let cfg = CiWaitConfig::load(tmp.path()).unwrap();
+        assert_eq!(cfg.poll_interval_seconds, 301);
     }
 
     #[test]
     fn test_load_accepts_valid_boundaries() {
-        // Min and max of both ranges must load successfully.
+        // The floors and large values both load.
         let cases = [(1u64, 5u64), (1, 300), (1440, 5), (1440, 300)];
         for (t, p) in cases {
             let tmp = tempfile::tempdir().unwrap();
@@ -838,9 +820,14 @@ mod tests {
         assert!(err.starts_with("timeout_minutes 0 out of range"));
 
         cfg = CiWaitConfig::default();
-        cfg.poll_interval_seconds = 10_000;
+        cfg.poll_interval_seconds = 4;
         let err = cfg.validate_bounds().unwrap_err();
-        assert!(err.starts_with("poll_interval_seconds 10000 out of range"));
+        assert!(err.starts_with("poll_interval_seconds 4 out of range"));
+
+        cfg = CiWaitConfig::default();
+        cfg.poll_interval_seconds = 10_000;
+        cfg.timeout_minutes = 100_000;
+        assert!(cfg.validate_bounds().is_ok());
     }
 
     #[test]

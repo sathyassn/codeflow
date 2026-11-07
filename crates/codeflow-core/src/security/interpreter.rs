@@ -1487,7 +1487,7 @@ fn secret_path_spelling_checked(
     // An oversize path is refused first and by name. Without this a reader
     // operand reached `glob_intersects`, whose token cap refuses it without
     // saying why, before the matcher could name the bound.
-    if word.len() > super::pattern::MAX_GLOB_PATH_BYTES {
+    if word.len() > codeflow_limits::GLOB_PATH_BYTES.count() {
         return Err(super::pattern::PATH_PAST_BOUND);
     }
     let word = crate::portable_path::filesystem_spelling(word).to_ascii_lowercase();
@@ -4843,7 +4843,7 @@ mod tests {
             let findings = judge_in(&repo, &repo.root, &repo.root, command, PolicyLevel::Block);
             let correct = if refuse {
                 integrity_refusal(&findings)
-                    .is_some_and(|v| v.message.contains("more than 4096 entries"))
+                    .is_some_and(|v| v.message.contains("past limits.guard_glob_entry_limit"))
             } else {
                 findings.is_empty()
             };
@@ -4871,10 +4871,7 @@ mod tests {
     #[test]
     fn unbounded_glob_input_names_its_cause_in_the_path_check() {
         let repo = repo();
-        let long = format!(
-            "/{}",
-            "a".repeat(super::super::pattern::MAX_GLOB_PATH_BYTES)
-        );
+        let long = format!("/{}", "a".repeat(codeflow_limits::GLOB_PATH_BYTES.count()));
         let cause = secret_path_result(&long, &repo.root, None, Some(true))
             .expect_err("a path past the bound must refuse, not answer");
         assert!(
@@ -4905,7 +4902,7 @@ mod tests {
     #[test]
     fn oversize_name_after_a_substitution_names_the_bound() {
         let repo = repo();
-        let long = "a".repeat(super::super::pattern::MAX_GLOB_PATH_BYTES);
+        let long = "a".repeat(codeflow_limits::GLOB_PATH_BYTES.count());
         let command = format!("python3 tool.py $(date)/{long}");
         let findings = judge_in(&repo, &repo.root, &repo.root, &command, PolicyLevel::Block);
         assert!(
@@ -4927,7 +4924,7 @@ mod tests {
     #[test]
     fn oversize_interpreter_literal_names_the_bound() {
         let repo = repo();
-        let long = "a".repeat(super::super::pattern::MAX_GLOB_PATH_BYTES + 1);
+        let long = "a".repeat(codeflow_limits::GLOB_PATH_BYTES.count() + 1);
         let command = format!("python3 -c \"print('/{long}')\"");
         let findings = judge_in(&repo, &repo.root, &repo.root, &command, PolicyLevel::Block);
         assert!(
@@ -4950,7 +4947,7 @@ mod tests {
     fn brace_word_past_the_byte_bound_names_the_brace_bound() {
         let repo = repo();
         let word = format!("pub{{a,b}}{}", "/x".repeat(3000));
-        assert!(word.len() > 4096 && word.len() < super::super::pattern::MAX_GLOB_PATH_BYTES);
+        assert!(word.len() > 4096 && word.len() < codeflow_limits::GLOB_PATH_BYTES.count());
         let cause = "cannot inspect every brace alternative";
         assert_eq!(
             secret_path_result(&word, &repo.root, None, Some(true)),
@@ -4994,7 +4991,7 @@ mod tests {
     #[test]
     fn unbounded_glob_input_is_refused_by_the_guard_with_its_cause() {
         let repo = repo();
-        let long = "a".repeat(super::super::pattern::MAX_GLOB_PATH_BYTES);
+        let long = "a".repeat(codeflow_limits::GLOB_PATH_BYTES.count());
         let command = format!("python3 tool.py /{long}");
         let findings = judge_in(&repo, &repo.root, &repo.root, &command, PolicyLevel::Block);
         assert!(

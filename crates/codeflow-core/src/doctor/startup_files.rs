@@ -27,9 +27,6 @@ const READ: &[&str] = &[
     ".zshrc",
 ];
 
-/// The most bytes read from one startup file.
-const READ_LIMIT: u64 = 256 * 1024;
-
 /// What a startup file's `source` lines name.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Sourced {
@@ -59,10 +56,11 @@ pub(crate) fn sourced_files(env: &StartupEnv) -> Sourced {
                 continue;
             }
         };
-        if !meta.is_file() || meta.len() > READ_LIMIT {
-            if meta.len() > READ_LIMIT {
+        if !meta.is_file() || meta.len() > codeflow_limits::DOCTOR_STARTUP_READ_LIMIT.value() {
+            if meta.len() > codeflow_limits::DOCTOR_STARTUP_READ_LIMIT.value() {
                 found.unresolved.push(format!(
-                    "~/{name}: larger than the {READ_LIMIT}-byte read limit"
+                    "~/{name}: larger than the {doctor_startup_read_limit}-byte read limit",
+                    doctor_startup_read_limit = codeflow_limits::DOCTOR_STARTUP_READ_LIMIT.value()
                 ));
             }
             continue;

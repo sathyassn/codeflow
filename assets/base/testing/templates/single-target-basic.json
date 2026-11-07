@@ -21,7 +21,8 @@
         "full": {
           "command": "npm test -- --ci"
         }
-      }
+      },
+      "timeout_seconds": 600
     }
   ]
 }

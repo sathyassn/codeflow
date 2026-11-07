@@ -10,7 +10,7 @@ use codeflow_core::hooks::policy::Policy;
 use codeflow_core::hooks::PolicyLevel;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::readiness::{self, Backlog, Entry, State};
-use codeflow_core::workgraph::work_start::{ReviewedPin, REVIEW_LOOKUP_TIMEOUT};
+use codeflow_core::workgraph::work_start::ReviewedPin;
 use codeflow_core::workgraph::{
     declared_work_target, durable_work_tracking_enabled, resolve_work_target_checked,
 };
@@ -675,7 +675,7 @@ fn pr_review(
 ) -> Result<serde_json::Value, String> {
     use std::io::{Read as _, Seek as _};
     use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
     let mut output = tempfile::tempfile().map_err(|error| error.to_string())?;
     let mut command = Command::new("gh");
     command
@@ -702,10 +702,12 @@ fn pr_review(
         .map_err(|error| format!("cannot verify review for this pin: {error}"))?;
     let start = Instant::now();
     let status = loop {
-        if start.elapsed() >= REVIEW_LOOKUP_TIMEOUT {
+        if start.elapsed() >= codeflow_limits::WORK_START_REVIEW_LOOKUP_TIMEOUT_SECONDS.wait() {
             break Err(format!(
                 "cannot verify review for this pin: provider timed out after {} seconds",
-                REVIEW_LOOKUP_TIMEOUT.as_secs()
+                codeflow_limits::WORK_START_REVIEW_LOOKUP_TIMEOUT_SECONDS
+                    .wait()
+                    .as_secs()
             ));
         }
         match output.metadata() {
@@ -723,7 +725,7 @@ fn pr_review(
         }
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => std::thread::sleep(codeflow_limits::POLL_LOCK_MILLIS.wait()),
             Err(error) => {
                 break Err(format!(
                     "cannot verify review for this pin: cannot wait for provider: {error}"

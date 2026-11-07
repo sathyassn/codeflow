@@ -590,7 +590,7 @@ fn legacy_recovery_precedes_full_state_parsing_on_setup_and_update() {
             &PortalIo::open(root.path()).unwrap(),
             STATE_PATH,
             valid,
-            MAX_STATE_BYTES,
+            codeflow_limits::SCAFFOLD_PORTAL_MAX_STATE_BYTES.value(),
             "fixture",
         )
         .unwrap();
@@ -638,7 +638,7 @@ fn baseline_removal_live_failure_rolls_back_but_abrupt_failure_recovers_forward(
         plan.remove(
             &PortalIo::open(root.path()).unwrap(),
             &baseline,
-            MAX_MANAGED_FILE_BYTES,
+            codeflow_limits::SCAFFOLD_PORTAL_MAX_MANAGED_FILE_BYTES.value(),
             "fixture",
         )
         .unwrap();

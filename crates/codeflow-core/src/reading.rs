@@ -51,8 +51,6 @@ use std::path::{Path, PathBuf};
 
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 
-const KIB: usize = 1024;
-
 /// Shipped skill files keyed `<skill>/<path>`, with their text.
 pub type SkillFiles = BTreeMap<String, String>;
 
@@ -74,29 +72,33 @@ pub type SkillFiles = BTreeMap<String, String>;
 /// The Anthropic API refuses a skill or agent `description` longer than
 /// this many characters (Agent Skills best practices, "YAML frontmatter
 /// requirements"). A real limit: doctor warns past it.
-pub const DESCRIPTION_LIMIT_CHARS: usize = 1024;
+pub const DESCRIPTION_LIMIT_CHARS: usize =
+    codeflow_limits::HARNESS_DESCRIPTION_CHARS.default_count();
 
 /// Where Claude Code's skill listing cuts a description, `when_to_use`
 /// included. Named beside a warning, never measured against.
-pub const DESCRIPTION_LISTING_CHARS: usize = 1536;
+pub const DESCRIPTION_LISTING_CHARS: usize =
+    codeflow_limits::HARNESS_DESCRIPTION_LISTING_CHARS.default_count();
 
 /// Advisory guideline for a skill or agent body. Anthropic's skill authoring
 /// guide and Cursor's rules guide both say to keep a body under 500 lines
 /// and move detail to files read on demand.
-pub const BODY_GUIDELINE_LINES: usize = 500;
+pub const BODY_GUIDELINE_LINES: usize = codeflow_limits::READING_BODY_LINES.default_count();
 
 /// Advisory guideline for the always-loaded instruction set: `CLAUDE.md`
 /// with every file it imports, or `AGENTS.md` alone where Claude Code reads
 /// that instead. Claude Code's memory guide targets under 200 lines per
 /// file and says an imported file loads at launch too.
-pub const INSTRUCTIONS_GUIDELINE_LINES: usize = 200;
+pub const INSTRUCTIONS_GUIDELINE_LINES: usize =
+    codeflow_limits::READING_INSTRUCTIONS_LINES.default_count();
 
 /// Advisory guideline for the per-task reading chain, what one full
 /// implementation task reads after the kernel. 160 KiB is about 40k tokens
 /// at four bytes per token, one fifth of a 200k context window. No vendor
 /// publishes a per-task number; this one has headroom over the shipped
 /// chain so the structure test, not the number, controls growth.
-pub const READING_CHAIN_GUIDELINE_BYTES: usize = 160 * KIB;
+pub const READING_CHAIN_GUIDELINE_BYTES: usize =
+    codeflow_limits::READING_CHAIN_BYTES.default_count();
 
 /// The basis a note states for the kernel guideline.
 pub const KERNEL_BASIS: &str =
@@ -128,9 +130,9 @@ impl Default for Guidelines {
     fn default() -> Self {
         Self {
             kernel_bytes: crate::scaffold::rule_map::MANAGED_BLOCK_GUIDELINE_BYTES,
-            chain_bytes: READING_CHAIN_GUIDELINE_BYTES,
-            body_lines: BODY_GUIDELINE_LINES,
-            instructions_lines: INSTRUCTIONS_GUIDELINE_LINES,
+            chain_bytes: codeflow_limits::READING_CHAIN_BYTES.count(),
+            body_lines: codeflow_limits::READING_BODY_LINES.count(),
+            instructions_lines: codeflow_limits::READING_INSTRUCTIONS_LINES.count(),
         }
     }
 }
@@ -344,7 +346,7 @@ impl AlwaysLoaded {
 }
 
 /// Claude Code follows an `@path` import this many hops deep.
-const IMPORT_DEPTH: usize = 4;
+const IMPORT_DEPTH: usize = codeflow_limits::HARNESS_IMPORT_DEPTH.default_count();
 
 /// The always-loaded instruction set under `root`, or `None` when it has no
 /// instruction file. A candidate that is proven absent or is not a regular

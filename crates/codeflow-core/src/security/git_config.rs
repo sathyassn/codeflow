@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub(crate) type Environment = BTreeMap<String, String>;
 type ConfigValue<'a> = (&'a str, &'a str, &'a [u8]);
@@ -137,7 +137,7 @@ pub(crate) fn read(
 ) -> Result<EffectiveConfig, String> {
     #[cfg(test)]
     READS.with(|reads| reads.set(reads.get() + 1));
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + codeflow_limits::GUARD_GIT_READ_SECONDS.wait();
     validate_environment(environment)?;
     let mut command = crate::git::command();
     command
@@ -286,7 +286,7 @@ fn parse(
 /// `git config --file`. Used for an include whose condition the caller
 /// cannot evaluate yet, such as one keyed on a worktree that does not exist.
 pub(crate) fn read_file(path: &Path, environment: &Environment) -> Result<EffectiveConfig, String> {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + codeflow_limits::GUARD_GIT_READ_SECONDS.wait();
     validate_environment(environment)?;
     // Include paths are canonical; Git on Windows does not accept the
     // verbatim `\\?\` spelling that canonicalization produces there.
@@ -422,7 +422,7 @@ pub(crate) fn repository_of(
     cwd: &Path,
     globals: &[String],
 ) -> Result<Option<(PathBuf, PathBuf)>, String> {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + codeflow_limits::GUARD_GIT_READ_SECONDS.wait();
     let mut probe = crate::git::command();
     probe.current_dir(cwd).stdin(Stdio::null());
     with_globals(&mut probe, cwd, globals)?;
@@ -451,9 +451,11 @@ pub(crate) fn bounded_output(
     command: &mut std::process::Command,
     deadline: Instant,
 ) -> Result<Vec<u8>, String> {
-    const LIMIT: u64 = 4 * 1024 * 1024;
     if Instant::now() >= deadline {
-        return Err("cannot verify Git configuration: child exceeded 3 seconds".into());
+        return Err(format!(
+            "cannot verify Git configuration: child exceeded {} seconds",
+            codeflow_limits::GUARD_GIT_READ_SECONDS.value()
+        ));
     }
     let mut child = command
         .stdout(Stdio::piped())
@@ -468,20 +470,24 @@ pub(crate) fn bounded_output(
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
         let result = stdout
-            .take(LIMIT + 1)
+            .take(codeflow_limits::GUARD_GIT_CONFIG_BYTES.value() + 1)
             .read_to_end(&mut bytes)
             .map(|_| bytes);
         let _ = sender.send(result);
     });
     let result = receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()));
     let bytes = match result {
-        Ok(Ok(bytes)) if bytes.len() as u64 <= LIMIT => bytes,
+        Ok(Ok(bytes)) if bytes.len() as u64 <= codeflow_limits::GUARD_GIT_CONFIG_BYTES.value() => {
+            bytes
+        }
         _ => {
             let _ = child.kill();
             std::thread::spawn(move || child.wait());
-            return Err(
-                "cannot verify Git configuration: read failed or exceeded 3 seconds / 4 MiB".into(),
-            );
+            return Err(format!(
+                "cannot verify Git configuration: read failed or exceeded {} seconds / {} bytes",
+                codeflow_limits::GUARD_GIT_READ_SECONDS.value(),
+                codeflow_limits::GUARD_GIT_CONFIG_BYTES.value()
+            ));
         }
     };
     let status = loop {
@@ -494,9 +500,12 @@ pub(crate) fn bounded_output(
         if Instant::now() >= deadline {
             let _ = child.kill();
             std::thread::spawn(move || child.wait());
-            return Err("cannot verify Git configuration: child exceeded 3 seconds".into());
+            return Err(format!(
+                "cannot verify Git configuration: child exceeded {} seconds",
+                codeflow_limits::GUARD_GIT_READ_SECONDS.value()
+            ));
         }
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(codeflow_limits::POLL_CHILD_OUTPUT_MILLIS.wait());
     };
     if !status.success() {
         return Err("cannot verify Git configuration: git rejected the configuration (including malformed values or an include loop)".into());
@@ -507,6 +516,7 @@ pub(crate) fn bounded_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn fixture() -> (tempfile::TempDir, Environment) {
         let dir = tempfile::tempdir().unwrap();
@@ -806,7 +816,9 @@ mod tests {
         .unwrap();
         env.insert("GIT_CONFIG_GLOBAL".into(), global.to_str().unwrap().into());
         let start = Instant::now();
-        assert!(read(dir.path(), &[], &env).unwrap_err().contains("4 MiB"));
+        assert!(read(dir.path(), &[], &env)
+            .unwrap_err()
+            .contains("4194304 bytes"));
         assert!(start.elapsed() < Duration::from_secs(5));
     }
 
@@ -842,9 +854,12 @@ mod tests {
         let mut child = std::process::Command::new("sh");
         child.args(["-c", "exec 1>&-; exec sleep 10"]);
         let start = Instant::now();
-        assert!(bounded_output(&mut child, start + Duration::from_secs(3))
-            .unwrap_err()
-            .contains("3 seconds"));
+        assert!(bounded_output(
+            &mut child,
+            start + codeflow_limits::GUARD_GIT_READ_SECONDS.wait()
+        )
+        .unwrap_err()
+        .contains("3 seconds"));
         assert!(start.elapsed() < Duration::from_secs(5));
     }
 
