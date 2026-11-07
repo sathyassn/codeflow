@@ -2495,10 +2495,7 @@ mod tests {
             let mut clicks = Clicks::default();
             let report = run(&host, &mut clicks, &MemoryStore::default());
             let failure = report.failure.unwrap_or_else(|| panic!("{answer}"));
-            assert!(
-                failure.contains("cannot read the environment"),
-                "{failure}"
-            );
+            assert!(failure.contains("cannot read the environment"), "{failure}");
             assert!(host.writes().is_empty(), "{answer}: {:?}", host.writes());
             assert!(clicks.manifests.is_empty(), "{answer}");
         }

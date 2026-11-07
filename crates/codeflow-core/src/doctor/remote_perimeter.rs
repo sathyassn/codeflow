@@ -1693,10 +1693,16 @@ mod tests {
             let (body, why) = classic_protection(&gh, "o/r", "main");
             assert!(body.is_none() && why.is_some(), "{error}");
             let mut out = Perimeter::default();
-            assert!(authority_environment(&gh, "o/r", "main", &mut out), "{error}");
+            assert!(
+                authority_environment(&gh, "o/r", "main", &mut out),
+                "{error}"
+            );
             assert_eq!(out.unread.len(), 1, "{error}");
         }
-        for error in ["gh: Branch not protected (HTTP 404)", "gh: Not Found (HTTP 404)"] {
+        for error in [
+            "gh: Branch not protected (HTTP 404)",
+            "gh: Not Found (HTTP 404)",
+        ] {
             let gh = |_: &[&str]| Err(error.to_string());
             assert_eq!(classic_protection(&gh, "o/r", "main"), (None, None));
             let mut out = Perimeter::default();
