@@ -382,7 +382,8 @@ fn asking_the_remote_runs_no_configured_command() {
     let error = landed_policy::load(f.root())
         .err()
         .expect("a transport that runs a command is not asked");
-    assert!(error.contains("git fetch origin"), "{error}");
+    // TSK-1184 AC-7: refused by name before any query, not as a failed one.
+    assert!(error.contains("the ext protocol"), "{error}");
     assert!(!ran.exists(), "the ext:: command ran");
     // A configured upload command on a reachable empty repository.
     f.repo.remote_delete("origin").unwrap();
@@ -404,6 +405,9 @@ fn asking_the_remote_runs_no_configured_command() {
     assert!(!ran.exists(), "the configured upload command ran");
 }
 
+/// A remote URL, the settings added to it, and the refusal it gives.
+type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a str);
+
 /// Each repository setting that git would run as a command on the way to
 /// a remote: none runs when the authority asks the remote, and none can
 /// make a remote with refs read as empty (each case refuses with the fetch
@@ -415,11 +419,24 @@ fn no_configured_transport_command_runs_or_fabricates_initialization() {
     let ran = marker.path().join("ran");
     let touch = format!("sh -c 'touch {}' --", ran.display());
     let touch = touch.as_str();
-    let cases: [(&str, &[(&str, &str)]); 5] = [
+    // The refusal each case gives: the fetch route when the remote cannot be
+    // asked, or, since TSK-1184 AC-7, the allow-list when the effective
+    // transport is outside it.
+    let fetch = "git fetch origin";
+    let listed = "outside the hermetic allow-list";
+    let cases: [Case; 5] = [
         // An SSH command, for an SSH remote.
-        ("ssh://127.0.0.1:9/repo.git", &[("core.sshCommand", touch)]),
+        (
+            "ssh://127.0.0.1:9/repo.git",
+            &[("core.sshCommand", touch)],
+            fetch,
+        ),
         // A proxy command, for a git:// remote.
-        ("git://127.0.0.1:9/repo.git", &[("core.gitProxy", touch)]),
+        (
+            "git://127.0.0.1:9/repo.git",
+            &[("core.gitProxy", touch)],
+            listed,
+        ),
         // A remote helper by a `vcs` name the configuration allows.
         (
             "https://127.0.0.1:9/repo.git",
@@ -427,6 +444,7 @@ fn no_configured_transport_command_runs_or_fabricates_initialization() {
                 ("remote.origin.vcs", "touchy"),
                 ("protocol.touchy.allow", "always"),
             ],
+            fetch,
         ),
         // A URL rewritten to a command transport.
         (
@@ -435,14 +453,16 @@ fn no_configured_transport_command_runs_or_fabricates_initialization() {
                 ("url.ext::sh -c touch% /tmp/never.insteadOf", "fixture"),
                 ("protocol.ext.allow", "always"),
             ],
+            listed,
         ),
         // A credential helper and an askpass program.
         (
             "http://127.0.0.1:9/repo.git",
             &[("credential.helper", touch), ("core.askPass", touch)],
+            fetch,
         ),
     ];
-    for (url, settings) in cases {
+    for (url, settings, refusal) in cases {
         let f = Fixture::new(url);
         let mut config = f.repo.config().unwrap();
         for (key, value) in settings {
@@ -453,7 +473,8 @@ fn no_configured_transport_command_runs_or_fabricates_initialization() {
         let error = landed_policy::load(f.root())
             .err()
             .unwrap_or_else(|| panic!("{url}: an unasked remote is no initialization"));
-        assert!(error.contains("git fetch origin"), "{url}: {error}");
+        assert!(error.contains(refusal), "{url}: {error}");
+        assert!(!error.contains("initialization"), "{url}: {error}");
         assert!(!ran.exists(), "{url}: a configured command ran");
     }
 }
@@ -507,4 +528,257 @@ fn authority_errors_refuse_and_a_proven_absence_selects_the_defaults() {
         landed_policy::load(f.root()).is_err(),
         "an object error refuses"
     );
+}
+
+/// TSK-1184: an empty repository at the configured URL and a populated one
+/// that a configuration rewrite makes git use instead. Returns the fixture,
+/// the empty URL and the populated URL; `rewrite` adds the setting that
+/// makes them differ.
+fn rewritten(
+    rewrite: impl Fn(&Fixture, &str, &str),
+) -> (Fixture, String, String, tempfile::TempDir) {
+    let remotes = tempfile::tempdir().unwrap();
+    let empty = remotes.path().join("empty.git");
+    let populated = remotes.path().join("populated.git");
+    upstream(&empty, true);
+    upstream(&populated, false);
+    let empty = empty.to_str().unwrap().to_string();
+    let populated = populated.to_str().unwrap().to_string();
+    let f = Fixture::new(&empty);
+    rewrite(&f, &empty, &populated);
+    let tip = f.commit(&[(".codeflow/policy.json", MAIN_POLICY)], &[]);
+    f.on_branch(tip);
+    (f, empty, populated, remotes)
+}
+
+fn refusal(f: &Fixture) -> String {
+    match landed_policy::load(f.root()) {
+        Ok(authority) => panic!("read policy from {}", authority.source),
+        Err(error) => error,
+    }
+}
+
+/// TSK-1184 AC-1: the configured URL is empty and an `insteadOf` rewrite
+/// makes git fetch from a populated repository. Before the change this read
+/// as initialization and `HEAD` judged; now it refuses and names both.
+#[test]
+fn an_insteadof_rewrite_to_a_populated_remote_refuses_naming_both() {
+    let (f, empty, populated, _keep) = rewritten(|f, empty, populated| {
+        let mut config = f.repo.config().unwrap();
+        config
+            .set_str(&format!("url.{populated}.insteadOf"), empty)
+            .unwrap();
+    });
+    let error = refusal(&f);
+    assert!(error.contains(&empty), "{error}");
+    assert!(error.contains(&populated), "{error}");
+    assert!(error.contains("never read from HEAD"), "{error}");
+}
+
+/// TSK-1184 AC-2 and AC-6: the push identity counts too: `pushInsteadOf`
+/// and `pushurl` each refuse with both identities named.
+#[test]
+fn a_push_rewrite_or_push_url_refuses_naming_both() {
+    type Rewrite = fn(&Fixture, &str, &str);
+    let cases: [(&str, Rewrite); 2] = [
+        ("pushInsteadOf", |f, empty, populated| {
+            let mut config = f.repo.config().unwrap();
+            config
+                .set_str(&format!("url.{populated}.pushInsteadOf"), empty)
+                .unwrap();
+        }),
+        ("pushurl", |f, _, populated| {
+            let mut config = f.repo.config().unwrap();
+            config.set_str("remote.origin.pushurl", populated).unwrap();
+        }),
+    ];
+    for (what, rewrite) in cases {
+        let (f, empty, populated, _keep) = rewritten(rewrite);
+        let error = refusal(&f);
+        assert!(error.contains(&empty), "{what}: {error}");
+        assert!(error.contains(&populated), "{what}: {error}");
+        assert!(error.contains("pushes to"), "{what}: {error}");
+    }
+}
+
+/// TSK-1184 AC-6: a rewrite set in an included configuration file refuses
+/// as one set directly.
+#[test]
+fn a_rewrite_from_an_included_file_refuses() {
+    let include = tempfile::tempdir().unwrap();
+    let path = include.path().join("rewrite.config");
+    let (f, empty, populated, _keep) = rewritten(|f, empty, populated| {
+        std::fs::write(
+            &path,
+            format!("[url \"{populated}\"]\n\tinsteadOf = {empty}\n"),
+        )
+        .unwrap();
+        let mut config = f.repo.config().unwrap();
+        config
+            .set_str("include.path", path.to_str().unwrap())
+            .unwrap();
+    });
+    let error = refusal(&f);
+    assert!(error.contains(&empty), "{error}");
+    assert!(error.contains(&populated), "{error}");
+}
+
+/// TSK-1184 AC-6: an empty fork as the effective remote is still not the
+/// configured one: a rewrite to another empty repository refuses too, so
+/// initialization needs the configured URL itself to be empty.
+#[test]
+fn a_rewrite_to_another_empty_repository_refuses() {
+    let (f, empty, other, _keep) = rewritten(|f, empty, _| {
+        let fork = std::path::Path::new(empty).with_file_name("fork.git");
+        upstream(&fork, true);
+        let mut config = f.repo.config().unwrap();
+        config
+            .set_str(&format!("url.{}.insteadOf", fork.display()), empty)
+            .unwrap();
+    });
+    let error = refusal(&f);
+    assert!(error.contains(&empty), "{error}");
+    assert!(error.contains("fork.git"), "{error} ({other})");
+}
+
+/// TSK-1184 AC-7: an effective URL on a transport outside the hermetic
+/// allow-list refuses naming the protocol and the list, whether the
+/// configured URL holds it or a rewrite produces it; nothing runs.
+#[test]
+fn an_effective_url_outside_the_allow_list_refuses_naming_the_protocol() {
+    let marker = tempfile::tempdir().unwrap();
+    let ran = marker.path().join("ran");
+    let ext = format!("ext::sh -c touch% {}", ran.display());
+    let direct = |url: &str| {
+        let f = Fixture::new(url);
+        let tip = f.commit(&[(".codeflow/policy.json", MAIN_POLICY)], &[]);
+        f.on_branch(tip);
+        f
+    };
+    let rewritten_to = |url: &str| {
+        let f = Fixture::new("fixture-remote");
+        let mut config = f.repo.config().unwrap();
+        config
+            .set_str(&format!("url.{url}.insteadOf"), "fixture-remote")
+            .unwrap();
+        config.set_str("protocol.ext.allow", "always").unwrap();
+        let tip = f.commit(&[(".codeflow/policy.json", MAIN_POLICY)], &[]);
+        f.on_branch(tip);
+        f
+    };
+    for (protocol, url) in [("ext", ext.as_str()), ("git", "git://127.0.0.1:9/repo.git")] {
+        for f in [direct(url), rewritten_to(url)] {
+            let error = refusal(&f);
+            assert!(
+                error.contains(&format!("the {protocol} protocol")),
+                "{protocol}: {error}"
+            );
+            assert!(error.contains("file:http:https:ssh"), "{protocol}: {error}");
+            assert!(error.contains("never widened"), "{protocol}: {error}");
+        }
+    }
+    assert!(!ran.exists(), "the ext:: command ran");
+}
+
+/// TSK-1184 AC-2: when git cannot say which URL it uses, the load refuses
+/// instead of asking the configured URL. A stand-in `git` fails only
+/// `remote get-url`; the child test runs with it first on `PATH`.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_effective_identity_refuses() {
+    use std::os::unix::fs::PermissionsExt as _;
+    const CHILD: &str = "CODEFLOW_TSK1184_UNREADABLE_CHILD";
+    if let Some(root) = std::env::var_os(CHILD) {
+        let error = landed_policy::load(std::path::Path::new(&root))
+            .err()
+            .expect("an unreadable identity refuses");
+        assert!(error.contains("cannot be read"), "{error}");
+        assert!(error.contains("never read from HEAD"), "{error}");
+        return;
+    }
+    let remote = tempfile::tempdir().unwrap();
+    upstream(remote.path(), true);
+    let f = Fixture::new(remote.path().to_str().unwrap());
+    let tip = f.commit(&[(".codeflow/policy.json", MAIN_POLICY)], &[]);
+    f.on_branch(tip);
+    // The same fixture with the real git is initialization.
+    assert!(landed_policy::load(f.root())
+        .unwrap()
+        .source
+        .contains("initialization"));
+    let bin = tempfile::tempdir().unwrap();
+    let real = String::from_utf8(
+        std::process::Command::new("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let real = real.trim();
+    let git = bin.path().join("git");
+    std::fs::write(
+        &git,
+        format!(
+            "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = get-url ] && exit 1; done\nexec '{real}' \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "an_unreadable_effective_identity_refuses",
+            "--nocapture",
+        ])
+        .env(CHILD, f.root())
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// TSK-1184 AC-3: matching identities and a verified-empty remote stay the
+/// one initialization case, and a populated tracking namespace is never
+/// asked: a rewrite does not stop a repository whose authority is fetched.
+#[test]
+fn matching_identities_keep_initialization_and_fetched_authority() {
+    let remote = tempfile::tempdir().unwrap();
+    upstream(remote.path(), true);
+    let f = Fixture::new(remote.path().to_str().unwrap());
+    let tip = f.commit(&[(".codeflow/policy.json", MAIN_POLICY)], &[]);
+    f.on_branch(tip);
+    let authority = landed_policy::load(f.root()).unwrap();
+    assert!(
+        authority
+            .source
+            .contains("initialization: origin advertises no refs"),
+        "{}",
+        authority.source
+    );
+    assert!(authority.authority.is_none());
+    // Once the authority is fetched, the remote is not asked, so a rewrite
+    // the fetch guard owns does not change where policy is read.
+    let mut config = f.repo.config().unwrap();
+    config
+        .set_str(
+            "url./nonexistent/elsewhere.git.insteadOf",
+            remote.path().to_str().unwrap(),
+        )
+        .unwrap();
+    f.tracking("main", tip);
+    f.remote_head("refs/remotes/origin/main");
+    let authority = landed_policy::load(f.root()).unwrap();
+    assert_eq!(authority.source, "refs/remotes/origin/main");
+    assert!(authority.authority.is_some());
 }

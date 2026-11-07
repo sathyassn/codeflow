@@ -597,6 +597,19 @@ fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<Str
     text_answer(&bytes)
 }
 
+/// [`bounded`] for a local git read in another module: the answer, or why
+/// there is none, as text (TSK-1184 `remote_identity`).
+pub(crate) fn bounded_text(
+    command: std::process::Command,
+    deadline: Duration,
+) -> Result<String, String> {
+    bounded(command, deadline).map_err(|why| match why {
+        Failure::Exit(_) | Failure::Authentication => "git failed".to_string(),
+        Failure::Timeout(deadline) => format!("git gave no answer within {}", seconds(deadline)),
+        Failure::Other(why) => why,
+    })
+}
+
 /// Whether git's diagnostics carry an authentication marker. The bytes are
 /// matched as ASCII and never decoded: the text is not shown to anyone.
 fn authentication_failed(diagnostics: &[u8]) -> bool {

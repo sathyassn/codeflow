@@ -839,3 +839,63 @@ fn the_guard_refuses_a_silent_remote_after_its_wait_and_a_fetch_clears_it() {
         "{took:?}"
     );
 }
+
+/// TSK-1184 AC-1, AC-3 and AC-5: a fresh adopter whose remote is empty and
+/// configured as git uses it is labelled initialization, and its first push
+/// passes the guard and the pre-push hook. When an `insteadOf` rewrite makes
+/// git use a populated repository instead, doctor, the git-guard and
+/// pre-commit refuse with both identities named and never read `HEAD`.
+#[test]
+fn a_rewritten_empty_remote_refuses_and_a_matching_fresh_remote_pushes() {
+    let a = Adopter::new();
+    let empty = a.temp.path().join("empty.git");
+    let populated = a.temp.path().join("populated.git");
+    let empty = empty.to_str().unwrap();
+    let populated = populated.to_str().unwrap();
+    for bare in [empty, populated] {
+        a.git(&["init", "-q", "--bare", "-b", "main", bare]);
+    }
+    a.git(&["remote", "add", "origin", empty]);
+    a.commit(
+        &[(".codeflow/policy.json", MAIN_POLICY)],
+        "chore: adopt codeflow",
+    );
+    a.git(&["push", "-q", populated, "main"]);
+    a.git(&["checkout", "-q", "-b", "feat/first"]);
+    let head = a.commit(&[("README.md", "first\n")], "docs: first change");
+
+    let text = a.doctor();
+    println!("fresh remote:\n{text}");
+    assert!(
+        text.contains("initialization: origin advertises no refs"),
+        "{text}"
+    );
+    let guard = a.guard("git push origin feat/first");
+    assert_eq!(guard.status.code(), Some(0), "{}", said(&guard));
+    let push = a.codeflow(
+        &["git-hook", "pre-push", "origin", empty],
+        &format!("refs/heads/feat/first {head} refs/heads/feat/first {ZERO}\n"),
+    );
+    let text = said(&push);
+    println!("first push:\n{text}");
+    assert_eq!(push.status.code(), Some(0), "{text}");
+
+    a.git(&["config", &format!("url.{populated}.insteadOf"), empty]);
+    let text = a.doctor();
+    println!("rewritten remote:\n{text}");
+    assert!(text.contains(empty) && text.contains(populated), "{text}");
+    assert!(text.contains("never read from HEAD"), "{text}");
+    assert!(!text.contains("initialization"), "{text}");
+    let guard = a.guard("git commit -m 'docs: x'");
+    let text = said(&guard);
+    println!("git-guard, rewritten remote:\n{text}");
+    assert_eq!(guard.status.code(), Some(2), "{text}");
+    assert!(text.contains(populated), "{text}");
+    a.write("README.md", "second\n");
+    a.git(&["add", "README.md"]);
+    let commit = a.codeflow(&["git-hook", "pre-commit"], "");
+    let text = said(&commit);
+    println!("pre-commit, rewritten remote:\n{text}");
+    assert_ne!(commit.status.code(), Some(0), "{text}");
+    assert!(text.contains(populated), "{text}");
+}
