@@ -5615,6 +5615,44 @@ impl Reader<'_> {
         values.into_iter().collect()
     }
 
+    /// The value of text the reader keeps whole, after judging what any
+    /// substitution inside it deletes.
+    fn opaque_values(
+        &mut self,
+        text: &str,
+        unknown: Option<&'static str>,
+        st: &State,
+    ) -> Vec<(String, Kind)> {
+        if unknown == Some(why::EXPANSIONS) {
+            self.unfinished(why::EXPANSIONS);
+            return vec![(taint(why::EXPANSIONS), Kind::Quoted)];
+        }
+        // A substitution inside arithmetic still runs.
+        if text.contains("$(") || text.contains('`') {
+            let mut lexer = Lexer::new(text.trim_start_matches('$'));
+            let mut inner = Word::default();
+            while lexer.peek(0).is_some() {
+                lexer.word_char(&mut inner, false);
+            }
+            // So does the substitution reading of a `$((…))`.
+            for part in &inner.parts {
+                if let Part::Subst { script, .. }
+                | Part::Arith {
+                    subst: Some(script),
+                    ..
+                } = part
+                {
+                    let mut child = st.clone();
+                    self.child_script(script, &mut child);
+                }
+            }
+        }
+        vec![(
+            unknown.map_or_else(|| text.to_string(), taint),
+            Kind::Quoted,
+        )]
+    }
+
     /// Each value a part may take, with how the shell treats it.
     fn part_values(&mut self, part: &Part, st: &State) -> Vec<(String, Kind)> {
         match part {
@@ -5622,33 +5660,7 @@ impl Reader<'_> {
                 let kind = if *quoted { Kind::Quoted } else { Kind::Bare };
                 vec![(text.clone(), kind)]
             }
-            Part::Opaque { text, unknown, .. } => {
-                if *unknown == Some(why::EXPANSIONS) {
-                    self.unfinished(why::EXPANSIONS);
-                    return vec![(taint(why::EXPANSIONS), Kind::Quoted)];
-                }
-                // A substitution inside arithmetic still runs.
-                if text.contains("$(") || text.contains('`') {
-                    let mut lexer = Lexer::new(text.trim_start_matches('$'));
-                    let mut inner = Word::default();
-                    while lexer.peek(0).is_some() {
-                        lexer.word_char(&mut inner, false);
-                    }
-                    // So does the substitution reading of a `$((…))`.
-                    for part in &inner.parts {
-                        if let Part::Subst { script, .. }
-                        | Part::Arith {
-                            subst: Some(script),
-                            ..
-                        } = part
-                        {
-                            let mut child = st.clone();
-                            self.child_script(script, &mut child);
-                        }
-                    }
-                }
-                vec![(unknown.map_or_else(|| text.clone(), taint), Kind::Quoted)]
-            }
+            Part::Opaque { text, unknown, .. } => self.opaque_values(text, *unknown, st),
             Part::Arith { text, subst, .. } => {
                 // A shell may read `$((…))` as a command substitution when
                 // its text is not arithmetic: what that reading deletes is
