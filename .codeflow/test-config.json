@@ -50,6 +50,7 @@
       "scripts/test_windows_partitions.py",
       "scripts/ci-reuse.py",
       "scripts/test_ci_reuse.py",
+      "scripts/policy-admission.py",
       "scripts/windows-daily.py",
       "scripts/test_windows_daily.py",
       "scripts/test_workflow_refs.py",

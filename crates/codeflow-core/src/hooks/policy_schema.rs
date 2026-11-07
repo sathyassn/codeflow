@@ -464,7 +464,7 @@ pub const SCHEMA: [KeySpec; 82] = [
         valid: "a non-empty array of status check names, none blank",
         purpose: "Status checks a protected branch requires before merging, on a branch that is up to date with its base.",
         notes: "Defaults to the shipped CI job names: codeflow gates, secret scan, \
-                security review and trusted: commit standards. `codeflow remote protect` \
+                security review and commit standards. `codeflow remote protect` \
                 requires them, on an up-to-date branch, on each protected branch \
                 other than the default branch, whose own rulesets require the \
                 names its policy workflow declares; `codeflow doctor --check \
@@ -2072,7 +2072,7 @@ mod tests {
                 "codeflow gates",
                 "secret scan",
                 "security review",
-                "trusted: commit standards"
+                "commit standards"
             ]
         );
         // A set list replaces the default.

@@ -1,7 +1,7 @@
 # codeflow policy: the enforcing CodeFlow check for pull requests. Written by
 # `codeflow init` and managed by `codeflow update`.
 #
-# The verdict job, `trusted: commit standards`, runs on `pull_request_target`
+# The verdict job, `commit standards`, runs on `pull_request_target`
 # for every pull request, whatever it targets. GitHub runs this file from the
 # repository's default branch, never from the pull request or its target,
 # and sets GITHUB_REF to that branch and GITHUB_SHA to its tip. The job
@@ -41,6 +41,14 @@
 # until the check is re-run; `queue` is a 2026 key that some linters reject
 # (actionlint releases up to 1.7.12), so ignore that message in the linter's
 # configuration rather than removing the key.
+#
+# Merge admission starts when codeflow-ci completes (TSK-1239): the commit
+# standards job never waits for that run, and codeflow-admission.yml, on
+# `workflow_run` completed, re-runs this job for the run's pull request.
+# That workflow joins this concurrency group (`codeflow-policy-pr-<n>`) with
+# the same `queue: max`, so it starts only after a policy run in progress
+# ends, and the re-run it requests waits behind it. It writes no check: the
+# native job here stays the only producer of `commit standards`.
 #
 # The event pins the head and the base commit: the job fetches both as data
 # and refuses a head that is not the event's. Only the body comes from the
@@ -94,7 +102,7 @@ concurrency:
 
 jobs:
   commit-lint:
-    name: "trusted: commit standards"
+    name: "commit standards"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     # Read access to pull requests serves the body step, read access to
@@ -491,17 +499,20 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
-      # Merge admission (TSK-449 AC-6). A draft's codeflow-ci verdicts are
-      # skipped, which a required-check rule reads as passing, so this
-      # required check passes only when the newest codeflow-ci pull_request
-      # run at exactly this head completed with success and both verdicts
-      # succeeded. A ready pull request waits for that run, 35 minutes at
-      # most so the job stays inside the 45-minute job bound; a run still
-      # pending then refuses and names the re-run that admits it. A draft,
-      # a cancelled or failed run, a run only for another head or a skipped
-      # verdict refuses at once. `ready_for_review` and a new push start
-      # this job again at the new head. The script comes from the authority
-      # checkout above, never from the pull request or its target.
+      # Merge admission (TSK-449 AC-6, TSK-1239). A draft's codeflow-ci
+      # verdicts are skipped, which a required-check rule reads as passing,
+      # so this required check passes only when the pull request is open,
+      # ready, at this head and on this target, the newest codeflow-ci
+      # pull_request run at exactly this head completed with success and
+      # both verdicts succeeded, and the pull request was not retargeted
+      # after that run was created. It judges once and never waits: a run
+      # still pending refuses at once, and when that run completes,
+      # codeflow-admission.yml re-runs this job, which then judges the
+      # completed run, so no runner is held while codeflow-ci runs. A draft,
+      # a cancelled or failed run, a run only for another head or pull
+      # request, a skipped verdict, a retarget and any API error refuse.
+      # The script comes from the authority checkout above, never from the
+      # pull request or its target.
       - name: the exact head's ready codeflow-ci run passed
         if: github.event_name == 'pull_request_target'
         env:
@@ -509,13 +520,10 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          DRAFT: ${{ github.event.pull_request.draft }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          wait=2100
-          if [ "$DRAFT" = true ]; then wait=0; fi
-          python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
-            --workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows \
-            --wait "$wait"
+          python3 -I scripts/policy-admission.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
+            --base "$BASE_REF" --workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows
 
       - name: Assert the authority checkout
         env:
@@ -544,7 +552,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           TRUSTED_NAMES: |
-            trusted: commit standards
+            commit standards
             trusted: release impact
         run: |
           set -euo pipefail
@@ -1027,7 +1035,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           TRUSTED_NAMES: |
-            trusted: commit standards
+            commit standards
             trusted: release impact
         run: |
           set -euo pipefail
@@ -1228,7 +1236,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           TRUSTED_NAMES: |
-            trusted: commit standards
+            commit standards
             trusted: release impact
         run: |
           set -euo pipefail
@@ -1382,7 +1390,11 @@ jobs:
             printf '%s\t%s\t%s\n' "$id" "$name" "$result" >> "${work}/created.tsv"
           done <<< "$VERDICTS"
           while IFS=$'\t' read -r id name result; do
-            verdict="trusted: ${name#"authority: "}"
+            # The verdict job the check reports on, by its own name.
+            case "$name" in
+              "authority: commit standards") verdict="commit standards" ;;
+              *) verdict="trusted: ${name#"authority: "}" ;;
+            esac
             conclusion=failure
             if [ "$result" = success ]; then conclusion=success; fi
             jq -cn --arg conclusion "$conclusion" --arg title "${verdict} ${result}" \
