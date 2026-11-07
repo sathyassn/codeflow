@@ -63,9 +63,11 @@ evidence" define; the brief follows
    validating typed model (a plain dataclass, `TypedDict`, `interface` or
    cast does not validate); and a hand-written validator where a model from
    the language's standard typed-model library, or one generated from an
-   existing schema, fits. Verify that invalid, absent, and unexpected values
-   are handled and tested. A value already parsed into a model needs no
-   second validator or wrapper.
+   existing schema, fits. An opt-out never lifts the boundary finding for
+   data from an untrusted source: that data is parsed and validated at its
+   boundary whatever the project's typing choice. Verify that invalid,
+   absent, and unexpected values are handled and tested. A value already
+   parsed into a model needs no second validator or wrapper.
 3. Ask two questions of every criterion, and reject on either: is it
    supported by evidence on this source, and does the result achieve the
    outcome for the affected user? Record file:line plus one sentence; no

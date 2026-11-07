@@ -761,7 +761,7 @@
     ".agents/skills/cf-model-orchestrator/resources/grok-host.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/grok-host.md",
       "ownership": "managed",
-      "sha256": "d4a50e719c16b271c14064fc3651e2085948829f1358ba2719d88698ab849b8a",
+      "sha256": "ffde37767d5a33dec7bb8767be7659d7d09e60660dbb9465bf43428142e6de70",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/quality-contract.md": {
@@ -797,7 +797,7 @@
     ".agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
       "ownership": "managed",
-      "sha256": "37aab27d817ff4a6a0fd618011bb1de58f1443c07c282c90eac82718ca26458e",
+      "sha256": "51e9227e72e7ba6b5ea71311856ef1556fa5007dba535ca7deed5f500f3c6545",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/quality/editorial.md": {
@@ -1349,7 +1349,7 @@
     ".claude/agents/cf-reviewer.md": {
       "src": "claude/agents/cf-reviewer.md",
       "ownership": "managed",
-      "sha256": "90941837433d0b936c17b03c34a5ea653ceaab869dcaeec85b49cffa4c1021a5",
+      "sha256": "ce65a15a262713f9714c6d22ca4f3b75aeff94670e48b8f37fd50ed4e196a9bf",
       "exec": false
     },
     ".claude/agents/cf-security-reviewer.md": {
@@ -2123,7 +2123,7 @@
     ".claude/skills/cf-model-orchestrator/resources/grok-host.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/grok-host.md",
       "ownership": "managed",
-      "sha256": "d4a50e719c16b271c14064fc3651e2085948829f1358ba2719d88698ab849b8a",
+      "sha256": "ffde37767d5a33dec7bb8767be7659d7d09e60660dbb9465bf43428142e6de70",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/quality-contract.md": {
@@ -2159,7 +2159,7 @@
     ".claude/skills/cf-model-orchestrator/resources/quality/design-implementation.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
       "ownership": "managed",
-      "sha256": "37aab27d817ff4a6a0fd618011bb1de58f1443c07c282c90eac82718ca26458e",
+      "sha256": "51e9227e72e7ba6b5ea71311856ef1556fa5007dba535ca7deed5f500f3c6545",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/quality/editorial.md": {

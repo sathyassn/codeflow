@@ -1880,6 +1880,14 @@ fn typed_code_and_boundary_data_are_the_default() {
                 "opt-out route",
                 "only by stating the reason in the project-owned Stack standards of its `AGENTS.md`",
             ),
+            (
+                "new file in a javascript codebase",
+                "A new file in it is TypeScript unless the project's opt-out keeps new files in JavaScript.",
+            ),
+            (
+                "opt-out keeps boundary validation",
+                "It never removes the parse and validation of data from an untrusted source at its boundary",
+            ),
         ],
     );
 }
@@ -1949,6 +1957,10 @@ fn typed_code_rule_is_applied_by_develop_stack_and_review() {
             (
                 "hand-written validator",
                 "a hand-written validator where a model from the language's standard typed-model library",
+            ),
+            (
+                "opt-out keeps the boundary finding",
+                "An opt-out never lifts the boundary finding for data from an untrusted source",
             ),
         ],
     );

@@ -44,7 +44,7 @@ describes a shape and accepts any value at run time. Parse with the
 typed-model library that is standard for the language, whether or not it
 ships with the language: Pydantic models in Python, zod schemas in
 TypeScript and checked JavaScript, serde types in Rust, structs decoded
-with unknown fields refused plus a validator in Go, and a `type` and a
+with unknown fields refused, plus a validator in Go, and a `type` and a
 `validation` block on each OpenTofu variable. In Rego, a rule checks
 `input` with `json.match_schema` and refuses on its errors, or the caller
 validates the document before the query; a schema given through
@@ -59,10 +59,10 @@ typed; add no wrapper layers or duplicate domain models for this rule.
 
 A new project or new file that would otherwise be JavaScript is
 TypeScript. An existing JavaScript codebase is type-checked in place
-instead of rewritten, new files included where the project keeps them in
-JavaScript: `tsc`
-with `checkJs` (or `// @ts-check` file by file) and JSDoc types on every
-new or changed function and data shape.
+instead of rewritten: `tsc` with `checkJs` (or `// @ts-check` file by
+file) and JSDoc types on every new or changed function and data shape in
+its JavaScript files. A new file in it is TypeScript unless the project's
+opt-out keeps new files in JavaScript.
 
 A change that needs a type checker, linter or validating-model library the
 project lacks adds it to the project: the dependency in the project's
@@ -75,6 +75,11 @@ Until CodeFlow's relaxation register ships (planned for 4.2.0), a project
 opts out of this default, whole or for one language or path, only by
 stating the reason in the project-owned Stack standards of its
 `AGENTS.md`; the default holds everywhere that statement does not name.
+An opt-out changes whether code is typed and which checker or model
+library applies. It never removes the parse and validation of data from
+an untrusted source at its boundary, with invalid, absent and unexpected
+values handled and tested; a project that opts out of the typed-model
+library says how that data is validated instead.
 
 Both seats grade design proportionality before approval. Each actual executor
 first-verifies its implementation for necessity, clarity, idiomatic structure,
