@@ -12,7 +12,9 @@ async function fixture(action) {
     await mkdir(join(root, 'scripts'));
     await mkdir(join(root, 'node_modules/astro/bin'), { recursive: true });
     for (const file of ['workflow.mjs', 'publication.mjs', 'child-lifecycle.mjs', 'process-environment.mjs', 'runtime-scripts.mjs', 'runtime-scripts.json']) await copyFile(resolve('docs-portal/scripts', file), join(root, 'scripts', file));
-    await writeFile(join(root, 'scripts/lib.mjs'), `export {compareDeterministicText, portablePathKey, safeRelative} from ${JSON.stringify(pathToFileURL(resolve('docs-portal/scripts/lib.mjs')).href)};`);
+    await mkdir(join(root, 'public'));
+    await copyFile(resolve('docs-portal/public/tokens.js'), join(root, 'public/tokens.js'));
+    await writeFile(join(root, 'scripts/lib.mjs'), `export {compareDeterministicText, portablePathKey, safeRelative, PORTAL_THEMES} from ${JSON.stringify(pathToFileURL(resolve('docs-portal/scripts/lib.mjs')).href)};`);
     const record = `import {readFileSync,appendFileSync} from 'node:fs';\nconst owner=JSON.parse(readFileSync('.portal/workflow.lock'));\nappendFileSync('sequence.jsonl',JSON.stringify({stage:STAGE,token:owner.token})+'\\n');\n`;
     for (const stage of ['adapter', 'evidence']) await writeFile(join(root, `scripts/${stage}.mjs`), record.replace('STAGE', JSON.stringify(stage)));
     await writeFile(join(root, 'node_modules/astro/bin/astro.mjs'), record.replace('STAGE', 'process.argv[2]') + "if(process.argv[2]==='build' && requireFailure()) process.exit(1); function requireFailure(){try{readFileSync('fail-build');return true;}catch{return false;}}\n");

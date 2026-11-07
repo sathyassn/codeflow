@@ -1,7 +1,16 @@
 # Daily full Windows coverage of main and each active integration line, as
-# scripts/windows-daily.py defines active. A daily result
-# is never merge evidence. With the reduced tier on (codeflow-ci.yml), the twelve
-# partitions leave line pull requests, and this run and the line pushes cover them.
+# scripts/windows-daily.py defines active. A daily result is never merge evidence.
+# With the reduced tier on (codeflow-ci.yml), the twelve partitions leave line pull
+# requests, and this run and the line pushes cover them. A line this run leaves out
+# has only its pushes: it has no daily evidence, and the verdict says so.
+#
+# This workflow starts the runs and runs no line code. Caches are scoped by the ref a
+# run is under, so each line's run is started at that line's own ref, never as a job
+# here under main. windows-daily-verdict.yml judges the runs later.
+#
+# A line whose exact tip already has a passing daily run gets no new one until that
+# run is older than DAILY_PROOF_MAX_AGE_DAYS, in the sources job, so a project changes
+# the age there. A rerun at that age keeps image drift covered at a known interval.
 name: daily Windows
 
 on:
@@ -9,8 +18,8 @@ on:
     - cron: "23 6 * * *"
   workflow_dispatch:
 
-permissions:
-  contents: read
+# Each job names what it needs. Only the dispatch job can start runs.
+permissions: {}
 
 concurrency:
   group: daily-windows-${{ github.ref }}
@@ -19,26 +28,49 @@ concurrency:
 jobs:
   sources:
     name: resolve daily Windows source commits
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
     outputs:
       matrix: ${{ steps.sources.outputs.matrix }}
+      runs: ${{ steps.sources.outputs.runs }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
       - name: Discover main and each active integration line at immutable commits
         id: sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAILY_PROOF_MAX_AGE_DAYS: "7"
         run: python3 -I -B scripts/windows-daily.py discover
+      - name: Keep what was requested for the verdict
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: daily-windows-requested
+          path: daily-windows-requested.json
+          if-no-files-found: error
+          retention-days: 7
 
-  lines:
-    name: daily Windows ${{ matrix.ref }} at ${{ matrix.sha }}
+  dispatch:
+    name: start the daily Windows run for ${{ matrix.ref }}
     needs: sources
+    # GitHub refuses an empty matrix, and every line may be skipped.
+    if: ${{ needs.sources.outputs.runs == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.sources.outputs.matrix) }}
-    uses: ./.github/workflows/windows-daily-run.yml
-    with:
-      source-ref: ${{ matrix.ref }}
-      source-sha: ${{ matrix.sha }}
-      artifact-key: ${{ matrix.key }}
+    steps:
+      - name: Start the line's run at the line's own ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ matrix.ref }}
+          SOURCE_SHA: ${{ matrix.sha }}
+        run: gh workflow run windows-daily-run.yml --repo "$GITHUB_REPOSITORY" --ref "${SOURCE_REF#refs/heads/}" -f source-sha="$SOURCE_SHA"

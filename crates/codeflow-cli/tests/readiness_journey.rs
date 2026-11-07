@@ -11,6 +11,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "support/fixture_seed.rs"]
+mod fixture_seed;
 #[path = "support/outcome.rs"]
 mod outcome;
 #[path = "support/process_folders.rs"]
@@ -171,8 +173,15 @@ const OTHER: &str = "integration/EPC-002-other";
 /// | TSK-005 Taken | backlog | ready, then claimed elsewhere |
 /// | TSK-006 Across | other | ready |
 /// | TSK-007 Cross | backlog | waiting on TSK-006 on the other line |
-#[allow(clippy::too_many_lines)] // One fixture plans the whole backlog in order.
+/// Each test gets its own copy of one planned project per run (TSK-356).
 fn planned_project() -> (tempfile::TempDir, PathBuf) {
+    let dir = fixture_seed::copy("readiness", || build_planned_project().0);
+    let root = dir.path().join("proj");
+    (dir, root)
+}
+
+#[allow(clippy::too_many_lines)] // One fixture plans the whole backlog in order.
+fn build_planned_project() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("proj");
     let bare = dir.path().join("origin.git");
@@ -387,7 +396,8 @@ fn work_next_and_claim_pick_the_ready_task_and_status_agrees() {
 
     let claimed = ok(&codeflow(&root, &["work", "claim", "TSK-001"]), "claim");
     assert!(
-        claimed.contains(&format!("task/TSK-001-root from {LINE}@")),
+        // The claim names the fetched remote tip it was cut from (TSK-1047).
+        claimed.contains(&format!("task/TSK-001-root from origin/{LINE}@")),
         "{claimed}"
     );
     assert!(!claimed.to_lowercase().contains("lock"), "{claimed}");
@@ -871,4 +881,90 @@ fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
     } else {
         rows.join("\n")
     }
+}
+
+/// TSK-356: a fixture seed is built once for many concurrent callers, and
+/// each copy has its own files, its own bare origin and a remote that names
+/// that origin, so a change in one copy never reaches another or the seed.
+#[test]
+fn fixture_seeds_build_once_and_isolate_files_and_remotes() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let seeds = tempfile::tempdir().unwrap();
+    let builds = AtomicUsize::new(0);
+    let build = || {
+        builds.fetch_add(1, Ordering::SeqCst);
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("proj");
+        std::fs::create_dir(&root).unwrap();
+        git(&root, &["init", "-q"]);
+        git(dir.path(), &["init", "-q", "--bare", "origin.git"]);
+        let origin = dir.path().join("origin.git");
+        git(
+            &root,
+            &["remote", "add", "origin", origin.to_str().unwrap()],
+        );
+        std::fs::write(root.join("value"), "seed").unwrap();
+        dir
+    };
+    let copies = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..4)
+            .map(|_| scope.spawn(|| fixture_seed::copy_in(seeds.path(), "isolation", build)))
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(builds.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture_seed::counts(seeds.path(), "isolation"), (1, 4));
+    for copy in &copies {
+        let root = copy.path().join("proj");
+        assert_eq!(
+            git(&root, &["remote", "get-url", "origin"]),
+            copy.path().join("origin.git").to_str().unwrap()
+        );
+        assert_eq!(std::fs::read_to_string(root.join("value")).unwrap(), "seed");
+        std::fs::write(root.join("value"), "changed").unwrap();
+        std::fs::write(
+            copy.path().join("origin.git/HEAD"),
+            "ref: refs/heads/changed\n",
+        )
+        .unwrap();
+    }
+    let clean = fixture_seed::copy_in(seeds.path(), "isolation", || panic!("seed rebuilt"));
+    assert_eq!(
+        std::fs::read_to_string(clean.path().join("proj/value")).unwrap(),
+        "seed"
+    );
+    assert!(
+        !std::fs::read_to_string(clean.path().join("origin.git/HEAD"))
+            .unwrap()
+            .contains("changed")
+    );
+}
+
+/// TSK-356: a run keeps its own seed folder and any folder changed within
+/// the stale age, so a run that is still going keeps its seeds, and removes
+/// the folders older runs left behind.
+#[test]
+fn fixture_seed_runs_remove_only_stale_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let day = std::time::Duration::from_secs(24 * 60 * 60);
+    let first = fixture_seed::prepare_run_directory(dir.path(), uuid::Uuid::new_v4(), day);
+    std::fs::write(first.join("seed"), "live").unwrap();
+    let second = uuid::Uuid::new_v4();
+    let current = fixture_seed::prepare_run_directory(dir.path(), second, day);
+    assert!(first.exists(), "a run still in progress lost its seeds");
+    std::fs::write(current.join("seed"), "current").unwrap();
+    let zero = std::time::Duration::ZERO;
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert_eq!(
+        fixture_seed::prepare_run_directory(dir.path(), second, zero),
+        current
+    );
+    assert!(!first.exists(), "a stale run's seeds remain");
+    assert_eq!(
+        std::fs::read_to_string(current.join("seed")).unwrap(),
+        "current"
+    );
 }

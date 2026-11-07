@@ -336,6 +336,12 @@ catalog! {
     /// A task branch whose planning is not anchored on the target.
     WORK_START_RECONCILE = Step::Codeflow("codeflow work start"),
         "reconcile the target branch, then run `codeflow work start {id}`";
+    /// A review head missing its current target tip.
+    WORK_TARGET_TIP = Step::Git("git merge"),
+        "fetch the target remote, then run `git merge -- \"{tip}\"` on the task branch and rerun `codeflow ci` before review";
+    /// A target tip `codeflow ci` cannot read, so containment is unverified.
+    WORK_TARGET_UNVERIFIED = Step::Codeflow("codeflow ci"),
+        "repair the target read, such as fetching its remote, and rerun `codeflow ci` until its tip is verified";
     /// A task blocked on the target (TSK-1036): its own pull request
     /// unblocks it once the Blocker is resolved.
     WORK_START_UNBLOCK = Step::Codeflow("codeflow task status"),
@@ -627,7 +633,7 @@ catalog! {
         "fetch the destination's protected branches (`git fetch <remote>`) so the range has a base, then push again";
     /// A destination whose default-branch lookup could not be used.
     PUSH_DESTINATION_SILENT = Step::Git("git ls-remote"),
-        "make `git ls-remote --symref <remote>` answer (network access, remote credentials), repair the remote's advertised default branch if needed, then rerun the command or push";
+        "make `git ls-remote --symref <remote>` answer (network access, remote credentials), repair the remote's advertised default branch if needed, then rerun the command or push; when it answers but slowly, raise `git.remote_query_timeout_seconds` or `git.remote_query_attempts` on the default branch through a reviewed pull request";
     /// A push that rewrites the destination's branch.
     PUSH_REWRITE = Step::Git("git pull"),
         "push without the rewrite (`git pull --rebase` onto the destination's branch first), or let CI check the whole range";

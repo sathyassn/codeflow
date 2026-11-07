@@ -15,6 +15,8 @@ use std::process::{Command, Output};
 const CI: &str = include_str!("../../../assets/base/ci/codeflow-ci.yml");
 const POLICY: &str = include_str!("../../../assets/base/ci/codeflow-policy.yml");
 const REGISTRY: &str = include_str!("../../../assets/base/ci/codeflow-registry.yml");
+/// This repository's copy, which adds the `trusted: release impact` job.
+const OWN_POLICY: &str = include_str!("../../../.github/workflows/codeflow-policy.yml");
 const ASSET: &str = "codeflow-cli-x86_64-unknown-linux-gnu";
 
 /// The `run:` script of every step whose name starts with `prefix`: the
@@ -1591,16 +1593,21 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
         assert!(registry_on.contains(event), "{registry_on}");
     }
     assert!(!registry_on.contains("pull_request"), "{registry_on}");
-    // TSK-254: one group per pull request cancels a superseded run. The
-    // registry workflow has no group, so a registry run is never replaced
-    // by a queued event.
+    // TSK-1040: one group per pull request queues every event (no run is
+    // cancelled or replaced). The registry workflow has no group, so a
+    // registry run is never replaced by a queued event.
     assert_eq!(POLICY.matches("concurrency:").count(), 1, "one group");
     assert!(
         POLICY.contains(
             "\nconcurrency:\n  group: ${{ format('{0}-pr-{1}', github.workflow, \
-             github.event.pull_request.number) }}\n  cancel-in-progress: true\n\njobs:\n"
+             github.event.pull_request.number) }}\n  \
+             cancel-in-progress: false\n  queue: max\n\njobs:\n"
         ),
-        "one group per pull request"
+        "no event cancels or replaces a run"
+    );
+    assert!(
+        !POLICY.contains("cancel-in-progress: ${{"),
+        "cancellation is never an expression"
     );
     assert!(!REGISTRY.contains("concurrency:"));
     assert!(REGISTRY.contains("\npermissions:\n  contents: read\n"));
@@ -1612,9 +1619,14 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     );
     assert!(!POLICY.contains(": write"), "the token stays read-only");
     // The judging run reads the body when it runs, so the newest body is
-    // judged whichever run survives the group; the event's copy is unused.
+    // judged even by a run that waited in the queue; the event's copy is unused.
     assert!(!POLICY.contains("github.event.pull_request.body"));
-    assert!(POLICY.contains("CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}"));
+    // The body reaches `codeflow ci` as a file: the runner prints a step's
+    // `env:` values and its arguments, so neither may carry the text.
+    assert!(!POLICY.contains("CODEFLOW_PR_BODY"));
+    assert!(!POLICY.contains("outputs.text"));
+    assert!(POLICY.contains("BODY_FILE: ${{ runner.temp }}/pr-body.md"));
+    assert!(POLICY.contains("--pr-body-file \"$BODY_FILE\""));
     assert!(POLICY.contains("/pulls/${PR_NUMBER}\" -o \"${RUNNER_TEMP}/pull.json\""));
 
     // TSK-336: the verdict job, under its trusted name, is the policy
@@ -1867,7 +1879,8 @@ fn judge_a_forged_head(head_pin: &str) {
     let start = POLICY
         .find("        run: |\n          if ! git cat-file -e \"${AUTHORITY_SHA}:.codeflow/policy.json\"")
         .expect("the verdict block");
-    let call = "--policy-from \"$AUTHORITY_SHA\" --baseline-from \"$AUTHORITY_SHA\"\n";
+    let call = "--policy-from \"$AUTHORITY_SHA\" --baseline-from \"$AUTHORITY_SHA\" \
+                --pr-body-file \"$BODY_FILE\"\n";
     let end = start + POLICY[start..].find(call).expect("the verdict call") + call.len();
     assert!(POLICY[start..end].contains("\n          codeflow ci --base \"$BASE_SHA\""));
     let forged = [&POLICY[..start], "        run: exit 0\n", &POLICY[end..]].concat();
@@ -2005,6 +2018,15 @@ fn run_verdict_step(
         .next()
         .expect("the verdict step");
     let bin = Path::new(env!("CARGO_BIN_EXE_codeflow")).parent().unwrap();
+    // TSK-1040: the step reads the body from the file the body step wrote.
+    std::fs::create_dir_all(home).unwrap();
+    let body_file = home.join("pr-body.md");
+    std::fs::write(
+        &body_file,
+        "## Summary\n\nA fixture change.\n\n- One file.\n\n## Changes\n\n- The fixture file.\n\n\
+         ## Reviews\n\nNone for this fixture.\n\nTask: fixture-unit\n",
+    )
+    .unwrap();
     Command::new("bash")
         .args(["-c", &step])
         .current_dir(checkout)
@@ -2016,6 +2038,7 @@ fn run_verdict_step(
         .env("BASE_SHA", base)
         .env("HEAD_SHA", head)
         .env("HEAD_REF", branch)
+        .env("BODY_FILE", &body_file)
         .env("ACTOR", "unknown")
         .env("CODEFLOW_HOME", home)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -2216,4 +2239,530 @@ fn long_scan_errors_fail_closed_under_pipefail() {
             assert!(String::from_utf8_lossy(&output.stdout).contains("did not complete a scan"));
         }
     }
+}
+
+/// Runs one step's script from the shipped policy workflow against a local
+/// pull request API (`file://`), as the runner would, and returns the
+/// outcome with the step output file.
+fn run_policy_step(
+    step_prefix: &str,
+    pull_json: Option<&str>,
+    env: &[(&str, &str)],
+) -> (Output, String) {
+    run_step_of(POLICY, step_prefix, pull_json, env)
+}
+
+/// `run_policy_step` for a step of `workflow`, which may be one job's text.
+fn run_step_of(
+    workflow: &str,
+    step_prefix: &str,
+    pull_json: Option<&str>,
+    env: &[(&str, &str)],
+) -> (Output, String) {
+    // Values here are fixed test strings with no quote in them.
+    let exports: Vec<String> = env
+        .iter()
+        .map(|(key, value)| format!("export {key}='{value}'\n"))
+        .collect();
+    let mut script = exports.join("");
+    script.push_str(
+        &run_blocks(workflow, step_prefix)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("step {step_prefix}")),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let api = dir.path().join("api/repos/o/r/pulls");
+    std::fs::create_dir_all(&api).unwrap();
+    if let Some(json) = pull_json {
+        std::fs::write(api.join("7"), json).unwrap();
+    }
+    let temp = dir.path().join("tmp");
+    std::fs::create_dir_all(&temp).unwrap();
+    let output_file = dir.path().join("github-output");
+    std::fs::write(&output_file, "").unwrap();
+    let mut command = Command::new("bash");
+    command
+        .args(["-c", &script])
+        .env(
+            "GITHUB_API_URL",
+            format!("file://{}", dir.path().join("api").display()),
+        )
+        .env("GITHUB_REPOSITORY", "o/r")
+        .env("GITHUB_OUTPUT", &output_file)
+        .env("RUNNER_TEMP", &temp)
+        .env("GH_TOKEN", "unused")
+        .env("PR_NUMBER", "7");
+    let out = command.output().expect("bash runs");
+    (out, std::fs::read_to_string(&output_file).unwrap())
+}
+
+fn pull(head: &str, base: &str, body: &str) -> String {
+    serde_json::json!({"head": {"sha": head}, "base": {"ref": base}, "body": body}).to_string()
+}
+
+/// The digest the body step logs for `body`: sha256 of the text and a newline.
+fn body_digest(body: &str) -> String {
+    let out = Command::new("sh")
+        .args([
+            "-c",
+            "printf '%s\\n' \"$1\" | shasum -a 256 | cut -d ' ' -f 1",
+        ])
+        .arg("sh")
+        .arg(body)
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+const JUDGED_HEAD: &str = "1111111111111111111111111111111111111111";
+
+fn run_recheck(after: Option<&str>, digest: &str) -> Output {
+    run_policy_step(
+        "the pull request is unchanged",
+        after,
+        &[
+            ("JUDGED_HEAD", JUDGED_HEAD),
+            ("JUDGED_BASE", "main"),
+            ("JUDGED_DIGEST", digest),
+        ],
+    )
+    .0
+}
+
+#[test]
+fn the_body_is_logged_as_a_digest_never_as_text() {
+    let body = "## Summary\nSECRET-BODY-TEXT mentions $(whoami) and `id`\n";
+    let (out, written) = run_policy_step(
+        "Read the pull request's current body",
+        Some(&pull(JUDGED_HEAD, "main", body)),
+        &[],
+    );
+    let log = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "{log}");
+    let digest = body_digest(body);
+    assert_eq!(digest.len(), 64, "{digest}");
+    assert!(written.contains(&format!("digest={digest}\n")), "{written}");
+    assert!(
+        log.contains(&format!("sha256 {digest}")),
+        "the digest is logged: {log}"
+    );
+    assert!(
+        !log.contains("SECRET-BODY-TEXT"),
+        "the text is never logged: {log}"
+    );
+    assert!(
+        !written.contains("SECRET-BODY-TEXT"),
+        "no step output carries the text: {written}"
+    );
+}
+
+/// Runs the body-reading step and then the `codeflow ci` step the way the
+/// runner does, with a stand-in `codeflow` that records where it found the
+/// body. Returns the combined log and what the stand-in saw.
+fn run_body_then_ci(body: &str) -> (String, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let api = dir.path().join("api/repos/o/r/pulls");
+    std::fs::create_dir_all(&api).unwrap();
+    std::fs::write(api.join("7"), pull(JUDGED_HEAD, "main", body)).unwrap();
+    let temp = dir.path().join("tmp");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&temp).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    let marker = dir.path().join("marker");
+    let fake = bin.join("codeflow");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\necho \"codeflow $*\"\nfile=\nwhile [ $# -gt 0 ]; do\n  \
+         [ \"$1\" = --pr-body-file ] && file=$2\n  shift\ndone\n\
+         grep -q CANARY-BODY-TEXT \"$file\" && echo file-has-body >> \"$MARKER\"\n\
+         env | grep -q CANARY-BODY-TEXT && echo env-has-body >> \"$MARKER\"\nexit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let output_file = dir.path().join("github-output");
+    std::fs::write(&output_file, "").unwrap();
+    // TSK-336: the step refuses an authority with no policy before it runs
+    // codeflow, so the stand-in runs from a checkout that carries one.
+    let checkout = dir.path().join("checkout");
+    std::fs::create_dir_all(checkout.join(".codeflow")).unwrap();
+    git(&checkout, &["init", "-q", "-b", "main"]);
+    std::fs::write(checkout.join(".codeflow/policy.json"), "{}\n").unwrap();
+    git(&checkout, &["add", "."]);
+    git(
+        &checkout,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@e",
+            "commit",
+            "-q",
+            "-m",
+            "policy",
+        ],
+    );
+    let authority = git(&checkout, &["rev-parse", "HEAD"]);
+    let step = |prefix: &str| {
+        run_blocks(POLICY, prefix)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("step {prefix}"))
+    };
+    let script = format!(
+        "export PATH='{}':\"$PATH\"\nexport MARKER='{}'\n{}\n\
+         export AUTHORITY_SHA='{authority}' BASE_SHA=b HEAD_SHA=h HEAD_REF=r ACTOR=a BODY_FILE='{}/pr-body.md'\n{}",
+        bin.display(),
+        marker.display(),
+        step("Read the pull request's current body"),
+        temp.display(),
+        step("codeflow ci (commit"),
+    );
+    let out = Command::new("bash")
+        .args(["-c", &script])
+        .current_dir(&checkout)
+        .env(
+            "GITHUB_API_URL",
+            format!("file://{}", dir.path().join("api").display()),
+        )
+        .env("GITHUB_REPOSITORY", "o/r")
+        .env("GITHUB_OUTPUT", &output_file)
+        .env("RUNNER_TEMP", &temp)
+        .env("GH_TOKEN", "unused")
+        .env("PR_NUMBER", "7")
+        .output()
+        .expect("bash runs");
+    let log = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "{log}");
+    (log, std::fs::read_to_string(&marker).unwrap_or_default())
+}
+
+#[test]
+fn the_body_text_never_reaches_the_log_or_the_codeflow_environment() {
+    let body = "## Summary\nCANARY-BODY-TEXT $(id) `id`\n";
+    let (log, seen) = run_body_then_ci(body);
+    assert!(
+        !log.contains("CANARY-BODY-TEXT"),
+        "neither the steps nor the arguments of codeflow ci carry the text: {log}"
+    );
+    assert!(log.contains("--pr-body-file"), "{log}");
+    assert!(
+        log.contains(&format!("sha256 {}", body_digest(body))),
+        "{log}"
+    );
+    assert_eq!(
+        seen, "file-has-body\n",
+        "codeflow ci reads the body from the file and not from its environment"
+    );
+}
+
+#[test]
+fn the_last_step_passes_when_head_base_and_body_are_unchanged() {
+    let body = "same body\n";
+    let after = pull(JUDGED_HEAD, "main", body.trim_end());
+    let out = run_recheck(Some(&after), &body_digest(body.trim_end()));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn the_last_step_fails_with_its_own_message_for_each_change() {
+    let digest = body_digest("judged body");
+    for (after, message) in [
+        (
+            pull(
+                "2222222222222222222222222222222222222222",
+                "main",
+                "judged body",
+            ),
+            "head changed while this run judged it",
+        ),
+        (
+            pull(JUDGED_HEAD, "release", "judged body"),
+            "base branch changed while this run judged it",
+        ),
+        (
+            pull(JUDGED_HEAD, "main", "edited body"),
+            "body changed while this run judged it",
+        ),
+    ] {
+        let out = run_recheck(Some(&after), &digest);
+        let text = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{text}");
+        assert!(text.contains(message), "{message}: {text}");
+        assert!(
+            !text.contains("judged body"),
+            "the body is never printed: {text}"
+        );
+    }
+}
+
+#[test]
+fn the_last_step_fails_closed_when_the_read_fails_or_is_unreadable() {
+    let digest = body_digest("judged body");
+    // The API has no such pull request: the read fails.
+    let out = run_recheck(None, &digest);
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("cannot read the pull request again"),
+        "{text}"
+    );
+    // The answer is not a pull request (no head): unreadable fails too.
+    for bad in [
+        "{}",
+        "not json",
+        r#"{"head":{"sha":null},"base":{"ref":"main"}}"#,
+    ] {
+        let out = run_recheck(Some(bad), &digest);
+        let text = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{bad}: {text}");
+        assert!(text.contains("fails closed"), "{bad}: {text}");
+    }
+    // A run with no recorded digest cannot show the body is unchanged.
+    let after = pull(JUDGED_HEAD, "main", "judged body");
+    let out = run_recheck(Some(&after), "");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("recorded no body digest"));
+}
+
+/// The release impact job's steps in order, parsed from this repository's
+/// workflow, with each step's label.
+fn release_impact_steps() -> Vec<(String, serde_yaml::Value)> {
+    let parsed: serde_yaml::Value = serde_yaml::from_str(OWN_POLICY).unwrap();
+    parsed["jobs"]["release-impact"]["steps"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|step| {
+            let label = step["name"]
+                .as_str()
+                .or_else(|| step["uses"].as_str())
+                .unwrap_or_default();
+            (label.to_owned(), step.clone())
+        })
+        .collect()
+}
+
+/// The release impact job reads its body as commit standards does: into a
+/// file, logged only as a digest, and handed to `scripts/release.py` with
+/// `--body-file`. The runner prints a step's `env:` values, so a body in
+/// `env:` would reach the log. The body step and the script step run as the
+/// workflow writes them, with a stand-in `python3`.
+#[test]
+fn the_release_impact_job_hands_the_body_to_its_script_as_a_file() {
+    let steps = release_impact_steps();
+    let validate = &steps
+        .iter()
+        .find(|(label, _)| label == "Validate reviewed release intent")
+        .expect("the release verdict step")
+        .1;
+    let declared = serde_yaml::to_string(&validate["env"]).unwrap();
+    assert!(!declared.contains("steps.body"), "{declared}");
+    assert_eq!(
+        validate["env"]["BODY_FILE"].as_str(),
+        Some("${{ runner.temp }}/pr-body.md"),
+        "{declared}"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let body = "## Release impact\nCANARY-BODY-TEXT $(id) `id`\n";
+    let api = dir.path().join("api/repos/o/r/pulls");
+    std::fs::create_dir_all(&api).unwrap();
+    std::fs::write(api.join("7"), pull(JUDGED_HEAD, "main", body)).unwrap();
+    let temp = dir.path().join("tmp");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&temp).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    let marker = dir.path().join("marker");
+    let fake = bin.join("python3");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\necho \"python3 $*\"\nfile=\nwhile [ $# -gt 0 ]; do\n  \
+         [ \"$1\" = --body-file ] && file=$2\n  shift\ndone\n\
+         [ -n \"$file\" ] && grep -q CANARY-BODY-TEXT \"$file\" && echo file-has-body >> \"$MARKER\"\n\
+         env | grep -q CANARY-BODY-TEXT && echo env-has-body >> \"$MARKER\"\nexit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let output_file = dir.path().join("github-output");
+    std::fs::write(&output_file, "").unwrap();
+    let job_text = job(OWN_POLICY, "release-impact");
+    let step = |prefix: &str| {
+        run_blocks(job_text, prefix)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("step {prefix}"))
+    };
+    let script = format!(
+        "export PATH='{}':\"$PATH\"\nexport MARKER='{}'\n{}\n\
+         export BASE_SHA=b HEAD_SHA=h BASE_REF=main BODY_FILE='{}/pr-body.md'\n{}",
+        bin.display(),
+        marker.display(),
+        step("Read the pull request's current body"),
+        temp.display(),
+        step("Validate reviewed release intent"),
+    );
+    let out = Command::new("bash")
+        .args(["-c", &script])
+        .env(
+            "GITHUB_API_URL",
+            format!("file://{}", dir.path().join("api").display()),
+        )
+        .env("GITHUB_REPOSITORY", "o/r")
+        .env("GITHUB_OUTPUT", &output_file)
+        .env("RUNNER_TEMP", &temp)
+        .env("GH_TOKEN", "unused")
+        .env("PR_NUMBER", "7")
+        .output()
+        .expect("bash runs");
+    let log = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "{log}");
+    assert!(!log.contains("CANARY-BODY-TEXT"), "{log}");
+    assert!(log.contains("--body-file"), "{log}");
+    assert!(
+        log.contains(&format!("sha256 {}", body_digest(body))),
+        "{log}"
+    );
+    let written = std::fs::read_to_string(&output_file).unwrap();
+    assert!(!written.contains("CANARY-BODY-TEXT"), "{written}");
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap_or_default(),
+        "file-has-body\n",
+        "the script reads the body from the file and not from its environment"
+    );
+}
+
+/// The release impact job ends with the recheck commit standards ends with,
+/// after its verdict, so a queued run cannot pass on a body, head or base
+/// branch that changed while it judged them. The step runs as the workflow
+/// writes it, on the digest the job's own body step records.
+#[test]
+fn the_release_impact_job_fails_a_run_whose_pull_request_changed() {
+    const RECHECK: &str = "the pull request is unchanged";
+    let job_text = job(OWN_POLICY, "release-impact");
+    let block = |text: &str| {
+        run_blocks(text, RECHECK)
+            .into_iter()
+            .next()
+            .expect("the recheck step")
+    };
+    assert_eq!(block(job_text), block(job(OWN_POLICY, "commit-lint")));
+    assert_eq!(block(job_text), block(job(POLICY, "commit-lint")));
+
+    let steps = release_impact_steps();
+    let at = |prefix: &str| {
+        steps
+            .iter()
+            .position(|(label, _)| label.starts_with(prefix))
+    };
+    let recheck = at(RECHECK).expect("the recheck step");
+    assert!(at("Validate reviewed release intent").unwrap() < recheck);
+    assert_eq!(recheck, steps.len() - 2, "only an assertion follows it");
+    assert_eq!(steps[recheck + 1].0, ASSERT_STEP);
+    let env = &steps[recheck].1["env"];
+    assert_eq!(
+        env["JUDGED_DIGEST"].as_str(),
+        Some("${{ steps.body.outputs.digest }}")
+    );
+    assert_eq!(
+        env["JUDGED_HEAD"].as_str(),
+        Some("${{ github.event.pull_request.head.sha }}")
+    );
+    assert_eq!(
+        env["JUDGED_BASE"].as_str(),
+        Some("${{ github.event.pull_request.base.ref }}")
+    );
+
+    // The digest this job's body step records, then the recheck against it.
+    let judged = "judged body";
+    let (read, written) = run_step_of(
+        job_text,
+        "Read the pull request's current body",
+        Some(&pull(JUDGED_HEAD, "main", judged)),
+        &[],
+    );
+    assert!(
+        read.status.success(),
+        "{}",
+        String::from_utf8_lossy(&read.stderr)
+    );
+    let digest = written
+        .lines()
+        .find_map(|line| line.strip_prefix("digest="))
+        .expect("the body step records a digest")
+        .to_owned();
+    let run = |after: Option<&str>| {
+        run_step_of(
+            job_text,
+            RECHECK,
+            after,
+            &[
+                ("JUDGED_HEAD", JUDGED_HEAD),
+                ("JUDGED_BASE", "main"),
+                ("JUDGED_DIGEST", digest.as_str()),
+            ],
+        )
+        .0
+    };
+    let same = run(Some(&pull(JUDGED_HEAD, "main", judged)));
+    assert!(
+        same.status.success(),
+        "{}",
+        String::from_utf8_lossy(&same.stderr)
+    );
+    let edited = run(Some(&pull(JUDGED_HEAD, "main", "edited body")));
+    let said = String::from_utf8_lossy(&edited.stdout);
+    assert_eq!(edited.status.code(), Some(1), "{said}");
+    assert!(
+        said.contains("body changed while this run judged it"),
+        "{said}"
+    );
+    assert!(!said.contains("edited body"), "{said}");
+    let unread = run(None);
+    assert_eq!(unread.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&unread.stdout).contains("cannot read the pull request again"));
+}
+
+#[test]
+fn the_policy_workflow_documents_the_queue_limits() {
+    let readme = include_str!("../../../assets/base/ci/README.md");
+    for needed in [
+        "100 runs",
+        "queue: max",
+        "after the last read",
+        "actionlint",
+    ] {
+        assert!(readme.contains(needed), "README is missing: {needed}");
+        if needed != "after the last read" {
+            assert!(
+                POLICY.contains(needed) || needed == "100 runs" && POLICY.contains("at most 100"),
+                "workflow comment is missing: {needed}"
+            );
+        }
+    }
+    // The header comment wraps lines, so read it as one run of words.
+    let header = POLICY.replace("\n# ", " ");
+    assert!(
+        header.contains("after that last read"),
+        "the window is stated in the workflow"
+    );
 }
