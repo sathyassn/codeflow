@@ -58,6 +58,7 @@ use crate::hooks::policy::DEFAULT_REQUIRED_CHECKS;
 pub mod agent_key;
 pub mod apps;
 mod fnmatch;
+pub mod user_token;
 
 /// `owner/name` of the repository's `origin` remote when it is on
 /// github.com; `None` when there is no such remote.

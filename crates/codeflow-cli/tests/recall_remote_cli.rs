@@ -719,9 +719,72 @@ fn agent_token_committer_takes_only_name_or_email_and_never_a_credential_request
             "--git-credential",
             "get",
         ],
+        vec!["remote", "agent-token", "--committer", "name", "--user"],
     ] {
         let out = run_in(dir.path(), home.path(), &args);
         assert_eq!(out.status.code(), Some(2), "{args:?}");
         assert_eq!(stdout(&out), "", "{args:?}");
     }
+}
+
+/// TSK-1348 AC-14: `--user` as a git credential helper answers only `get`
+/// for `https://github.com`; any other request prints nothing and reaches no
+/// store, on every platform.
+#[test]
+fn agent_token_user_credential_answers_only_github_get() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "demo");
+    for operation in ["get", "store", "erase"] {
+        let out = run_in(
+            dir.path(),
+            home.path(),
+            &[
+                "remote",
+                "agent-token",
+                "--user",
+                "--git-credential",
+                operation,
+                "--repo",
+                "codeflow-test-none/never-an-entry",
+            ],
+        );
+        assert!(out.status.success(), "{operation}");
+        assert_eq!(stdout(&out), "", "{operation}");
+    }
+    assert!(!home.path().join("locks").exists());
+}
+
+/// TSK-1348 AC-13: with no saved authorization, `--user` prints no token and
+/// names the command that authorizes.
+#[test]
+fn agent_token_user_without_a_login_names_agent_login() {
+    if real_store_is_the_keychain() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "demo");
+    let out = run_in(
+        dir.path(),
+        home.path(),
+        &[
+            "remote",
+            "agent-token",
+            "--user",
+            "--repo",
+            "codeflow-test-none/never-an-entry",
+        ],
+    );
+    let error = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(!out.status.success(), "{error}");
+    assert_eq!(stdout(&out), "", "{error}");
+    // A Linux runner without `secret-tool` or curl stops earlier, naming it.
+    assert!(
+        error.contains("codeflow remote agent-login --repo codeflow-test-none/never-an-entry")
+            || error.contains("secret-tool")
+            || error.contains("curl")
+            || error.contains("no credential store"),
+        "{error}"
+    );
 }

@@ -1246,6 +1246,9 @@ fn existing_agent(
             store.describe(),
             app.slug
         ));
+        report
+            .lines
+            .extend(person_authorship_lines(target, &app.slug));
         report_committer(auth, &app.slug, report);
         Ok(())
     } else {
@@ -1302,12 +1305,28 @@ fn agent(
         app.id,
         install_url(&app.slug)
     ));
-    report.lines.push(format!(
-        "agent sessions act as {}[bot] with a token from `codeflow remote agent-token`",
-        app.slug
-    ));
+    report
+        .lines
+        .extend(person_authorship_lines(target, &app.slug));
     report_committer(auth, &app.slug, report);
     Ok(())
+}
+
+/// How agent pull requests get the developer as author: the device flow
+/// click a manifest cannot make, then each developer's one login (TSK-1348
+/// AC-15). GitHub's manifest parameters include no device flow setting, so
+/// the click is named with its page rather than made.
+fn person_authorship_lines(target: &Target, slug: &str) -> [String; 2] {
+    [
+        format!(
+            "one more click for the agent App: on its settings page ({}), under \"Identifying and authorizing users\", select \"Enable Device Flow\" and save; a GitHub App manifest cannot turn it on",
+            target.app_page_url(slug, "")
+        ),
+        format!(
+            "then each developer runs `codeflow remote agent-login --repo {}` once; agent sessions open pull requests with `GH_TOKEN=$(codeflow remote agent-token --user)`, so the developer is the author, and push with the installation token from `codeflow remote agent-token`",
+            target.repository
+        ),
+    ]
 }
 
 /// Escape text for an HTML attribute or element.
@@ -2041,6 +2060,48 @@ mod tests {
             "{shown}"
         );
         assert!(shown.contains("forget o/r"), "{shown}");
+    }
+
+    /// AC-15: a manifest cannot turn on the device flow, so both a new agent
+    /// App and an existing one name the click and its settings page, then
+    /// the developer's one login and the token pull requests are opened with.
+    #[test]
+    fn setup_names_the_device_flow_click_and_the_developer_login() {
+        let click =
+            "under \"Identifying and authorizing users\", select \"Enable Device Flow\" and save";
+        let login = "each developer runs `codeflow remote agent-login --repo o/r` once";
+        let user =
+            "`GH_TOKEN=$(codeflow remote agent-token --user)`, so the developer is the author";
+        // A new agent App, on a personal account.
+        let mut clicks = Clicks::default();
+        let report = run(&fresh_host(), &mut clicks, &MemoryStore::default());
+        let shown = report.render().into_string();
+        assert_eq!(report.failure, None, "{shown}");
+        assert!(
+            shown.contains(&format!(
+                "on its settings page (https://github.com/settings/apps/codeflow-agent-r), {click}"
+            )),
+            "{shown}"
+        );
+        assert!(shown.contains(login) && shown.contains(user), "{shown}");
+        assert!(!shown.contains("agent sessions act as"), "{shown}");
+        // The manifest posted holds no device flow setting to rely on.
+        let manifest = clicks.manifests[1].1.as_object().unwrap();
+        assert!(
+            manifest.keys().all(|key| !key.contains("device")),
+            "{manifest:?}"
+        );
+        // An agent App already set up.
+        let store = MemoryStore::default();
+        store.store("o/r", &agent_entry()).unwrap();
+        let report = run(&set_up_host(), &mut Clicks::default(), &store);
+        let shown = report.render().into_string();
+        assert_eq!(report.failure, None, "{shown}");
+        assert!(
+            shown.contains("agent App: already set up") && shown.contains(click),
+            "{shown}"
+        );
+        assert!(shown.contains(login) && shown.contains(user), "{shown}");
     }
 
     #[test]

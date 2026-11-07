@@ -210,10 +210,13 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--agent-name <NAME>` | The agent App's name (default `codeflow-agent-<repo>`). |
 | | `--no-agent` | Set up the authority App only. |
 | | `--paste` | Write each App's page to a file and read back the address GitHub opens, instead of serving the page on a local port. |
-| `codeflow remote agent-token` | | Print a GitHub installation token of this repository's agent App, valid for one hour, for `GH_TOKEN` or `git push`. The App's key is read from this computer's credential store and never printed |
+| `codeflow remote agent-token` | | Print a GitHub installation token of this repository's agent App, valid for one hour, for `git push`. The App's key is read from this computer's credential store and never printed. With `--user`, print your own user access token for the agent App instead, for `GH_TOKEN`: pull requests opened with it show you as author |
 | | `--repo <OWNER/NAME>` | The repository, `owner/name` (default: the `origin` remote). |
 | | `--git-credential <OPERATION>` | Answer as a git credential helper: `get` for `https://github.com` prints the token as the password of `x-access-token`; another host or operation prints nothing. |
 | | `--committer <FIELD>` | Print the App's committer name or email instead of a token, confirmed with GitHub; nothing reaches standard output when it cannot be confirmed. No token is minted. One of `name`, `email`. |
+| | `--user` | Print the user access token `codeflow remote agent-login` saved, renewed first when it is near its end. Only an authorization GitHub refuses or that has expired asks you to log in again. |
+| `codeflow remote agent-login` | | Authorize the repository's agent App to act for you, once per computer, through GitHub's device flow: open the printed address and enter the code. The grant is kept in this computer's credential store, apart from the App's key, and renewed by `agent-token --user`. Uses no personal access token and no `gh` login. The agent App needs "Enable Device Flow" turned on in its settings |
+| | `--repo <OWNER/NAME>` | The repository, `owner/name` (default: the `origin` remote). |
 | `codeflow remote import-agent-key` | | Store this computer's own key for the repository's agent App, from a private key file generated on the App's settings page. Needs no administrator role and no `gh` login |
 | | `--key-file <PATH>` | The private key file; it must be readable only by you. Required. |
 | | `--client-id <ID>` | The App's Client ID, from its settings page. Required. |

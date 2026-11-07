@@ -93,6 +93,18 @@ pub trait KeyStore {
 
     /// The command that removes the entry for `account`.
     fn undo(&self, account: &str) -> String;
+
+    /// Keep `secret` for `account` in place of any entry there, and read it
+    /// back. A store that cannot replace an entry refuses.
+    ///
+    /// # Errors
+    ///
+    /// When the store refuses, cannot be reached, or does not give back the
+    /// value it was handed.
+    fn replace(&self, account: &str, secret: &str) -> Result<(), String> {
+        let _ = (account, secret);
+        Err(format!("{} cannot replace an entry", self.describe()))
+    }
 }
 
 /// This computer's credential store: the login keychain on macOS, the
@@ -100,17 +112,39 @@ pub trait KeyStore {
 /// yet, so the agent App is refused there before anything is created.
 #[must_use]
 pub fn os_store() -> Box<dyn KeyStore> {
+    os_store_for(AGENT_KEY_SERVICE)
+}
+
+/// This computer's credential store, keeping its entries under `service`.
+#[must_use]
+pub fn os_store_for(service: &'static str) -> Box<dyn KeyStore> {
     #[cfg(target_os = "macos")]
     {
-        Box::new(Keychain::login())
+        Box::new(Keychain::login_for(service))
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        Box::new(SecretService)
+        Box::new(SecretService { service })
     }
     #[cfg(not(unix))]
     {
+        let _ = service;
         Box::new(Unsupported)
+    }
+}
+
+/// Whether a store gave back exactly what it was handed; the value itself
+/// never reaches a message.
+#[cfg(any(unix, test))]
+fn kept(store: &dyn KeyStore, account: &str, secret: &str) -> Result<(), String> {
+    let back = store.load(account)?;
+    if back == secret {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} did not give back the entry it was handed for {account}",
+            store.describe()
+        ))
     }
 }
 
@@ -144,11 +178,11 @@ fn confine(command: &mut Command, inherited: &[(OsString, OsString)], keep: &[&s
 
 /// A helper's output, for a message only: it is shown, never compared, and
 /// every caller that may echo a key passes it through [`redact`].
-fn helper_text(bytes: &[u8]) -> String {
+pub(crate) fn helper_text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).trim().to_string()
 }
 
-fn run(command: &mut Command, input: Option<&[u8]>) -> Result<Output, String> {
+pub(crate) fn run(command: &mut Command, input: Option<&[u8]>) -> Result<Output, String> {
     command.stdin(Stdio::null());
     match input {
         Some(data) => crate::git::output_with_input(command, data),
@@ -164,14 +198,24 @@ fn run(command: &mut Command, input: Option<&[u8]>) -> Result<Output, String> {
 #[cfg(target_os = "macos")]
 pub struct Keychain {
     keychain: Option<PathBuf>,
+    service: &'static str,
 }
 
 #[cfg(target_os = "macos")]
 impl Keychain {
-    /// The user's default (login) keychain.
+    /// The user's default (login) keychain, for the agent App's key.
     #[must_use]
     pub fn login() -> Self {
-        Self { keychain: None }
+        Self::login_for(AGENT_KEY_SERVICE)
+    }
+
+    /// The user's default (login) keychain, keeping entries under `service`.
+    #[must_use]
+    pub fn login_for(service: &'static str) -> Self {
+        Self {
+            keychain: None,
+            service,
+        }
     }
 
     /// A named keychain file, for a scratch keychain in tests.
@@ -179,18 +223,13 @@ impl Keychain {
     pub fn at(keychain: &Path) -> Self {
         Self {
             keychain: Some(keychain.to_path_buf()),
+            service: AGENT_KEY_SERVICE,
         }
     }
 
     fn find(&self, account: &str, password: bool) -> Command {
         let mut command = Command::new("/usr/bin/security");
-        command.args([
-            "find-generic-password",
-            "-s",
-            AGENT_KEY_SERVICE,
-            "-a",
-            account,
-        ]);
+        command.args(["find-generic-password", "-s", self.service, "-a", account]);
         if password {
             command.arg("-w");
         }
@@ -202,16 +241,26 @@ impl Keychain {
 }
 
 /// The `security -i` line that adds the entry: the secret travels as hex on
-/// standard input, never in the argument list `ps` shows.
+/// standard input, never in the argument list `ps` shows. With `update`, `-U`
+/// replaces an entry already there.
 #[cfg(any(target_os = "macos", test))]
-fn keychain_add_line(account: &str, secret: &str, keychain: Option<&Path>) -> String {
+fn keychain_add_line(
+    service: &str,
+    account: &str,
+    secret: &str,
+    keychain: Option<&Path>,
+    update: bool,
+) -> String {
     let hex = secret.bytes().fold(String::new(), |mut hex, byte| {
         use std::fmt::Write as _;
         let _ = write!(hex, "{byte:02x}");
         hex
     });
     let keychain = keychain.map_or_else(String::new, |path| format!(" {}", path.display()));
-    format!("add-generic-password -s {AGENT_KEY_SERVICE} -a {account} -l {AGENT_KEY_SERVICE} -X {hex}{keychain}\n")
+    let update = if update { " -U" } else { "" };
+    format!(
+        "add-generic-password -s {service} -a {account} -l {service}{update} -X {hex}{keychain}\n"
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -250,7 +299,13 @@ impl KeyStore for Keychain {
     }
 
     fn store(&self, account: &str, secret: &str) -> Result<(), String> {
-        let line = keychain_add_line(account, secret, self.keychain.as_deref());
+        let line = keychain_add_line(
+            self.service,
+            account,
+            secret,
+            self.keychain.as_deref(),
+            false,
+        );
         let output = run(
             Command::new("/usr/bin/security").arg("-i"),
             Some(line.as_bytes()),
@@ -291,7 +346,30 @@ impl KeyStore for Keychain {
             .keychain
             .as_ref()
             .map_or_else(String::new, |path| format!(" {}", path.display()));
-        format!("security delete-generic-password -s {AGENT_KEY_SERVICE} -a {account}{keychain}")
+        format!(
+            "security delete-generic-password -s {} -a {account}{keychain}",
+            self.service
+        )
+    }
+
+    fn replace(&self, account: &str, secret: &str) -> Result<(), String> {
+        let line = keychain_add_line(
+            self.service,
+            account,
+            secret,
+            self.keychain.as_deref(),
+            true,
+        );
+        let output = run(
+            Command::new("/usr/bin/security").arg("-i"),
+            Some(line.as_bytes()),
+        )?;
+        kept(self, account, secret).map_err(|why| {
+            redact(
+                &format!("{why}: {}", helper_text(&output.stderr)),
+                &[secret],
+            )
+        })
     }
 }
 
@@ -327,8 +405,8 @@ fn decode_hex(text: &str) -> Option<String> {
 /// (libsecret `on_lookup_unlocked`). `search` with no `--unlock` lists locked
 /// entries too and prompts no one (libsecret `load_items`).
 #[cfg(any(all(unix, not(target_os = "macos")), test))]
-fn search_args(account: &str) -> [&str; 5] {
-    ["search", "service", AGENT_KEY_SERVICE, "account", account]
+fn search_args<'a>(service: &'a str, account: &'a str) -> [&'a str; 5] {
+    ["search", "service", service, "account", account]
 }
 
 /// Whether `secret-tool search` shows an entry. It exits 0 for an answer and
@@ -382,9 +460,12 @@ fn lookup_failure(
     }
 }
 
-/// The freedesktop Secret Service, through `secret-tool`.
+/// The freedesktop Secret Service, through `secret-tool`, keeping entries
+/// under `service`.
 #[cfg(all(unix, not(target_os = "macos")))]
-pub struct SecretService;
+pub struct SecretService {
+    service: &'static str,
+}
 
 #[cfg(all(unix, not(target_os = "macos")))]
 impl SecretService {
@@ -416,7 +497,10 @@ impl KeyStore for SecretService {
     }
 
     fn exists(&self, account: &str) -> Result<bool, String> {
-        let output = run(Self::command()?.args(search_args(account)), None)?;
+        let output = run(
+            Self::command()?.args(search_args(self.service, account)),
+            None,
+        )?;
         search_answer(&output, &self.describe())
     }
 
@@ -424,9 +508,9 @@ impl KeyStore for SecretService {
         let output = run(
             Self::command()?.args([
                 "store",
-                &format!("--label={AGENT_KEY_SERVICE}"),
+                &format!("--label={}", self.service),
                 "service",
-                AGENT_KEY_SERVICE,
+                self.service,
                 "account",
                 account,
             ]),
@@ -447,7 +531,7 @@ impl KeyStore for SecretService {
 
     fn load(&self, account: &str) -> Result<String, String> {
         let output = run(
-            Self::command()?.args(["lookup", "service", AGENT_KEY_SERVICE, "account", account]),
+            Self::command()?.args(["lookup", "service", self.service, "account", account]),
             None,
         )?;
         if !output.status.success() || output.stdout.is_empty() {
@@ -458,7 +542,17 @@ impl KeyStore for SecretService {
     }
 
     fn undo(&self, account: &str) -> String {
-        format!("secret-tool clear service {AGENT_KEY_SERVICE} account {account}")
+        format!(
+            "secret-tool clear service {} account {account}",
+            self.service
+        )
+    }
+
+    /// `secret-tool store` replaces an entry with the same attributes, so a
+    /// replace is a store read back.
+    fn replace(&self, account: &str, secret: &str) -> Result<(), String> {
+        self.store(account, secret)?;
+        kept(self, account, secret)
     }
 }
 
@@ -473,7 +567,7 @@ impl KeyStore for Unsupported {
     }
 
     fn available(&self) -> Result<(), String> {
-        Err("this platform has no credential store CodeFlow can keep the agent App's key in yet (macOS keychain or Linux Secret Service)".to_string())
+        Err("this platform has no credential store CodeFlow can keep the agent App's key or a GitHub authorization in yet (macOS keychain or Linux Secret Service)".to_string())
     }
 
     fn exists(&self, _: &str) -> Result<bool, String> {
@@ -618,7 +712,7 @@ impl CurlHttp {
     }
 
     /// `/usr/bin/curl` in its confined environment, with no arguments yet.
-    fn program(&self) -> Command {
+    pub(crate) fn program(&self) -> Command {
         let mut command = Command::new("/usr/bin/curl");
         confine(
             &mut command,
@@ -679,6 +773,101 @@ impl AppHttp for CurlHttp {
     }
 }
 
+/// GitHub's answer to an OAuth request: the HTTP status and the body, which
+/// can hold a token and so never reaches a message.
+pub struct OAuthAnswer {
+    /// The HTTP status.
+    pub status: u16,
+    /// The response body.
+    pub body: String,
+}
+
+/// A form POST to GitHub's OAuth endpoints (`github.com/login/...`), which
+/// answer JSON when asked and carry their secrets in the body.
+pub trait OAuthHttp {
+    /// GitHub's answer to `form` posted to `url`.
+    ///
+    /// # Errors
+    ///
+    /// When no answer came: the transport failed, or the answer had no status.
+    fn post_form(&self, url: &str, form: &[(&str, &str)]) -> Result<OAuthAnswer, String>;
+}
+
+/// `form` as `application/x-www-form-urlencoded`, every byte outside the
+/// unreserved set percent-encoded.
+fn form_body(form: &[(&str, &str)]) -> String {
+    let encode = |text: &str| {
+        text.bytes().fold(String::new(), |mut out, byte| {
+            if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+                out.push(char::from(byte));
+            } else {
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{byte:02X}");
+            }
+            out
+        })
+    };
+    form.iter()
+        .map(|(name, value)| format!("{}={}", encode(name), encode(value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+impl CurlHttp {
+    /// The curl command for an OAuth POST: the form, which holds a device code
+    /// or a refresh token, goes on standard input (`--data-binary @-`), never
+    /// in the argument list; the status is written after the body.
+    fn oauth_command(&self, url: &str) -> Command {
+        let mut command = self.program();
+        command.args([
+            "-q",
+            "-sS",
+            "--max-time",
+            "30",
+            "-X",
+            "POST",
+            "-H",
+            "Accept: application/json",
+            "-H",
+            "Content-Type: application/x-www-form-urlencoded",
+            "-H",
+            "User-Agent: codeflow",
+            "--data-binary",
+            "@-",
+            "-w",
+            "\n%{http_code}",
+            url,
+        ]);
+        command
+    }
+}
+
+impl OAuthHttp for CurlHttp {
+    fn post_form(&self, url: &str, form: &[(&str, &str)]) -> Result<OAuthAnswer, String> {
+        let secrets: Vec<&str> = form.iter().map(|(_, value)| *value).collect();
+        let output = run(
+            &mut self.oauth_command(url),
+            Some(form_body(form).as_bytes()),
+        )?;
+        if !output.status.success() {
+            return Err(redact(
+                &format!("POST {url} failed: {}", helper_text(&output.stderr)),
+                &secrets,
+            ));
+        }
+        let text = String::from_utf8(output.stdout)
+            .map_err(|_| format!("the answer to POST {url} is not UTF-8"))?;
+        let (body, status) = text
+            .rsplit_once('\n')
+            .and_then(|(body, status)| Some((body, status.trim().parse::<u16>().ok()?)))
+            .ok_or_else(|| format!("the answer to POST {url} has no HTTP status"))?;
+        Ok(OAuthAnswer {
+            status,
+            body: body.to_string(),
+        })
+    }
+}
+
 /// What a failed [`AppHttp`] call shows about its cause.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CallFailure {
@@ -729,7 +918,7 @@ pub(crate) fn call_failure(error: &str) -> CallFailure {
 
 /// A failed call by its cause, for a status with no meaning of its own to the
 /// caller. `unknown` says what the failure leaves open. Callers redact it.
-fn call_problem(error: &str, unknown: &str) -> String {
+pub(crate) fn call_problem(error: &str, unknown: &str) -> String {
     match call_failure(error) {
         CallFailure::Unreachable => format!("cannot reach GitHub, so {unknown}: {error}"),
         CallFailure::Status(401) => format!(
@@ -961,7 +1150,7 @@ pub fn bot_committer(
 
 /// The agent App entry kept for `repository`. A parse failure drops serde's
 /// text, which can echo the entry.
-fn load_app(store: &dyn KeyStore, repository: &str) -> Result<AgentApp, String> {
+pub(crate) fn load_app(store: &dyn KeyStore, repository: &str) -> Result<AgentApp, String> {
     store.available()?;
     let raw = store.load(repository)?;
     serde_json::from_str(&raw).map_err(|_| {
@@ -1327,6 +1516,9 @@ pub(crate) mod tests {
         fn undo(&self, account: &str) -> String {
             format!("forget {account}")
         }
+        fn replace(&self, account: &str, secret: &str) -> Result<(), String> {
+            self.store(account, secret)
+        }
     }
 
     struct FakeSigner(Result<Vec<u8>, String>);
@@ -1521,12 +1713,135 @@ pub(crate) mod tests {
 
     #[test]
     fn keychain_line_carries_the_secret_on_stdin_as_hex_only() {
-        let line = keychain_add_line("o/r", "{\"pem\":\"x y\"}", None);
+        let line = keychain_add_line(AGENT_KEY_SERVICE, "o/r", "{\"pem\":\"x y\"}", None, false);
         assert!(line.starts_with("add-generic-password -s codeflow-agent-app -a o/r "));
         assert!(!line.contains("pem"));
         let hex = line.split(" -X ").nth(1).unwrap().trim();
         assert_eq!(decode_hex(hex).as_deref(), Some("{\"pem\":\"x y\"}"));
         assert!(line.ends_with('\n') && line.matches('\n').count() == 1);
+    }
+
+    /// AC-13: a renewed grant replaces the entry in place (`-U`), under the
+    /// service it is given; a first store does not.
+    #[test]
+    fn keychain_line_replaces_only_when_asked() {
+        let line = keychain_add_line("codeflow-agent-user", "o/r", "{}", None, true);
+        assert!(
+            line.starts_with(
+                "add-generic-password -s codeflow-agent-user -a o/r -l codeflow-agent-user -U -X "
+            ),
+            "{line}"
+        );
+        let line = keychain_add_line(AGENT_KEY_SERVICE, "o/r", "{}", None, false);
+        assert!(!line.contains(" -U"), "{line}");
+    }
+
+    /// A store kept only when it gives the value back: a store that answers
+    /// something else is refused, and the message holds neither value.
+    #[test]
+    fn kept_compares_the_value_read_back() {
+        let store = MemoryStore::default();
+        store.store("o/r", "ghr_new").unwrap();
+        assert!(kept(&store, "o/r", "ghr_new").is_ok());
+        let error = kept(&store, "o/r", "ghr_other").unwrap_err();
+        assert!(
+            !error.contains("ghr_new") && !error.contains("ghr_other"),
+            "{error}"
+        );
+    }
+
+    /// AC-13: the OAuth form holds a device code or a refresh token, so it
+    /// goes on standard input and never into the argument list `ps` shows.
+    #[test]
+    fn oauth_command_carries_no_form_value() {
+        let http = CurlHttp {
+            inherited: Some(Vec::new()),
+        };
+        let command = http.oauth_command("https://github.com/login/oauth/access_token");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(args.first().map(String::as_str), Some("-q"));
+        let data = args.iter().position(|arg| arg == "--data-binary").unwrap();
+        assert_eq!(args[data + 1], "@-");
+        assert!(args.iter().any(|arg| arg == "Accept: application/json"));
+        assert!(!args.iter().any(|arg| arg.contains("refresh_token")));
+        assert_eq!(
+            form_body(&[("client_id", "Iv1"), ("refresh_token", "a+b c/=")]),
+            "client_id=Iv1&refresh_token=a%2Bb%20c%2F%3D"
+        );
+    }
+
+    /// AC-13: the real curl posts the form from standard input and reads
+    /// GitHub's status and body, a 4xx included, from a local listener.
+    #[cfg(unix)]
+    #[test]
+    fn curl_posts_the_oauth_form_and_reads_the_status() {
+        use std::io::{Read as _, Write as _};
+        if CurlHttp::discover().is_err() {
+            eprintln!("/usr/bin/curl not installed; skipped");
+            return;
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            // Until the headers and the whole body have come.
+            loop {
+                let read = stream.read(&mut chunk).unwrap();
+                request.extend_from_slice(&chunk[..read]);
+                let text = String::from_utf8_lossy(&request).to_string();
+                if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                    let length = head
+                        .lines()
+                        .find_map(|line| line.strip_prefix("Content-Length: "))
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if body.len() >= length || read == 0 {
+                        break;
+                    }
+                }
+                if read == 0 {
+                    break;
+                }
+            }
+            let body = br#"{"error":"authorization_pending"}"#;
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+            stream.write_all(body).unwrap();
+            String::from_utf8_lossy(&request).to_string()
+        });
+        let http = CurlHttp {
+            inherited: Some(Vec::new()),
+        };
+        let answer = http
+            .post_form(
+                &format!("http://127.0.0.1:{port}/login/oauth/access_token"),
+                &[("client_id", "Iv1"), ("device_code", "a+b c")],
+            )
+            .unwrap();
+        let request = server.join().unwrap();
+        assert_eq!(answer.status, 400);
+        assert_eq!(answer.body, r#"{"error":"authorization_pending"}"#);
+        assert!(
+            request.starts_with("POST /login/oauth/access_token "),
+            "{request}"
+        );
+        assert!(request.contains("Accept: application/json"), "{request}");
+        assert!(
+            request.ends_with("\r\n\r\nclient_id=Iv1&device_code=a%2Bb%20c"),
+            "{request}"
+        );
     }
 
     /// The real signer, with a throwaway key made for this test: it signs
@@ -2586,7 +2901,7 @@ pub(crate) mod tests {
     /// cannot: with no `--unlock`, nothing asks the person at the screen.
     #[test]
     fn the_store_search_never_unlocks() {
-        let args = search_args("o/r");
+        let args = search_args(AGENT_KEY_SERVICE, "o/r");
         assert_eq!(args[0], "search");
         assert!(!args.contains(&"--unlock"), "{args:?}");
         assert_eq!(args[1..], ["service", AGENT_KEY_SERVICE, "account", "o/r"]);
