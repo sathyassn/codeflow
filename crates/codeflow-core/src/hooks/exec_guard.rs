@@ -397,8 +397,15 @@ fn carrier_violations(
     let mut violations: Vec<Violation> =
         found.unread.iter().map(|why| carrier_unread(why)).collect();
     for run in &found.runs {
-        for finding in evaluate_ruled(&run.bare_line(cwd), posix, levels, integrity, cwd, root, outcome)
-        {
+        for finding in evaluate_ruled(
+            &run.bare_line(cwd),
+            posix,
+            levels,
+            integrity,
+            cwd,
+            root,
+            outcome,
+        ) {
             merge_strongest(&mut violations, finding);
         }
     }

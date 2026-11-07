@@ -101,13 +101,29 @@ const LINE_CARRIERS: &[&str] = &[
 fn carried_commands_are_judged_as_typed_bare() {
     let fixture = Fixture::new();
     let cases: &[(&str, &str, &str)] = &[
-        ("claude -p hello", "exec-guard", "security.headless_peer_runs"),
-        ("codex exec hello", "exec-guard", "security.headless_peer_runs"),
+        (
+            "claude -p hello",
+            "exec-guard",
+            "security.headless_peer_runs",
+        ),
+        (
+            "codex exec hello",
+            "exec-guard",
+            "security.headless_peer_runs",
+        ),
         ("grok -p hello", "exec-guard", "security.headless_peer_runs"),
-        ("git push --force origin main", "git-guard", "git.force_push_protected"),
+        (
+            "git push --force origin main",
+            "git-guard",
+            "git.force_push_protected",
+        ),
         ("git branch -D main", "git-guard", "git.delete_protected"),
         ("rm -rf /", "exec-guard", "security.dangerous_commands"),
-        ("sudo rm -rf /var", "exec-guard", "security.privilege_escalation"),
+        (
+            "sudo rm -rf /var",
+            "exec-guard",
+            "security.privilege_escalation",
+        ),
         ("cargo publish", "exec-guard", "security.outward_actions"),
     ];
     let mut wrong = Vec::new();
@@ -153,7 +169,10 @@ fn a_carried_git_command_is_judged_in_its_directory() {
     let commit = "git commit --allow-empty -m 'chore: x'";
     assert!(passed(&fixture.judge("git-guard", commit)));
     let other = shell_path(&fixture.other);
-    let control = fixture.judge("git-guard", &format!("git -C '{other}' {commit}"));
+    let control = fixture.judge(
+        "git-guard",
+        &format!("git -C '{other}' commit --allow-empty -m 'chore: x'"),
+    );
     assert!(refused(&control, "git.commit_to_protected"), "{control:?}");
     for command in [
         format!("hc run --cwd '{other}' -- {commit}"),
@@ -161,7 +180,10 @@ fn a_carried_git_command_is_judged_in_its_directory() {
         format!("hc run --cwd ../other -- {commit}"),
     ] {
         let out = fixture.judge("git-guard", &command);
-        assert!(refused(&out, "git.commit_to_protected"), "{command}: {out:?}");
+        assert!(
+            refused(&out, "git.commit_to_protected"),
+            "{command}: {out:?}"
+        );
     }
     let out = fixture.judge("git-guard", &format!("hc run --on vps -- {commit}"));
     assert!(refused(&out, "git.hook_integrity"), "{out:?}");
@@ -193,7 +215,68 @@ fn the_seat_launch_lines_pass() {
     }
     let out = fixture.judge("exec-guard", "hc run --bg --name s seat 'review x.rs'");
     if !passed(&out) {
-        wrong.push(format!("seat template: {}", String::from_utf8_lossy(&out.stderr)));
+        wrong.push(format!(
+            "seat template: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// AC-2: the Codex launch line passes with `--cwd` at a large worktree, inside
+/// the guard's deadline. The outer words are read once, by the carrier
+/// reader; the secret-read walk no longer reads Codex's `-c` as archive
+/// syntax over the whole `--cwd` tree.
+#[test]
+fn the_codex_launch_line_passes_at_a_large_worktree() {
+    let fixture = Fixture::new();
+    let large = fixture.session.join("target/debug/deps");
+    std::fs::create_dir_all(&large).unwrap();
+    for at in 0..6000 {
+        std::fs::write(large.join(format!("f{at}.rlib")), "").unwrap();
+    }
+    let dir = shell_path(&fixture.session);
+    let command = format!(
+        "hc run --bg --no-parent --no-notify --name cf-x-cx01 --cwd '{dir}' -- codex --no-daemon --model gpt-6.1-sol -c 'model_reasoning_effort=\"medium\"' --ask-for-approval never"
+    );
+    let started = std::time::Instant::now();
+    let out = fixture.judge("exec-guard", &command);
+    assert!(passed(&out), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}
+
+/// The secret-read rules still judge what a carrier reads: a carried
+/// recursive read of a secret store, and the files `hc file read`, `hc put`
+/// and `hc update --from` read.
+#[test]
+fn carried_and_carrier_reads_meet_the_secret_read_rules() {
+    let fixture = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        "hc run -- grep -r token ~/.ssh",
+        "hc run --cwd . -- tar -czf out.tgz ~/.ssh",
+        "hc exec grep -r token ~/.aws",
+        "hc file read ~/.ssh/id_rsa",
+        "hc file read --cwd ~/.ssh id_rsa",
+        "hc put t1 ~/.ssh/id_rsa",
+        "hc update --from ~/.aws/credentials",
+    ] {
+        let out = fixture.judge("exec-guard", command);
+        if !refused(&out, "security.secret_reads") {
+            wrong.push(format!(
+                "should refuse: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+    }
+    for command in ["hc file read README.md", "hc put t1 base.txt"] {
+        let out = fixture.judge("exec-guard", command);
+        if !passed(&out) {
+            wrong.push(format!(
+                "should allow: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
@@ -211,7 +294,7 @@ fn unreadable_forms_refuse_and_read_only_forms_pass() {
         "hc send --frob t1 hello",
         "hc keys --frob t1 enter",
         "hc run --bg odd task",
-        "hc run --cwd \"$(pwd)\" -- ls",
+        "hc run --cwd \"$(cat dir.txt)\" -- ls",
         "echo t1 | xargs hc run -- ls",
     ] {
         let exec = fixture.judge("exec-guard", command);

@@ -114,8 +114,9 @@ pub(crate) struct Carried {
 
 impl Carried {
     fn unread(&mut self, form: &str, why: impl std::fmt::Display) {
-        self.unread
-            .push(format!("`{form}`: {why}; the guard cannot judge what it runs"));
+        self.unread.push(format!(
+            "`{form}`: {why}; the guard cannot judge what it runs"
+        ));
     }
 }
 
@@ -147,7 +148,10 @@ pub(crate) fn carried(command: &str, cwd: &Path) -> Carried {
             let name = name.strip_suffix(".exe").unwrap_or(name);
             let words = Words {
                 args: &call.args[1..],
-                patterns: call.expands.as_deref().map(|p| p.get(1..).unwrap_or_default()),
+                patterns: call
+                    .expands
+                    .as_deref()
+                    .map(|p| p.get(1..).unwrap_or_default()),
             };
             let place = Place {
                 cwd: call.cwd.clone(),
@@ -176,9 +180,11 @@ pub(crate) fn carried(command: &str, cwd: &Path) -> Carried {
             }
         }
     }
-    out.runs.sort_by(|a, b| a.line.cmp(&b.line).then(a.directory.cmp(&b.directory)));
+    out.runs
+        .sort_by(|a, b| a.line.cmp(&b.line).then(a.directory.cmp(&b.directory)));
     out.runs.dedup();
-    out.writes.sort_by(|a, b| a.path.cmp(&b.path).then(a.directory.cmp(&b.directory)));
+    out.writes
+        .sort_by(|a, b| a.path.cmp(&b.path).then(a.directory.cmp(&b.directory)));
     out.writes.dedup();
     out.unread.sort();
     out.unread.dedup();
@@ -217,7 +223,8 @@ impl Words<'_> {
     fn pattern(&self, at: usize) -> bool {
         // A lost reading is taken as a pattern, which the guards judge
         // more strictly than a literal.
-        self.patterns.is_none_or(|p| p.get(at).copied().unwrap_or(true))
+        self.patterns
+            .is_none_or(|p| p.get(at).copied().unwrap_or(true))
     }
 }
 
@@ -309,14 +316,13 @@ fn options(
         let Some(option) = grammar.valued.iter().find(|f| **f == name) else {
             return Err(format!("the option `{name}` is not one the guard reads"));
         };
-        let value = match attached {
-            Some(value) => value,
-            None => {
-                index += 1;
-                args.get(index)
-                    .cloned()
-                    .ok_or_else(|| format!("the option `{option}` has no value"))?
-            }
+        let value = if let Some(value) = attached {
+            value
+        } else {
+            index += 1;
+            args.get(index)
+                .cloned()
+                .ok_or_else(|| format!("the option `{option}` has no value"))?
         };
         out.values.push((option, value));
         index += 1;
@@ -328,6 +334,10 @@ fn options(
 /// `hc` and its subcommands.
 #[allow(clippy::too_many_lines)] // One dispatch over the closed list of `hc` commands.
 fn hc(words: &Words<'_>, place: &Place, out: &mut Carried) {
+    const NONE: Grammar = Grammar {
+        flags: &[],
+        valued: &[],
+    };
     let args = words.args;
     let Some(first) = args.first().map(String::as_str) else {
         // `hc` alone picks a terminal to attach to.
@@ -340,10 +350,6 @@ fn hc(words: &Words<'_>, place: &Place, out: &mut Carried) {
     ) {
         return;
     }
-    const NONE: Grammar = Grammar {
-        flags: &[],
-        valued: &[],
-    };
     let simple = |grammar: &Grammar, form: &'static str, out: &mut Carried| {
         if let Err(why) = options(args, 1, grammar, true) {
             out.unread(form, why);
@@ -418,14 +424,21 @@ fn hc(words: &Words<'_>, place: &Place, out: &mut Carried) {
             "hc events",
             out,
         ),
-        "update" => simple(
-            &Grammar {
+        "update" => {
+            let grammar = Grammar {
                 flags: &["--force"],
                 valued: &["--from", "--version"],
-            },
-            "hc update",
-            out,
-        ),
+            };
+            match options(args, 1, &grammar, true) {
+                // `--from` reads a local file.
+                Ok(parsed) => {
+                    if let Some(file) = parsed.last("--from") {
+                        read_path("hc update --from", file, place.cwd.clone(), out);
+                    }
+                }
+                Err(why) => out.unread("hc update", why),
+            }
+        }
         "connect" => simple(
             &Grammar {
                 flags: &[],
@@ -439,7 +452,15 @@ fn hc(words: &Words<'_>, place: &Place, out: &mut Carried) {
         "kill" => simple(&NONE, "hc kill", out),
         "rm" => simple(&NONE, "hc rm", out),
         "label" => simple(&NONE, "hc label", out),
-        "put" => simple(&NONE, "hc put", out),
+        "put" => match options(args, 1, &NONE, true) {
+            // `hc put <terminal> <file>` reads a local file and sends it.
+            Ok(parsed) => match operands(args, parsed.operands, &NONE).as_slice() {
+                _ if parsed.help => {}
+                [_, file] => read_path("hc put", file, place.cwd.clone(), out),
+                _ => out.unread("hc put", "it does not name one terminal and one file"),
+            },
+            Err(why) => out.unread("hc put", why),
+        },
         "templates" => simple(&NONE, "hc templates", out),
         "schema" => simple(&NONE, "hc schema", out),
         "help" => {}
@@ -453,7 +474,10 @@ fn hc(words: &Words<'_>, place: &Place, out: &mut Carried) {
             Some(other) => out.unread("hc server", format!("the subcommand `{other}` is unknown")),
         },
         other if other.starts_with('-') => {
-            out.unread("hc", format!("the option `{other}` is not one the guard reads"));
+            out.unread(
+                "hc",
+                format!("the option `{other}` is not one the guard reads"),
+            );
         }
         other => out.unread("hc", format!("the subcommand `{other}` is unknown")),
     }
@@ -473,7 +497,14 @@ fn hc_run(words: &Words<'_>, place: &Place, out: &mut Carried) {
             "--rm",
             "--keep",
         ],
-        valued: &["--name", "--cwd", "--on", "--label", "--parent", "--timeout"],
+        valued: &[
+            "--name",
+            "--cwd",
+            "--on",
+            "--label",
+            "--parent",
+            "--timeout",
+        ],
     };
     let parsed = match options(args, 1, &grammar, false) {
         Ok(parsed) => parsed,
@@ -482,8 +513,8 @@ fn hc_run(words: &Words<'_>, place: &Place, out: &mut Carried) {
     if parsed.help {
         return;
     }
-    let argv = &args[parsed.operands..];
-    if argv.is_empty() {
+    let carried_words = &args[parsed.operands..];
+    if carried_words.is_empty() {
         // The machine's own interactive shell.
         return;
     }
@@ -492,8 +523,8 @@ fn hc_run(words: &Words<'_>, place: &Place, out: &mut Carried) {
         Err(why) => return out.unread(FORM, why),
     };
     // One word is a shell line; several are a program and its arguments.
-    let line = if argv.len() == 1 {
-        argv[0].clone()
+    let line = if carried_words.len() == 1 {
+        carried_words[0].clone()
     } else {
         match quote(words, parsed.operands) {
             Ok(line) => line,
@@ -506,7 +537,7 @@ fn hc_run(words: &Words<'_>, place: &Place, out: &mut Carried) {
         directory: directory.clone(),
     });
     // The first word may name a template, whose command runs instead.
-    match template_command(&argv[0], place.home.as_deref()) {
+    match template_command(&carried_words[0], place.home.as_deref()) {
         Ok(Some(command)) => out.runs.push(Run {
             form: "hc run <template>",
             line: command,
@@ -542,7 +573,10 @@ fn hc_exec(words: &Words<'_>, place: &Place, out: &mut Carried) {
             return out.unread(FORM, format!("`--env {assignment}` is not key=value"));
         };
         if !is_identifier(name) || value.chars().any(char::is_control) {
-            return out.unread(FORM, format!("`--env {assignment}` is not one the guard reads"));
+            return out.unread(
+                FORM,
+                format!("`--env {assignment}` is not one the guard reads"),
+            );
         }
         line.push_str(name);
         line.push('=');
@@ -585,21 +619,34 @@ fn hc_file(args: &[String], place: &Place, out: &mut Carried) {
             },
         ),
         Some("help" | "-h" | "--help" | "--json") | None => return,
-        Some(other) => return out.unread("hc file", format!("the subcommand `{other}` is unknown")),
+        Some(other) => {
+            return out.unread("hc file", format!("the subcommand `{other}` is unknown"))
+        }
     };
     let parsed = match options(args, 2, &grammar, true) {
         Ok(parsed) => parsed,
         Err(why) => return out.unread(form, why),
     };
-    if parsed.help || form == "hc file read" {
+    if parsed.help {
         return;
     }
     let paths: Vec<&String> = operands(args, parsed.operands, &grammar);
     let [path] = paths.as_slice() else {
         return out.unread(form, "it does not name exactly one file");
     };
+    if form == "hc file read" {
+        // A read is judged by the secret-read rules as `cat` of the path,
+        // where the line runs when the file is on another machine.
+        return match run_directory(&parsed, place) {
+            Ok(directory) => read_path(form, path, directory, out),
+            Err(why) => out.unread(form, why),
+        };
+    }
     if parsed.last("--on").is_some() {
-        return out.unread(form, "the file is on another machine, where no path rule reaches");
+        return out.unread(
+            form,
+            "the file is on another machine, where no path rule reaches",
+        );
     }
     let directory = match run_directory(&parsed, place) {
         Ok(Some(directory)) => directory,
@@ -652,6 +699,60 @@ fn hc_machine(args: &[String], place: &Place, out: &mut Carried) {
     }
 }
 
+/// A local file a carrier reads, judged as `cat` of that path, so the
+/// secret-read rules apply as they do to a bare read.
+fn read_path(form: &'static str, path: &str, directory: Option<PathBuf>, out: &mut Carried) {
+    if path.chars().any(char::is_control) {
+        return out.unread(
+            form,
+            "its path holds a substitution the guard cannot fill in",
+        );
+    }
+    out.runs.push(Run {
+        form,
+        line: format!("cat -- {}", shell_word(path, true)),
+        directory,
+    });
+}
+
+/// Whether the carrier reader reads the call `args` (program first) in
+/// full: a known `hc` subcommand with every option known, or `herdr pane
+/// run` and `herdr agent start` read without doubt. The guards' other
+/// readers then leave the outer words to it, so its carried command is
+/// judged once, in its own directory (TSK-1344).
+pub(crate) fn fully_read(args: &[String]) -> bool {
+    let Some(program) = args.first() else {
+        return false;
+    };
+    let name = crate::hooks::git_guard::basename(program);
+    let name = name.strip_suffix(".exe").unwrap_or(name);
+    let words = Words {
+        args: &args[1..],
+        patterns: None,
+    };
+    let place = Place {
+        cwd: Some(PathBuf::from("/")),
+        home: crate::portable_path::user_home(),
+    };
+    let mut out = Carried::default();
+    if HC_PROGRAMS.contains(&name) {
+        hc(&words, &place, &mut out);
+    } else if HERDR_PROGRAMS.contains(&name)
+        && matches!(
+            (
+                args.get(1).map(String::as_str),
+                args.get(2).map(String::as_str)
+            ),
+            (Some("pane"), Some("run")) | (Some("agent"), Some("start"))
+        )
+    {
+        herdr(&words, &mut out);
+    } else {
+        return false;
+    }
+    out.unread.is_empty()
+}
+
 /// The operands among `args[from..]`, skipping options and their values.
 fn operands<'a>(args: &'a [String], from: usize, grammar: &Grammar) -> Vec<&'a String> {
     let mut found = Vec::new();
@@ -689,7 +790,10 @@ fn run_directory(parsed: &Options, place: &Place) -> Result<Option<PathBuf>, Str
         return Err("its `--cwd` holds an expansion the guard cannot fill in".to_string());
     }
     let path = if cwd == "~" {
-        place.home.clone().ok_or("its `--cwd` names a home the guard cannot read")?
+        place
+            .home
+            .clone()
+            .ok_or("its `--cwd` names a home the guard cannot read")?
     } else if let Some(rest) = cwd.strip_prefix("~/") {
         place
             .home
@@ -714,13 +818,28 @@ fn quote(words: &Words<'_>, from: usize) -> Result<String, String> {
         if word.chars().any(char::is_control) {
             return Err("a word holds a substitution the guard cannot fill in".to_string());
         }
-        if words.pattern(at) {
-            out.push(escaped_pattern(word));
-        } else {
-            out.push(double_quoted(word));
-        }
+        out.push(shell_word(word, words.pattern(at)));
     }
     Ok(out.join(" "))
+}
+
+/// One word as shell text: a pattern word with its syntax live, any other
+/// double-quoted with its expansions live. A leading `~` stays live either
+/// way, since the shell that ran the carrier expanded an unquoted one; a
+/// quoted one is judged as the home, the stricter reading.
+fn shell_word(word: &str, pattern: bool) -> String {
+    let (tilde, rest) = match word.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => ("~", rest),
+        _ => ("", word),
+    };
+    if rest.is_empty() {
+        return tilde.to_string();
+    }
+    if pattern {
+        format!("{tilde}{}", escaped_pattern(rest))
+    } else {
+        format!("{tilde}{}", double_quoted(rest))
+    }
 }
 
 fn double_quoted(word: &str) -> String {
@@ -787,15 +906,12 @@ fn template_command(name: &str, home: Option<&Path>) -> Result<Option<String>, S
         let text = match std::fs::read_to_string(&file) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(format!(
-                    "the template `{name}` cannot be read: {error}"
-                ))
-            }
+            Err(error) => return Err(format!("the template `{name}` cannot be read: {error}")),
         };
         commands.push(
-            frontmatter_command(&text)
-                .ok_or_else(|| format!("the template `{name}` has no `command` the guard can read"))?,
+            frontmatter_command(&text).ok_or_else(|| {
+                format!("the template `{name}` has no `command` the guard can read")
+            })?,
         );
     }
     if commands.is_empty() {
@@ -870,7 +986,10 @@ fn herdr(words: &Words<'_>, out: &mut Carried) {
                 return;
             }
             if let Some(option) = rest.iter().find(|a| a.starts_with('-') && *a != "-") {
-                return out.unread(FORM, format!("the option `{option}` is not one the guard reads"));
+                return out.unread(
+                    FORM,
+                    format!("the option `{option}` is not one the guard reads"),
+                );
             }
             if rest.len() < 2 {
                 return;
@@ -900,7 +1019,10 @@ fn herdr(words: &Words<'_>, out: &mut Carried) {
                 return out.unread(FORM, "it names no `--kind`");
             };
             if kind.is_empty() || !kind.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-                return out.unread(FORM, format!("the kind `{kind}` is not one the guard reads"));
+                return out.unread(
+                    FORM,
+                    format!("the kind `{kind}` is not one the guard reads"),
+                );
             }
             let agent_args = args
                 .iter()
@@ -959,14 +1081,20 @@ mod tests {
     #[test]
     fn hc_run_directory_follows_cwd_and_on() {
         let found = read("hc run --cwd sub -- git status");
-        assert_eq!(found.runs[0].directory, Some(PathBuf::from("/work/repo/sub")));
+        assert_eq!(
+            found.runs[0].directory,
+            Some(PathBuf::from("/work/repo/sub"))
+        );
         let found = read("hc run --cwd /elsewhere -- git status");
         assert_eq!(found.runs[0].directory, Some(PathBuf::from("/elsewhere")));
         let found = read("hc run --on vps -- ls");
         assert_eq!(found.runs[0].directory, None);
         assert!(found.unread.is_empty());
         let found = read("hc run --on vps -- git status");
-        assert!(found.unread[0].contains("cannot be established"), "{found:?}");
+        assert!(
+            found.unread[0].contains("cannot be established"),
+            "{found:?}"
+        );
         let found = read("hc run --cwd \"$D\" -- ls");
         assert!(!found.unread.is_empty());
     }
@@ -1032,7 +1160,6 @@ mod tests {
             "hc templates",
             "hc server status",
             "hc machine ls",
-            "hc file read README.md",
             "hc run",
             "hc run --bg",
             "hc run --help",
@@ -1075,6 +1202,51 @@ mod tests {
             lines("herdr agent start x --kind codex --pane p1"),
             vec!["codex"]
         );
+    }
+
+    #[test]
+    fn file_reading_forms_are_judged_as_reads() {
+        let found = read("hc file read --cwd sub notes.md");
+        assert_eq!(found.runs[0].line, "cat -- notes.md");
+        assert_eq!(
+            found.runs[0].directory,
+            Some(PathBuf::from("/work/repo/sub"))
+        );
+        // The reader fills in the home the shell expands.
+        let home = lines("hc file read ~/.ssh/id_rsa");
+        assert!(
+            home[0].starts_with("cat -- ") && home[0].ends_with("/.ssh/id_rsa"),
+            "{home:?}"
+        );
+        assert_eq!(read("hc file read --on vps x").runs[0].directory, None);
+        assert_eq!(lines("hc put t1 notes.md"), vec!["cat -- notes.md"]);
+        assert_eq!(lines("hc update --from ./hc-new"), vec!["cat -- ./hc-new"]);
+        assert!(!read("hc put t1").unread.is_empty());
+    }
+
+    #[test]
+    fn fully_read_needs_a_known_form_with_known_options() {
+        let words =
+            |line: &str| -> Vec<String> { line.split_whitespace().map(str::to_string).collect() };
+        for line in [
+            "hc run --bg --name x --cwd /tmp -- codex -c a=b",
+            "hc exec --cwd /tmp ls",
+            "hc ls",
+            "hc",
+            "herdr pane run p1 ls",
+            "herdr agent start x --kind codex --pane p1 -- -c a",
+        ] {
+            assert!(fully_read(&words(line)), "{line}");
+        }
+        for line in [
+            "hc run --frob -- ls",
+            "hc frobnicate",
+            "herdr pane send-text p1 x",
+            "herdr agent start x --pane p1",
+            "tar -c x",
+        ] {
+            assert!(!fully_read(&words(line)), "{line}");
+        }
     }
 
     #[test]
@@ -1127,6 +1299,16 @@ mod tests {
         assert!(template_command("bad", Some(temp.path())).is_err());
         assert_eq!(template_command("absent", Some(temp.path())), Ok(None));
         assert_eq!(template_command("../peer", Some(temp.path())), Ok(None));
+    }
+
+    #[test]
+    fn the_policy_reference_lists_the_carrier_programs() {
+        let listed = crate::security::launchers::policy_reference_list(
+            "### Terminal carriers the guards model",
+            "Programs",
+        );
+        let code: Vec<&str> = HC_PROGRAMS.iter().chain(HERDR_PROGRAMS).copied().collect();
+        assert_eq!(listed, code);
     }
 
     #[test]

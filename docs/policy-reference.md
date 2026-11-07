@@ -820,15 +820,20 @@ bare (TSK-1344). The code holds the program names in
   another machine, and in a `herdr` pane, the directory is unknown: the
   command is judged where the line runs, and a Git command in it refuses.
 - Files: `hc file write` and `hc file edit` meet the Edit tool's path
-  rules; on another machine (`--on`) they refuse.
+  rules; on another machine (`--on`) they refuse. The files `hc file
+  read`, `hc put` and `hc update --from` read are judged by the
+  secret-read rules, as `cat` of the same path.
+- Read once: the other readers leave the outer words of a form this reader
+  reads in full to it, so a carried program's options are not read again as
+  the carrier's own. A form it cannot read keeps every other reader.
 - Refused and named: an unknown `hc` subcommand or option, an option
   without its value, a template the guard cannot read or whose `command` is
   not a one-line scalar, a word holding a substitution, words supplied by
   `xargs` or `find -exec`, and carriers nested more than six deep.
 - Read and passed: `hc ls`, `get`, `read`, `wait`, `kill`, `rm`, `attach`,
-  `interrupt`, `label`, `keep`, `put`, `templates`, `events`, `schema`,
-  `server`, `update`, `connect`, the other `machine` commands, `file read`,
-  `--skill`, `--help` and `--version`, when their options parse.
+  `interrupt`, `label`, `keep`, `templates`, `events`, `schema`, `server`,
+  `connect`, the other `machine` commands, `--skill`, `--help` and
+  `--version`, when their options parse.
 
 Text typed into a terminal is not judged: `hc send`, `hc keys`, `herdr
 pane send-text`, `herdr pane send-keys` and `herdr agent prompt`. The guard
