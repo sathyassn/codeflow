@@ -396,12 +396,14 @@ fn asking_the_remote_runs_no_configured_command() {
             &format!("sh -c 'touch {shown}; exec git-upload-pack \"$@\"' upload"),
         )
         .unwrap();
-    let authority = landed_policy::load(f.root()).unwrap();
-    assert!(
-        authority.source.contains("initialization"),
-        "{}",
-        authority.source
-    );
+    // TSK-1184 review: a configured upload program chooses what a later
+    // fetch reaches, which the hermetic answer does not cover, so this is no
+    // longer initialization; it refuses naming the setting, and still runs
+    // nothing.
+    let error = landed_policy::load(f.root())
+        .err()
+        .expect("a configured upload program is not initialization");
+    assert!(error.contains("remote.origin.uploadpack"), "{error}");
     assert!(!ran.exists(), "the configured upload command ran");
 }
 
@@ -444,7 +446,7 @@ fn no_configured_transport_command_runs_or_fabricates_initialization() {
                 ("remote.origin.vcs", "touchy"),
                 ("protocol.touchy.allow", "always"),
             ],
-            fetch,
+            "remote.origin.vcs",
         ),
         // A URL rewritten to a command transport.
         (
@@ -781,4 +783,167 @@ fn matching_identities_keep_initialization_and_fetched_authority() {
     let authority = landed_policy::load(f.root()).unwrap();
     assert_eq!(authority.source, "refs/remotes/origin/main");
     assert!(authority.authority.is_some());
+}
+
+/// TSK-1184 review finding 1: a rewrite included on a `gitdir` condition
+/// that names the repository by a symbolic link applies to a command run
+/// through the link, while a read of the resolved path does not see it.
+/// Neither path is initialization: the class refuses, naming the file.
+#[cfg(unix)]
+#[test]
+fn a_path_conditional_rewrite_refuses_by_every_path() {
+    let top = tempfile::tempdir().unwrap();
+    let empty = top.path().join("empty.git");
+    let populated = top.path().join("populated.git");
+    upstream(&empty, true);
+    upstream(&populated, false);
+    let real = top.path().join("real");
+    let link = top.path().join("link");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let repo = Repository::init(&real).unwrap();
+    repo.set_head("refs/heads/task/TSK-007-authority").unwrap();
+    repo.remote("origin", empty.to_str().unwrap()).unwrap();
+    let rewrite = top.path().join("rewrite.config");
+    std::fs::write(
+        &rewrite,
+        format!(
+            "[url \"{}\"]\n\tinsteadOf = {}\n",
+            populated.display(),
+            empty.display()
+        ),
+    )
+    .unwrap();
+    let mut config = repo.config().unwrap();
+    config
+        .set_str(
+            &format!("includeIf.gitdir:{}/.git.path", link.display()),
+            rewrite.to_str().unwrap(),
+        )
+        .unwrap();
+    let f = Fixture { dir: top, repo };
+    let tip = f.commit(&[(".codeflow/policy.json", MAIN_POLICY)], &[]);
+    f.on_branch(tip);
+    for root in [&link, &real] {
+        let error = match landed_policy::load(root) {
+            Ok(authority) => panic!("{}: read policy from {}", root.display(), authority.source),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("rewrite.config"),
+            "{}: {error}",
+            root.display()
+        );
+        assert!(
+            error.contains("never read from HEAD"),
+            "{}: {error}",
+            root.display()
+        );
+        assert!(
+            !error.contains("initialization"),
+            "{}: {error}",
+            root.display()
+        );
+    }
+}
+
+/// TSK-1184 review finding 2: a remote helper set for the remote, here
+/// through an included file, replaces the transport while the URL stays the
+/// empty, reachable repository. Git runs the helper for a fetch; the policy
+/// load refuses naming the setting and the helper, and runs nothing.
+#[cfg(unix)]
+#[test]
+fn a_remote_helper_for_a_reachable_empty_remote_refuses_naming_it() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let remote = tempfile::tempdir().unwrap();
+    upstream(remote.path(), true);
+    let f = Fixture::new(remote.path().to_str().unwrap());
+    let side = tempfile::tempdir().unwrap();
+    let marker = side.path().join("helper-ran");
+    let bin = side.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let helper = bin.join("git-remote-touchy");
+    std::fs::write(
+        &helper,
+        format!("#!/bin/sh\ntouch '{}'\nexit 1\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let included = side.path().join("helper.config");
+    std::fs::write(&included, "[remote \"origin\"]\n\tvcs = touchy\n").unwrap();
+    let mut config = f.repo.config().unwrap();
+    config
+        .set_str("include.path", included.to_str().unwrap())
+        .unwrap();
+    let tip = f.commit(&[(".codeflow/policy.json", MAIN_POLICY)], &[]);
+    f.on_branch(tip);
+    // A fetch-side question by the remote's name runs the helper.
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let _ = std::process::Command::new("git")
+        .current_dir(f.root())
+        .env("PATH", path)
+        .args(["ls-remote", "origin"])
+        .output()
+        .unwrap();
+    assert!(marker.exists(), "git did not run the helper for the remote");
+    std::fs::remove_file(&marker).unwrap();
+    let error = refusal(&f);
+    assert!(error.contains("remote.origin.vcs"), "{error}");
+    assert!(error.contains("touchy"), "{error}");
+    assert!(!error.contains("initialization"), "{error}");
+    assert!(!marker.exists(), "the policy load ran the helper");
+}
+
+/// TSK-1184 sibling sweep: each transport setting of the remote's section
+/// refuses on a reachable empty remote, set directly or through an include.
+#[test]
+fn every_transport_setting_of_the_remote_refuses() {
+    for setting in ["vcs", "uploadpack", "receivepack"] {
+        let remote = tempfile::tempdir().unwrap();
+        upstream(remote.path(), true);
+        let f = Fixture::new(remote.path().to_str().unwrap());
+        let mut config = f.repo.config().unwrap();
+        config
+            .set_str(&format!("remote.origin.{setting}"), "fixture-program")
+            .unwrap();
+        let tip = f.commit(&[(".codeflow/policy.json", MAIN_POLICY)], &[]);
+        f.on_branch(tip);
+        let error = refusal(&f);
+        assert!(
+            error.contains(&format!("remote.origin.{setting}")),
+            "{setting}: {error}"
+        );
+        assert!(!error.contains("initialization"), "{setting}: {error}");
+    }
+}
+
+/// The shared transport check takes a remote's name or URL section and
+/// refuses only that section's settings.
+#[test]
+fn the_shared_transport_check_reads_one_section() {
+    let remote = tempfile::tempdir().unwrap();
+    upstream(remote.path(), true);
+    let url = remote.path().to_str().unwrap().to_string();
+    let f = Fixture::new(&url);
+    let limits = codeflow_core::git::remote_query::QueryLimits::guard();
+    let check = |section: &str| {
+        codeflow_core::git::remote_identity::require_native_transport(f.root(), section, limits)
+    };
+    assert!(check("remote.origin").is_ok());
+    assert!(check(&format!("remote.{url}")).is_ok());
+    assert!(check("core").is_err(), "not a remote section");
+    let mut config = f.repo.config().unwrap();
+    config
+        .set_str(&format!("remote.{url}.vcs"), "touchy")
+        .unwrap();
+    let error = check(&format!("remote.{url}")).unwrap_err();
+    assert!(error.contains("touchy"), "{error}");
+    assert!(
+        check("remote.origin").is_ok(),
+        "another section is not read"
+    );
 }
