@@ -3331,7 +3331,7 @@ fn tsk416_a_copy_behind_the_pin_is_accepted_and_an_ahead_or_diverged_one_refused
 }
 
 /// TSK-416 AC-21 (issue 603): `work start --on` accepts a pin whose
-/// depends_on edge arrives in the task's own committed change, and still
+/// `depends_on` edge arrives in the task's own committed change, and still
 /// checks the pin. An edge only in the working tree is not read, and the
 /// refusal names the sanctioned path.
 #[test]
