@@ -169,16 +169,21 @@ fn a_reparsed_reading_shares_the_nesting_bound() {
         ("substitution", format!("echo \"$({inner})\"")),
         ("nested script", format!("bash -c '{inner}'")),
     ];
+    let mut missed = Vec::new();
     for (form, text) in &forms {
         let shallower = in_braces(text, deep - 1);
         assert_allowed(&[shallower.as_str()]);
         let line = in_braces(text, deep);
-        let found = judged(&line).unwrap_or_else(|| panic!("{form}: not refused"));
-        assert!(found.unfinished, "{form}: {found:?}");
-        assert!(verdict(&line).is_some(), "{form}: no verdict");
+        match judged(&line) {
+            Some(found) if found.unfinished && verdict(&line).is_some() => {}
+            other => missed.push(format!("{form}: {other:?}")),
+        }
         let deletion = in_braces(&text.replace("true", "rm -rf /usr"), deep);
-        assert!(verdict(&deletion).is_some(), "{form}: deletion not refused");
+        if verdict(&deletion).is_none() {
+            missed.push(format!("{form}: deletion not refused"));
+        }
     }
+    assert!(missed.is_empty(), "not refused:\n{}", missed.join("\n"));
 }
 
 /// Which arithmetic text is sure: numbers, names, subscripts, expansions
