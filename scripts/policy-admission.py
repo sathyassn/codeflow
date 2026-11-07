@@ -15,8 +15,10 @@ read from the pull request's timeline. A pending or absent run refuses at
 once, and the completion of that run starts the check again.
 
 `rerun` runs in codeflow-admission.yml on `workflow_run` completed. For a
-completed codeflow-ci pull_request run whose pull request is open, ready and
-still at that run's head, it re-runs the commit standards job of the newest
+completed pull_request run of a named verdict workflow (codeflow-ci, or
+codeflow-line-pr for a pull request into a line, TSK-1321), whose pull
+request is open, ready and still at that run's head, it re-runs the commit
+standards job of the newest
 codeflow-policy run of that pull request at that head, so the native job
 judges again with the run complete. It never writes a check or a status,
 never reads an artifact and never runs code from the pull request; every
@@ -31,7 +33,7 @@ non-admitting verdict until someone re-runs it.
 Usage: policy-admission.py admit --repo OWNER/NAME --head SHA --pull N --base REF
                                  --workflow PATH --require NAME [--require NAME ...]
        policy-admission.py rerun --repo OWNER/NAME --run ID --head SHA
-                                 --workflow PATH --policy-workflow PATH --job NAME
+                                 --workflow PATH [--workflow PATH ...] --policy-workflow PATH --job NAME
 """
 
 from __future__ import annotations
@@ -143,17 +145,22 @@ class Writer(reuse.Api):
                 raise Skip(f"POST {path} answered {response.status}")
 
 
-def rerun(run_id: int, head: str, workflow: str, policy_workflow: str, job_name: str, api) -> str:
+def rerun(run_id: int, head: str, workflows: set[str], policy_workflow: str, job_name: str, api) -> str:
     """Re-run the commit standards job for the pull request of completed
-    codeflow-ci run `run_id`; returns what was done. Raises Skip on any
-    record that cannot be trusted."""
+    pull_request run `run_id` of one of `workflows`; returns what was done.
+    Raises Skip on any record that cannot be trusted."""
     if not SHA.match(head):
         raise Skip(f"the head {head!r} is not a commit id")
+    if not workflows or not all(isinstance(w, str) and w for w in workflows):
+        raise Skip("no verdict workflow is named")
     run = api.get(f"actions/runs/{run_id}")
     if not isinstance(run, dict) or run.get("id") != run_id:
         raise Skip(f"the API returned no record for run {run_id}")
-    if run.get("event") != "pull_request" or run.get("path") != workflow or run.get("head_sha") != head:
-        raise Skip(f"run {run_id} is not a {workflow} pull_request run at {head}")
+    # The run's own record names its workflow file, so each completed run is
+    # matched against the files this repository's admission may read; the
+    # event's values are never trusted for that.
+    if run.get("event") != "pull_request" or run.get("path") not in workflows or run.get("head_sha") != head:
+        raise Skip(f"run {run_id} is not a pull_request run of {', '.join(sorted(workflows))} at {head}")
     if run.get("status") != "completed":
         raise Skip(f"run {run_id} is {run.get('status')}, not completed")
     pulls = [pr.get("number") for pr in run.get("pull_requests") or [] if isinstance(pr, dict)]
@@ -186,16 +193,18 @@ def rerun(run_id: int, head: str, workflow: str, policy_workflow: str, job_name:
 def rerun_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="policy-admission.py rerun", description=rerun.__doc__.split("\n\n")[0])
     parser.add_argument("--repo", required=True)
-    parser.add_argument("--run", type=int, required=True, help="the completed codeflow-ci run")
+    parser.add_argument("--run", type=int, required=True, help="the completed verdict run")
     parser.add_argument("--head", required=True, help="that run's head commit")
-    parser.add_argument("--workflow", required=True, help="the codeflow-ci workflow file")
+    parser.add_argument("--workflow", action="append", required=True,
+                        help="a verdict workflow file whose completed run may start the re-run (repeatable)")
     parser.add_argument("--policy-workflow", required=True, help="the workflow file of the commit standards job")
     parser.add_argument("--job", required=True, help="the job to re-run")
     parser.add_argument("--api", default=os.environ.get("GITHUB_API_URL", "https://api.github.com"))
     args = parser.parse_args(argv)
     api = Writer(args.api, args.repo, os.environ.get("GH_TOKEN", ""))
     try:
-        print(f"policy-admission rerun: {rerun(args.run, args.head, args.workflow, args.policy_workflow, args.job, api)}")
+        print(f"policy-admission rerun: "
+              f"{rerun(args.run, args.head, set(args.workflow), args.policy_workflow, args.job, api)}")
     except Skip as reason:
         print(f"policy-admission rerun: refused: {reason}")
         return 1

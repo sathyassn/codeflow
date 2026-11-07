@@ -29,6 +29,7 @@ SPEC.loader.exec_module(reuse)
 
 PUSHED, HEAD, MAIN = "a" * 40, "b" * 40, "c" * 40
 WORKFLOW = ".github/workflows/codeflow-ci.yml"
+LINE_WORKFLOW = ".github/workflows/codeflow-line-pr.yml"
 PUSH_ONLY = {"reuse a pull request verdict"}
 MAIN_REF = "refs/heads/main"
 APT_KEY = "playwright-apt-ubuntu24-20261005.1-1.56.1"
@@ -1033,8 +1034,33 @@ class CompletionRerunTests(unittest.TestCase):
     standards job is re-run once, only for the run's own open, ready pull
     request at that head; nothing is written but the job re-run."""
 
-    def rerun(self, api, run_id=77, head=HEAD):
-        return admission.rerun(run_id, head, WORKFLOW, POLICY, STANDARDS, api)
+    def rerun(self, api, run_id=77, head=HEAD, workflows=(WORKFLOW, LINE_WORKFLOW)):
+        return admission.rerun(run_id, head, set(workflows), POLICY, STANDARDS, api)
+
+    def test_a_line_pull_request_whose_only_run_is_the_line_workflow_is_rerun(self):
+        # TSK-1321: a pull request into a line that has the placement starts
+        # codeflow-line-pr.yml and no codeflow-ci.yml run, so that run's
+        # completion is the only event that can re-run commit standards.
+        def line_api():
+            return AdmissionApi(runs=[run(base="integration/x", path=LINE_WORKFLOW)],
+                                pull=pull_record(base={"ref": "integration/x"}))
+        api = line_api()
+        self.assertIn("re-ran", self.rerun(api))
+        self.assertEqual(api.posts, ["actions/jobs/9001/rerun"])
+        # Admission that names only codeflow-ci.yml (main before TSK-1321)
+        # refuses that run, so the line pull request would never be judged
+        # again.
+        api = line_api()
+        with self.assertRaises(admission.Skip):
+            self.rerun(api, workflows=(WORKFLOW,))
+        self.assertEqual(api.posts, [])
+
+    def test_no_named_workflow_reruns_nothing(self):
+        api = AdmissionApi()
+        for workflows in ((), ("",)):
+            with self.subTest(workflows=workflows), self.assertRaises(admission.Skip):
+                self.rerun(api, workflows=workflows)
+        self.assertEqual(api.posts, [])
 
     def test_a_completed_run_reruns_the_newest_policy_job(self):
         api = AdmissionApi(policy_runs=[policy_run(id=499, run_number=8), policy_run()],
@@ -1097,7 +1123,8 @@ class CompletionRerunTests(unittest.TestCase):
             out = io.StringIO()
             with mock.patch.object(admission, "Writer", return_value=api), redirect_stdout(out):
                 code = admission.rerun_main(["--repo", "o/r", "--run", "77", "--head", HEAD, "--workflow", WORKFLOW,
-                                             "--policy-workflow", POLICY, "--job", STANDARDS])
+                                             "--workflow", LINE_WORKFLOW, "--policy-workflow", POLICY,
+                                             "--job", STANDARDS])
             return code, out.getvalue()
         self.assertEqual(run_main(AdmissionApi())[0], 0)
         for broken in ("run", "pull", "policy runs", "policy jobs", "post"):
