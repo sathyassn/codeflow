@@ -95,6 +95,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("TASK_DELIVERABLES", Runs),
     ("RECORD_OUTCOME", Runs),
     ("EPIC_DELIVERABLES", Runs),
+    ("SERVING_TRANSFER", Runs),
     ("DOCS_LAYER_ABSENT", Runs),
     ("DOCS_EPICS_UNCHECKED", Runs),
     ("DOCS_SPECS_UNCHECKED", Runs),
@@ -1592,6 +1593,32 @@ fn clears_record_outcome() {
                 "{printed}"
             );
             state_outcome(&root, TASK);
+        },
+    );
+}
+
+#[test]
+fn clears_serving_transfer() {
+    let dir = planned();
+    let root = project(&dir);
+    let dangling = read(&root, TASK).replacen(
+        "- AC-1",
+        "- AC-1 Retain the obligation (serves EPC-001 AC-99)",
+        1,
+    );
+    write(&root, TASK, &dangling);
+    prove(
+        "SERVING_TRANSFER",
+        "(serves EPC-001 AC-99) names a missing criterion",
+        || validate(&root),
+        |printed| {
+            assert!(printed.contains(TASK), "{printed}");
+            let restored = read(&root, EPIC).replacen(
+                "\n## Acceptance Criteria\n",
+                "\n## Acceptance Criteria\n\n- AC-99 Retain the obligation.\n",
+                1,
+            );
+            write(&root, EPIC, &restored);
         },
     );
 }

@@ -2202,6 +2202,7 @@ fn the_named_step_clears_a_stale_in_progress_task() {
     // names `codeflow task status <id> todo`; running that step (the status
     // verb the command drives) clears the warning.
     let repo = Repo::new();
+    repo.write(EPIC_PATH, &epic("planning", "", EPIC_CRITERION));
     repo.write(
         "project-management/tasks/TSK-002.md",
         &task("TSK-002", "in_progress", CRITERIA, "Pending."),
@@ -3910,4 +3911,457 @@ fn follow_up_of_keeps_a_lookalike_apart_from_the_task() {
     )
     .unwrap();
     assert_eq!(record.follow_up_of.as_deref(), Some("TSK-001\u{a0}"));
+}
+
+const TRANSFER_NOTE: &str = "\n  - Amended 2026-11-03: transferred to EPC-002 AC-1.";
+const TRANSFER_SOURCE: &str = "- AC-1 When used, the system shall work.";
+const TRANSFER_TAG: &str = "- AC-1 The task shall deliver (serves EPC-001 AC-1)";
+const DESTINATION_PATH: &str = "project-management/epics/EPC-002.md";
+
+/// Preserve the old serving tag, changing only membership in the planning commit.
+fn transfer_fixture(source: &str, target: &str, status: &str, preexisting: bool) -> (Repo, String) {
+    let repo = Repo::new();
+    repo.write(EPIC_PATH, &epic("planning", "", source));
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "todo", TRANSFER_TAG, "Pending."),
+    );
+    if preexisting {
+        repo.write(
+            DESTINATION_PATH,
+            &epic("planning", "", target).replace("EPC-001", "EPC-002"),
+        );
+    }
+    repo.commit("plan original obligation");
+    repo.write(
+        EPIC_PATH,
+        &epic("planning", "", &format!("{source}{TRANSFER_NOTE}")),
+    );
+    repo.write(
+        DESTINATION_PATH,
+        &epic(status, "", target).replace("EPC-001", "EPC-002"),
+    );
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "todo", TRANSFER_TAG, "Pending.").replacen(
+            "epic_id: EPC-001",
+            "epic_id: EPC-002",
+            1,
+        ),
+    );
+    let amendment = repo.commit("transfer obligation and task");
+    (repo, amendment)
+}
+
+fn close_transfer_source(repo: &Repo, result: &str) -> Result<(), VerbError> {
+    let acceptance = repo
+        .reviewed(&block(&["AC-1"], "none | n/a"))
+        .replace("verified | cargo test AC-1", result);
+    set_status(
+        repo.root(),
+        RecordKind::Epic,
+        "EPC-001",
+        &StatusChange {
+            acceptance: Some(acceptance),
+            ..change("complete")
+        },
+    )
+    .map(drop)
+}
+
+#[test]
+fn transferred_criterion_closes_only_with_its_moving_planning_commit() {
+    let (repo, amendment) = transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
+    let refused = refusal(close_transfer_source(&repo, "verified | observed"));
+    assert!(refused.contains("waiver naming the commit"), "{refused}");
+    close_transfer_source(&repo, &format!("waived | {amendment}")).unwrap();
+}
+
+#[test]
+fn transfer_refuses_invalid_destinations_and_changed_obligations() {
+    for (target, status, preexisting, reason) in [
+        (TRANSFER_SOURCE, "cancelled", false, "open destination"),
+        (TRANSFER_SOURCE, "archived", false, "open destination"),
+        (TRANSFER_SOURCE, "complete", false, "open destination"),
+        (TRANSFER_SOURCE, "planning", true, "existed before"),
+        (
+            "- AC-2 Another criterion.",
+            "planning",
+            false,
+            "criterion is missing",
+        ),
+        (
+            "- AC-1 A different obligation.",
+            "planning",
+            false,
+            "preserve the obligation",
+        ),
+        (
+            "- AC-1 When used, the system shall work. (journey)",
+            "planning",
+            false,
+            "preserve the obligation",
+        ),
+        (
+            "- AC-1 When used, the system shall work. (after release)",
+            "planning",
+            false,
+            "preserve the obligation",
+        ),
+    ] {
+        let (repo, amendment) = transfer_fixture(TRANSFER_SOURCE, target, status, preexisting);
+        let refused = refusal(close_transfer_source(
+            &repo,
+            &format!("waived | {amendment}"),
+        ));
+        assert!(
+            refused.contains(reason),
+            "{status}, {preexisting}: {refused}"
+        );
+    }
+}
+
+#[test]
+fn transfer_refuses_missing_self_malformed_and_unmoved_records() {
+    for (change_kind, reason) in [
+        ("missing", "destination epic is missing"),
+        ("self", "own epic"),
+        ("malformed", "use `- Amended"),
+        ("membership", "not a moved serving task"),
+        ("unreadable", "graft"),
+    ] {
+        let (repo, moving) = transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
+        match change_kind {
+            "missing" => fs::remove_file(repo.root().join(DESTINATION_PATH)).unwrap(),
+            "self" => repo.write(
+                EPIC_PATH,
+                &repo.read(EPIC_PATH).replace("to EPC-002", "to EPC-001"),
+            ),
+            "malformed" => repo.write(
+                EPIC_PATH,
+                &repo
+                    .read(EPIC_PATH)
+                    .replace("transferred to", "transferred toward"),
+            ),
+            "membership" => repo.write(
+                TASK_PATH,
+                &repo
+                    .read(TASK_PATH)
+                    .replace("epic_id: EPC-002", "epic_id: EPC-003"),
+            ),
+            _ => repo.write(".git/info/grafts", &format!("{moving}\n")),
+        }
+        // The overlay case intentionally cannot create any further commit.
+        let amendment = if change_kind == "unreadable" {
+            moving
+        } else {
+            repo.commit("alter transfer records")
+        };
+        let refused = refusal(close_transfer_source(
+            &repo,
+            &format!("waived | {amendment}"),
+        ));
+        assert!(refused.contains(reason), "{change_kind}: {refused}");
+    }
+}
+
+#[test]
+fn transfer_waiver_cannot_name_a_later_wording_amendment_or_an_unseen_commit() {
+    for unseen in [false, true] {
+        let (repo, amendment) =
+            transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
+        let reviewed = repo.git(&["rev-parse", "HEAD"]);
+        repo.write(
+            EPIC_PATH,
+            &repo.read(EPIC_PATH).replace(
+                TRANSFER_NOTE,
+                &format!("{TRANSFER_NOTE}\n  - Amended 2026-11-04: clarify the record."),
+            ),
+        );
+        let other = repo.commit("another wording amendment");
+        let acceptance = block(&["AC-1"], "none | n/a")
+            .replace(&"a".repeat(40), if unseen { &reviewed } else { &other })
+            .replace("verified | cargo test AC-1", &format!("waived | {other}"));
+        assert_ne!(amendment, other);
+        let close = StatusChange {
+            acceptance: Some(acceptance),
+            ..change("complete")
+        };
+        let refused =
+            refusal(set_status(repo.root(), RecordKind::Epic, "EPC-001", &close).map(drop));
+        assert!(
+            refused.contains("transfer") || refused.contains("review"),
+            "{refused}"
+        );
+    }
+}
+
+#[test]
+fn transfer_preserves_after_release_deferral_and_refuses_ticks_or_silence() {
+    let source = "- AC-1 When released, the system shall work. (after release)";
+    let (repo, amendment) = transfer_fixture(source, source, "planning", false);
+    assert!(refusal(close_transfer_source(
+        &repo,
+        &format!("waived | {amendment}")
+    ))
+    .contains("after-release transfer"));
+    let (repo, _) = transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
+    assert!(refusal(close_epic(&repo)).contains("own waiver"));
+    repo.write(
+        EPIC_PATH,
+        &repo.read(EPIC_PATH).replace("- AC-1", "- [x] AC-1"),
+    );
+    repo.commit("tick transferred criterion");
+    assert!(refusal(close_epic(&repo)).contains("unverified"));
+}
+
+#[test]
+fn transfer_destination_uses_only_complete_moved_task_results_and_journey_proof() {
+    for (complete, journey, native) in [
+        (false, false, false),
+        (true, false, false),
+        (true, true, false),
+        (true, true, true),
+    ] {
+        let source = "- AC-1 (journey) When used, the system shall work.";
+        let (repo, _) = transfer_fixture(source, source, "planning", false);
+        if complete {
+            let close = fenced(&repo.reviewed(&block(
+                &["AC-1"],
+                if journey {
+                    "verified | fresh project"
+                } else {
+                    "none | not exercised"
+                },
+            )));
+            repo.write(
+                TASK_PATH,
+                &task("TSK-001", "complete", TRANSFER_TAG, &close).replacen(
+                    "epic_id: EPC-001",
+                    "epic_id: EPC-002",
+                    1,
+                ),
+            );
+        }
+        if native {
+            repo.write(
+                "project-management/tasks/TSK-002.md",
+                &task(
+                    "TSK-002",
+                    "todo",
+                    "- AC-1 Native proof (serves EPC-002 AC-1)",
+                    "Pending.",
+                )
+                .replacen("epic_id: EPC-001", "epic_id: EPC-002", 1),
+            );
+        }
+        repo.commit("record serving proof");
+        let graph = Graph::from_worktree(repo.root()).unwrap();
+        let target = graph.get("EPC-002", RecordKind::Epic).unwrap();
+        let verdict = epic_criterion_verified(target, &target.criteria.items[0], &graph, None);
+        assert_eq!(
+            verdict.is_ok(),
+            complete && journey && !native,
+            "{verdict:?}"
+        );
+    }
+}
+
+#[test]
+fn transfer_warnings_name_dangling_and_unrecorded_foreign_tags_only() {
+    let (repo, _) = transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
+    let graph = Graph::from_worktree(repo.root()).unwrap();
+    assert!(super::super::criterion_move::warnings(&graph).is_empty());
+    repo.write(
+        TASK_PATH,
+        &repo
+            .read(TASK_PATH)
+            .replace("EPC-001 AC-1)", "EPC-001 AC-99)"),
+    );
+    let graph = Graph::from_worktree(repo.root()).unwrap();
+    let warnings = super::super::criterion_move::warnings(&graph);
+    assert!(warnings[0]
+        .text
+        .contains("TSK-001 AC-1: (serves EPC-001 AC-99)"));
+    repo.write(
+        TASK_PATH,
+        &repo
+            .read(TASK_PATH)
+            .replace("EPC-001 AC-99)", "EPC-001 AC-1)"),
+    );
+    repo.write(EPIC_PATH, &epic("planning", "", TRANSFER_SOURCE));
+    repo.commit("remove transfer note");
+    let graph = Graph::from_worktree(repo.root()).unwrap();
+    assert!(!super::super::criterion_move::warnings(&graph).is_empty());
+    assert!(
+        refusal(close_transfer_source(&repo, "verified | own block"))
+            .contains("no complete serving task")
+    );
+}
+
+#[test]
+fn transfer_destination_accepts_a_complete_moved_tasks_waived_result() {
+    let (repo, amendment) = transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
+    let close = repo
+        .reviewed(&block(&["AC-1"], "none | ordinary criterion"))
+        .replace(
+            "verified | cargo test AC-1",
+            &format!("waived | {amendment}"),
+        );
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "complete", TRANSFER_TAG, &fenced(&close)).replacen(
+            "epic_id: EPC-001",
+            "epic_id: EPC-002",
+            1,
+        ),
+    );
+    repo.commit("record waived task result");
+    let graph = Graph::from_worktree(repo.root()).unwrap();
+    let destination = graph.get("EPC-002", RecordKind::Epic).unwrap();
+    assert!(
+        epic_criterion_verified(destination, &destination.criteria.items[0], &graph, None).is_ok()
+    );
+}
+
+#[test]
+fn a_completed_transfer_destination_keeps_its_proof_but_never_waives_the_source() {
+    let (repo, _) = transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
+    let close = fenced(&repo.reviewed(&block(&["AC-1"], "none | ordinary criterion")));
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "complete", TRANSFER_TAG, &close).replacen(
+            "epic_id: EPC-001",
+            "epic_id: EPC-002",
+            1,
+        ),
+    );
+    repo.commit("record task proof");
+    set_status(
+        repo.root(),
+        RecordKind::Epic,
+        "EPC-002",
+        &change("complete"),
+    )
+    .unwrap();
+    repo.commit("complete destination");
+    let graph = Graph::from_worktree(repo.root()).unwrap();
+    let destination = graph.get("EPC-002", RecordKind::Epic).unwrap();
+    assert!(epic_close_problems(destination, &graph).is_empty());
+    let refused = refusal(close_transfer_source(&repo, "verified | finished tasks"));
+    assert!(refused.contains("open destination"), "{refused}");
+}
+
+#[test]
+fn cancelled_moved_tasks_never_allow_destination_own_block_proof() {
+    let (repo, _) = transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
+    repo.write(
+        TASK_PATH,
+        &task(
+            "TSK-001",
+            "cancelled",
+            TRANSFER_TAG,
+            "- cancelled: work stopped\n- scope: retained in the destination",
+        )
+        .replacen("epic_id: EPC-001", "epic_id: EPC-002", 1),
+    );
+    repo.commit("cancel moved task");
+    let close = StatusChange {
+        acceptance: Some(repo.reviewed(&block(&["AC-1"], "none | ordinary criterion"))),
+        ..change("complete")
+    };
+    let refused = refusal(set_status(repo.root(), RecordKind::Epic, "EPC-002", &close).map(drop));
+    assert!(
+        refused.contains("no complete moved serving task"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_cancelled_native_task_does_not_replace_or_block_moved_task_proof() {
+    let (repo, _) = transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
+    let close = fenced(&repo.reviewed(&block(&["AC-1"], "none | ordinary criterion")));
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "complete", TRANSFER_TAG, &close).replacen(
+            "epic_id: EPC-001",
+            "epic_id: EPC-002",
+            1,
+        ),
+    );
+    repo.write(
+        "project-management/tasks/TSK-002.md",
+        &task(
+            "TSK-002",
+            "cancelled",
+            "- AC-1 Native work (serves EPC-002 AC-1)",
+            "- cancelled: replaced\n- scope: moved proof decides",
+        )
+        .replacen("epic_id: EPC-001", "epic_id: EPC-002", 1),
+    );
+    repo.commit("cancel native task beside moved proof");
+    set_status(
+        repo.root(),
+        RecordKind::Epic,
+        "EPC-002",
+        &change("complete"),
+    )
+    .unwrap();
+}
+
+#[test]
+fn cancelled_foreign_membership_is_ignored_only_when_the_review_already_saw_cancellation() {
+    for (before, now) in [
+        ("cancelled", "cancelled"),
+        ("todo", "cancelled"),
+        ("todo", "todo"),
+    ] {
+        let (repo, amendment) =
+            transfer_fixture(TRANSFER_SOURCE, TRANSFER_SOURCE, "planning", false);
+        let foreign_path = "project-management/tasks/TSK-002.md";
+        let foreign = |status: &str| {
+            task(
+                "TSK-002",
+                status,
+                TRANSFER_TAG,
+                if status == "cancelled" {
+                    "- cancelled: withdrawn\n- scope: carried elsewhere"
+                } else {
+                    "Pending."
+                },
+            )
+            .replacen("epic_id: EPC-001", "epic_id: EPC-003", 1)
+        };
+        repo.write(
+            "project-management/epics/EPC-003.md",
+            &epic("planning", "", "- AC-1 Other work.").replace("EPC-001", "EPC-003"),
+        );
+        repo.write(foreign_path, &foreign(before));
+        let reviewed = repo.commit("record foreign membership at review");
+        if before != now {
+            repo.write(foreign_path, &foreign(now));
+            repo.commit("cancel foreign task after review");
+        }
+        let acceptance = block(&["AC-1"], "none | ordinary criterion")
+            .replace(&"a".repeat(40), &reviewed)
+            .replace(
+                "verified | cargo test AC-1",
+                &format!("waived | {amendment}"),
+            );
+        let result = set_status(
+            repo.root(),
+            RecordKind::Epic,
+            "EPC-001",
+            &StatusChange {
+                acceptance: Some(acceptance),
+                ..change("complete")
+            },
+        )
+        .map(drop);
+        if before == "cancelled" {
+            assert!(result.is_ok(), "cancelled at both points: {result:?}");
+        } else {
+            assert!(refusal(result).contains("not a moved serving task"));
+        }
+    }
 }
