@@ -1,0 +1,11 @@
+id = "TSK-1375"
+uid = "4037d70d-d93b-488e-b6bc-efa2680ed964"
+kind = "TSK"
+title = "The guards judge every reading of ambiguous text"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-07T08:53:34Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
