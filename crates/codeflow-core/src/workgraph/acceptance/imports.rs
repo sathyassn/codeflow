@@ -1,6 +1,7 @@
 //! Source attribution for unchanged records imported by an ordinary merge.
 use std::collections::BTreeMap;
 
+use super::mains_bytes::MainsBytes;
 use super::{
     active_block, bind_completion_with_amendment, bind_epic_completion, commit_of,
     default_target_name, first_parent, history, introduced_at, is_ancestor_or_same,
@@ -25,7 +26,7 @@ pub struct ImportedRecord {
 type Imports = BTreeMap<String, ImportedRecord>;
 // The outer history judgment and an object fetch clear this cache. A graph's
 // contents distinguish callers that have removed records from the same head.
-type ImportKey = (std::path::PathBuf, Oid, Oid, String);
+type ImportKey = (std::path::PathBuf, Oid, Oid, String, Option<MainsBytes>);
 thread_local! {
     static IMPORTS: std::cell::RefCell<BTreeMap<ImportKey, Result<Imports, String>>> = const { std::cell::RefCell::new(BTreeMap::new()) };
 }
@@ -40,6 +41,11 @@ pub(crate) fn clear_cache() {
 /// The receiver may not introduce any change to that record outside the
 /// source's history. Product changes remain in the receiver's own range.
 ///
+/// With `mains`, a record that arrived by merge and that main's bytes
+/// admits ([`super::mains_bytes::judge`], TSK-1185) is imported from the
+/// verified default tip without re-proof; its completion is the one the
+/// default branch admitted.
+///
 /// # Errors
 /// Refuses unreadable or overlaid history and an invalid source binding.
 pub fn imported_records(
@@ -47,6 +53,7 @@ pub fn imported_records(
     base: Oid,
     head: Oid,
     graph: &Graph,
+    mains: Option<&MainsBytes>,
 ) -> Result<BTreeMap<String, ImportedRecord>, String> {
     let _judgment = history::judgment();
     history::check(repo).map_err(|error| error.to_string())?;
@@ -58,13 +65,76 @@ pub fn imported_records(
     let digest = crate::scaffold::sha256_hex(
         &serde_json::to_vec(&contents).map_err(|error| error.to_string())?,
     );
-    let key = (repo.path().to_path_buf(), base, head, digest);
+    let key = (
+        repo.path().to_path_buf(),
+        base,
+        head,
+        digest,
+        mains.cloned(),
+    );
     if let Some(result) = IMPORTS.with(|memo| memo.borrow().get(&key).cloned()) {
         return result;
     }
-    let result = compute_imports(repo, base, head, graph);
+    let result = compute_imports(repo, base, head, graph, mains);
     IMPORTS.with(|memo| memo.borrow_mut().insert(key, result.clone()));
     result
+}
+
+/// Main's bytes (TSK-1185 AC-11, AC-13): each record in `changed` the rule
+/// admits is the default branch's, imported from the verified tip without
+/// re-proof and removed from `changed`. A judgment that cannot be read
+/// admits nothing, so every record keeps the full checks.
+fn take_mains_bytes(
+    repo: &Repository,
+    mains: &MainsBytes,
+    (base, head): (Oid, Oid),
+    graph: &Graph,
+    changed: &mut Vec<&RecordView>,
+) -> Imports {
+    let admitted = super::mains_bytes::judge(repo, mains, base, head, graph)
+        .map(|judged| judged.admitted)
+        .unwrap_or_default();
+    let mut imported = BTreeMap::new();
+    changed.retain(|record| {
+        if !admitted.contains(&record.path) {
+            return true;
+        }
+        imported.insert(
+            record.id.clone(),
+            ImportedRecord {
+                path: record.path.clone(),
+                home: record.integration_target.as_deref().map_or_else(
+                    || "the default branch".to_string(),
+                    |declared| super::super::work_start::logical_target(declared).to_string(),
+                ),
+                landing: mains.tip,
+                completion: None,
+            },
+        );
+        false
+    });
+    imported
+}
+
+/// [`refuse_unpublished`] for each changed record homed on the default
+/// branch or an integration line.
+fn refuse_unpublished_homes(
+    repo: &Repository,
+    changed: &[&RecordView],
+    default: &str,
+    default_tip: Oid,
+    (anchor, head): (Oid, Oid),
+) -> Result<(), String> {
+    for record in changed {
+        let home = record
+            .integration_target
+            .as_deref()
+            .map_or(default, super::super::work_start::logical_target);
+        if home == default || home.starts_with("integration/") {
+            refuse_unpublished(repo, record, home, default_tip, anchor, head)?;
+        }
+    }
+    Ok(())
 }
 
 fn compute_imports(
@@ -72,6 +142,7 @@ fn compute_imports(
     base: Oid,
     head: Oid,
     graph: &Graph,
+    mains: Option<&MainsBytes>,
 ) -> Result<Imports, String> {
     #[cfg(test)]
     COMPUTATIONS.with(|count| count.set(count.get() + 1));
@@ -79,23 +150,23 @@ fn compute_imports(
     // receiver forked. Search imports since the shared anchor, while the
     // actual target base still judges competing criteria below.
     let anchor = history::merge_base(repo, base, head).map_err(|error| error.to_string())?;
-    let changed = merged_records(repo, anchor, head, graph)?;
+    let mut changed = merged_records(repo, anchor, head, graph)?;
     if changed.is_empty() {
         return Ok(BTreeMap::new());
+    }
+    let trusted = mains.map(|mains| mains.tip);
+    let mut imported = match mains {
+        Some(mains) => take_mains_bytes(repo, mains, (base, head), graph, &mut changed),
+        None => BTreeMap::new(),
+    };
+    if changed.is_empty() {
+        return Ok(imported);
     }
     let root = repo.workdir().unwrap_or_else(|| repo.path());
     let default = default_target_name(repo)?;
     let default_tip =
         home_tip(repo, &default.name)?.ok_or_else(|| unavailable_home(&default.name))?;
-    for record in &changed {
-        let home = record.integration_target.as_deref().map_or(
-            default.name.as_str(),
-            super::super::work_start::logical_target,
-        );
-        if home == default.name || home.starts_with("integration/") {
-            refuse_unpublished(repo, record, home, default_tip, anchor, head)?;
-        }
-    }
+    refuse_unpublished_homes(repo, &changed, &default.name, default_tip, (anchor, head))?;
     let mut homes = BTreeMap::from([(default.name.clone(), default_tip)]);
     let mut retired = BTreeMap::new();
     for record in &changed {
@@ -141,7 +212,6 @@ fn compute_imports(
             }
         }
     }
-    let mut imported = BTreeMap::new();
     for (home, tip) in homes {
         // A source already contained by the shared anchor supplies no new imports.
         if is_ancestor_or_same(repo, tip, anchor)? || on_home_chain(repo, head, tip)? {
@@ -177,7 +247,7 @@ fn compute_imports(
             if !is_new_import(repo, record, landed, anchor, head)? {
                 continue;
             }
-            let result = prove_record(repo, record, &home, tip, default_tip, landed, base, head)
+            let result = prove_record(repo, record, &home, tip, default_tip, landed, base, head, trusted)
                 .map_err(|reason| format!("{}: blocks come from target history on `{home}` at {landed}: {reason}; fetch the home and repair or reopen the work there through its task pull request, then merge the reviewed result", record.id))?;
             imported.insert(record.id.clone(), result);
         }
@@ -425,6 +495,10 @@ fn admissible_planning_landing(repo: &Repository, landing: Oid) -> Result<Option
 /// task is in a permitted state at the landing and at its first parent.
 /// It answers only the home-change question; every other proof still runs.
 ///
+/// TSK-1185 AC-16 adds one exception to TSK-1004 AC-8: the landing may
+/// instead be on the first-parent chain of the default tip this run
+/// verified (`trusted`), never of a home a record or a ref names.
+///
 /// # Errors
 /// Unreadable history is an error, never a planning move.
 fn is_planning_move(
@@ -433,9 +507,26 @@ fn is_planning_move(
     landed: Oid,
     parent: Oid,
     head: Oid,
+    trusted: Option<Oid>,
 ) -> Result<bool, String> {
-    Ok(on_home_chain(repo, landed, head)?
-        && admissible_planning_landing(repo, landed)? == Some(parent)
+    let on_chain = on_home_chain(repo, landed, head)?
+        || match trusted {
+            Some(tip) => on_home_chain(repo, landed, tip)?,
+            None => false,
+        };
+    Ok(on_chain && is_trusted_planning_move(repo, record, landed, parent)?)
+}
+
+/// Whether `landed` is an admissible planning landing over `parent` with
+/// the task in a permitted state at both (TSK-1004 AC-6, AC-7). The caller
+/// supplies the chain `landed` is on.
+pub(super) fn is_trusted_planning_move(
+    repo: &Repository,
+    record: &RecordView,
+    landed: Oid,
+    parent: Oid,
+) -> Result<bool, String> {
+    Ok(admissible_planning_landing(repo, landed)? == Some(parent)
         && permitted_at(repo, landed, record)
         && permitted_at(repo, parent, record))
 }
@@ -681,6 +772,7 @@ fn prove_retired_record(
     base: Oid,
     head: Oid,
     parents: &[Oid],
+    trusted: Option<Oid>,
 ) -> Result<Option<ImportedRecord>, String> {
     let Some(declared) = record
         .integration_target
@@ -720,6 +812,7 @@ fn prove_retired_record(
         origin,
         base,
         head,
+        trusted,
     )?;
     Ok(Some(ImportedRecord {
         path: record.path.clone(),
@@ -817,6 +910,7 @@ fn prove_record(
     landed: Oid,
     base: Oid,
     head: Oid,
+    trusted: Option<Oid>,
 ) -> Result<ImportedRecord, String> {
     let commit = repo
         .find_commit(landed)
@@ -837,7 +931,7 @@ fn prove_record(
         &parents,
         base,
         head,
-        correction.is_some(),
+        (correction.is_some(), trusted),
     )?;
     verify_earlier_home_move(repo, record, home, tip, landed, base)?;
     let imported = |completion| ImportedRecord {
@@ -860,6 +954,7 @@ fn prove_record(
         base,
         head,
         &parents,
+        trusted,
     )? {
         return Ok(proof);
     }
@@ -885,6 +980,7 @@ fn prove_record(
             origin,
             origin,
             source,
+            trusted,
         )?
         .completion
     } else if record.kind == RecordKind::Task && active_block(record).is_some() {
@@ -926,7 +1022,7 @@ fn verify_record_home(
     parents: &[Oid],
     base: Oid,
     head: Oid,
-    corrected: bool,
+    (corrected, trusted): (bool, Option<Oid>),
 ) -> Result<(), String> {
     if record.kind == RecordKind::Task {
         let uid = record_uid(&record.content);
@@ -950,7 +1046,7 @@ fn verify_record_home(
                             .map_or(home, super::super::work_start::logical_target)
                 })
             }) && !corrected
-                && !is_planning_move(repo, record, landed, *parent, head)?
+                && !is_planning_move(repo, record, landed, *parent, head, trusted)?
             {
                 return Err("the landing changes the task's declared home".into());
             }
@@ -996,6 +1092,7 @@ pub fn imported_record_paths(
     root: &std::path::Path,
     base: &str,
     head: &str,
+    mains: Option<&MainsBytes>,
 ) -> Result<Vec<String>, String> {
     let repo = Repository::discover(root).map_err(|error| error.to_string())?;
     let resolve = |name: &str| {
@@ -1006,7 +1103,7 @@ pub fn imported_record_paths(
     };
     let graph = Graph::from_revision(&repo, head)?;
     Ok(
-        imported_records(&repo, resolve(base)?, resolve(head)?, &graph)?
+        imported_records(&repo, resolve(base)?, resolve(head)?, &graph, mains)?
             .into_values()
             .map(|record| record.path)
             .collect(),
@@ -1029,13 +1126,13 @@ mod tests {
         {
             let _run = history::judgment();
             for _ in 0..3 {
-                assert!(imported_records(&repo, head, head, &graph)
+                assert!(imported_records(&repo, head, head, &graph, None)
                     .unwrap()
                     .is_empty());
             }
             assert_eq!(COMPUTATIONS.with(std::cell::Cell::get), 1);
         }
-        assert!(imported_records(&repo, head, head, &graph)
+        assert!(imported_records(&repo, head, head, &graph, None)
             .unwrap()
             .is_empty());
         assert_eq!(COMPUTATIONS.with(std::cell::Cell::get), 2);

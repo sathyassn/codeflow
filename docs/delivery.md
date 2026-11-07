@@ -278,16 +278,52 @@ Each task or epic record has one home, where it changes:
 - a task's home is the target it declares in `integration_target`;
 - an epic's home is its own line, or the line its `parent_line` names.
 
-A sync takes `main`'s version only of records whose home is not the line,
-and never changes a record whose home is the line: the epic's record, the
-record of an epic that lands on the line, or the record of a task that
+A sync never changes a record whose home is the line: the epic's record,
+the record of an epic that lands on the line, or the record of a task that
 targets the line. A task with no declared target is judged by its epic, and
 stays frozen when the line does not hold that epic's record. Removing or
-moving such a record is a change too.
-Because each record changes only at its home, `main` never holds a newer
-change to a record whose home is the line, so the refusal applies only when
-that rule was broken. A records-only sync that already passes as a planning
-amendment keeps that class.
+moving such a record is a change too. A records-only sync that already
+passes as a planning amendment keeps that class.
+
+**Main's bytes.** The hosted policy check of a pull request into a line
+takes `main`'s records as `main` holds them. A record whose tree entry at
+the head, blob and mode, equals its entry at `main`'s verified commit is
+not proved again and not frozen, on a sync and on any other route into the
+line. The check turns this on only when the commit `--policy-from` names
+is the tip its own query of `origin` reports for the default branch, and
+the run is not the pre-push hook's hand-off; a run that cannot verify both
+keeps the full checks. Home and edits are read from the line's tip, `main`'s commit and
+their merge base, never from the head. Each record this takes, or matches
+but keeps on the full checks, is reported with its reason.
+
+These are behaviour changes:
+
+- A line no longer proves again a completion `main` admitted, including one
+  admitted through an administrator's bypass.
+- A line takes `main`'s text and criteria for a record whose home is not the
+  line, even when the line edited it.
+- A sync takes `main`'s version of a record whose home is the line when the
+  line has not edited it since its merge base with `main`.
+- A home move counts when a planning landing on `main`'s first-parent chain
+  made it, with the task `todo` or `blocked` and no acceptance block at the
+  landing and its first parent (an exception to TSK-1004 AC-8).
+- All of this applies on a task's pull request that resolved a merge of
+  `main` by hand, as well as on a sync, and it covers records the line never
+  held.
+
+Still refused:
+
+- A record whose home is the line and that the line edited since the merge
+  base, a criteria-only edit included.
+- A record whose home differs between the line's tip and `main`'s commit,
+  unless a planning landing on `main`'s chain moved it.
+- Another path in the same range. The range is a sync only when its merges
+  are clean merges of `main`.
+- The same blob with another mode, a record that cannot be read, and any run
+  without the verified commit.
+
+The pre-push hook keeps the full checks, because a pusher can redirect the
+destination it asks through `pushurl` or `insteadOf`.
 
 Refused, naming the cause:
 

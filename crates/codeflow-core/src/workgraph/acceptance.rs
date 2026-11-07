@@ -462,10 +462,12 @@ mod authority {
 pub use authority::{CriteriaBases, RunBases, StackingTips};
 
 mod imports;
+pub mod mains_bytes;
 mod planning_move;
 mod receiving_merges;
 pub(crate) use imports::clear_cache as clear_import_cache;
 pub use imports::{imported_record_paths, imported_records, ImportedRecord};
+pub use mains_bytes::{MainsBytes, MAINS_BYTES_NOTE};
 use receiving_merges::LineSyncTip;
 
 /// The source and completion endpoints established by the binding.
@@ -2430,6 +2432,10 @@ pub struct Scope<'a> {
     pub own_line: Option<&'a OwnLine>,
     /// The remote-tracking ref this run replaces.
     pub replaced: Option<&'a super::landing::Replaced>,
+    /// The default-branch tip this run verified against the destination
+    /// (TSK-1185 AC-14), which turns on main's bytes for a range into an
+    /// epic line. `None` keeps every record on the full checks.
+    pub trusted: Option<Oid>,
 }
 
 /// Whether a record of a task shows a completion of it: it is complete,
@@ -3396,34 +3402,9 @@ fn line_records_changed(
     epic: &str,
     line: &str,
 ) -> Vec<Finding> {
-    let on_line = |declared: Option<&String>| {
-        declared.is_some_and(|name| {
-            super::work_start::logical_target(name) == super::work_start::logical_target(line)
-        })
-    };
-    let line_epic = |record: &RecordView| {
-        record.kind == RecordKind::Epic
-            && (record.id == epic || on_line(record.parent_line.as_ref()))
-    };
     let mut found = Vec::new();
     for before in target.records.values() {
-        let line_record = match before.kind {
-            RecordKind::Epic => line_epic(before),
-            // A task's home is the target it declares. One that declares
-            // none is judged by its epic: a line epic, or an epic the line
-            // does not hold, keeps it frozen, so an unknown home fails
-            // closed. A task with neither a target nor an epic is
-            // standalone, homed on the default branch.
-            RecordKind::Task => match before.integration_target {
-                Some(_) => on_line(before.integration_target.as_ref()),
-                None => before
-                    .epic_id
-                    .as_deref()
-                    .is_some_and(|id| target.records.get(id).is_none_or(line_epic)),
-            },
-            RecordKind::Spec => false,
-        };
-        if !line_record {
+        if !homed_on_line(before, target, epic, line) {
             continue;
         }
         let after = head.records.get(&before.id);
@@ -3442,6 +3423,38 @@ fn line_records_changed(
         ));
     }
     found
+}
+
+/// Whether `record`, as `graph` holds it, has its home on `epic`'s `line`
+/// (TSK-1312): the epic's record, an epic that lands on the line, or a task
+/// that targets the line or declares no target and names a line epic or an
+/// epic `graph` does not hold.
+pub(super) fn homed_on_line(record: &RecordView, graph: &Graph, epic: &str, line: &str) -> bool {
+    let on_line = |declared: Option<&String>| {
+        declared.is_some_and(|name| {
+            super::work_start::logical_target(name) == super::work_start::logical_target(line)
+        })
+    };
+    let line_epic = |record: &RecordView| {
+        record.kind == RecordKind::Epic
+            && (record.id == epic || on_line(record.parent_line.as_ref()))
+    };
+    match record.kind {
+        RecordKind::Epic => line_epic(record),
+        // A task's home is the target it declares. One that declares
+        // none is judged by its epic: a line epic, or an epic the line
+        // does not hold, keeps it frozen, so an unknown home fails
+        // closed. A task with neither a target nor an epic is
+        // standalone, homed on the default branch.
+        RecordKind::Task => match record.integration_target {
+            Some(_) => on_line(record.integration_target.as_ref()),
+            None => record
+                .epic_id
+                .as_deref()
+                .is_some_and(|id| graph.records.get(id).is_none_or(line_epic)),
+        },
+        RecordKind::Spec => false,
+    }
 }
 
 fn authority_note(record: &RecordView, source: &str) -> Finding {
@@ -3618,6 +3631,7 @@ impl<'r> Judging<'r> {
         let scope = Scope {
             own_line: self.own_line.as_ref(),
             replaced: self.replaced.as_ref(),
+            trusted: None,
         };
         judge_in_range(
             &mut self.store,
@@ -4138,6 +4152,7 @@ pub fn completions_in_range(
         run,
         (line, receiving_line(line, None), None),
         stacked,
+        None,
     )
 }
 
@@ -4170,6 +4185,7 @@ fn completions_received(
     run: &RunBases,
     (line, receiving, sync_tip): (Option<&str>, Option<&str>, Option<LineSyncTip>),
     stacked: &[StackedHead],
+    mains: Option<&MainsBytes>,
 ) -> Result<Vec<Finding>, String> {
     let _judgment = history::judgment();
     let amendable = criteria.amends();
@@ -4191,7 +4207,7 @@ fn completions_received(
         .map_err(|error| error.message().to_string())?;
     let before = Graph::from_revision(repo, &anchor.to_string())?;
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
-    let imported = match imported_records(repo, base_oid, head_oid, &after) {
+    let imported = match imported_records(repo, base_oid, head_oid, &after, mains) {
         Ok(imported) => imported,
         Err(reason) => return Ok(vec![finding(IMPORT_RULE, reason)]),
     };
@@ -4769,9 +4785,36 @@ pub fn pull_request_findings_into(
     let run = RunBases::new(std::iter::once(target_tip).chain(candidate));
     let head_tip = oid(head)?;
     let mut at_head = Graph::from_revision(&repo, head)?;
-    let imported = match imported_records(&repo, target_tip, head_tip, &at_head) {
+    // Main's bytes (TSK-1185): only with a verified tip, and only on a
+    // range whose target is an epic line.
+    let mains = scope
+        .trusted
+        .zip(receiving_line(None, into))
+        .map(|(tip, line)| MainsBytes {
+            tip,
+            line: line.to_string(),
+        });
+    let (taken, mut mains_notes) = match mains.as_ref() {
+        None => (std::collections::BTreeSet::new(), Vec::new()),
+        Some(mains) => match mains_bytes::judge(&repo, mains, target_tip, head_tip, &at_head) {
+            Ok(judged) => (judged.admitted, judged.notes),
+            Err(reason) => (
+                std::collections::BTreeSet::new(),
+                vec![Finding {
+                    epic_record: None,
+                    rule: MAINS_BYTES_NOTE,
+                    message: format!("main's bytes admits nothing, so every record keeps the full checks: {reason}"),
+                    note: true,
+                }],
+            ),
+        },
+    };
+    let imported = match imported_records(&repo, target_tip, head_tip, &at_head, mains.as_ref()) {
         Ok(imported) => imported,
-        Err(reason) => return Ok(vec![finding(IMPORT_RULE, reason)]),
+        Err(reason) => {
+            mains_notes.push(finding(IMPORT_RULE, reason));
+            return Ok(mains_notes);
+        }
     };
     let anchor = history::merge_base(&repo, target_tip, head_tip).map_err(|e| e.to_string())?;
     let before = Graph::from_revision(&repo, &anchor.to_string())?;
@@ -4797,6 +4840,8 @@ pub fn pull_request_findings_into(
         found.extend(line_landing_copies(&repo, target_tip, head_tip, anchor)?);
     } else {
         let mut paths = super::lifecycle::changed_paths(&repo, &anchor.to_string(), Some(head))?;
+        // A record main's bytes takes is the default branch's, not frozen.
+        paths.retain(|path| !taken.contains(path));
         // A sync's freeze of line-homed records reads every path: an epic's
         // record has the default branch as its home, so it reads as imported.
         let all_paths = paths.clone();
@@ -4887,7 +4932,9 @@ pub fn pull_request_findings_into(
         &run,
         (branch, receiving_line(branch, into), sync_tip),
         &stacked,
+        mains.as_ref(),
     )?);
+    found.extend(mains_notes);
     Ok(found)
 }
 

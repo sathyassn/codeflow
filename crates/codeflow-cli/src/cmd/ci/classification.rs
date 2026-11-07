@@ -624,7 +624,7 @@ pub(super) fn dispatch(
     branch: &str,
     range: Option<&Range<'_>>,
     release: Option<&ReleaseHead>,
-    trusted: Option<&str>,
+    (trusted, verified): (Option<&str>, Option<codeflow_core::git::Oid>),
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) -> Option<Class> {
@@ -721,6 +721,7 @@ pub(super) fn dispatch(
                 base: range.base,
                 head: range.head,
                 exemption: class.is_secret_scan_exemption(),
+                mains: verified.map(|tip| (tip, range.target)),
             };
             tracked(root, task_id, anchor, &files, &changes, tagged);
             range_journey(root, git, task_id, range, tagged);
@@ -1029,6 +1030,20 @@ fn push(tagged: &mut Vec<super::TaggedViolation>, rule: &str, message: String, h
 /// findings (R-64). When the branch carries the same task, `codeflow ci`'s
 /// own-branch preflight already reports an anchor failure (with the visible
 /// workgraph check), so it is not reported twice here.
+/// Main's bytes (TSK-1185) for a task range into an epic line, when this
+/// run verified the default branch's tip.
+fn mains_bytes(
+    target: &str,
+    verified: Option<codeflow_core::git::Oid>,
+) -> Option<codeflow_core::workgraph::acceptance::MainsBytes> {
+    verified
+        .filter(|_| codeflow_core::workgraph::line_adoption::epic_id(target).is_ok())
+        .map(|tip| codeflow_core::workgraph::acceptance::MainsBytes {
+            tip,
+            line: target.to_string(),
+        })
+}
+
 /// How a tracked task's anchor failure is reported: not at all on its own
 /// branch (the own-branch preflight reports it), else at the
 /// `git.work_planning` level (TSK-133).
@@ -1042,6 +1057,9 @@ struct Anchor<'a> {
     base: &'a str,
     head: &'a str,
     exemption: bool,
+    /// The default tip this run verified and the range's target, which turn
+    /// on main's bytes for a target that is an epic line (TSK-1185).
+    mains: Option<(codeflow_core::git::Oid, &'a str)>,
 }
 
 fn anchor_failure(
@@ -1154,10 +1172,14 @@ fn task_record_additions(
     changes: &[(String, GitName)],
     tagged: &mut Vec<super::TaggedViolation>,
 ) {
+    let mains = anchor
+        .mains
+        .and_then(|(tip, target)| mains_bytes(target, Some(tip)));
     let imported_paths = match codeflow_core::workgraph::acceptance::imported_record_paths(
         root,
         anchor.base,
         anchor.head,
+        mains.as_ref(),
     ) {
         Ok(paths) => paths,
         Err(error) => {
@@ -1414,6 +1436,7 @@ mod tests {
                         branch: "task/TSK-001-test",
                         base: &head,
                         head: &head,
+                        mains: None,
                     },
                     &[],
                     &[],
@@ -1445,6 +1468,7 @@ mod tests {
                     branch: "spike/TSK-001-test",
                     base: "HEAD",
                     head: "HEAD",
+                    mains: None,
                 },
                 &["src/lib.rs".into()],
                 &[],
@@ -1474,6 +1498,7 @@ mod tests {
                     branch: "spike/TSK-001-test",
                     base: &head,
                     head: &head,
+                    mains: None,
                 },
                 &["docs/research/findings.md".into()],
                 &[],

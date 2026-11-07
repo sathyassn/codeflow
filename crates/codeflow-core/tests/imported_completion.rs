@@ -75,7 +75,7 @@ fn import_proof_names_home_landing_and_original_completion_tail() {
     let receiver = commit(root);
     let repo = Repository::open(root).unwrap();
     let graph = Graph::from_revision(&repo, "HEAD").unwrap();
-    let imports = imported_records(&repo, receiver_base, receiver, &graph).unwrap();
+    let imports = imported_records(&repo, receiver_base, receiver, &graph, None).unwrap();
     let source = &imports["TSK-001"];
     assert_eq!(source.home, "main");
     assert_eq!(source.landing, landed);
@@ -91,9 +91,11 @@ fn import_proof_names_home_landing_and_original_completion_tail() {
     );
     let changed = commit(root);
     let graph = Graph::from_revision(&repo, "HEAD").unwrap();
-    assert!(imported_records(&repo, receiver_base, changed, &graph)
-        .unwrap()
-        .is_empty());
+    assert!(
+        imported_records(&repo, receiver_base, changed, &graph, None)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -125,7 +127,7 @@ fn home_search_does_not_read_record_versions_before_the_range_base() {
     let head = Oid::from_str(&git(root, &["rev-parse", "HEAD"])).unwrap();
     let repo = Repository::open(root).unwrap();
     let graph = Graph::from_revision(&repo, "HEAD").unwrap();
-    assert!(imported_records(&repo, base, head, &graph)
+    assert!(imported_records(&repo, base, head, &graph, None)
         .unwrap()
         .is_empty());
 }
