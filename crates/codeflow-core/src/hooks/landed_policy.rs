@@ -171,11 +171,15 @@ fn advertises_refs(repo: &Repository, root: &Path, remote: &str) -> Result<bool,
         urls.push(url.to_string());
     }
     match urls.as_slice() {
-        [url] => crate::git::remote_query::advertises_any_ref(
-            root,
-            url,
-            crate::git::remote_query::QueryLimits::guard(),
-        ),
+        // TSK-327 AC-6: the question goes to the configured URL, so a
+        // rewrite that sends the fetch elsewhere refuses initialization.
+        [url] => crate::git::remote_query::require_unredirected(root, url).and_then(|()| {
+            crate::git::remote_query::advertises_any_ref(
+                root,
+                url,
+                crate::git::remote_query::QueryLimits::guard(),
+            )
+        }),
         [] => Err(format!("{key} is not set")),
         _ => Err(format!("{key} has several values")),
     }

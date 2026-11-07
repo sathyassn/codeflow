@@ -254,6 +254,144 @@ pub fn ls_remote(root: &Path, args: &[&str], limits: QueryLimits) -> Result<Stri
     ls_remote_attempts(args, limits, || run(root, &all, limits.timeout))
 }
 
+/// Refuse, as a destination that cannot be verified, a query of `url` that
+/// the local configuration would send somewhere other than `url` itself
+/// (TSK-327). The pre-push hook is given the URL the push uses, after git
+/// applied its rewrites; `git ls-remote <url>` and `git fetch <url>` read
+/// the same configuration again and would apply a second rewrite, so the
+/// answer could come from a repository the push never reaches. The check
+/// reads the configuration the query itself reads (repository, worktree,
+/// global and system files with their includes, through
+/// [`crate::git::judging_command`], so no command-line overlay counts) and
+/// refuses when any of these would apply to `url`:
+///
+/// - a `url.<base>.insteadOf` value that is a prefix of `url`, which git
+///   rewrites before it connects;
+/// - a `remote.<url>.*` section, which makes git read `url` as a configured
+///   remote with its own URL, upload command or helper;
+/// - a `remotes/<url>` or `branches/<url>` file, when `url` has no directory
+///   separator and git could read it as a legacy remote name.
+///
+/// A configuration that cannot be read refuses too. Nothing is rewritten
+/// here: the query either asks `url` exactly or does not ask.
+///
+/// # Errors
+///
+/// Returns what would redirect the query, or why the configuration could not
+/// be read.
+pub fn require_unredirected(root: &Path, url: &str) -> Result<(), String> {
+    let shown = display_url(url);
+    let refuse = |why: String| {
+        format!(
+            "the destination {shown} cannot be verified: {why}; the hook asks only the exact URL the push uses"
+        )
+    };
+    if let Some(overlay) = destination_overlay(root, url).map_err(refuse)? {
+        return Err(refuse(format!(
+            "{overlay} would send the destination query somewhere other than this URL; remove it, or push to the URL it names"
+        )));
+    }
+    Ok(())
+}
+
+/// What in the configuration at `root` would redirect a query of `url`, if
+/// anything (see [`require_unredirected`]).
+fn destination_overlay(root: &Path, url: &str) -> Result<Option<String>, String> {
+    let out = crate::git::judging_command()
+        .arg("-C")
+        .arg(root)
+        .args(["config", "-z", "--list"])
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("cannot read the git configuration: {error}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "cannot read the git configuration: git config failed ({})",
+            out.status
+        ));
+    }
+    if let Some(overlay) = overlay_in(&out.stdout, url.as_bytes()) {
+        return Ok(Some(overlay));
+    }
+    legacy_remote_file(root, url)
+}
+
+/// [`destination_overlay`] over `git config -z --list` output: entries end
+/// in NUL, and a key is followed by a newline and its value, or by nothing
+/// for a key with no value. Section and variable names are lowercase there;
+/// a subsection keeps its case, as git compares it.
+fn overlay_in(listed: &[u8], url: &[u8]) -> Option<String> {
+    for entry in listed.split(|byte| *byte == 0) {
+        if entry.is_empty() {
+            continue;
+        }
+        let (key, value) = match entry.iter().position(|byte| *byte == b'\n') {
+            Some(at) => (&entry[..at], Some(&entry[at + 1..])),
+            None => (entry, None),
+        };
+        if let Some(base) = key
+            .strip_prefix(b"url.")
+            .and_then(|rest| rest.strip_suffix(b".insteadof"))
+        {
+            // Git refuses a valueless rewrite when it reads remotes, so the
+            // query would not run as asked either. An empty value never
+            // matches: git takes only a longer prefix than none.
+            let rewrites = value.map_or(true, |prefix| !prefix.is_empty() && url.starts_with(prefix));
+            if rewrites {
+                return Some(format!(
+                    "the setting url.{}.insteadOf",
+                    display_urls(&String::from_utf8_lossy(base))
+                ));
+            }
+        }
+        if let Some(rest) = key.strip_prefix(b"remote.") {
+            let subsection = rest
+                .iter()
+                .rposition(|byte| *byte == b'.')
+                .map(|dot| &rest[..dot]);
+            if subsection == Some(url) {
+                return Some(format!(
+                    "a remote configured under the name {}",
+                    display_url(&String::from_utf8_lossy(url))
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// A legacy `remotes/<url>` or `branches/<url>` file in the common
+/// directory, which git reads when `url` is a valid remote name: not empty,
+/// not `.` or `..`, and free of directory separators.
+fn legacy_remote_file(root: &Path, url: &str) -> Result<Option<String>, String> {
+    let separator = |c: char| c == '/' || (cfg!(windows) && c == '\\');
+    if url.is_empty() || url == "." || url == ".." || url.contains(separator) {
+        return Ok(None);
+    }
+    let repo = git2::Repository::discover(root)
+        .map_err(|error| format!("cannot open the repository: {}", error.message()))?;
+    for folder in ["remotes", "branches"] {
+        let file = repo.commondir().join(folder).join(url);
+        match std::fs::symlink_metadata(&file) {
+            Ok(_) => {
+                return Ok(Some(format!(
+                    "the legacy remote file {folder}/{}",
+                    display_url(url)
+                )))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "cannot read the legacy remote file {folder}/{}: {error}",
+                    display_url(url)
+                ))
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// A duration as messages show it: whole seconds without a fraction.
 fn seconds(duration: Duration) -> String {
     if duration.subsec_nanos() == 0 {
@@ -309,7 +447,9 @@ fn ls_remote_attempts(
 
 /// Fetch `refs` from `url` into the object store only, within the fetch
 /// wait `limits` sets: no tracking ref, tag or `FETCH_HEAD` is written, so
-/// nothing a later check reads as authority changes.
+/// nothing a later check reads as authority changes. A fetch the local
+/// configuration would send elsewhere is refused before it runs
+/// ([`require_unredirected`]).
 ///
 /// # Errors
 ///
@@ -320,6 +460,7 @@ pub fn fetch_objects(
     refs: &[&str],
     limits: QueryLimits,
 ) -> Result<(), String> {
+    require_unredirected(root, url)?;
     let mut all = vec![
         "fetch",
         "--quiet",
@@ -562,30 +703,44 @@ fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<Str
             MAX_ANSWER_BYTES >> 20
         )));
     }
-    // A descendant may retain stderr after git exits. Keep git unreaped
-    // until both pipes finish, so its group ID cannot be reused before
-    // timeout cleanup, and keep the same deadline for this pipe too.
-    while !diagnostics.is_finished() {
-        if expired() {
-            kill_group(&mut child);
-            return Err(timed_out());
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    // Unreadable diagnostics cannot prove an authentication failure, so a
-    // failed exit is then reported as a plain one, which still refuses.
-    let authentication = match diagnostics.join() {
-        Ok(Ok(bytes)) => authentication_failed(&bytes),
-        Ok(Err(_)) | Err(_) => false,
-    };
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if !expired() => std::thread::sleep(Duration::from_millis(20)),
+    // Git's own exit, observed without reaping it: an unreaped git keeps
+    // its process group ID reserved, so ending the group below can reach
+    // only git's descendants.
+    loop {
+        match has_exited(&mut child) {
+            Ok(true) => break,
+            Ok(false) if !expired() => std::thread::sleep(Duration::from_millis(20)),
             _ => {
                 kill_group(&mut child);
                 return Err(timed_out());
             }
+        }
+    }
+    // Git's stderr closes when it exits unless a descendant it started, such
+    // as an SSH or credential helper, still holds it (TSK-389). Such a
+    // helper gets a short grace and is then ended with git's group, so the
+    // lookup costs one wait and leaves no process behind, never a timeout
+    // and a retry. Its diagnostics are then not read, so a failed exit is
+    // reported as a plain one, which still refuses.
+    let grace = Instant::now() + STDERR_GRACE;
+    while !diagnostics.is_finished() && Instant::now() < grace {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let authentication = if diagnostics.is_finished() {
+        match diagnostics.join() {
+            Ok(Ok(bytes)) => authentication_failed(&bytes),
+            Ok(Err(_)) | Err(_) => false,
+        }
+    } else {
+        signal_group(&child);
+        false
+    };
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            return Err(Failure::Other(format!(
+                "could not read how git exited: {error}"
+            )))
         }
     };
     if !status.success() {
@@ -627,8 +782,14 @@ fn text_answer(bytes: &[u8]) -> Result<String, Failure> {
 }
 
 /// The SSH command git would use, with password and host-key prompts off.
-/// A configured command is kept: `GIT_SSH_COMMAND`, then `core.sshCommand`,
-/// then `GIT_SSH`, then `ssh`.
+/// A configured command is kept, selected by git's own precedence:
+/// `GIT_SSH_COMMAND`, then `core.sshCommand`, then `GIT_SSH`, then `ssh`
+/// (TSK-327 AC-3). `core.sshCommand` is read through
+/// [`crate::git::judging_command`], the process the query itself runs in, so
+/// a command-line overlay the query ignores cannot select it. The one
+/// selected command is passed on as `GIT_SSH_COMMAND`, which git prefers to
+/// every other selector, so no unselected transport runs. When the selection
+/// cannot be read, the query refuses.
 ///
 /// OS text rule (issue 79): the command is executed, so it must be exactly what
 /// git would run. A value that is not valid UTF-8 cannot be passed on as text,
@@ -652,7 +813,7 @@ fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
     // another program.
     let mut configured = from_env("GIT_SSH_COMMAND")?;
     if configured.is_none() {
-        let out = crate::git::command()
+        let out = crate::git::judging_command()
             .arg("-C")
             .arg(root)
             .args(["config", "--null", "--get", "core.sshCommand"])
@@ -693,17 +854,60 @@ fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
     Ok(format!("{configured} -o BatchMode=yes"))
 }
 
-/// Kill a child and, on Unix, the process group it leads (an SSH or
-/// credential helper it started), then reap it.
-fn kill_group(child: &mut std::process::Child) {
+/// How long a helper may hold git's stderr open after git has exited before
+/// it is ended with git's process group (TSK-389).
+const STDERR_GRACE: Duration = Duration::from_millis(250);
+
+/// Whether the child has exited, without reaping it on Unix, so its process
+/// group ID cannot be reused while the group may still be signalled.
+fn has_exited(child: &mut std::process::Child) -> std::io::Result<bool> {
+    #[cfg(unix)]
+    {
+        let pid: libc::id_t = child.id();
+        // SAFETY: a zeroed `siginfo_t` is a valid value to pass for `waitid`
+        // to fill; `WNOWAIT` leaves the child waitable, so the later `wait`
+        // still reaps it and reads its status.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let done = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if done != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // With `WNOHANG`, a child that has not exited leaves `info` zeroed.
+        Ok(info.si_signo != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        child.try_wait().map(|status| status.is_some())
+    }
+}
+
+/// On Unix, SIGKILL to the process group the child leads (an SSH or
+/// credential helper it started); best-effort, and the child is not reaped.
+fn signal_group(child: &std::process::Child) {
     #[cfg(unix)]
     if let Ok(group) = i32::try_from(child.id()) {
         // SAFETY: the child leads its own process group (`process_group(0)`),
-        // whose id is its pid; SIGKILL to it is best-effort.
+        // whose id is its pid, and it is not reaped yet, so the id is still
+        // its group's; SIGKILL to it is best-effort.
         unsafe {
             libc::killpg(group, libc::SIGKILL);
         }
     }
+    #[cfg(not(unix))]
+    let _ = child;
+}
+
+/// Kill a child and, on Unix, the process group it leads (an SSH or
+/// credential helper it started), then reap it.
+fn kill_group(child: &mut std::process::Child) {
+    signal_group(child);
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -766,44 +970,241 @@ mod tests {
         );
     }
 
+    /// TSK-389 (TSK-327 AC-7 and AC-8): a helper that keeps git's stderr
+    /// open after git has exited costs one wait, well inside the deadline,
+    /// and is ended with git's group. Before, the query waited the whole
+    /// deadline for that pipe and reported a timeout, which `ls_remote`
+    /// then retried. A git that fails still refuses, in the same one wait.
     #[cfg(unix)]
     #[test]
-    fn inherited_stderr_keeps_the_query_within_its_deadline() {
+    fn a_helper_holding_stderr_costs_one_wait_and_is_ended() {
         use std::os::unix::fs::PermissionsExt as _;
-        if let Some(root) = std::env::var_os("CODEFLOW_STDERR_ONLY_CHILD") {
-            let started = Instant::now();
-            let result = run(
-                Path::new(&root),
-                &["ls-remote", "stub"],
-                Duration::from_millis(200),
-            );
-            assert!(matches!(result, Err(Failure::Timeout(_))));
-            assert!(started.elapsed() < Duration::from_secs(5));
+        const CHILD: &str = "CODEFLOW_STDERR_HELPER_CHILD";
+        const DEADLINE: Duration = Duration::from_secs(10);
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = Path::new(&root);
+            for (exit, answered) in [("0", true), ("128", false)] {
+                std::fs::write(root.join("exit"), exit).unwrap();
+                let started = Instant::now();
+                let result = run(root, &["ls-remote", "stub"], DEADLINE);
+                let took = started.elapsed();
+                assert!(took < Duration::from_secs(3), "took {took:?}");
+                if answered {
+                    assert!(matches!(result, Ok(ref answer) if answer.is_empty()));
+                } else {
+                    assert!(matches!(result, Err(Failure::Exit(Some(128)))));
+                }
+                let helper: i32 = std::fs::read_to_string(root.join("helper.pid"))
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
+                // The helper was signalled with git's group. Its new parent
+                // reaps it shortly; until then it is a zombie that `kill`
+                // still finds, so the check waits for it to go.
+                let gone = Instant::now() + Duration::from_secs(5);
+                // SAFETY: signal 0 only asks whether the process exists.
+                while unsafe { libc::kill(helper, 0) } == 0 {
+                    assert!(Instant::now() < gone, "helper {helper} still runs");
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
             return;
         }
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
         let git = bin.join("git");
-        // Git exits and closes stdout while its descendant retains stderr.
-        std::fs::write(&git, "#!/bin/sh\n/bin/sleep 60 >/dev/null &\nexit 0\n").unwrap();
+        // Git answers, starts a helper that keeps stderr, and exits.
+        std::fs::write(
+            &git,
+            format!(
+                "#!/bin/sh\n/bin/sleep 60 >/dev/null </dev/null &\necho $! > '{root}/helper.pid'\nexit $(/bin/cat '{root}/exit')\n",
+                root = dir.path().display()
+            ),
+        )
+        .unwrap();
         std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
         let out = crate::git::process(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "git::remote_query::tests::inherited_stderr_keeps_the_query_within_its_deadline",
+                "git::remote_query::tests::a_helper_holding_stderr_costs_one_wait_and_is_ended",
                 "--nocapture",
             ])
-            .env("CODEFLOW_STDERR_ONLY_CHILD", dir.path())
+            .env(CHILD, dir.path())
             .env("PATH", bin)
             .env("GIT_SSH_COMMAND", "ssh")
             .output()
             .unwrap();
         assert!(
             out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stdout)
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    /// TSK-327 AC-3: the query runs only the transport git's precedence
+    /// selects among `GIT_SSH_COMMAND`, `core.sshCommand` and `GIT_SSH`,
+    /// for each one alone, each pair and all three, and plain `ssh` with
+    /// none. A `core.sshCommand` given only as a command-line overlay,
+    /// which the query itself never reads, selects nothing.
+    #[cfg(unix)]
+    #[test]
+    fn the_query_runs_only_the_selected_ssh_transport() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "CODEFLOW_SSH_SELECTION_CHILD";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let limits = QueryLimits::scaled(Duration::from_secs(20), 1);
+            let asked = ls_remote(Path::new(&root), &["ssh://example.invalid/x.git"], limits);
+            assert!(asked.is_err(), "every recorder refuses: {asked:?}");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let log = dir.path().join("ran.log");
+        for name in ["rec-command", "rec-config", "rec-program", "rec-overlay", "ssh"] {
+            let script = bin.join(name);
+            std::fs::write(
+                &script,
+                format!("#!/bin/sh\necho {name} >> '{}'\nexit 255\n", log.display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .unwrap();
+        // (GIT_SSH_COMMAND, core.sshCommand, GIT_SSH, overlay) and the one run.
+        let cases: [([bool; 4], &str); 9] = [
+            ([false, false, false, false], "ssh"),
+            ([true, false, false, false], "rec-command"),
+            ([false, true, false, false], "rec-config"),
+            ([false, false, true, false], "rec-program"),
+            ([true, true, false, false], "rec-command"),
+            ([true, false, true, false], "rec-command"),
+            ([false, true, true, false], "rec-config"),
+            ([true, true, true, false], "rec-command"),
+            ([false, false, false, true], "ssh"),
+        ];
+        for ([command, config, program, overlay], expected) in cases {
+            let root = tempfile::tempdir().unwrap();
+            let repo = git2::Repository::init(root.path()).unwrap();
+            if config {
+                repo.config()
+                    .unwrap()
+                    .set_str("core.sshCommand", "rec-config")
+                    .unwrap();
+            }
+            let _ = std::fs::remove_file(&log);
+            let mut child = crate::git::process(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "git::remote_query::tests::the_query_runs_only_the_selected_ssh_transport",
+                    "--nocapture",
+                ])
+                .env(CHILD, root.path())
+                .env("PATH", &path)
+                .env("HOME", dir.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env_remove("GIT_SSH_COMMAND")
+                .env_remove("GIT_SSH")
+                .env_remove("GIT_SSH_VARIANT")
+                .env_remove("GIT_CONFIG_PARAMETERS")
+                .env_remove("GIT_CONFIG_COUNT");
+            if command {
+                child.env("GIT_SSH_COMMAND", "rec-command");
+            }
+            if program {
+                child.env("GIT_SSH", bin.join("rec-program"));
+            }
+            if overlay {
+                child.env("GIT_CONFIG_PARAMETERS", "'core.sshCommand=rec-overlay'");
+            }
+            let out = child.output().unwrap();
+            assert!(
+                out.status.success(),
+                "{expected}: {}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let ran = std::fs::read_to_string(&log).unwrap_or_default();
+            let ran: std::collections::BTreeSet<&str> = ran.lines().collect();
+            assert_eq!(
+                ran,
+                std::collections::BTreeSet::from([expected]),
+                "case {:?}",
+                (command, config, program, overlay)
+            );
+        }
+    }
+
+    /// TSK-327 AC-1: every configuration that would send a destination
+    /// query elsewhere is named; a rewrite of another URL, a pushInsteadOf
+    /// and a remote under another name are not.
+    #[test]
+    fn a_redirecting_setting_is_named_and_others_are_not() {
+        let url = b"/srv/dest.git";
+        let listed = |entries: &[&str]| entries.join("\0").into_bytes();
+        for (entries, named) in [
+            (vec!["url./srv/decoy.git.insteadof\n/srv/dest"], true),
+            (vec!["url./srv/decoy.git.insteadof\n/srv/dest.git"], true),
+            (vec!["url.x.insteadof"], true),
+            (vec!["remote./srv/dest.git.uploadpack\nevil"], true),
+            (vec!["url./srv/decoy.git.insteadof\n"], false),
+            (vec!["url./srv/decoy.git.insteadof\n/srv/other"], false),
+            (
+                vec!["url./srv/decoy.git.pushinsteadof\n/srv/dest.git"],
+                false,
+            ),
+            (
+                vec!["remote.origin.url\n/srv/dest.git", "remote.pushdefault\norigin"],
+                false,
+            ),
+            (vec!["remote./SRV/DEST.GIT.url\nx"], false),
+        ] {
+            assert_eq!(
+                overlay_in(&listed(&entries), url).is_some(),
+                named,
+                "{entries:?}"
+            );
+        }
+    }
+
+    /// TSK-327 AC-1: the check reads the repository's own configuration
+    /// and its legacy remote files, and a clean repository passes.
+    #[test]
+    fn a_rewrite_in_the_repository_refuses_the_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let dest = dir.path().join("dest.git");
+        let url = dest.to_str().unwrap();
+        // The developer's own files could name this path only by accident.
+        if require_unredirected(dir.path(), url).is_err() {
+            return;
+        }
+        repo.config()
+            .unwrap()
+            .set_str(
+                &format!("url.{}/decoy.git.insteadOf", dir.path().display()),
+                url,
+            )
+            .unwrap();
+        let refused = require_unredirected(dir.path(), url).unwrap_err();
+        assert!(refused.contains("insteadOf"), "{refused}");
+        assert!(refused.contains("cannot be verified"), "{refused}");
+        let clean = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(clean.path()).unwrap();
+        assert!(require_unredirected(clean.path(), "dest").is_ok());
+        std::fs::create_dir_all(repo.path().join("remotes")).unwrap();
+        std::fs::write(repo.path().join("remotes").join("dest"), "URL: /elsewhere\n").unwrap();
+        let refused = require_unredirected(clean.path(), "dest").unwrap_err();
+        assert!(refused.contains("remotes/dest"), "{refused}");
+        assert!(require_unredirected(clean.path(), "./dest").is_ok());
     }
 
     #[test]

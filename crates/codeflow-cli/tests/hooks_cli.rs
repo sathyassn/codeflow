@@ -5528,6 +5528,76 @@ fn push_set_queries_the_destination_once_for_multiple_refs() {
     );
 }
 
+/// TSK-327 AC-1: an `insteadOf` in the repository, global or system
+/// configuration that matches the URL the push uses would send the hook's
+/// destination query to another repository, here a decoy that advertises a
+/// different branch set. The hook refuses the push as an unchecked
+/// destination instead of judging it against the decoy; without the
+/// rewrite the same push passes.
+#[cfg(unix)]
+#[test]
+fn push_set_refuses_a_destination_query_a_rewrite_would_redirect() {
+    let dir = sibling_repo();
+    let url = push_url(dir.path(), "upstream");
+    git(dir.path(), &["push", "-q", &url, "main"]);
+    let decoy = dir.path().join(".git").join("decoy.git");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", "-b", "main", decoy.to_str().unwrap()],
+    );
+    git(
+        dir.path(),
+        &["push", "-q", decoy.to_str().unwrap(), "main", "main:decoy-only"],
+    );
+    let good = rev(dir.path(), "feat/good");
+    let stdin = format!("refs/heads/feat/good {good} refs/heads/feat/good {ZERO_SHA}\n");
+    let hook = |scope: Option<&str>| {
+        let mut cmd = codeflow();
+        cmd.args(["git-hook", "pre-push", "upstream", &url])
+            .current_dir(dir.path());
+        let rewrite = format!(
+            "[url \"{}\"]\n\tinsteadOf = {url}\n",
+            decoy.display()
+        );
+        let file = dir.path().join(".git").join("planted-config");
+        match scope {
+            Some("global") => {
+                std::fs::write(&file, rewrite).unwrap();
+                cmd.env("GIT_CONFIG_GLOBAL", &file);
+            }
+            Some("system") => {
+                std::fs::write(&file, rewrite).unwrap();
+                cmd.env("GIT_CONFIG_SYSTEM", &file)
+                    .env_remove("GIT_CONFIG_NOSYSTEM");
+            }
+            _ => {}
+        }
+        run_with_stdin(&mut cmd, &stdin)
+    };
+    let control = hook(None);
+    assert_eq!(
+        control.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&control.stderr)
+    );
+    let key = format!("url.{}.insteadOf", decoy.display());
+    for scope in ["repository", "global", "system"] {
+        if scope == "repository" {
+            git(dir.path(), &["config", &key, &url]);
+        }
+        let out = hook(Some(scope));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_ne!(out.status.code(), Some(0), "{scope}: {err}");
+        assert!(err.contains("ci.destination_unavailable"), "{scope}: {err}");
+        assert!(err.contains("cannot be verified"), "{scope}: {err}");
+        assert!(err.contains("insteadOf"), "{scope}: {err}");
+        if scope == "repository" {
+            git(dir.path(), &["config", "--unset", &key]);
+        }
+    }
+}
+
 /// A minimal scaffold on `feat/probe` whose test config holds a heavy quick
 /// target that sleeps past any push and a quick target that fails, with an
 /// answering destination `upstream`.

@@ -210,17 +210,22 @@ pub fn ask(
 /// What `url` advertises: its default branch, branches and tags (peeled),
 /// in one bounded lookup (`git ls-remote --symref`, with the timeout and
 /// attempts `limits` sets from the trusted policy). A caller that already
-/// holds it, such as pre-push, passes it on instead of asking again.
+/// holds it, such as pre-push, passes it on instead of asking again. A
+/// query the local configuration would send to another repository is
+/// refused as unverifiable before anything is asked
+/// ([`crate::git::remote_query::require_unredirected`], TSK-327).
 ///
 /// # Errors
 ///
 /// Returns why the destination could not be asked.
 pub fn advertisement(repo_root: &Path, url: &str, limits: QueryLimits) -> Result<String, String> {
-    crate::git::remote_query::ls_remote(
-        repo_root,
-        &["--symref", url, "HEAD", "refs/heads/*", "refs/tags/*"],
-        limits,
-    )
+    crate::git::remote_query::require_unredirected(repo_root, url).and_then(|()| {
+        crate::git::remote_query::ls_remote(
+            repo_root,
+            &["--symref", url, "HEAD", "refs/heads/*", "refs/tags/*"],
+            limits,
+        )
+    })
     .map_err(|why| {
         let shown = crate::git::remote_query::display_url(url);
         format!("asking the destination {shown} for its default branch: {why}")
