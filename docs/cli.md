@@ -252,6 +252,10 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--into <REF>` | Non-task branch/ref this task will merge into. |
 | | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin already contained in HEAD. |
 | `codeflow work status` | | List, per task, each worktree with uncommitted changes, unpushed commits or commits on no branch, read from git; work that cannot be recovered is named. Reads only |
+| `codeflow work remove-candidate <BRANCH>` | | Remove a local landing candidate branch whose tree landed on its line by another commit: fetch the line from origin, find a commit on its first-parent history with the same tree, check no worktree uses the branch and no pull request is open from it, delete it and record the proof in the ledger |
+| | `<BRANCH>` | The candidate branch, named with `git.candidate_prefix`. |
+| | `--line <BRANCH>` | The line on origin the candidate landed on: a protected branch or an `integration/` line. Required. |
+| | `--dry-run` | Check and print the proof without removing anything. |
 
 ### Remember
 

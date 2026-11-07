@@ -961,6 +961,47 @@ class PullRequestTests(unittest.TestCase):
             )
         )
 
+    def check_exact_body(self, body: str) -> list[list[str]]:
+        """Judge a body file holding exactly these bytes, on a range whose one
+        pending entry is minor; return every list of bodies the evaluator read."""
+        base = self.repo.target
+        self.repo.pending("2.1.0", [("minor", "feature")])
+        head = self.repo.commit("feat: implementation marker")
+        body_path = self.repo.root / "body.md"
+        body_path.write_bytes(body.encode("utf-8"))
+        with mock.patch.object(release, "read_pr_bodies", wraps=release.read_pr_bodies) as reader:
+            try:
+                release.check_pr(
+                    self.repo.args(
+                        base=base, head=head, target_ref=base, body_file=body_path, body_env=None
+                    )
+                )
+            finally:
+                self.seen_bodies = [call.args[0] for call in reader.call_args_list]
+        return self.seen_bodies
+
+    def test_a_crlf_body_reaches_the_evaluator_byte_for_byte(self) -> None:
+        # GitHub stores a body typed in its web editor with CRLF line ends, and
+        # `codeflow ci` reads them as they are, so this verdict reads them too.
+        body = self.repo.body("minor").replace("\n", "\r\n")
+        seen = self.check_exact_body(body)
+        self.assertTrue(any(body in bodies for bodies in seen), seen)
+
+    def test_a_lone_cr_in_a_bullet_reaches_the_evaluator_byte_for_byte(self) -> None:
+        body = self.repo.body("minor").replace("\n- Breaking", "\r- Breaking")
+        seen = self.check_exact_body(body)
+        self.assertTrue(any(body in bodies for bodies in seen), seen)
+
+    def test_a_lone_cr_before_the_section_gets_the_verdict_codeflow_ci_gives(self) -> None:
+        # A lone CR ends no line where `codeflow ci` looks for the section's
+        # heading, so it finds no section here. Text mode would fold the CR
+        # into a line end and accept a body `codeflow ci` refuses.
+        body = "Lead.\r" + self.repo.body("minor")
+        self.assertIsNone(release.read_pr_bodies([body])[0]["release_impact"])
+        with self.assertRaisesRegex(release.ReleaseError, "exactly one '## Release impact' section"):
+            self.check_exact_body(body)
+        self.assertTrue(any(body in bodies for bodies in self.seen_bodies), self.seen_bodies)
+
     def test_marker_floor_is_minimum_not_second_calculator(self) -> None:
         base = self.repo.target
         self.repo.pending("2.1.0", [("minor", "feature")])

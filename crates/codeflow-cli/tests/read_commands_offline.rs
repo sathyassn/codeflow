@@ -16,6 +16,8 @@ use codeflow_core::security::git::GLOBAL_VALUE_OPTIONS;
 
 const LINE: &str = "integration/EPC-001-offline";
 
+#[path = "support/fixture_seed.rs"]
+mod fixture_seed;
 #[path = "support/outcome.rs"]
 mod outcome;
 #[path = "support/process_folders.rs"]
@@ -101,7 +103,16 @@ fn edit(root: &Path, relative: &str, from: &str, to: &str) {
 
 /// A fresh full-tier project with a bare origin, an epic line holding
 /// `tasks` planned tasks, and that line fetched.
+/// Each test gets its own copy of one seed per task count (TSK-356).
 fn planned_project(tasks: usize) -> (tempfile::TempDir, PathBuf) {
+    let dir = fixture_seed::copy(&format!("offline-{tasks}"), || {
+        build_planned_project(tasks).0
+    });
+    let root = dir.path().join("proj");
+    (dir, root)
+}
+
+fn build_planned_project(tasks: usize) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("proj");
     let bare = dir.path().join("origin.git");

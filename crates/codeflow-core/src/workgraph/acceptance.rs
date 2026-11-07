@@ -2014,6 +2014,17 @@ pub fn owned_paths(
     head: &str,
     hide: &[&str],
 ) -> Result<Vec<String>, String> {
+    owned_paths_except(repo_root, head, hide, &std::collections::BTreeSet::new())
+}
+
+/// Exclude exact commits whose own work has been proved reviewed, without
+/// excluding the unreviewed work they may have imported through other parents.
+fn owned_paths_except(
+    repo_root: &std::path::Path,
+    head: &str,
+    hide: &[&str],
+    reviewed_own: &std::collections::BTreeSet<Oid>,
+) -> Result<Vec<String>, String> {
     let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
@@ -2030,9 +2041,11 @@ pub fn owned_paths(
     }
     let mut paths = std::collections::BTreeSet::new();
     for commit in walk {
-        let commit = repo
-            .find_commit(commit.map_err(unreadable)?)
-            .map_err(unreadable)?;
+        let commit = commit.map_err(unreadable)?;
+        if reviewed_own.contains(&commit) {
+            continue;
+        }
+        let commit = repo.find_commit(commit).map_err(unreadable)?;
         let parents = history::parents(&repo, &commit).map_err(unreadable)?;
         if parents.len() > 1 {
             match read_merge(&repo, &commit) {
@@ -2490,14 +2503,21 @@ pub struct OwnLine {
 pub use super::landing::Replaced;
 
 /// What a run's judgement of task records may take beyond its bases:
-/// the bounded own-line exception, and the remote-tracking ref the run
-/// replaces (TSK-350).
+/// the bounded own-line exception, the remote-tracking ref the run
+/// replaces (TSK-350), and the work branch prefixes of the policy the run
+/// judges with (TSK-1309 AC-6).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Scope<'a> {
     /// The own-line exception, when the caller verified one.
     pub own_line: Option<&'a OwnLine>,
     /// The remote-tracking ref this run replaces.
     pub replaced: Option<&'a super::landing::Replaced>,
+    /// The judged policy's `git.branch_prefixes`, from which the judged
+    /// branch's task is read, as [`super::work_start::judged_task_id`]
+    /// reads it. `None` reads them from the checkout's policy, for a
+    /// library caller that judges with the checkout; `codeflow ci` always
+    /// passes the policy it judges with.
+    pub branch_prefixes: Option<&'a [String]>,
 }
 
 /// Whether a record of a task shows a completion of it: it is complete,
@@ -3635,6 +3655,7 @@ impl<'r> Judging<'r> {
         let scope = Scope {
             own_line: self.own_line.as_ref(),
             replaced: self.replaced.as_ref(),
+            branch_prefixes: None,
         };
         judge_in_range(
             &mut self.store,
@@ -4155,6 +4176,7 @@ pub fn completions_in_range(
         run,
         (line, receiving_line(line, None), None),
         stacked,
+        None,
     )
 }
 
@@ -4187,6 +4209,7 @@ fn completions_received(
     run: &RunBases,
     (line, receiving, sync_tip): (Option<&str>, Option<&str>, Option<LineSyncTip>),
     stacked: &[StackedHead],
+    prefixes: Option<&[String]>,
 ) -> Result<Vec<Finding>, String> {
     let _judgment = history::judgment();
     let amendable = criteria.amends();
@@ -4227,6 +4250,22 @@ fn completions_received(
         &local,
         *criteria == Criteria::Amendable,
     );
+    let branch_task = if receiving.is_some() && receiving_line(line, None).is_none() {
+        let root = repo.workdir().unwrap_or_else(|| repo.path());
+        // The judged policy's prefixes, as `codeflow ci` reads its own
+        // task (TSK-1309 AC-6): the checkout's policy may name others.
+        line.map(|branch| {
+            match prefixes {
+                Some(prefixes) => super::work_start::judged_task_id(root, prefixes, branch, head),
+                None => super::work_start::task_id_from_branch_at(root, branch, head),
+            }
+            .map_err(|error| error.to_string())
+        })
+        .transpose()?
+        .flatten()
+    } else {
+        None
+    };
     let mut reviewed = Vec::new();
     let mut proofs = LineProofs::default();
     for task in after
@@ -4324,7 +4363,22 @@ fn completions_received(
                 ),
             );
             if let Some(proof) = bound.proof {
-                reviewed.push(proof.reviewed);
+                let branch_base =
+                    (branch_task.as_deref() == Some(task.id.as_str())).then_some(base_oid);
+                reviewed.push(receiving_merges::ReviewedTaskHead {
+                    head: proof.reviewed,
+                    branch_base,
+                    made_at: None,
+                });
+                reviewed.extend(archived_reviews(
+                    repo,
+                    task,
+                    anchor,
+                    head_oid,
+                    default_target,
+                    &with_own_line(run.stacking(), line, task, amendable.then_some(head_oid)),
+                    branch_base,
+                )?);
             }
             // A completion made before the range head but bound at it (a
             // frozen range) did not make the head's change: name the head.
@@ -4345,6 +4399,71 @@ fn completions_received(
         repo, base_oid, head_oid, receiving, &after, &reviewed, sync_tip,
     )?);
     Ok(findings)
+}
+
+/// The earlier completions of a reopened `task` whose reviews still credit
+/// its own work. An archived block counts only as strictly as an active
+/// one: this range's history made it at a commit (`at`) where it binds
+/// again through the same reviewed-span check ([`binding_source`]) to the
+/// same reviewed commit, and that commit is inside the judged head. Where
+/// `at` lies is judged by [`receiving_merges`]. A block the range did not
+/// make, that does not parse, or that no longer binds, credits nothing; an
+/// unreadable history is an error.
+fn archived_reviews(
+    repo: &Repository,
+    task: &RecordView,
+    anchor: Oid,
+    head: Oid,
+    default_target: Option<Oid>,
+    stacking: &StackingTips,
+    branch_base: Option<Oid>,
+) -> Result<Vec<receiving_merges::ReviewedTaskHead>, String> {
+    let archive = task.superseded_blocks();
+    if archive.is_empty() {
+        return Ok(Vec::new());
+    }
+    let made = completions_made(repo, task, Some(anchor), Landing::Commit(head))?;
+    let mut credited = Vec::new();
+    for archived in archive {
+        let Ok(mut block) = archived.parsed else {
+            continue;
+        };
+        block.superseded = false;
+        block.reason = None;
+        let Some(reviewed) = commit_of(repo, &block.reviewed) else {
+            continue;
+        };
+        if !is_ancestor_or_same(repo, reviewed, head)? {
+            continue;
+        }
+        for at in made
+            .iter()
+            .filter(|made| made.block == block)
+            .map(|made| made.at)
+        {
+            let Some(then) = record_at(repo, at, task)? else {
+                continue;
+            };
+            let bound = binding_source(
+                repo,
+                &then,
+                Landing::Commit(at),
+                reviewed,
+                Carried::Transport(Transport::TaskLanding),
+                stacking,
+                default_target,
+                Some(anchor),
+            );
+            if bound.is_ok_and(|proof| proof.reviewed == reviewed) {
+                credited.push(receiving_merges::ReviewedTaskHead {
+                    head: reviewed,
+                    branch_base,
+                    made_at: Some(at),
+                });
+            }
+        }
+    }
+    Ok(credited)
 }
 
 /// The target tips a completion in a range may stack merges from: the run's
@@ -4895,6 +5014,7 @@ pub fn pull_request_findings_into(
         &run,
         (branch, receiving_line(branch, into), sync_tip),
         &stacked,
+        scope.branch_prefixes,
     )?);
     Ok(found)
 }

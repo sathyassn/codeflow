@@ -40,7 +40,12 @@ fn task(root: &Path, status: &str, closeout: &str) {
     .unwrap();
 }
 
+/// Each test gets its own copy of one seed per run (TSK-356).
 fn fixture() -> tempfile::TempDir {
+    super::fixture_seed::copy("ci-acceptance", build_fixture)
+}
+
+fn build_fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     git(root, &["init", "-qb", "main"]);

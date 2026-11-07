@@ -89,6 +89,7 @@ pub(super) fn dispatch(
                 Scope {
                     own_line: own_line.as_ref(),
                     replaced: replaced.as_ref(),
+                    branch_prefixes: Some(&git.branch_prefixes),
                 },
             )
         }),

@@ -17,7 +17,9 @@
 //!   parse, and one identity (one id never carried with two uids, and one
 //!   record of the task per commit).
 //!   A branch or remote-tracking ref outside the range that adds a
-//!   completing version only makes the answer unknown.
+//!   completing version only makes the answer unknown. In a clone with a
+//!   remote, a local branch that no remote holds and no worktree has
+//!   checked out is a leftover copy and is not read (TSK-1308).
 //! - **Criteria** are authority. They come from the newest version of the
 //!   record at the judged points themselves, which a later reviewed
 //!   planning amendment may have changed; when the points no longer hold
@@ -990,7 +992,8 @@ impl<'r> RecordStore<'r> {
     }
 
     /// A branch or remote-tracking ref that records a completion of the
-    /// task outside the range ending at `head`: some commit it reaches and
+    /// task outside the range ending at `head` (a local branch only when it
+    /// is live work, [`super::local_branches`]): some commit it reaches and
     /// `head` does not adds the task's record, or changes it from every
     /// parent's version, to a version that shows a completion. A planned
     /// record held elsewhere is no landing (issue #67), and a copy inherited
@@ -1010,6 +1013,11 @@ impl<'r> RecordStore<'r> {
         let unreadable =
             |error: git2::Error| format!("cannot read the branches of this clone: {error}");
         let mut refs = Vec::new();
+        // A leftover local copy, such as a replaced landing candidate, is
+        // not evidence of a landing (TSK-1308): in a clone with a remote, a
+        // local branch counts only when a remote holds it or a worktree has
+        // it checked out; any doubt counts it.
+        let local = super::local_branches::LocalBranches::read(self.repo);
         for reference in self.repo.references().map_err(unreadable)? {
             let reference = reference.map_err(unreadable)?;
             // OS text rule (issue 79): a ref that holds the task outside the
@@ -1018,6 +1026,9 @@ impl<'r> RecordStore<'r> {
             let name = crate::git::name::reference_name(&reference);
             let tracked = name.starts_with(b"refs/heads/") || name.starts_with(b"refs/remotes/");
             if !tracked || reference.kind() == Some(git2::ReferenceType::Symbolic) {
+                continue;
+            }
+            if !local.is_live(name.bytes()) {
                 continue;
             }
             let commit = reference.peel_to_commit().map_err(unreadable)?;

@@ -2660,22 +2660,34 @@ mod tests {
     fn an_update_after_a_crash_at_any_point_installs_the_new_version() {
         // T153-1: a record ahead of its file made the next update keep the
         // old shipped file as a user edit.
-        assert_update_recovers_from_any_crash(false);
+        assert_update_recovers_from_any_crash(false, true);
     }
 
     #[cfg(unix)]
     #[test]
     fn a_crash_with_the_file_on_another_drive_still_installs_the_new_version() {
         // T153-R2-1: the payload's drive caches apart from its records'.
-        assert_update_recovers_from_any_crash(true);
+        assert_update_recovers_from_any_crash(true, true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_update_recovers_from_a_crash_around_the_payload_on_each_drive_layout() {
+        // TSK-356: the representative cut points of the two matrices above,
+        // which run only in the full gate: just before and just after the
+        // payload's own write, on one drive and on two.
+        for second_drive in [false, true] {
+            assert_update_recovers_from_any_crash(second_drive, false);
+        }
     }
 
     #[cfg(unix)]
     /// Crashes an upgrade just before and after each write that concerns
     /// `zzz/payload.txt`, and each device flush, and checks that the next
     /// update installs the new version. With `second_drive`, `zzz/` is on a
-    /// device of its own.
-    fn assert_update_recovers_from_any_crash(second_drive: bool) {
+    /// device of its own. Without `exhaustive`, only the points just before
+    /// and just after the payload's own write.
+    fn assert_update_recovers_from_any_crash(second_drive: bool, exhaustive: bool) {
         let dir = crate::fixture_tests::project_dir();
         let old = assets_with_payload(&dir.path().join("old"), "old shipped data\n");
         let new = assets_with_payload(&dir.path().join("new"), "new shipped data\n");
@@ -2734,6 +2746,16 @@ mod tests {
             }
         }
         assert!(points.len() >= 8, "{points:?}");
+        if !exhaustive {
+            let payload = &watched[0];
+            let at = events
+                .iter()
+                .position(|event| {
+                    matches!(event, interruption::Event::Renamed(path, _) if path == payload)
+                })
+                .expect("the update writes the payload");
+            points = std::collections::BTreeSet::from([at, at + 1]);
+        }
         for point in points {
             let root = dir.path().join(format!("crash-{point}"));
             copy_tree(&base, &root);
