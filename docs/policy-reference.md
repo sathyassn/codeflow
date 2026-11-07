@@ -1261,10 +1261,10 @@ one session. Step 7 has no ordering dependency.
 5. In that environment, add the secret `CODEFLOW_AUTHORITY_APP_KEY` (the key
    file's contents) and the variable `CODEFLOW_AUTHORITY_APP_ID`.
 6. Run `codeflow remote protect --check-app <id> --lines "integration/**"`
-   as the administrator; retire only a foreign ruleset that step 4 of the
-   enablement order names; run `codeflow doctor
-   --check remote-perimeter` and stop only when it is green with no
-   recovery window open.
+   as the administrator; run `codeflow doctor --check remote-perimeter`
+   and stop only when it is green with no recovery window open. Retire a
+   foreign ruleset only when that check names it for requiring a name no
+   workflow on the default branch produces.
 7. Create the agent principal: a non-administrator App installation or bot
    account with Contents and Pull requests write and Actions read, and no
    Workflows, Commit statuses, Checks, Administration, Environments or
