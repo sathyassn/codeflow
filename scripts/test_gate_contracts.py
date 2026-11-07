@@ -17,6 +17,62 @@ def read(path):
     return (ROOT / path).read_text()
 
 
+def uncommented(text):
+    return '\n'.join(line.rstrip() for line in text.splitlines()
+                     if line.strip() and not line.lstrip().startswith('#'))
+
+
+def gate_steps(workflow):
+    """(job name, the job's text, its uncommented steps, the gate step's
+    index) for each step named `codeflow test...` in `workflow`."""
+    parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+    found = []
+    for name, job in zip(parts[1::2], parts[2::2]):
+        if '\n    steps:\n' not in job:
+            continue
+        steps = [uncommented(step) for step in re.split(r'\n(?= {6}- )', job.split('\n    steps:\n', 1)[1])]
+        found += [(name, job, steps, index) for index, step in enumerate(steps)
+                  if step.startswith('      - name: codeflow test')]
+    return found
+
+
+def run_record_upload_problems(workflow):
+    """What keeps each gate step's run record from reaching the GitHub API
+    (TSK-1305 AC-5): the step right after it must upload
+    <build output>/codeflow-gate/*/run.json, pass or fail, without changing
+    the job's result, under a name unique per job, part and attempt, kept for
+    at most 14 days."""
+    problems = []
+    for name, job, steps, index in gate_steps(workflow):
+        upload = steps[index + 1] if index + 1 < len(steps) else ''
+        lines = upload.splitlines()
+        if not upload.startswith("      - name: Keep the gate") or not any(
+                re.fullmatch(r'        uses: actions/upload-artifact@[0-9a-f]{40} # v\d+\.\d+\.\d+', line) for line in lines):
+            problems.append(f'{name}: no upload-artifact step named "Keep the gate..." follows the gate step')
+            continue
+        if '        if: always()' not in lines:
+            problems.append(f'{name}: the upload must run with `if: always()`, so a failed gate keeps its record')
+        if '        continue-on-error: true' not in lines:
+            problems.append(f'{name}: the upload must set continue-on-error: true, so it never changes the result')
+        path = next((line.split(': ', 1)[1] for line in lines if line.startswith('          path: ')), '')
+        if not path.endswith('/codeflow-gate/*/run.json'):
+            problems.append(f'{name}: the upload path must be <build output>/codeflow-gate/*/run.json; found {path!r}')
+        artifact = next((line.split(': ', 1)[1] for line in lines if line.startswith('          name: ')), '')
+        unique = ['${{ github.job }}', '-attempt-${{ github.run_attempt }}']
+        if '\n      matrix:\n' in job:
+            unique.append('${{ matrix.part }}')
+        if not all(part in artifact for part in unique):
+            problems.append(f'{name}: the artifact name must be unique per job, part and attempt '
+                            f'({", ".join(unique)}); found {artifact!r}')
+        days = next((line.split(': ', 1)[1] for line in lines if line.startswith('          retention-days: ')), '')
+        if not days.isdigit() or int(days) > 14:
+            problems.append(f'{name}: the record\'s retention must be at most 14 days; found {days!r}')
+        if '          if-no-files-found: warn' not in lines and '          if-no-files-found: ignore' not in lines:
+            problems.append(f'{name}: the upload needs if-no-files-found: warn or ignore, so a gate that '
+                            'wrote no record keeps its own result')
+    return problems
+
+
 def github_expression(text, context):
     """Evaluate a GitHub Actions expression in the small subset the workflow
     concurrency block uses, with GitHub's rules for that subset: `||` and `&&`
@@ -355,6 +411,36 @@ class GateContracts(unittest.TestCase):
         for command in ('cargo clippy --workspace --all-targets -- -D warnings', 'cargo test --workspace --doc',
                         'cargo nextest run --archive-file'):
             self.assertIn(command, runs)
+
+    def test_every_gate_run_keeps_its_run_record_as_an_artifact(self):
+        # TSK-1305 AC-5 (issue 546): right after each step that runs
+        # `codeflow test`, in this repository's workflow and the one adopters
+        # get, a step uploads target/codeflow-gate/*/run.json whether the
+        # gate passed or failed, without changing the job's result, under a
+        # name unique per job (and part) and attempt, kept a short time.
+        for path in ('.github/workflows/codeflow-ci.yml', 'assets/base/ci/codeflow-ci.yml'):
+            with self.subTest(workflow=path):
+                text = read(path)
+                self.assertEqual(run_record_upload_problems(text), [])
+                # Each control below breaks one property, and the check names it.
+                gate_jobs = len(gate_steps(text))
+                self.assertGreater(gate_jobs, 0)
+                for broken, needle in (
+                    (text.replace('      - name: Keep the gate', '      - name: Drop the gate'), 'no upload'),
+                    (text.replace('        if: always()\n        continue-on-error: true\n        uses: actions/upload',
+                                  '        continue-on-error: true\n        uses: actions/upload'), 'if: always()'),
+                    (text.replace('        if: always()\n        continue-on-error: true\n',
+                                  '        if: always()\n'), 'continue-on-error'),
+                    (text.replace('codeflow-gate/*/run.json', 'codeflow-gate/*/report.xml'), 'run.json'),
+                    (text.replace('-attempt-${{ github.run_attempt }}', ''), 'attempt'),
+                    (text.replace('          retention-days: 7\n', '          retention-days: 90\n'), 'retention'),
+                    (text.replace('          if-no-files-found: warn\n', '          if-no-files-found: error\n'),
+                     'if-no-files-found'),
+                ):
+                    with self.subTest(control=needle):
+                        problems = run_record_upload_problems(broken)
+                        self.assertEqual(len(problems), gate_jobs, problems)
+                        self.assertTrue(all(needle in problem for problem in problems), problems)
 
     def test_the_adopter_policy_template_cancels_only_pr_runs_the_same_way(self):
         self.assert_policy_queues_every_pull_request_run(read('assets/base/ci/codeflow-policy.yml'))

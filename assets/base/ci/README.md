@@ -284,6 +284,33 @@ Limits:
   collaborators (the repository's Actions settings) limits who can start such
   a workflow.
 
+## Reading a hosted gate's results
+
+The job log prints one line per target and a target's captured output only
+when it failed. After `codeflow test`, the GitHub gates job uploads the
+gate's run record, `target/codeflow-gate/<run id>/run.json` (or under a
+`CARGO_TARGET_DIR` the setup hook wrote to `GITHUB_ENV`), as the artifact
+`codeflow-gate-<job>-attempt-<n>`, kept for 7 days. Its `outcomes` list
+names every target the run was given with its state and duration, failed,
+unrun and skipped ones included, and its `results` hold each target's
+captured output. The upload runs whether the gate passed or failed, never
+changes the job's result, and only warns when no record was written, for
+example when the install failed. Read it through the API:
+
+```sh
+gh api repos/<owner>/<repo>/actions/runs/<run id>/artifacts --jq '.artifacts[].name'
+gh run download <run id> -n codeflow-gate-gates-attempt-1
+jq '.outcomes' */run.json
+```
+
+The record holds whatever the targets print, and anyone who can read the
+repository's Actions runs can download it, as they can read the job log. A
+target that prints a credential puts it in the record, where GitHub's log
+masking does not reach. Classify such a variable as `sensitive` in the
+target's `evidence.environment` in `.codeflow/test-config.json`; the gate
+then redacts its value from the captured output before the record is
+written.
+
 ## Project setup hook
 
 The gate runs on the runner's default toolchain unless the project sets up
