@@ -964,17 +964,62 @@ class AdmissionTests(unittest.TestCase):
                     self.git("switch", "-q", "main")
                     self.git("branch", "-q", "-f", "integration/x", self.line + "~1")
 
-    def test_a_head_may_bring_main_s_reviewed_line_workflows(self):
-        self.place_line("an older line workflow\n")
+    def main_moves(self, text="a newer line workflow\n"):
+        """Main changes both line workflows after the line synced."""
+        self.git("switch", "-q", "main")
+        self.write(self.LINE_FILE, text)
+        self.write(self.PUSH_FILE, text)
+        self.main = self.commit("main changes the line workflows")
+
+    def test_a_line_with_an_older_main_copy_keeps_the_line_verdict(self):
+        # The base holds main's earlier copies: an ancestor of main's commit
+        # held them, so the line keeps its placement until it syncs again.
+        self.place_line()
+        self.main_moves()
         self.branch("task")
-        self.write(self.LINE_FILE, "the line workflow\n")
-        self.write(self.PUSH_FILE, "the line workflow\n")
+        self.write("task.txt", "task work\n")
+        self.assertLine(self.admit(self.commit("task work"), self.NO_GH))
+
+    def test_a_line_s_own_line_workflows_never_choose_the_line_verdict(self):
+        # A line that landed its own copies, which main never held, is judged
+        # on both verdicts of codeflow-ci.yml, as if it had none. Before
+        # TSK-1321's fix the base file's presence alone chose the line verdict.
+        for label, line_text, push_text in (
+                ("both its own", "a line-made workflow\n", "a line-made workflow\n"),
+                ("one its own", "the line workflow\n", "a line-made workflow\n"),
+                ("the other its own", "a line-made workflow\n", "the line workflow\n")):
+            with self.subTest(label):
+                self.git("switch", "-q", "integration/x")
+                self.write(self.LINE_FILE, line_text)
+                self.write(self.PUSH_FILE, push_text)
+                self.line = self.commit(f"install {label}")
+                self.branch(f"task-{label.replace(' ', '-')}")
+                self.write("task.txt", f"task work {label}\n")
+                self.assertBoth(self.admit(self.commit("task work"), self.NO_GH))
+                self.git("switch", "-q", "main")
+                self.git("branch", "-q", "-f", "integration/x", self.line + "~1")
+                self.line = self.git("rev-parse", "integration/x")
+
+    def test_a_history_read_that_fails_keeps_both_verdicts(self):
+        self.place_line()
+        self.branch("task")
+        self.write("task.txt", "task work\n")
+        broken = 'if [ "$1" = rev-list ]; then exit 2; fi\nexec REAL "$@"\n'
+        self.assertBoth(self.admit(self.commit("task work"), self.NO_GH, git=broken))
+
+    def test_a_head_may_bring_main_s_reviewed_line_workflows(self):
+        self.place_line()
+        self.main_moves()
+        self.branch("task")
+        self.write(self.LINE_FILE, "a newer line workflow\n")
+        self.write(self.PUSH_FILE, "a newer line workflow\n")
         self.assertLine(self.admit(self.commit("take main's copies"), self.NO_GH))
 
     def test_a_head_that_matches_neither_base_nor_main_is_refused_even_if_one_file_matches(self):
-        self.place_line("an older line workflow\n")
+        self.place_line()
+        self.main_moves()
         self.branch("task")
-        self.write(self.LINE_FILE, "the line workflow\n")
+        self.write(self.LINE_FILE, "a newer line workflow\n")
         self.write(self.PUSH_FILE, "a third line workflow\n")
         self.assertRefused(self.admit(self.commit("one reviewed, one not"), self.NO_GH))
 
@@ -985,10 +1030,15 @@ class AdmissionTests(unittest.TestCase):
         broken = 'case "$*" in rev-parse*refs/codeflow/pr-head:*) exit 2 ;; esac\nexec REAL "$@"\n'
         self.assertRefused(self.admit(self.commit("task work"), self.NO_GH, git=broken))
 
-    def test_a_draft_does_not_wait(self):
-        code, out, argv = self.admit(self.sync(), ready=False)
-        self.assertEqual(code, 0, out)
-        self.assertEqual(argv[argv.index("--wait") + 1], "0")
+    def test_admission_judges_once_against_the_judged_base(self):
+        # TSK-1239: the step never waits; policy-admission.py rechecks the
+        # pull request's base against the one judged here.
+        for head, gh in ((self.sync(), None), (self.git("rev-parse", "sync"), self.NO_GH)):
+            code, out, argv = self.admit(head, gh) if gh is None else self.admit(head, gh, base="main")
+            self.assertEqual(code, 0, out)
+            self.assertEqual(argv[:2], ["-I", "scripts/policy-admission.py"])
+            self.assertEqual(argv[argv.index("--base") + 1], "integration/x" if gh is None else "main")
+            self.assertNotIn("--wait", argv)
 
 
 class CancelledExpression(Expression):

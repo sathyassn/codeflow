@@ -336,7 +336,15 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(re.search(r'^name: (.+)$', read('.github/workflows/codeflow-ci.yml'), re.M).group(1),
                          'codeflow-ci')
         self.assertEqual(re.search(r'^name: (.+)$', policy, re.M).group(1), 'codeflow-policy')
-        self.assertIn('on:\n  workflow_run:\n    workflows: [codeflow-ci]\n    types: [completed]\n\n', admission)
+        # TSK-1321: a line pull request's only run is codeflow-line-pr, so its
+        # completion starts admission too, and the script accepts exactly the
+        # two workflow files whose verdicts commit standards reads.
+        self.assertEqual(re.search(r'^name: (.+)$', read('.github/workflows/codeflow-line-pr.yml'), re.M).group(1),
+                         'codeflow-line-pr')
+        self.assertIn('on:\n  workflow_run:\n    workflows: [codeflow-ci, codeflow-line-pr]\n    types: [completed]\n\n',
+                      admission)
+        self.assertEqual(re.findall(r'--workflow (\S+)', admission),
+                         ['.github/workflows/codeflow-ci.yml', '.github/workflows/codeflow-line-pr.yml'])
         self.assertIn('\npermissions: {}\n', admission)
         self.assertIn("format('{0}-pr-{1}', github.workflow, github.event.pull_request.number)", policy)
         self.assertIn("format('codeflow-policy-pr-{0}', github.event.workflow_run.pull_requests[0].number)", admission)
