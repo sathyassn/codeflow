@@ -165,9 +165,14 @@ fn entries(root: &Path, limits: QueryLimits) -> Result<Vec<Entry>, String> {
 /// value NUL` per entry; a key with no value has no LF. Without
 /// `--show-origin` (`with_origin` false) each entry is `key LF value NUL`.
 fn parse_listing(bytes: &[u8], with_origin: bool) -> Result<Vec<Entry>, String> {
-    let text = |field: &[u8]| match std::str::from_utf8(field) {
-        Ok(text) => (text.to_string(), true),
-        Err(_) => (String::from_utf8_lossy(field).into_owned(), false),
+    // A field that is not UTF-8 keeps only its display spelling and is
+    // marked inexact, so a check that acts on it refuses.
+    let text = |field: &[u8]| {
+        let name = super::GitName::from_bytes(field);
+        match name.rule_text() {
+            Ok(text) => (text.to_string(), true),
+            Err(_) => (name.display().to_string(), false),
+        }
     };
     let mut fields = bytes.split(|&byte| byte == 0);
     let mut entries = Vec::new();
@@ -292,16 +297,17 @@ fn refuse_path_conditional_remote_settings(entries: &[Entry]) -> Result<(), Stri
                 super::display_text(&entry.origin)
             )
         })?;
-        match std::fs::symlink_metadata(&file) {
-            // Git skips an include that names no file.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+        match crate::absence::symlink_metadata_optional(&file) {
+            // Git skips an include that names no file; absence must be
+            // proven through the file's ancestors.
+            Ok(None) => continue,
+            Ok(Some(_)) => {}
             Err(error) => {
                 return Err(format!(
                     "the configuration file {} included on the condition {shown_condition} cannot be inspected: {error}",
                     file.display()
                 ))
             }
-            Ok(_) => {}
         }
         let mut command = super::command();
         command
