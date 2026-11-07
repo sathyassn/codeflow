@@ -3448,7 +3448,9 @@ fn check_ci_perimeter(opts: &Options) -> CheckResult {
 
 /// The shared id registry (SPC-013 R-10, R-21): damage, ids no ref can
 /// place, and the assurance of the host. Reads fetched refs only; it never
-/// fetches.
+/// fetches. The host's assurance is its live rules on the registry branch,
+/// read through `gh` with GET calls only when the `origin` is on GitHub
+/// (TSK-383).
 fn check_id_registry(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
@@ -3515,17 +3517,33 @@ fn check_id_registry(opts: &Options) -> CheckResult {
             .map_or("none yet".to_string(), |sha| {
                 crate::ids::ledger::short(sha).to_string()
             });
-        if state.data_profile.contains_key(crate::ids::AUTHORITY) {
-            notes.push(format!(
-                "host data profile applied; last verified tip {last}"
-            ));
-        } else {
+        // The live rules decide, whoever created them (TSK-383); the
+        // receipt `remote protect` records counts only when they cannot be
+        // read.
+        let recorded = state.data_profile.contains_key(crate::ids::AUTHORITY);
+        let registry = crate::ids::REGISTRY_BRANCH;
+        let profile = crate::remote::BranchRule::registry_data_profile();
+        let mut unprotected = |note: String| {
             if !status.is_warn() {
                 status = Status::Warn(remedy::DOCTOR_REGISTRY_UNPROTECTED.remedy());
             }
-            notes.push(format!(
-                "reduced assurance: no host rules recorded for codeflow/registry (`codeflow remote protect` applies them); a rewrite is detected only against the last verified tip ({last})"
-            ));
+            notes.push(note);
+        };
+        match remote_perimeter::live_branch_rules(opts, registry, &profile) {
+            remote_perimeter::LiveRules::Holds(by) => notes.push(format!(
+                "host rules on {registry} block force pushes and deletion ({}); last verified tip {last}",
+                by.join(", ")
+            )),
+            remote_perimeter::LiveRules::Lacks(missing) => unprotected(format!(
+                "reduced assurance: the live host rules on {registry} do not {} (`codeflow remote protect --branch {registry}` applies them); a rewrite is detected only against the last verified tip ({last})",
+                missing.join(" or ")
+            )),
+            remote_perimeter::LiveRules::Unread(why) if recorded => notes.push(format!(
+                "host data profile recorded as applied, but the live rules were not read ({why}); last verified tip {last}"
+            )),
+            remote_perimeter::LiveRules::Unread(why) => unprotected(format!(
+                "reduced assurance: no host rules recorded for {registry} and the live rules were not read ({why}); `codeflow remote protect` applies them; a rewrite is detected only against the last verified tip ({last})"
+            )),
         }
     }
     result(status, notes.join("; "))

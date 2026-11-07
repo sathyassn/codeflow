@@ -6,7 +6,9 @@
 //!
 //! The host is a `gh` stand-in on `PATH` that answers from files: it records
 //! GitHub's REST shapes, and the hosted fixture on a scratch repository is
-//! owed (TSK-1080 AC-2, AC-4, AC-6).
+//! owed (TSK-1080 AC-2, AC-4, AC-6). The TSK-383 journey runs `doctor` and
+//! `remote protect --dry-run` against a stand-in that holds split `main`
+//! rulesets and a manual registry ruleset, and refuses every write.
 
 use std::path::Path;
 #[cfg(unix)]
@@ -115,12 +117,25 @@ fn a_check_app_or_line_pattern_that_cannot_be_right_is_refused() {
     }
 }
 
+/// Without a readable host the dry run prints the intended rules and says
+/// they are not the exact requests (TSK-383 AC-3). The `gh` on `PATH` is a
+/// stand-in that fails, so no real host is read.
+#[cfg(unix)]
 #[test]
-fn the_dry_run_names_the_three_rulesets_and_reads_no_host() {
+fn without_a_readable_host_the_dry_run_names_the_intended_rulesets() {
+    use std::os::unix::fs::PermissionsExt;
     let dir = project();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(
+        bin.join("gh"),
+        "#!/bin/sh\necho 'gh: no host here' >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
     let out = codeflow(
         dir.path(),
-        None,
+        Some(&bin),
         &[
             "remote",
             "protect",
@@ -146,10 +161,15 @@ fn the_dry_run_names_the_three_rulesets_and_reads_no_host() {
     ] {
         assert!(report.contains(expected), "{expected}: {report}");
     }
-    // The dry run reads no host, so it says which pattern a live run skips.
+    // The dry run read no host, so it says which pattern a live run skips
+    // and that these are not the exact requests.
     assert!(
         report
             .contains("a policy pattern that names the default branch gets no ruleset of its own"),
+        "{report}"
+    );
+    assert!(
+        report.contains("so these are the intended rules, not the exact requests"),
         "{report}"
     );
 }
@@ -275,4 +295,188 @@ fn two_runs_write_the_owned_rulesets_once_and_never_the_foreign_one() {
         std::fs::read_to_string(host.join("rs-24379074.json")).unwrap(),
         FOREIGN
     );
+}
+
+/// Run `git` in `root` with the test's isolated configuration.
+#[cfg(unix)]
+fn git(root: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Journey")
+        .env("GIT_AUTHOR_EMAIL", "journey@example.test")
+        .env("GIT_COMMITTER_NAME", "Journey")
+        .env("GIT_COMMITTER_EMAIL", "journey@example.test")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// Issue 200's host: `main` split across two rulesets with different bypass
+/// lists, and a `codeflow/registry` ruleset an administrator made by hand.
+#[cfg(unix)]
+const SPLIT_MAIN_CHECKS: &str = r#"{"id":301,"name":"main checks","target":"branch","source_type":"Repository","enforcement":"active","conditions":{"ref_name":{"exclude":[],"include":["~DEFAULT_BRANCH"]}},"rules":[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"codeflow gates","integration_id":15368}]}}],"bypass_actors":[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]}"#;
+#[cfg(unix)]
+const SPLIT_MAIN_HISTORY: &str = r#"{"id":302,"name":"main history","target":"branch","source_type":"Repository","enforcement":"active","conditions":{"ref_name":{"exclude":[],"include":["~DEFAULT_BRANCH"]}},"rules":[{"type":"non_fast_forward"},{"type":"deletion"}],"bypass_actors":[]}"#;
+#[cfg(unix)]
+const MANUAL_REGISTRY: &str = r#"{"id":303,"name":"registry guard","target":"branch","source_type":"Repository","enforcement":"active","conditions":{"ref_name":{"exclude":[],"include":["refs/heads/codeflow/registry"]}},"rules":[{"type":"non_fast_forward"},{"type":"deletion"}],"bypass_actors":[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]}"#;
+
+/// A `gh` for issue 200's host that answers reads only: every call is
+/// logged to `calls`, and a write is logged to `writes` and refused.
+#[cfg(unix)]
+fn split_host(dir: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let host = dir.join("host");
+    std::fs::create_dir_all(host.join("wf")).unwrap();
+    std::fs::create_dir_all(dir.join("bin")).unwrap();
+    std::fs::write(host.join("wf/policy.yml"), POLICY).unwrap();
+    std::fs::write(host.join("wf/ci.yml"), CI).unwrap();
+    for (id, body) in [
+        (301, SPLIT_MAIN_CHECKS),
+        (302, SPLIT_MAIN_HISTORY),
+        (303, MANUAL_REGISTRY),
+    ] {
+        std::fs::write(host.join(format!("rs-{id}.json")), body).unwrap();
+    }
+    let h = host.display();
+    let script = format!(
+        r#"#!/bin/sh
+h='{h}'
+wf='repos/o/r/contents/.github/workflows'
+printf '%s\n' "$*" >> "$h/calls"
+case "$*" in
+  "api -X "*) printf '%s\n' "$*" >> "$h/writes"; echo "this host refuses writes" >&2; exit 1 ;;
+  "repo view"*) printf '%s' '{{"nameWithOwner":"o/r","isPrivate":false,"defaultBranchRef":{{"name":"main"}}}}' ;;
+  "api repos/o/r/rulesets?"*) printf '[{{"id":301,"name":"main checks","target":"branch","source_type":"Repository"}},{{"id":302,"name":"main history","target":"branch","source_type":"Repository"}},{{"id":303,"name":"registry guard","target":"branch","source_type":"Repository"}}]' ;;
+  "api repos/o/r/rulesets/"*) cat "$h/rs-${{2##*/}}.json" ;;
+  "api $wf?ref=main") printf '[{{"path":".github/workflows/codeflow-policy.yml","type":"file"}},{{"path":".github/workflows/codeflow-ci.yml","type":"file"}}]' ;;
+  *"$wf/codeflow-policy.yml?ref=main") cat "$h/wf/policy.yml" ;;
+  *"$wf/codeflow-ci.yml?ref=main") cat "$h/wf/ci.yml" ;;
+  "api repos/o/r/branches/main") printf '{{"name":"main"}}' ;;
+  "api repos/o/r/rules/branches/codeflow/registry?"*) printf '[{{"type":"non_fast_forward","ruleset_source_type":"Repository","ruleset_source":"o/r","ruleset_id":303}},{{"type":"deletion","ruleset_source_type":"Repository","ruleset_source":"o/r","ruleset_id":303}}]' ;;
+  "api repos/o/r/branches/codeflow/registry/protection") echo "gh: Branch not protected (HTTP 404)" >&2; exit 1 ;;
+  "api repos/o/r/branches/"*) echo "gh: Branch not found (HTTP 404)" >&2; exit 1 ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+"#
+    );
+    let gh = dir.join("bin/gh");
+    std::fs::write(&gh, script).unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    host
+}
+
+/// TSK-383 AC-5: on a full-tier project whose registry is seeded and whose
+/// `origin` is on GitHub, against a host holding split `main` rulesets and a
+/// manual `codeflow/registry` ruleset, the built `doctor` passes the
+/// registry check from the live rules, and `remote protect --dry-run` plans
+/// nothing for either `main` ruleset or for the absent `master`, and sends
+/// no write.
+#[cfg(unix)]
+#[test]
+fn doctor_reads_the_live_registry_rules_and_the_dry_run_leaves_split_main_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let bare = dir.path().join("remote.git");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", "-b", "main", "remote.git"],
+    );
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    // The installed hooks run the binary under test, never the one on the
+    // user's PATH.
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let exe_dir = exe.parent().unwrap();
+    let init = codeflow(&root, Some(exe_dir), &["init", "--yes", "--full"]);
+    assert!(init.status.success(), "{}", text(&init));
+    // The remote's default branch holds the scaffold, as a project's does.
+    git(
+        &bare,
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            "HEAD:refs/heads/main",
+        ],
+    );
+    git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
+    git(&root, &["fetch", "-q", "origin"]);
+    git(&root, &["remote", "set-head", "origin", "-a"]);
+    let seed = codeflow(&root, Some(exe_dir), &["ids", "seed"]);
+    assert!(seed.status.success(), "{}", text(&seed));
+    git(&root, &["fetch", "-q", "origin"]);
+    // The fetched refs stay; from here the host is the stand-in.
+    git(
+        &root,
+        &["remote", "set-url", "origin", "https://github.com/o/r.git"],
+    );
+    let host = split_host(&root);
+    let bin = root.join("bin");
+
+    let doctor = codeflow(&root, Some(&bin), &["doctor", "--check", "id-registry"]);
+    let report = text(&doctor);
+    println!("{report}");
+    assert!(
+        report.contains(
+            "host rules on codeflow/registry block force pushes and deletion (ruleset 303)"
+        ),
+        "{report}"
+    );
+    assert!(!report.contains("reduced assurance"), "{report}");
+
+    let dry = codeflow(&root, Some(&bin), &["remote", "protect", "--dry-run"]);
+    let report = text(&dry);
+    println!("{report}");
+    assert!(dry.status.success(), "{report}");
+    assert!(report.contains("status: dry-run"), "{report}");
+    assert!(
+        report.contains(
+            "policy branch 'master' does not exist on o/r, so no ruleset is planned for it"
+        ),
+        "{report}"
+    );
+    let requests: Vec<&str> = report
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("request: "))
+        .collect();
+    assert_eq!(requests.len(), 4, "A, B, C and the registry: {report}");
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.starts_with("POST repos/o/r/rulesets {")),
+        "{report}"
+    );
+    for untouched in [
+        "rulesets/301",
+        "rulesets/302",
+        "rulesets/303",
+        "codeflow protect master",
+    ] {
+        assert!(
+            requests.iter().all(|request| !request.contains(untouched)),
+            "{untouched}: {report}"
+        );
+    }
+    assert!(!host.join("writes").exists(), "a write was sent: {report}");
+    let calls = std::fs::read_to_string(host.join("calls")).unwrap();
+    assert!(!calls.contains("-X"), "{calls}");
+    for (id, body) in [
+        (301, SPLIT_MAIN_CHECKS),
+        (302, SPLIT_MAIN_HISTORY),
+        (303, MANUAL_REGISTRY),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(host.join(format!("rs-{id}.json"))).unwrap(),
+            body
+        );
+    }
 }

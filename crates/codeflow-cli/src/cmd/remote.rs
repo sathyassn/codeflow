@@ -1,12 +1,15 @@
 //! `codeflow remote protect [--provider github] [--dry-run] [--profile
-//! <name>] [--check-app <id>] [--lines <pattern>]` — write the rulesets this
-//! command owns to the remote (charter §6.1 plane 3, TSK-1080).
+//! <name>] [--check-app <id>] [--lines <pattern>] [--branch <name>]
+//! [--adopt <ruleset>]` — write the rulesets this command owns to the
+//! remote (charter §6.1 plane 3, TSK-1080, TSK-383).
 
 use anyhow::Context;
 use clap::{Args, Subcommand};
 use codeflow_core::hooks::policy_schema;
 use codeflow_core::registry;
-use codeflow_core::remote::{provider_for, AuthorityPlan, Profile, ProtectionPlan, DEFAULT_LINES};
+use codeflow_core::remote::{
+    provider_for, Adopt, AuthorityPlan, Profile, ProtectionPlan, Scope, DEFAULT_LINES,
+};
 
 /// Arguments for `codeflow remote`.
 #[derive(Debug, Args)]
@@ -23,9 +26,10 @@ pub enum RemoteCommand {
     /// checks" on the integration lines, and `codeflow protect <pattern>`
     /// for each other protected branch in policy.json.
     ///
-    /// Only rulesets with these names are written; every other ruleset is
-    /// left as it is. An update never lowers an approval count, removes a
-    /// rule, changes which app produces a check or widens a bypass list.
+    /// Only rulesets with these names, and one `--adopt` names, are
+    /// written; every other ruleset is left as it is. An update never
+    /// lowers an approval count, removes a rule, changes which app produces
+    /// a check or widens a bypass list.
     /// The authority and line checks are written with an empty bypass
     /// list, which closes a recovery window. To reduce a rule, edit it on
     /// the host as an administrator; there is no command for it. The checks
@@ -37,7 +41,8 @@ pub enum RemoteCommand {
         #[arg(long, default_value = "github")]
         provider: String,
 
-        /// Print the intended rules without applying anything.
+        /// Read the host and print the exact requests a run would send,
+        /// writing nothing.
         #[arg(long)]
         dry_run: bool,
 
@@ -59,6 +64,19 @@ pub enum RemoteCommand {
         /// targets.
         #[arg(long, value_name = "PATTERN", default_value = DEFAULT_LINES)]
         lines: String,
+
+        /// Limit the run to the owned rulesets that target this branch. A
+        /// literal policy branch the host does not have is reported and
+        /// never planned, with or without this flag.
+        #[arg(long, value_name = "NAME")]
+        branch: Option<String>,
+
+        /// Bring an existing ruleset, by id or exact name, under the owned
+        /// name of the ruleset that targets exactly the same branches; add
+        /// `=<owned name>` where two owned rulesets target them. It is
+        /// renamed and only gains rules. Repeat for more than one.
+        #[arg(long, value_name = "RULESET")]
+        adopt: Vec<String>,
     },
 }
 
@@ -80,6 +98,8 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
         profile,
         check_app,
         lines,
+        branch,
+        adopt,
     } = &args.command;
     // The flags are judged before any file or host is read.
     let authority = AuthorityPlan::new(
@@ -88,6 +108,23 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
         lines,
     )
     .map_err(|error| anyhow::anyhow!("remote protect: {error}"))?;
+    let adopt = adopt
+        .iter()
+        .map(|text| Adopt::parse(text))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| anyhow::anyhow!("remote protect: {error}"))?;
+    if branch
+        .as_deref()
+        .is_some_and(|b| b.trim().is_empty() || b.starts_with("refs/"))
+    {
+        anyhow::bail!(
+            "remote protect: --branch must name one branch below refs/heads/, such as main"
+        );
+    }
+    let scope = Scope {
+        branch: branch.clone(),
+        adopt,
+    };
 
     let cwd = std::env::current_dir().context("cannot resolve current directory")?;
     let root = registry::find_repo_root(&cwd)
@@ -132,10 +169,22 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
     if tracked {
         plan = plan.with_registry_profile();
     }
-    plan = plan.with_authority(authority);
+    plan = plan.with_authority(authority).with_scope(scope);
 
+    // The dry run reads the host, never writes it, and prints the exact
+    // requests a run would send; without `gh` it prints the intended rules
+    // and says it read no host.
     let report = if *dry_run {
-        plan.dry_run_report(provider)
+        match provider_for(provider, &root) {
+            Ok(adapter) => adapter.preview(&plan),
+            Err(why) => {
+                let mut report = plan.dry_run_report(provider);
+                report.limitations.push(format!(
+                    "the host was not read ({why}), so these are the intended rules, not the exact requests; --branch, --adopt and absent branches are judged only against the host"
+                ));
+                report
+            }
+        }
     } else {
         let adapter = provider_for(provider, &root).map_err(|e| anyhow::anyhow!(e))?;
         adapter.apply(&plan)
