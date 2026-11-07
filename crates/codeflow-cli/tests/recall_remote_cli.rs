@@ -236,6 +236,7 @@ fn remote_protect_refuses_an_invalid_policy_and_writes_nothing() {
         format!(
             "#!/bin/sh\n\
              case \"$*\" in\n\
+               \"auth status --hostname github.com\") exit 0 ;;\n\
                \"repo view\"*) printf '%s' '{{\"nameWithOwner\":\"o/r\",\"isPrivate\":false,\"defaultBranchRef\":{{\"name\":\"main\"}}}}' ;;\n\
                \"api -X \"*) echo \"$*\" >> '{}'; cat >/dev/null; printf '{{}}' ;;\n\
                \"api repos/o/r/rulesets?\"*) printf '[]' ;;\n\

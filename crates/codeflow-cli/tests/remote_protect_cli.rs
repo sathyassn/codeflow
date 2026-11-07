@@ -235,6 +235,7 @@ fn recorded_host(dir: &Path) -> PathBuf {
 h='{h}'
 wf='repos/o/r/contents/.github/workflows'
 case "$*" in
+  "auth status --hostname github.com") exit 0 ;;
   "repo view"*) printf '%s' '{{"nameWithOwner":"o/r","isPrivate":false,"defaultBranchRef":{{"name":"main"}}}}' ;;
   "api repos/o/r/rulesets?"*) printf '['; paste -sd, "$h/list" | tr -d '\n'; printf ']' ;;
   "api repos/o/r/rulesets/"*) cat "$h/rs-${{2##*/}}.json" ;;
@@ -382,6 +383,7 @@ printf '%s\n' "$*" >> "$h/calls"
 printf 'GH_HOST=%s GH_REPO=%s\n' "${{GH_HOST-unset}}" "${{GH_REPO-unset}}" >> "$h/env"
 case "$*" in
   "api -X "*) printf '%s\n' "$*" >> "$h/writes"; echo "this host refuses writes" >&2; exit 1 ;;
+  "auth status --hostname github.com") exit 0 ;;
   "repo view"*) printf '%s' '{{"nameWithOwner":"o/r","isPrivate":false,"defaultBranchRef":{{"name":"main"}}}}' ;;
   "api repos/o/r/rulesets?"*) printf '[{{"id":301,"name":"main checks","target":"branch","source_type":"Repository"}},{{"id":302,"name":"main history","target":"branch","source_type":"Repository"}},{{"id":303,"name":"registry guard","target":"branch","source_type":"Repository"}}]' ;;
   "api repos/o/r/rulesets/"*) cat "$h/rs-${{2##*/}}.json" ;;
@@ -612,7 +614,9 @@ fn a_push_url_for_another_repository_is_refused() {
 
 /// Review of PR 700, finding 4: an inherited `GH_HOST` or `GH_REPO` never
 /// reaches `gh`, so neither can point a read or a write at another host or
-/// repository. `codeflow()` sets both to decoys.
+/// repository. `codeflow()` sets both to decoys. Doctor reads github.com
+/// only, so its `gh` gets no host; `remote protect` pins the host `origin`
+/// names on every call, the login check first.
 #[cfg(unix)]
 #[test]
 fn gh_never_sees_an_inherited_host_or_repository() {
@@ -620,13 +624,28 @@ fn gh_never_sees_an_inherited_host_or_repository() {
     let (root, host, bin) = seeded_split_project(dir.path());
     let doctor = codeflow(&root, Some(&bin), &["doctor", "--check", "id-registry"]);
     println!("{}", text(&doctor));
-    let dry = codeflow(&root, Some(&bin), &["remote", "protect", "--dry-run"]);
-    println!("{}", text(&dry));
     let env = std::fs::read_to_string(host.join("env")).unwrap();
     assert!(!env.is_empty());
     assert!(
         env.lines()
             .all(|line| line == "GH_HOST=unset GH_REPO=unset"),
         "{env}"
+    );
+    std::fs::remove_file(host.join("env")).unwrap();
+    std::fs::remove_file(host.join("calls")).unwrap();
+    let dry = codeflow(&root, Some(&bin), &["remote", "protect", "--dry-run"]);
+    println!("{}", text(&dry));
+    let env = std::fs::read_to_string(host.join("env")).unwrap();
+    assert!(env.lines().count() > 2, "{env}");
+    assert!(
+        env.lines()
+            .all(|line| line == "GH_HOST=github.com GH_REPO=unset"),
+        "{env}"
+    );
+    let calls = std::fs::read_to_string(host.join("calls")).unwrap();
+    assert_eq!(
+        calls.lines().next(),
+        Some("auth status --hostname github.com"),
+        "{calls}"
     );
 }

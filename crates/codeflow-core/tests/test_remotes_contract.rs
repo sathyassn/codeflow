@@ -77,6 +77,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "unit tests that read the repository an `origin` URL names; `gh` is a stub and only `git remote get-url` runs, which asks no remote",
     ),
     (
+        "codeflow-core/src/remote.rs",
+        "ghe.example.invalid",
+        "unit tests that read the host an `origin` URL names; `gh` is a stub and only `git remote get-url` runs, which asks no remote",
+    ),
+    (
         "codeflow-cli/tests/remote_protect_cli.rs",
         "github.com",
         "the origin URL only names the repository to a gh stub on PATH; the repository sets protocol.https.allow=never, so git never contacts the host",

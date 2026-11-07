@@ -1626,6 +1626,60 @@ pub(crate) fn parse_github_url(url: &str) -> Option<String> {
 ///
 /// Returns why the repository cannot be named as one.
 pub(crate) fn origin_repository(root: &Path) -> Result<Option<String>, String> {
+    let github = |url: &str| parse_github_url(url).map(|nwo| ("github.com".to_string(), nwo));
+    Ok(origin_on(root, github)?.map(|(_, nwo)| nwo))
+}
+
+/// `(host, owner/name)` from an HTTPS, HTTP or SSH URL or an scp-style
+/// `user@host:owner/name`, on any host. The host is lower-cased and loses
+/// any user or port; one that is not a plain DNS name is not parsed.
+pub(crate) fn parse_repo_url(url: &str) -> Option<(String, String)> {
+    let (authority, path) = if let Some((scheme, rest)) = url.split_once("://") {
+        if !matches!(scheme, "https" | "http" | "ssh") {
+            return None;
+        }
+        rest.split_once('/')?
+    } else {
+        let (authority, path) = url.split_once(':')?;
+        if authority.contains('/') {
+            return None;
+        }
+        (authority, path)
+    };
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = host.split_once(':').map_or(host, |(host, _)| host);
+    let plain = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '.';
+    if host.is_empty() || !host.chars().all(plain) || host.starts_with(['-', '.']) {
+        return None;
+    }
+    let path = path.trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let mut parts = path.split('/');
+    let (owner, name) = (parts.next()?, parts.next()?);
+    (parts.next().is_none() && !owner.is_empty() && !name.is_empty())
+        .then(|| (host.to_ascii_lowercase(), format!("{owner}/{name}")))
+}
+
+/// The one repository `origin` names on whatever host it is on, as
+/// `(host, owner/name)`, for `remote protect`: the host is pinned for every
+/// `gh` call, so no inherited setting can send a read or a write to another
+/// host. The same push URL rule as [`origin_repository`] holds.
+///
+/// # Errors
+///
+/// Returns why the repository cannot be named as one.
+pub(crate) fn origin_host_repository(root: &Path) -> Result<Option<(String, String)>, String> {
+    origin_on(root, parse_repo_url)
+}
+
+/// `origin`'s fetch URL parsed by `parse`, when every URL git pushes
+/// `origin` to parses to the same host and repository.
+fn origin_on(
+    root: &Path,
+    parse: impl Fn(&str) -> Option<(String, String)>,
+) -> Result<Option<(String, String)>, String> {
     let Some(repo) = crate::hooks::repo::open(root)? else {
         return Ok(None);
     };
@@ -1642,7 +1696,7 @@ pub(crate) fn origin_repository(root: &Path) -> Result<Option<String>, String> {
     let url = remote
         .url()
         .map_err(|error| format!("cannot read the `origin` URL: {}", error.message()))?;
-    let Some(nwo) = parse_github_url(url) else {
+    let Some((host, nwo)) = parse(url) else {
         return Ok(None);
     };
     // Git's own answer, after `pushurl` and `pushInsteadOf`.
@@ -1662,14 +1716,17 @@ pub(crate) fn origin_repository(root: &Path) -> Result<Option<String>, String> {
     let pushes = String::from_utf8(output.stdout)
         .map_err(|_| "the `origin` push URL is not UTF-8".to_string())?;
     for push in pushes.split('\n').filter(|line| !line.is_empty()) {
-        if !parse_github_url(push).is_some_and(|named| named.eq_ignore_ascii_case(&nwo)) {
+        let same = parse(push).is_some_and(|(named_host, named)| {
+            named_host == host && named.eq_ignore_ascii_case(&nwo)
+        });
+        if !same {
             return Err(format!(
-                "`origin` pushes to {}, not to {nwo}, the repository it fetches from, so the host rules of one do not protect the other; point the push URL at {nwo} or remove it",
+                "`origin` pushes to {}, not to {nwo} on {host}, the repository it fetches from, so the host rules of one do not protect the other; point the push URL at {nwo} or remove it",
                 crate::git::remote_query::display_urls(push)
             ));
         }
     }
-    Ok(Some(nwo))
+    Ok(Some((host, nwo)))
 }
 
 /// A bypass list for a reader: `RepositoryRole 5 (always), Team 9
@@ -1772,8 +1829,9 @@ pub type GhTransport = Box<dyn Fn(&[&str], Option<&str>) -> Result<String, Strin
 /// GitHub adapter, shelling out to the `gh` CLI for auth and transport.
 pub struct GithubProvider {
     transport: GhTransport,
-    /// The checkout whose `origin` names the repository, for `gh`.
-    repo_dir: Option<PathBuf>,
+    /// `(host, owner/name)` of the checkout's `origin`, read once when `gh`
+    /// is bound to a checkout; every `gh` call is pinned to that host.
+    origin: Option<Result<Option<(String, String)>, String>>,
     /// The repository a recorded host stands for (test seam).
     repository: Option<String>,
 }
@@ -1793,11 +1851,18 @@ impl GithubProvider {
     /// Construct with an explicit `gh` binary (test seam for PATH shims).
     pub fn with_gh(gh: impl Into<PathBuf>, repo_dir: impl AsRef<Path>) -> Self {
         let gh = gh.into();
-        let repo_dir = repo_dir.as_ref().to_path_buf();
-        let dir = repo_dir.clone();
-        let mut provider =
-            Self::with_transport(Box::new(move |args, input| run_gh(&gh, &dir, args, input)));
-        provider.repo_dir = Some(repo_dir);
+        let dir = repo_dir.as_ref().to_path_buf();
+        let origin = origin_host_repository(&dir);
+        let host = origin
+            .as_ref()
+            .ok()
+            .cloned()
+            .flatten()
+            .map(|(host, _)| host);
+        let mut provider = Self::with_transport(Box::new(move |args, input| {
+            run_gh(&gh, &dir, host.as_deref(), args, input)
+        }));
+        provider.origin = Some(origin);
         provider
     }
 
@@ -1807,7 +1872,7 @@ impl GithubProvider {
     pub fn with_transport(transport: GhTransport) -> Self {
         Self {
             transport,
-            repo_dir: None,
+            origin: None,
             repository: None,
         }
     }
@@ -1825,19 +1890,36 @@ impl GithubProvider {
     }
 
     /// Identify the repo (`owner/name`, visibility, default branch) via
-    /// `gh repo view` of the repository `origin` names, so `gh`'s own
-    /// choice of repository never decides it (review of PR 700). An answer
-    /// for another repository is refused.
+    /// `gh repo view` of the repository `origin` names, on the host its URL
+    /// names, so neither `gh`'s own choice nor an inherited setting decides
+    /// it (review of PR 700). A host `gh` has no working login for, or an
+    /// answer for another repository, is refused before anything is read.
     fn repo_info(&self) -> Result<RepoInfo, String> {
-        let expected = match &self.repo_dir {
-            Some(dir) => Some(origin_repository(dir)?.ok_or(
-                "`origin` is not a github.com repository, so remote protect cannot tell which repository to write; point `origin` at the repository on github.com",
-            )?),
-            None => self.repository.clone(),
+        let (expected, target) = match &self.origin {
+            Some(origin) => {
+                let (host, nwo) = origin.clone()?.ok_or(
+                    "`origin` has no URL that names a repository as host/owner/name, so remote protect cannot tell which repository to write; point `origin` at the repository",
+                )?;
+                if self
+                    .run_gh(&["auth", "status", "--hostname", &host], None)
+                    .is_err()
+                {
+                    return Err(format!(
+                        "gh has no working login for {host}, the host `origin` names (`gh auth status --hostname {host}` fails), so nothing is read or written; run `gh auth login --hostname {host}`, then run remote protect again"
+                    ));
+                }
+                let target = if host == "github.com" {
+                    nwo.clone()
+                } else {
+                    format!("{host}/{nwo}")
+                };
+                (Some(nwo), Some(target))
+            }
+            None => (self.repository.clone(), self.repository.clone()),
         };
         let mut args = vec!["repo", "view"];
-        if let Some(nwo) = &expected {
-            args.push(nwo);
+        if let Some(target) = &target {
+            args.push(target);
         }
         args.extend(["--json", "nameWithOwner,isPrivate,defaultBranchRef"]);
         let out = self.run_gh(&args, None)?;
@@ -2277,17 +2359,21 @@ impl GithubProvider {
 fn run_gh(
     gh: &Path,
     repo_dir: &Path,
+    host: Option<&str>,
     args: &[&str],
     input: Option<&str>,
 ) -> Result<String, String> {
     let mut cmd = Command::new(gh);
-    // The host and repository come from `origin` alone: an inherited
-    // GH_HOST or GH_REPO cannot point a read or a write at another one
-    // (review of PR 700).
-    cmd.args(args)
-        .env_remove("GH_HOST")
-        .env_remove("GH_REPO")
-        .current_dir(repo_dir)
+    // The host and repository come from `origin` alone: GH_HOST is set to
+    // the host its URL names, never inherited, and GH_REPO is removed, so
+    // no read or write can go to another host or repository (review of
+    // PR 700).
+    cmd.args(args).env_remove("GH_REPO");
+    match host {
+        Some(host) => cmd.env("GH_HOST", host),
+        None => cmd.env_remove("GH_HOST"),
+    };
+    cmd.current_dir(repo_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -2696,6 +2782,9 @@ mod tests {
         std::fs::write(
             &shim,
             r#"#!/bin/sh
+if [ "$1" = "auth" ]; then
+  exit 0
+fi
 if [ "$1" = "repo" ]; then
   printf '{"nameWithOwner":"owner/caf'
   printf '\377'
@@ -2769,6 +2858,9 @@ printf '{}'
         let path = dir.join("gh");
         let script = format!(
             "#!/bin/sh\n\
+             if [ \"$1\" = \"auth\" ]; then\n\
+               exit 0\n\
+             fi\n\
              if [ \"$1\" = \"repo\" ]; then\n\
                printf '%s' '{{\"nameWithOwner\":\"sathyassn/private-repo\",\"isPrivate\":true}}'\n\
                exit 0\n\
@@ -3215,6 +3307,7 @@ jobs:
                 r#"#!/bin/sh
 d='{d}'
 case "$*" in
+  "auth status --hostname github.com") exit 0 ;;
   "repo view"*) printf '%s' '{{"nameWithOwner":"o/r","isPrivate":false,"defaultBranchRef":{{"name":"main"}}}}' ;;
   "repo") exit 0 ;;
   "api -X "*) printf '%s %s\n' "$3" "$4" >> "$d/writes"; body="$(cat)"; printf '%s\n' "$body" >> "$d/bodies"; printf '%s' "$body" ;;
@@ -4632,6 +4725,110 @@ jobs:
         assert!(
             why.contains("`origin` pushes to https://github.com/x/y.git, not to o/r"),
             "{why}"
+        );
+    }
+
+    /// `remote protect` names the host from `origin`'s URL on any host, so
+    /// an Enterprise host keeps working once it is pinned.
+    #[test]
+    fn origin_urls_name_their_host_and_repository() {
+        for (url, host) in [
+            ("https://github.com/o/r.git", "github.com"),
+            ("git@github.com:o/r.git", "github.com"),
+            ("https://GHE.example.invalid/o/r", "ghe.example.invalid"),
+            (
+                "https://user@ghe.example.invalid:8443/o/r.git",
+                "ghe.example.invalid",
+            ),
+            (
+                "ssh://git@ghe.example.invalid:2222/o/r.git/",
+                "ghe.example.invalid",
+            ),
+            ("git@ghe.example.invalid:o/r.git", "ghe.example.invalid"),
+        ] {
+            assert_eq!(
+                parse_repo_url(url),
+                Some((host.to_string(), "o/r".to_string())),
+                "{url}"
+            );
+        }
+        for url in [
+            "file:///srv/o/r.git",
+            "/srv/o/r.git",
+            "git://ghe.example.invalid/o/r.git",
+            "https://ghe.example.invalid/o",
+            "https://ghe.example.invalid/o/r/extra",
+            "https://gh$e.example.invalid/o/r",
+            "https://-ghe.example.invalid/o/r",
+        ] {
+            assert_eq!(parse_repo_url(url), None, "{url}");
+        }
+    }
+
+    /// Review of PR 700, finding 4, as settled: every `gh` call `remote
+    /// protect` makes carries `GH_HOST` set to the host `origin` names, and
+    /// a host `gh` has no working login for is refused before any read.
+    #[cfg(unix)]
+    #[test]
+    fn every_gh_call_is_pinned_to_the_host_origin_names() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path())
+            .unwrap()
+            .remote("origin", "https://ghe.example.invalid/o/r.git")
+            .unwrap();
+        let d = dir.path().display().to_string();
+        let shim = dir.path().join("gh");
+        std::fs::write(
+            &shim,
+            format!(
+                r#"#!/bin/sh
+printf '%s %s\n' "${{GH_HOST-unset}}" "$*" >> '{d}/calls'
+case "$*" in
+  "auth status --hostname ghe.example.invalid") [ -f '{d}/logged-out' ] && exit 1; exit 0 ;;
+  "repo view ghe.example.invalid/o/r --json"*) printf '%s' '{{"nameWithOwner":"o/r","isPrivate":false,"defaultBranchRef":{{"name":"main"}}}}' ;;
+  "api repos/o/r/rulesets?"*) printf '[]' ;;
+  "api repos/o/r/branches/"*) printf '{{"name":"main"}}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        wait_until_executable(&shim);
+        let policy = write_policy(dir.path(), r#"["main"]"#);
+        let plan = ProtectionPlan::from_policy_file(&policy).unwrap();
+        let calls = dir.path().join("calls");
+
+        let report = GithubProvider::with_gh(&shim, dir.path())
+            .preview(&plan)
+            .render();
+        let seen = std::fs::read_to_string(&calls).unwrap();
+        assert!(seen.lines().count() > 2, "{seen}\n{report}");
+        assert!(
+            seen.lines()
+                .all(|line| line.starts_with("ghe.example.invalid ")),
+            "{seen}"
+        );
+        assert!(
+            seen.contains("repo view ghe.example.invalid/o/r --json"),
+            "{seen}"
+        );
+        assert!(!report.contains("the host was not read"), "{report}");
+
+        std::fs::write(dir.path().join("logged-out"), "").unwrap();
+        std::fs::remove_file(&calls).unwrap();
+        let report = GithubProvider::with_gh(&shim, dir.path())
+            .apply(&plan)
+            .render();
+        assert!(
+            report.contains("gh has no working login for ghe.example.invalid"),
+            "{report}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&calls).unwrap(),
+            "ghe.example.invalid auth status --hostname ghe.example.invalid\n"
         );
     }
 

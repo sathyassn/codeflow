@@ -1214,11 +1214,15 @@ Findings). A bypass actor merges into the default branch with `gh pr merge
   B do, `--adopt <ruleset>=<owned name>` says which. Any other target is
   refused and the ruleset is left as it is. The dry run and the report name
   the adopted ruleset, its id and its new name.
-- **One repository.** `remote protect` and `doctor` act on the github.com
-  repository `origin` fetches from. A push URL that names another
-  repository is refused, `gh repo view` is asked about that repository and
-  an answer for another one is refused, and `GH_HOST` and `GH_REPO` are not
-  passed to `gh`, so neither can point a read or a write elsewhere.
+- **One repository.** `remote protect` and `doctor` act on the repository
+  `origin` fetches from. A push URL that names another repository is
+  refused, `gh repo view` is asked about that repository and an answer for
+  another one is refused, and an inherited `GH_HOST` or `GH_REPO` never
+  reaches `gh`, so neither can point a read or a write elsewhere. `remote
+  protect` sets `GH_HOST` to the host `origin`'s URL names, a GitHub
+  Enterprise host included, and refuses a host `gh` has no working login
+  for. `doctor` reads the rules of a github.com `origin` only; for any other
+  host it notes that they were not read.
 - **The dry run is exact.** `--dry-run` reads the host with GET calls only
   and prints each request a run would send (method, path and body); a run
   sends exactly those. Without a readable host it prints the intended rules
