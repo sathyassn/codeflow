@@ -25,6 +25,13 @@ The pre-push hook runs no quick target (TSK-449), so cite
 records its selection with an empty `skipped` list; a target CI skips
 (`ci_skip`) is listed in `ci_skipped` and makes the run incomplete.
 
+The shipped CI workflow runs the targets that define `quick` but not the
+mode it runs, after its gate, so a quick-only target keeps an automatic run
+(TSK-1291). When no enabled target defines the mode it runs, as in a config
+with only `quick` targets, it runs the quick targets instead of the gate. A
+failing check, a config it cannot read and a config with nothing to run
+still fail the step.
+
 Credit can return only from a recorder whose identity no agent session and
 no candidate test can use, such as an attestation made by hosted CI. A
 same-user key, an ownership or mode check, or a home-directory lookup is
