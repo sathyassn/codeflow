@@ -381,6 +381,22 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "ascii-marker",
     ),
+    // TSK-1185: `git version` output, an ASCII version read for its numbers; one that does not parse refuses the merge judgment.
+    (
+        "codeflow-core/src/workgraph/history.rs",
+        "installed_git_version",
+        "from_utf8_lossy",
+        1,
+        "ascii-marker",
+    ),
+    // TSK-1185: git's stderr, shown only in the message of a refused merge judgment.
+    (
+        "codeflow-core/src/workgraph/history.rs",
+        "remerge_failed",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // `git version` and `git hash-object` output: an ASCII version read for its numbers, which refuses when it does not parse, and a hex object id (TSK-412).
     (
         "codeflow-core/src/hooks/gitleaks.rs",
@@ -2880,6 +2896,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "grammar:gitleaks-version",
+    ),
+    // TSK-1185: `git version` output and git's stderr, an ASCII version line and message text; neither is a name, and a version that does not parse refuses.
+    (
+        "crates/codeflow-core/src/workgraph/history.rs",
+        "installed_git_version",
+        "trim",
+        1,
+        "grammar:git-version",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/history.rs",
+        "remerge_failed",
+        "trim",
+        1,
+        "grammar:git-version",
     ),
     // TSK-412: `git version` and `git hash-object` output, an ASCII version line and a hex object id; a version that does not parse refuses.
     (

@@ -518,26 +518,18 @@ pub const MERGE_GIT_FLOOR: (u32, u32) = (2, 41);
 /// merge, or `None` when it can. An unreadable version refuses.
 #[must_use]
 pub fn merge_git_refusal(version: &str) -> Option<String> {
-    let version = version.trim();
     let (major, minor) = MERGE_GIT_FLOOR;
     let upgrade = "This is a Git version problem, not a bad merge: upgrade Git \
                    (https://git-scm.com/downloads), then rerun.";
-    let installed = version
-        .strip_prefix("git version ")
-        .and_then(|rest| rest.split_whitespace().next());
-    let parsed = installed.and_then(|number| {
-        let mut parts = number.split('.');
-        Some((
-            parts.next()?.parse::<u32>().ok()?,
-            parts.next()?.parse::<u32>().ok()?,
-        ))
-    });
-    match (installed, parsed) {
-        (_, Some(found)) if found >= MERGE_GIT_FLOOR => None,
-        (Some(number), Some(_)) => Some(format!(
-            "Git {number} is too old to judge a merge: CodeFlow needs Git {major}.{minor} or later, for `git --attr-source`. {upgrade}"
-        )),
-        _ => Some(format!(
+    match crate::hooks::gitleaks::git_version(version) {
+        Some(found) if found >= MERGE_GIT_FLOOR => None,
+        Some(_) => {
+            let installed = version.strip_prefix("git version ").unwrap_or(version);
+            Some(format!(
+                "Git {installed} is too old to judge a merge: CodeFlow needs Git {major}.{minor} or later, for `git --attr-source`. {upgrade}"
+            ))
+        }
+        None => Some(format!(
             "cannot read the Git version from `{version}`: CodeFlow needs Git {major}.{minor} or later to judge a merge. {upgrade}"
         )),
     }
@@ -622,9 +614,11 @@ pub fn remerge_differences(
     let mut fields = merged.stdout.split(|byte| *byte == 0);
     let tree = fields
         .next()
-        .and_then(|field| std::str::from_utf8(field).ok())
-        .and_then(|field| Oid::from_str(field).ok())
         .ok_or_else(|| Error::from_str("git merge-tree reported no tree"))?;
+    let tree = Oid::from_str(
+        std::str::from_utf8(tree)
+            .map_err(|_| Error::from_str("git merge-tree reported no tree"))?,
+    )?;
     let conflicted: Vec<Vec<u8>> = fields
         .take_while(|field| !field.is_empty())
         .map(<[u8]>::to_vec)
@@ -675,9 +669,12 @@ mod tests {
     #[test]
     fn tsk1185_an_old_git_is_refused_as_a_version_problem() {
         for (output, installed) in [
-            ("git version 2.40.1\n", "2.40.1"),
+            ("git version 2.40.1", "2.40.1"),
             ("git version 2.34.1", "2.34.1"),
-            ("git version 2.39.5 (Apple Git-154)", "2.39.5"),
+            (
+                "git version 2.39.5 (Apple Git-154)",
+                "2.39.5 (Apple Git-154)",
+            ),
             ("git version 2.40.1.windows.1", "2.40.1.windows.1"),
         ] {
             let refusal = merge_git_refusal(output).expect(output);
