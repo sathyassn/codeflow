@@ -218,7 +218,7 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["codeflow-core tests/path_policy.rs", "codeflow-cli tests/path_policy_cli.rs", "cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-core tests/managed_secret_scan.rs", "codeflow-core tests/policy_key_placement.rs", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "codeflow-cli tests/ci_pin.rs", "codeflow-cli tests/ci_pin_platforms.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs", "codeflow-cli tests/refusal_journey.rs", "cargo test hooks::git_discard", "cargo test hooks::edit_guard", "cargo test security::outward", "cargo test security::interpreter"]
+verified_by: ["codeflow-core tests/landing_class.rs", "codeflow-cli tests/records_only_landing.rs", "codeflow-core tests/path_policy.rs", "codeflow-cli tests/path_policy_cli.rs", "cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-core tests/managed_secret_scan.rs", "codeflow-core tests/policy_key_placement.rs", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "codeflow-cli tests/ci_pin.rs", "codeflow-cli tests/ci_pin_platforms.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs", "codeflow-cli tests/refusal_journey.rs", "cargo test hooks::git_discard", "cargo test hooks::edit_guard", "cargo test security::outward", "cargo test security::interpreter"]
 epics: [EPC-001, EPC-011, EPC-017, EPC-020, EPC-022, EPC-023, EPC-024]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
@@ -233,6 +233,7 @@ section of `.codeflow/policy.json`.
   the gate-context token for protected-branch advances, and the guard's refusal
   of override variables set in-session.
 - Secret scanning fails closed.
+- Records-only landings use record checks, not the full gate (TSK-1151).
 - Agent sessions are judged by the landed policy on the remote, so a local
   edit, commit or branch cannot relax the session checks. The authority is
   the default branch at one commit, never a line or a guess (ADR-0091).

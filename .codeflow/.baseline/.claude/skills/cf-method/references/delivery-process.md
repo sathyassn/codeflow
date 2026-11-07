@@ -2,7 +2,7 @@
 
 This is the one narrative of how work moves from a request to `main`: plan
 once when a brief or spec is broken down, one PR per task with its record,
-one holistic review, one full gate per batch candidate, and continuous
+one holistic review, one selected landing gate per batch candidate, and continuous
 landing. The rule map, the stage skills and the rule files point here instead
 of restating the flow. Where durable tracking is not active (the standard and
 minimal tiers), the same flow runs with the harness's tracked unit in place
@@ -217,7 +217,7 @@ reviewer; another task's criteria are never changed from this PR.
  a hand-resolved product hunk returns its task to review
        |
        v
- <full gate, once, on the exact candidate>
+ <selected landing checks on the exact candidate>
        | green                          | red
        v                                v
  integration line advances        diagnose first
@@ -243,7 +243,8 @@ reviewer; another task's criteria are never changed from this PR.
   command, in the task PR. The pace of planned work is set in
   [the workflow lifecycle](workflow-lifecycle.md) "Planned work moves at
   speed".
-  The primary runs the full gate once per batch candidate and links it. A
+  The primary runs the landing-class checks from `.codeflow/rules/git-rules.md` once per
+  batch candidate and links their evidence. A
   standalone PR is its own candidate and runs its own gate.
 - Before asking for review, the builder merges the current integration line
   into the task branch and resolves any conflicts there, so conflicts surface

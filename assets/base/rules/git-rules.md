@@ -122,6 +122,52 @@ evidence attributes the failure to it. Only the finished body
 reaches `main`, via one human-reviewed PR that the operator merges. See
 cf-method, "Managing a body of work" (standard and full tiers).
 
+The integration landing gate follows the candidate's diff from the current
+line tip. `codeflow ci --base <line-tip> --head <candidate> --into <line>`
+reports its landing class. A **records-only** candidate needs
+`codeflow validate --docs`, a clean `codeflow ci` on that range, the
+built-in secret scan of every introduced commit, each target the project
+lists in `execution.record_checks` of its test config (run in full mode)
+and `codeflow test --mode quick --all`.
+A **code** candidate keeps one full gate on the exact candidate. A protected
+target, or one matching the release branch pattern (`integration/release-*`
+or `git.release_branch_pattern`), keeps its full gate whatever the diff. A
+classification is not a passed check.
+
+`git.record_paths` in the line tip's `.codeflow/policy.json` declares the
+eligible paths. It is empty by default, so a project that declares nothing
+keeps the full gate on every landing. List only Markdown that no build or
+test reads: a test that reads a listed file does not run on a records-only
+landing. The shipped JSON omits the key so older binaries can still read an
+updated scaffold. Upgrade the binary before declaring a list.
+Declarations admit only regular non-executable Markdown files outside the
+planning classifier's product, watched, instruction, hidden and template
+exclusions. Config and JSON stay code. A project marks Markdown that a build
+or check executes or treats as a contract in `product_paths` or
+`breaking_watch_paths`; a record declaration never overrides those lists.
+Both sides of a rename or copy must qualify. A mode change, any submodule
+added, removed or moved to another commit at any path, a symlink or
+submodule under a declared record folder or on a folder a changed record
+resolves through, an unreadable diff or invalid config keeps the full gate.
+
+The landing evidence names the base, candidate, class, the reason for it and
+the checks actually run. `codeflow integrate` records these under the shared Git directory at
+`codeflow/landings/<candidate>.json`; its records-only path runs validation,
+range CI, the built-in credential scan, the declared record checks and the
+quick gate. The built-in scan waives a hit only for a commit-qualified
+fingerprint in `.gitleaksignore` at the line tip. Project and hosted secret
+scanners remain required where adopted. A PR landing carries the same
+evidence in its PR. CI reports its own executed checks and does not claim to
+have run the other landing checks.
+
+Several reviewed units ready on one line build one candidate and run one
+gate, never one gate per unit. Heavy runs share the host by capacity: gates
+in different worktrees and on different lines run side by side in their own
+slots, with fewer jobs each past the host's job budget, and none waits for
+another. Only a `host_exclusive` target runs alone, and a gate from a binary
+older than the slots refuses new runs while it holds the lock. Each worktree
+keeps its own cargo target directory.
+
 Direct commits on an epic line are refused at push. `codeflow ci` refuses
 them on a landing candidate before its gate when run with `--line-tip
 integration/EPC-NNN-<slug>`, which judges the candidate from the line's

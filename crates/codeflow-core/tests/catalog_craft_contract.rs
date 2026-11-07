@@ -127,10 +127,11 @@ fn ship_and_pr_template_require_whole_branch_summary_and_measured_coverage() {
             "a job's `PASS` is not a coverage number",
             "Do not relabel subset coverage as workspace coverage",
             "unavailable or stale evidence is a gap",
-            // TSK-184: builders cite targeted and quick runs; the full gate
-            // runs once on the landing candidate and is cited durably.
+            // TSK-184: builders cite targeted and quick runs; the landing
+            // checks run once on the candidate and are cited durably. TSK-1151
+            // selects them by landing class (records-only or full gate).
             "pastes its targeted tests and its `codeflow test --mode quick` run",
-            "The full gate runs once on the landing candidate",
+            "\"Bodies of work\") run once on the candidate",
             "Cite a gate run by its run id and revision from its durable home",
         ],
     );

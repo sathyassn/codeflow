@@ -59,6 +59,10 @@
       "scripts/fixtures/coverage-merge/**",
       "scripts/test_gate_portal_windows.py"
     ],
+    "record_checks": [
+      "docs-validation",
+      "docs-portal"
+    ],
     "worker_budget": 9
   },
   "defaults": {
@@ -429,10 +433,10 @@
       "runner": "custom",
       "modes": {
         "essential": {
-          "command": "\"$CODEFLOW_BIN\" validate --docs"
+          "command": "\"$CODEFLOW_BIN\" validate --docs && python3 -B scripts/journey-gate.py --check-pending"
         },
         "full": {
-          "command": "\"$CODEFLOW_BIN\" validate --docs"
+          "command": "\"$CODEFLOW_BIN\" validate --docs && python3 -B scripts/journey-gate.py --check-pending"
         }
       },
       "requires": [
@@ -440,7 +444,9 @@
       ],
       "narrow": [
         "docs/**",
-        "project-management/**"
+        "project-management/**",
+        "scripts/journey-gate.py",
+        "crates/codeflow-cli/tests/journey_gate.toml"
       ]
     },
     {

@@ -100,6 +100,11 @@ pub struct ExecutionConfig {
     /// Stop on first target failure.
     #[serde(default)]
     pub fail_fast: bool,
+
+    /// Targets a records-only landing runs in full mode beside the built-in
+    /// `codeflow validate --docs`. Empty runs the built-in validation only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub record_checks: Vec<String>,
 }
 
 /// Default settings applied to all targets.
@@ -860,7 +865,7 @@ pub fn load_named_test_config(path: &Path) -> Result<(TestConfig, Vec<u8>), Test
 }
 
 /// Parse and validate test config text read from `path`.
-fn parse_test_config(path: &Path, content: &str) -> Result<TestConfig, TestingError> {
+pub(crate) fn parse_test_config(path: &Path, content: &str) -> Result<TestConfig, TestingError> {
     // First, check schema_version before full parse
     let raw: serde_json::Value =
         serde_json::from_str(content).map_err(|e| TestingError::ConfigInvalid {

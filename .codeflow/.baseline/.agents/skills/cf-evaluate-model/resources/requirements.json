@@ -1476,7 +1476,7 @@
         {
           "path": ".agents/skills/cf-method/SKILL.md",
           "markers": [
-            "runs one full gate on that exact candidate"
+            "checks from `.codeflow/rules/git-rules.md` on that exact candidate"
           ]
         }
       ]
@@ -2916,7 +2916,7 @@
             "1: take it without asking; progress goes in the running report, never in an offer",
             "1: choose from evidence and disclose it",
             "1: classify and continue; fix an assertion-red check, push and poll again",
-            "2: once the full gate is green on that exact candidate, the primary merges it without fast forward or with `codeflow integrate`, then confirms the landed state against the candidate's evidence with `codeflow status`",
+            "2: once the landing-class checks in git-rules Bodies of work are green on that exact candidate, the primary merges it without fast forward or with `codeflow integrate`, then confirms the landed state against the candidate's evidence with `codeflow status`",
             "3: ask for a fresh grant",
             "4: wait for the operator; do not spend",
             "4: report it ready; a human merges"
@@ -3140,7 +3140,7 @@
     {
       "id": "CF-PM-011",
       "level": "hard",
-      "statement": "Every PR reviewed and ready when an integration line lands joins one candidate in dependency order, with one full gate and one hosted run on that exact combined candidate. Later-ready PRs join the next candidate. Never serialize ready PRs behind each other's landing or hosted run; serialize candidates on a line, while different lines may land in parallel.",
+      "statement": "Every PR reviewed and ready when an integration line lands joins one candidate in dependency order, with the checks its landing class selects (one full gate for a code candidate) and one hosted run on that exact combined candidate. Later-ready PRs join the next candidate. Never serialize ready PRs behind each other's landing or hosted run; serialize candidates on a line, while different lines may land in parallel.",
       "sources": [
         {
           "path": ".agents/skills/cf-method/SKILL.md",
@@ -3148,13 +3148,14 @@
             "every PR",
             "reviewed and ready at that moment on one candidate in dependency order",
             "another PR's landing or hosted run",
-            "one full gate on that exact candidate"
+            "one full gate on that exact candidate",
+            "runs the checks its landing class selects"
           ]
         },
         {
           "path": "AGENTS.md",
           "markers": [
-            "one full gate and one hosted run on the exact candidate"
+            "the landing-class gate and one hosted run on the exact candidate"
           ]
         }
       ]

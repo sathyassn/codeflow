@@ -184,18 +184,19 @@ waive the clarity, safety, review or protected-branch conditions.
    unit review and carries it as `codeflow ci` binds it; a hand-resolved
    product hunk is that task's own work and returns it to a whole-unit
    review at its new head; a path two tasks both changed is looked at on the
-   candidate, and that look is not a unit review), and runs one full gate on
-   that exact candidate. It lands through one of two
+   candidate, and that look is not a unit review), and runs the landing-class
+   checks from `.codeflow/rules/git-rules.md` on that exact candidate. A code
+   candidate takes one full gate on that exact candidate. It lands through one of two
    sanctioned modes: **Local**, `codeflow integrate <candidate> --into
    integration/<…>` on a candidate cut from the current line tip (one per line at a time,
-   runs the non-selective full gate, keeps the tested tip); or **PR** into the
+   runs the checks its landing class selects, keeps the tested tip); or **PR** into the
    integration branch, merged by the primary once the candidate's
-   `codeflow test --mode full --all` gate is complete and green and the PR's
+   selected landing checks are complete and green and the PR's
    required checks pass. The PR cites the gate run by its id and
    revision from its durable home. Local mode rebases by default; `--merge`
    runs from a linked worktree and gates a no-fast-forward merge commit that
    keeps the reviewed head and advances only the local line. Both modes execute
-   every target and refuse failures, skips and incomplete gates. A repository
+   every selected target and refuse failures, skips and incomplete gates. A repository
    with no targets retains the loud warning that the merge is not test-verified
    and may land. Neither variant pushes.
 4. **A red batch is diagnosed first.** Drop a member only when evidence

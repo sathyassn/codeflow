@@ -239,5 +239,80 @@ class PartTests(unittest.TestCase):
                 self.assertIsNone(gate.run(key, names, None, None))
 
 
+class PendingCheckTests(unittest.TestCase):
+    """A pending journey names a task that is not complete (TSK-1151).
+
+    The check reads task records, so a records-only landing runs it through
+    the docs-validation record check.
+    """
+
+    def check(self, status: str | None, control: list[str] | None = None, record: str | None = None) -> list[str]:
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            tasks = root / "project-management" / "tasks"
+            tasks.mkdir(parents=True)
+            if record is not None:
+                (tasks / "TSK-900.md").write_text(record)
+            elif status is not None:
+                (tasks / "TSK-900.md").write_text(f"---\nid: TSK-900\nstatus: {status}  # note\n---\n")
+            journeys = [
+                {"text": "a shipped journey", "control": ["a"], "fault": ["b"]},
+                {"text": "a later journey", "pending": "TSK-900", "control": control or [], "fault": []},
+            ]
+            return gate.pending_problems(journeys, root)
+
+    def test_an_open_pending_task_passes(self):
+        for status in ("todo", "blocked", "in_progress", "'todo'", '"in_progress"'):
+            with self.subTest(status=status):
+                self.assertEqual(self.check(status), [])
+
+    def test_a_quoted_complete_status_fails(self):
+        # The record parser reads the field as YAML, so a quoted spelling is
+        # complete there too (Grok review of a9ad817e6, finding 1).
+        for status in ('"complete"', "'complete'"):
+            with self.subTest(status=status):
+                problems = self.check(status)
+                self.assertEqual(len(problems), 1)
+                self.assertIn("pending on TSK-900, which is complete", problems[0])
+
+    def test_a_record_without_a_status_line_fails_closed(self):
+        problems = self.check(None, record="---\nid: TSK-900\n---\n")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("no status line", problems[0])
+
+    def test_an_unreadable_status_fails_closed(self):
+        cases = {
+            "an unknown word": "---\nid: TSK-900\nstatus: done\n---\n",
+            "an escape": '---\nid: TSK-900\nstatus: "compl\\x65te"\n---\n',
+            "an unclosed quote": "---\nid: TSK-900\nstatus: 'complete\n---\n",
+            "a tag": "---\nid: TSK-900\nstatus: !!str complete\n---\n",
+            "two status lines": "---\nid: TSK-900\nstatus: todo\nstatus: complete\n---\n",
+            "no front matter": "status: complete\n",
+        }
+        for name, record in cases.items():
+            with self.subTest(case=name):
+                problems = self.check(None, record=record)
+                self.assertEqual(len(problems), 1)
+                self.assertIn("whose status cannot be read", problems[0])
+
+    def test_a_completed_pending_task_fails(self):
+        problems = self.check("complete")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("pending on TSK-900, which is complete", problems[0])
+
+    def test_a_pending_journey_that_names_tests_fails(self):
+        problems = self.check("todo", control=["codeflow-cli --test x y"])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("names no tests", problems[0])
+
+    def test_a_missing_pending_record_fails_closed(self):
+        problems = self.check(None)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("TSK-900", problems[0])
+
+    def test_the_live_map_has_no_stale_pending_journey(self):
+        self.assertEqual(gate.pending_problems(gate.load_journeys(), gate.ROOT), [])
+
+
 if __name__ == "__main__":
     unittest.main()
