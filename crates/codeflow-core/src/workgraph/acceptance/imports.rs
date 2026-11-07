@@ -784,6 +784,29 @@ fn prove_task_completion(
     Ok(proof)
 }
 
+/// A correction landed no reviewed work, so the completion is proved where it
+/// did land. This calls the proof directly: `prove_record` on the original
+/// would read its old target as a retired home.
+fn prove_corrected_completion(
+    repo: &Repository,
+    original: &RecordView,
+    home: &str,
+    tip: Oid,
+    default_tip: Oid,
+    before_correction: Oid,
+) -> Result<CompletionProof, String> {
+    let origin = matching_landing(repo, original, tip, before_correction, None)?
+        .ok_or("the corrected record has no landing on the home")?;
+    let commit = repo
+        .find_commit(origin)
+        .map_err(|error| error.to_string())?;
+    let parents = history::parents(repo, &commit).map_err(|error| error.to_string())?;
+    if parents.len() > 1 && !is_clean_remerge(repo, &commit).map_err(|error| error.to_string())? {
+        return Err("the home landing contains an unreviewed merge resolution".into());
+    }
+    prove_task_completion(repo, original, home, tip, default_tip, origin, &parents)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prove_record(
     repo: &Repository,
@@ -817,36 +840,16 @@ fn prove_record(
         correction.is_some(),
     )?;
     verify_earlier_home_move(repo, record, home, tip, landed, base)?;
+    let imported = |completion| ImportedRecord {
+        path: record.path.clone(),
+        home: home.to_string(),
+        landing: landed,
+        completion,
+    };
     if let Some(original) = correction {
-        // The correction landed no reviewed work, so the completion is proved
-        // where it did land. This calls the proof directly: `prove_record`
-        // on the original would read its old target as a retired home.
-        let origin = matching_landing(repo, &original, tip, parents[0], None)?
-            .ok_or("the corrected record has no landing on the home")?;
-        let commit = repo
-            .find_commit(origin)
-            .map_err(|error| error.to_string())?;
-        let origin_parents = history::parents(repo, &commit).map_err(|error| error.to_string())?;
-        if origin_parents.len() > 1
-            && !is_clean_remerge(repo, &commit).map_err(|error| error.to_string())?
-        {
-            return Err("the home landing contains an unreviewed merge resolution".into());
-        }
-        let completion = prove_task_completion(
-            repo,
-            &original,
-            home,
-            tip,
-            default_tip,
-            origin,
-            &origin_parents,
-        )?;
-        return Ok(ImportedRecord {
-            path: record.path.clone(),
-            home: home.to_string(),
-            landing: landed,
-            completion: Some(completion),
-        });
+        let completion =
+            prove_corrected_completion(repo, &original, home, tip, default_tip, parents[0])?;
+        return Ok(imported(Some(completion)));
     }
     if let Some(proof) = prove_retired_record(
         repo,
@@ -911,12 +914,7 @@ fn prove_record(
         }
         None
     };
-    Ok(ImportedRecord {
-        path: record.path.clone(),
-        home: home.to_string(),
-        landing: landed,
-        completion,
-    })
+    Ok(imported(completion))
 }
 
 #[allow(clippy::too_many_arguments)] // The same guarded landing inputs as prove_record.
