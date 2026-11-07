@@ -35,6 +35,7 @@ pub use codex_profile::{
     builder_launch_root, probe_codex_builder_grants, probe_codex_builder_profile,
     CodexBuilderProbe, CodexLoad, GrantCheck, GrantProbe, ProjectLayer, CODEX_BUILDER_OVERRIDES,
 };
+pub(crate) use remote_perimeter::github_origin;
 
 /// Outcome of a health check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

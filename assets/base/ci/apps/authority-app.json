@@ -1,0 +1,15 @@
+{
+  "name": "",
+  "url": "",
+  "description": "Creates the authority: check runs of CodeFlow's policy workflow. Holds Checks write only. Created by codeflow remote setup-apps.",
+  "hook_attributes": {
+    "url": "",
+    "active": false
+  },
+  "redirect_url": "",
+  "public": false,
+  "default_permissions": {
+    "checks": "write"
+  },
+  "default_events": []
+}

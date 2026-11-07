@@ -92,6 +92,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "production constant naming the gitleaks release page, not a test remote",
     ),
     (
+        "codeflow-core/src/remote/agent_key.rs",
+        "api.github.com",
+        "production constant naming GitHub's REST API for agent-token, not a test remote; its tests use a fake HTTP client or a loopback server",
+    ),
+    (
         "codeflow-core/src/scaffold/release_pin.rs",
         "github.com",
         "production constant naming the release download base, not a test remote",

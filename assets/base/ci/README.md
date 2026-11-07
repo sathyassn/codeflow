@@ -451,8 +451,22 @@ an administrator's edit on the host. It refuses the checks rulesets until
 the default branch's `codeflow-policy.yml` declares the `trusted:` names,
 then the operator retires any older ruleset that requires the old names
 (`commit standards`, `secret scan`, `release impact`), which `doctor`
-names. The Mode A App and environment setup, the enablement order and the
-recovery window are in the policy reference's "Remote protection" section.
+names. The enablement order and the recovery window are in the policy
+reference's "Remote protection" section.
+
+Mode A's App and environment take one command and two clicks per App. A
+repository administrator runs `codeflow remote setup-apps` under their own
+`gh auth login`. It creates the authority App (Checks write only), the
+environment `codeflow-authority` restricted to the default branch with the
+App's key secret `CODEFLOW_AUTHORITY_APP_KEY` and id variable
+`CODEFLOW_AUTHORITY_APP_ID`, and the agent App (Contents and Pull requests
+write only), whose key stays in the administrator's operating system
+credential store. The two clicks are "Create GitHub App" on GitHub and
+"Install" on the link the command prints. Agent sessions then act on GitHub
+as `<slug>[bot]` with a token from `codeflow remote agent-token`. The steps,
+the attribution each token gives and the differences between personal and
+organization accounts are in the policy reference's "Mode A setup", and
+`docs/github-apps.md` is the guide for an adopter.
 
 ## Optional external add-ons
 

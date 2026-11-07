@@ -55,7 +55,19 @@ use serde_json::{json, Value};
 
 use crate::hooks::policy::DEFAULT_REQUIRED_CHECKS;
 
+pub mod agent_key;
+pub mod apps;
 mod fnmatch;
+
+/// `owner/name` of the repository's `origin` remote when it is on
+/// github.com; `None` when there is no such remote.
+///
+/// # Errors
+///
+/// When the repository or its `origin` cannot be read.
+pub fn github_origin(root: &Path) -> Result<Option<String>, String> {
+    crate::doctor::github_origin(root)
+}
 
 /// The GitHub App id of GitHub Actions. Ruleset status checks pin it, so a
 /// required check passes only when GitHub Actions reported it, as the
@@ -904,9 +916,7 @@ pub fn read_declared(
         &format!("repos/{nwo}/contents/.github/workflows?ref={reference}"),
     ]) {
         Ok(text) => text,
-        Err(error) if error.contains("404") || error.contains("Not Found") => {
-            return Ok(Declared::default())
-        }
+        Err(error) if status_is_404(&error) => return Ok(Declared::default()),
         Err(error) => {
             return Err(format!(
                 "the workflows on {branch} are not readable ({})",
@@ -963,6 +973,16 @@ pub fn read_declared(
 
 fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or(text).trim()
+}
+
+/// Whether a `gh` failure is an HTTP 404. `gh` prints the status after the
+/// response body, so the last status in the text is the real one, and a body
+/// that holds "404" or "Not Found" under another status does not count. Every
+/// place where absence leads to a write or a pass asks this.
+pub(crate) fn status_is_404(error: &str) -> bool {
+    error
+        .rfind("(HTTP ")
+        .is_some_and(|at| error[at..].starts_with("(HTTP 404)"))
 }
 
 /// The checks B and C require, from what the default branch declares, or
@@ -1525,9 +1545,7 @@ impl GithubProvider {
     ///
     /// Returns `Err(String)` when `gh` is not installed/locatable.
     pub fn discover(repo_dir: &Path) -> Result<Self, String> {
-        let gh = which::which("gh")
-            .map_err(|e| format!("gh CLI not found ({e}); install GitHub CLI or use --dry-run"))?;
-        Ok(Self::with_gh(gh, repo_dir))
+        Ok(Self::with_transport(gh_transport(repo_dir)?))
     }
 
     /// Construct with an explicit `gh` binary (test seam for PATH shims).
@@ -1710,6 +1728,20 @@ impl GithubProvider {
             format!("{pattern}: not applied — {err}")
         }
     }
+}
+
+/// The `gh` on PATH, run in `repo_dir`.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when `gh` is not installed/locatable.
+pub fn gh_transport(repo_dir: &Path) -> Result<GhTransport, String> {
+    let gh = which::which("gh")
+        .map_err(|e| format!("gh CLI not found ({e}); install GitHub CLI or use --dry-run"))?;
+    let repo_dir = repo_dir.to_path_buf();
+    Ok(Box::new(move |args, input| {
+        run_gh(&gh, &repo_dir, args, input)
+    }))
 }
 
 /// Run `gh` with args, optionally piping `input` to stdin. Returns stdout
@@ -1927,6 +1959,22 @@ impl RemoteProvider for GithubProvider {
 
 #[cfg(test)]
 mod tests {
+
+    /// An empty declaration decides what the rulesets require, so a failure
+    /// that only names 404 or Not Found stops, and a real 404 is the empty
+    /// folder.
+    #[test]
+    fn only_a_real_404_means_no_workflow_folder() {
+        for error in [
+            r#"{"message":"upstream said 404"}gh: Bad Gateway (HTTP 502)"#,
+            "Not Found: dial tcp: i/o timeout",
+        ] {
+            let gh = |_: &[&str]| Err(error.to_string());
+            assert!(super::read_declared(&gh, "o/r", "main").is_err(), "{error}");
+        }
+        let gh = |_: &[&str]| Err("gh: Not Found (HTTP 404)".to_string());
+        assert!(super::read_declared(&gh, "o/r", "main").is_ok());
+    }
 
     #[cfg(unix)]
     #[test]
