@@ -943,22 +943,42 @@ fn without_a_pinned_digest_the_install_warns_and_checks_sha256_sum() {
     );
 }
 
-/// Run the gates job's `codeflow test` step in `repo` with a logging
-/// `codeflow` first on PATH. Returns the output and the log.
+/// Run the gates job's gate steps in `repo` with a logging `codeflow` first
+/// on PATH. Returns the last step's output and the log of `codeflow test`.
 fn run_test_step(repo: &Path) -> (Output, String) {
     run_test_step_on(repo, None)
 }
 
+/// The variables a step wrote to `GITHUB_ENV` as `NAME<<MARK`, value lines,
+/// `MARK`, the form the setup hook step writes.
+fn carried_env(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        let Some((name, mark)) = line.split_once("<<") else {
+            continue;
+        };
+        let value: Vec<&str> = lines.by_ref().take_while(|l| *l != mark).collect();
+        out.push((name.to_string(), value.join("\n")));
+    }
+    out
+}
+
+/// The runner's order: the step that finds the binary, the project setup
+/// hook in its own step, then the gate step with what the hook carried
+/// through `GITHUB_ENV` and `GITHUB_PATH` and its own `env:` last. A failed
+/// step ends the job. On a pull request the working tree is committed first
+/// and that commit is the base the gate reads.
 fn run_test_step_on(repo: &Path, event: Option<&str>) -> (Output, String) {
-    let script = run_blocks(CI, "codeflow test").remove(0);
-    let bin = repo.parent().unwrap().join("fake-bin");
+    let parent = repo.parent().unwrap();
+    let bin = parent.join("fake-bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let log = repo.parent().unwrap().join("calls.log");
+    let log = parent.join("calls.log");
     let _ = std::fs::remove_file(&log);
     std::fs::write(
         bin.join("codeflow"),
         format!(
-            "#!/bin/sh\necho \"codeflow $* HOOK_VALUE=${{HOOK_VALUE:-unset}} PWD=$(pwd)\" >> '{}'\n",
+            "#!/bin/sh\n[ \"$1\" = test ] || exit 0\necho \"codeflow $* HOOK_VALUE=${{HOOK_VALUE:-unset}} PWD=$(pwd)\" >> '{}'\n",
             log.display()
         ),
     )
@@ -968,18 +988,89 @@ fn run_test_step_on(repo: &Path, event: Option<&str>) -> (Output, String) {
         .arg(bin.join("codeflow"))
         .status()
         .unwrap();
-    let out = Command::new("bash")
-        .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", &script])
-        .current_dir(repo)
-        .env(
-            "PATH",
-            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
-        )
-        .env("LOG", &log)
-        .env("EVENT", event.unwrap_or_default())
-        .output()
-        .unwrap();
-    (out, std::fs::read_to_string(&log).unwrap_or_default())
+    let files = parent.join("runner");
+    let _ = std::fs::remove_dir_all(&files);
+    std::fs::create_dir_all(&files).unwrap();
+    for name in ["output", "env", "path"] {
+        std::fs::write(files.join(name), "").unwrap();
+    }
+    let mut tip = String::new();
+    if event == Some("pull_request") {
+        if !repo.join(".git").exists() {
+            git(repo, &["init", "-q"]);
+        }
+        git(repo, &["add", "-A"]);
+        git(
+            repo,
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "chore: the base",
+            ],
+        );
+        tip = git(repo, &["rev-parse", "HEAD"]);
+    }
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let run = |name: &str, carried: &[(&str, &str)], path: &str, step: [&str; 3]| {
+        Command::new("bash")
+            .args(["--noprofile", "--norc", "-eo", "pipefail", "-c"])
+            .arg(run_blocks(CI, name).remove(0))
+            .current_dir(repo)
+            .env("GITHUB_OUTPUT", files.join("output"))
+            .env("GITHUB_ENV", files.join("env"))
+            .env("GITHUB_PATH", files.join("path"))
+            .env("RUNNER_TEMP", &files)
+            .env("LOG", &log)
+            .envs(carried.iter().copied())
+            .env("PATH", path)
+            .env("EVENT", step[0])
+            .env("BASE_TIP", step[1])
+            .env("CODEFLOW_BIN", step[2])
+            .output()
+            .unwrap()
+    };
+    let read = |out: Output| (out, std::fs::read_to_string(&log).unwrap_or_default());
+    let found = run("Find the codeflow binary the gate runs", &[], &path, ["", "", ""]);
+    if !found.status.success() {
+        return read(found);
+    }
+    let hook = run("Project setup hook", &[], &path, ["", "", ""]);
+    if !hook.status.success() {
+        return read(hook);
+    }
+    let outputs = std::fs::read_to_string(files.join("output")).unwrap();
+    let gate_bin = outputs
+        .lines()
+        .find_map(|l| l.strip_prefix("bin="))
+        .unwrap_or_default()
+        .to_string();
+    let carried = carried_env(&std::fs::read_to_string(files.join("env")).unwrap());
+    let carried: Vec<(&str, &str)> = carried
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let mut front: Vec<String> = std::fs::read_to_string(files.join("path"))
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    front.reverse();
+    front.push(path);
+    let gate = run(
+        "codeflow test",
+        &carried,
+        &front.join(":"),
+        [event.unwrap_or_default(), tip.as_str(), gate_bin.as_str()],
+    );
+    read(gate)
 }
 
 /// sathyassn/codeflow#46: the gates job sources a project-owned setup hook
@@ -1034,8 +1125,9 @@ fn the_gates_job_sources_the_project_setup_hook_before_the_test_gate() {
     assert_eq!(log.trim(), "hook");
 
     // sathyassn/codeflow#81: the hook cannot move what the gate calls. A
-    // `codeflow` function, a `codeflow` earlier on PATH and `set +e` leave
-    // the real gate running, and reassigning the binary fails the step.
+    // `codeflow` function, a `codeflow` earlier on PATH, `set +e` and a new
+    // value for the gate's binary leave the real gate running: the binary
+    // was found before the hook ran, in a step of its own.
     let decoy = dir.path().join("decoy");
     std::fs::create_dir_all(&decoy).unwrap();
     std::fs::write(
@@ -1067,23 +1159,48 @@ fn the_gates_job_sources_the_project_setup_hook_before_the_test_gate() {
     );
     std::fs::write(
         work.join(".codeflow/ci-setup.sh"),
-        format!("codeflow_bin='{}'\n", decoy.join("codeflow").display()),
+        format!(
+            "export CODEFLOW_BIN='{0}' codeflow_bin='{0}'\n",
+            decoy.join("codeflow").display()
+        ),
     )
     .unwrap();
     let (out, log) = run_test_step(&work);
-    assert!(!out.status.success(), "{out:?}");
-    assert_eq!(log.trim(), "");
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        log.trim(),
+        format!(
+            "codeflow test --strict --mode full HOOK_VALUE=unset PWD={}",
+            root.display()
+        )
+    );
 
-    // A hook that exits, even with status 0, fails the step: the gate
-    // never ran.
+    // A hook that exits, even with status 0, fails its step, and the job
+    // ends there.
     std::fs::write(work.join(".codeflow/ci-setup.sh"), "exit 0\n").unwrap();
     let (out, log) = run_test_step(&work);
     assert!(!out.status.success(), "{out:?}");
     assert_eq!(log.trim(), "");
     assert!(
-        String::from_utf8_lossy(&out.stdout).contains("the run ended before codeflow test ran"),
+        String::from_utf8_lossy(&out.stdout).contains("a project setup hook must not exit"),
         "{out:?}"
     );
+
+    // One that clears the step's trap first, or sets a variable the step
+    // reads, ends only its own step: the gate step runs after it.
+    for hook in ["trap - EXIT\nexit 0\n", "codeflow_returned=1\nexit 0\n"] {
+        std::fs::write(work.join(".codeflow/ci-setup.sh"), hook).unwrap();
+        let (out, log) = run_test_step(&work);
+        assert!(out.status.success(), "{hook}: {out:?}");
+        assert_eq!(
+            log.trim(),
+            format!(
+                "codeflow test --strict --mode full HOOK_VALUE=unset PWD={}",
+                root.display()
+            ),
+            "{hook}"
+        );
+    }
 }
 
 /// A repository whose base commit holds `base_policy` (none when `None`)

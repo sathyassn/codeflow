@@ -281,16 +281,18 @@ is an edit, and a tree that cannot be read is named unknown, never a removal.
 | Input | Read by | Remedy code |
 |---|---|---|
 | `git.security_review`, `git.dep_audit` in `.codeflow/policy.json` | the security review | `CI_SECURITY_LEVEL_LOWERED` |
-| `.codeflow/ci-setup.sh` | the gates job and the shared pinned run, sourced before `codeflow test` | `CI_SETUP_HOOK_CHANGED` |
+| `.codeflow/ci-setup.sh` | the gates job, in its own step before the gate step, and the shared pinned run, sourced before `codeflow test` | `CI_SETUP_HOOK_CHANGED` |
 | `.codeflow/base-checks.json` | the trusted-base project checks (TSK-1103) | `CI_BASE_CHECK_CHANGED` |
 | each `script` and `inputs` path it declares, on either side of the range | the same checks | `CI_BASE_CHECK_CHANGED` |
 | `.codeflow/audit-exceptions.sh` | the security review's project exception hook (TSK-294) | `CI_AUDIT_EXCEPTIONS_CHANGED` |
 | each `audit_exception_inputs` path in `.codeflow/base-checks.json` | the files that hook reads, such as its register | `CI_AUDIT_EXCEPTIONS_CHANGED` |
 
 `.codeflow/test-config.json` and `.codeflow/policy.json` are read by the
-gates job from the base branch's tip, so a pull request's own copy never
-runs its gate, and the managed workflow files are judged by
-`CI_WORKFLOW_CHANGED`.
+gates job's gate step from the base branch's tip, after the project setup
+hook's step has ended, so neither a pull request's own copy nor a setup hook
+that rewrites it decides its gate. The setup hook itself is the change's
+code and is named by `CI_SETUP_HOOK_CHANGED`, and the managed workflow
+files are judged by `CI_WORKFLOW_CHANGED`.
 
 ## Unsupported policy keys
 

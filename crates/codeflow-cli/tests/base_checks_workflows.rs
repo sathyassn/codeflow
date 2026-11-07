@@ -405,20 +405,121 @@ fn the_verdict_job_fetches_the_tip_and_checks_the_merge() {
     assert!(log.contains("the pull request head moved"), "{log}");
 }
 
-/// AC-16: the gates job reads the test config and the policy from the
-/// base, so a head that drops a target, lowers a floor or edits the policy
-/// is judged by the base's copies; a file the base lacks is removed; a base
-/// copy that is not a regular file or cannot be read fails the job.
-#[test]
-fn the_gate_reads_its_config_and_policy_from_the_base() {
-    let script = run_blocks(CI, "Read the gate's config and policy from the base").remove(0);
-    let base_config = r#"{"schema_version": 1, "execution": {"quick_default_class": "heavy"}, "targets": [{"name": "unit", "command": "true", "modes": {"essential": {}}}, {"name": "lint", "command": "true"}]}"#;
-    let base_policy = r#"{"git": {"security_review": "block"}}"#;
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
+/// What a run of the gates job's last steps did: whether the setup hook's
+/// step passed, whether the gate step ran and passed, the steps' output and
+/// each call the gate made, with the config and policy it saw.
+struct GateRun {
+    hook_ok: bool,
+    gate_ok: Option<bool>,
+    log: String,
+    calls: Vec<String>,
+}
+
+/// The variables a step wrote to `GITHUB_ENV` as `NAME<<MARK`, value lines,
+/// `MARK`, the form the setup hook step writes.
+fn carried_env(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        let Some((name, mark)) = line.split_once("<<") else {
+            continue;
+        };
+        let value: Vec<&str> = lines.by_ref().take_while(|l| *l != mark).collect();
+        out.push((name.to_string(), value.join("\n")));
+    }
+    out
+}
+
+/// Run the gates job's last three steps in `root` as the runner runs them:
+/// the step that finds the binary, the project setup hook in its own step,
+/// then the gate step with what the hook carried through `GITHUB_ENV` and
+/// `GITHUB_PATH` and its own `env:` last. A failed step ends the job. The
+/// stand-in `codeflow` records each call with the config and policy it saw.
+fn run_gate(root: &Path, event: &str, base_tip: &str) -> GateRun {
+    let temp = tempfile::tempdir().unwrap();
+    let bin = temp.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let calls = temp.path().join("calls");
+    let fake = bin.join("codeflow");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\nprintf '%s config=%s policy=%s tool=%s\\n' \"$*\" \"$(cat .codeflow/test-config.json 2>/dev/null)\" \"$(cat .codeflow/policy.json 2>/dev/null)\" \"${{TOOL:-unset}}\" >> '{}'\n",
+            calls.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let env_file = temp.path().join("env");
+    let path_file = temp.path().join("path");
+    std::fs::write(&env_file, "").unwrap();
+    std::fs::write(&path_file, "").unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let runner = [
+        ("GITHUB_ENV", env_file.to_str().unwrap()),
+        ("GITHUB_PATH", path_file.to_str().unwrap()),
+        ("RUNNER_TEMP", temp.path().to_str().unwrap()),
+    ];
+    let script = |name: &str| run_blocks(CI, name).remove(0);
+    let recorded = || {
+        std::fs::read_to_string(&calls)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    };
+
+    let mut env: Vec<(&str, &str)> = vec![("PATH", path.as_str())];
+    env.extend(runner);
+    let (ok, mut log, outputs) = run_step(&script("Find the codeflow binary the gate runs"), root, &env);
+    assert!(ok, "{log}");
+    let (hook_ok, hook_log, _) = run_step(&script("Project setup hook"), root, &env);
+    log.push_str(&hook_log);
+    if !hook_ok {
+        return GateRun {
+            hook_ok,
+            gate_ok: None,
+            log,
+            calls: recorded(),
+        };
+    }
+
+    let carried = carried_env(&std::fs::read_to_string(&env_file).unwrap());
+    let mut front: Vec<String> = std::fs::read_to_string(&path_file)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    front.reverse();
+    front.push(path.clone());
+    let gate_path = front.join(":");
+    let mut env: Vec<(&str, &str)> = carried
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    env.extend(runner);
+    env.extend([
+        ("PATH", gate_path.as_str()),
+        ("EVENT", event),
+        ("BASE_TIP", base_tip),
+        ("CODEFLOW_BIN", outputs["bin"].as_str()),
+    ]);
+    let (gate_ok, gate_log, _) = run_step(&script("codeflow test"), root, &env);
+    log.push_str(&gate_log);
+    GateRun {
+        hook_ok,
+        gate_ok: Some(gate_ok),
+        log,
+        calls: recorded(),
+    }
+}
+
+/// A repository whose base holds `config` and `policy`, and whose head,
+/// committed on top, weakens both; returns the base commit.
+fn weakened(root: &Path, config: &str, policy: &str) -> String {
     git(root, &["init", "-q", "-b", "main"]);
-    write(root, ".codeflow/test-config.json", base_config);
-    write(root, ".codeflow/policy.json", base_policy);
+    write(root, ".codeflow/test-config.json", config);
+    write(root, ".codeflow/policy.json", policy);
     let base = commit(root, "chore: seed");
     // The head drops a target, lowers the execution floor and the policy.
     write(
@@ -432,25 +533,39 @@ fn the_gate_reads_its_config_and_policy_from_the_base() {
         r#"{"git": {"security_review": "off"}}"#,
     );
     commit(root, "feat: weaken the gate");
-    let (ok, log, _) = run_step(
-        &script,
-        root,
-        &[("EVENT", "pull_request"), ("BASE_TIP", &base)],
-    );
-    assert!(ok, "{log}");
-    assert_eq!(
-        std::fs::read_to_string(root.join(".codeflow/test-config.json")).unwrap(),
-        base_config
-    );
-    assert_eq!(
-        std::fs::read_to_string(root.join(".codeflow/policy.json")).unwrap(),
-        base_policy
-    );
+    base
+}
+
+const BASE_CONFIG: &str = r#"{"schema_version": 1, "execution": {"quick_default_class": "heavy"}, "targets": [{"name": "unit", "command": "true", "modes": {"essential": {}}}, {"name": "lint", "command": "true"}]}"#;
+const BASE_POLICY: &str = r#"{"git": {"security_review": "block"}}"#;
+
+/// The calls a gate makes when it reads the base's copies: the docs check,
+/// then the tests in the mode the base's config chooses.
+fn base_calls(tool: &str) -> Vec<String> {
+    ["validate --docs", "test --strict --mode essential"]
+        .iter()
+        .map(|call| format!("{call} config={BASE_CONFIG} policy={BASE_POLICY} tool={tool}"))
+        .collect()
+}
+
+/// AC-16: the gates job reads the test config and the policy from the
+/// base, so a head that drops a target, lowers a floor or edits the policy
+/// is judged by the base's copies, by the docs check and the tests both; a
+/// file the base lacks is removed.
+#[test]
+fn the_gate_reads_its_config_and_policy_from_the_base() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let base = weakened(root, BASE_CONFIG, BASE_POLICY);
+    let run = run_gate(root, "pull_request", &base);
+    assert_eq!(run.gate_ok, Some(true), "{}", run.log);
+    assert_eq!(run.calls, base_calls("unset"), "{}", run.log);
     assert!(
-        log.contains(&format!(
+        run.log.contains(&format!(
             "the gate reads .codeflow/test-config.json from the base {base}"
         )),
-        "{log}"
+        "{}",
+        run.log
     );
 
     // A base without the files: the head's copies are removed.
@@ -467,26 +582,88 @@ fn the_gate_reads_its_config_and_policy_from_the_base() {
     let without = commit(root, "chore: no config");
     write(root, ".codeflow/test-config.json", "{}");
     write(root, ".codeflow/policy.json", "{}");
-    let (ok, log, _) = run_step(
-        &script,
-        root,
-        &[("EVENT", "pull_request"), ("BASE_TIP", &without)],
+    let run = run_gate(root, "pull_request", &without);
+    assert_eq!(run.gate_ok, Some(true), "{}", run.log);
+    assert_eq!(
+        run.calls,
+        [
+            "validate --docs config= policy= tool=unset",
+            "test --strict --mode full config= policy= tool=unset"
+        ],
+        "{}",
+        run.log
     );
-    assert!(ok, "{log}");
-    assert!(!root.join(".codeflow/test-config.json").exists());
-    assert!(!root.join(".codeflow/policy.json").exists());
     assert!(
-        log.contains("holds no .codeflow/policy.json; the gate runs without it, as the base would"),
-        "{log}"
+        run.log.contains(
+            "holds no .codeflow/policy.json; the gate runs without it, as the base would"
+        ),
+        "{}",
+        run.log
     );
 }
 
+/// AC-16: the project setup hook runs in its own step, before the gate
+/// step reads the base's copies, so a hook that rewrites both files, ends
+/// its step early, clears its trap, sets the variables a shared shell once
+/// read or puts another `codeflow` first on PATH neither skips the gate nor
+/// changes what it reads; what it exports still reaches the gate.
+#[test]
+fn a_setup_hook_cannot_skip_the_gate_or_change_what_it_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let decoy = root.join("decoy");
+    write(root, "decoy/codeflow", "#!/bin/sh\nexit 0\n");
+    std::fs::set_permissions(
+        decoy.join("codeflow"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let base = weakened(root, BASE_CONFIG, BASE_POLICY);
+    let rewrite = "printf '{}' > .codeflow/test-config.json\nprintf '{}' > .codeflow/policy.json\n";
+    let shadow = format!(
+        "export PATH='{0}':\"$PATH\" CODEFLOW_BIN='{0}/codeflow'\ncodeflow() {{ :; }}\nset +e\n",
+        decoy.display()
+    );
+    // A hook that ends its step early carries nothing, so `TOOL` reaches
+    // the gate only from the hooks that return.
+    for (hook, tool) in [
+        (rewrite.to_string(), "set"),
+        (
+            format!("{rewrite}codeflow_gated=1\ncodeflow_returned=1\nexit 0\n"),
+            "unset",
+        ),
+        (format!("{rewrite}trap - EXIT\nexit 0\n"), "unset"),
+        (shadow, "set"),
+    ] {
+        write(root, ".codeflow/ci-setup.sh", &format!("export TOOL=set\n{hook}"));
+        let run = run_gate(root, "pull_request", &base);
+        assert!(run.hook_ok, "{hook}: {}", run.log);
+        assert_eq!(run.gate_ok, Some(true), "{hook}: {}", run.log);
+        assert_eq!(run.calls, base_calls(tool), "{hook}: {}", run.log);
+    }
+
+    // An `exit` that leaves the step's trap in place fails the hook's step,
+    // and the job ends there.
+    write(root, ".codeflow/ci-setup.sh", &format!("{rewrite}exit 0\n"));
+    let run = run_gate(root, "pull_request", &base);
+    assert!(!run.hook_ok, "{}", run.log);
+    assert_eq!(run.gate_ok, None);
+    assert!(run.log.contains("a project setup hook must not exit"), "{}", run.log);
+}
+
 /// AC-16: a base copy that is a link or cannot be read fails the job, as
-/// does a missing base on a pull request; a push judges its own copies.
+/// does a missing base on a pull request or a missing binary; a push judges
+/// its own copies.
 #[test]
 fn the_gate_refuses_a_base_copy_it_cannot_read() {
-    let script = run_blocks(CI, "Read the gate's config and policy from the base").remove(0);
-    let base_policy = r#"{"git": {"security_review": "block"}}"#;
+    let script = run_blocks(CI, "codeflow test").remove(0);
+    let gate = |root: &Path, event: &str, tip: &str| {
+        run_step(
+            &script,
+            root,
+            &[("EVENT", event), ("BASE_TIP", tip), ("CODEFLOW_BIN", "/usr/bin/true")],
+        )
+    };
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     git(root, &["init", "-q", "-b", "main"]);
@@ -495,11 +672,7 @@ fn the_gate_refuses_a_base_copy_it_cannot_read() {
     // A base whose policy is a symbolic link fails.
     std::os::unix::fs::symlink("/etc/hosts", root.join(".codeflow/policy.json")).unwrap();
     let linked = commit(root, "chore: a linked policy");
-    let (ok, log, _) = run_step(
-        &script,
-        root,
-        &[("EVENT", "pull_request"), ("BASE_TIP", &linked)],
-    );
+    let (ok, log, _) = gate(root, "pull_request", &linked);
     assert!(!ok);
     assert!(
         log.contains(&format!(
@@ -510,35 +683,36 @@ fn the_gate_refuses_a_base_copy_it_cannot_read() {
 
     // A base copy that cannot be read fails.
     git(root, &["rm", "-q", ".codeflow/policy.json"]);
-    write(root, ".codeflow/policy.json", base_policy);
+    write(root, ".codeflow/policy.json", BASE_POLICY);
     let unreadable = commit(root, "chore: restore the policy");
     let blob = git(
         root,
         &["rev-parse", &format!("{unreadable}:.codeflow/policy.json")],
     );
     std::fs::remove_file(root.join(format!(".git/objects/{}/{}", &blob[..2], &blob[2..]))).unwrap();
-    let (ok, log, _) = run_step(
-        &script,
-        root,
-        &[("EVENT", "pull_request"), ("BASE_TIP", &unreadable)],
-    );
+    let (ok, log, _) = gate(root, "pull_request", &unreadable);
     assert!(!ok);
     assert!(log.contains("nothing is judged"), "{log}");
 
     // No base at all fails.
-    let (ok, log, _) = run_step(
-        &script,
-        root,
-        &[("EVENT", "pull_request"), ("BASE_TIP", "")],
-    );
+    let (ok, log, _) = gate(root, "pull_request", "");
     assert!(!ok);
     assert!(
         log.contains("no base commit to read the gate's config and policy from"),
         "{log}"
     );
 
+    // No binary found before the hook fails.
+    let (ok, log, _) = run_step(
+        &script,
+        root,
+        &[("EVENT", "push"), ("BASE_TIP", ""), ("CODEFLOW_BIN", "")],
+    );
+    assert!(!ok);
+    assert!(log.contains("the gate's codeflow binary was not found"), "{log}");
+
     // A push judges the pushed commit with its own copies.
-    let (ok, log, _) = run_step(&script, root, &[("EVENT", "push"), ("BASE_TIP", "")]);
+    let (ok, log, _) = gate(root, "push", "");
     assert!(ok, "{log}");
     assert!(
         log.contains("judges the pushed commit with its own config and policy"),
@@ -546,32 +720,36 @@ fn the_gate_refuses_a_base_copy_it_cannot_read() {
     );
 }
 
-/// AC-16: in the gates job the base read comes after the base is resolved
-/// and before anything reads the config or the policy.
+/// AC-16: in the gates job the binary is found and the hook runs, each in
+/// its own step, after the base is resolved and before the gate step, which
+/// reads the base and runs the docs check and the tests; no step carries a
+/// condition, since `ci_pin` holds that the gates job runs on every event.
 #[test]
 fn the_gates_job_reads_the_base_before_the_gate() {
-    let gates: Vec<String> = steps(CI)
-        .into_iter()
-        .filter(|s| s.job == "gates")
-        .map(|s| s.name)
-        .collect();
-    let at = |name: &str| {
-        gates
-            .iter()
-            .position(|n| n.starts_with(name))
-            .unwrap_or_else(|| panic!("{name}: {gates:?}"))
-    };
-    assert!(at("Resolve the base") < at("Read the gate's config and policy from the base"));
-    assert!(at("Read the gate's config and policy from the base") < at("codeflow test"));
-    assert!(at("codeflow test") < at("codeflow validate --docs"));
-    let read = steps(CI)
-        .into_iter()
-        .find(|s| s.name.starts_with("Read the gate's config"))
-        .unwrap();
-    // No step condition: `ci_pin` holds that the gates job has no `if:`, so
-    // the script itself passes on any event but a pull request.
-    assert_eq!(read.condition, None);
-    assert_eq!(read.env["EVENT"], "${{ github.event_name }}");
+    let gates: Vec<Step> = steps(CI).into_iter().filter(|s| s.job == "gates").collect();
+    let names: Vec<&str> = gates.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names[1..],
+        [
+            "Resolve the base",
+            "Install codeflow (target-pinned, checksum-verified)",
+            "Find the codeflow binary the gate runs",
+            "Project setup hook",
+            "codeflow test",
+        ]
+    );
+    assert!(gates.iter().all(|s| s.condition.is_none()));
+    let (find, hook, gate) = (&gates[3], &gates[4], &gates[5]);
+    assert_eq!(find.id.as_deref(), Some("gate"));
+    assert!(hook.run.as_deref().unwrap().contains("\n. ./.codeflow/ci-setup.sh\n"));
+    let run = gate.run.as_deref().unwrap();
+    assert!(!run.contains("ci-setup.sh"), "{run}");
+    let at = |text: &str| run.find(text).unwrap_or_else(|| panic!("{text}: {run}"));
+    assert!(at("git cat-file blob") < at("\"$CODEFLOW_BIN\" validate --docs"));
+    assert!(at("\"$CODEFLOW_BIN\" validate --docs") < at("\"$CODEFLOW_BIN\" test --strict"));
+    assert_eq!(gate.env["EVENT"], "${{ github.event_name }}");
+    assert_eq!(gate.env["BASE_TIP"], "${{ steps.base.outputs.tip }}");
+    assert_eq!(gate.env["CODEFLOW_BIN"], "${{ steps.gate.outputs.bin }}");
 }
 
 /// AC-9: the step lives in the verdict job, after the head is fetched as

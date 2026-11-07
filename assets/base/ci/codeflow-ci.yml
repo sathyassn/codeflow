@@ -15,7 +15,8 @@
 # then run `codeflow update`.
 #
 # A project that needs its own toolchain for the gate commits
-# .codeflow/ci-setup.sh; the gates job sources it just before `codeflow test`.
+# .codeflow/ci-setup.sh; the gates job sources it in its own step before
+# `codeflow test`.
 # The secret scan reads only the commits a pull request or push brings; the
 # weekly and manual runs read the full history.
 #
@@ -191,81 +192,113 @@ jobs:
           if [ -n "$digest" ]; then verified="the digest pinned in .codeflow/project.toml and sha256.sum"; fi
           echo "codeflow ${version} installed and verified against ${verified}"
 
-      # On a pull request the gate's targets and policy are the base's: the
-      # base tip's .codeflow/test-config.json and .codeflow/policy.json
-      # replace the pull request's copies before anything reads them, so a
-      # pull request cannot drop a target, lower a floor or edit the policy
-      # its own gate runs under; its change takes effect once it lands. A
-      # file the base does not hold is removed, so the gate runs as the base
-      # would; one the base holds as anything but a regular file, or that
-      # cannot be read, fails the job.
-      - name: Read the gate's config and policy from the base
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE_TIP: ${{ steps.base.outputs.tip }}
+      # The gate's binary is the one the install above put on PATH, found here
+      # before any project code runs, so the gate step below never looks it
+      # up on a PATH the project setup hook may have changed.
+      - name: Find the codeflow binary the gate runs
+        id: gate
         run: |
-          set -euo pipefail
-          if [ "$EVENT" != pull_request ]; then
-            echo "a ${EVENT} run judges the pushed commit with its own config and policy"; exit 0
-          fi
-          case ${BASE_TIP:-} in
-            '' | *[!0-9a-f]*) echo "::error::no base commit to read the gate's config and policy from; nothing is judged"; exit 1 ;;
-          esac
-          if [ -L .codeflow ] || { [ -e .codeflow ] && [ ! -d .codeflow ]; }; then
-            echo "::error::.codeflow in this change is not a folder; the base's config and policy cannot be put in place; nothing is judged"; exit 1
-          fi
-          mkdir -p .codeflow
-          for file in .codeflow/test-config.json .codeflow/policy.json; do
-            if ! entry=$(git ls-tree "$BASE_TIP" -- "$file"); then
-              echo "::error::cannot read the tree of the base ${BASE_TIP}; nothing is judged"; exit 1
-            fi
-            rm -f -- "$file"
-            case ${entry%% *} in
-              '') echo "the base ${BASE_TIP} holds no ${file}; the gate runs without it, as the base would" ;;
-              100644|100755)
-                if ! git cat-file blob "${BASE_TIP}:${file}" > "$file"; then
-                  echo "::error::cannot read ${file} at the base ${BASE_TIP}; nothing is judged"; exit 1
-                fi
-                echo "the gate reads ${file} from the base ${BASE_TIP}" ;;
-              *) echo "::error::${file} at the base ${BASE_TIP} is not a regular file; nothing is judged"; exit 1 ;;
-            esac
-          done
+          set -eu
+          bin=$(command -v codeflow)
+          echo "bin=${bin}" >> "$GITHUB_OUTPUT"
+          echo "the gate runs ${bin}"
 
       # Project setup (optional): a change that holds .codeflow/ci-setup.sh
-      # has it sourced here, after the install and before the test gate,
-      # under set -eu, so the toolchain it installs and the variables it
-      # exports reach the gate and a failing command fails the job. The
-      # project owns the file; `codeflow update` never writes it.
+      # has it sourced here, in its own step after the install and before the
+      # test gate, under set -eu, so a failing command fails the job. What it
+      # exports, and the folders it puts in front of PATH, are carried to the
+      # gate step through GITHUB_ENV and GITHUB_PATH. An `exit` in it, even
+      # `exit 0`, fails this step. Its own step keeps it from skipping the
+      # gate: an `exit`, a trap or a shell variable in it ends with this
+      # step, and the gate step reads the base's files and finds its binary
+      # without it. The project owns the file; `codeflow update` never
+      # writes it.
+      - name: Project setup hook
+        run: |
+          set -eu
+          if [ ! -f .codeflow/ci-setup.sh ]; then
+            echo "no project setup hook (.codeflow/ci-setup.sh)"; exit 0
+          fi
+          codeflow_env=$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/codeflow-env.XXXXXX")
+          python3 -I -c 'import json, os, sys; json.dump(dict(os.environ), open(sys.argv[1], "w"))' "$codeflow_env"
+          codeflow_returned=
+          trap '[ -n "$codeflow_returned" ] || { echo "::error::the project setup hook ended the step instead of returning; a project setup hook must not exit"; exit 1; }' EXIT
+          echo "codeflow: sourcing the project setup hook .codeflow/ci-setup.sh"
+          . ./.codeflow/ci-setup.sh
+          set -eu
+          codeflow_returned=1
+          python3 -I - "$codeflow_env" <<'CARRY'
+          import json, os, re, secrets, sys
+          before = json.load(open(sys.argv[1]))
+          own = {"PATH", "PWD", "OLDPWD", "SHLVL", "_", "BASH_ENV", "ENV", "NODE_OPTIONS", "EVENT", "BASE_TIP", "CODEFLOW_BIN"}
+          with open(before["GITHUB_ENV"], "a") as env:
+              for name, value in sorted(os.environ.items()):
+                  if before.get(name) == value or name in own or name.startswith(("GITHUB_", "RUNNER_")):
+                      continue
+                  if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                      continue
+                  mark = "codeflow_" + secrets.token_hex(16)
+                  env.write(f"{name}<<{mark}\n{value}\n{mark}\n")
+          was = before.get("PATH", "").split(os.pathsep)
+          added = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p and p not in was]
+          with open(before["GITHUB_PATH"], "a") as path:
+              for folder in reversed(added):
+                  path.write(folder + "\n")
+          CARRY
+
+      # The gate. On a pull request its targets and policy are the base's:
+      # the base tip's .codeflow/test-config.json and .codeflow/policy.json
+      # replace the change's copies here, after the setup hook has ended and
+      # just before the gate reads them, so neither the change's copies nor a
+      # hook that rewrites them decides the targets or policy its own gate
+      # runs under; the change takes effect once it lands. A file the base
+      # does not hold is removed, so the gate runs as the base would; one the
+      # base holds as anything but a regular file, or that cannot be read,
+      # fails the job. The docs check runs before the tests, so no test
+      # command runs before it reads the policy.
       - name: codeflow test
         env:
           EVENT: ${{ github.event_name }}
+          BASE_TIP: ${{ steps.base.outputs.tip }}
+          CODEFLOW_BIN: ${{ steps.gate.outputs.bin }}
         run: |
-          set -eu
-          codeflow_mode=full
-          if [ "${EVENT:-}" = pull_request ] && python3 -I -c 'import json, sys; c = json.load(open(".codeflow/test-config.json")); sys.exit(0 if any("essential" in (t.get("modes") or {}) for t in c.get("targets", [])) else 1)' 2>/dev/null; then
-            codeflow_mode=essential
+          set -euo pipefail
+          case ${CODEFLOW_BIN:-} in
+            /*) ;;
+            *) echo "::error::the gate's codeflow binary was not found; nothing is judged"; exit 1 ;;
+          esac
+          if [ "$EVENT" = pull_request ]; then
+            case ${BASE_TIP:-} in
+              '' | *[!0-9a-f]*) echo "::error::no base commit to read the gate's config and policy from; nothing is judged"; exit 1 ;;
+            esac
+            if [ -L .codeflow ] || { [ -e .codeflow ] && [ ! -d .codeflow ]; }; then
+              echo "::error::.codeflow in this change is not a folder; the base's config and policy cannot be put in place; nothing is judged"; exit 1
+            fi
+            mkdir -p .codeflow
+            for file in .codeflow/test-config.json .codeflow/policy.json; do
+              if ! entry=$(git ls-tree "$BASE_TIP" -- "$file"); then
+                echo "::error::cannot read the tree of the base ${BASE_TIP}; nothing is judged"; exit 1
+              fi
+              rm -f -- "$file"
+              case ${entry%% *} in
+                '') echo "the base ${BASE_TIP} holds no ${file}; the gate runs without it, as the base would" ;;
+                100644|100755)
+                  if ! git cat-file blob "${BASE_TIP}:${file}" > "$file"; then
+                    echo "::error::cannot read ${file} at the base ${BASE_TIP}; nothing is judged"; exit 1
+                  fi
+                  echo "the gate reads ${file} from the base ${BASE_TIP}" ;;
+                *) echo "::error::${file} at the base ${BASE_TIP} is not a regular file; nothing is judged"; exit 1 ;;
+              esac
+            done
+          else
+            echo "a ${EVENT} run judges the pushed commit with its own config and policy"
           fi
-          # The hook runs with the gate's authority, like this file, so it is
-          # reviewed as this file is. These lines keep it from skipping the gate
-          # by accident: the shell variables naming the binary and folder are
-          # read-only (the binary itself is not), set -eu holds again once it
-          # returns, and a run it ends (an `exit`) fails.
-          codeflow_bin=$(command -v codeflow)
-          codeflow_root=$(pwd)
-          readonly codeflow_bin codeflow_root codeflow_mode
-          codeflow_gated=
-          trap '[ -n "$codeflow_gated" ] || { echo "::error::the run ended before codeflow test ran; a project setup hook must not exit"; exit 1; }' EXIT
-          if [ -f .codeflow/ci-setup.sh ]; then
-            echo "codeflow: sourcing the project setup hook .codeflow/ci-setup.sh"
-            . ./.codeflow/ci-setup.sh
-            set -eu
-            cd "$codeflow_root"
+          mode=full
+          if [ "$EVENT" = pull_request ] && python3 -I -c 'import json, sys; c = json.load(open(".codeflow/test-config.json")); sys.exit(0 if any("essential" in (t.get("modes") or {}) for t in c.get("targets", [])) else 1)' 2>/dev/null; then
+            mode=essential
           fi
-          codeflow_gated=1
-          "$codeflow_bin" test --strict --mode "$codeflow_mode"
-
-      - name: codeflow validate --docs
-        run: codeflow validate --docs
+          "$CODEFLOW_BIN" validate --docs
+          "$CODEFLOW_BIN" test --strict --mode "$mode"
 
   # R-113 upgrade step one: a pull request that raises the pinned version is
   # judged by the target's binary above; this job tests the candidate binary

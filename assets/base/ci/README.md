@@ -293,28 +293,42 @@ its own. A project that needs a toolchain of its own (a Node version with
 corepack and a frozen install, a pinned Python, a service) commits
 `.codeflow/ci-setup.sh`. The GitHub gates job and the shared pinned run of
 the GitLab, Bitbucket and generic wrappers source it after installing
-codeflow and just before `codeflow test --strict`, so the managed file stays
+codeflow and before `codeflow test --strict`, so the managed file stays
 managed and the gate runs once, on the project's toolchain:
 
-- It is sourced (`. ./.codeflow/ci-setup.sh`) under `set -eu` by the shell
-  that runs the gate, so write POSIX sh. Variables it exports and `PATH`
-  changes reach `codeflow test`; on GitHub it may also write `GITHUB_PATH`
-  or `GITHUB_ENV`. A `cd` in it does not move the gate.
+- It is sourced (`. ./.codeflow/ci-setup.sh`) under `set -eu`, so write
+  POSIX sh. In the GitLab, Bitbucket and generic scripts it shares the
+  shell that runs the gate, so variables it exports and `PATH` changes
+  reach `codeflow test`. On GitHub it runs in a step of its own, the
+  "Project setup hook" step, just before the gate step: the variables it
+  exports are carried to the gate step through `GITHUB_ENV`, and folders it
+  adds to `PATH` through `GITHUB_PATH`, in front of the runner's own. A
+  variable it removes, `NODE_OPTIONS`, `BASH_ENV`, `ENV`, the runner's
+  `GITHUB_` and `RUNNER_` names and the gate step's own `EVENT`,
+  `BASE_TIP` and `CODEFLOW_BIN` are not carried; it may also write
+  `GITHUB_ENV` or `GITHUB_PATH` itself. A `cd` in it does not move the gate.
 - A failing command fails the job before the gate runs. An `exit` in it,
-  even `exit 0`, fails the job too, since the gate never ran, but only
-  while the hook leaves the script's `EXIT` trap in place; a hook that
-  replaces that trap and then exits can end the job green, because it
-  shares the gate's shell (below).
-- It cannot skip the gate by accident: the gate runs the `codeflow` binary
-  found before the hook, from the folder the hook started in, and `set -eu`
-  holds again once the hook returns, so a `codeflow` function, a `PATH`
-  entry or `set +e` in it leaves the gate running. In the GitLab,
-  Bitbucket and generic scripts the exit trap is set again once the hook
-  returns too, so an `EXIT` trap the hook sets does not run; remove the
-  hook's own temporary files before it returns.
-- It is not a security boundary. It shares the gate's shell and runs with
-  the gate's authority, as the CI file does, which a change can also edit,
-  so a hook written to defeat the gate can. Review it as you would the CI
+  even `exit 0`, fails the job too, but only while the hook leaves its
+  `EXIT` trap in place. On GitHub a hook that replaces that trap and then
+  exits ends only its own step, and the gate step runs after it; in the
+  shared run it can end the job green, because it shares the gate's shell
+  (below).
+- It cannot skip the gate by accident. On GitHub the gate's binary is found
+  in a step before the hook runs, and the gate step reads the gate's config
+  and policy from the base after the hook's step has ended (see "Base
+  branch tip"), so a `codeflow` function, a `PATH` entry, `set +e`, a shell
+  variable, an early `exit` or a rewrite of those two files in it leaves the
+  gate running on the base's copies. In the shared run the gate runs the
+  `codeflow` binary found before the hook, from the folder the hook started
+  in, and `set -eu` holds again once the hook returns, so a `codeflow`
+  function, a `PATH` entry or `set +e` in it leaves the gate running. In
+  the GitLab, Bitbucket and generic scripts the exit trap is set again once
+  the hook returns too, so an `EXIT` trap the hook sets does not run;
+  remove the hook's own temporary files before it returns.
+- It is not a security boundary. It runs in the gates job with the gate's
+  authority, as the CI file does, which a change can also edit, so a hook
+  written to defeat the gate can, as can the change's own tests, which the
+  gate runs. Review it as you would the CI
   file: `codeflow ci` in the enforcing policy job names a change that adds,
   edits or removes it, and you can protect `.codeflow/` and the CI file with
   required review. It runs in the gates job, never in the secret-scan job,
@@ -409,12 +423,16 @@ range, the security review's trusted commit, and in the verdict job the range
 The secret scan resolves the tip inside its gitleaks step, so that nothing
 but the checkout runs before the scan. The event's base commit is never read, because it is the base when the event
 fired, and a later run would judge an old base's policy. On a pull request
-the gates job also reads `.codeflow/test-config.json` and
-`.codeflow/policy.json` from that tip, replacing the change's copies before
-anything reads them: a pull request cannot drop a target or edit the policy
-its own gate runs under, and its change takes effect once it lands. A file
-the tip does not hold is removed, so the gate runs as the base would; one
-the tip holds as a link, or that cannot be read, fails the job.
+the gates job's gate step reads `.codeflow/test-config.json` and
+`.codeflow/policy.json` from that tip, after the project setup hook's step
+has ended and just before `codeflow validate --docs` and `codeflow test`
+read them: the change's own copies, and a setup hook that rewrites them, do
+not decide the targets or the policy its gate runs under, and its change
+takes effect once it lands. A file the tip does not hold is removed, so the
+gate runs as the base would; one the tip holds as a link, or that cannot be
+read, fails the job. The setup hook and the tests stay the change's own
+code, run with the gate's authority, so their reviewer remains the boundary
+(see "Project setup hook").
 
 The race that remains: a base that moves after a run is not seen by that
 run, and a push to the base fires no pull request event. Requiring branches
