@@ -118,6 +118,11 @@ fn carried_commands_are_judged_as_typed_bare() {
             "git.force_push_protected",
         ),
         ("git branch -D main", "git-guard", "git.delete_protected"),
+        (
+            "git push --no-verify origin main",
+            "git-guard",
+            "git.no_verify_bypass",
+        ),
         ("rm -rf /", "exec-guard", "security.dangerous_commands"),
         (
             "sudo rm -rf /var",
@@ -296,6 +301,16 @@ fn unreadable_forms_refuse_and_read_only_forms_pass() {
         "hc run --bg odd task",
         "hc run --cwd \"$(cat dir.txt)\" -- ls",
         "echo t1 | xargs hc run -- ls",
+        // A directory the guard cannot establish (PR 706 review, F1):
+        // another machine, with or without `--cwd`, and a pane's shell.
+        "hc run --on vps -- ls",
+        "hc exec --on vps --cwd / -- rm -rf usr",
+        "hc exec --on vps --cwd ~/.ssh -- tar -cf - .",
+        "hc file read --on vps --cwd ~/.ssh config",
+        "herdr pane split --current --direction right --cwd /",
+        "herdr pane split --current --env A=1",
+        "herdr pane run w1:p1 'rm -rf usr'",
+        "herdr agent start seat --kind codex --pane w1:p1",
     ] {
         let exec = fixture.judge("exec-guard", command);
         let git = fixture.judge("git-guard", command);

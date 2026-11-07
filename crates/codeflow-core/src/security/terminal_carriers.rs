@@ -71,9 +71,9 @@ pub(crate) struct Run {
     /// The command, as shell text the guards read as if typed bare.
     pub(crate) line: String,
     /// The directory it runs in on this machine. `None` when the guard
-    /// cannot establish it (another machine, or a pane's shell); the
-    /// command is then judged where the line runs, and a Git command in it
-    /// refuses.
+    /// cannot establish it (another machine, a pane's shell, or a `cd` it
+    /// cannot follow); the form is then unread and refuses, since a
+    /// relative path in the command names files the guard cannot see.
     pub(crate) directory: Option<PathBuf>,
 }
 
@@ -82,7 +82,8 @@ impl Run {
     /// another directory is preceded by `cd` to it, so each guard follows
     /// the move as it does for the same line typed bare, and judges a Git
     /// command against the repository there. A run whose directory is
-    /// unknown is judged where the line runs.
+    /// unknown is also judged where the line runs, and its form refuses
+    /// (`unknown_directories`).
     pub(crate) fn bare_line(&self, cwd: &Path) -> String {
         match &self.directory {
             Some(directory) if directory != cwd => {
@@ -186,30 +187,31 @@ pub(crate) fn carried(command: &str, cwd: &Path) -> Carried {
     out.writes
         .sort_by(|a, b| a.path.cmp(&b.path).then(a.directory.cmp(&b.directory)));
     out.writes.dedup();
+    unknown_directories(&mut out);
     out.unread.sort();
     out.unread.dedup();
-    for run in &out.runs {
-        if run.directory.is_none() && runs_git(&run.line) {
-            out.unread.push(format!(
-                "`{}`: the repository its Git command targets cannot be established; \
-                 the guard cannot judge what it runs",
-                run.form
-            ));
-        }
-    }
     out
 }
 
-/// Whether a line runs Git, or a program the guard cannot name.
-fn runs_git(line: &str) -> bool {
-    crate::hooks::git_guard::simple_commands(line)
+/// Marks unread each run whose directory the guard cannot establish: on
+/// another machine (`--on`, with or without `--cwd`), in a `herdr` pane's
+/// shell, or after a `cd` it cannot follow. A relative path in such a
+/// command names files the guard cannot see, so judging the words where
+/// the line runs would judge a different tree; the form refuses instead.
+fn unknown_directories(out: &mut Carried) {
+    let forms: Vec<&'static str> = out
+        .runs
         .iter()
-        .filter_map(|argv| argv.first())
-        .any(|program| {
-            crate::hooks::git_guard::basename(program) == "git"
-                || program.contains(['$', '`'])
-                || program.chars().any(char::is_control)
-        })
+        .filter(|run| run.directory.is_none())
+        .map(|run| run.form)
+        .collect();
+    for form in forms {
+        out.unread(
+            form,
+            "the directory it runs in cannot be established (another machine, a terminal \
+             pane, or a `cd` the guard cannot follow)",
+        );
+    }
 }
 
 /// A carrier's words after its program name, with whether each is an
@@ -750,6 +752,7 @@ pub(crate) fn fully_read(args: &[String]) -> bool {
     } else {
         return false;
     }
+    unknown_directories(&mut out);
     out.unread.is_empty()
 }
 
@@ -971,8 +974,11 @@ fn frontmatter_command(text: &str) -> Option<String> {
 }
 
 /// `herdr pane run <pane> <command>` and `herdr agent start <name> --kind
-/// KIND --pane ID [--timeout MS] [-- <agent-args>...]`. The other `herdr`
-/// commands manage panes or type text and run nothing the guard reads.
+/// KIND --pane ID [--timeout MS] [-- <agent-args>...]`, which run in a
+/// pane whose directory the guard cannot see, and `herdr pane split`, whose
+/// `--cwd` and `--env` set a pane's directory and environment. The other
+/// `herdr` commands manage panes or type text and run nothing the guard
+/// reads.
 fn herdr(words: &Words<'_>, out: &mut Carried) {
     let args = words.args;
     match (
@@ -1039,6 +1045,21 @@ fn herdr(words: &Words<'_>, out: &mut Carried) {
                 directory: None,
             });
         }
+        (Some("pane"), Some("split")) => {
+            if let Some(option) = args[2..].iter().find(|a| {
+                matches!(a.as_str(), "--cwd" | "--env")
+                    || a.starts_with("--cwd=")
+                    || a.starts_with("--env=")
+            }) {
+                out.unread(
+                    "herdr pane split",
+                    format!(
+                        "`{option}` sets a pane's directory or environment, which later \
+                         commands in that pane run under"
+                    ),
+                );
+            }
+        }
         _ => {}
     }
 }
@@ -1087,14 +1108,29 @@ mod tests {
         );
         let found = read("hc run --cwd /elsewhere -- git status");
         assert_eq!(found.runs[0].directory, Some(PathBuf::from("/elsewhere")));
-        let found = read("hc run --on vps -- ls");
-        assert_eq!(found.runs[0].directory, None);
-        assert!(found.unread.is_empty());
-        let found = read("hc run --on vps -- git status");
-        assert!(
-            found.unread[0].contains("cannot be established"),
-            "{found:?}"
-        );
+        // On another machine the directory is unknown, with or without
+        // `--cwd`, so every carried command refuses (PR 706 review, F1).
+        let words =
+            |line: &str| -> Vec<String> { line.split_whitespace().map(str::to_string).collect() };
+        for line in [
+            "hc run --on vps -- ls",
+            "hc run --on vps -- git status",
+            "hc run --on vps --cwd / -- rm -rf usr",
+            "hc exec --on vps --cwd / -- rm -rf usr",
+            "hc exec --on vps --cwd /root/.ssh -- tar -cf - .",
+            "hc file read --on vps --cwd /root/.ssh config",
+        ] {
+            let found = read(line);
+            assert_eq!(found.runs[0].directory, None, "{line}");
+            assert!(
+                found
+                    .unread
+                    .iter()
+                    .any(|u| u.contains("cannot be established")),
+                "{line}: {found:?}"
+            );
+            assert!(!fully_read(&words(line)), "{line}");
+        }
         let found = read("hc run --cwd \"$D\" -- ls");
         assert!(!found.unread.is_empty());
     }
@@ -1191,17 +1227,28 @@ mod tests {
 
     #[test]
     fn herdr_forms_carry_their_command() {
-        let found = read("herdr pane run w1:p1 'ls -la'");
-        assert_eq!(found.runs[0].line, "ls -la");
+        // A pane's directory is unknown, so the carried command is read
+        // and its form refuses (PR 706 review, F1).
+        let found = read("herdr pane run w1:p1 'rm -rf usr'");
+        assert_eq!(found.runs[0].line, "rm -rf usr");
         assert_eq!(found.runs[0].directory, None);
-        assert_eq!(
-            lines("herdr agent start x --kind claude --pane p1 -- -p hello"),
-            vec!["claude \"-p\" \"hello\""]
-        );
-        assert_eq!(
-            lines("herdr agent start x --kind codex --pane p1"),
-            vec!["codex"]
-        );
+        assert!(!found.unread.is_empty());
+        let found = read("herdr agent start x --kind claude --pane p1 -- -p hello");
+        assert_eq!(found.runs[0].line, "claude \"-p\" \"hello\"");
+        assert!(!found.unread.is_empty());
+        assert!(!read("herdr agent start x --kind codex --pane p1")
+            .unread
+            .is_empty());
+        for line in [
+            "herdr pane split --current --direction right --cwd /",
+            "herdr pane split --current --cwd=/",
+            "herdr pane split --current --env A=1",
+        ] {
+            assert!(!read(line).unread.is_empty(), "{line}");
+        }
+        assert!(read("herdr pane split --current --direction right")
+            .unread
+            .is_empty());
     }
 
     #[test]
@@ -1218,7 +1265,9 @@ mod tests {
             home[0].starts_with("cat -- ") && home[0].ends_with("/.ssh/id_rsa"),
             "{home:?}"
         );
-        assert_eq!(read("hc file read --on vps x").runs[0].directory, None);
+        let remote = read("hc file read --on vps x");
+        assert_eq!(remote.runs[0].directory, None);
+        assert!(!remote.unread.is_empty());
         assert_eq!(lines("hc put t1 notes.md"), vec!["cat -- notes.md"]);
         assert_eq!(lines("hc update --from ./hc-new"), vec!["cat -- ./hc-new"]);
         assert!(!read("hc put t1").unread.is_empty());
@@ -1233,10 +1282,15 @@ mod tests {
             "hc exec --cwd /tmp ls",
             "hc ls",
             "hc",
+        ] {
+            assert!(fully_read(&words(line)), "{line}");
+        }
+        // A pane's directory is unknown, so these are not fully read.
+        for line in [
             "herdr pane run p1 ls",
             "herdr agent start x --kind codex --pane p1 -- -c a",
         ] {
-            assert!(fully_read(&words(line)), "{line}");
+            assert!(!fully_read(&words(line)), "{line}");
         }
         for line in [
             "hc run --frob -- ls",

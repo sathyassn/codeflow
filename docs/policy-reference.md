@@ -816,13 +816,18 @@ bare (TSK-1344). The code holds the program names in
   pane run <pane> <command>`; `herdr agent start <name> --kind <kind>
   [options] -- <args>...`, judged as `<kind> <args>...`.
 - Directory: `--cwd` from where the line runs, else that directory, so a
-  Git command is judged against the repository it targets. With `--on`
-  another machine, and in a `herdr` pane, the directory is unknown: the
-  command is judged where the line runs, and a Git command in it refuses.
+  Git command is judged against the repository it targets. Where the
+  directory is unknown, the form refuses whatever it carries, because a
+  relative path in it names files the guard cannot see: on another machine
+  (`--on`, with or without `--cwd`), in a `herdr` pane (`pane run`,
+  `agent start`), and after a `cd` the guard cannot follow. `herdr pane
+  split` with `--cwd` or `--env` refuses too, since later commands in that
+  pane run under the directory and environment it sets.
 - Files: `hc file write` and `hc file edit` meet the Edit tool's path
   rules; on another machine (`--on`) they refuse. The files `hc file
   read`, `hc put` and `hc update --from` read are judged by the
-  secret-read rules, as `cat` of the same path.
+  secret-read rules, as `cat` of the same path; `hc file read --on`
+  refuses.
 - Read once: the other readers leave the outer words of a form this reader
   reads in full to it, so a carried program's options are not read again as
   the carrier's own. A form it cannot read keeps every other reader.
@@ -836,7 +841,10 @@ bare (TSK-1344). The code holds the program names in
   `--version`, when their options parse.
 
 Text typed into a terminal is not judged: `hc send`, `hc keys`, `herdr
-pane send-text`, `herdr pane send-keys` and `herdr agent prompt`. The guard
+pane send-text`, `herdr pane send-keys`, `herdr agent send-keys`, `herdr
+agent prompt`, and the body and task of an `hc run` template, which the
+Herdr app sends as the first message once the agent is ready (the
+template's `command` is judged). The guard
 cannot know whether the program in that terminal reads the text as a
 prompt or runs it as a command, and `hc keys` can spell any line one key at
 a time, so a filter would stop only some spellings and is not offered as
