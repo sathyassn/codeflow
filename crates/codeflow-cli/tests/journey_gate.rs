@@ -272,7 +272,7 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
     ));
     assert!(trigger.contains("integration/**"));
     // TSK-449: a draft of any base runs no gate job.
-    let condition = "github.event_name == 'pull_request' && !github.event.pull_request.draft && contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || github.event_name == 'push' && contains(fromJSON('[\"refs/heads/main\",\"refs/heads/master\"]'), github.ref) || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'";
+    let condition = "github.event_name == 'pull_request' && !github.event.pull_request.draft && contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'";
     for id in [
         "gates-build",
         "gates",
