@@ -210,6 +210,9 @@ const LOOP_PASSES: usize = 6;
 /// reading both recurse on this, once per nested script, so it keeps a line
 /// well inside the stack; hand-written and generated lines stay far below it.
 const MAX_NESTING: usize = 16;
+/// Brace expressions expanded in one word. Expansion recurses once per
+/// expression, so past this the word's further values are unknown.
+const MAX_BRACE_GROUPS: usize = 64;
 
 // ---------------------------------------------------------------------------
 // Words and tokens
@@ -7676,7 +7679,7 @@ fn brace_expand(pieces: &[(String, Kind)]) -> Vec<Vec<(String, Kind)>> {
         .flat_map(|(text, kind)| text.chars().map(move |c| (c, *kind)))
         .collect();
     let mut out = Vec::new();
-    let whole = expand_chars(chars, &mut out);
+    let whole = expand_chars(chars, &mut out, 0);
     let mut expanded: Vec<Vec<(String, Kind)>> = out.iter().map(|chars| regroup(chars)).collect();
     if !whole {
         expanded.push(vec![(taint(why::MANY), Kind::Quoted)]);
@@ -7684,8 +7687,9 @@ fn brace_expand(pieces: &[(String, Kind)]) -> Vec<Vec<(String, Kind)>> {
     expanded
 }
 
-/// Expand into `out`, and whether every choice fit under [`MAX_VALUES`].
-fn expand_chars(chars: Vec<(char, Kind)>, out: &mut Vec<Vec<(char, Kind)>>) -> bool {
+/// Expand into `out`, `groups` brace expressions in, and whether every
+/// choice fit under [`MAX_VALUES`] and [`MAX_BRACE_GROUPS`].
+fn expand_chars(chars: Vec<(char, Kind)>, out: &mut Vec<Vec<(char, Kind)>>, groups: usize) -> bool {
     if out.len() >= MAX_VALUES {
         return false;
     }
@@ -7693,14 +7697,20 @@ fn expand_chars(chars: Vec<(char, Kind)>, out: &mut Vec<Vec<(char, Kind)>>) -> b
         out.push(chars);
         return true;
     };
-    let mut whole = true;
+    if groups >= MAX_BRACE_GROUPS {
+        return false;
+    }
+    // The first choice that cannot finish ends the expansion: the rest is
+    // unknown, and reading on could only repeat the stop.
     for choice in choices {
         let mut next = chars[..open].to_vec();
         next.extend(choice);
         next.extend_from_slice(&chars[close + 1..]);
-        whole &= expand_chars(next, out);
+        if !expand_chars(next, out, groups + 1) {
+            return false;
+        }
     }
-    whole
+    true
 }
 
 /// The first brace expression in `chars`: its `{`, its `}` and its

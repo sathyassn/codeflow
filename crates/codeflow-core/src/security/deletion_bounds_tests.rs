@@ -137,6 +137,21 @@ fn brace_alternatives_past_the_value_bound_stay_unknown() {
 }
 
 #[test]
+fn brace_expressions_past_the_group_bound_stay_unknown() {
+    let line = format!("rm -rf ./{}", "{a..a}".repeat(100));
+    let found = judged(&line).expect("the unexpanded groups stay unknown");
+    assert!(found.unproven.is_some(), "{found:?}");
+    assert!(judged(&format!("rm -rf ./{}", "{a..a}".repeat(8))).is_none());
+    // Each expression is one level of expansion: a long word stays cheap.
+    for groups in [100, 20_000] {
+        let word = "{a,b}".repeat(groups);
+        assert!(judged(&format!("echo {word}")).is_none());
+        let found = judged(&format!("rm -rf ./{word}")).expect("the long word stays unknown");
+        assert!(found.unproven.is_some(), "{groups}: {found:?}");
+    }
+}
+
+#[test]
 fn a_program_word_past_the_value_bound_is_refused() {
     for count in [100, 200] {
         let list = vec!["env"; count].join(",");

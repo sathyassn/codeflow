@@ -122,6 +122,11 @@ const MAX_EXPANSION_DEPTH: usize = 64;
 
 /// Lex `line` with the shell's lexical states.
 pub(crate) fn lex(line: &str) -> Lexed {
+    lex_at(line, 0)
+}
+
+/// [`lex`] for code met `depth` expansions deep.
+fn lex_at(line: &str, depth: usize) -> Lexed {
     let mut lexer = Lexer {
         chars: line.chars().collect(),
         at: 0,
@@ -129,7 +134,7 @@ pub(crate) fn lex(line: &str) -> Lexed {
         opaque: false,
         current_shell: false,
         heredocs: Vec::new(),
-        depth: 0,
+        depth,
     };
     let commands = lexer.list(None);
     let text = lexer
@@ -450,9 +455,14 @@ impl Lexer {
     }
 
     /// Lex code the shell runs elsewhere (a backquote body) for the flags
-    /// it can raise here.
+    /// it can raise here. The body is one expansion deeper, so past
+    /// [`MAX_EXPANSION_DEPTH`] it is left unread and the line is opaque.
     fn nested(&mut self, code: &str) {
-        let inner = lex(code);
+        if self.depth >= MAX_EXPANSION_DEPTH {
+            self.opaque = true;
+            return;
+        }
+        let inner = lex_at(code, self.depth + 1);
         self.opaque |= inner.opaque;
         self.current_shell |= inner.current_shell;
     }
