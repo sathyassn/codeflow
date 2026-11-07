@@ -30,7 +30,8 @@ use super::policy::{read_project_toml, Policy};
 
 /// The size one prompt reminder line aims for, since it recurs on every
 /// prompt; a guideline the tests print against, not a cap.
-pub const REMINDER_LINE_GUIDELINE_BYTES: usize = 300;
+pub const REMINDER_LINE_GUIDELINE_BYTES: usize =
+    codeflow_limits::REMINDER_LINE_BYTES.default_count();
 
 /// The scaffold manifest, the inventory of what each tier installs.
 pub const SCAFFOLD_MANIFEST: &str = include_str!("../../../../assets/base/scaffold-manifest.toml");

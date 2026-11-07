@@ -296,7 +296,7 @@ fn slow_python(root: &Path) -> PathBuf {
 /// none. The duration is measured input; no clock or budget setting enters
 /// the binary or its environment (TSK-356 AC-2).
 fn budget_finding(slow: std::time::Duration) -> Option<String> {
-    use codeflow_core::hooks::git_hook::{over_budget_note, PushStep, PUSH_SET_BUDGET};
+    use codeflow_core::hooks::git_hook::{over_budget_note, PushStep};
     let steps = [
         PushStep {
             name: "target policy".into(),
@@ -308,7 +308,12 @@ fn budget_finding(slow: std::time::Duration) -> Option<String> {
         },
     ];
     let total = steps.iter().map(|step| step.duration).sum();
-    over_budget_note(&steps, total, PUSH_SET_BUDGET).map(|note| note.line("codeflow", "note"))
+    over_budget_note(
+        &steps,
+        total,
+        codeflow_limits::PUSH_SET_BUDGET_SECONDS.wait(),
+    )
+    .map(|note| note.line("codeflow", "note"))
 }
 
 /// The push set's budget and its remedy without a real minute's wait: the

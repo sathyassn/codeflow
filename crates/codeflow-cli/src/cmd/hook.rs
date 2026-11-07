@@ -31,7 +31,7 @@ use codeflow_core::hooks::{
 
 // Large enough for the maximum decoded terminal message even when every byte
 // uses JSON's longest escape, while still bounding allocation before parsing.
-const MAX_SCHEMA_HOOK_INPUT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_SCHEMA_HOOK_INPUT_BYTES: usize = codeflow_limits::HOOK_SCHEMA_INPUT_BYTES.default_count();
 
 /// Which Claude-layer hook to run.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -151,14 +151,21 @@ pub fn run(args: &HookArgs) -> i32 {
 /// starts before the payload is read, so a stalled stdin counts too; a
 /// guard that decides in time exits first and the thread dies with it.
 fn arm_guard_deadline(guard: &'static str) -> std::io::Result<()> {
-    use codeflow_core::hooks::guard_deadline::GUARD_DEADLINE_SECS;
+    use codeflow_limits::{GUARD_DEADLINE, GUARD_DEADLINE_POLL};
+    let started = std::time::Instant::now();
     std::thread::Builder::new()
         .name("guard-deadline".into())
         .spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(GUARD_DEADLINE_SECS));
+            // The project's deadline arrives once the guard has read its
+            // policy, so the clock is checked against the current value: a
+            // stall before that read refuses at the default.
+            while started.elapsed() < GUARD_DEADLINE.wait() {
+                std::thread::sleep(GUARD_DEADLINE_POLL.wait());
+            }
+            let seconds = GUARD_DEADLINE.value();
             let finding = codeflow_core::remedy::Finding::new(
                 format!(
-                    "BLOCKED: the guard reached no decision within {GUARD_DEADLINE_SECS} seconds, so it cannot show the call is allowed; refusing"
+                    "BLOCKED: the guard reached no decision within {seconds} seconds, so it cannot show the call is allowed; refusing"
                 ),
                 codeflow_core::remedy::GUARD_DEADLINE.remedy(),
             );
@@ -178,7 +185,7 @@ fn arm_guard_deadline(guard: &'static str) -> std::io::Result<()> {
 /// How long the deadline's refusal waits for its reason to be written
 /// before it exits 2 regardless.
 const REFUSAL_WRITE_WAIT: std::time::Duration =
-    std::time::Duration::from_secs(codeflow_core::hooks::guard_deadline::GUARD_REFUSAL_WRITE_SECS);
+    std::time::Duration::from_secs(codeflow_limits::GUARD_REFUSAL_WRITE_WAIT.default);
 
 /// Run `write` on its own thread and wait at most `wait` for it to finish;
 /// whether it finished in time. A write that blocks keeps its thread, which
@@ -849,7 +856,7 @@ fn edit_guard(stdin: &str) -> i32 {
 
 /// Resolve a `gh pr merge <arg>` target to its base branch via `gh pr view`
 /// (empty `arg` = the current branch's PR). Bounded by
-/// [`GUARD_PR_LOOKUP_SECS`](codeflow_core::hooks::guard_deadline::GUARD_PR_LOOKUP_SECS)
+/// [`codeflow_limits::GUARD_PR_LOOKUP_WAIT`]
 /// and best-effort: any failure returns `None`, which the guard treats as
 /// doubt and blocks.
 fn gh_pr_base(arg: &str) -> Option<String> {
@@ -859,7 +866,7 @@ fn gh_pr_base(arg: &str) -> Option<String> {
         let _ = tx.send(gh_pr_base_blocking(&arg));
     });
     rx.recv_timeout(std::time::Duration::from_secs(
-        codeflow_core::hooks::guard_deadline::GUARD_PR_LOOKUP_SECS,
+        codeflow_limits::GUARD_PR_LOOKUP_WAIT.value(),
     ))
     .unwrap_or(None)
 }

@@ -59,18 +59,11 @@ fn adopt_or_stop<T>(
 /// Default per-target wall-clock timeout, applied when a target omits
 /// `timeout_seconds`. A hanging test target must never block the gate or
 /// pre-push forever, so every target has a finite ceiling.
-pub const DEFAULT_TIMEOUT_SECONDS: u64 = 600;
+pub const DEFAULT_TIMEOUT_SECONDS: u64 = codeflow_limits::TARGET_TIMEOUT.default;
 
 /// Exit code reported for a target killed after exceeding its timeout. Matches
 /// the GNU `timeout(1)` convention so the failure reads unambiguously.
 const TIMEOUT_EXIT_CODE: i32 = 124;
-
-/// Polling interval while waiting for a target command to finish.
-const POLL_INTERVAL: Duration = Duration::from_millis(50);
-
-/// Maximum retained bytes for each child output stream. Readers keep the tail
-/// so the most recent failure context survives noisy commands.
-const OUTPUT_CAPTURE_LIMIT: usize = 1024 * 1024;
 
 /// Result of running a single target's test command.
 #[derive(Debug, Clone)]
@@ -419,16 +412,19 @@ fn run_parallel(
 }
 
 /// The worker budget of a heavy run that shares the host with `runs` heavy
-/// runs, itself included: always bounded by the host's job budget, even for
-/// the first run and when `worker_budget` is unset, which only caps it
-/// further (TSK-1145).
+/// runs, itself included: the host's job budget, shared, unless the project
+/// set `worker_budget` and left the budget to memory, when it is used as set
+/// (TSK-1145, TSK-1299).
 fn run_budget(execution: &super::config::ExecutionConfig, runs: usize) -> usize {
-    let host = super::capacity::host_jobs(execution.host_jobs);
-    let jobs = super::capacity::run_jobs(host, execution.worker_budget, runs);
-    if super::capacity::lowered(host, execution.worker_budget, runs) {
+    let share = super::capacity::run_share(execution.host_jobs, execution.worker_budget, runs);
+    let (host, jobs) = (share.host, share.jobs);
+    if share.lowered {
         progress!(
             "[codeflow test] {runs} heavy runs share this host's {host} jobs; this run uses {jobs}"
         );
+    }
+    if let Some(warning) = share.warning {
+        progress!("[codeflow test] {warning} (about {host} jobs; this run uses {jobs})");
     }
     jobs
 }
@@ -472,8 +468,8 @@ pub fn run_dependency_targets_with_admission(
     let bound = parallel_bound(execution.parallel, execution.max_parallel);
     let mut admission: Option<super::gate_guard::GateLock> = None;
     let mut wait_started = None;
-    // The jobs heavy targets share: the run's own budget, lowered when more
-    // heavy runs share the host than its job budget holds (TSK-1145).
+    // The jobs heavy targets share: the run's own budget, shared when the host
+    // budget bounds it and more heavy runs are active than it holds (TSK-1145).
     let mut budget = super::gate_guard::held_runs().map_or(execution.worker_budget, |runs| {
         Some(run_budget(execution, runs))
     });
@@ -692,7 +688,7 @@ pub fn run_dependency_targets_with_admission(
         }
         if running.is_empty() {
             if waiting {
-                std::thread::sleep(POLL_INTERVAL);
+                std::thread::sleep(codeflow_limits::POLL_WAIT_MILLIS.wait());
                 continue;
             }
             if !pending.is_empty() {
@@ -704,7 +700,8 @@ pub fn run_dependency_targets_with_admission(
             break;
         }
         let received = if waiting {
-            rx.recv_timeout(POLL_INTERVAL).ok()
+            rx.recv_timeout(codeflow_limits::POLL_WAIT_MILLIS.wait())
+                .ok()
         } else {
             rx.recv().ok()
         };
@@ -1041,7 +1038,7 @@ fn evidence_leases(
                         crate::git::display_path(&tree.path().join(&relative))
                     ))));
                 }
-                std::thread::sleep(Duration::from_millis(50));
+                std::thread::sleep(codeflow_limits::POLL_WAIT_MILLIS.wait());
             }
         }
         leases.push(file);
@@ -2750,7 +2747,7 @@ os._exit(0)
                     gate_output(out)
                 ));
             }
-            std::thread::sleep(POLL_INTERVAL);
+            std::thread::sleep(codeflow_limits::POLL_WAIT_MILLIS.wait());
         }
     }
 

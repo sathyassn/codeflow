@@ -1584,7 +1584,7 @@ impl SessionStore {
             if std::time::Instant::now() >= deadline {
                 return Ok(false);
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::sleep(codeflow_limits::PRESENT_STATE_POLL.wait());
         }
     }
 
@@ -2843,7 +2843,8 @@ type ReanchorKey = (Uuid, Uuid, Uuid, u64);
 static REANCHOR_CACHE: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<ReanchorKey, FeedbackAnchor>>,
 > = std::sync::OnceLock::new();
-const REANCHOR_CACHE_ENTRIES: usize = 8_192;
+const REANCHOR_CACHE_ENTRIES: usize =
+    codeflow_limits::PRESENT_REANCHOR_CACHE_ENTRIES.default_count();
 
 fn cached_reanchor(key: ReanchorKey, compute: impl FnOnce() -> FeedbackAnchor) -> FeedbackAnchor {
     let cache = REANCHOR_CACHE.get_or_init(Default::default);

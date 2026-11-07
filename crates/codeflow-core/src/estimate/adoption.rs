@@ -7,10 +7,6 @@ use std::path::{Component, Path, PathBuf};
 /// The adoption record's path, relative to the repository root.
 pub const ADOPTION_PATH: &str = ".codeflow/estimate.json";
 
-const MAX_ADOPTION_BYTES: u64 = 64 * 1024;
-/// At most this many forecast files are joined; more is a finding.
-pub(super) const MAX_FORECAST_FILES: usize = 256;
-
 /// What `.codeflow/estimate.json` says, as the outcomes report and the
 /// status line read it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,7 +50,12 @@ pub fn read(repo_root: &Path) -> Adoption {
     // redirect the read outside the repository.
     let bytes = std::fs::canonicalize(repo_root)
         .and_then(|root| crate::bounded_file::ConfinedRoot::open(&root))
-        .and_then(|root| root.read(Path::new(ADOPTION_PATH), MAX_ADOPTION_BYTES));
+        .and_then(|root| {
+            root.read(
+                Path::new(ADOPTION_PATH),
+                codeflow_limits::ESTIMATE_MAX_ADOPTION_BYTES.value(),
+            )
+        });
     let bytes = match bytes {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -139,10 +140,9 @@ fn home(repo_root: &Path, root: &str) -> Home {
                 Ok(_) => continue,
                 Err(error) => return unreadable(&format!("`{name}/{file}`"), error),
             }
-            if found.len() == MAX_FORECAST_FILES {
+            if found.len() == codeflow_limits::ESTIMATE_MAX_FORECAST_FILES.count() {
                 return Home::Unusable(format!(
-                    "more than {MAX_FORECAST_FILES} forecast files under `{root}/forecasts`"
-                ));
+                    "more than {estimate_max_forecast_files} forecast files under `{root}/forecasts`", estimate_max_forecast_files = codeflow_limits::ESTIMATE_MAX_FORECAST_FILES.count()));
             }
             let root = root.trim_end_matches('/');
             found.push((

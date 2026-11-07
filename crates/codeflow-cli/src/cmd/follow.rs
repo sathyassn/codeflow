@@ -18,7 +18,7 @@ use codeflow_core::coord::schema::{
     Data, Drop, Evidence, EvidenceKind, FollowUp, HandOver, ItemCheck, ItemUpdate, Reason,
     Rejected, Source,
 };
-use codeflow_core::coord::store::{self, Draft, Paths, ReadOutcome, SubjectId, COMMAND_WAIT};
+use codeflow_core::coord::store::{self, Draft, Paths, ReadOutcome, SubjectId};
 use codeflow_core::coord::text;
 use codeflow_core::coord::transition::{Item, ItemState, Ledger};
 use codeflow_core::coord::{self as coord, CoordError};
@@ -242,9 +242,6 @@ pub struct PurgeArgs {
     pub id: String,
 }
 
-/// The most urgent items `list` shows before it points at the rest.
-const URGENT_SHOWN: usize = 20;
-
 #[must_use]
 pub fn run(args: &FollowArgs) -> i32 {
     let cwd = match std::env::current_dir() {
@@ -299,7 +296,7 @@ fn bound_actor() -> Result<Actor, CoordError> {
 fn schedule(text: Option<&str>, now: u64) -> Result<u64, CoordError> {
     match text {
         Some(text) => coord::parse_schedule(text, now).map_err(refused),
-        None => Ok(now + coord::CHECK_INTERVAL_SECS),
+        None => Ok(now + codeflow_limits::COORD_CHECK_INTERVAL.value()),
     }
 }
 
@@ -402,15 +399,20 @@ fn one(
     data: Data,
     verb: &str,
 ) -> Result<(), CoordError> {
-    let committed = store::commit(paths, &actor.recorded_by, COMMAND_WAIT, |_| {
-        Ok(vec![Draft {
-            subject: SubjectId::Given(id.to_string()),
-            data,
-            comment,
-            idempotency_key: None,
-            expected_revision: expected,
-        }])
-    })?;
+    let committed = store::commit(
+        paths,
+        &actor.recorded_by,
+        codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait(),
+        |_| {
+            Ok(vec![Draft {
+                subject: SubjectId::Given(id.to_string()),
+                data,
+                comment,
+                idempotency_key: None,
+                expected_revision: expected,
+            }])
+        },
+    )?;
     report(&committed, verb);
     Ok(())
 }
@@ -543,15 +545,20 @@ fn add_cmd(paths: &Paths, root: &Path, actor: &Actor, add: &AddArgs) -> Result<(
         reason: "linked".into(),
     }));
     let suggestions = suggest(root, ledger_now, &record.title, &considered);
-    let committed = store::commit(paths, &actor.recorded_by, COMMAND_WAIT, |_| {
-        Ok(vec![Draft {
-            subject: SubjectId::NextFollowUp,
-            data: Data::ItemAdded(record),
-            comment: None,
-            idempotency_key: add.idempotency_key.clone(),
-            expected_revision: None,
-        }])
-    })?;
+    let committed = store::commit(
+        paths,
+        &actor.recorded_by,
+        codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait(),
+        |_| {
+            Ok(vec![Draft {
+                subject: SubjectId::NextFollowUp,
+                data: Data::ItemAdded(record),
+                comment: None,
+                idempotency_key: add.idempotency_key.clone(),
+                expected_revision: None,
+            }])
+        },
+    )?;
     report(&committed, "added");
     for (reference, title) in suggestions {
         println!(
@@ -840,7 +847,12 @@ fn check_cmd(
         }
         return Ok(());
     }
-    let committed = store::commit(paths, &actor.recorded_by, COMMAND_WAIT, |_| Ok(drafts))?;
+    let committed = store::commit(
+        paths,
+        &actor.recorded_by,
+        codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait(),
+        |_| Ok(drafts),
+    )?;
     for envelope in &committed.envelopes {
         let verb = match envelope.event.as_str() {
             "item_closed" => "closed on machine-verified evidence",
@@ -860,7 +872,12 @@ fn check_cmd(
 
 fn purge_cmd(paths: &Paths, actor: &Actor, id: &str) -> Result<(), CoordError> {
     // Authorization is judged under the lock, inside the store.
-    let purged = store::purge(paths, &actor.recorded_by, id, COMMAND_WAIT)?;
+    let purged = store::purge(
+        paths,
+        &actor.recorded_by,
+        id,
+        codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait(),
+    )?;
     match purged.sequence {
         Some(sequence) => println!(
             "{id}: every free-text field of {} events replaced with [purged]; ids, links, times and order kept; {} of its quarantined lines removed, other items' kept; recorded as sequence {sequence}",
@@ -885,7 +902,7 @@ fn repair(paths: &Paths) -> Result<(), CoordError> {
     if actor.recorded_by.role != "operator" {
         return Err(refused("only the operator repairs the ledger"));
     }
-    let repaired = store::repair(paths, COMMAND_WAIT)?;
+    let repaired = store::repair(paths, codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait())?;
     match repaired.quarantined {
         Some(path) => println!(
             "kept {} events; the damaged suffix is in {}",
@@ -990,10 +1007,11 @@ fn render_list(views: &[View<'_>], instance: &str, md: bool, all: bool) -> TextB
         })
         .collect();
     let mut groups: BTreeMap<String, Vec<&View<'_>>> = BTreeMap::new();
-    for view in selected
-        .iter()
-        .take(if all { usize::MAX } else { URGENT_SHOWN })
-    {
+    for view in selected.iter().take(if all {
+        usize::MAX
+    } else {
+        codeflow_limits::FOLLOW_URGENT_SHOWN.count()
+    }) {
         groups
             .entry(holder_label(view.item))
             .or_default()
@@ -1057,14 +1075,15 @@ fn render_list(views: &[View<'_>], instance: &str, md: bool, all: bool) -> TextB
             let _ = writeln!(block, "  nothing");
         }
     }
-    if !all && selected.len() > URGENT_SHOWN {
+    if !all && selected.len() > codeflow_limits::FOLLOW_URGENT_SHOWN.count() {
         if md {
             let _ = writeln!(block);
         }
         let _ = writeln!(
             block,
-            "showing {URGENT_SHOWN} of {} urgent items",
-            selected.len()
+            "showing {follow_urgent_shown} of {} urgent items",
+            selected.len(),
+            follow_urgent_shown = codeflow_limits::FOLLOW_URGENT_SHOWN.count()
         );
     }
     if !all {

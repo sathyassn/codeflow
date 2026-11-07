@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use pulldown_cmark::{Event, Parser, Tag};
 use serde::de::{SeqAccess, Visitor};
@@ -27,37 +27,12 @@ pub mod lookups;
 pub use figures::{altitude_words, AltitudeWords};
 pub use lookups::LookupInputs;
 
-const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 /// The themes a portal configuration may name, exactly the starter's
 /// `PORTAL_THEMES` in `scripts/lib.mjs`: the three skins, then `signal` and
 /// `folio`, kept as aliases of graphite and sage. A parity test reads the
 /// starter's list so the two cannot drift.
 const PORTAL_THEMES: [&str; 5] = ["graphite", "slate", "sage", "signal", "folio"];
 const PAGEFIND_ENTRY_PATH: &str = "dist/pagefind/pagefind-entry.json";
-const MAX_PAGEFIND_ENTRY_BYTES: u64 = 1024 * 1024;
-const MAX_PAGES: usize = 10_000;
-const MAX_REPOSITORY_FILES: usize = 100_000;
-const MAX_GIT_TREE_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_ARTIFACTS: usize = 100_000;
-const MAX_TOTAL_TRAVERSAL_ENTRIES: usize = 100_000;
-const MAX_CLAIMED_FILE_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_SOURCE_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_TOTAL_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_MEDIA_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_TOTAL_MEDIA_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_RASTER_DIMENSION: u32 = 8_192;
-const MAX_RASTER_PIXELS: u64 = 33_554_432;
-const MAX_TOTAL_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_STALE_REASON_BYTES: usize = 512;
-const MAX_STALE_STUB_BYTES: u64 = 4 * 1024;
-const MAX_RENDERED_PAGE_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_TOTAL_RENDERED_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_IDS_PER_PAGE: usize = 256;
-const MAX_RELATIONSHIPS_PER_PAGE: usize = 512;
-const MAX_BACKLINKS_PER_PAGE: usize = 512;
-const MAX_SNIPPETS_PER_PAGE: usize = 64;
-const MAX_FRAGMENT_LINKS: usize = 16_384;
-const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 const PORTAL_CONFIG_KEYS: [&str; 12] = [
     "schema_version",
     "title",
@@ -87,7 +62,6 @@ const PORTAL_OPTIONAL_CONFIG_KEYS: [&str; 4] =
     ["records", "page_carriers", "page_classes", "figures"];
 const PORTAL_PAGE_CARRIER_KEYS: [&str; 2] = ["source", "technical"];
 const PORTAL_TECHNICAL_CARRIERS: [&str; 1] = ["list"];
-const MAX_PORTAL_PAGE_CARRIERS: usize = 64;
 const PORTAL_RECORDS_KEYS: [&str; 3] = ["enabled", "layer", "pointers"];
 const PORTAL_RECORDS_POINTER_KEYS: [&str; 3] = ["folder", "id_prefix", "purpose"];
 const RECORD_ID_PREFIXES: [&str; 5] = ["ADR", "CAP", "EPC", "SPC", "TSK"];
@@ -282,21 +256,33 @@ fn deserialize_pages<'de, D>(deserializer: D) -> Result<Vec<Page>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    deserialize_bounded_sequence(deserializer, MAX_PAGES, "portal pages")
+    deserialize_bounded_sequence(
+        deserializer,
+        codeflow_limits::PORTAL_MAX_PAGES.count(),
+        "portal pages",
+    )
 }
 
 fn deserialize_artifacts<'de, D>(deserializer: D) -> Result<Vec<Artifact>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    deserialize_bounded_sequence(deserializer, MAX_ARTIFACTS, "portal artifacts")
+    deserialize_bounded_sequence(
+        deserializer,
+        codeflow_limits::PORTAL_MAX_ARTIFACTS.count(),
+        "portal artifacts",
+    )
 }
 
 fn deserialize_ids<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    deserialize_bounded_sequence(deserializer, MAX_IDS_PER_PAGE, "page IDs")
+    deserialize_bounded_sequence(
+        deserializer,
+        codeflow_limits::PORTAL_MAX_IDS_PER_PAGE.count(),
+        "page IDs",
+    )
 }
 
 fn deserialize_relationships<'de, D>(deserializer: D) -> Result<Vec<Relationship>, D::Error>
@@ -305,7 +291,7 @@ where
 {
     deserialize_bounded_sequence(
         deserializer,
-        MAX_RELATIONSHIPS_PER_PAGE,
+        codeflow_limits::PORTAL_MAX_RELATIONSHIPS_PER_PAGE.count(),
         "page relationships",
     )
 }
@@ -314,14 +300,22 @@ fn deserialize_backlinks<'de, D>(deserializer: D) -> Result<Vec<Backlink>, D::Er
 where
     D: Deserializer<'de>,
 {
-    deserialize_bounded_sequence(deserializer, MAX_BACKLINKS_PER_PAGE, "page backlinks")
+    deserialize_bounded_sequence(
+        deserializer,
+        codeflow_limits::PORTAL_MAX_BACKLINKS_PER_PAGE.count(),
+        "page backlinks",
+    )
 }
 
 fn deserialize_snippets<'de, D>(deserializer: D) -> Result<Vec<Snippet>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    deserialize_bounded_sequence(deserializer, MAX_SNIPPETS_PER_PAGE, "page snippets")
+    deserialize_bounded_sequence(
+        deserializer,
+        codeflow_limits::PORTAL_MAX_SNIPPETS_PER_PAGE.count(),
+        "page snippets",
+    )
 }
 
 fn deserialize_bounded_sequence<'de, D, T>(
@@ -450,7 +444,10 @@ pub fn validate_portal_with(
     ) else {
         return report;
     };
-    let bytes = match read_bounded_regular(&evidence_path, MAX_MANIFEST_BYTES) {
+    let bytes = match read_bounded_regular(
+        &evidence_path,
+        codeflow_limits::PORTAL_MAX_MANIFEST_BYTES.value(),
+    ) {
         Ok(bytes) => bytes,
         Err(error) => {
             report
@@ -503,16 +500,18 @@ pub fn validate_portal_with(
             .issues
             .push("repository release version is invalid".into());
     }
-    if evidence.pages.len() > MAX_PAGES {
-        report
-            .issues
-            .push(format!("page count exceeds {MAX_PAGES}"));
+    if evidence.pages.len() > codeflow_limits::PORTAL_MAX_PAGES.count() {
+        report.issues.push(format!(
+            "page count exceeds {portal_max_pages}",
+            portal_max_pages = codeflow_limits::PORTAL_MAX_PAGES.count()
+        ));
         return report;
     }
-    if evidence.artifacts.len() > MAX_ARTIFACTS {
-        report
-            .issues
-            .push(format!("artifact count exceeds {MAX_ARTIFACTS}"));
+    if evidence.artifacts.len() > codeflow_limits::PORTAL_MAX_ARTIFACTS.count() {
+        report.issues.push(format!(
+            "artifact count exceeds {portal_max_artifacts}",
+            portal_max_artifacts = codeflow_limits::PORTAL_MAX_ARTIFACTS.count()
+        ));
         return report;
     }
     if !preflight_page_claims(&evidence.pages, &mut report) {
@@ -584,8 +583,8 @@ pub fn validate_portal_with(
         &repository,
         &evidence.repository.commit,
         &source_paths,
-        MAX_SOURCE_BYTES,
-        MAX_TOTAL_SOURCE_BYTES,
+        codeflow_limits::PORTAL_MAX_SOURCE_BYTES.value(),
+        codeflow_limits::PORTAL_MAX_TOTAL_SOURCE_BYTES.value(),
     ) {
         Ok(blobs) => blobs,
         Err(error) => {
@@ -601,7 +600,7 @@ pub fn validate_portal_with(
     let mut routes = BTreeSet::new();
     let mut claimed_paths = BTreeSet::new();
     let mut id_owner = BTreeMap::new();
-    let mut rendered_bytes_remaining = MAX_TOTAL_RENDERED_BYTES;
+    let mut rendered_bytes_remaining = codeflow_limits::PORTAL_MAX_TOTAL_RENDERED_BYTES.value();
     let mut rendered_by_route = BTreeMap::new();
     for page in &evidence.pages {
         report.checked_pages += 1;
@@ -653,7 +652,7 @@ pub fn validate_portal_with(
                 || page.searchable
                 || page.stale_reason.as_deref().is_none_or(|reason| {
                     reason.is_empty()
-                        || reason.len() > MAX_STALE_REASON_BYTES
+                        || reason.len() > codeflow_limits::PORTAL_MAX_STALE_REASON_BYTES.count()
                         || reason.chars().any(char::is_control)
                 })
                 || fallback_title.as_deref() != Some(page.title.as_str())
@@ -965,7 +964,13 @@ pub fn validate_portal_with(
             "llms.txt",
             &mut report,
         )
-        .and_then(|path| read_bounded_text(&path, MAX_CLAIMED_FILE_BYTES).ok());
+        .and_then(|path| {
+            read_bounded_text(
+                &path,
+                codeflow_limits::PORTAL_MAX_CLAIMED_FILE_BYTES.value(),
+            )
+            .ok()
+        });
         if actual.as_deref() != Some(expected.as_str()) {
             report
                 .issues
@@ -1281,13 +1286,11 @@ fn configured_page_carriers(
     let Some(value) = value else {
         return Some(());
     };
-    let Some(entries) = value
-        .as_array()
-        .filter(|entries| entries.len() <= MAX_PORTAL_PAGE_CARRIERS)
-    else {
+    let Some(entries) = value.as_array().filter(|entries| {
+        entries.len() <= codeflow_limits::PORTAL_MAX_PORTAL_PAGE_CARRIERS.count()
+    }) else {
         report.issues.push(format!(
-            "portal configuration page_carriers is not an array of at most {MAX_PORTAL_PAGE_CARRIERS} entries"
-        ));
+            "portal configuration page_carriers is not an array of at most {portal_max_portal_page_carriers} entries", portal_max_portal_page_carriers = codeflow_limits::PORTAL_MAX_PORTAL_PAGE_CARRIERS.count()));
         return None;
     };
     let mut sources = BTreeSet::new();
@@ -1944,10 +1947,11 @@ fn select_publishable_sources(
                 continue;
             }
             selected.insert(record.path.clone());
-            if selected.len() > MAX_PAGES {
-                report
-                    .issues
-                    .push(format!("publishable source count exceeds {MAX_PAGES}"));
+            if selected.len() > codeflow_limits::PORTAL_MAX_PAGES.count() {
+                report.issues.push(format!(
+                    "publishable source count exceeds {portal_max_pages}",
+                    portal_max_pages = codeflow_limits::PORTAL_MAX_PAGES.count()
+                ));
                 return None;
             }
         }
@@ -2095,7 +2099,7 @@ fn git_tree_records(root: &Path, commit: &str) -> std::io::Result<Vec<GitTreeRec
         root,
         &["ls-tree", "-r", "-z", "--full-tree", commit],
         None,
-        MAX_GIT_TREE_BYTES,
+        codeflow_limits::PORTAL_MAX_GIT_TREE_BYTES.value(),
     )?;
     let mut records = Vec::new();
     let mut portable = BTreeSet::new();
@@ -2139,10 +2143,14 @@ fn git_tree_records(root: &Path, commit: &str) -> std::io::Result<Vec<GitTreeRec
             mode: mode.to_string(),
             kind: kind.to_string(),
         });
-        if records.len() > MAX_REPOSITORY_FILES {
+        if records.len() > codeflow_limits::PORTAL_MAX_REPOSITORY_FILES.count() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Git tree file count exceeds {MAX_REPOSITORY_FILES}"),
+                format!(
+                    "Git tree file count exceeds {portal_max_repository_files}",
+                    portal_max_repository_files =
+                        codeflow_limits::PORTAL_MAX_REPOSITORY_FILES.count()
+                ),
             ));
         }
     }
@@ -2217,8 +2225,8 @@ fn verify_media(
         repository,
         commit,
         &source_paths,
-        MAX_MEDIA_BYTES,
-        MAX_TOTAL_MEDIA_BYTES,
+        codeflow_limits::PORTAL_MAX_MEDIA_BYTES.value(),
+        codeflow_limits::PORTAL_MAX_TOTAL_MEDIA_BYTES.value(),
     ) {
         Ok(blobs) => blobs,
         Err(error) => {
@@ -2293,9 +2301,10 @@ fn verify_media(
                     Some((width, height))
                         if width > 0
                             && height > 0
-                            && width <= MAX_RASTER_DIMENSION
-                            && height <= MAX_RASTER_DIMENSION
-                            && u64::from(width) * u64::from(height) <= MAX_RASTER_PIXELS => {}
+                            && width <= codeflow_limits::PORTAL_MAX_RASTER_DIMENSION.small()
+                            && height <= codeflow_limits::PORTAL_MAX_RASTER_DIMENSION.small()
+                            && u64::from(width) * u64::from(height)
+                                <= codeflow_limits::PORTAL_MAX_RASTER_PIXELS.value() => {}
                     _ => report.issues.push(format!(
                         "referenced media bytes or dimensions are invalid: {}",
                         item.source_path
@@ -2338,7 +2347,7 @@ fn verify_reserved_public_inventory(
             0,
             &mut file_count,
             &mut entries_seen,
-            MAX_TOTAL_TRAVERSAL_ENTRIES,
+            codeflow_limits::PORTAL_MAX_TOTAL_TRAVERSAL_ENTRIES.count(),
             &mut bytes,
             &mut actual,
             &mut portable_actual,
@@ -2369,6 +2378,12 @@ fn reserved_file_size(entry: &std::fs::DirEntry, child: &Path) -> Result<u64, St
                 child.display()
             )
         })
+}
+
+/// Whether reserved public output has passed what a corpus may hold.
+fn past_public_corpus(files: usize, bytes: u64) -> bool {
+    files > codeflow_limits::PORTAL_MAX_PAGES.count() + 1_000
+        || bytes > codeflow_limits::PORTAL_MAX_TOTAL_ARTIFACT_BYTES.value()
 }
 
 #[allow(clippy::too_many_arguments)] // Recursive bounded walker carries one shared budget and report.
@@ -2462,7 +2477,7 @@ fn collect_reserved_public_files(
                 ));
                 continue;
             };
-            if *file_count > MAX_PAGES + 1_000 || *bytes > MAX_TOTAL_ARTIFACT_BYTES {
+            if past_public_corpus(*file_count, *bytes) {
                 report
                     .issues
                     .push("reserved public output exceeds its corpus limit".into());
@@ -2587,7 +2602,11 @@ fn collect_dist_artifacts(
     portal: &Path,
     report: &mut PortalValidationReport,
 ) -> DistArtifactInventory {
-    collect_dist_artifacts_with_entry_limit(portal, report, MAX_TOTAL_TRAVERSAL_ENTRIES)
+    collect_dist_artifacts_with_entry_limit(
+        portal,
+        report,
+        codeflow_limits::PORTAL_MAX_TOTAL_TRAVERSAL_ENTRIES.count(),
+    )
 }
 
 #[allow(clippy::too_many_lines)] // Keeps the production and test entry limits on one identical traversal.
@@ -2684,16 +2703,19 @@ fn collect_dist_artifacts_with_entry_limit(
                     }
                 };
                 *total_bytes = total_bytes.saturating_add(metadata.len());
-                if *total_bytes > MAX_TOTAL_ARTIFACT_BYTES {
+                if *total_bytes > codeflow_limits::PORTAL_MAX_TOTAL_ARTIFACT_BYTES.value() {
                     report.issues.push(format!(
-                        "built artifact corpus exceeds {MAX_TOTAL_ARTIFACT_BYTES} bytes"
+                        "built artifact corpus exceeds {portal_max_total_artifact_bytes} bytes",
+                        portal_max_total_artifact_bytes =
+                            codeflow_limits::PORTAL_MAX_TOTAL_ARTIFACT_BYTES.value()
                     ));
                     return false;
                 }
-                if paths.len() >= MAX_ARTIFACTS {
-                    report
-                        .issues
-                        .push(format!("artifact count exceeds {MAX_ARTIFACTS}"));
+                if paths.len() >= codeflow_limits::PORTAL_MAX_ARTIFACTS.count() {
+                    report.issues.push(format!(
+                        "artifact count exceeds {portal_max_artifacts}",
+                        portal_max_artifacts = codeflow_limits::PORTAL_MAX_ARTIFACTS.count()
+                    ));
                     return false;
                 }
                 let Some(relative_path) = portable_relative_path(&child) else {
@@ -2783,7 +2805,10 @@ fn verify_pagefind_entry(
     ) else {
         return;
     };
-    let bytes = match read_bounded_regular(&path, MAX_PAGEFIND_ENTRY_BYTES) {
+    let bytes = match read_bounded_regular(
+        &path,
+        codeflow_limits::PORTAL_MAX_PAGEFIND_ENTRY_BYTES.value(),
+    ) {
         Ok(bytes) => bytes,
         Err(error) => {
             report.issues.push(format!(
@@ -3013,7 +3038,7 @@ fn verify_portal_fragments(
         .map(|page| (page.source_path.as_str(), page.route.as_str()))
         .collect();
     let mut built_cache: BTreeMap<String, Option<String>> = BTreeMap::new();
-    let mut remaining_built_bytes = MAX_TOTAL_SOURCE_BYTES;
+    let mut remaining_built_bytes = codeflow_limits::PORTAL_MAX_TOTAL_SOURCE_BYTES.value();
     let mut built_budget_reported = false;
     let mut fragment_links = 0_usize;
     for page in pages.iter().filter(|page| !page.stale) {
@@ -3035,9 +3060,10 @@ fn verify_portal_fragments(
                 continue;
             };
             fragment_links += 1;
-            if fragment_links > MAX_FRAGMENT_LINKS {
+            if fragment_links > codeflow_limits::PORTAL_MAX_FRAGMENT_LINKS.count() {
                 report.issues.push(format!(
-                    "portal Markdown contains more than {MAX_FRAGMENT_LINKS} fragment links"
+                    "portal Markdown contains more than {portal_max_fragment_links} fragment links",
+                    portal_max_fragment_links = codeflow_limits::PORTAL_MAX_FRAGMENT_LINKS.count()
                 ));
                 return;
             }
@@ -3126,12 +3152,18 @@ fn load_fragment_artifact(
         "portal fragment artifact",
         report,
     )?;
-    let html = read_bounded_text(&built, MAX_CLAIMED_FILE_BYTES).ok()?;
+    let html = read_bounded_text(
+        &built,
+        codeflow_limits::PORTAL_MAX_CLAIMED_FILE_BYTES.value(),
+    )
+    .ok()?;
     let bytes = u64::try_from(html.len()).ok()?;
     let Some(remaining) = remaining_bytes.checked_sub(bytes) else {
         if !*budget_reported {
             report.issues.push(format!(
-                "portal fragment artifact reads exceed {MAX_TOTAL_SOURCE_BYTES} bytes"
+                "portal fragment artifact reads exceed {portal_max_total_source_bytes} bytes",
+                portal_max_total_source_bytes =
+                    codeflow_limits::PORTAL_MAX_TOTAL_SOURCE_BYTES.value()
             ));
             *budget_reported = true;
         }
@@ -3239,7 +3271,7 @@ fn verify_rendered_claims(
             || !output.contains("data-pagefind-ignore=\"all\"")
             || !output.contains("Source unavailable")
             || !output.contains("the previous version of this page is not shown")
-            || output.len() as u64 > MAX_STALE_STUB_BYTES)
+            || output.len() as u64 > codeflow_limits::PORTAL_MAX_STALE_STUB_BYTES.value())
     {
         report.issues.push(format!(
             "{} lacks its exact bounded stale-stub markers",
@@ -3304,7 +3336,10 @@ fn verify_file(
     let Some(path) = safe_join(root, Path::new(relative), label, report) else {
         return;
     };
-    match read_bounded_regular(&path, MAX_CLAIMED_FILE_BYTES) {
+    match read_bounded_regular(
+        &path,
+        codeflow_limits::PORTAL_MAX_CLAIMED_FILE_BYTES.value(),
+    ) {
         Ok(bytes) if sha256_hex(&bytes) == expected => {}
         Ok(_) => report
             .issues
@@ -3330,7 +3365,9 @@ fn verify_file_budgeted(
         return None;
     }
     let path = safe_join(root, Path::new(relative), label, report)?;
-    let maximum = MAX_CLAIMED_FILE_BYTES.min(*remaining);
+    let maximum = codeflow_limits::PORTAL_MAX_CLAIMED_FILE_BYTES
+        .value()
+        .min(*remaining);
     match read_bounded_regular(&path, maximum) {
         Ok(bytes) => {
             *remaining = remaining.saturating_sub(bytes.len() as u64);
@@ -3360,7 +3397,9 @@ fn read_claimed_text(
     report: &mut PortalValidationReport,
 ) -> Option<String> {
     let path = safe_join(root, Path::new(relative), label, report)?;
-    let maximum = MAX_RENDERED_PAGE_BYTES.min(*remaining);
+    let maximum = codeflow_limits::PORTAL_MAX_RENDERED_PAGE_BYTES
+        .value()
+        .min(*remaining);
     let bytes = match read_bounded_regular(&path, maximum) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -3517,7 +3556,9 @@ fn git_batch_blobs(
         ));
     }
     let paths: BTreeSet<&str> = source_paths.iter().copied().collect();
-    if paths.len() > MAX_PAGES || paths.iter().any(|path| !safe_path_text(path)) {
+    if paths.len() > codeflow_limits::PORTAL_MAX_PAGES.count()
+        || paths.iter().any(|path| !safe_path_text(path))
+    {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "invalid or excessive Git blob paths",
@@ -3722,14 +3763,14 @@ fn git_output_bounded(
             let _ = child.kill();
             break (child.wait()?, Some("Git output exceeds its byte limit"));
         }
-        if started.elapsed() >= GIT_TIMEOUT {
+        if started.elapsed() >= codeflow_limits::PORTAL_GIT_TIMEOUT_SECONDS.wait() {
             let _ = child.kill();
             break (child.wait()?, Some("Git command exceeded its time limit"));
         }
         if let Some(status) = child.try_wait()? {
             break (status, None);
         }
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(codeflow_limits::POLL_CHILD_OUTPUT_MILLIS.wait());
     };
     let bytes = stdout_thread
         .join()
@@ -4169,12 +4210,27 @@ mod tests {
     fn javascript_producer_limits_match_the_rust_verifier() {
         let source = include_str!("../../../../assets/docs-portal/starter/scripts/limits.mjs");
         let expected = [
-            ("manifestBytes", MAX_MANIFEST_BYTES),
-            ("pages", MAX_PAGES as u64),
-            ("idsPerPage", MAX_IDS_PER_PAGE as u64),
-            ("relationshipsPerPage", MAX_RELATIONSHIPS_PER_PAGE as u64),
-            ("backlinksPerPage", MAX_BACKLINKS_PER_PAGE as u64),
-            ("snippetsPerPage", MAX_SNIPPETS_PER_PAGE as u64),
+            (
+                "manifestBytes",
+                codeflow_limits::PORTAL_MAX_MANIFEST_BYTES.value(),
+            ),
+            ("pages", codeflow_limits::PORTAL_MAX_PAGES.count() as u64),
+            (
+                "idsPerPage",
+                codeflow_limits::PORTAL_MAX_IDS_PER_PAGE.count() as u64,
+            ),
+            (
+                "relationshipsPerPage",
+                codeflow_limits::PORTAL_MAX_RELATIONSHIPS_PER_PAGE.count() as u64,
+            ),
+            (
+                "backlinksPerPage",
+                codeflow_limits::PORTAL_MAX_BACKLINKS_PER_PAGE.count() as u64,
+            ),
+            (
+                "snippetsPerPage",
+                codeflow_limits::PORTAL_MAX_SNIPPETS_PER_PAGE.count() as u64,
+            ),
         ];
         for (name, value) in expected {
             let line = source
@@ -5055,7 +5111,7 @@ mod tests {
             "markdown_twin_sha256": "0".repeat(64),
             "stale": false,
             "searchable": true,
-            "ids": vec!["TSK-001"; MAX_IDS_PER_PAGE + 1],
+            "ids": vec!["TSK-001"; codeflow_limits::PORTAL_MAX_IDS_PER_PAGE.count() + 1],
             "relationships": [],
             "backlinks": [],
             "snippets": [],
@@ -5574,8 +5630,9 @@ mod tests {
         png[16..20].copy_from_slice(&65_535_u32.to_be_bytes());
         assert!(
             raster_dimensions("png", &png).is_some_and(|(width, height)| {
-                width > MAX_RASTER_DIMENSION
-                    || u64::from(width) * u64::from(height) > MAX_RASTER_PIXELS
+                width > codeflow_limits::PORTAL_MAX_RASTER_DIMENSION.small()
+                    || u64::from(width) * u64::from(height)
+                        > codeflow_limits::PORTAL_MAX_RASTER_PIXELS.value()
             })
         );
         assert_eq!(raster_dimensions("png", b"<svg></svg>"), None);
@@ -5632,8 +5689,8 @@ mod tests {
             temp.path(),
             &commit,
             &paths,
-            MAX_SOURCE_BYTES,
-            MAX_TOTAL_SOURCE_BYTES,
+            codeflow_limits::PORTAL_MAX_SOURCE_BYTES.value(),
+            codeflow_limits::PORTAL_MAX_TOTAL_SOURCE_BYTES.value(),
         )
         .unwrap();
         let authority = collect_ids(&pages, &blobs);
@@ -5726,7 +5783,7 @@ mod tests {
         let error = git_output_bounded(repository.path(), &["show", "HEAD:large.bin"], None, 1024)
             .unwrap_err();
         assert!(error.to_string().contains("byte limit"));
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]
@@ -5819,8 +5876,8 @@ mod tests {
             repository.path(),
             &commit,
             &["docs/guide.md"],
-            MAX_SOURCE_BYTES,
-            MAX_TOTAL_SOURCE_BYTES,
+            codeflow_limits::PORTAL_MAX_SOURCE_BYTES.value(),
+            codeflow_limits::PORTAL_MAX_TOTAL_SOURCE_BYTES.value(),
         );
         assert!(result.is_err());
     }

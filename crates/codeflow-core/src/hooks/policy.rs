@@ -228,7 +228,7 @@ where
         .ok_or_else(|| {
             serde::de::Error::custom(format!(
                 "invalid value {value} for {key}; expected {}",
-                super::limits::bounds_text(limit)
+                limit.bounds_text()
             ))
         })
 }
@@ -655,12 +655,12 @@ impl Default for GitPolicy {
                 .collect(),
             claim_remotes: Vec::new(),
             candidate_prefix: "candidate/".to_string(),
-            candidate_search_depth: 200,
+            candidate_search_depth: codeflow_limits::GIT_CANDIDATE_SEARCH_DEPTH.default_small(),
             branch_name_omit_words: DEFAULT_BRANCH_NAME_OMIT_WORDS
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
-            line_sync_interval: 0,
+            line_sync_interval: codeflow_limits::GIT_LINE_SYNC_INTERVAL.default_small(),
             remote_query_timeout_seconds: crate::git::remote_query::DEFAULT_TIMEOUT_SECONDS,
             remote_query_attempts: crate::git::remote_query::DEFAULT_ATTEMPTS,
             remote_fetch_timeout_seconds: crate::git::remote_query::DEFAULT_FETCH_TIMEOUT_SECONDS,
@@ -675,11 +675,12 @@ impl Default for GitPolicy {
             .iter()
             .map(ToString::to_string)
             .collect(),
-            commit_desc_max_len: 50,
-            commit_subject_max_len: 72,
+            commit_desc_max_len: codeflow_limits::GIT_COMMIT_DESC_MAX_LEN.default_small(),
+            commit_subject_max_len: codeflow_limits::GIT_COMMIT_SUBJECT_MAX_LEN.default_small(),
             commit_body: PolicyLevel::Block,
-            commit_body_max_bullets: 3,
-            commit_body_bullet_max_len: 72,
+            commit_body_max_bullets: codeflow_limits::GIT_COMMIT_BODY_MAX_BULLETS.default_small(),
+            commit_body_bullet_max_len: codeflow_limits::GIT_COMMIT_BODY_BULLET_MAX_LEN
+                .default_small(),
             // Strict baseline: no extra footer tokens are allowed by default —
             // only `- ` bullets and the `BREAKING CHANGE:` footer. Every opt-in
             // list is empty and ticket enforcement is off; a project turns on
@@ -700,7 +701,7 @@ impl Default for GitPolicy {
             pr_breaking_level: "major".into(),
             pr_required_sections: DEFAULT_PR_REQUIRED_SECTIONS.map(String::from).to_vec(),
             pr_code_sections: DEFAULT_PR_CODE_SECTIONS.map(String::from).to_vec(),
-            pr_body_max_words: 1000,
+            pr_body_max_words: codeflow_limits::GIT_PR_BODY_MAX_WORDS.default_small(),
             work_records: PolicyLevel::Block,
             work_planning: PolicyLevel::Block,
             product_paths: None,
@@ -1038,6 +1039,91 @@ impl Default for GuidanceSection {
     }
 }
 
+/// Names a policy section that holds only declared limits.
+pub trait LimitSectionName {
+    /// The section's key in `.codeflow/policy.json`.
+    const NAME: &'static str;
+}
+
+/// The `coord` section: coordination timing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoordLimits;
+
+impl LimitSectionName for CoordLimits {
+    const NAME: &'static str = "coord";
+}
+
+/// The `limits` section: every other limit a project sets in policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectLimits;
+
+impl LimitSectionName for ProjectLimits {
+    const NAME: &'static str = "limits";
+}
+
+/// A policy section of declared limits, by leaf name. It always holds every
+/// limit of its section, so `codeflow policy show` reads each default from
+/// here; the bounds and defaults come from [`super::limits`] alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct LimitSection<S> {
+    values: std::collections::BTreeMap<String, u64>,
+    #[serde(skip)]
+    section: std::marker::PhantomData<S>,
+}
+
+impl<S: LimitSectionName> Default for LimitSection<S> {
+    fn default() -> Self {
+        let prefix = format!("{}.", S::NAME);
+        let values = super::limits::LIMITS
+            .iter()
+            .filter(|limit| limit.route == super::limits::Route::Policy)
+            .filter_map(|limit| {
+                let leaf = limit.key?.strip_prefix(&prefix)?;
+                Some((leaf.to_string(), limit.default))
+            })
+            .collect();
+        Self {
+            values,
+            section: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'de, S: LimitSectionName> Deserialize<'de> for LimitSection<S> {
+    /// A value of the wrong type or outside its bounds, and a key no limit
+    /// declares, refuse at load naming the key; nothing wraps or panics later.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let given =
+            std::collections::BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
+        let mut section = Self::default();
+        for (leaf, value) in given {
+            let key = format!("{}.{leaf}", S::NAME);
+            let limit = super::limits::for_key(&key)
+                .ok_or_else(|| serde::de::Error::custom(format!("unknown key {key}")))?;
+            let number = value
+                .as_u64()
+                .filter(|number| limit.accepts(*number))
+                .ok_or_else(|| {
+                    serde::de::Error::custom(format!(
+                        "invalid value {value} for {key}; expected {}",
+                        limit.bounds_text()
+                    ))
+                })?;
+            section.values.insert(leaf, number);
+        }
+        Ok(section)
+    }
+}
+
+impl<S: LimitSectionName> LimitSection<S> {
+    fn keyed(&self) -> impl Iterator<Item = (String, u64)> + '_ {
+        self.values
+            .iter()
+            .map(|(leaf, value)| (format!("{}.{leaf}", S::NAME), *value))
+    }
+}
+
 /// Full `.codeflow/policy.json` shape (only the parts the hook plane reads).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -1046,6 +1132,8 @@ pub struct Policy {
     pub git: GitPolicy,
     pub security: SecuritySection,
     pub guidance: GuidanceSection,
+    pub coord: LimitSection<CoordLimits>,
+    pub limits: LimitSection<ProjectLimits>,
 }
 
 /// Where [`Policy::load`] sources the effective policy from — for callers that
@@ -1063,6 +1151,14 @@ pub enum PolicySource {
 }
 
 impl Policy {
+    /// Give the process this policy's limits (TSK-1299). The first call
+    /// wins: a guard or hook installs what it resolved as the authority, and
+    /// a repository it later judges by name does not move its own bounds.
+    pub fn install_limits(&self) {
+        let values: Vec<(String, u64)> = self.coord.keyed().chain(self.limits.keyed()).collect();
+        super::limits::install(values.iter().map(|(key, value)| (key.as_str(), *value)));
+    }
+
     /// Read optional project policy, refusing unreadable or malformed input.
     /// # Errors
     /// An existing policy cannot be read or decoded.
@@ -1154,6 +1250,18 @@ impl Policy {
     }
 }
 
+/// Give the process the limits of the project around `start`. A folder with
+/// no policy, or one that does not load, keeps the defaults: the command that
+/// needs the file refuses on its own.
+pub fn install_project_limits(start: &Path) {
+    let found = start
+        .ancestors()
+        .find(|folder| folder.join(".codeflow").join("policy.json").is_file());
+    if let Some(Ok(policy)) = found.map(Policy::load) {
+        policy.install_limits();
+    }
+}
+
 /// Whether the enforcement planes should treat the policy as armed.
 ///
 /// `policy_armed = true` (the fail-safe default) is always armed. A disarmed
@@ -1241,7 +1349,7 @@ pub fn policy_armed(root: &Path) -> Result<bool, String> {
 
 /// The largest policy or project settings file read, in the working copy or
 /// as a committed blob (TSK-397 security review SEC01-3).
-pub(crate) const SETTINGS_READ_LIMIT: u64 = 4 * 1024 * 1024;
+pub(crate) const SETTINGS_READ_LIMIT: u64 = codeflow_limits::POLICY_SETTINGS_READ_BYTES.default;
 
 /// Read an optional configuration file. Only proven absence selects a default;
 /// existing entries and unresolved ancestors remain unreadable inputs. The

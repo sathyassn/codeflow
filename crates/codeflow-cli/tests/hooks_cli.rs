@@ -8924,7 +8924,7 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     ] {
         let out = exec_guard_contract_3(&root, command);
         let err = String::from_utf8_lossy(&out.stderr);
-        if out.status.code() != Some(2) || !err.contains("more than 4096 entries") {
+        if out.status.code() != Some(2) || !err.contains("past limits.guard_glob_entry_limit") {
             wrong.push(format!("should refuse an escaping glob: {command}: {err}"));
         }
     }
@@ -8964,7 +8964,7 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
                 guard_run(command, &root)
             };
             let err = String::from_utf8_lossy(&out.stderr);
-            if out.status.code() != Some(2) || !err.contains("more than 4096 entries") {
+            if out.status.code() != Some(2) || !err.contains("past limits.guard_glob_entry_limit") {
                 wrong.push(format!(
                     "should refuse glob holding {protected}: {command}: {err}"
                 ));

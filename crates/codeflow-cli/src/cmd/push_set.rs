@@ -26,7 +26,7 @@
 //!   that branch, the push's target, not from the range's base, which can be
 //!   another line's tip. A new branch keeps the base. CI judging the pull
 //!   request stays the authority.
-//! - The whole set is timed; over [`git_hook::PUSH_SET_BUDGET`] the hook names
+//! - The whole set is timed; over [`codeflow_limits::PUSH_SET_BUDGET_SECONDS`] the hook names
 //!   the slowest step.
 //!
 //! Every check runs through this same binary, so the hook checks what CI will
@@ -182,7 +182,11 @@ fn run_checked_with_binary(
     }
 
     let total = started.elapsed();
-    if let Some(note) = git_hook::over_budget_note(&steps, total, git_hook::PUSH_SET_BUDGET) {
+    if let Some(note) = git_hook::over_budget_note(
+        &steps,
+        total,
+        codeflow_limits::PUSH_SET_BUDGET_SECONDS.wait(),
+    ) {
         report.notes.push(note);
     }
     report

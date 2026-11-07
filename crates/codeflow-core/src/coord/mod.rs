@@ -92,15 +92,6 @@ impl fmt::Display for Raw<'_> {
 
 impl std::error::Error for CoordError {}
 
-/// The default interval between checks of a follow-up, in seconds.
-pub const CHECK_INTERVAL_SECS: u64 = 10 * 60;
-
-/// The default time after which a holder's contact is overdue, in seconds.
-pub const HEARTBEAT_TIMEOUT_SECS: u64 = 30 * 60;
-
-/// The longest a follow-up waiting on a prerequisite goes between checks.
-pub const MAX_RECHECK_SECS: u64 = 24 * 60 * 60;
-
 /// The current time in seconds since the Unix epoch.
 #[must_use]
 pub fn now_secs() -> u64 {

@@ -689,9 +689,6 @@ fn split_landed(
     (open.into_iter().collect(), done)
 }
 
-/// The most commits walked from a landed tip to the line it left.
-const LANDED_WALK_LIMIT: usize = 100_000;
-
 /// The first-parent line of one target tip, read at most once and only when
 /// a landed branch needs it.
 type LandLine = std::cell::OnceCell<Option<std::collections::HashSet<git2::Oid>>>;
@@ -764,7 +761,7 @@ fn adds_work_beyond_record(
     let Ok(mut current) = repo.find_commit(tip) else {
         return false;
     };
-    for _ in 0..LANDED_WALK_LIMIT {
+    for _ in 0..codeflow_limits::WORKGRAPH_LANDED_WALK_LIMIT.count() {
         if line.contains(&current.id()) {
             return false;
         }

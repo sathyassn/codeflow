@@ -205,8 +205,6 @@ fn md_files_in(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     files_in(dir, "md")
 }
 fn md_files_under(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
-    const MAX_DEPTH: usize = 64;
-    const MAX_ENTRIES: usize = 10_000;
     let mut files = Vec::new();
     if !dir.try_exists()? {
         return Ok(files);
@@ -214,13 +212,13 @@ fn md_files_under(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut pending = vec![(dir.to_path_buf(), 0_usize)];
     let mut visited = 0_usize;
     while let Some((current, depth)) = pending.pop() {
-        if depth > MAX_DEPTH {
+        if depth > codeflow_limits::RECALL_MAX_DEPTH.count() {
             return Err(std::io::Error::other("recall source depth limit reached"));
         }
         for entry in fs::read_dir(&current)? {
             let entry = entry?;
             visited += 1;
-            if visited > MAX_ENTRIES {
+            if visited > codeflow_limits::RECALL_MAX_ENTRIES.count() {
                 return Err(std::io::Error::other("recall source entry limit reached"));
             }
             let path = entry.path();
@@ -412,7 +410,7 @@ fn open_db(db_path: &Path) -> Result<Connection, RecallError> {
         fs::create_dir_all(dir)?;
     }
     let conn = Connection::open(db_path)?;
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.busy_timeout(codeflow_limits::RECALL_BUSY_TIMEOUT_SECONDS.wait())?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS cursors (
             repo   TEXT NOT NULL,

@@ -701,7 +701,7 @@ fn start_service(store: &SessionStore, id: Uuid) -> codeflow_present::Result<Rea
         .spawn()
         .map_err(|error| PresentError::ServiceUnavailable(error.to_string()))?;
     let mut child = ChildGuard::new(child);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + codeflow_limits::PRESENT_SERVICE_START_SECONDS.wait();
     loop {
         if ready_path.is_file() {
             let ready = read_ready_record(&ready_path, id)?;
@@ -731,7 +731,7 @@ fn start_service(store: &SessionStore, id: Uuid) -> codeflow_present::Result<Rea
                 "timed out waiting for the service readiness record".to_string(),
             ));
         }
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(codeflow_limits::POLL_WAIT_MILLIS.wait());
     }
 }
 
@@ -755,7 +755,7 @@ fn read_ready_record(path: &Path, id: Uuid) -> codeflow_present::Result<ReadyRec
 
 fn request_rebootstrap(ready: &ReadyRecord) -> codeflow_present::Result<()> {
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ready.port);
-    let timeout = Duration::from_secs(2);
+    let timeout = codeflow_limits::PRESENT_CONNECT_SECONDS.wait();
     let mut stream = TcpStream::connect_timeout(&address, timeout)
         .map_err(|error| PresentError::ServiceUnavailable(error.to_string()))?;
     stream
@@ -844,7 +844,7 @@ impl Drop for ChildGuard {
 
 fn verify_service(id: Uuid, port: u16, instance_id: Uuid) -> codeflow_present::Result<()> {
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
-    let timeout = Duration::from_secs(2);
+    let timeout = codeflow_limits::PRESENT_CONNECT_SECONDS.wait();
     let mut stream = TcpStream::connect_timeout(&address, timeout)
         .map_err(|error| PresentError::ServiceUnavailable(error.to_string()))?;
     stream
@@ -930,7 +930,7 @@ fn deliver_feedback(
             }
             return Ok(code);
         }
-        thread::sleep(Duration::from_millis(250));
+        thread::sleep(codeflow_limits::PRESENT_FOLLOW_POLL_MILLIS.wait());
     }
 }
 

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 /// `cmd/ci/judging.rs` (TSK-1077 review rounds 04 and 05, F6).
 pub const INPUT_ROOTS: &[&str] = &[
     "crates/codeflow-core/src/hooks",
+    "crates/codeflow-limits/src",
     "crates/codeflow-core/src/security",
     "crates/codeflow-core/src/remedy.rs",
     "crates/codeflow-core/src/portable_path.rs",

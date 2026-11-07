@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::bounded_file::FileIdentity;
 
-const MAX_RECORD_BYTES: u64 = 1024 * 1024;
 const HARNESS_CATALOG: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../assets/base/agents/skills/cf-evaluate-model/resources/harnesses.json"
@@ -479,20 +478,26 @@ fn read_bounded_json_with_hook(
             path.display()
         ));
     }
-    if opened.len() > MAX_RECORD_BYTES {
+    if opened.len() > codeflow_limits::QUALIFICATION_MAX_RECORD_BYTES.value() {
         return Err(format!(
-            "{label} exceeds {MAX_RECORD_BYTES} bytes: {}",
-            path.display()
+            "{label} exceeds {qualification_max_record_bytes} bytes: {}",
+            path.display(),
+            qualification_max_record_bytes =
+                codeflow_limits::QUALIFICATION_MAX_RECORD_BYTES.value()
         ));
     }
     let mut data = Vec::new();
-    file.take(MAX_RECORD_BYTES + 1)
+    file.take(codeflow_limits::QUALIFICATION_MAX_RECORD_BYTES.value() + 1)
         .read_to_end(&mut data)
         .map_err(|error| format!("read {}: {error}", path.display()))?;
-    if u64::try_from(data.len()).unwrap_or(u64::MAX) > MAX_RECORD_BYTES {
+    if u64::try_from(data.len()).unwrap_or(u64::MAX)
+        > codeflow_limits::QUALIFICATION_MAX_RECORD_BYTES.value()
+    {
         return Err(format!(
-            "{label} exceeds {MAX_RECORD_BYTES} bytes: {}",
-            path.display()
+            "{label} exceeds {qualification_max_record_bytes} bytes: {}",
+            path.display(),
+            qualification_max_record_bytes =
+                codeflow_limits::QUALIFICATION_MAX_RECORD_BYTES.value()
         ));
     }
     Ok(data)
@@ -898,7 +903,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("oversized.json");
         let file = std::fs::File::create(&path).unwrap();
-        file.set_len(MAX_RECORD_BYTES + 1).unwrap();
+        file.set_len(codeflow_limits::QUALIFICATION_MAX_RECORD_BYTES.value() + 1)
+            .unwrap();
         let error = load_bindings(directory.path()).unwrap_err();
         assert!(error.contains("binding exceeds 1048576 bytes"));
     }

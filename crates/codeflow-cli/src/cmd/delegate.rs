@@ -174,10 +174,14 @@ pub fn run(args: &DelegateArgs) -> i32 {
 
 fn read_prompt(path: &Path) -> std::io::Result<Vec<u8>> {
     let file = std::fs::File::open(path)?;
-    let limit = u64::try_from(delegate::MAX_PROMPT_BYTES)
+    let limit = u64::try_from(codeflow_limits::DELEGATE_MAX_PROMPT_BYTES.count())
         .unwrap_or(u64::MAX)
         .saturating_add(1);
-    let mut prompt = Vec::with_capacity(delegate::MAX_PROMPT_BYTES.min(64 * 1024));
+    let mut prompt = Vec::with_capacity(
+        codeflow_limits::DELEGATE_MAX_PROMPT_BYTES
+            .count()
+            .min(64 * 1024),
+    );
     file.take(limit).read_to_end(&mut prompt)?;
     Ok(prompt)
 }

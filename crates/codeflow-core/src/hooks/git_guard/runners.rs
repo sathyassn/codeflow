@@ -7,7 +7,7 @@ use super::{
     redirect_writes, run_dirs, same_path, shown_word, split_alias, strip_launchers,
     strip_reserved_words, unresolved_word, Arity, Literals, OptionSpec, ParsedOptions, Seen,
     Violation, GIT_BUILTINS, GIT_LOCATION_VARS, GIT_PUSH_OPTIONS, GIT_REBASE_OPTIONS,
-    MAX_ALIAS_DEPTH, NESTING_LIMIT, NESTING_UNREAD, RUN_DIR_LIMIT,
+    MAX_ALIAS_DEPTH, NESTING_LIMIT, NESTING_UNREAD,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -1036,7 +1036,7 @@ fn external_program(
         command.current_dir(cwd).arg("--exec-path");
         let bytes = crate::security::git_config::bounded_output(
             &mut command,
-            std::time::Instant::now() + std::time::Duration::from_secs(3),
+            std::time::Instant::now() + codeflow_limits::GUARD_GIT_READ_SECONDS.wait(),
         )?;
         let bytes = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
         crate::git::GitName::from_bytes(bytes)
@@ -1220,7 +1220,7 @@ fn directories(
                     .ok_or("a for-each-repo entry has no work tree")?
                     .to_path_buf(),
             );
-            if dirs.len() > RUN_DIR_LIMIT {
+            if dirs.len() > codeflow_limits::GUARD_RUN_DIR_LIMIT.count() {
                 return Err("too many for-each-repo directories".into());
             }
         }
@@ -1273,7 +1273,7 @@ fn directories(
                     .ok_or("no submodule work tree")?
                     .to_path_buf(),
             );
-            if dirs.len() > RUN_DIR_LIMIT {
+            if dirs.len() > codeflow_limits::GUARD_RUN_DIR_LIMIT.count() {
                 return Err("too many Git runner directories to inspect".into());
             }
             if recursive {

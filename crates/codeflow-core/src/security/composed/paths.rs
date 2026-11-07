@@ -518,7 +518,8 @@ pub(crate) fn linked_paths(word: &str, cwd: &Path, links: &[Link]) -> Result<Vec
 }
 
 /// Maximum distinct concrete shell-code readings per input line.
-pub(crate) const MAX_SCRIPT_READINGS: usize = 16;
+pub(crate) const MAX_SCRIPT_READINGS: usize =
+    codeflow_limits::GUARD_SCRIPT_READINGS.default_count();
 
 #[derive(Default)]
 struct Reparses {
@@ -2191,7 +2192,9 @@ fn reparse(
         return after.clone();
     }
     let before = position.clone();
-    if depth < 16 && reparses.count < MAX_SCRIPT_READINGS {
+    if depth < codeflow_limits::GUARD_SCRIPT_REPARSE_DEPTH.default_count()
+        && reparses.count < MAX_SCRIPT_READINGS
+    {
         reparses.count += 1;
         if let Ok((nested, docs)) = lex(script) {
             let first = output.len();

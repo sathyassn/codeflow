@@ -272,7 +272,7 @@ fn a_tip_that_keeps_moving_stops_after_the_bounded_retries() {
     );
     match task(&a, "contended") {
         Err(IdsError::Contended(attempts, reason)) => {
-            assert_eq!(attempts, codeflow_core::ids::PUSH_ATTEMPTS);
+            assert_eq!(attempts, codeflow_limits::IDS_PUSH_ATTEMPTS.count());
             assert!(reason.contains("cannot lock ref"), "{reason}");
         }
         other => panic!("expected contention, got {other:?}"),

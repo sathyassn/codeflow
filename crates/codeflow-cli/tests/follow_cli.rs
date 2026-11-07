@@ -1100,7 +1100,9 @@ fn an_updated_dependency_is_watched_and_its_wait_is_capped() {
     ));
     let next = folded(&paths).items["FU-001"].record.next_check.clone();
     let next = codeflow_core::coord::parse_time(&next).unwrap();
-    assert!(next <= codeflow_core::coord::now_secs() + codeflow_core::coord::MAX_RECHECK_SECS + 5);
+    assert!(
+        next <= codeflow_core::coord::now_secs() + codeflow_limits::COORD_MAX_RECHECK.value() + 5
+    );
     write(
         &f.root,
         "project-management/tasks/TSK-002.md",
@@ -1308,7 +1310,7 @@ fn purge_keeps_other_items_quarantined_lines() {
     damaged.extend_from_slice(b"damaged interior line\n");
     damaged.extend_from_slice(&all[prefix.len()..]);
     std::fs::write(&paths.events, damaged).unwrap();
-    let quarantined = store::repair(&paths, store::COMMAND_WAIT)
+    let quarantined = store::repair(&paths, codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait())
         .unwrap()
         .quarantined
         .unwrap();
@@ -1651,7 +1653,7 @@ fn purge_removes_a_damaged_quarantined_line_of_its_item() {
     let mut damaged = prefix.clone();
     damaged.extend(suffix);
     std::fs::write(&paths.events, damaged).unwrap();
-    let quarantined = store::repair(&paths, store::COMMAND_WAIT)
+    let quarantined = store::repair(&paths, codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait())
         .unwrap()
         .quarantined
         .unwrap();
@@ -1828,9 +1830,21 @@ fn the_operator_purges_an_item_that_survives_only_in_quarantine() {
     )
     .unwrap();
     let lead = fixture::coordinator("WS-001", "c1", 1);
-    let error = store::purge(&paths, &lead, "FU-009", store::COMMAND_WAIT).unwrap_err();
+    let error = store::purge(
+        &paths,
+        &lead,
+        "FU-009",
+        codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait(),
+    )
+    .unwrap_err();
     assert!(format!("{error}").contains("only the operator"), "{error}");
-    let purged = store::purge(&paths, &fixture::operator(), "FU-009", store::COMMAND_WAIT).unwrap();
+    let purged = store::purge(
+        &paths,
+        &fixture::operator(),
+        "FU-009",
+        codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait(),
+    )
+    .unwrap();
     assert_eq!(purged.quarantine_removed, 1);
     let kept = std::fs::read_to_string(&fragment).unwrap();
     assert!(!kept.contains("PRIVATE") && kept.contains("KEEP"), "{kept}");
@@ -2052,7 +2066,7 @@ fn a_joined_quarantined_line_is_kept_for_either_subject() {
         damaged.extend_from_slice(&middle[prefix.len()..middle.len() - 1]);
         damaged.extend_from_slice(&all[middle.len()..]);
         std::fs::write(&paths.events, damaged).unwrap();
-        let quarantined = store::repair(&paths, store::COMMAND_WAIT)
+        let quarantined = store::repair(&paths, codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait())
             .unwrap()
             .quarantined
             .unwrap();
@@ -2080,7 +2094,13 @@ fn a_quarantine_only_purge_says_no_event_was_recorded() {
         "{\"subject_id\":\"FU-009\",\"data\":\"X\"}\n",
     )
     .unwrap();
-    let purged = store::purge(&paths, &fixture::operator(), "FU-009", store::COMMAND_WAIT).unwrap();
+    let purged = store::purge(
+        &paths,
+        &fixture::operator(),
+        "FU-009",
+        codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait(),
+    )
+    .unwrap();
     assert_eq!(purged.sequence, None);
     assert_eq!(purged.quarantine_removed, 1);
 }
@@ -2497,7 +2517,6 @@ fn a_changed_criterion_after_the_completion_voids_the_proof() {
 #[cfg(unix)]
 #[test]
 fn a_stalled_record_read_is_unknown_within_its_bound() {
-    use codeflow_core::coord::observe::RECORDS_TIMEOUT;
     use std::os::unix::fs::PermissionsExt;
     let f = fixture();
     let paths = bind(&f.root);
@@ -2541,7 +2560,9 @@ fn a_stalled_record_read_is_unknown_within_its_bound() {
     let elapsed = started.elapsed();
     assert!(marker.exists(), "the history read was not exercised");
     assert!(
-        elapsed < RECORDS_TIMEOUT + std::time::Duration::from_secs(8),
+        elapsed
+            < codeflow_limits::COORD_RECORDS_TIMEOUT_SECONDS.wait()
+                + std::time::Duration::from_secs(8),
         "the check waited {elapsed:?}"
     );
     assert_eq!(folded(&paths).items["FU-001"].state, ItemState::Open);

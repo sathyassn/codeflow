@@ -9,7 +9,7 @@ use super::git::{z_fields, Git};
 use super::inventory::{self, branch_name, is_landing_branch};
 use super::ledger::{short, Ledger};
 use super::state::{self, Unwritten};
-use super::{tracking_ref, IdsError, Standing, AUTHORITY, PUSH_ATTEMPTS, REGISTRY_REF};
+use super::{tracking_ref, IdsError, Standing, AUTHORITY, REGISTRY_REF};
 
 /// What to reserve.
 #[derive(Debug, Clone)]
@@ -99,7 +99,7 @@ fn reserve_locked(git: &Git, request: &Request) -> Result<Reservation, IdsError>
     publish_pending(git, AUTHORITY)?;
     let tracking = tracking_ref(AUTHORITY);
     let mut reason = String::new();
-    for attempt in 0..PUSH_ATTEMPTS {
+    for attempt in 0..codeflow_limits::IDS_PUSH_ATTEMPTS.count() {
         if attempt > 0 {
             backoff(attempt);
             if let Fetched::Offline(reason) = fetch(git, AUTHORITY)? {
@@ -144,7 +144,10 @@ fn reserve_locked(git: &Git, request: &Request) -> Result<Reservation, IdsError>
             Pushed::Unclear(why) => return read_back(git, &entry, &commit, &why),
         }
     }
-    Err(IdsError::Contended(PUSH_ATTEMPTS, reason))
+    Err(IdsError::Contended(
+        codeflow_limits::IDS_PUSH_ATTEMPTS.count(),
+        reason,
+    ))
 }
 
 /// A jittered pause before retrying a lost race, so issuers that keep
@@ -436,7 +439,16 @@ pub(super) fn adopt(git: &Git, remote: &str, tip: &str) -> Result<(), IdsError> 
 pub(super) fn fetch(git: &Git, remote: &str) -> Result<Fetched, IdsError> {
     let tracking = tracking_ref(remote);
     let refspec = format!("refs/heads/{}:{tracking}", super::REGISTRY_BRANCH);
-    let output = git.output(&["fetch", "--no-tags", remote, &refspec])?;
+    let deadline = crate::git::remote_query::QueryLimits::from_authority_or_default(git.root())
+        .fetch_timeout();
+    let Some(output) = git.output_within(&["fetch", "--no-tags", remote, &refspec], deadline)?
+    else {
+        return Ok(Fetched::Offline(format!(
+            "no answer from {remote} within {} s; {} sets this",
+            deadline.as_secs(),
+            crate::git::remote_query::FETCH_TIMEOUT_KEY
+        )));
+    };
     if output.status.success() {
         return Ok(Fetched::Ok);
     }
@@ -734,7 +746,7 @@ fn publish_pending(git: &Git, remote: &str) -> Result<SyncReport, IdsError> {
         return Ok(report);
     };
     let mut reason = String::new();
-    for attempt in 0..PUSH_ATTEMPTS {
+    for attempt in 0..codeflow_limits::IDS_PUSH_ATTEMPTS.count() {
         if attempt > 0 {
             backoff(attempt);
             if let Fetched::Offline(reason) = fetch(git, remote)? {
@@ -819,7 +831,10 @@ fn publish_pending(git: &Git, remote: &str) -> Result<SyncReport, IdsError> {
             }
         }
     }
-    Err(IdsError::Contended(PUSH_ATTEMPTS, reason))
+    Err(IdsError::Contended(
+        codeflow_limits::IDS_PUSH_ATTEMPTS.count(),
+        reason,
+    ))
 }
 
 fn clash_message(git: &Git, clashes: &[Entry]) -> Result<String, IdsError> {
@@ -975,7 +990,7 @@ pub fn restore(root: &Path, ids: &[RegId]) -> Result<Vec<RegId>, IdsError> {
         REGISTRY_REF.to_string()
     };
     let mut reason = String::new();
-    for attempt in 0..PUSH_ATTEMPTS {
+    for attempt in 0..codeflow_limits::IDS_PUSH_ATTEMPTS.count() {
         if attempt > 0 {
             if let Fetched::Offline(reason) = fetch(&git, AUTHORITY)? {
                 return Err(IdsError::Offline(reason));
@@ -1036,7 +1051,10 @@ pub fn restore(root: &Path, ids: &[RegId]) -> Result<Vec<RegId>, IdsError> {
             Pushed::Unclear(why) => return Err(IdsError::Transport(why)),
         }
     }
-    Err(IdsError::Contended(PUSH_ATTEMPTS, reason))
+    Err(IdsError::Contended(
+        codeflow_limits::IDS_PUSH_ATTEMPTS.count(),
+        reason,
+    ))
 }
 
 /// `new --resume` (R-18): the pending write for `id`, when the reservation's

@@ -274,9 +274,6 @@ fn check_path_safety(name: &str, path: &str) -> DoctorCheck {
     }
 }
 
-/// Probe timeout in seconds.
-const PROBE_TIMEOUT_SECS: u64 = 5;
-
 fn run_probe(runner: &RunnerType, target_name: &str) -> DoctorCheck {
     let (cmd, args) = match runner {
         RunnerType::Cargo => ("cargo", vec!["--version"]),
@@ -304,7 +301,11 @@ fn run_probe(runner: &RunnerType, target_name: &str) -> DoctorCheck {
 /// hermetically with a guaranteed-absent command name — the runner-name path
 /// depends on which tools happen to be installed on the host.
 fn probe_command(cmd: &str, args: &[&str], target_name: &str) -> DoctorCheck {
-    match run_with_timeout(cmd, args, Duration::from_secs(PROBE_TIMEOUT_SECS)) {
+    match run_with_timeout(
+        cmd,
+        args,
+        Duration::from_secs(codeflow_limits::DOCTOR_PROBE_TIMEOUT_SECONDS.value()),
+    ) {
         ProbeResult::Success => DoctorCheck {
             name: format!("{target_name}.probe"),
             status: CheckStatus::Pass,
@@ -319,7 +320,8 @@ fn probe_command(cmd: &str, args: &[&str], target_name: &str) -> DoctorCheck {
             name: format!("{target_name}.probe"),
             status: CheckStatus::Warn,
             message: format!(
-                "probe for runner={cmd} exceeded {PROBE_TIMEOUT_SECS}s timeout; not blocking"
+                "probe for runner={cmd} exceeded {}s timeout; not blocking",
+                codeflow_limits::DOCTOR_PROBE_TIMEOUT_SECONDS.value()
             ),
         },
         ProbeResult::SpawnError(msg) => DoctorCheck {
@@ -363,7 +365,7 @@ fn run_with_timeout(cmd: &str, args: &[&str], timeout: Duration) -> ProbeResult 
                     let _ = child.wait();
                     return ProbeResult::Timeout;
                 }
-                std::thread::sleep(Duration::from_millis(50));
+                std::thread::sleep(codeflow_limits::POLL_WAIT_MILLIS.wait());
             }
             Err(e) => return ProbeResult::SpawnError(e.to_string()),
         }

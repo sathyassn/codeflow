@@ -48,9 +48,6 @@ fn sandbox_overrides() -> impl Iterator<Item = &'static str> {
         .filter(|value| !value.starts_with("default_permissions="))
 }
 
-/// How long one Codex command may take before it counts as not run.
-const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
-
 /// How one `codex features list` run with the builder overrides ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodexLoad {
@@ -155,7 +152,11 @@ impl CodexBuilderProbe {
 /// temporary folder is removed afterwards.
 #[must_use]
 pub fn probe_codex_builder_profile(root: &Path, codex: &Path) -> CodexBuilderProbe {
-    probe_with_timeout(root, codex, LOAD_TIMEOUT)
+    probe_with_timeout(
+        root,
+        codex,
+        codeflow_limits::DOCTOR_CODEX_LOAD_TIMEOUT_SECONDS.wait(),
+    )
 }
 
 fn probe_with_timeout(root: &Path, codex: &Path, timeout: Duration) -> CodexBuilderProbe {
@@ -319,10 +320,6 @@ pub enum GrantCheck {
     NotRun(String),
 }
 
-/// How many folders the probe reports: two lock folders, `objects` and
-/// `refs`.
-const PROBED_FOLDERS: usize = 4;
-
 /// The folder a builder seat starts in: the main checkout that holds the
 /// common `.git` of `project` (transport.md, "from the main checkout
 /// root"). `project` itself when it is not in a repository, or when the
@@ -350,7 +347,12 @@ pub fn builder_launch_root(project: &Path) -> std::path::PathBuf {
 /// and writes nothing else.
 #[must_use]
 pub fn probe_codex_builder_grants(launch_root: &Path, codex: &Path, codeflow: &Path) -> GrantProbe {
-    grants_with_timeout(launch_root, codex, codeflow, LOAD_TIMEOUT)
+    grants_with_timeout(
+        launch_root,
+        codex,
+        codeflow,
+        codeflow_limits::DOCTOR_CODEX_LOAD_TIMEOUT_SECONDS.wait(),
+    )
 }
 
 /// What the builder write probe reported: the folders a builder seat has to
@@ -420,7 +422,8 @@ fn folder_grants(
     let lines = probe_lines(&run.stdout);
     match (run.code, lines) {
         (Some(0), Some(lines))
-            if lines.len() == PROBED_FOLDERS && lines.iter().all(|(ok, _)| *ok) =>
+            if lines.len() == codeflow_limits::DOCTOR_CODEX_PROBED_FOLDERS.count()
+                && lines.iter().all(|(ok, _)| *ok) =>
         {
             GrantCheck::Effective(lines.into_iter().map(|(_, dir)| dir).collect())
         }

@@ -6,12 +6,11 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::{deserialize_portal_files, path_text, validate_portal_root, MAX_BUNDLE_FILES};
+use super::{deserialize_portal_files, path_text, validate_portal_root};
 use crate::scaffold::Shown;
 use crate::strict_json::parse_strict_json;
 
 pub(crate) const MANAGED_GENERATOR: &str = "@codeflow/docs-portal";
-pub(crate) const MAX_IDENTITY_BYTES: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -29,9 +28,10 @@ impl Generator {
     }
 
     pub(crate) fn is_valid(&self) -> bool {
-        [&self.name, &self.version]
-            .iter()
-            .all(|value| !value.trim().is_empty() && value.len() <= MAX_IDENTITY_BYTES)
+        [&self.name, &self.version].iter().all(|value| {
+            !value.trim().is_empty()
+                && value.len() <= codeflow_limits::SCAFFOLD_PORTAL_MAX_IDENTITY_BYTES.count()
+        })
     }
 }
 
@@ -121,9 +121,9 @@ pub(crate) fn validate(state: &PortalState) -> Result<(), Shown> {
     if !matches!(state.schema_version, 1 | 2)
         || path_text(&root) != state.root
         || state.starter_version.trim().is_empty()
-        || state.starter_version.len() > MAX_IDENTITY_BYTES
+        || state.starter_version.len() > codeflow_limits::SCAFFOLD_PORTAL_MAX_IDENTITY_BYTES.count()
         || state.files.is_empty()
-        || state.files.len() > MAX_BUNDLE_FILES
+        || state.files.len() > codeflow_limits::SCAFFOLD_PORTAL_MAX_BUNDLE_FILES.count()
         || !state.generator.is_valid()
     {
         return Err(Shown::fixed(
@@ -152,7 +152,7 @@ pub(crate) fn validate(state: &PortalState) -> Result<(), Shown> {
 }
 
 fn check_size(bytes: &[u8]) -> Result<(), Shown> {
-    if bytes.len() as u64 > super::MAX_STATE_BYTES {
+    if bytes.len() as u64 > codeflow_limits::SCAFFOLD_PORTAL_MAX_STATE_BYTES.value() {
         Err(Shown::fixed("portal adoption state exceeds its byte limit"))
     } else {
         Ok(())
@@ -193,7 +193,7 @@ mod tests {
             for bad in [
                 String::new(),
                 " ".to_string(),
-                "x".repeat(MAX_IDENTITY_BYTES + 1),
+                "x".repeat(codeflow_limits::SCAFFOLD_PORTAL_MAX_IDENTITY_BYTES.count() + 1),
             ] {
                 let mut invalid = two.clone();
                 invalid["generator"][field] = bad.into();
@@ -224,7 +224,12 @@ mod tests {
         ] {
             assert!(recovery_root(bytes).is_err());
         }
-        let oversized = vec![b' '; usize::try_from(super::super::MAX_STATE_BYTES).unwrap() + 1];
+        let oversized =
+            vec![
+                b' ';
+                usize::try_from(codeflow_limits::SCAFFOLD_PORTAL_MAX_STATE_BYTES.value()).unwrap()
+                    + 1
+            ];
         assert!(recovery_root(&oversized).is_err());
         assert!(parse(&oversized).is_err());
     }

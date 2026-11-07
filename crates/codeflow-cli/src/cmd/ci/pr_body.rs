@@ -515,7 +515,7 @@ pub(crate) fn reviews_record_none(body: &str, heading: &str) -> bool {
 /// length warning (TSK-228). A project sets its own number in
 /// `policy.json`, or `0` to turn the warning off (TSK-267).
 #[cfg(test)]
-const BODY_WORD_LIMIT: usize = 1000;
+const BODY_WORD_LIMIT: usize = codeflow_limits::GIT_PR_BODY_MAX_WORDS.default_count();
 
 /// The HTML elements GitHub keeps that start a new line of text. It strips
 /// every other tag and keeps its text, so the words either side of one of

@@ -100,7 +100,7 @@ impl JsonlWriter {
                             waited: wait,
                         });
                     }
-                    std::thread::sleep(Duration::from_millis(10));
+                    std::thread::sleep(codeflow_limits::POLL_LEDGER_LOCK_MILLIS.wait());
                 }
                 Err(e) => {
                     return Err(LedgerError::Lock(format!(

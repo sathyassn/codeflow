@@ -644,11 +644,6 @@ fn resolve_output(output: &str, root: &Path, target_dir: &Path) -> std::path::Pa
         .map_or_else(|| root.join(output), |p| target_dir.join(p))
 }
 
-/// The largest file and the most names in one folder that the durable copy
-/// takes; a run folder beyond either is refused, never truncated.
-const EVIDENCE_FILE_LIMIT: u64 = 1 << 30;
-const EVIDENCE_ENTRY_LIMIT: usize = 100_000;
-
 /// Copy the run folder `from`, beneath the evidence anchor `anchor`, to the
 /// new folder `to` beneath the `CodeFlow` home (TSK-1044). Both sides walk
 /// from a held root handle (the anchor, and the home's parent) and never
@@ -688,7 +683,7 @@ fn copy_folder(
         move |error| (false, relative, error)
     };
     for name in source
-        .entries(from, EVIDENCE_ENTRY_LIMIT)
+        .entries(from, codeflow_limits::GATE_EVIDENCE_ENTRY_LIMIT.count())
         .map_err(read_side(from))?
     {
         let Some(name) = name.to_str() else {
@@ -713,14 +708,18 @@ fn copy_folder(
         }
         let file = source.open_regular(&child).map_err(read_side(&child))?;
         crate::contained::single_name(&file).map_err(read_side(&child))?;
-        let mut limited = file.take(EVIDENCE_FILE_LIMIT + 1);
+        let mut limited = file.take(codeflow_limits::GATE_EVIDENCE_FILE_LIMIT.value() + 1);
         destination
             .create_new_with(&target, None, |out| {
                 let copied = std::io::copy(&mut limited, out)?;
-                if copied > EVIDENCE_FILE_LIMIT {
+                if copied > codeflow_limits::GATE_EVIDENCE_FILE_LIMIT.value() {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        format!("{child} is larger than {EVIDENCE_FILE_LIMIT} bytes"),
+                        format!(
+                            "{child} is larger than {gate_evidence_file_limit} bytes",
+                            gate_evidence_file_limit =
+                                codeflow_limits::GATE_EVIDENCE_FILE_LIMIT.value()
+                        ),
                     ));
                 }
                 Ok(())

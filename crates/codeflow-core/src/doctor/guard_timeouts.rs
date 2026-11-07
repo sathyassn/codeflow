@@ -136,8 +136,11 @@ fn findings(root: &Path) -> Result<(Vec<String>, Vec<Format>), String> {
         // The guards' own read: a regular file under a byte limit, never a
         // link, a FIFO or a device, so a planted FIFO fails the check
         // instead of hanging it.
-        let bytes = crate::bounded_file::read_bounded_regular(&path, super::MAX_SETTINGS_BYTES)
-            .map_err(|error| format!("cannot read {}: {error}", crate::git::display_path(&path)))?;
+        let bytes = crate::bounded_file::read_bounded_regular(
+            &path,
+            codeflow_limits::DOCTOR_MAX_SETTINGS_BYTES.value(),
+        )
+        .map_err(|error| format!("cannot read {}: {error}", crate::git::display_path(&path)))?;
         let value: Value = serde_json::from_slice(&bytes).map_err(|error| {
             format!("cannot parse {}: {error}", crate::git::display_path(&path))
         })?;

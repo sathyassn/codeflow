@@ -48,7 +48,7 @@ pub const RULE: &str = "security.shell_startup";
 pub const SANCTIONED: &str = "shell startup files belong to the operator: ask the operator to make this change by hand, outside the agent session; no policy key relaxes this rule, and the harness sandbox denies these writes where one runs (issue 86)";
 
 /// The most symbolic links one path is followed through.
-const LINK_LIMIT: usize = 40;
+const LINK_LIMIT: usize = codeflow_limits::STARTUP_LINK_LIMIT.default_count();
 
 /// The zsh startup files, which `ZDOTDIR` moves.
 const ZSH_FILES: &[&str] = &[".zshenv", ".zprofile", ".zshrc", ".zlogin", ".zlogout"];
@@ -445,7 +445,7 @@ impl Class {
     /// file that [`Class::target`] and [`Class::placement`] do not name: a
     /// file name protected in every directory, a symbolic link leaving
     /// `root`, or a tree the guard cannot read whole (more than
-    /// [`ROOT_READ_LIMIT`] directories, or an unreadable one). A root that
+    /// [`codeflow_limits::GUARD_ROOT_READ_LIMIT`] directories, or an unreadable one). A root that
     /// does not exist reaches nothing.
     fn reaches_below(&self, root: &Path) -> bool {
         let protected: Vec<&str> = self
@@ -480,7 +480,7 @@ impl Class {
             let Ok(entries) = std::fs::read_dir(&dir) else {
                 return true;
             };
-            if read > ROOT_READ_LIMIT {
+            if read > codeflow_limits::GUARD_ROOT_READ_LIMIT.count() {
                 return true;
             }
             for entry in entries {
@@ -537,10 +537,6 @@ impl Class {
             .cloned()
     }
 }
-
-/// How many directories [`Class::reaches_below`] reads below one root
-/// before it stops and counts the root as reaching a class file.
-const ROOT_READ_LIMIT: usize = 4096;
 
 /// Needles that name the file only where the path ends there: `git/config`
 /// is git's configuration below a configuration directory, while

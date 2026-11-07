@@ -7,6 +7,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+codeflow-limits = { path = "../codeflow-limits" }
 axum.workspace = true
 base64.workspace = true
 fs2.workspace = true

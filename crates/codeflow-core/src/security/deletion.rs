@@ -188,13 +188,13 @@ fn read_deletion(command: &str, base: Option<&Path>, rooted_unplaced: bool) -> O
 
 /// Values kept per variable and for the working directory; past this, the
 /// values that are already protected are kept first.
-const MAX_VALUES: usize = 64;
+const MAX_VALUES: usize = codeflow_limits::DELETION_READER_VALUES.default_count();
 /// Concrete argument vectors judged per simple command.
-const MAX_VARIANTS: usize = 64;
+const MAX_VARIANTS: usize = codeflow_limits::DELETION_READER_VARIANTS.default_count();
 /// Nested scripts (`sh -c`, `eval`, substitutions) and function calls.
-const MAX_DEPTH: usize = 6;
+const MAX_DEPTH: usize = codeflow_limits::DELETION_READER_DEPTH.default_count();
 /// Passes over a loop body before its state is taken as settled.
-const LOOP_PASSES: usize = 6;
+const LOOP_PASSES: usize = codeflow_limits::DELETION_READER_LOOP_PASSES.default_count();
 
 // ---------------------------------------------------------------------------
 // Words and tokens
@@ -1849,7 +1849,7 @@ const TAINT_CLOSE: char = '\u{E002}';
 /// Separates the fields of `"$@"` held in one value.
 const FIELD_BREAK: char = '\u{E000}';
 /// Paths a glob may name that the reader checks before it gives up.
-const MAX_GLOB: usize = 4096;
+const MAX_GLOB: usize = codeflow_limits::DELETION_GLOB_LIMIT.default_count();
 
 /// The constructs that make a value unknown, as a refusal names them.
 mod why {

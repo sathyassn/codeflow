@@ -467,6 +467,26 @@ fn monorepo_template_executes_each_target_in_its_declared_cwd() {
 }
 
 #[test]
+fn every_shipped_target_carries_a_timeout_inside_the_registry_bounds() {
+    let limit = codeflow_limits::TARGET_TIMEOUT;
+    let mut read = 0;
+    for entry in std::fs::read_dir(assets_template_dir()).unwrap() {
+        let path = entry.unwrap().path();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let template: serde_json::Value = serde_json::from_str(&text).unwrap();
+        for target in template["targets"].as_array().unwrap() {
+            let name = format!("{}: {}", path.display(), target["name"]);
+            let seconds = target["timeout_seconds"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{name} has no timeout_seconds"));
+            assert!(limit.accepts(seconds), "{name}: {seconds}");
+            read += 1;
+        }
+    }
+    assert!(read > 0);
+}
+
+#[test]
 fn shipped_templates_match_the_public_mode_and_artifact_contract() {
     for entry in std::fs::read_dir(assets_template_dir()).unwrap() {
         let path = entry.unwrap().path();

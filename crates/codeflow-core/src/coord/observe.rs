@@ -50,25 +50,14 @@ pub struct Limits {
     pub freshness: Duration,
 }
 
-/// Records: 10 seconds.
-pub const RECORDS_TIMEOUT: Duration = Duration::from_secs(10);
-/// One local Git observation: 10 seconds.
-pub const GIT_TIMEOUT: Duration = Duration::from_secs(10);
-/// One network observation: 20 seconds.
-pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(20);
-/// One heartbeat write: 5 seconds.
-pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
-/// Freshness of a cached observation: 60 seconds.
-pub const FRESHNESS: Duration = Duration::from_secs(60);
-
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            records: RECORDS_TIMEOUT,
-            git: GIT_TIMEOUT,
-            network: NETWORK_TIMEOUT,
-            heartbeat: HEARTBEAT_TIMEOUT,
-            freshness: FRESHNESS,
+            records: codeflow_limits::COORD_RECORDS_TIMEOUT_SECONDS.wait(),
+            git: codeflow_limits::COORD_GIT_TIMEOUT_SECONDS.wait(),
+            network: codeflow_limits::COORD_NETWORK_TIMEOUT_SECONDS.wait(),
+            heartbeat: codeflow_limits::COORD_OBSERVE_HEARTBEAT_TIMEOUT_SECONDS.wait(),
+            freshness: codeflow_limits::COORD_FRESHNESS_SECONDS.wait(),
         }
     }
 }
@@ -90,9 +79,6 @@ where
         .ok()?;
     receive.recv_timeout(limit).ok()
 }
-
-/// The most output one observation keeps from each stream.
-const OUTPUT_LIMIT: u64 = 1 << 20;
 
 /// Run `command` with its output captured, everything bounded by `limit`:
 /// the process, its output being drained, and any descendant that inherited
@@ -120,7 +106,7 @@ pub fn command(
         std::thread::spawn(move || {
             let mut bytes = Vec::new();
             let read = std::io::Read::read_to_end(
-                &mut std::io::Read::take(stream, OUTPUT_LIMIT),
+                &mut std::io::Read::take(stream, codeflow_limits::COORD_OUTPUT_LIMIT.value()),
                 &mut bytes,
             );
             let _ = send.send(read.map(|_| bytes));
@@ -145,7 +131,7 @@ pub fn command(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20));
+                std::thread::sleep(codeflow_limits::POLL_LOCK_MILLIS.wait());
             }
             _ => {
                 stop(&mut child);
