@@ -1,0 +1,11 @@
+id = "TSK-1374"
+uid = "5e03fabd-a3a7-4f5e-9a37-3b15be1124d8"
+kind = "TSK"
+title = "The deletion guard fails closed at its bounds"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-07T07:55:35Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
