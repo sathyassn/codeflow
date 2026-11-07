@@ -37,9 +37,12 @@ jobs:
     permissions:
       contents: read
     steps:
+      # The checkout leaves no token in its git config for later steps or
+      # repository code to read (TSK-1175).
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install codeflow (pinned by this commit, checksum-verified)
         env:
@@ -153,7 +156,20 @@ jobs:
       # The registry is fetched explicitly with full history, never forced
       # (R-20).
       - name: Fetch the shared registry
+        env:
+          FETCH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          # The checkout keeps no credential (persist-credentials: false), so
+          # a private repository's fetch carries the run's read-only token
+          # for this step only: through git's GIT_CONFIG_* variables,
+          # scoped to this repository's URL, masked, never written to git
+          # config or a file, and gone when the step ends.
+          basic=$(printf 'x-access-token:%s' "$FETCH_TOKEN" | base64 | tr -d '\n')
+          echo "::add-mask::${basic}"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic}"
           if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
             git fetch --no-tags origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
           else
