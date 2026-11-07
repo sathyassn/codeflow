@@ -2836,7 +2836,9 @@ printf '{}'
     }
 
     /// A checkout whose `origin` names `nwo` on github.com, as a project
-    /// has; no test contacts it, since `gh` is a stub.
+    /// has; no test contacts it, since `gh` is a stub. Only the Unix shim
+    /// tests use it.
+    #[cfg(unix)]
     fn github_checkout(dir: &Path, nwo: &str) {
         let repo = git2::Repository::init(dir).unwrap();
         repo.remote("origin", &format!("https://github.com/{nwo}.git"))

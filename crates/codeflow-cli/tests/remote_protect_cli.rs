@@ -324,9 +324,18 @@ fn two_runs_write_the_owned_rulesets_once_and_never_the_foreign_one() {
 
 /// Run `git` in `root` with the test's isolated configuration.
 fn git(root: &Path, args: &[&str]) -> String {
+    // `codeflow init` installs hooks in these repositories, and the hooks
+    // run `codeflow`: this build's binary comes first on PATH, as for
+    // `codeflow()`, so no installed binary answers for it.
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(std::iter::once(exe.parent().unwrap().to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("joinable PATH");
     let out = Command::new("git")
         .args(args)
         .current_dir(root)
+        .env("PATH", path)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "Journey")
