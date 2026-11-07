@@ -310,6 +310,41 @@ fn decode_hex(text: &str) -> Option<String> {
     String::from_utf8(bytes?).ok()
 }
 
+/// The arguments that ask `secret-tool` whether an entry exists: `search`,
+/// never `lookup`. `lookup` exits 1 for an error and for no entry alike, and
+/// also gives no value and no error when an unlock leaves an entry locked
+/// (libsecret `on_lookup_unlocked`). `search` with no `--unlock` lists locked
+/// entries too and prompts no one (libsecret `load_items`).
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn search_args(account: &str) -> [&str; 5] {
+    ["search", "service", AGENT_KEY_SERVICE, "account", account]
+}
+
+/// Whether `secret-tool search` shows an entry. It exits 0 for an answer and
+/// 1 for an error (libsecret `secret_tool_action_search`), so only exit 0
+/// with nothing on either stream proves there is none; any other failure is
+/// an error, never "absent", as for the keychain. Standard output can hold
+/// the secret, so it never reaches a message.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn search_answer(output: &Output, store: &str) -> Result<bool, String> {
+    let unread = || {
+        format!(
+            "cannot read {store} ({}): {}",
+            output.status,
+            helper_text(&output.stderr)
+        )
+    };
+    if !output.status.success() {
+        Err(unread())
+    } else if !output.stdout.is_empty() {
+        Ok(true)
+    } else if output.stderr.is_empty() {
+        Ok(false)
+    } else {
+        Err(unread())
+    }
+}
+
 /// The freedesktop Secret Service, through `secret-tool`.
 #[cfg(all(unix, not(target_os = "macos")))]
 pub struct SecretService;
@@ -344,11 +379,8 @@ impl KeyStore for SecretService {
     }
 
     fn exists(&self, account: &str) -> Result<bool, String> {
-        let output = run(
-            Self::command()?.args(["lookup", "service", AGENT_KEY_SERVICE, "account", account]),
-            None,
-        )?;
-        Ok(output.status.success() && !output.stdout.is_empty())
+        let output = run(Self::command()?.args(search_args(account)), None)?;
+        search_answer(&output, &self.describe())
     }
 
     fn store(&self, account: &str, secret: &str) -> Result<(), String> {
@@ -1852,6 +1884,88 @@ pub(crate) mod tests {
         );
         assert!(http.calls.borrow().is_empty());
         assert_eq!(store.load("o/r").unwrap(), before);
+    }
+
+    /// A store that cannot say whether it holds an entry, as a locked keyring
+    /// or a failed D-Bus call leaves it. Nothing may write to it.
+    pub(crate) struct UnclearStore;
+    impl KeyStore for UnclearStore {
+        fn describe(&self) -> String {
+            "an unclear store".to_string()
+        }
+        fn available(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn exists(&self, _: &str) -> Result<bool, String> {
+            Err("the keyring did not answer".to_string())
+        }
+        fn store(&self, _: &str, _: &str) -> Result<(), String> {
+            panic!("wrote to a store that could not answer");
+        }
+        fn load(&self, _: &str) -> Result<String, String> {
+            panic!("read a store that could not answer");
+        }
+        fn undo(&self, account: &str) -> String {
+            format!("forget {account}")
+        }
+    }
+
+    #[test]
+    fn import_stops_when_the_store_cannot_answer() {
+        let http = Routes::new(&[]);
+        let missing = Path::new("/nonexistent/never-read.pem");
+        let error = import(&UnclearStore, &http, &signs(), missing).unwrap_err();
+        assert!(error.contains("did not answer"), "{error}");
+        assert!(http.calls.borrow().is_empty());
+    }
+
+    /// A real exit status and real output, from a shell standing in for
+    /// `secret-tool`, which this host does not have.
+    #[cfg(unix)]
+    fn stub_tool(script: &str) -> Output {
+        Command::new("/bin/sh")
+            .args(["-c", script])
+            .output()
+            .unwrap()
+    }
+
+    /// `secret-tool search` exits 0 for an answer and 1 for an error
+    /// (libsecret `tool/secret-tool.c`, `secret_tool_action_search`), so only
+    /// a clean, empty answer proves there is no entry.
+    #[cfg(unix)]
+    #[test]
+    fn a_store_search_proves_absence_only_by_a_clean_empty_answer() {
+        let answer = |script: &str| search_answer(&stub_tool(script), "the store");
+        assert_eq!(answer("exit 0"), Ok(false));
+        assert_eq!(answer("printf '[/1]\\nlabel = k\\n'"), Ok(true));
+        // A locked item is listed, and its unread secret goes to stderr.
+        assert_eq!(
+            answer("printf '[/1]\\n'; printf 'secret-tool: locked\\n' >&2"),
+            Ok(true)
+        );
+        for script in [
+            "printf 'secret-tool: Cannot autolaunch D-Bus\\n' >&2; exit 1",
+            "exit 1",
+            "exit 2",
+            "printf 'usage\\n' >&2; exit 2",
+            "printf '[/1]\\nsecret = hunter2\\n'; exit 1",
+            "printf 'a warning\\n' >&2; exit 0",
+            "kill -9 $$",
+        ] {
+            let error = answer(script).expect_err(script);
+            assert!(error.contains("the store"), "{script}: {error}");
+            assert!(!error.contains("hunter2"), "{script}: {error}");
+        }
+    }
+
+    /// The search lists a locked entry without a prompt, which `lookup`
+    /// cannot: with no `--unlock`, nothing asks the person at the screen.
+    #[test]
+    fn the_store_search_never_unlocks() {
+        let args = search_args("o/r");
+        assert_eq!(args[0], "search");
+        assert!(!args.contains(&"--unlock"), "{args:?}");
+        assert_eq!(args[1..], ["service", AGENT_KEY_SERVICE, "account", "o/r"]);
     }
 
     #[cfg(unix)]

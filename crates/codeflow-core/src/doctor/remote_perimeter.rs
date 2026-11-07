@@ -707,7 +707,7 @@ fn authority_environment(
         &format!("repos/{nwo}/environments/{AUTHORITY_ENVIRONMENT}"),
     ]) {
         Ok(text) => serde_json::from_str::<Value>(&text).unwrap_or(Value::Null),
-        Err(error) if error.contains("404") || error.contains("Not Found") => return false,
+        Err(error) if crate::remote::status_is_404(&error) => return false,
         Err(error) => {
             out.unread.push(unread(&error));
             return true;
@@ -866,7 +866,7 @@ fn classic_protection(
                 Some("classic branch protection not readable (not a JSON object)".to_string()),
             ),
         },
-        Err(error) if error.contains("404") || error.contains("not protected") => (None, None),
+        Err(error) if crate::remote::status_is_404(&error) => (None, None),
         Err(error) => (
             None,
             Some(format!(
@@ -1678,6 +1678,31 @@ mod tests {
         // A real 404 is a branch without classic protection, and warns.
         let text = warn_text(&check(&opts(dir.path(), unprotected)));
         assert!(text.contains("main requires no status checks"), "{text}");
+    }
+
+    /// A failure that names 404 or Not Found leaves the answer unknown; only
+    /// a real 404 means the protection or the environment is not there.
+    #[test]
+    fn only_a_real_404_means_absent() {
+        for error in [
+            r#"{"message":"upstream said 404"}gh: Bad Gateway (HTTP 502)"#,
+            r#"{"message":"Branch not protected"}gh: Bad Gateway (HTTP 502)"#,
+            "Not Found: dial tcp: i/o timeout",
+        ] {
+            let gh = |_: &[&str]| Err(error.to_string());
+            let (body, why) = classic_protection(&gh, "o/r", "main");
+            assert!(body.is_none() && why.is_some(), "{error}");
+            let mut out = Perimeter::default();
+            assert!(authority_environment(&gh, "o/r", "main", &mut out), "{error}");
+            assert_eq!(out.unread.len(), 1, "{error}");
+        }
+        for error in ["gh: Branch not protected (HTTP 404)", "gh: Not Found (HTTP 404)"] {
+            let gh = |_: &[&str]| Err(error.to_string());
+            assert_eq!(classic_protection(&gh, "o/r", "main"), (None, None));
+            let mut out = Perimeter::default();
+            assert!(!authority_environment(&gh, "o/r", "main", &mut out));
+            assert!(out.unread.is_empty(), "{error}");
+        }
     }
 
     /// Classic protection cannot remove a ruleset requirement, so rulesets

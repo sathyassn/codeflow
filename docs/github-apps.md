@@ -107,7 +107,10 @@ The run stops, whatever the App's visibility, when:
 - the secret is missing, or the variable does not hold an App id;
 - GitHub shows an App with another id, other permissions or any events;
 - GitHub answers anything other than success or 404, such as a rate limit or a
-  server error. Run it again later.
+  server error. Run it again later;
+- this computer's credential store cannot say whether it holds the agent App's
+  key, such as when the Secret Service is not reachable on Linux. The run
+  creates no App and stores nothing.
 
 ## An authority App you made by hand
 

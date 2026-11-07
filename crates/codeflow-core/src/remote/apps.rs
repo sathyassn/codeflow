@@ -27,6 +27,7 @@ use super::agent_key::{
     app_as_itself, committer_for_slug, redact, signed_app_jwt, AgentApp, AppHttp, BotCommitter,
     KeyStore, Signer, API_ROOT,
 };
+use super::status_is_404;
 
 /// The environment that holds the authority App's key; only the default
 /// branch may deploy to it.
@@ -385,18 +386,15 @@ fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or_default().trim()
 }
 
-fn not_found(error: &str) -> bool {
-    error.contains("404") || error.contains("Not Found")
-}
-
-/// Whether a `gh` failure is an HTTP 404. `gh` prints the status after the
-/// response body, so the last status in the text is the real one, and a body
-/// that holds "404" under another status does not count. Unlike [`not_found`],
-/// which leads to "create", this leads to "carry on", so it is exact.
-fn status_is_404(error: &str) -> bool {
-    error
-        .rfind("(HTTP ")
-        .is_some_and(|at| error[at..].starts_with("(HTTP 404)"))
+/// Whether a failure of [`AppHttp`] is an HTTP 404. `curl` prints its own
+/// line after the response body, so the last such line is the real answer,
+/// and a body that holds "404" under another status does not count.
+fn curl_status_is_404(error: &str) -> bool {
+    error.rfind("curl: (").is_some_and(|at| {
+        error[at..]
+            .strip_prefix("curl: (22) The requested URL returned error: 404")
+            .is_some_and(|rest| !rest.starts_with(|next: char| next.is_ascii_digit()))
+    })
 }
 
 fn forbidden(error: &str) -> bool {
@@ -540,7 +538,7 @@ fn environment(gh: Gh<'_>, target: &Target, report: &mut SetupReport) -> Result<
         Ok(text) => Some(serde_json::from_str::<Value>(&text).map_err(|_| {
             format!("the environment {AUTHORITY_ENVIRONMENT} could not be read: not JSON")
         })?),
-        Err(error) if not_found(&error) => None,
+        Err(error) if status_is_404(&error) => None,
         Err(error) => {
             return Err(format!(
                 "cannot read the environment {AUTHORITY_ENVIRONMENT}: {}",
@@ -565,7 +563,7 @@ fn environment(gh: Gh<'_>, target: &Target, report: &mut SetupReport) -> Result<
     };
     let body = environment_body(existing.as_ref());
     gh(&["api", "-X", "PUT", &path, "--input", "-"], Some(&body.to_string())).map_err(|error| {
-        if forbidden(&error) || not_found(&error) {
+        if forbidden(&error) || status_is_404(&error) {
             format!(
                 "refused: writing the environment {AUTHORITY_ENVIRONMENT} needs Administration write on {repository}, which this token lacks ({}){free_note}",
                 first_line(&error)
@@ -870,7 +868,7 @@ fn hook_problems(auth: &AppAuth<'_>, target: &Target, client_id: &str, pem: &str
                 None => vec!["a webhook configuration GitHub did not describe".to_string()],
             }
         }
-        Err(error) if not_found(&error) => Vec::new(),
+        Err(error) if curl_status_is_404(&error) => Vec::new(),
         Err(error) => vec![format!(
             "a webhook that can be checked ({})",
             first_line(&redact(&error, &secrets))
@@ -1001,7 +999,7 @@ fn authority(
                 .unwrap_or_default();
             return existing_authority(gh, target, name, &value, &variable, report);
         }
-        Err(error) if not_found(&error) => {}
+        Err(error) if status_is_404(&error) => {}
         Err(error) => {
             return Err(format!(
                 "cannot read {AUTHORITY_ID_VARIABLE} in {AUTHORITY_ENVIRONMENT}: {}",
@@ -1101,7 +1099,7 @@ fn existing_authority(
         None,
     ) {
         Ok(_) => present.push(format!("the secret {AUTHORITY_KEY_SECRET}")),
-        Err(error) if not_found(&error) => {
+        Err(error) if status_is_404(&error) => {
             missing.push(format!("the secret {AUTHORITY_KEY_SECRET}"));
         }
         Err(error) => missing.push(format!(
@@ -1560,7 +1558,7 @@ impl ManifestBrowser for PasteBrowser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::remote::agent_key::tests::MemoryStore;
+    use crate::remote::agent_key::tests::{MemoryStore, UnclearStore};
     use std::cell::RefCell;
     use std::io::{Read, Write};
 
@@ -2478,6 +2476,134 @@ mod tests {
         );
         let report = run(&host, &mut Clicks::default(), &MemoryStore::default());
         assert_eq!(report.failure, None);
+    }
+
+    /// Failures that name 404 or Not Found without being one.
+    const NOT_A_404: [&str; 3] = [
+        r#"{"message":"upstream said 404"}gh: Bad Gateway (HTTP 502)"#,
+        r#"{"message":"Not Found"}gh: Bad Gateway (HTTP 502)"#,
+        "Not Found: dial tcp: i/o timeout",
+    ];
+
+    /// Reading an environment as absent writes it and drops
+    /// `can_admins_bypass`, so only a real 404 may do that.
+    #[test]
+    fn only_a_real_404_means_no_environment() {
+        for answer in NOT_A_404 {
+            let host =
+                fresh_host().answer("api repos/o/r/environments/codeflow-authority", Err(answer));
+            let mut clicks = Clicks::default();
+            let report = run(&host, &mut clicks, &MemoryStore::default());
+            let failure = report.failure.unwrap_or_else(|| panic!("{answer}"));
+            assert!(
+                failure.contains("cannot read the environment"),
+                "{failure}"
+            );
+            assert!(host.writes().is_empty(), "{answer}: {:?}", host.writes());
+            assert!(clicks.manifests.is_empty(), "{answer}");
+        }
+    }
+
+    /// Reading the id variable as absent creates an App and replaces the key
+    /// secret, so only a real 404 may do that.
+    #[test]
+    fn only_a_real_404_means_no_id_variable() {
+        for answer in NOT_A_404 {
+            let host = fresh_host().answer(
+                "api repos/o/r/environments/codeflow-authority/variables/CODEFLOW_AUTHORITY_APP_ID",
+                Err(answer),
+            );
+            let mut clicks = Clicks::default();
+            let report = run(&host, &mut clicks, &MemoryStore::default());
+            let failure = report.failure.unwrap_or_else(|| panic!("{answer}"));
+            assert!(
+                failure.contains("cannot read CODEFLOW_AUTHORITY_APP_ID"),
+                "{failure}"
+            );
+            assert!(clicks.manifests.is_empty(), "{answer}");
+            assert!(
+                !host.writes().iter().any(|call| call.starts_with("secret")),
+                "{answer}"
+            );
+        }
+    }
+
+    /// A secret read that fails is reported as unread, not as a missing one.
+    #[test]
+    fn only_a_real_404_means_no_key_secret() {
+        for answer in NOT_A_404 {
+            let host = private_host().answer(
+                "api repos/o/r/environments/codeflow-authority/secrets/CODEFLOW_AUTHORITY_APP_KEY",
+                Err(answer),
+            );
+            let report = run(&host, &mut Clicks::default(), &MemoryStore::default());
+            let failure = report.failure.unwrap_or_else(|| panic!("{answer}"));
+            assert!(failure.contains("(cannot read it"), "{failure}");
+        }
+    }
+
+    /// `GET /app/hook/config` goes through curl, whose failure ends with its
+    /// own status line, so that line decides, whatever the body says.
+    #[test]
+    fn only_curls_own_404_means_no_webhook() {
+        let failed = |body: &str, status: &str| {
+            Err(format!(
+                "GET https://api.github.com/app/hook/config failed: {body}curl: (22) The requested URL returned error: {status}"
+            ))
+        };
+        for hook in [
+            failed(r#"{"message":"upstream said 404"}"#, "502"),
+            failed(r#"{"message":"Not Found"}"#, "502"),
+            failed(r#"{"message":"returned error: 404"}"#, "502"),
+            failed("", "4040"),
+            Err("GET failed: curl: (22) The requested URL returned error: 404curl: (28) Operation timed out".to_string()),
+            Err("GET failed: curl: (7) Not Found: dial tcp".to_string()),
+            Err("GET failed: curl: (28) Operation timed out".to_string()),
+        ] {
+            let host = fresh_host();
+            let shown = format!("{hook:?}");
+            let report = run_hook(
+                &host,
+                &mut Clicks::default(),
+                &MemoryStore::default(),
+                &HookHttp::hook(hook),
+            );
+            let failure = report.failure.unwrap_or_else(|| panic!("{shown}"));
+            assert!(
+                failure.contains("a webhook that can be checked"),
+                "{failure}"
+            );
+            assert!(!host.writes().iter().any(|call| call.starts_with("secret")));
+        }
+        for status in ["404", "404 Not Found"] {
+            let report = run_hook(
+                &fresh_host(),
+                &mut Clicks::default(),
+                &MemoryStore::default(),
+                &HookHttp::hook(failed(r#"{"message":"Not Found"}"#, status)),
+            );
+            assert_eq!(report.failure, None, "{status}");
+        }
+    }
+
+    /// A locked keyring or a failed store call is not "no entry": no second
+    /// agent App is created and nothing is stored.
+    #[test]
+    fn a_store_that_cannot_answer_creates_no_agent_app() {
+        let host = fresh_host();
+        let mut clicks = Clicks::default();
+        let report = run(&host, &mut clicks, &UnclearStore);
+        let failure = report.failure.unwrap();
+        assert!(failure.contains("did not answer"), "{failure}");
+        assert!(
+            !host.writes().iter().any(|call| call.contains("agentcode")),
+            "{:?}",
+            host.writes()
+        );
+        assert!(!clicks
+            .manifests
+            .iter()
+            .any(|(_, manifest)| manifest["name"].as_str().unwrap_or("").contains("agent")));
     }
 
     /// The agent App's own answer decides: a refused key, a deleted App, a
