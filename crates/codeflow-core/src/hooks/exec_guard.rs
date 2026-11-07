@@ -143,6 +143,27 @@ pub fn evaluate_ruled(
     root: &std::path::Path,
     outcome: &super::sandbox_state::Outcome,
 ) -> Vec<Violation> {
+    let mut violations = evaluate_spelled(command, posix, levels, integrity, cwd, root, outcome);
+    // A name the disk folds onto a protected one reaches every check of this
+    // guard in the spelling they compare (TSK-1349 AC-7).
+    if let Some(spelled) = super::repo::ascii_spelling(command) {
+        violations.extend(evaluate_spelled(
+            &spelled, posix, levels, integrity, cwd, root, outcome,
+        ));
+    }
+    violations
+}
+
+/// [`evaluate_ruled`] for the line as spelled.
+fn evaluate_spelled(
+    command: &str,
+    posix: bool,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &std::path::Path,
+    root: &std::path::Path,
+    outcome: &super::sandbox_state::Outcome,
+) -> Vec<Violation> {
     // A NUL byte ends a C string in the shell but not in the guard, so the
     // two would read different commands; refuse before any lexing (TSK-397
     // Codex review round 9).

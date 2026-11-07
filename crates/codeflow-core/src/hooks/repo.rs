@@ -41,6 +41,38 @@ pub fn folded_ref_name(name: &str) -> String {
     decomposed.to_uppercase().to_lowercase().nfc().collect()
 }
 
+/// `text` as a filesystem that folds names reads it, when that differs: each
+/// character [`folded_ref_name`] turns into ASCII (`ſ`, the Kelvin sign, the
+/// `fl` ligature) is written so, each one HFS+ ignores is dropped, and the
+/// rest is NFC. ASCII stays as written, so a flag such as `-R` keeps its
+/// meaning. The guards compare names as ASCII in many places, and a target
+/// that does not exist yet has no entry on disk to recover its spelling from,
+/// so they judge this spelling as well as the one written (TSK-1349 AC-7).
+#[must_use]
+pub fn ascii_spelling(text: &str) -> Option<String> {
+    use unicode_normalization::UnicodeNormalization as _;
+    if text.is_ascii() {
+        return None;
+    }
+    let mut spelled = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_ascii() {
+            spelled.push(c);
+        } else if !matches!(c, '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}'
+            | '\u{206a}'..='\u{206f}' | '\u{feff}')
+        {
+            let folded = folded_ref_name(c.encode_utf8(&mut [0; 4]));
+            if folded.is_ascii() {
+                spelled.push_str(&folded);
+            } else {
+                spelled.push(c);
+            }
+        }
+    }
+    let spelled: String = spelled.nfc().collect();
+    (spelled != text).then_some(spelled)
+}
+
 /// The commit `name` points to, read only when git lists a ref by exactly
 /// that spelling and no other listed spelling folds to it (TSK-381 SF-4). On
 /// a case-insensitive filesystem a loose `refs/remotes/origin/MAIN` also
@@ -1439,6 +1471,27 @@ mod tests {
             super::folded_ref_name("integration/cafe\u{301}"),
             super::folded_ref_name("integration/caf\u{e9}")
         );
+    }
+
+    #[test]
+    fn ascii_spelling_writes_what_the_disk_folds_and_keeps_the_rest() {
+        for (written, spelled) in [
+            ("workflow\u{17f}", Some("workflows")),
+            (".gro\u{212a}", Some(".grok")),
+            (".code\u{fb02}ow", Some(".codeflow")),
+            (".gi\u{200d}thub", Some(".github")),
+            ("rm -R work\u{fb02}ow", Some("rm -R workflow")),
+            ("cafe\u{301}", Some("caf\u{e9}")),
+            ("caf\u{e9}", None),
+            ("\u{65e5}\u{672c}\u{8a9e}.txt", None),
+            ("-R .GitHub", None),
+        ] {
+            assert_eq!(
+                super::ascii_spelling(written).as_deref(),
+                spelled,
+                "{written}"
+            );
+        }
     }
 
     #[test]

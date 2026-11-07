@@ -262,7 +262,15 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
     let mut seen = BTreeSet::new();
     let mut violations = Vec::new();
     let startup = crate::security::startup::StartupEnv::with_home_at(ctx.home, cwd);
-    for path in &request.paths {
+    // A name the disk folds onto a protected one is judged in the spelling
+    // the checks below compare (TSK-1349 AC-7).
+    let spelled: Vec<PathBuf> = request
+        .paths
+        .iter()
+        .filter_map(|path| path.to_str().and_then(super::repo::ascii_spelling))
+        .map(PathBuf::from)
+        .collect();
+    for path in request.paths.iter().chain(&spelled) {
         let absolute = absolute_target(path, cwd, ctx.home);
         // First, so a path past the bound reads nothing on disk (TSK-1258).
         let lexical = normalized(&absolute, false)?;
@@ -734,6 +742,26 @@ fn non_ascii_below(path: &Path, dir: &Path) -> bool {
             .any(|part| !part.as_os_str().as_encoded_bytes().is_ascii())
 }
 
+/// `path` lies directly or deeper under `root`, and its first component below
+/// `root` is a dot name holding a non-ASCII byte. APFS folds `.gro\u{212A}`
+/// onto `.grok` and `.code\u{FB02}ow` onto `.codeflow`, and a directory that
+/// does not exist yet cannot be checked against the disk, so the name is
+/// judged protected on every host, failing closed. A name such as
+/// `日本語.txt` is not a dot name and stays ordinary (TSK-1349 AC-7).
+fn non_ascii_dot_name_below(path: &Path, root: &Path) -> bool {
+    under_ignoring_case(path, root)
+        && path
+            .components()
+            .nth(root.components().count())
+            .is_some_and(|part| {
+                let name = part.as_os_str();
+                !name.as_encoded_bytes().is_ascii()
+                    && name.to_str().is_none_or(|name| {
+                        name.chars().find(|c| c.is_alphanumeric() || *c == '.') == Some('.')
+                    })
+            })
+}
+
 /// `base` is a checkout's dot directory, such as `.github` or `.codeflow`, so
 /// the entry is one of the action table's. A spelling in another case names
 /// the same file wherever a checkout's disk ignores case, and a commit carries
@@ -972,11 +1000,11 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
 struct ProtectedPath {
     path: [Result<PathBuf, String>; 2],
     directory: bool,
-    /// Under the git administrative directory, so a non-ASCII name below it
-    /// is judged protected ([`non_ascii_below`]).
-    git_owned: bool,
-    /// Compared without ASCII case ([`under_ignoring_case`]): a git-owned
-    /// path, or one in a checkout's dot directory ([`dot_directory`]).
+    /// Under the git administrative directory or a checkout's dot directory
+    /// ([`dot_directory`]): compared without ASCII case
+    /// ([`under_ignoring_case`]), and a non-ASCII name below it, or in place
+    /// of it, is judged protected ([`non_ascii_below`],
+    /// [`non_ascii_dot_name_below`]).
     fold_case: bool,
     base: PathBuf,
     resolved_base: [std::cell::OnceCell<Result<PathBuf, String>>; 2],
@@ -1166,7 +1194,6 @@ fn protected_at(root: &Path) -> Result<Option<Protected>, String> {
             .map(|(path, directory, base)| ProtectedPath {
                 path: both(path),
                 directory: *directory,
-                git_owned: path.starts_with(repo.commondir()),
                 fold_case: path.starts_with(repo.commondir()) || dot_directory(base),
                 base: base.clone(),
                 resolved_base: Default::default(),
@@ -1238,7 +1265,12 @@ pub(crate) fn repository_enforcement_target(
                         .as_ref()
                         .map_err(Clone::clone)
                 };
-                if entry.git_owned && non_ascii_below(&target, base()?) {
+                if entry.fold_case
+                    && (non_ascii_below(&target, base()?)
+                        || base()?
+                            .parent()
+                            .is_some_and(|root| non_ascii_dot_name_below(&target, root)))
+                {
                     return Ok(true);
                 }
                 if same

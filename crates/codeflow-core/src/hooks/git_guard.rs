@@ -508,7 +508,15 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
 /// Evaluate a command using the tool payload's working directory for paths.
 #[must_use]
 pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> Evaluation {
-    evaluate_report_with_runners(command, ctx, cwd, true)
+    let mut report = evaluate_report_with_runners(command, ctx, cwd, true);
+    // A name the disk folds onto a protected one reaches every check of this
+    // guard in the spelling they compare (TSK-1349 AC-7).
+    if let Some(spelled) = super::repo::ascii_spelling(command) {
+        let other = evaluate_report_with_runners(&spelled, ctx, cwd, true);
+        report.violations.extend(other.violations);
+        report.notes.extend(other.notes);
+    }
+    report
 }
 
 thread_local! {
@@ -4760,7 +4768,10 @@ fn names_whole_dir(after: &str) -> bool {
 /// and `/./` collapsed, and lower case, since a case-insensitive file
 /// system (the macOS default) reads `.CODEFLOW` as `.codeflow`.
 fn canonical_text(text: &str) -> String {
-    let mut out: String = text
+    let spelled = super::repo::ascii_spelling(text);
+    let mut out: String = spelled
+        .as_deref()
+        .unwrap_or(text)
         .chars()
         .filter(|c| !matches!(c, '\'' | '"'))
         .collect::<String>()

@@ -244,15 +244,11 @@ fn edit_guard_refuses_a_tool_write_under_the_workflow_directory() {
 /// A spelling in another case is matched by the guard, not by the disk. The
 /// project holds no `.github`, so no disk can fold the spelling onto an
 /// existing directory: this runs the same on every host. The admitted lines
-/// show that only the workflow and action directories are folded.
+/// show that only the protected paths in those directories are folded.
 #[test]
 fn the_guards_fold_letter_case_without_the_disk() {
     let dir = tempfile::tempdir().unwrap();
-    let root = project(dir.path());
-    init_repo(&root, "feat/w");
-    write_policy(&root, POLICY);
-    git(&root, &["add", "."]);
-    git(&root, &["commit", "-m", "chore: fixture"]);
+    let root = project_without_enforcement_folders(dir.path());
     let mut wrong = Vec::new();
     for name in ["git-guard", "exec-guard"] {
         for command in [
@@ -288,26 +284,169 @@ fn the_guards_fold_letter_case_without_the_disk() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The project in `dir`, committed, with no `.github` and no git hooks
+/// folder, so a spelling cannot reach an existing entry through the disk.
+fn project_without_enforcement_folders(dir: &Path) -> PathBuf {
+    let root = project(dir);
+    init_repo(&root, "feat/w");
+    write_policy(&root, POLICY);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "chore: fixture"]);
+    root
+}
+
+/// The exit code of edit-guard for a file-tool write to `path` under `root`.
+fn tool_write(root: &Path, path: &str) -> (Option<i32>, String) {
+    tool_write_from(root, None, path)
+}
+
+/// [`tool_write`], with `home` as the hook's home directory when given.
+fn tool_write_from(root: &Path, home: Option<&Path>, path: &str) -> (Option<i32>, String) {
+    let payload = serde_json::json!({
+        "tool_name": "Write",
+        "tool_input": { "file_path": root.join(path), "content": "on: push\n" },
+        "cwd": root,
+    });
+    let mut command = codeflow();
+    command
+        .args(["hook", "edit-guard", "--contract", "3"])
+        .current_dir(root)
+        .env_remove("CLAUDE_PROJECT_DIR");
+    if let Some(home) = home {
+        command.env("HOME", home).env("USERPROFILE", home);
+    }
+    let out = run_with_stdin(&mut command, &payload.to_string());
+    (out.status.code(), stderr(&out))
+}
+
+/// The file tools fold case the same way, with no disk to do it for them.
+#[test]
+fn the_file_tools_fold_letter_case_without_the_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = project_without_enforcement_folders(dir.path());
     for (path, code) in [
         (".GitHub/Workflows/new.yml", 2),
         (".GitHub/Actions/build/action.yml", 2),
         (".Claude/settings.json", 2),
         (".GitHub/notes.md", 0),
     ] {
-        let payload = serde_json::json!({
-            "tool_name": "Write",
-            "tool_input": { "file_path": root.join(path), "content": "on: push\n" },
-            "cwd": root,
-        });
-        let out = run_with_stdin(
-            codeflow()
-                .args(["hook", "edit-guard", "--contract", "3"])
-                .current_dir(&root)
-                .env_remove("CLAUDE_PROJECT_DIR"),
-            &payload.to_string(),
-        );
-        assert_eq!(out.status.code(), Some(code), "{path}: {}", stderr(&out));
+        let (got, said) = tool_write(&root, path);
+        assert_eq!(got, Some(code), "{path}: {said}");
     }
+}
+
+/// Spellings APFS folds onto a protected name (`ſ` U+017F, the Kelvin sign
+/// U+212A, the `fl` ligature U+FB02), and ones HFS+ ignores (zero-width
+/// joiner U+200D). Each is a name the guard cannot normalise for every disk,
+/// so it refuses on every host. Payloads only, judged and never executed.
+const NON_ASCII_WRITES: &[&str] = &[
+    "mkdir -p .github/workflow\u{17f} && echo x > .github/workflow\u{17f}/ci.yml",
+    "mkdir -p .github/action\u{17f} && echo x > .github/action\u{17f}/run/action.yml",
+    "mkdir -p .codeflow/git-hook\u{17f} && echo x > .codeflow/git-hook\u{17f}/pre-commit",
+    "echo x > .github/work\u{fb02}ows/ci.yml",
+    "echo x > .codeflow/git-hoo\u{212a}s/pre-commit",
+    "echo x > .codeflow/policy.j\u{17f}on",
+    "echo x > .claude/\u{17f}ettings.json",
+    "echo x > .gro\u{212a}/sandbox.toml",
+    "echo x > .code\u{fb02}ow/policy.json",
+    "mkdir -p .code\u{fb02}ow/git-hooks",
+    "echo x > .gi\u{200d}thub/workflows/ci.yml",
+    "echo x > \u{200d}.github/workflows/ci.yml",
+    "touch .github/workflow\u{17f}/ci.yml",
+    "cp notes.md .github/workflow\u{17f}/ci.yml",
+    "mv notes.md .github/workflow\u{17f}/ci.yml",
+    "sh -c 'echo x > .github/workflow\u{17f}/ci.yml'",
+    "ln -s .github/workflow\u{17f} wf && echo x > wf/ci.yml",
+    "rm -rf .code\u{fb02}ow",
+];
+
+/// A non-ASCII spelling of a protected name refuses before the entry exists,
+/// on both hooks and through the file tools; ordinary non-ASCII names stay
+/// admitted.
+#[test]
+fn a_non_ascii_spelling_of_a_protected_name_refuses() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = project_without_enforcement_folders(dir.path());
+    let mut wrong = Vec::new();
+    for name in ["git-guard", "exec-guard"] {
+        for command in NON_ASCII_WRITES {
+            let out = hook(name, &root, command);
+            if out.status.code() != Some(2)
+                || !stderr(&out).contains("policy rule git.hook_integrity")
+            {
+                wrong.push(format!("{name} admitted {command}\n{}", stderr(&out)));
+            }
+        }
+        for command in [
+            "echo x > docs/caf\u{e9}.md",
+            "echo x > \u{65e5}\u{672c}\u{8a9e}.txt",
+            "mkdir -p docs/workflow\u{17f}",
+        ] {
+            let out = hook(name, &root, command);
+            if out.status.code() != Some(0) {
+                wrong.push(format!("{name} refused {command}\n{}", stderr(&out)));
+            }
+        }
+    }
+    for (path, code) in [
+        (".github/workflow\u{17f}/ci.yml", 2),
+        (".codeflow/git-hook\u{17f}/pre-commit", 2),
+        (".gro\u{212a}/sandbox.toml", 2),
+        (".code\u{fb02}ow/policy.json", 2),
+        ("docs/caf\u{e9}.md", 0),
+        ("\u{65e5}\u{672c}\u{8a9e}.txt", 0),
+    ] {
+        let (got, said) = tool_write(&root, path);
+        if got != Some(code) {
+            wrong.push(format!("edit-guard gave {got:?} for {path}\n{said}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// One line per group of comparing checks: each compares a name as ASCII, so
+/// each needs the line in the spelling the disk would read. Payloads only.
+const NON_ASCII_BY_CHECK: &[(&str, &str)] = &[
+    (
+        "interpreter arguments",
+        "python3 -c 'print(open(\".aw\u{17f}/credentials\").read())'",
+    ),
+    ("secret reads", "cat ~/.aw\u{17f}/credentials"),
+    ("startup files", "echo x >> ~/.ba\u{17f}hrc"),
+    ("git config files", "echo x > ~/.gitcon\u{fb01}g"),
+    ("git-guard creation", "git init .code\u{fb02}ow/x"),
+    ("program names", "/usr/bin/\u{17f}udo ls"),
+];
+
+/// The installed pair refuses a non-ASCII spelling at every kind of check,
+/// and the file tools refuse it for a path anchored at home.
+#[test]
+fn every_comparing_check_reads_the_ascii_spelling() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = project_without_enforcement_folders(dir.path());
+    let mut wrong = Vec::new();
+    for (check, command) in NON_ASCII_BY_CHECK {
+        let refused = ["git-guard", "exec-guard"]
+            .iter()
+            .any(|name| hook(name, &root, command).status.code() == Some(2));
+        if !refused {
+            wrong.push(format!("{check}: the pair admitted {command}"));
+        }
+    }
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in [".gro\u{212a}/config.toml", ".codex/rule\u{17f}/x"] {
+        let path = home.join(name);
+        let (got, said) = tool_write_from(&root, Some(&home), &path.to_string_lossy());
+        if got != Some(2) {
+            wrong.push(format!(
+                "home rule: edit-guard gave {got:?} for {name}\n{said}"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// An empty project folder inside `dir`.
