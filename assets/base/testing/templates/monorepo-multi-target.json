@@ -15,6 +15,7 @@
       "enabled": true,
       "cwd": "services/api",
       "runner": "go",
+      "timeout_seconds": 600,
       "modes": {
         "essential": {
           "command": "go test ./..."
@@ -39,6 +40,7 @@
       "enabled": true,
       "cwd": "apps/web",
       "runner": "vitest",
+      "timeout_seconds": 600,
       "modes": {
         "essential": {
           "command": "pnpm test --run"
@@ -63,6 +65,7 @@
       "enabled": true,
       "cwd": "tools",
       "runner": "pytest",
+      "timeout_seconds": 600,
       "modes": {
         "essential": {
           "command": "pytest -q"
