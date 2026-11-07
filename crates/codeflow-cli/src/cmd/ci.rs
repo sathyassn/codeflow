@@ -38,6 +38,7 @@ use codeflow_core::hooks::policy::{Policy, PolicySource};
 use codeflow_core::hooks::{
     adoption, any_blocking, git_hook, policy_schema, standards, GitPolicy, PolicyLevel, Violation,
 };
+use codeflow_core::scaffold::too_old::{self, BinaryAge};
 use codeflow_core::scaffold::ScaffoldManifest;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::work_start::ReviewedPin;
@@ -299,9 +300,11 @@ struct AddedLine {
 
 /// Validate the policy before verifying anything: `false` (after naming each
 /// offending key) when it is invalid; deprecated keys are warned about.
-fn policy_verifiable(root: &Path) -> bool {
+fn policy_verifiable(root: &Path, rules_out: Option<&Path>) -> bool {
     if let Err(errors) = policy_schema::validate_policy(root) {
-        report_invalid_policy(&errors);
+        // No authority is known yet, so the working tree's pin answers. It
+        // only words the refusal: this run stops here either way.
+        report_invalid_policy(&errors, &crate::cmd::binary_age(root), rules_out);
         return false;
     }
     for warning in policy_schema::deprecation_warnings(root)
@@ -378,7 +381,7 @@ pub fn run(args: &CiArgs) -> i32 {
     // naming each offending key, rather than silently verify against the
     // built-in defaults, which could pass a range the real (mistyped) policy
     // meant to block. Exit 2, the existing could-not-verify-in-full code.
-    if !policy_verifiable(&root) {
+    if !policy_verifiable(&root, args.blocking_rules_out.as_deref()) {
         return 2;
     }
     // Reuse the exact loader the hooks use (charter D7). Bootstrap grace is
@@ -389,10 +392,16 @@ pub fn run(args: &CiArgs) -> i32 {
     let (working, _armed) = match Policy::load_effective(&root) {
         Ok(value) => value,
         Err(error) => {
-            eprintln!(
-                "codeflow: cannot read policy: {}",
-                codeflow_core::git::display_message(&error)
-            );
+            let age = crate::cmd::binary_age(&root);
+            let too_old = crate::cmd::unread_refusal("codeflow ci", &age, "its policy", || {
+                eprintln!(
+                    "codeflow: cannot read policy: {}",
+                    codeflow_core::git::display_message(&error)
+                );
+            });
+            if too_old {
+                write_too_old_rule(args.blocking_rules_out.as_deref());
+            }
             return 2;
         }
     };
@@ -460,7 +469,12 @@ pub fn run(args: &CiArgs) -> i32 {
     ) else {
         return 2;
     };
-    let Some(judging) = judging_policy(&root, authority.as_ref(), working) else {
+    let Some(judging) = judging_policy(
+        &root,
+        authority.as_ref(),
+        working,
+        args.blocking_rules_out.as_deref(),
+    ) else {
         return 2;
     };
     note_lowered_security_levels(&root, &judging.raw, &head);
@@ -879,10 +893,65 @@ pub fn run(args: &CiArgs) -> i32 {
     if let Some(running) = args.run_level {
         run_under(running, &judging.raw, &mut tagged);
     }
+    settle_unread_records(&root, authority.as_ref(), &mut tagged);
     if let Some(out) = &args.blocking_rules_out {
         write_blocking_rules(out, &tagged);
     }
     report(&tagged, &ran, &skipped)
+}
+
+/// Records carry no version of their own and a newer one fails by meaning,
+/// so a binary cannot tell a record it cannot read from a wrong record. When
+/// the authority commit declares a newer `CodeFlow`, every `work.*` finding
+/// gives way to one blocking too-old finding (TSK-1285). The pin is read at
+/// the authority, never at the head: the range cannot write it, so a raised
+/// pin cannot hide a finding. Other findings stay, since they judge the
+/// commits and the body rather than the records.
+fn settle_unread_records(
+    root: &Path,
+    authority: Option<&judging::Authority>,
+    tagged: &mut Vec<TaggedViolation>,
+) {
+    let is_work = |t: &TaggedViolation| t.violation.rule.starts_with("work.");
+    if !tagged
+        .iter()
+        .any(|t| is_work(t) && t.violation.level == PolicyLevel::Block)
+    {
+        return;
+    }
+    let binary = env!("CARGO_PKG_VERSION");
+    let age = authority.map_or_else(
+        || BinaryAge::from_state(None, binary),
+        |authority| BinaryAge::at_commit(root, authority.sha(), binary),
+    );
+    if let Some(refusal) = age.too_old("its task and epic records") {
+        tagged.retain(|t| !is_work(t));
+        tagged.push(TaggedViolation {
+            sha: None,
+            violation: Violation::new(
+                too_old::RULE,
+                PolicyLevel::Block,
+                refusal.message,
+                refusal.remedy,
+            ),
+        });
+    } else if let Some(line) = age.may_be_older() {
+        eprintln!("codeflow ci: {line}");
+    }
+}
+
+/// Name the too-old refusal for the pre-push hook on a path that stops
+/// before any finding exists. Best effort, like [`write_blocking_rules`].
+fn write_too_old_rule(out: Option<&Path>) {
+    if let Some(out) = out {
+        let _ = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(out)
+            .and_then(|mut file| {
+                std::io::Write::write_all(&mut file, format!("{}\n", too_old::RULE).as_bytes())
+            });
+    }
 }
 
 /// The blocking findings' rule ids, one per line, for the pre-push hook's
@@ -1529,15 +1598,24 @@ fn verified_epic_line(
 
 /// Name every invalid policy key and, when a key is unknown to this binary,
 /// the two-step upgrade order (SPC-013 R-113).
-fn report_invalid_policy(errors: &[policy_schema::PolicyError]) {
-    for e in errors {
-        eprintln!("codeflow ci: policy error: {e}", e = crate::cmd::shown(&e));
-    }
-    eprintln!(
-        "codeflow ci: error: .codeflow/policy.json is invalid — nothing was verified (see `codeflow policy explain`)"
-    );
-    if let Some(hint) = policy_schema::upgrade_order_hint(errors, env!("CARGO_PKG_VERSION")) {
-        eprintln!("codeflow ci: {hint}");
+fn report_invalid_policy(
+    errors: &[policy_schema::PolicyError],
+    age: &BinaryAge,
+    rules_out: Option<&Path>,
+) {
+    let too_old = crate::cmd::unread_refusal("codeflow ci", age, "its policy", || {
+        for e in errors {
+            eprintln!("codeflow ci: policy error: {e}", e = crate::cmd::shown(&e));
+        }
+        eprintln!(
+            "codeflow ci: error: .codeflow/policy.json is invalid — nothing was verified (see `codeflow policy explain`)"
+        );
+        if let Some(hint) = policy_schema::upgrade_order_hint(errors, env!("CARGO_PKG_VERSION")) {
+            eprintln!("codeflow ci: {hint}");
+        }
+    });
+    if too_old {
+        write_too_old_rule(rules_out);
     }
 }
 

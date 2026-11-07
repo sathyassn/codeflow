@@ -364,6 +364,20 @@ block names those files. Review and commit the intended generated changes,
 then rerun the gate on the resulting checkout. A gate error names the error
 itself, including failures that occur after the configuration has loaded.
 
+## A refusal says the binary is too old
+
+`this binary is too old` means a reader failed on the policy, test config or
+task and epic records, and `scaffold_version` in `.codeflow/project.toml`
+declares a newer CodeFlow than the binary running. Findings from a binary that
+cannot read the repository are not reliable, so the message replaces them.
+Install the version it names, or build from the repository's source, then
+rerun; `codeflow doctor` reports the binary the hooks run. `codeflow ci` reads
+that version at the commit that judges the range, never at the head.
+
+`may be older than this repository` is the same doubt with no version to
+compare: the findings are still printed. Check the binary before changing
+what they name.
+
 ## Every command is refused because the policy authority is unresolved
 
 The guards read policy from the remote's default branch. When

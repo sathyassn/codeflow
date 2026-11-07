@@ -398,6 +398,31 @@ pub fn policy_text_at(root: &Path, rev: &str) -> Result<Option<String>, String> 
     file_in(&repo, &tree, ".codeflow/policy.json", &shown)
 }
 
+/// How an error about a landed policy that fails the schema begins.
+const INVALID_POLICY: &str = "invalid policy at";
+
+/// Whether `error` says a landed policy failed the schema, rather than that
+/// a ref or Git object could not be read.
+#[must_use]
+pub fn is_invalid_policy(error: &str) -> bool {
+    error.starts_with(INVALID_POLICY)
+}
+
+/// The project state a revision holds, if any: a marker `codeflow ci` can
+/// trust because the range it judges cannot write it (TSK-1285).
+///
+/// # Errors
+/// The revision or its tree cannot be read.
+pub fn project_state_text_at(root: &Path, rev: &str) -> Result<Option<String>, String> {
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let shown = crate::git::display_text(rev);
+    let tree = repo
+        .revparse_single(rev)
+        .and_then(|o| o.peel_to_tree())
+        .map_err(|e| format!("cannot read project state at {shown}: {e}"))?;
+    file_in(&repo, &tree, crate::scaffold::state::PROJECT_TOML, &shown)
+}
+
 /// The policy an authority commit holds, checked against the schema before
 /// it is read, or the shipped defaults when the commit has no policy file.
 /// The size and ignored-file rules read their keys here, so a value the
@@ -418,9 +443,9 @@ pub fn checked_policy_at(repo: &Repository, commit: git2::Oid) -> Result<Policy,
     };
     super::policy_schema::validate_policy_str(&text).map_err(|errors| {
         let shown: Vec<_> = errors.iter().map(ToString::to_string).collect();
-        format!("invalid policy at {short}: {}", shown.join("; "))
+        format!("{INVALID_POLICY} {short}: {}", shown.join("; "))
     })?;
-    serde_json::from_str(&text).map_err(|e| format!("invalid policy at {short}: {e}"))
+    serde_json::from_str(&text).map_err(|e| format!("{INVALID_POLICY} {short}: {e}"))
 }
 
 /// The text of the regular file at `path` in `tree`: `None` when the tree
@@ -475,7 +500,7 @@ fn at_commit(
         .map_err(|e| format!("cannot read policy source {shown}: {e}"))?;
     let policy = file_in(repo, &tree, ".codeflow/policy.json", shown)?
         .map_or_else(|| Ok(Policy::default()), |s| serde_json::from_str(&s))
-        .map_err(|e| format!("invalid policy at {shown}: {e}"))?;
+        .map_err(|e| format!("{INVALID_POLICY} {shown}: {e}"))?;
     let project = file_in(repo, &tree, ".codeflow/project.toml", shown)?
         .map(|s| toml::from_str(&s))
         .transpose()
