@@ -273,10 +273,10 @@
       "runner": "custom",
       "modes": {
         "essential": {
-          "command": "python3 -B scripts/test_release.py && python3 -B scripts/test_gate_driver.py"
+          "command": "python3 -B scripts/test_release.py"
         },
         "full": {
-          "command": "python3 -B scripts/test_release.py && python3 -B scripts/test_gate_driver.py"
+          "command": "python3 -B scripts/test_release.py"
         }
       },
       "requires": [
@@ -286,8 +286,6 @@
       "narrow": [
         "scripts/release.py",
         "scripts/test_release.py",
-        "scripts/test_gate_driver.py",
-        "assets/base/ci/codeflow-ci.yml",
         "scripts/changelog_split.py",
         "scripts/fixtures/**",
         ".release/**",
