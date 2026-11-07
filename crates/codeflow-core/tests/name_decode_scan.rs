@@ -1687,6 +1687,30 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // TSK-1348: trims the line end from the status curl itself writes after an OAuth answer; a line that is not a number is no status, so post_form returns an error and no answer.
+    (
+        "crates/codeflow-core/src/remote/agent_key.rs",
+        "CurlHttp::post_form",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    // TSK-1348: an OAuth answer that is not JSON names no refusal and holds no grant, so read_answer returns an error, never a grant or an authorization to drop.
+    (
+        "crates/codeflow-core/src/remote/user_token.rs",
+        "read_answer",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // TSK-1348: a `GET /user` answer that is not JSON names no login, so user_login returns an error and no token is printed or stored.
+    (
+        "crates/codeflow-core/src/remote/user_token.rs",
+        "user_login",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
     // TSK-397: doctor's Claude settings reader. A layer that is not UTF-8
     // or not a JSON object is reported, never read as an absent layer. A
     // `.git` file's `gitdir:` value is trimmed as Git trims it, and the main
@@ -7200,6 +7224,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/remote/agent_key.rs", "Keychain::store", "exists", 1, "KeyStore::exists after the write: false or an error reports the key as not kept, so the run stops non-zero (TSK-1348)."),
     ("crates/codeflow-core/src/remote/agent_key.rs", "SecretService::load", "exists", 1, "KeyStore::exists after a lookup that gave nothing and named no cause: only a clean empty search reports no entry; true reports a locked entry, an error reports the store failure, and every branch returns an error, never a key (TSK-1348)."),
     ("crates/codeflow-core/src/remote/apps.rs", "agent", "exists", 1, "KeyStore::exists: true sends the run to existing_agent, which refuses unless the entry and its App verify; false creates the App; an error stops the run (TSK-1348)."),
+    ("crates/codeflow-core/src/remote/user_token.rs", "user_token", "exists", 1, "KeyStore::exists: false prints no token and names agent-login; an error stops with the store's cause; true goes on to load, and an entry that does not parse asks to authorize again, never a token (TSK-1348)."),
     ("crates/codeflow-core/src/git/unreadable.rs", "read_regular_file", "is_file", 1, "Type check on symlink_metadata, which already succeeded; a non-file is not opened so a FIFO cannot block the scan, and it is reported as readable because only a refused stat or open counts (TSK-1315)."),
     ("crates/codeflow-core/src/git/unreadable.rs", "walk", "is_dir", 1, "Type check on a read_dir entry only chooses to descend; a non-directory entry is still read, so no file is skipped as absent (TSK-1315)."),
     ("crates/codeflow-core/src/hooks/gitleaks.rs", "private::open_folder", "is_dir", 1, "Type check on the descriptor opened without following a link; anything but a directory this user owns with mode 0700 refuses, which fails the scan as incomplete (TSK-412)."),
