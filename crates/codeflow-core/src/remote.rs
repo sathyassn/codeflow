@@ -24,7 +24,11 @@
 //! `codeflow protect <pattern>`, as does the registry's data profile.
 //!
 //! Ownership is by exact name. A ruleset with any other name is never
-//! written. Every write sends the whole body (`name`, `target`,
+//! written, unless the operator names it with `--adopt` and it targets
+//! exactly what one owned ruleset targets: then it is renamed to that
+//! owned name and updated as one (TSK-383). A literal policy branch the
+//! host does not have gets no ruleset, `--branch` limits a run to one
+//! branch, and the dry run prints the exact requests a run sends. Every write sends the whole body (`name`, `target`,
 //! `enforcement`, `conditions`, `bypass_actors`, `rules`), because GitHub
 //! does not document what an update does with omitted fields. An update
 //! only adds: an approval count is never lowered, a rule is never removed,

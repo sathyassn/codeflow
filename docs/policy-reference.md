@@ -1200,7 +1200,26 @@ Findings). A bypass actor merges into the default branch with `gh pr merge
   `codeflow protect <pattern>`, with the checks in `git.required_checks`.
   The registry's data profile is `codeflow protect codeflow/registry`.
   Classic branch protection is never written.
-- **Never weaker.** A ruleset with any other name is never written. Every
+- **Absent branches and `--branch`.** A pattern in `git.protected_branches`
+  that names one branch the host does not have (a 404 from
+  `repos/<repo>/branches/<name>`) is reported and gets no ruleset; a glob,
+  the default branch and the registry are planned without that read.
+  `--branch <name>` limits a run to the owned rulesets that target that
+  branch.
+- **Adopting a ruleset.** `--adopt <id or name>` hands one existing ruleset
+  to `remote protect`: it is matched to the owned ruleset whose include
+  patterns are exactly its own, with no exclude, renamed to the owned name
+  and updated as an owned ruleset is, so it keeps its bypass list unless it
+  becomes B or C. Where two owned rulesets target the same branches, as A and
+  B do, `--adopt <ruleset>=<owned name>` says which. Any other target is
+  refused and the ruleset is left as it is. The dry run and the report name
+  the adopted ruleset, its id and its new name.
+- **The dry run is exact.** `--dry-run` reads the host with GET calls only
+  and prints each request a run would send (method, path and body); a run
+  sends exactly those. Without a readable host it prints the intended rules
+  and says they are not the exact requests.
+- **Never weaker.** A ruleset with any other name, unless `--adopt` names
+  it, is never written. Every
   write sends `name`, `target`, `enforcement`, `conditions`,
   `bypass_actors` and `rules`, because GitHub does not document what an
   update does with omitted fields, and the bypass list the host answers is

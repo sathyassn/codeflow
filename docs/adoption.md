@@ -17,6 +17,15 @@ much working method comes with it.
   started: two pull requests each green on an older base can merge and leave
   the branch red. `codeflow doctor --check remote-perimeter` reads the live
   rules back and warns when they do not require that.
+- If your repository already has rulesets, `remote protect` leaves them as
+  they are and adds its own beside them. It changes another ruleset only when
+  you name it with `--adopt`, and only when that ruleset targets exactly the
+  branches of the ruleset it stands for. `--dry-run` reads the host and prints
+  the exact requests a run would send, and `--branch <name>` limits a run to
+  one branch. A protected branch in the policy that the host does not have
+  is reported and gets no ruleset. `codeflow doctor` accepts any active
+  ruleset or branch protection on `codeflow/registry` that blocks force
+  pushes and deletion, whoever created it.
 - A project can start at minimal and move up later. A lower-tier request
   never removes files.
 
