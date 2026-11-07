@@ -1874,7 +1874,7 @@ pub(super) fn is_clean_remerge(
 /// binding's authority and ancestry checks still apply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MergeReading {
-    /// Two parents, and the in-process remerge of them has no conflict and
+    /// Two parents, and git's own remerge of them has no conflict and
     /// equals the merge's tree: the merge added nothing of its own.
     Clean,
     /// Two parents, and the merge's tree differs from the remerge: the
@@ -1887,10 +1887,6 @@ pub enum MergeReading {
     /// never drops out of the journey rule.
     Unknown(String),
 }
-
-/// The index entry flag bits that hold a conflict stage (1 to 3); stage 0
-/// is a merged entry.
-const STAGE: u16 = 0x3000;
 
 /// Read `merge` against the clean automatic remerge of its two parents.
 pub(crate) fn read_merge(repo: &Repository, merge: &git2::Commit<'_>) -> MergeReading {
@@ -1919,58 +1915,12 @@ pub(crate) fn read_merge(repo: &Repository, merge: &git2::Commit<'_>) -> MergeRe
         (Ok(first), Ok(second)) => (first, second),
         (Err(error), _) | (_, Err(error)) => return unreadable(error),
     };
-    let merged = match history::merge_commits(repo, &first, &second) {
-        Ok(merged) => merged,
-        Err(error) => return unreadable(error),
-    };
-    let mut recorded = match git2::Index::new() {
-        Ok(index) => index,
-        Err(error) => return unreadable(error),
-    };
-    if let Err(error) = merge.tree().and_then(|tree| recorded.read_tree(&tree)) {
-        return unreadable(error);
-    }
-    // Entries compare and are returned by their raw names, so two names
-    // that read alike once converted stay two.
-    // Stage 0 holds a merged entry; stages 1 to 3 hold a conflict's sides.
-    let entries = |index: &git2::Index| {
-        index
-            .iter()
-            .filter(|entry| entry.flags & STAGE == 0)
-            .map(|entry| (entry.path.clone(), (entry.id, entry.mode)))
-            .collect::<std::collections::BTreeMap<Vec<u8>, (Oid, u32)>>()
-    };
-    let remerged = entries(&merged);
-    let ours = entries(&recorded);
-    let mut changed: std::collections::BTreeSet<Vec<u8>> = remerged
-        .iter()
-        .filter(|(name, entry)| ours.get(*name) != Some(*entry))
-        .map(|(name, _)| name.clone())
-        .chain(
-            ours.keys()
-                .filter(|name| !remerged.contains_key(*name))
-                .cloned(),
-        )
-        .collect();
-    if merged.has_conflicts() {
-        match merged.conflicts() {
-            Ok(conflicts) => {
-                for conflict in conflicts.flatten() {
-                    for side in [conflict.ancestor, conflict.our, conflict.their]
-                        .into_iter()
-                        .flatten()
-                    {
-                        changed.insert(side.path.clone());
-                    }
-                }
-            }
-            Err(error) => return unreadable(error),
-        }
-    }
-    if changed.is_empty() {
-        MergeReading::Clean
-    } else {
-        MergeReading::Changed(changed.into_iter().collect())
+    // Paths compare and are returned by their raw names, so two names that
+    // read alike once converted stay two.
+    match history::remerge_differences(repo, &first, &second, merge.tree_id()) {
+        Ok(changed) if changed.is_empty() => MergeReading::Clean,
+        Ok(changed) => MergeReading::Changed(changed),
+        Err(error) => unreadable(error),
     }
 }
 
@@ -5754,6 +5704,283 @@ mod tests {
         write("a.txt", "resolved\n");
         git(root, &["commit", "-qam", "resolved"]);
         assert!(!clean(), "a resolved conflict");
+    }
+
+    /// A repository holding `.codeflow/manifest.json` as merge 2e40ae2ab's
+    /// three sides hold it, with the first parent on `line` and the second
+    /// on `task`, neither merged yet.
+    fn tsk1185_manifest_sides(root: &std::path::Path) {
+        let fixture = |side: &str| {
+            std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/remerge-2e40ae2ab")
+                    .join(format!("{side}.json")),
+            )
+            .unwrap()
+        };
+        let write =
+            |side: &str| std::fs::write(root.join(".codeflow/manifest.json"), fixture(side));
+        git(root, &["init", "-q", "-b", "line"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+        write("base").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "base"]);
+        git(root, &["switch", "-qc", "task"]);
+        write("theirs").unwrap();
+        git(root, &["commit", "-qam", "theirs"]);
+        git(root, &["switch", "-q", "line"]);
+        write("ours").unwrap();
+        git(root, &["commit", "-qam", "ours"]);
+    }
+
+    /// TSK-1185 AC-9: merge 2e40ae2ab is git's own clean merge, so it holds
+    /// no hand resolution, though libgit2's diff conflicts on it. The merged
+    /// blob is the real commit's, so the fixture is that merge. Each reader
+    /// of the merge agrees: the binding, and the journey rule's paths.
+    #[test]
+    fn tsk1185_merge_2e40ae2ab_is_read_as_git_merges_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        tsk1185_manifest_sides(root);
+        git(root, &["merge", "-q", "--no-ff", "-m", "merge", "task"]);
+        let repo = Repository::open(root).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let blob = head
+            .tree()
+            .unwrap()
+            .get_path(std::path::Path::new(".codeflow/manifest.json"))
+            .unwrap()
+            .id();
+        assert_eq!(blob.to_string(), "240c72dfd712f936349db3d5b8756ced8fee3776");
+
+        let libgit2 =
+            history::merge_commits(&repo, &head.parent(0).unwrap(), &head.parent(1).unwrap())
+                .unwrap();
+        assert!(libgit2.has_conflicts(), "the two engines disagree here");
+
+        assert_eq!(read_merge(&repo, &head), MergeReading::Clean);
+        assert!(is_clean_remerge(&repo, &head).unwrap());
+        let owned = owned_paths(root, "HEAD", &["HEAD^1", "HEAD^2"]).unwrap();
+        assert!(owned.is_empty(), "{owned:?}");
+    }
+
+    /// TSK-1185 AC-9: one edited line on that merge is a hand resolution,
+    /// and every reader refuses it.
+    #[test]
+    fn tsk1185_a_hand_edit_on_merge_2e40ae2ab_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        tsk1185_manifest_sides(root);
+        git(root, &["merge", "-q", "--no-ff", "--no-commit", "task"]);
+        let path = root.join(".codeflow/manifest.json");
+        let mut text = std::fs::read(&path).unwrap();
+        text.extend_from_slice(b"\n");
+        std::fs::write(&path, text).unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "merge"]);
+        let repo = Repository::open(root).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+
+        assert_eq!(
+            read_merge(&repo, &head),
+            MergeReading::Changed(vec![b".codeflow/manifest.json".to_vec()])
+        );
+        assert!(!is_clean_remerge(&repo, &head).unwrap());
+        let owned = owned_paths(root, "HEAD", &["HEAD^1", "HEAD^2"]).unwrap();
+        assert_eq!(owned, [".codeflow/manifest.json"]);
+    }
+
+    /// Two sides that change one line differently, on `line` and `task`,
+    /// with `attributes` in the base commit's `.gitattributes` if any.
+    fn tsk1185_conflicting_sides(root: &std::path::Path, attributes: Option<&str>) {
+        let write = |text: &str| std::fs::write(root.join("a.txt"), text).unwrap();
+        git(root, &["init", "-q", "-b", "line"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        write("base\n");
+        if let Some(attributes) = attributes {
+            std::fs::write(root.join(".gitattributes"), attributes).unwrap();
+        }
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "base"]);
+        git(root, &["switch", "-qc", "task"]);
+        write("task\n");
+        git(root, &["commit", "-qam", "task"]);
+        git(root, &["switch", "-q", "line"]);
+        write("line\n");
+        git(root, &["commit", "-qam", "line"]);
+    }
+
+    /// TSK-1185 AC-9: an attribute the tree holds cannot choose the merge.
+    /// The built-in `merge=union` makes a conflicting merge pass as clean,
+    /// keeping both sides' lines, which is a resolution nobody reviewed.
+    #[test]
+    fn tsk1185_a_merge_attribute_in_the_tree_does_not_make_a_merge_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        tsk1185_conflicting_sides(root, Some("* merge=union\n"));
+        git(root, &["merge", "-q", "--no-ff", "-m", "merge", "task"]);
+        let repo = Repository::open(root).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(
+            read_merge(&repo, &head),
+            MergeReading::Changed(vec![b"a.txt".to_vec()])
+        );
+    }
+
+    /// TSK-1185 AC-9: the same attribute left in the checkout, never
+    /// committed, cannot choose it either.
+    #[test]
+    fn tsk1185_a_merge_attribute_in_the_checkout_does_not_make_a_merge_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        tsk1185_conflicting_sides(root, None);
+        std::fs::write(root.join(".gitattributes"), "* merge=union\n").unwrap();
+        git(root, &["merge", "-q", "--no-ff", "-m", "merge", "task"]);
+        let repo = Repository::open(root).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(
+            read_merge(&repo, &head),
+            MergeReading::Changed(vec![b"a.txt".to_vec()])
+        );
+    }
+
+    /// TSK-1185 AC-9: settings local to the clone cannot choose the merge.
+    /// Each one here makes `git merge` record a clean union of both sides,
+    /// and the reading still refuses it.
+    #[test]
+    fn tsk1185_local_merge_settings_do_not_make_a_merge_clean() {
+        for local in ["info/attributes", "merge.default"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            tsk1185_conflicting_sides(root, None);
+            if local == "merge.default" {
+                git(root, &["config", "merge.default", "union"]);
+            } else {
+                std::fs::create_dir_all(root.join(".git/info")).unwrap();
+                std::fs::write(root.join(".git").join(local), "* merge=union\n").unwrap();
+            }
+            git(root, &["merge", "-q", "--no-ff", "-m", "merge", "task"]);
+            let repo = Repository::open(root).unwrap();
+            let head = repo.head().unwrap().peel_to_commit().unwrap();
+            assert_eq!(
+                read_merge(&repo, &head),
+                MergeReading::Changed(vec![b"a.txt".to_vec()]),
+                "{local}"
+            );
+        }
+    }
+
+    /// TSK-1185 AC-9: judging a merge runs nothing from the repository. A
+    /// configured merge driver, chosen by a committed attribute and by
+    /// `merge.default`, and the hooks a merge fires all run on a real `git
+    /// merge` here, and none of them run when the merge is read.
+    #[test]
+    fn tsk1185_reading_a_merge_runs_no_driver_or_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        tsk1185_conflicting_sides(root, Some("* merge=probe\n"));
+        let marker = root.join("ran");
+        let touch = format!(
+            "touch '{}'",
+            marker.display().to_string().replace('\\', "/")
+        );
+        git(root, &["config", "merge.probe.driver", &touch]);
+        git(root, &["config", "merge.default", "probe"]);
+        for hook in ["pre-merge-commit", "post-merge", "reference-transaction"] {
+            let path = root.join(".git/hooks").join(hook);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, format!("#!/bin/sh\n{touch}\n")).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        git(root, &["merge", "-q", "--no-ff", "-m", "merge", "task"]);
+        assert!(marker.exists(), "a real merge runs them");
+        std::fs::remove_file(&marker).unwrap();
+
+        let repo = Repository::open(root).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(
+            read_merge(&repo, &head),
+            MergeReading::Changed(vec![b"a.txt".to_vec()])
+        );
+        assert!(!marker.exists(), "reading the merge ran repository code");
+    }
+
+    /// TSK-1185 AC-9: a merge that records git's conflicted tree, markers
+    /// and all, equals the automatic result but is not conflict-free.
+    #[test]
+    fn tsk1185_a_recorded_conflict_tree_is_not_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        tsk1185_conflicting_sides(root, None);
+        let run = |args: &[&str]| {
+            crate::git::command()
+                .args(args)
+                .current_dir(root)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@example.com")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@example.com")
+                .output()
+                .unwrap()
+        };
+        let output = run(&["merge-tree", "--write-tree", "line", "task"]);
+        assert_eq!(output.status.code(), Some(1));
+        let text = String::from_utf8(output.stdout).unwrap();
+        let tree = text.lines().next().unwrap();
+        let merge = run(&[
+            "commit-tree",
+            tree,
+            "-p",
+            "line",
+            "-p",
+            "task",
+            "-m",
+            "merge",
+        ]);
+        let merge = String::from_utf8(merge.stdout).unwrap();
+        let repo = Repository::open(root).unwrap();
+        let head = repo
+            .find_commit(Oid::from_str(merge.trim()).unwrap())
+            .unwrap();
+        assert_eq!(
+            read_merge(&repo, &head),
+            MergeReading::Changed(vec![b"a.txt".to_vec()])
+        );
+    }
+
+    /// TSK-1185 AC-9: reading a merge writes nothing to the repository, so
+    /// a read-only `codeflow ci` stays read-only.
+    #[test]
+    fn tsk1185_reading_a_merge_writes_no_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        tsk1185_conflicting_sides(root, None);
+        git(
+            root,
+            &[
+                "merge", "-q", "--no-ff", "-s", "ours", "-m", "merge", "task",
+            ],
+        );
+        let count = || {
+            let output = crate::git::command()
+                .args(["count-objects"])
+                .current_dir(root)
+                .output()
+                .unwrap();
+            String::from_utf8(output.stdout).unwrap()
+        };
+        let before = count();
+        let repo = Repository::open(root).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert!(matches!(read_merge(&repo, &head), MergeReading::Changed(_)));
+        assert_eq!(count(), before);
     }
 
     /// TSK-264 AC-12 (ADR-0082): a branch that added a changelog fragment

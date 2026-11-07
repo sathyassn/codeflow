@@ -447,9 +447,252 @@ pub fn merge_commits(
     repo.merge_commits(ours, theirs, None)
 }
 
+/// Git's empty tree: the attribute source of a remerge, so no `merge=`
+/// attribute a tree or checkout holds can choose how a file merges.
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// An empty repository for [`remerge_differences`] to run in, so the judged
+/// repository supplies its objects and nothing else: its config, merge
+/// drivers, hooks, refs, `info/attributes` and commit-graph stay unread, and
+/// every object git writes stays here.
+fn remerge_scratch() -> Result<tempfile::TempDir, Error> {
+    let failed =
+        |error: std::io::Error| Error::from_str(&format!("cannot prepare a remerge: {error}"));
+    let scratch = tempfile::tempdir().map_err(failed)?;
+    std::fs::create_dir(scratch.path().join("objects")).map_err(failed)?;
+    std::fs::create_dir(scratch.path().join("refs")).map_err(failed)?;
+    std::fs::write(scratch.path().join("HEAD"), "ref: refs/heads/none\n").map_err(failed)?;
+    std::fs::write(scratch.path().join("config"), "").map_err(failed)?;
+    Ok(scratch)
+}
+
+/// A `git` process in `scratch` reading the objects of `repo`. System and
+/// user config and attributes are off as well, and merge settings are fixed
+/// at git's defaults, so nothing outside the two commits chooses the result.
+fn remerge_command(repo: &Repository, scratch: &std::path::Path) -> std::process::Command {
+    let empty_file = scratch.join("config");
+    let mut command = crate::git::judging_command();
+    command
+        .current_dir(scratch)
+        .arg("--no-replace-objects")
+        .arg(format!("--attr-source={EMPTY_TREE}"))
+        .arg("--git-dir")
+        .arg(scratch)
+        .arg("-c")
+        .arg(format!("core.attributesFile={}", empty_file.display()))
+        .args([
+            "-c",
+            "core.commitGraph=false",
+            "-c",
+            "merge.renames=true",
+            "-c",
+            "merge.directoryRenames=conflict",
+            "-c",
+            "merge.renormalize=false",
+            "-c",
+            "merge.default=text",
+        ])
+        .env_remove("GIT_EXEC_PATH")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_ATTR_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", &empty_file)
+        .env(
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            repo.commondir().join("objects"),
+        );
+    command
+}
+
+/// The oldest Git that can judge a merge: `--attr-source` arrives in 2.41.
+pub const MERGE_GIT_FLOOR: (u32, u32) = (2, 41);
+
+/// Why the Git that printed `version` (`git version` output) cannot judge a
+/// merge, or `None` when it can. An unreadable version refuses.
+#[must_use]
+pub fn merge_git_refusal(version: &str) -> Option<String> {
+    let version = version.trim();
+    let (major, minor) = MERGE_GIT_FLOOR;
+    let upgrade = "This is a Git version problem, not a bad merge: upgrade Git \
+                   (https://git-scm.com/downloads), then rerun.";
+    let installed = version
+        .strip_prefix("git version ")
+        .and_then(|rest| rest.split_whitespace().next());
+    let parsed = installed.and_then(|number| {
+        let mut parts = number.split('.');
+        Some((
+            parts.next()?.parse::<u32>().ok()?,
+            parts.next()?.parse::<u32>().ok()?,
+        ))
+    });
+    match (installed, parsed) {
+        (_, Some(found)) if found >= MERGE_GIT_FLOOR => None,
+        (Some(number), Some(_)) => Some(format!(
+            "Git {number} is too old to judge a merge: CodeFlow needs Git {major}.{minor} or later, for `git --attr-source`. {upgrade}"
+        )),
+        _ => Some(format!(
+            "cannot read the Git version from `{version}`: CodeFlow needs Git {major}.{minor} or later to judge a merge. {upgrade}"
+        )),
+    }
+}
+
+/// What the installed `git version` prints.
+///
+/// # Errors
+/// Returns why `git version` could not run.
+pub fn installed_git_version() -> Result<String, String> {
+    let output = crate::git::judging_command()
+        .arg("version")
+        .output()
+        .map_err(|error| format!("cannot run git: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("`git version` exited with {}", output.status));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn remerge_failed(step: &str, stderr: &[u8]) -> Error {
+    Error::from_str(&format!(
+        "{step} failed: {}",
+        String::from_utf8_lossy(stderr).trim()
+    ))
+}
+
+/// The paths where `recorded` differs from git's own merge of two commits,
+/// conflicted paths included; none means `recorded` is exactly that merge
+/// and it had no conflict (TSK-1185 AC-9).
+///
+/// The merge is `git merge-tree --write-tree`, the one fixed definition.
+/// libgit2 cannot stand in for it: git merges with the histogram diff, which
+/// libgit2 does not have, so the two disagree on some merges. No second
+/// algorithm is tried, because accepting any match would widen what passes.
+///
+/// # Errors
+/// Refuses overlays, incomplete ancestry, an unreadable merge input and any
+/// result git does not report plainly, such as a Git older than 2.41, which
+/// has no `--attr-source`.
+pub fn remerge_differences(
+    repo: &Repository,
+    ours: &Commit<'_>,
+    theirs: &Commit<'_>,
+    recorded: Oid,
+) -> Result<Vec<Vec<u8>>, Error> {
+    match merge_base(repo, ours.id(), theirs.id()) {
+        Ok(_) => {}
+        Err(error) if error.code() == ErrorCode::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    check(repo)?;
+    let scratch = remerge_scratch()?;
+    let run = |command: &mut std::process::Command| {
+        command
+            .output()
+            .map_err(|error| Error::from_str(&format!("cannot run git: {error}")))
+    };
+    let merged = run(remerge_command(repo, scratch.path()).args([
+        "merge-tree",
+        "--write-tree",
+        "-z",
+        "--name-only",
+        "--no-messages",
+        "--allow-unrelated-histories",
+        &ours.id().to_string(),
+        &theirs.id().to_string(),
+    ]))?;
+    let conflicts = match merged.status.code() {
+        Some(0) => false,
+        Some(1) => true,
+        _ => {
+            // Git too old for the flags here exits 129: say so, never read
+            // it as a merge that failed.
+            let version = installed_git_version().map_err(|why| Error::from_str(&why))?;
+            return Err(merge_git_refusal(&version).map_or_else(
+                || remerge_failed("git merge-tree", &merged.stderr),
+                |reason| Error::from_str(&reason),
+            ));
+        }
+    };
+    let mut fields = merged.stdout.split(|byte| *byte == 0);
+    let tree = fields
+        .next()
+        .and_then(|field| std::str::from_utf8(field).ok())
+        .and_then(|field| Oid::from_str(field).ok())
+        .ok_or_else(|| Error::from_str("git merge-tree reported no tree"))?;
+    let conflicted: Vec<Vec<u8>> = fields
+        .take_while(|field| !field.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect();
+    if conflicts == conflicted.is_empty() {
+        return Err(Error::from_str(
+            "git merge-tree's status and its conflicted paths disagree",
+        ));
+    }
+    if !conflicts && tree == recorded {
+        return Ok(Vec::new());
+    }
+    let differing = run(remerge_command(repo, scratch.path()).args([
+        "diff-tree",
+        "-r",
+        "-z",
+        "--name-only",
+        "--no-renames",
+        &tree.to_string(),
+        &recorded.to_string(),
+    ]))?;
+    if !differing.status.success() {
+        return Err(remerge_failed("git diff-tree", &differing.stderr));
+    }
+    let mut paths: std::collections::BTreeSet<Vec<u8>> = conflicted.into_iter().collect();
+    paths.extend(
+        differing
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|field| !field.is_empty())
+            .map(<[u8]>::to_vec),
+    );
+    if paths.is_empty() {
+        return Err(Error::from_str(
+            "the recorded tree differs from the merge, but git names no path",
+        ));
+    }
+    Ok(paths.into_iter().collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TSK-1185 AC-9: a Git too old to judge a merge is named as that, with
+    /// its version, the version needed and the upgrade step, and never reads
+    /// as a bad merge. No setting relaxes it.
+    #[test]
+    fn tsk1185_an_old_git_is_refused_as_a_version_problem() {
+        for (output, installed) in [
+            ("git version 2.40.1\n", "2.40.1"),
+            ("git version 2.34.1", "2.34.1"),
+            ("git version 2.39.5 (Apple Git-154)", "2.39.5"),
+            ("git version 2.40.1.windows.1", "2.40.1.windows.1"),
+        ] {
+            let refusal = merge_git_refusal(output).expect(output);
+            assert!(
+                refusal.contains(&format!("Git {installed} is too old")),
+                "{refusal}"
+            );
+            assert!(refusal.contains("Git 2.41 or later"), "{refusal}");
+            assert!(refusal.contains("not a bad merge"), "{refusal}");
+            assert!(refusal.contains("upgrade Git"), "{refusal}");
+        }
+        for output in [
+            "git version 2.41.0",
+            "git version 2.53.0 (Apple Git-157)",
+            "git version 3.0.0",
+        ] {
+            assert_eq!(merge_git_refusal(output), None, "{output}");
+        }
+        for output in ["", "git version", "not git", "git version x.y"] {
+            let refusal = merge_git_refusal(output).expect(output);
+            assert!(refusal.contains("cannot read the Git version"), "{refusal}");
+        }
+    }
 
     #[test]
     fn a_judgment_reads_metadata_once_and_the_next_judgment_refreshes_it() {

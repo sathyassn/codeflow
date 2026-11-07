@@ -41,6 +41,7 @@ use codeflow_core::hooks::{
 };
 use codeflow_core::scaffold::ScaffoldManifest;
 use codeflow_core::validate::validate_workgraph;
+use codeflow_core::workgraph::history;
 use codeflow_core::workgraph::work_start::ReviewedPin;
 use codeflow_core::workgraph::{
     branch_claims_task_id, declared_work_target, declared_work_target_at_revision,
@@ -361,9 +362,18 @@ pub fn run(args: &CiArgs) -> i32 {
     code
 }
 
+/// What `codeflow ci` says about the installed Git, when it cannot judge a
+/// merge. The judgment itself still refuses; this only says so sooner.
+fn git_floor_notice(version: Result<String, String>) -> Option<String> {
+    match version {
+        Ok(version) => history::merge_git_refusal(&version),
+        Err(reason) => Some(reason),
+    }
+}
+
 #[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
 fn run_checks(args: &CiArgs) -> i32 {
-    let _judgment = codeflow_core::workgraph::history::judgment();
+    let _judgment = history::judgment();
     if args.read_release_impact {
         return read_release_impact();
     }
@@ -384,6 +394,11 @@ fn run_checks(args: &CiArgs) -> i32 {
             return 2;
         }
     };
+    // Early notice of the Git floor: the refusal itself only comes when a
+    // merge on the range is judged, which can be at landing (TSK-1185 AC-9).
+    if let Some(notice) = git_floor_notice(history::installed_git_version()) {
+        eprintln!("codeflow ci: warning: {notice}");
+    }
     // An invalid policy cannot verify the consumer's intent — fail loudly,
     // naming each offending key, rather than silently verify against the
     // built-in defaults, which could pass a range the real (mistyped) policy
@@ -3451,6 +3466,23 @@ fn read_release_impact() -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// TSK-1185 AC-9: `codeflow ci` names a Git that cannot judge a merge
+    /// before a landing meets the refusal, and says nothing about one that can.
+    #[test]
+    fn tsk1185_ci_warns_early_of_a_git_too_old_to_judge_a_merge() {
+        let notice = super::git_floor_notice(Ok("git version 2.34.1".into())).unwrap();
+        assert!(notice.contains("Git 2.34.1 is too old"), "{notice}");
+        assert!(notice.contains("not a bad merge"), "{notice}");
+        assert_eq!(
+            super::git_floor_notice(Err("no git".into())).unwrap(),
+            "no git"
+        );
+        assert_eq!(
+            super::git_floor_notice(Ok("git version 2.41.0".into())),
+            None
+        );
+    }
+
     /// A repository whose `main` holds `base` and whose `HEAD` (`feat/x`)
     /// then commits `head`, each a list of (path, text).
     fn r24_range(base: &[(&str, &str)], head: &[(&str, &str)]) -> tempfile::TempDir {

@@ -291,6 +291,12 @@ reasons.
   gitleaks cannot read, or git is older than 2.41 and cannot stop a
   `.gitattributes` entry from hiding staged lines, a repository with a promisor remote (a partial clone) is on git older than 2.46 or its setting cannot be read, or a partial clone is missing an object the staged diff needs. The message names which; rename the path, upgrade git or
   fix the cause, then commit again.
+- **`Git 2.40.1 is too old to judge a merge`.** `codeflow ci` judges a clean
+  merge with `git merge-tree --write-tree`, pinned with `--attr-source`, so
+  it needs Git 2.41 or later. This is a Git version problem, not a bad merge,
+  and no setting relaxes it. Upgrade Git and rerun. `codeflow doctor --check
+  git-version` and a warning at the start of `codeflow ci` report it before
+  a landing does.
 
 A merge Git concludes itself is scanned in `commit-msg`, since Git runs no
 `pre-commit` for it. The refusal then appears while `git merge` runs; fix the
