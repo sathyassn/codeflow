@@ -1211,12 +1211,30 @@ fn update(root: &Path) -> String {
 /// at every tier and with every permission preset the init prompt offers.
 #[test]
 fn init_writes_the_compaction_default_at_every_tier_and_preset() {
-    for tier_flag in ["--minimal", "--standard", "--full"] {
-        for (answer, mode) in [
+    assert_init_writes_the_compaction_default(
+        &["--minimal", "--standard", "--full"],
+        &[
             ("default", None),
             ("acceptEdits", Some("acceptEdits")),
             ("bypassPermissions", Some("bypassPermissions")),
-        ] {
+        ],
+    );
+}
+
+/// TSK-356: the representative of the tier and preset matrix above, which
+/// runs only in the full gate: the smallest tier with a preset that writes a
+/// mode.
+#[test]
+fn init_writes_the_compaction_default_with_a_preset_mode() {
+    assert_init_writes_the_compaction_default(
+        &["--minimal"],
+        &[("acceptEdits", Some("acceptEdits"))],
+    );
+}
+
+fn assert_init_writes_the_compaction_default(tiers: &[&str], presets: &[(&str, Option<&str>)]) {
+    for &tier_flag in tiers {
+        for &(answer, mode) in presets {
             let (_tmp, root) = project();
             let out = codeflow_with_input(
                 &root,

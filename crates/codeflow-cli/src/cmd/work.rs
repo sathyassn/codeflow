@@ -61,6 +61,22 @@ pub enum WorkCommand {
     /// commits or commits on no branch, read from git; work that cannot be
     /// recovered is named. Reads only.
     Status,
+    /// Remove a local landing candidate branch whose tree landed on its
+    /// line by another commit: fetch the line from origin, find a commit on
+    /// its first-parent history with the same tree, check no worktree uses
+    /// the branch and no pull request is open from it, delete it and record
+    /// the proof in the ledger.
+    RemoveCandidate {
+        /// The candidate branch, named with `git.candidate_prefix`.
+        branch: String,
+        /// The line on origin the candidate landed on: a protected branch
+        /// or an `integration/` line.
+        #[arg(long, value_name = "BRANCH")]
+        line: String,
+        /// Check and print the proof without removing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[must_use]
@@ -74,7 +90,86 @@ pub fn run(args: &WorkArgs) -> i32 {
             on,
         } => start(task_id, target.as_deref(), on),
         WorkCommand::Status => status(),
+        WorkCommand::RemoveCandidate {
+            branch,
+            line,
+            dry_run,
+        } => remove_candidate(branch, line, *dry_run),
     }
+}
+
+fn remove_candidate(branch: &str, line: &str, dry_run: bool) -> i32 {
+    use codeflow_core::workgraph::candidate_removal;
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
+            return 2;
+        }
+    };
+    let open = |branch: &str| open_pull_requests(&root, branch);
+    let result = if dry_run {
+        candidate_removal::prove(&root, branch, line, &open)
+    } else {
+        candidate_removal::remove(&root, branch, line, &open)
+    };
+    match result {
+        Ok(proof) => {
+            let verb = if dry_run { "would remove" } else { "removed" };
+            println!(
+                "work remove-candidate: {verb} {} (tip {})",
+                proof.branch, proof.tip
+            );
+            println!(
+                "  proof: tree {} is the tree of {} on the first-parent history of {} at {}",
+                proof.tree, proof.line_commit, proof.line, proof.line_tip
+            );
+            if !dry_run {
+                println!("  recorded in the ledger as `{}`", candidate_removal::EVENT);
+            }
+            0
+        }
+        Err(error) => {
+            eprintln!(
+                "work remove-candidate: refused: {error}",
+                error = crate::cmd::shown(&error)
+            );
+            1
+        }
+    }
+}
+
+/// The open pull requests on the origin repository whose head is `branch`,
+/// asked of `gh`. Any failure to ask is an error, so the removal refuses.
+fn open_pull_requests(root: &std::path::Path, branch: &str) -> Result<Vec<u64>, String> {
+    let output = std::process::Command::new("gh")
+        .current_dir(root)
+        .env("GH_PROMPT_DISABLED", "1")
+        .args([
+            "pr", "list", "--state", "open", "--head", branch, "--json", "number", "--limit", "100",
+        ])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|error| format!("`gh` did not start: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`gh pr list` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let listed: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("`gh pr list` gave an answer that is not JSON: {error}"))?;
+    let entries = listed
+        .as_array()
+        .ok_or("`gh pr list` gave an answer that is not a list")?;
+    entries
+        .iter()
+        .map(|entry| {
+            entry["number"]
+                .as_u64()
+                .ok_or_else(|| "`gh pr list` gave an entry with no number".to_string())
+        })
+        .collect()
 }
 
 fn status() -> i32 {
