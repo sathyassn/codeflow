@@ -1137,13 +1137,16 @@ fn the_gates_job_sources_the_project_setup_hook_before_the_test_gate() {
     assert_eq!(log.trim(), "hook");
 }
 
-/// sathyassn/codeflow#81: the hook cannot move what the gate calls. A
-/// `codeflow` function, a `codeflow` earlier on PATH, `set +e` and a new
-/// value for the gate's binary leave the real gate running: the binary was
-/// found before the hook ran, in a step of its own. An `exit` fails the
-/// hook's step unless it clears the step's trap, and then the gate runs.
+/// sathyassn/codeflow#81: an ordinary hook does not move what the gate
+/// calls by accident. A `codeflow` function, a `codeflow` earlier on PATH,
+/// `set +e` and an exported variable named like the gate's binary leave the
+/// installed gate running, since the binary was found before the hook ran.
+/// This is a guard against mistakes; the hook is the change's own code and
+/// can still decide the job. An `exit` fails the hook's step, so the job is
+/// red and the gate step does not run, while the step's trap is in place;
+/// a hook that clears the trap ends only its own step, and the gate runs.
 #[test]
-fn the_project_setup_hook_cannot_move_or_skip_the_gate() {
+fn the_project_setup_hook_does_not_move_the_gate_by_accident() {
     let dir = tempfile::tempdir().unwrap();
     let work = dir.path().join("repo");
     std::fs::create_dir_all(work.join(".codeflow")).unwrap();

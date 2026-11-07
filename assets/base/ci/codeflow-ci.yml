@@ -193,8 +193,8 @@ jobs:
           echo "codeflow ${version} installed and verified against ${verified}"
 
       # The gate's binary is the one the install above put on PATH, found here
-      # before any project code runs, so the gate step below never looks it
-      # up on a PATH the project setup hook may have changed.
+      # before the project setup hook runs, so a folder the hook adds to PATH
+      # does not change which codeflow the gate runs by accident.
       - name: Find the codeflow binary the gate runs
         id: gate
         run: |
@@ -208,11 +208,12 @@ jobs:
       # test gate, under set -eu, so a failing command fails the job. What it
       # exports, and the folders it puts in front of PATH, are carried to the
       # gate step through GITHUB_ENV and GITHUB_PATH. An `exit` in it, even
-      # `exit 0`, fails this step. Its own step keeps it from skipping the
-      # gate: an `exit`, a trap or a shell variable in it ends with this
-      # step, and the gate step reads the base's files and finds its binary
-      # without it. The project owns the file; `codeflow update` never
-      # writes it.
+      # `exit 0`, fails this step and the job, while the hook leaves the
+      # step's trap in place; a hook that clears the trap and exits ends
+      # only this step, and the gate step runs after it. Like the test
+      # commands, the hook is the change's own code with the job's
+      # authority, so it is reviewed as this file is. The project owns the
+      # file; `codeflow update` never writes it.
       - name: Project setup hook
         run: |
           set -eu
@@ -246,16 +247,18 @@ jobs:
                   path.write(folder + "\n")
           CARRY
 
-      # The gate. On a pull request its targets and policy are the base's:
-      # the base tip's .codeflow/test-config.json and .codeflow/policy.json
-      # replace the change's copies here, after the setup hook has ended and
-      # just before the gate reads them, so neither the change's copies nor a
-      # hook that rewrites them decides the targets or policy its own gate
-      # runs under; the change takes effect once it lands. A file the base
-      # does not hold is removed, so the gate runs as the base would; one the
-      # base holds as anything but a regular file, or that cannot be read,
-      # fails the job. The docs check runs before the tests, so no test
-      # command runs before it reads the policy.
+      # The gate. This job runs the change's own code, its workflow file,
+      # setup hook and tests, with the runner's full privileges, so it is not
+      # a trusted verdict: a hook, a test command or an edit of this file
+      # written to pass can decide it. With this file as shipped, a pull
+      # request's targets come from the base tip's .codeflow/test-config.json,
+      # read here after the setup hook, so an ordinary edit of that file does
+      # not drop a target or lower a floor in its own run; the edit takes
+      # effect once it lands. A config the base does not hold is removed, so
+      # the gate runs as the base would; one the base holds as anything but a
+      # regular file, or that cannot be read, fails the job. The change's own
+      # .codeflow/policy.json stays in place for `codeflow validate --docs`;
+      # every enforcement level comes from the default branch (ADR-0091).
       - name: codeflow test
         env:
           EVENT: ${{ github.event_name }}
@@ -267,34 +270,33 @@ jobs:
             /*) ;;
             *) echo "::error::the gate's codeflow binary was not found; nothing is judged"; exit 1 ;;
           esac
+          config=.codeflow/test-config.json
           if [ "$EVENT" = pull_request ]; then
             case ${BASE_TIP:-} in
-              '' | *[!0-9a-f]*) echo "::error::no base commit to read the gate's config and policy from; nothing is judged"; exit 1 ;;
+              '' | *[!0-9a-f]*) echo "::error::no base commit to read the gate's test config from; nothing is judged"; exit 1 ;;
             esac
             if [ -L .codeflow ] || { [ -e .codeflow ] && [ ! -d .codeflow ]; }; then
-              echo "::error::.codeflow in this change is not a folder; the base's config and policy cannot be put in place; nothing is judged"; exit 1
+              echo "::error::.codeflow in this change is not a folder; the base's test config cannot be put in place; nothing is judged"; exit 1
             fi
             mkdir -p .codeflow
-            for file in .codeflow/test-config.json .codeflow/policy.json; do
-              if ! entry=$(git ls-tree "$BASE_TIP" -- "$file"); then
-                echo "::error::cannot read the tree of the base ${BASE_TIP}; nothing is judged"; exit 1
-              fi
-              rm -f -- "$file"
-              case ${entry%% *} in
-                '') echo "the base ${BASE_TIP} holds no ${file}; the gate runs without it, as the base would" ;;
-                100644|100755)
-                  if ! git cat-file blob "${BASE_TIP}:${file}" > "$file"; then
-                    echo "::error::cannot read ${file} at the base ${BASE_TIP}; nothing is judged"; exit 1
-                  fi
-                  echo "the gate reads ${file} from the base ${BASE_TIP}" ;;
-                *) echo "::error::${file} at the base ${BASE_TIP} is not a regular file; nothing is judged"; exit 1 ;;
-              esac
-            done
+            if ! entry=$(git ls-tree "$BASE_TIP" -- "$config"); then
+              echo "::error::cannot read the tree of the base ${BASE_TIP}; nothing is judged"; exit 1
+            fi
+            rm -f -- "$config"
+            case ${entry%% *} in
+              '') echo "the base ${BASE_TIP} holds no ${config}; the gate runs without it, as the base would" ;;
+              100644|100755)
+                if ! git cat-file blob "${BASE_TIP}:${config}" > "$config"; then
+                  echo "::error::cannot read ${config} at the base ${BASE_TIP}; nothing is judged"; exit 1
+                fi
+                echo "the gate reads ${config} from the base ${BASE_TIP}" ;;
+              *) echo "::error::${config} at the base ${BASE_TIP} is not a regular file; nothing is judged"; exit 1 ;;
+            esac
           else
-            echo "a ${EVENT} run judges the pushed commit with its own config and policy"
+            echo "a ${EVENT} run judges the pushed commit with its own test config"
           fi
           mode=full
-          if [ "$EVENT" = pull_request ] && python3 -I -c 'import json, sys; c = json.load(open(".codeflow/test-config.json")); sys.exit(0 if any("essential" in (t.get("modes") or {}) for t in c.get("targets", [])) else 1)' 2>/dev/null; then
+          if [ "$EVENT" = pull_request ] && python3 -I -c 'import json, sys; c = json.load(open(sys.argv[1])); sys.exit(0 if any("essential" in (t.get("modes") or {}) for t in c.get("targets", [])) else 1)' "$config" 2>/dev/null; then
             mode=essential
           fi
           "$CODEFLOW_BIN" validate --docs

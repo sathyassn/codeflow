@@ -1,8 +1,8 @@
 //! TSK-1103 in the shipped workflows: the trusted-base project checks run
 //! in the `pull_request_target` verdict job and nowhere in the head-run
 //! workflow (AC-9), every job resolves the base branch's tip once instead of
-//! the event's base commit (AC-15), the gates job reads its test config and
-//! policy from that tip (AC-16), and the GitLab, Bitbucket and generic
+//! the event's base commit (AC-15), the gates job reads its test config from
+//! that tip (AC-16), and the GitLab, Bitbucket and generic
 //! pinned run carries the same step before any of the change's code (AC-4,
 //! issue 510).
 //!
@@ -519,45 +519,41 @@ fn run_gate(root: &Path, event: &str, base_tip: &str) -> GateRun {
 }
 
 /// A repository whose base holds `config` and `policy`, and whose head,
-/// committed on top, weakens both; returns the base commit.
+/// committed on top, drops a target and lowers a floor in the config and
+/// edits the policy; returns the base commit.
 fn weakened(root: &Path, config: &str, policy: &str) -> String {
     git(root, &["init", "-q", "-b", "main"]);
     write(root, ".codeflow/test-config.json", config);
     write(root, ".codeflow/policy.json", policy);
     let base = commit(root, "chore: seed");
-    // The head drops a target, lowers the execution floor and the policy.
-    write(
-        root,
-        ".codeflow/test-config.json",
-        r#"{"schema_version": 1, "targets": [{"name": "lint", "command": "true"}]}"#,
-    );
-    write(
-        root,
-        ".codeflow/policy.json",
-        r#"{"git": {"security_review": "off"}}"#,
-    );
+    write(root, ".codeflow/test-config.json", HEAD_CONFIG);
+    write(root, ".codeflow/policy.json", HEAD_POLICY);
     commit(root, "feat: weaken the gate");
     base
 }
 
 const BASE_CONFIG: &str = r#"{"schema_version": 1, "execution": {"quick_default_class": "heavy"}, "targets": [{"name": "unit", "command": "true", "modes": {"essential": {}}}, {"name": "lint", "command": "true"}]}"#;
+const HEAD_CONFIG: &str =
+    r#"{"schema_version": 1, "targets": [{"name": "lint", "command": "true"}]}"#;
 const BASE_POLICY: &str = r#"{"git": {"security_review": "block"}}"#;
+const HEAD_POLICY: &str = r#"{"git": {"security_review": "off"}}"#;
 
-/// The calls a gate makes when it reads the base's copies: the docs check,
-/// then the tests in the mode the base's config chooses.
+/// The calls a pull request's gate makes: the docs check, then the tests in
+/// the mode the base's config chooses, each with the base's test config and
+/// the change's own policy file.
 fn base_calls(tool: &str) -> Vec<String> {
     ["validate --docs", "test --strict --mode essential"]
         .iter()
-        .map(|call| format!("{call} config={BASE_CONFIG} policy={BASE_POLICY} tool={tool}"))
+        .map(|call| format!("{call} config={BASE_CONFIG} policy={HEAD_POLICY} tool={tool}"))
         .collect()
 }
 
-/// AC-16: the gates job reads the test config and the policy from the
-/// base, so a head that drops a target, lowers a floor or edits the policy
-/// is judged by the base's copies, by the docs check and the tests both; a
-/// file the base lacks is removed.
+/// AC-16: with the workflow as shipped, the gates job reads the test config
+/// from the base tip, so a head that drops a target or lowers a floor is
+/// tested with the base's targets; a config the base lacks is removed. The
+/// change's own policy file stays in place, so `validate --docs` checks it.
 #[test]
-fn the_gate_reads_its_config_and_policy_from_the_base() {
+fn the_gate_reads_its_test_config_from_the_base() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let base = weakened(root, BASE_CONFIG, BASE_POLICY);
@@ -571,101 +567,94 @@ fn the_gate_reads_its_config_and_policy_from_the_base() {
         "{}",
         run.log
     );
-
-    // A base without the files: the head's copies are removed.
-    git(
-        root,
-        &[
-            "rm",
-            "-q",
-            "-f",
-            ".codeflow/test-config.json",
-            ".codeflow/policy.json",
-        ],
+    assert!(
+        !run.log.contains("policy.json from the base"),
+        "{}",
+        run.log
     );
+
+    // A base without a test config: the head's copy is removed and the
+    // head's policy file is still the one checked.
+    git(root, &["rm", "-q", "-f", ".codeflow/test-config.json"]);
     let without = commit(root, "chore: no config");
     write(root, ".codeflow/test-config.json", "{}");
-    write(root, ".codeflow/policy.json", "{}");
     let run = run_gate(root, "pull_request", &without);
     assert_eq!(run.gate_ok, Some(true), "{}", run.log);
     assert_eq!(
         run.calls,
         [
-            "validate --docs config= policy= tool=unset",
-            "test --strict --mode full config= policy= tool=unset"
+            format!("validate --docs config= policy={HEAD_POLICY} tool=unset"),
+            format!("test --strict --mode full config= policy={HEAD_POLICY} tool=unset"),
         ],
         "{}",
         run.log
     );
     assert!(
         run.log.contains(
-            "holds no .codeflow/policy.json; the gate runs without it, as the base would"
+            "holds no .codeflow/test-config.json; the gate runs without it, as the base would"
         ),
         "{}",
         run.log
     );
 }
 
-/// AC-16: the project setup hook runs in its own step, before the gate
-/// step reads the base's copies, so a hook that rewrites both files, ends
-/// its step early, clears its trap, sets the variables a shared shell once
-/// read or puts another `codeflow` first on PATH neither skips the gate nor
-/// changes what it reads; what it exports still reaches the gate.
+/// The project setup hook runs in its own step. What an honest hook exports
+/// reaches the gate step, and a config file it rewrites is replaced by the
+/// base's copy. A command that fails in the hook fails the hook's step, so
+/// the job is red and the gate step does not run; so does an `exit` while
+/// the step's trap is in place. A hook that clears the trap and exits ends
+/// only its own step, and the gate step runs after it.
 #[test]
-fn a_setup_hook_cannot_skip_the_gate_or_change_what_it_reads() {
+fn the_setup_hook_runs_in_its_own_step() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let decoy = root.join("decoy");
-    write(root, "decoy/codeflow", "#!/bin/sh\nexit 0\n");
-    std::fs::set_permissions(
-        decoy.join("codeflow"),
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .unwrap();
     let base = weakened(root, BASE_CONFIG, BASE_POLICY);
-    let rewrite = "printf '{}' > .codeflow/test-config.json\nprintf '{}' > .codeflow/policy.json\n";
-    let shadow = format!(
-        "export PATH='{0}':\"$PATH\" CODEFLOW_BIN='{0}/codeflow'\ncodeflow() {{ :; }}\nset +e\n",
-        decoy.display()
+    let rewrite = "printf '{}' > .codeflow/test-config.json\n";
+
+    write(
+        root,
+        ".codeflow/ci-setup.sh",
+        &format!("export TOOL=set\n{rewrite}"),
     );
-    // A hook that ends its step early carries nothing, so `TOOL` reaches
-    // the gate only from the hooks that return.
-    for (hook, tool) in [
-        (rewrite.to_string(), "set"),
-        (
-            format!("{rewrite}codeflow_gated=1\ncodeflow_returned=1\nexit 0\n"),
-            "unset",
-        ),
-        (format!("{rewrite}trap - EXIT\nexit 0\n"), "unset"),
-        (shadow, "set"),
-    ] {
+    let run = run_gate(root, "pull_request", &base);
+    assert!(run.hook_ok, "{}", run.log);
+    assert_eq!(run.gate_ok, Some(true), "{}", run.log);
+    assert_eq!(run.calls, base_calls("set"), "{}", run.log);
+
+    for hook in ["false\n", "exit 0\n"] {
         write(
             root,
             ".codeflow/ci-setup.sh",
             &format!("export TOOL=set\n{hook}"),
         );
         let run = run_gate(root, "pull_request", &base);
-        assert!(run.hook_ok, "{hook}: {}", run.log);
-        assert_eq!(run.gate_ok, Some(true), "{hook}: {}", run.log);
-        assert_eq!(run.calls, base_calls(tool), "{hook}: {}", run.log);
+        assert!(!run.hook_ok, "{hook}: {}", run.log);
+        assert_eq!(run.gate_ok, None, "{hook}: {}", run.log);
+        assert!(run.calls.is_empty(), "{hook}: {}", run.log);
     }
-
-    // An `exit` that leaves the step's trap in place fails the hook's step,
-    // and the job ends there.
-    write(root, ".codeflow/ci-setup.sh", &format!("{rewrite}exit 0\n"));
     let run = run_gate(root, "pull_request", &base);
-    assert!(!run.hook_ok, "{}", run.log);
-    assert_eq!(run.gate_ok, None);
     assert!(
         run.log.contains("a project setup hook must not exit"),
         "{}",
         run.log
     );
+
+    // A cleared trap: the hook's step ends early and carries nothing, and
+    // the gate step runs after it.
+    write(
+        root,
+        ".codeflow/ci-setup.sh",
+        "export TOOL=set\ntrap - EXIT\nexit 0\n",
+    );
+    let run = run_gate(root, "pull_request", &base);
+    assert!(run.hook_ok, "{}", run.log);
+    assert_eq!(run.gate_ok, Some(true), "{}", run.log);
+    assert_eq!(run.calls, base_calls("unset"), "{}", run.log);
 }
 
-/// AC-16: a base copy that is a link or cannot be read fails the job, as
-/// does a missing base on a pull request or a missing binary; a push judges
-/// its own copies.
+/// AC-16: a base test config that is a link or cannot be read fails the
+/// job, as does a missing base on a pull request or a missing binary; a
+/// push judges its own copy.
 #[test]
 fn the_gate_refuses_a_base_copy_it_cannot_read() {
     let script = run_blocks(CI, "codeflow test").remove(0);
@@ -683,27 +672,30 @@ fn the_gate_refuses_a_base_copy_it_cannot_read() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     git(root, &["init", "-q", "-b", "main"]);
-    write(root, ".codeflow/test-config.json", "{}");
+    write(root, ".codeflow/policy.json", "{}");
 
-    // A base whose policy is a symbolic link fails.
-    std::os::unix::fs::symlink("/etc/hosts", root.join(".codeflow/policy.json")).unwrap();
-    let linked = commit(root, "chore: a linked policy");
+    // A base whose test config is a symbolic link fails.
+    std::os::unix::fs::symlink("/etc/hosts", root.join(".codeflow/test-config.json")).unwrap();
+    let linked = commit(root, "chore: a linked config");
     let (ok, log, _) = gate(root, "pull_request", &linked);
     assert!(!ok);
     assert!(
         log.contains(&format!(
-            ".codeflow/policy.json at the base {linked} is not a regular file; nothing is judged"
+            ".codeflow/test-config.json at the base {linked} is not a regular file; nothing is judged"
         )),
         "{log}"
     );
 
     // A base copy that cannot be read fails.
-    git(root, &["rm", "-q", ".codeflow/policy.json"]);
-    write(root, ".codeflow/policy.json", BASE_POLICY);
-    let unreadable = commit(root, "chore: restore the policy");
+    git(root, &["rm", "-q", ".codeflow/test-config.json"]);
+    write(root, ".codeflow/test-config.json", BASE_CONFIG);
+    let unreadable = commit(root, "chore: restore the config");
     let blob = git(
         root,
-        &["rev-parse", &format!("{unreadable}:.codeflow/policy.json")],
+        &[
+            "rev-parse",
+            &format!("{unreadable}:.codeflow/test-config.json"),
+        ],
     );
     std::fs::remove_file(root.join(format!(".git/objects/{}/{}", &blob[..2], &blob[2..]))).unwrap();
     let (ok, log, _) = gate(root, "pull_request", &unreadable);
@@ -714,7 +706,7 @@ fn the_gate_refuses_a_base_copy_it_cannot_read() {
     let (ok, log, _) = gate(root, "pull_request", "");
     assert!(!ok);
     assert!(
-        log.contains("no base commit to read the gate's config and policy from"),
+        log.contains("no base commit to read the gate's test config from"),
         "{log}"
     );
 
@@ -730,11 +722,11 @@ fn the_gate_refuses_a_base_copy_it_cannot_read() {
         "{log}"
     );
 
-    // A push judges the pushed commit with its own copies.
+    // A push judges the pushed commit with its own copy.
     let (ok, log, _) = gate(root, "push", "");
     assert!(ok, "{log}");
     assert!(
-        log.contains("judges the pushed commit with its own config and policy"),
+        log.contains("judges the pushed commit with its own test config"),
         "{log}"
     );
 }

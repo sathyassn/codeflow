@@ -287,12 +287,13 @@ Each input, what reads it and its remedy code:
 - `.codeflow/audit-exceptions.sh`: read by the security review's project exception hook (TSK-294); remedy `CI_AUDIT_EXCEPTIONS_CHANGED`.
 - each `audit_exception_inputs` path in `.codeflow/base-checks.json`: read by the exception hook, such as its register; remedy `CI_AUDIT_EXCEPTIONS_CHANGED`.
 
-`.codeflow/test-config.json` and `.codeflow/policy.json` are read by the
-gates job's gate step from the base branch's tip, after the project setup
-hook's step has ended, so neither a pull request's own copy nor a setup hook
-that rewrites it decides its gate. The setup hook itself is the change's
-code and is named by `CI_SETUP_HOOK_CHANGED`, and the managed workflow
-files are judged by `CI_WORKFLOW_CHANGED`.
+`.codeflow/test-config.json` is read by the gates job's gate step from the
+base branch's tip, after the project setup hook's step has ended, so an
+ordinary edit of a pull request's own copy does not decide its gate's
+targets. The gates job runs the change's own code, so a hostile setup hook,
+test command or workflow edit can still decide that job. The setup hook is
+named by `CI_SETUP_HOOK_CHANGED`, and the managed workflow files are judged
+by `CI_WORKFLOW_CHANGED`.
 
 ## Unsupported policy keys
 
