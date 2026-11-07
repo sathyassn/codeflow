@@ -451,3 +451,51 @@ fn git_operand_bodies_take_the_rule_of_the_call() {
         assert!(out.status.success(), "{out:?}");
     }
 }
+
+/// TSK-1375: a deletion in any reading of text a shell may read more than
+/// one way is refused by the built exec guard under
+/// `security.dangerous_commands`, on the default rule and under relaxed,
+/// and real arithmetic stays allowed by the line's rules. The text is
+/// judged and never run.
+#[test]
+fn a_deletion_in_any_reading_of_ambiguous_text_refuses() {
+    const REFUSED: &[&str] = &[
+        "((rm -rf ~) )",
+        "true && ((rm -rf ~))",
+        "X=$((rm -rf ~) )",
+        "X=$((echo /) ); rm -rf \"$X\"",
+    ];
+    const ALLOWED: &[&str] = &[
+        "i=0; while (( i < 3 )); do i=$((i + 1)); done; rm -rf ./build",
+        "(( n % 2 == 0 )) && echo even",
+    ];
+    for policy in [DEFAULT, RELAXED] {
+        let dir = tempfile::tempdir().unwrap();
+        published(dir.path(), policy);
+        for line in REFUSED {
+            let out = exec_guard(dir.path(), line, false);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{line}: {stderr}");
+            assert!(
+                stderr.contains("security.dangerous_commands"),
+                "{line}: {stderr}"
+            );
+        }
+        for line in ALLOWED {
+            let out = exec_guard(dir.path(), line, false);
+            assert!(super::line_allows(&out), "{line}: {out:?}");
+        }
+        // git-guard judges what reaches the repository's own files, here
+        // its Git directory, in either reading.
+        for line in ["((rm -rf .git) )", "X=$((rm -rf .git) )"] {
+            let out = run_with_stdin(
+                codeflow()
+                    .args(["hook", "git-guard"])
+                    .current_dir(dir.path())
+                    .env_remove("CLAUDE_PROJECT_DIR"),
+                &super::guard_payload(line, dir.path()),
+            );
+            assert_eq!(out.status.code(), Some(2), "git-guard {line}: {out:?}");
+        }
+    }
+}
