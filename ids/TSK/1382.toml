@@ -1,0 +1,11 @@
+id = "TSK-1382"
+uid = "aa027bb2-4a67-4efa-b219-4123a20989de"
+kind = "TSK"
+title = "Core tests locate the build output folder the way the gate does"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-07T20:01:13Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
