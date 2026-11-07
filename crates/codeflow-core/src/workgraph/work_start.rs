@@ -1895,7 +1895,14 @@ impl PinBranches {
             if matching.is_empty() && !visible.is_empty() {
                 let mut behind = true;
                 for tip in visible.iter().flat_map(|(_, tips)| tips.iter()) {
-                    behind &= history::descendant_of(repo, pin.revision, *tip).unwrap_or(false);
+                    behind &= history::descendant_of(repo, pin.revision, *tip).map_err(|error| {
+                        format!(
+                            "{} predecessor branch: cannot read the ancestry of its copy at {tip} against the pin {}: {}; fetch the branch again and recheck",
+                            pin.task_id,
+                            pin.revision,
+                            error.message()
+                        )
+                    })?;
                 }
                 if behind {
                     return Err(format!("{} predecessor branch is behind the pin {}; visible heads: {heads}; push the reviewed head to the predecessor's branch or wait for its push, then fetch and recheck", pin.task_id, pin.revision));
