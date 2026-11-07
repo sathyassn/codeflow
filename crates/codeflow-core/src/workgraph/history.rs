@@ -472,6 +472,14 @@ fn remerge_scratch() -> Result<tempfile::TempDir, Error> {
 fn remerge_command(repo: &Repository, scratch: &std::path::Path) -> std::process::Command {
     let empty_file = scratch.join("config");
     let mut command = crate::git::judging_command();
+    // Every inherited `GIT_` value goes, such as `GIT_GRAFT_FILE` or
+    // `GIT_SHALLOW_FILE`, which would change the merge base. What git needs
+    // is set below.
+    for (name, _) in std::env::vars_os() {
+        if name.as_encoded_bytes().starts_with(b"GIT_") {
+            command.env_remove(name);
+        }
+    }
     command
         .current_dir(scratch)
         .arg("--no-replace-objects")
@@ -492,7 +500,7 @@ fn remerge_command(repo: &Repository, scratch: &std::path::Path) -> std::process
             "-c",
             "merge.default=text",
         ])
-        .env_remove("GIT_EXEC_PATH")
+        .env("GIT_NO_LAZY_FETCH", "1")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_ATTR_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", &empty_file)
