@@ -1,6 +1,8 @@
-# Judges the daily Windows runs from what GitHub records about them, six hours after
-# windows-daily.yml started them. A run that is missing, late or does not match counts
-# as no evidence, and this workflow fails. A daily result is never merge evidence.
+# Judges the daily runs of the full Linux and Windows suites from what GitHub records
+# about them, six hours after windows-daily.yml started them, and reports each line's
+# coverage total and the commit measured. A run that is missing, late or does not
+# match, or a total under the floor, counts as no evidence, and this workflow fails.
+# A daily result is never merge evidence.
 # A line left out has no daily evidence: this workflow can pass without it, and that
 # pass says nothing about it.
 name: daily Windows verdict

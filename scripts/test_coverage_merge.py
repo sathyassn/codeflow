@@ -108,6 +108,27 @@ class FloorTests(unittest.TestCase):
                 if status:
                     self.assertIn("is under the 90 percent floor", out)
 
+    def test_the_total_file_records_the_total_and_the_commit_under_the_floor_too(self):
+        for covered, status in ((899, 1), (900, 0)):
+            with self.subTest(covered=covered), tempfile.TemporaryDirectory() as folder, \
+                    Shards(synthetic(set(range(0, covered, 2))), synthetic(set(range(1, covered, 2)))) as directory:
+                total = Path(folder) / "total.json"
+                argv = ["coverage-merge.py", "--floor", "90", "--shards", "2", "--total-file", str(total),
+                        str(directory)]
+                with mock.patch("sys.argv", argv), mock.patch.dict("os.environ", {"GITHUB_SHA": "a" * 40}), \
+                        redirect_stdout(StringIO()):
+                    self.assertEqual(cm.main(), status)
+                self.assertEqual(json.loads(total.read_text()),
+                                 {"lines": 1000, "covered": covered, "floor": 90.0, "sha": "a" * 40})
+
+    def test_a_refused_merge_writes_no_total(self):
+        with tempfile.TemporaryDirectory() as folder, Shards(synthetic({1}), None) as directory:
+            total = Path(folder) / "total.json"
+            argv = ["coverage-merge.py", "--floor", "0", "--shards", "2", "--total-file", str(total), str(directory)]
+            with mock.patch("sys.argv", argv), redirect_stdout(StringIO()):
+                self.assertEqual(cm.main(), 1)
+            self.assertFalse(total.exists())
+
     def test_the_floor_is_the_rust_coverage_targets(self):
         self.assertEqual(cm.floor_from(ROOT / ".codeflow" / "test-config.json"), 90.0)
         with tempfile.TemporaryDirectory() as directory:

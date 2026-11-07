@@ -3,9 +3,25 @@
 # update` (charter §4.3): an unmodified copy is replaced on update; your edits
 # are preserved via 3-way merge, never clobbered.
 #
-# Linux and Windows gates run on ready pull requests into main, master and
-# integration/**, pushes below, and scheduled or manual runs. A draft keeps
-# the security jobs and skips the gates and both verdicts, so its verdicts
+# Suite placement: any change to which suite runs on which event is an
+# operator decision (2026-11-05, "A plus Linux off line PRs"). ADR-0097, "CI
+# suite placement by event", records it, and the maintainer page
+# docs/releasing.md, "Where CI suites run" (#where-ci-suites-run), explains
+# it. scripts/test_ci_placement.py holds one row per job of this workflow
+# and of the daily run with the events and bases it runs on, and fails when
+# a job's condition differs from its row, so a placement change is a visible
+# edit to that table.
+#
+# A ready pull request into an integration line runs only the short checks:
+# the Linux build and the `codeflow gates` parts here, the commit standards
+# and release impact in codeflow-policy.yml and codeflow-release.yml, and the
+# secret scan and security review here. Linux coverage and every Windows job
+# leave it; the `windows-tier` job decides from the event and base alone, and
+# an unreadable or unexpected value runs everything. Line pushes (the batch's
+# hosted proof), ready pull requests into main or master, the weekly
+# schedule and manual runs keep the full Linux and Windows gates. Both
+# verdicts still report, and pass when their suites were not selected. A
+# draft keeps the security jobs and skips the gates and both verdicts, so its verdicts
 # end neutral; merge admission is `commit standards` in codeflow-policy.yml,
 # which passes only on a successful ready run at the exact head (TSK-449).
 # Marking a pull request ready starts the gates without a push.
@@ -569,27 +585,30 @@ jobs:
   # The instrumented suite owns Linux test and coverage evidence and was the
   # longest part of the gate (13.8 to 19.8 minutes), so it runs as shards on
   # separate runners (TSK-270). Each shard builds the instrumented workspace
-  # and runs the tests scripts/coverage-shards.py gives it from measured
-  # durations, so together the shards run every test once. The report job
-  # adds up the shards' counters, applies the line floor that the
-  # rust-coverage target names, reads the Rust journeys from the shards'
-  # results and checks that each listed test ran in exactly its one shard.
-  # Locally, `codeflow test` still runs the one rust-coverage command.
-  # Both shards build the same thing, so only the first saves the cache.
-  # Timeouts: a shard is planned at about 11 minutes of tests (14 at most)
-  # after a build and setup of about 4 to 6 minutes, and gets the Windows
-  # partitions' 30; the report job only reads files and fails a shard past
-  # the 24 minute margin (TSK-1063).
+  # and runs `--partition hash:<n>/3`, which places a test by the hash of its
+  # name, so together the shards run every test once with no measured data
+  # (TSK-1321). The report job adds up the shards' counters, applies the line
+  # floor that the rust-coverage target names, reads the Rust journeys from
+  # the shards' results and checks that each listed test ran in exactly its
+  # hash shard (scripts/partition-check.py). Locally, `codeflow test` still
+  # runs the one rust-coverage command. The shards build the same thing, so
+  # only the first saves the cache. Timeouts: two shards ran 14.7 and 18.2
+  # minutes of tests (run 42146553626), so three run about 11 each, after a
+  # build and setup of about 4 to 6 minutes, and get the Windows partitions'
+  # 30; the report job only reads files, and fails a shard whose test
+  # minutes plus 6 of setup pass the 24 minute margin (TSK-1063).
+  # A pull request into an integration line does not run them (the
+  # `windows-tier` job below); the push to the line does.
   gates-coverage:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
-    name: codeflow gates (coverage ${{ matrix.shard }} of 2)
-    needs: reuse
+    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    name: codeflow gates (coverage ${{ matrix.shard }} of 3)
+    needs: [reuse, windows-tier]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Install the differential shells
@@ -631,7 +650,7 @@ jobs:
         shell: bash
         env:
           LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
-        run: cargo llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow -E "$(python3 -B scripts/coverage-shards.py filter ${{ matrix.shard }})"
+        run: cargo llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow --partition hash:${{ matrix.shard }}/3
       # The full report keeps each function's counters, which the report job
       # adds up. The test list for the partition check comes from these same
       # binaries: under the llvm-cov environment and in the llvm-cov target
@@ -694,7 +713,7 @@ jobs:
       # rust-coverage target's --fail-under-lines.
       - name: Line coverage of the whole suite
         shell: bash
-        run: python3 -B scripts/test_coverage_merge.py && python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards 2 target/coverage/data
+        run: python3 -B scripts/test_coverage_merge.py && python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards 3 target/coverage/data
 
       # The journey-gate target's command, on the shards' results.
       - name: journey gate
@@ -704,21 +723,26 @@ jobs:
           CODEFLOW_GATE_RESULTS: target/coverage/results
         run: python3 -B scripts/test_journey_gate.py && python3 -B scripts/journey-gate.py --part results --results "$CODEFLOW_GATE_RESULTS"
 
-      # Fails when a listed test ran in no shard, in two, or outside the
-      # shard the plan gives it, and prints each shard's test time.
+      # Fails when a listed test ran in no shard, in two, outside the shard
+      # its hash gives it, or without being listed, or when a shard's test
+      # minutes plus 6 of setup pass the 24 minute margin (TSK-1063), and
+      # prints each shard's test minutes and the slowest test.
       - name: Every test ran in exactly one shard
         if: ${{ !cancelled() }}
         shell: bash
-        run: python3 -B scripts/test_windows_partitions.py && python3 -B scripts/coverage-shards.py check --list target/coverage/results/coverage-shard-1/tests.json target/coverage/results/coverage-shard-2/tests.json --results target/coverage/results
+        run: python3 -B scripts/test_partition_check.py && python3 -B scripts/partition-check.py check --count 3 --prefix coverage-shard --margin-minutes 24 --setup-minutes 6 --list target/coverage/results/coverage-shard-1/tests.json target/coverage/results/coverage-shard-2/tests.json target/coverage/results/coverage-shard-3/tests.json --results target/coverage/results
 
   # The required check runs on every event, even when a part
   # fails, is cancelled or did not run. Draft integration pull requests and
   # unsupported bases fail. It passes only when every part, coverage shard
-  # and report passed, or reuse named a run and all were skipped.
+  # and report passed, or reuse named a run and all were skipped, or, on a
+  # pull request into an integration line, which runs only the short checks
+  # (tier `reduced`), every part passed and coverage and the release parts
+  # were not selected.
   gates-verdict:
     if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
     name: codeflow gates
-    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]
+    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -731,6 +755,9 @@ jobs:
           REPORT: ${{ needs.gates-coverage-report.result }}
           REUSE: ${{ needs.reuse.result }}
           REUSED: ${{ needs.reuse.outputs.run }}
+          TIER: ${{ needs.windows-tier.outputs.tier }}
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.ref }}
         run: |
           if [ "$REUSE" = success ] && [ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "the full gate passed on pull request run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSED}, which tested this exact tree"
@@ -739,6 +766,23 @@ jobs:
           if [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]; then
             echo "::error::the Linux gates did not run; bases outside main, master or integration/** cannot supply a passing verdict"
             exit 1
+          fi
+          if [ "$TIER" = reduced ]; then
+            case "$EVENT $BASE" in
+              "pull_request integration/"?*) ;;
+              *)
+                echo "::error::the reduced tier is only for a pull request into an integration line; event ${EVENT:-none}, base ${BASE:-none}"
+                exit 1
+                ;;
+            esac
+            if [ "$PARTS" != success ] || [ "$SHARDS $REPORT $RELEASE" != "skipped skipped skipped" ]; then
+              echo "::error::the short checks concluded parts=${PARTS}; the reduced tier runs no coverage shards (${SHARDS}), coverage report (${REPORT}) or release parts (${RELEASE}); see the codeflow gates jobs"
+              exit 1
+            fi
+            line="the short checks passed at ${GITHUB_SHA}; Linux coverage was not selected for a pull request into an integration line. This is not full gate evidence; the push to the line runs it."
+            echo "$line"
+            echo "$line" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
           if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || [ "$REPORT" != success ]; then
             echo "::error::the full gate concluded parts=${PARTS} coverage shards=${SHARDS} coverage report=${REPORT}; see the codeflow gates jobs"
@@ -752,18 +796,23 @@ jobs:
           fi
           echo "every part of the full gate passed"
 
-  # The reduced Windows tier (TSK-1242). Its switch is the REDUCED_TIER value in
-  # this job, off until a manual run of this workflow on the integration line
-  # has passed all twelve partitions at an exact commit (operator decision,
-  # 2026-11-03). With it on, a pull request into an integration line skips the
-  # test build, the twelve partitions and their journeys job, and runs the
-  # supported Windows journey tests in `windows-tier-journeys` beside the checks
-  # and the release journey. Pull requests into main, pushes, and scheduled and
-  # manual runs keep every partition. The `windows` verdict accepts exactly those
-  # skips, and scripts/ci-reuse.py refuses a reduced-tier run, so the push to the
-  # line runs every job. Until the daily run reaches main, those pushes are the
-  # only partition coverage of a line. scripts/gate-parity.py pins both jobs and
-  # accepts the switch only off or on.
+  # Placement by event (ADR-0097; the operator's decision of 2026-11-05, "A
+  # plus Linux off line PRs"): a pull request into an integration line runs
+  # only the short checks, so it skips the Linux coverage shards and every
+  # Windows job, whatever it changes. This job decides that from the event
+  # name and the base branch alone, never from a label, title or file the
+  # head controls. Pull requests into main, pushes, and scheduled and manual
+  # runs keep every job, and an empty or unexpected event or base runs
+  # everything (tier=full). The output value `reduced` means "short checks
+  # only"; it, the REDUCED_TIER switch (operator decision, 2026-11-03, on
+  # since run 41741936765, PR 558) and the job's Windows name are kept from
+  # TSK-1242 so earlier runs and records still read them. Both verdicts
+  # accept exactly these skips and say the suites were not selected. Such a
+  # run is never full evidence: the push to the line runs every job, and
+  # TSK-1026 AC-7 owns whether that push may reuse the run's other jobs
+  # (scripts/ci-reuse.py refuses the run until then).
+  # scripts/gate-parity.py pins this job and accepts the switch only off or
+  # on; scripts/test_windows_tier.py runs this step.
   windows-tier:
     if: github.event_name == 'pull_request'
     name: windows tier
@@ -777,37 +826,50 @@ jobs:
         shell: bash
         env:
           REDUCED_TIER: "on"
+          EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.ref }}
         run: |
           tier=full
-          if [ "$REDUCED_TIER" = on ]; then
+          if [ "$REDUCED_TIER" != on ]; then
+            reason="the reduced tier switch is $REDUCED_TIER"
+          elif [ "$EVENT" != pull_request ]; then
+            reason="the event '$EVENT' is not a pull request"
+          else
             case "$BASE" in
-              integration/*) tier=reduced ;;
+              integration/?*)
+                tier=reduced
+                reason="it is a pull request into the integration line $BASE"
+                ;;
+              *) reason="the base '$BASE' is not an integration line" ;;
             esac
           fi
           echo "tier=$tier" >> "$GITHUB_OUTPUT"
-          echo "Windows tier: $tier (reduced tier switch: $REDUCED_TIER, base: $BASE)"
+          echo "Windows tier: $tier, because $reason"
+          echo "Windows tier: $tier, because $reason" >> "$GITHUB_STEP_SUMMARY"
 
   # Native Windows is a release target again (TSK-197). The raw referee is
   # split up so the longest path is short (TSK-265): one job builds the test
   # binaries once into a nextest archive; the partitions run that archive
-  # without compiling, each the tests scripts/windows-partitions.py gives it
-  # from measured durations, so together they run every test once; the
-  # other Rust and Node checks and the Python release journey run beside
-  # them; and the journey gate reads every partition's results and checks
-  # that each listed test ran in exactly its one partition. The `windows`
-  # verdict below is the one check branch rules and .release/config.json
-  # read. Timeouts: the build compiled in about 3 minutes inside the old
-  # partitions (p95 about 4) and gets room for a cold dependency build; the
-  # release journey took 4.3 to 4.7 minutes. A partition is planned at 12
-  # minutes of tests or less (about 9 today), plus up to 2 minutes of job
-  # setup, so a typical job takes about 11 minutes and a runner 1.7 times
-  # slower, the worst read, stays under 24: 80 percent of the 30 minute limit
-  # (TSK-1063). The build checks before any partition starts that the data
-  # still covers the suite and the plan is inside that margin
-  # (`windows-partitions.py drift`); the journey job fails a run whose
-  # partition took more than the margin, and names a partition that ended
-  # without its report (a timeout or a cancellation) as not finished.
+  # without compiling, each `--partition hash:<n>/16`, which places a test by
+  # the hash of its name, so together they run every test once with no
+  # measured data and a new test never moves another (TSK-1321); the other
+  # Rust and Node checks and the Python release journey run beside them;
+  # and the journey gate reads every partition's results and checks that
+  # each listed test ran in exactly its hash partition
+  # (scripts/partition-check.py). The `windows` verdict below is the one
+  # check branch rules and .release/config.json read. Timeouts: the build
+  # compiled in about 3 minutes inside the old partitions (p95 about 4) and
+  # gets room for a cold dependency build; the release journey took 4.3 to
+  # 4.7 minutes. At 16 partitions the slowest holds about 9.6 test minutes
+  # on today's suite (12 at the 99th percentile of random placements), plus
+  # up to 2 minutes of job setup, so a runner 1.7 times slower stays near 22,
+  # under 24: 80 percent of the 30 minute limit (TSK-1063). Under the
+  # windows-hosted profile (.config/nextest.toml) nextest ends a test that
+  # runs past 12 minutes, so one hung test is reported as a timeout and the
+  # partition keeps its other results. The journey job names a partition
+  # that ended without its report (a timeout or a cancellation) as not
+  # finished, and fails a partition whose test minutes plus 2 of setup pass
+  # the 24 minute margin.
   windows-build:
     if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows test build
@@ -847,13 +909,6 @@ jobs:
           cargo nextest list --archive-file target/windows-tests.tar.zst --workspace-remap . --profile codeflow --message-format json > target/windows-tests.json
           printf '%s\n' "$GITHUB_WORKSPACE" > target/windows-workspace.txt
 
-      # Fails before any partition starts when the measurements no longer
-      # cover the suite, or the plan for this exact list puts a partition
-      # past the margin; the message names the refresh command.
-      - name: The partition plan still fits the suite
-        shell: bash
-        run: python -B scripts/windows-partitions.py drift --list target/windows-tests.json
-
       - name: Keep the archive for the partitions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -875,14 +930,14 @@ jobs:
 
   windows-tests:
     if: ${{ !cancelled() && needs.windows-build.result == 'success' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
-    name: windows tests (${{ matrix.partition }} of 12)
+    name: windows tests (${{ matrix.partition }} of 16)
     needs: windows-build
     runs-on: windows-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Install the differential shells
@@ -928,24 +983,24 @@ jobs:
           fi
 
       # Extracting into the checkout puts every binary at the path the build
-      # compiled in, and the report at target/nextest/codeflow/junit.xml.
+      # compiled in, and the report at target/nextest/windows-hosted/junit.xml.
       - name: cargo nextest run (one partition, from the archive)
         shell: bash
-        run: cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite --no-fail-fast --profile codeflow -E "$(python -B scripts/windows-partitions.py filter ${{ matrix.partition }} --list "$RUNNER_TEMP/windows-test-list/windows-tests.json")"
+        run: cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite --no-fail-fast --profile windows-hosted --partition hash:${{ matrix.partition }}/16
 
       - name: Keep this partition's results for the journey gate
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-junit-${{ matrix.partition }}
-          path: target/nextest/codeflow/junit.xml
+          path: target/nextest/windows-hosted/junit.xml
           if-no-files-found: ignore
           retention-days: 7
 
   windows:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows checks (doc, clippy, Node)
-    needs: reuse
+    needs: [reuse, windows-tier]
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -990,9 +1045,9 @@ jobs:
   # here from the start (TSK-265); the journeys job runs the rest. Together
   # the two parts run every journey once.
   windows-release-journey:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows release journey
-    needs: reuse
+    needs: [reuse, windows-tier]
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -1039,128 +1094,102 @@ jobs:
       # here, so the steps below do not read the gap as renamed journeys or
       # failing tests; they run only when every report exists. When one
       # report survives, download-artifact writes it without its numbered
-      # directory, so the script numbers it by the tests the plan gives it.
+      # directory, so the script numbers it by the hash of its tests.
       - name: Every partition wrote its report
         id: reports
         shell: bash
-        run: python -B scripts/windows-partitions.py reports --results target/nextest/partitions --list target/nextest/list/windows-tests.json
+        run: python -B scripts/partition-check.py reports --count 16 --prefix windows-junit --results target/nextest/partitions
 
       - name: journey gate
         shell: bash
         run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/partitions --skip-benchmark --part results
 
-      # Fails when a listed test ran in no partition, in two, or outside the
-      # partition the plan gives it, or a partition's time passes the margin,
-      # and prints each partition's test time against its plan.
+      # Fails when a listed test ran in no partition, in two, outside the
+      # partition its hash gives it, or without being listed, or when a
+      # partition's test minutes plus 2 of setup pass the 24 minute margin
+      # (TSK-1063), and prints each partition's test minutes and the slowest
+      # test.
       - name: Every test ran in exactly one partition
         if: ${{ !cancelled() && steps.reports.outcome == 'success' }}
         shell: bash
-        run: python scripts/test_windows_partitions.py && python scripts/windows-partitions.py check --list target/nextest/list/windows-tests.json --results target/nextest/partitions
+        run: python scripts/test_partition_check.py && python scripts/partition-check.py check --count 16 --prefix windows-junit --margin-minutes 24 --setup-minutes 2 --list target/nextest/list/windows-tests.json --results target/nextest/partitions
 
-  # The reduced tier's runtime journeys: the same journey map and results check
-  # as the windows-journeys job, on tests this job runs itself. Its compile
-  # shares the test build's dependency cache and gets the 45 minute job limit.
-  windows-tier-journeys:
-    if: ${{ !cancelled() && needs.windows-tier.outputs.tier == 'reduced' && !github.event.pull_request.draft }}
-    name: windows tier journeys
-    needs: windows-tier
-    runs-on: windows-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - name: Install the differential shells
-        id: shells
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
-        with:
-          msystem: MSYS
-          install: bash zsh dash
-      - name: Select the differential shell directory
-        shell: pwsh
-        env:
-          MSYS2_LOCATION: ${{ steps.shells.outputs.msys2-location }}
-        run: Add-Content -Path $env:GITHUB_ENV -Value "CODEFLOW_DIFFERENTIAL_SHELL_DIR=$env:MSYS2_LOCATION\usr\bin"
-      - name: Install Rust (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: windows-tests
-          cache-on-failure: true
-      - name: Install nextest
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
-        with:
-          tool: cargo-nextest@0.9.129
-      - name: Begin journey check
-        shell: bash
-        run: |
-          rm -rf target/nextest/codeflow
-          echo "CODEFLOW_GATE_STARTED_AT=$(python -c 'import time; print(time.time())')" >> "$GITHUB_ENV"
-      - name: Run every supported Windows journey test
-        shell: bash
-        run: cargo nextest run --workspace --no-fail-fast --profile codeflow -E "$(python -B scripts/journey-gate.py --nextest-filter --skip-benchmark)"
-      - name: journey gate
-        shell: bash
-        run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/codeflow/junit.xml --skip-benchmark --part results
-
-  # The required Windows check runs on every event, even
-  # when a job fails, is cancelled or did not run. Draft integration pull
-  # requests and unsupported bases fail. It passes only when all Windows
-  # jobs passed, reuse named a run and all were skipped, or the reduced tier
-  # took exactly its declared skips on a pull request into an integration line.
+  # The required Windows check runs on every event, even when a job fails, is
+  # cancelled or did not run. Draft integration pull requests and unsupported
+  # bases fail. The verdict is computed from the result of every job it
+  # needs (TSK-1321): each tier declares which jobs it skips, every other job
+  # must succeed, and a failure names each job that is not green with its
+  # result. It passes when every job the tier runs succeeded and every
+  # skipped job is one the tier declares skipped: the full tier skips none;
+  # the reduced tier, only on a pull request into an integration line,
+  # skips every Windows job, so Windows is not selected; a push that reuses
+  # a named pull request run skips them all.
+  # scripts/gate-parity.py pins this job and scripts/test_windows_tier.py
+  # runs its step.
   windows-verdict:
     if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
     name: windows
-    needs: [reuse, windows-tier, windows, windows-build, windows-tests, windows-journeys, windows-release-journey, windows-tier-journeys]
+    needs: [reuse, windows-tier, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Every Windows job passed
-        shell: bash
+      - name: Every Windows job the tier runs passed
+        shell: python3 -I {0}
         env:
-          REUSE: ${{ needs.reuse.result }}
-          REUSED: ${{ needs.reuse.outputs.run }}
-          CHECKS: ${{ needs.windows.result }}
-          BUILD: ${{ needs.windows-build.result }}
-          TESTS: ${{ needs.windows-tests.result }}
-          JOURNEYS: ${{ needs.windows-journeys.result }}
-          RELEASE: ${{ needs.windows-release-journey.result }}
-          MISSING: ${{ needs.windows-journeys.outputs.missing }}
-          TIER: ${{ needs.windows-tier.outputs.tier }}
-          TIER_JOURNEYS: ${{ needs.windows-tier-journeys.result }}
+          NEEDS: ${{ toJSON(needs) }}
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.ref }}
         run: |
-          if [ "$TIER" = reduced ]; then
-            if [ "$EVENT" = pull_request ] && [ "${BASE#integration/}" != "$BASE" ] \
-              && [ "$BUILD $TESTS $JOURNEYS" = "skipped skipped skipped" ] \
-              && [ "$CHECKS $RELEASE $TIER_JOURNEYS" = "success success success" ]; then
-              echo "Windows reduced tier passed at ${GITHUB_SHA}: the twelve test partitions were skipped by tier"
-              echo "Windows reduced tier at ${GITHUB_SHA}: the twelve test partitions were skipped by tier. This is not full Windows evidence; the push to the line runs them." >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            echo "::error::the reduced Windows tier accepts only the skipped build, partitions and partition journeys on a pull request into an integration line; event=${EVENT} base=${BASE} checks=${CHECKS} build=${BUILD} tests=${TESTS} journeys=${JOURNEYS} release journey=${RELEASE} tier journeys=${TIER_JOURNEYS}"
-            exit 1
-          fi
-          if [ "$TIER_JOURNEYS" != skipped ]; then
-            echo "::error::the reduced tier's journey job concluded ${TIER_JOURNEYS} outside the reduced tier"
-            exit 1
-          fi
-          if [ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ] \
-            && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
-            echo "Windows passed on pull request run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSED}, which tested this exact tree"
-            exit 0
-          fi
-          if [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ]; then
-            echo "::error::the Windows gates did not run; bases outside main, master or integration/** cannot supply a passing verdict"
-            exit 1
-          fi
-          if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then
-            if [ -n "$MISSING" ]; then
-              echo "::error::Windows test partition(s) ${MISSING} ended without a report (a timeout or a cancellation); their tests did not finish, none is known to have failed"
-            fi
-            echo "::error::Windows concluded checks=${CHECKS} build=${BUILD} tests=${TESTS} journeys=${JOURNEYS} release journey=${RELEASE}; see the windows jobs"
-            exit 1
-          fi
-          echo "every Windows job passed"
+          import json, os, re, sys
+          needs = json.loads(os.environ["NEEDS"])
+          event, base, sha = os.environ["EVENT"], os.environ.get("BASE", ""), os.environ["GITHUB_SHA"]
+          names = {"windows": "windows checks", "windows-build": "windows test build",
+                   "windows-tests": "windows tests", "windows-journeys": "windows journeys",
+                   "windows-release-journey": "windows release journey", "windows-tier": "windows tier"}
+          def result(job): return needs.get(job, {}).get("result", "missing")
+          def output(job, key): return (needs.get(job, {}).get("outputs") or {}).get(key, "")
+          tier, reused = output("windows-tier", "tier"), output("reuse", "run")
+          jobs = sorted(job for job in needs if job != "reuse")
+          gates = [job for job in jobs if job != "windows-tier"]
+          errors = []
+          if result("reuse") == "success" and re.fullmatch(r"[0-9]+", reused):
+              mode, skips = "reuse", set(jobs)
+          elif tier == "reduced":
+              mode, skips = "reduced", {"windows", "windows-build", "windows-tests", "windows-journeys",
+                                        "windows-release-journey"}
+              if event != "pull_request" or not base.startswith("integration/"):
+                  errors.append(f"the reduced tier is only for a pull request into an integration line; "
+                                f"event {event}, base {base or 'none'}")
+          else:
+              mode, skips = "full", set()
+          if event != "pull_request":
+              skips.add("windows-tier")
+          if mode == "full" and all(result(job) == "skipped" for job in gates):
+              errors.append("the Windows gates did not run; bases outside main, master or integration/** "
+                            "cannot supply a passing verdict")
+          else:
+              for job in jobs:
+                  want = "skipped" if job in skips else "success"
+                  if result(job) != want:
+                      declared = "the tier declares it skipped" if want == "skipped" else f"the {mode} tier runs it"
+                      errors.append(f"{names.get(job, job)} concluded {result(job)}; {declared}")
+          missing = output("windows-journeys", "missing")
+          if missing:
+              errors.append(f"Windows test partition(s) {missing} ended without a report (a timeout or a "
+                            "cancellation); their tests did not finish, none is known to have failed")
+          if errors:
+              for line in errors:
+                  print(f"::error::{line}")
+              sys.exit(1)
+          url = f"{os.environ.get('GITHUB_SERVER_URL', '')}/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{reused}"
+          line = {"reuse": f"Windows passed on pull request run {url}, which tested this exact tree",
+                  "reduced": f"Windows was not selected at {sha}: a pull request into an integration line runs "
+                             "only the short checks. This is not Windows evidence; the push to the line runs "
+                             "every Windows job.",
+                  "full": f"every Windows job passed at {sha}"}[mode]
+          print(line)
+          with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as summary:
+              print(line, file=summary)
 
   secret-scan:
     name: secret scan

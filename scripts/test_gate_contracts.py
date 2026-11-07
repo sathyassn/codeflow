@@ -139,13 +139,8 @@ class GateContracts(unittest.TestCase):
         jobs = dict(zip(parts[1::2], parts[2::2]))
         windows = {key: text for key, text in jobs.items() if key.startswith('windows')}
         gated = ('windows', 'windows-build', 'windows-tests', 'windows-journeys', 'windows-release-journey')
-        self.assertEqual(set(windows), {*gated, 'windows-verdict', 'windows-image', 'windows-tier', 'windows-tier-journeys'})
+        self.assertEqual(set(windows), {*gated, 'windows-verdict', 'windows-image'})
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
-        # TSK-1242: the tier only applies to pull requests. Neither job is a
-        # publication check; `scripts/gate-parity.py` pins their text.
-        for key in ('windows-tier', 'windows-tier-journeys'):
-            self.assertNotIn(windows[key].split('name: ', 1)[1].split('\n', 1)[0], checks)
-        self.assertIn("    if: github.event_name == 'pull_request'\n", windows['windows-tier'])
         # TSK-359: `windows-image` only reads the push's Windows runner image
         # for the reuse decision. It runs on pushes alone and is no gate.
         image = windows['windows-image']
@@ -165,7 +160,8 @@ class GateContracts(unittest.TestCase):
         # journeys run in a job that starts with the run.
         journeys = windows['windows-journeys']
         self.assertIn('journey-gate.py --results target/nextest/partitions --skip-benchmark --part results', journeys)
-        self.assertIn('windows-partitions.py check --list', journeys)
+        self.assertIn('partition-check.py check --count 16 --prefix windows-junit --margin-minutes 24 '
+                      '--setup-minutes 2 --list', journeys)
         self.assertNotIn('test_release.py', journeys)
         self.assertIn('needs: windows-tests', journeys)
         self.assertIn('pattern: windows-junit-*', journeys)
@@ -185,21 +181,28 @@ class GateContracts(unittest.TestCase):
         # `codeflow gates` is: one accepted body, so no edit can add another
         # way for it to pass.
         self.assertEqual(PARITY.windows_verdict_problems(workflow), [])
-        # Two ways to pass: the reduced tier (TSK-1242) and a reused or full run.
-        self.assertEqual(windows['windows-verdict'].count('exit 0'), 2)
+        # One way to fail and none to leave early with a pass: it passes only
+        # when the computed list of errors is empty (TSK-1321).
+        self.assertEqual(windows['windows-verdict'].count('sys.exit('), 1)
+        self.assertEqual(windows['windows-verdict'].count('sys.exit(1)'), 1)
         self.assertEqual([check for check in checks if 'windows' in check], ['windows'])
 
     def test_an_extra_way_for_the_windows_verdict_to_pass_is_refused(self):
         workflow = read('.github/workflows/codeflow-ci.yml')
-        guard = '          if [ "$CHECKS" != success ] || [ "$BUILD" != success ]'
+        guard = '          if errors:\n'
         self.assertEqual(workflow.count(guard), 1)
         controls = {
-            'an inserted exit 0': workflow.replace(guard, '          if [ "$TESTS" = failure ]; then\n'
-                                                          '            exit 0\n          fi\n' + guard),
-            'reuse without skipped jobs': workflow.replace(
-                '[ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = '
-                '"skipped skipped skipped skipped skipped" ]', '[ "$REUSE" = success ]'),
-            'a dropped job result': workflow.replace(' || [ "$RELEASE" != success ]', ''),
+            'an inserted exit 0': workflow.replace(guard, '          if result("windows-tests") == "failure":\n'
+                                                          '              sys.exit(0)\n' + guard),
+            'reuse without a named run': workflow.replace(
+                'mode = "reuse" if result("reuse") == "success" and re.fullmatch(r"[0-9]+", reused) else "full"',
+                'mode = "reuse" if result("reuse") == "success" else "full"'),
+            'a dropped job result': workflow.replace(
+                'jobs = sorted(job for job in needs if job != "reuse")',
+                'jobs = sorted(job for job in needs if job not in ("reuse", "windows-release-journey"))'),
+            'a pass with no job run': workflow.replace(
+                'if mode == "full" and all(result(job) == "skipped" for job in jobs):',
+                'if False:'),
             'continue-on-error': workflow.replace('    name: windows\n', '    name: windows\n    continue-on-error: true\n'),
         }
         for label, changed in controls.items():
@@ -222,13 +225,13 @@ class GateContracts(unittest.TestCase):
         self.assertIn('    permissions:\n      contents: read\n      actions: read\n      pull-requests: read\n', reuse)
         self.assertNotIn(': write', workflow)
         self.assertIn('python3 -I scripts/ci-reuse.py', reuse)
-        for key in ('gates', 'windows', 'windows-release-journey'):
+        self.assertIn("    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (", jobs['gates'])
+        self.assertIn('    needs: [reuse, gates-build]\n', jobs['gates'])
+        # TSK-1321: the coverage and Windows jobs follow the reuse decision.
+        for key in ('gates-coverage', 'windows-build', 'windows', 'windows-release-journey'):
             with self.subTest(job=key):
                 self.assertIn("    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (", jobs[key])
-                self.assertIn('    needs: [reuse, gates-build]\n' if key == 'gates' else '    needs: reuse\n', jobs[key])
-        # TSK-1242: the build also follows the tier, and still follows the reuse decision.
-        self.assertIn("    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (", jobs['windows-build'])
-        self.assertIn('    needs: [reuse, windows-tier]\n', jobs['windows-build'])
+                self.assertIn('    needs: reuse\n', jobs[key])
         self.assertIn("needs.windows-build.result == 'success'", jobs['windows-tests'])
         self.assertIn("needs.windows-tests.result != 'skipped'", jobs['windows-journeys'])
 
@@ -303,7 +306,8 @@ class GateContracts(unittest.TestCase):
         self.assertIn("        if: github.event_name == 'pull_request_target'\n", step)
         self.assertIn('python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER"', step)
         self.assertIn('          PR_NUMBER: ${{ github.event.pull_request.number }}\n', step)
-        self.assertIn('--workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows', step)
+        self.assertIn('workflow=.github/workflows/codeflow-ci.yml\n          set -- --require "codeflow gates" --require windows\n', step)
+        self.assertIn('--workflow "$workflow" "$@" --wait "$wait"', step)
         self.assertIn('          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n', step)
         self.assertIn('          if [ "$DRAFT" = true ]; then wait=0; fi\n', step)
         wait = int(re.search(r'^          wait=(\d+)$', step, re.M).group(1))
@@ -596,6 +600,20 @@ class GateContracts(unittest.TestCase):
         self.assertNotIn('default-filter', profiles['essential'])
         for name in ('read-benchmark', 'prose-exhaustive'):
             self.assertEqual(set(targets[name]['modes']), {'full'})
+
+    def test_only_the_hosted_windows_profile_bounds_a_test(self):
+        # TSK-1321 AC-6: the per-test bound is for the hosted Windows partitions
+        # only; the local gates' slow tests keep running while active (TSK-1278).
+        profiles = tomllib.loads(read('.config/nextest.toml'))['profile']
+        hosted = profiles['windows-hosted']
+        self.assertEqual(hosted['slow-timeout'], {'period': '120s', 'terminate-after': 6})
+        self.assertNotIn('slow-timeout', profiles['codeflow'])
+        self.assertNotIn('slow-timeout', profiles['essential'])
+        self.assertEqual(hosted['overrides'], profiles['codeflow']['overrides'])
+        self.assertFalse(hosted['fail-fast'])
+        self.assertEqual(hosted['junit']['path'], 'junit.xml')
+        self.assertNotIn('default-filter', hosted)
+        self.assertNotIn('inherits', hosted)
 
     def test_own_config_publishes_the_producer_graph_and_quality_floors(self):
         cfg = json.loads(read('.codeflow/test-config.json'))
@@ -958,6 +976,41 @@ class TestCollection(unittest.TestCase):
             with self.subTest(source=source[:40]):
                 self.assertEqual(self.problems(source), [])
                 self.assertGreater(probe_count(source), 0)
+
+
+class LinePullRequestConcurrencyTests(unittest.TestCase):
+    """A same-head event must not cancel a running line pull request run: its
+    verdict would be lost, and `commit standards` needs that verdict."""
+
+    def run_of(self, action, attempt='1', run_id='7'):
+        workflow = read('.github/workflows/codeflow-line-pr.yml')
+        context = {'github.workflow': 'codeflow-line-pr', 'github.event_name': 'pull_request',
+                   'github.event.action': action, 'github.event.pull_request.number': '620',
+                   'github.run_id': run_id, 'github.run_attempt': attempt}
+        group = re.search(r'^  group: \$\{\{ (.+) \}\}$', workflow, re.M).group(1)
+        cancel = re.search(r'^  cancel-in-progress: \$\{\{ (.+) \}\}$', workflow, re.M).group(1)
+        return github_expression(group, context), github_expression(cancel, context)
+
+    def test_a_same_head_event_shares_the_group_and_cancels_nothing(self):
+        new_commit_group, _ = self.run_of('synchronize')
+        for action in ('opened', 'reopened', 'ready_for_review'):
+            with self.subTest(action):
+                group, cancels = self.run_of(action)
+                self.assertEqual(group, new_commit_group)
+                self.assertFalse(cancels)
+
+    def test_a_new_commit_cancels_the_older_run_of_that_pull_request(self):
+        group, cancels = self.run_of('synchronize')
+        self.assertEqual(group, 'codeflow-line-pr-pr-620')
+        self.assertTrue(cancels)
+
+    def test_a_rerun_has_its_own_group_and_cancels_nothing(self):
+        group, cancels = self.run_of('synchronize', attempt='2')
+        self.assertEqual(group, 'codeflow-line-pr-rerun-7-2')
+        self.assertFalse(cancels)
+
+    def test_queue_stays_unset_beside_a_cancel(self):
+        self.assertNotIn('queue:', PARITY.concurrency_block(read('.github/workflows/codeflow-line-pr.yml')))
 
 
 if __name__ == '__main__':

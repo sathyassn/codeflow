@@ -1,8 +1,11 @@
-# Daily full Windows coverage of main and each active integration line, as
-# scripts/windows-daily.py defines active. A daily result is never merge evidence.
-# With the reduced tier on (codeflow-ci.yml), the twelve partitions leave line pull
-# requests, and this run and the line pushes cover them. A line this run leaves out
-# has only its pushes: it has no daily evidence, and the verdict says so.
+# Daily runs of the full Linux and Windows suites (the Linux build and gates parts,
+# the Linux coverage shards and every Windows job) of main and each active
+# integration line, as scripts/windows-daily.py defines active (ADR-0097). A daily
+# result is never merge evidence. Pull requests into a line run only the short
+# checks (codeflow-ci.yml), so the Linux coverage shards and every Windows job
+# leave them, and this run and the line pushes cover them. A line this run leaves
+# out has only its pushes: it has no daily evidence or coverage, and the verdict
+# says so.
 #
 # This workflow starts the runs and runs no line code. Caches are scoped by the ref a
 # run is under, so each line's run is started at that line's own ref, never as a job

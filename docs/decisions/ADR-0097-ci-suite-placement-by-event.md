@@ -213,3 +213,13 @@ operator's decision of 15:34: Windows leaves line pushes. The Decision, the
 table, the Consequences and the history now say so. This record moved from
 PR 631 to the records pull request into `main` so the placement reaches
 `main` ahead of the line.
+
+## Note, 2026-11-06, line pushes
+
+A line push starts `codeflow-line-push.yml`, because a job in `codeflow-ci.yml`
+whose `if:` is false would leave a `windows` row at the line's tip, which is
+also the head of the pull request into `main`. Where the Consequences above
+describe a line push running Windows today, that ends when TSK-1321 lands.
+Until TSK-1026 lands, a line push runs every Linux job and a pull request into
+`main` runs full Linux too. The operator applies the `integration/**` ruleset
+change in two steps.

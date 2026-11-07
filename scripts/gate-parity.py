@@ -85,29 +85,18 @@ def local_rust_commands(cfg: dict, notes: list[str] | None = None) -> set[str]:
 
 # TSK-203: the Windows suite runs in nextest partitions. TSK-265: one job
 # builds the suite into a nextest archive and each partition runs that
-# archive with the filterset scripts/windows-partitions.py gives it from
-# measured durations and the archive's test list (TSK-1063: the list places
-# binaries the data does not know). The archived run stands for the whole suite only when
-# the archive is built from the whole workspace with the same profile, and
-# the matrix runs every partition from 1 to the plan's count exactly once.
-# The plan itself gives every test exactly one partition, and the Windows
-# journeys job checks each run's results against the archive's test list.
-# TSK-1242: the reduced tier's journey run is a named subset, never the suite,
-# so it is pinned by TIER_JOURNEYS_JOB and owes no local parity.
+# archive. TSK-1321: each runs `--partition hash:<n>/<count>`, which gives
+# every test exactly one partition by the hash of its name, under the
+# windows-hosted profile, which adds the per-test bound to the codeflow
+# profile's settings. The archived run stands for the whole suite only when the
+# archive is built from the whole workspace with the codeflow profile, and the
+# matrix runs every partition from 1 to the run's count exactly once. The
+# Windows journeys job checks each run's results against the archive's test
+# list (scripts/partition-check.py).
 ARCHIVE = re.compile(r"^cargo nextest archive --workspace --profile codeflow --archive-file (\S+)$")
 ARCHIVED_RUN = re.compile(
     r"^cargo nextest run --archive-file (\S+) --workspace-remap \. --extract-to \. --extract-overwrite "
-    r"--no-fail-fast --profile codeflow "
-    r'-E "\$\(python -B scripts/windows-partitions\.py filter \$\{\{ matrix\.partition \}\} '
-    r'--list "\$RUNNER_TEMP/windows-test-list/windows-tests\.json"\)"$')
-PARTITION_DATA = ROOT / "scripts" / "windows-test-times.json"
-TIER_RUN = ('cargo nextest run --workspace --no-fail-fast --profile codeflow '
-            '-E "$(python -B scripts/journey-gate.py --nextest-filter --skip-benchmark)"')
-
-
-def planned_partitions(data: Path | None = None) -> int:
-    """The partition count scripts/windows-partitions.py plans for."""
-    return int(json.loads(repository_text(data or PARTITION_DATA))["partitions"])
+    r"--no-fail-fast --profile windows-hosted --partition hash:\$\{\{ matrix\.partition \}\}/([1-9][0-9]*)$")
 
 
 def matrix_partitions(job: str) -> list[int]:
@@ -119,7 +108,7 @@ def matrix_partitions(job: str) -> list[int]:
     return [int(v) for v in values] if all(v.isdigit() for v in values) else []
 
 
-def ci_rust_job_commands(workflow: str, planned: int | None = None) -> set[str]:
+def ci_rust_job_commands(workflow: str) -> set[str]:
     """Rust verification `run:` commands inside the Windows raw referee jobs
     (every job whose id starts with `windows`). An archive build runs no
     test; the archived partitions stand for the suite they cover."""
@@ -134,15 +123,13 @@ def ci_rust_job_commands(workflow: str, planned: int | None = None) -> set[str]:
             cmd = norm(run.group(1))
             if not is_rust_verification_command(cmd) or ARCHIVE.match(cmd):
                 continue
-            if name == "windows-tier-journeys" and cmd == TIER_RUN:
-                continue
             archived = ARCHIVED_RUN.match(cmd)
             if archived:
-                count = planned_partitions() if planned is None else planned
+                count = int(archived.group(2))
                 if archived.group(1) not in archives:
                     cmd = f"{cmd} (no windows job builds the archive {archived.group(1)})"
                 elif partitions != list(range(1, count + 1)):
-                    cmd = f"{cmd} (partitions {partitions} do not cover the planned 1 to {count})"
+                    cmd = f"{cmd} (partitions {partitions} do not cover 1 to {count})"
                 else:
                     cmd = SUITE
             out.add(cmd)
@@ -224,7 +211,7 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
         if norm_job(text) != norm_job(expected):
             problems.append(
                 f"`{VERDICT}` ({name}) must be exactly the verdict job: run "
-                "`if: always()` except on a draft, need the reuse, gates and "
+                "`if: ${{ !cancelled() }}` except on a draft, need the reuse, gates and "
                 "coverage jobs, and fail unless each of them succeeded or the reuse decision named a "
                 "run and all of them were skipped; any other form could let a skipped, failed or "
                 "cancelled part read as passed. Expected:\n" + expected)
@@ -243,15 +230,15 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
 # report job adds up their coverage, applies the floor and reads the
 # journeys. Both jobs are pinned exactly, like the verdict, and are built
 # from the config: the shards run the rust-coverage command with
-# --no-report and their planned filterset after its present-web-build
-# prerequisite, the report reads the floor from the config and runs the
-# journey-gate command on the shards' results, and the matrix, the merge
-# and the partition check cover every shard scripts/coverage-test-times.json
-# plans, once. The merge's own tests (scripts/test_coverage_merge.py) and
-# the planner's (scripts/test_windows_partitions.py) cover the rest.
+# --no-report and their hash partition after its present-web-build
+# prerequisite (TSK-1321), the report reads the floor from the config and
+# runs the journey-gate command on the shards' results, and the matrix, the
+# merge and the partition check cover every one of the COVERAGE_SHARDS
+# shards, once. The merge's own tests (scripts/test_coverage_merge.py) and
+# the partition check's (scripts/test_partition_check.py) cover the rest.
 COVERAGE_TARGETS = ("rust-coverage", "journey-gate")
-SHARD_DATA = ROOT / "scripts" / "coverage-test-times.json"
-SHARD_FILTER = '-E "$(python3 -B scripts/coverage-shards.py filter ${{ matrix.shard }})"'
+COVERAGE_SHARDS = 3
+SHARD_FILTER = "--partition hash:${{ matrix.shard }}/@COUNT@"
 COVERAGE_CANONICAL = "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow"
 COVERAGE_JOB = """\
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (@CONDITION@) }}
@@ -320,7 +307,7 @@ COVERAGE_JOB = """\
           retention-days: 7
 """
 COVERAGE_REPORT_JOB = """\
-    if: always() && needs.gates-coverage.result != 'skipped' && (@CONDITION@)
+    if: ${{ !cancelled() && needs.gates-coverage.result != 'skipped' && (@CONDITION@) }}
     name: codeflow gates (coverage report)
     needs: gates-coverage
     runs-on: ubuntu-24.04
@@ -354,7 +341,7 @@ COVERAGE_REPORT_JOB = """\
       - name: Every test ran in exactly one shard
         if: ${{ !cancelled() }}
         shell: bash
-        run: python3 -B scripts/test_windows_partitions.py && python3 -B scripts/coverage-shards.py check --list @LISTS@ --results target/coverage/results
+        run: python3 -B scripts/test_partition_check.py && python3 -B scripts/partition-check.py check --count @COUNT@ --prefix coverage-shard --margin-minutes 24 --setup-minutes 6 --list @LISTS@ --results target/coverage/results
 """
 
 
@@ -379,8 +366,8 @@ def coverage_jobs(cfg: dict, condition: str, shards: int) -> tuple[str, str, lis
                  + " " + SHARD_FILTER)
     numbers = range(1, shards + 1)
     lists = " ".join(f"target/coverage/results/coverage-shard-{n}/tests.json" for n in numbers)
-    fill = {"@CONDITION@": condition, "@COUNT@": str(shards), "@SHARDS@": ", ".join(map(str, numbers)),
-            "@WEB_BUILD@": full.get("present-web-build", ""), "@SHARD_RUN@": shard_run,
+    fill = {"@CONDITION@": condition, "@SHARDS@": ", ".join(map(str, numbers)),
+            "@WEB_BUILD@": full.get("present-web-build", ""), "@SHARD_RUN@": shard_run, "@COUNT@": str(shards),
             "@JOURNEY@": full.get("journey-gate", ""), "@LISTS@": lists}
     jobs = []
     for template in (COVERAGE_JOB, COVERAGE_REPORT_JOB):
@@ -391,15 +378,15 @@ def coverage_jobs(cfg: dict, condition: str, shards: int) -> tuple[str, str, lis
 
 
 def coverage_job_problems(cfg: dict, jobs: dict[str, str], condition: str,
-                          data: Path | None = None) -> list[str]:
+                          count: int = COVERAGE_SHARDS) -> list[str]:
     """The shard and report jobs are exactly the pinned ones for this config
-    and plan, and nothing else in the workflow claims their names."""
-    shards, report, problems = coverage_jobs(cfg, condition, planned_partitions(data or SHARD_DATA))
+    and shard count, and nothing else in the workflow claims their names."""
+    shards, report, problems = coverage_jobs(cfg, condition, count)
     for job, expected in (("gates-coverage", shards), ("gates-coverage-report", report)):
         if norm_job(jobs.get(job, "")) != norm_job(expected):
             problems.append(f"the `{job}` job must be exactly this, built from .codeflow/test-config.json and "
-                            "scripts/coverage-test-times.json: any other form could run part of the suite, skip "
-                            "a shard or judge the floor on another number. Expected:\n" + expected)
+                            f"{count} hash shards: any other form could run part of the suite, skip a shard or "
+                            "judge the floor on another number. Expected:\n" + expected)
     return problems
 
 
@@ -454,161 +441,284 @@ REUSE_JOB = """\
 
 
 # TSK-265: the `windows` verdict, pinned exactly like `codeflow gates`: a
-# substring check would let an inserted second success path through. It
-# passes only when every Windows job succeeded, or when the reuse decision
-# named a run and every Windows job was skipped, or (TSK-1242) when the
-# reduced tier declared exactly its skips on a pull request into an integration
-# line and every job it keeps passed. Verdicts run on every event but a draft
-# pull request, which ends them neutral (TSK-449), including when gate
-# selection skips the work.
+# substring check would let an inserted second success path through.
+# TSK-1321: it is computed from the result of every job it needs: a full run
+# skips none, a reuse that names a run skips them all, and a failure names
+# each job that is not green. A pull request into an integration line starts
+# no run of this workflow, so this verdict has no "not selected" pass (see
+# LINE_WORKFLOW below).
+# scripts/test_windows_tier.py runs this step. Verdicts run on every event
+# but a draft pull request, which ends them neutral (TSK-449), including
+# when gate selection skips the work.
 WINDOWS_VERDICT = "windows"
 WINDOWS_VERDICT_JOB = """\
-    if: ${{{{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}}}
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
     name: windows
-    needs: [reuse, windows-tier, windows, windows-build, windows-tests, windows-journeys, windows-release-journey, windows-tier-journeys]
+    needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Every Windows job passed
-        shell: bash
+        shell: python3 -I {0}
         env:
-          REUSE: ${{{{ needs.reuse.result }}}}
-          REUSED: ${{{{ needs.reuse.outputs.run }}}}
-          CHECKS: ${{{{ needs.windows.result }}}}
-          BUILD: ${{{{ needs.windows-build.result }}}}
-          TESTS: ${{{{ needs.windows-tests.result }}}}
-          JOURNEYS: ${{{{ needs.windows-journeys.result }}}}
-          RELEASE: ${{{{ needs.windows-release-journey.result }}}}
-          MISSING: ${{{{ needs.windows-journeys.outputs.missing }}}}
-          TIER: ${{{{ needs.windows-tier.outputs.tier }}}}
-          TIER_JOURNEYS: ${{{{ needs.windows-tier-journeys.result }}}}
-          EVENT: ${{{{ github.event_name }}}}
-          BASE: ${{{{ github.event.pull_request.base.ref }}}}
+          NEEDS: ${{ toJSON(needs) }}
         run: |
-          if [ "$TIER" = reduced ]; then
-            if [ "$EVENT" = pull_request ] && [ "${{BASE#integration/}}" != "$BASE" ] \\
-              && [ "$BUILD $TESTS $JOURNEYS" = "skipped skipped skipped" ] \\
-              && [ "$CHECKS $RELEASE $TIER_JOURNEYS" = "success success success" ]; then
-              echo "Windows reduced tier passed at ${{GITHUB_SHA}}: the twelve test partitions were skipped by tier"
-              echo "Windows reduced tier at ${{GITHUB_SHA}}: the twelve test partitions were skipped by tier. This is not full Windows evidence; the push to the line runs them." >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            echo "::error::the reduced Windows tier accepts only the skipped build, partitions and partition journeys on a pull request into an integration line; event=${{EVENT}} base=${{BASE}} checks=${{CHECKS}} build=${{BUILD}} tests=${{TESTS}} journeys=${{JOURNEYS}} release journey=${{RELEASE}} tier journeys=${{TIER_JOURNEYS}}"
-            exit 1
-          fi
-          if [ "$TIER_JOURNEYS" != skipped ]; then
-            echo "::error::the reduced tier's journey job concluded ${{TIER_JOURNEYS}} outside the reduced tier"
-            exit 1
-          fi
-          if [ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ] \\
-            && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
-            echo "Windows passed on pull request run ${{GITHUB_SERVER_URL}}/${{GITHUB_REPOSITORY}}/actions/runs/${{REUSED}}, which tested this exact tree"
-            exit 0
-          fi
-          if [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ]; then
-            echo "::error::the Windows gates did not run; bases outside main, master or integration/** cannot supply a passing verdict"
-            exit 1
-          fi
-          if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then
-            if [ -n "$MISSING" ]; then
-              echo "::error::Windows test partition(s) ${{MISSING}} ended without a report (a timeout or a cancellation); their tests did not finish, none is known to have failed"
-            fi
-            echo "::error::Windows concluded checks=${{CHECKS}} build=${{BUILD}} tests=${{TESTS}} journeys=${{JOURNEYS}} release journey=${{RELEASE}}; see the windows jobs"
-            exit 1
-          fi
-          echo "every Windows job passed"
+          import json, os, re, sys
+          needs = json.loads(os.environ["NEEDS"])
+          sha = os.environ["GITHUB_SHA"]
+          names = {"windows": "windows checks", "windows-build": "windows test build",
+                   "windows-tests": "windows tests", "windows-journeys": "windows journeys",
+                   "windows-release-journey": "windows release journey"}
+          def result(job): return needs.get(job, {}).get("result", "missing")
+          def output(job, key): return (needs.get(job, {}).get("outputs") or {}).get(key, "")
+          reused = output("reuse", "run")
+          jobs = sorted(job for job in needs if job != "reuse")
+          errors = []
+          mode = "reuse" if result("reuse") == "success" and re.fullmatch(r"[0-9]+", reused) else "full"
+          if mode == "full" and all(result(job) == "skipped" for job in jobs):
+              errors.append("the Windows gates did not run; bases outside main or master cannot supply a "
+                            "passing verdict")
+          else:
+              want = "skipped" if mode == "reuse" else "success"
+              for job in jobs:
+                  if result(job) != want:
+                      declared = "a reused run skips it" if mode == "reuse" else "a full run needs it"
+                      errors.append(f"{names.get(job, job)} concluded {result(job)}; {declared}")
+          missing = output("windows-journeys", "missing")
+          if missing:
+              errors.append(f"Windows test partition(s) {missing} ended without a report (a timeout or a "
+                            "cancellation); their tests did not finish, none is known to have failed")
+          if errors:
+              for line in errors:
+                  print(f"::error::{line}")
+              sys.exit(1)
+          url = f"{os.environ.get('GITHUB_SERVER_URL', '')}/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{reused}"
+          line = {"reuse": f"Windows passed on pull request run {url}, which tested this exact tree",
+                  "full": f"every Windows job passed at {sha}"}[mode]
+          print(line)
+          with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as summary:
+              print(line, file=summary)
 """
 
 
-# TSK-1242: the switch is the one value of this job that may differ, off or on.
-# A pull request into an integration line takes the reduced tier only when it
-# is on; any other value, base or event takes the full tier.
-TIER_SWITCH = re.compile(r'^( {10}REDUCED_TIER: )"(?:on|off)"$', re.M)
-WINDOWS_TIER_JOB = """\
-    if: github.event_name == 'pull_request'
-    name: windows tier
+# Where a pull request into an integration line runs (TSK-1321, ADR-0097, the
+# operator's decision of 2026-11-05). GitHub counts a skipped required check
+# as a success, and a job whose `if:` is false still leaves a skipped row
+# under its name, so a required name must not be in any workflow such a pull
+# request starts. codeflow-ci.yml therefore does not start for one: its
+# trigger ignores integration/**, so any other base, including one nobody
+# planned for, takes the full run. codeflow-line-pr.yml starts instead, runs
+# the short checks and reports the literal line name `codeflow gates (line)`,
+# which no ruleset on main requires, so a retargeted pull request has no green
+# result of a required name to carry. Its build, gate parts, secret scan,
+# canary and security review are codeflow-ci.yml's jobs, held equal here.
+#
+# A push to a line runs the full Linux suites and no Windows job (the operator's
+# decision of 2026-11-06). The `windows` job of codeflow-ci.yml would leave a
+# row at the line's tip, which is also the head of the pull request into main,
+# so codeflow-ci.yml does not start for a line push either.
+# codeflow-line-push.yml starts instead. Its `codeflow gates` runs on every push
+# and passes only when every Linux job passed; it has no job named `windows`.
+LINE_WORKFLOW = ROOT / ".github" / "workflows" / "codeflow-line-pr.yml"
+LINE_PUSH_WORKFLOW = ROOT / ".github" / "workflows" / "codeflow-line-push.yml"
+CI_PULL_REQUEST_TRIGGER = """\
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches-ignore: ["integration/**"]
+"""
+CI_PUSH_TRIGGER = """\
+  push:
+    branches: [main, master]
+"""
+LINE_TRIGGER = """\
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: ["integration/**"]
+
+"""
+LINE_VERDICT = "codeflow gates (line)"
+LINE_JOB_NAMES = {"provenance": "record the tested merge (${{ matrix.artifact }})",
+                  "gates-build": "codeflow build", "gates": "codeflow gates (${{ matrix.part }})",
+                  "gates-line-verdict": LINE_VERDICT, "secret-scan": "secret scan",
+                  "gitleaks-canary": "gitleaks allowlist canary", "security-review": "security review"}
+# The jobs copied whole, and the two whose `if:` and `needs:` leave out the
+# reuse decision and the bases, which a line pull request has no need of.
+LINE_COPIED_JOBS = ("secret-scan", "gitleaks-canary", "security-review")
+LINE_GATE_JOBS = ("gates-build", "gates")
+# A line pull request records its tested merge, so a line push can reuse its
+# short checks (TSK-1026 AC-7). Only the Ubuntu record: no Windows job runs here.
+LINE_PROVENANCE_DROPPED = ("          - artifact: ci-provenance-windows", "            runner: windows-latest",
+                           "            python: python")
+LINE_GATES_IF = "${{ !cancelled() && !github.event.pull_request.draft }}"
+# One group per pull request. Only a new commit cancels, so a same-head event
+# such as ready_for_review never cancels a running run, and a rerun has its own
+# group. `queue` stays unset: GitHub refuses `queue: max` beside a cancel.
+LINE_CONCURRENCY = """\
+concurrency:
+  group: ${{ github.run_attempt == 1 && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-rerun-{1}-{2}', github.workflow, github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' && github.run_attempt == 1 }}"""
+LINE_VERDICT_JOB = """\
+    if: ${{ !cancelled() && !github.event.pull_request.draft }}
+    name: codeflow gates (line)
+    needs: [gates-build, gates]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    outputs:
-      tier: ${{ steps.tier.outputs.tier }}
     steps:
-      - name: Choose the Windows tier
-        id: tier
+      - name: Every short check passed
         shell: bash
         env:
-          REDUCED_TIER: "off"
-          BASE: ${{ github.event.pull_request.base.ref }}
+          BUILD: ${{ needs.gates-build.result }}
+          PARTS: ${{ needs.gates.result }}
         run: |
-          tier=full
-          if [ "$REDUCED_TIER" = on ]; then
-            case "$BASE" in
-              integration/*) tier=reduced ;;
-            esac
+          if [ "$BUILD" != success ] || [ "$PARTS" != success ]; then
+            echo "::error::the short checks concluded build=${BUILD} parts=${PARTS}; see the codeflow gates jobs"
+            exit 1
           fi
-          echo "tier=$tier" >> "$GITHUB_OUTPUT"
-          echo "Windows tier: $tier (reduced tier switch: $REDUCED_TIER, base: $BASE)"
+          line="the short checks passed at ${GITHUB_SHA}. This is not full gate evidence; the push to the line runs the full Linux suites, and the pull request into main runs Windows."
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
 """
-TIER_JOURNEYS_JOB = f"""\
-    if: ${{{{ !cancelled() && needs.windows-tier.outputs.tier == 'reduced' && !github.event.pull_request.draft }}}}
-    name: windows tier journeys
-    needs: windows-tier
-    runs-on: windows-latest
-    timeout-minutes: 45
+
+
+LINE_PUSH_TRIGGER = """\
+on:
+  push:
+    branches: ["integration/**"]
+
+"""
+LINE_PUSH_JOB_NAMES = {"gates-build": "codeflow build", "gates": "codeflow gates (${{ matrix.part }})",
+                       "gates-coverage": "codeflow gates (coverage ${{ matrix.shard }} of 3)",
+                       "gates-coverage-report": "codeflow gates (coverage report)",
+                       "gates-verdict": "codeflow gates", "secret-scan": "secret scan",
+                       "gitleaks-canary": "gitleaks allowlist canary", "security-review": "security review"}
+# Each gate job's `if:` and `needs:` on a line push: no reuse decision, no bases.
+LINE_PUSH_GATE_JOBS = {
+    "gates-build": ("${{ !cancelled() }}", None),
+    "gates": ("${{ !cancelled() }}", "gates-build"),
+    "gates-coverage": ("${{ !cancelled() }}", None),
+    "gates-coverage-report": ("${{ !cancelled() && needs.gates-coverage.result != 'skipped' }}", "gates-coverage"),
+}
+LINE_PUSH_VERDICT_JOB = """\
+    if: ${{ !cancelled() }}
+    name: codeflow gates
+    needs: [gates-build, gates, gates-coverage, gates-coverage-report]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - name: Install the differential shells
-        id: shells
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
-        with:
-          msystem: MSYS
-          install: bash zsh dash
-      - name: Select the differential shell directory
-        shell: pwsh
+      - name: Every Linux job passed
+        shell: bash
         env:
-          MSYS2_LOCATION: ${{{{ steps.shells.outputs.msys2-location }}}}
-        run: Add-Content -Path $env:GITHUB_ENV -Value "CODEFLOW_DIFFERENTIAL_SHELL_DIR=$env:MSYS2_LOCATION\\usr\\bin"
-      - name: Install Rust (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: windows-tests
-          cache-on-failure: true
-      - name: Install nextest
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
-        with:
-          tool: cargo-nextest@0.9.129
-      - name: Begin journey check
-        shell: bash
+          BUILD: ${{ needs.gates-build.result }}
+          PARTS: ${{ needs.gates.result }}
+          SHARDS: ${{ needs.gates-coverage.result }}
+          REPORT: ${{ needs.gates-coverage-report.result }}
         run: |
-          rm -rf target/nextest/codeflow
-          echo "CODEFLOW_GATE_STARTED_AT=$(python -c 'import time; print(time.time())')" >> "$GITHUB_ENV"
-      - name: Run every supported Windows journey test
-        shell: bash
-        run: {TIER_RUN}
-      - name: journey gate
-        shell: bash
-        run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/codeflow/junit.xml --skip-benchmark --part results
+          if [ "$BUILD $PARTS $SHARDS $REPORT" != "success success success success" ]; then
+            echo "::error::the Linux gate concluded build=${BUILD} parts=${PARTS} coverage shards=${SHARDS} coverage report=${REPORT}; see the codeflow gates jobs"
+            exit 1
+          fi
+          line="the full Linux gate passed at ${GITHUB_SHA}. Windows runs on the pull request into main and on the daily run."
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
 """
-BUILD_TIER_CLAUSE = "!cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == ''"
 
 
-def windows_tier_problems(workflow: str) -> list[str]:
-    """The tier job, its journey job and the one job that declares the skip are
-    exactly the pinned forms, so no other job can leave the full tier."""
-    jobs = workflow_jobs(workflow)
+def job_body(text: str) -> list[str]:
+    """A job's lines apart from its `if:` and `needs:`."""
+    return [line for line in norm_job(text) if not line.startswith(("    if:", "    needs:"))]
+
+
+def line_placement_problems(workflow: str, line: str | None) -> list[str]:
+    """A line pull request starts the line workflow and not this one, and the
+    line workflow publishes only its literal names, with this one's jobs."""
     problems = []
-    tier = TIER_SWITCH.sub(r'\1"off"', jobs.get("windows-tier", ""))
-    if norm_job(tier) != norm_job(WINDOWS_TIER_JOB):
-        problems.append("`windows-tier` must be exactly this, with its switch off or on:\n" + WINDOWS_TIER_JOB)
-    if norm_job(jobs.get("windows-tier-journeys", "")) != norm_job(TIER_JOURNEYS_JOB):
-        problems.append("`windows-tier-journeys` must be exactly this:\n" + TIER_JOURNEYS_JOB)
-    build = jobs.get("windows-build", "")
-    if BUILD_TIER_CLAUSE not in build or "    needs: [reuse, windows-tier]\n" not in build:
-        problems.append(f"`windows-build` must need [reuse, windows-tier] and run under `{BUILD_TIER_CLAUSE}`")
-    others = [name for name, text in jobs.items() if "needs.windows-tier.outputs.tier" in text
-              and name not in ("windows-build", "windows-tier-journeys", "windows-verdict")]
-    if others:
-        problems.append(f"only windows-build may leave the full tier; these jobs also read the tier: {others}")
+    if CI_PULL_REQUEST_TRIGGER not in workflow:
+        problems.append("codeflow-ci.yml must not start for a pull request into an integration line; its trigger "
+                        "must be exactly:\n" + CI_PULL_REQUEST_TRIGGER)
+    if "windows-tier" in workflow_jobs(workflow) or "REDUCED_TIER" in workflow:
+        problems.append("codeflow-ci.yml has no tier: a required check must never pass with its suite not selected")
+    if line is None:
+        return [*problems, "codeflow-line-pr.yml is missing: a pull request into an integration line would run nothing"]
+    if LINE_TRIGGER not in line:
+        problems.append("codeflow-line-pr.yml must start only for a pull request into an integration line; its "
+                        "trigger must be exactly:\n" + LINE_TRIGGER)
+    if concurrency_block(line) != LINE_CONCURRENCY:
+        problems.append("codeflow-line-pr.yml's `concurrency` block must be exactly this, so a same-head event "
+                        "never cancels a running run:\n" + LINE_CONCURRENCY)
+    jobs, full = workflow_jobs(line), workflow_jobs(workflow)
+    names = job_names(jobs)
+    if names != LINE_JOB_NAMES:
+        problems.append(f"codeflow-line-pr.yml must publish exactly {LINE_JOB_NAMES}; it publishes {names}")
+    for job in LINE_COPIED_JOBS:
+        if norm_job(jobs.get(job, "")) != norm_job(full.get(job, "")):
+            problems.append(f"`{job}` must be the same job in codeflow-line-pr.yml and codeflow-ci.yml")
+    for job in LINE_GATE_JOBS:
+        if job_body(jobs.get(job, "")) != job_body(full.get(job, "")):
+            problems.append(f"`{job}` must be the same job in codeflow-line-pr.yml and codeflow-ci.yml, apart from "
+                            "its `if:` and `needs:`")
+        condition = re.search(r"^ {4}if:\s*(.+?)\s*$", jobs.get(job, ""), re.M)
+        if not condition or condition.group(1) != LINE_GATES_IF:
+            problems.append(f"`{job}` in codeflow-line-pr.yml must run under exactly `{LINE_GATES_IF}`")
+    wanted = [text for text in norm_job(full.get("provenance", "")) if text not in LINE_PROVENANCE_DROPPED]
+    if not wanted or norm_job(jobs.get("provenance", "")) != wanted:
+        problems.append("`provenance` in codeflow-line-pr.yml must be codeflow-ci.yml's job with only its Ubuntu "
+                        "record, so a line pull request records its tested merge")
+    if norm_job(jobs.get("gates-line-verdict", "")) != norm_job(LINE_VERDICT_JOB):
+        problems.append(f"`{LINE_VERDICT}` must be exactly this, so it passes only when the build and every part "
+                        "passed:\n" + LINE_VERDICT_JOB)
+    return problems
+
+
+def concurrency_block(workflow: str) -> str:
+    found = re.search(r"(?ms)^concurrency:\n.*?(?=^\S|\Z)", workflow)
+    return found.group(0).strip() if found else ""
+
+
+def job_names(jobs: dict[str, str]) -> dict[str, str]:
+    names = {}
+    for job, text in jobs.items():
+        name = re.search(r"^ {4}name:\s*(.+?)\s*$", text, re.M)
+        names[job] = name.group(1) if name else ""
+    return names
+
+
+def line_push_problems(workflow: str, push: str | None) -> list[str]:
+    """A line push starts the line push workflow and not this one, so it leaves
+    no `windows` row, and that workflow runs this one's Linux jobs."""
+    problems = []
+    if CI_PUSH_TRIGGER not in workflow:
+        problems.append("codeflow-ci.yml must not start for a push to an integration line; its trigger must be "
+                        "exactly:\n" + CI_PUSH_TRIGGER)
+    if push is None:
+        return [*problems, "codeflow-line-push.yml is missing: a push to an integration line would run nothing"]
+    if LINE_PUSH_TRIGGER not in push:
+        problems.append("codeflow-line-push.yml must start only for a push to an integration line; its trigger "
+                        "must be exactly:\n" + LINE_PUSH_TRIGGER)
+    if concurrency_block(push) != concurrency_block(workflow):
+        problems.append("codeflow-line-push.yml must have codeflow-ci.yml's `concurrency` block, so a newer push "
+                        "to a line cancels the older push run (TSK-1313)")
+    jobs, full = workflow_jobs(push), workflow_jobs(workflow)
+    if job_names(jobs) != LINE_PUSH_JOB_NAMES:
+        problems.append(f"codeflow-line-push.yml must publish exactly {LINE_PUSH_JOB_NAMES}; it publishes "
+                        f"{job_names(jobs)}")
+    for job in LINE_COPIED_JOBS:
+        if norm_job(jobs.get(job, "")) != norm_job(full.get(job, "")):
+            problems.append(f"`{job}` must be the same job in codeflow-line-push.yml and codeflow-ci.yml")
+    for job, (condition, needs) in LINE_PUSH_GATE_JOBS.items():
+        text = jobs.get(job, "")
+        if job_body(text) != job_body(full.get(job, "")):
+            problems.append(f"`{job}` must be the same job in codeflow-line-push.yml and codeflow-ci.yml, apart "
+                            "from its `if:` and `needs:`")
+        found = re.search(r"^ {4}if:\s*(.+?)\s*$", text, re.M)
+        if not found or found.group(1) != condition:
+            problems.append(f"`{job}` in codeflow-line-push.yml must run under exactly `{condition}`")
+        wanted = re.search(r"^ {4}needs:\s*(.+?)\s*$", text, re.M)
+        if (wanted.group(1) if wanted else None) != needs:
+            problems.append(f"`{job}` in codeflow-line-push.yml must have `needs: {needs}`")
+    if norm_job(jobs.get("gates-verdict", "")) != norm_job(LINE_PUSH_VERDICT_JOB):
+        problems.append("`codeflow gates` in codeflow-line-push.yml must be exactly this, so it runs on every push "
+                        "and passes only when every Linux job passed:\n" + LINE_PUSH_VERDICT_JOB)
     return problems
 
 
@@ -619,12 +729,12 @@ def windows_verdict_problems(workflow: str) -> list[str]:
                 if re.search(rf"^ {{4}}name:\s*{re.escape(WINDOWS_VERDICT)}\s*$", text, re.M)]
     if len(verdicts) != 1:
         return [f"exactly one job must be named `{WINDOWS_VERDICT}`; found {[n for n, _ in verdicts]}"]
-    expected = WINDOWS_VERDICT_JOB.format()
+    expected = WINDOWS_VERDICT_JOB
     name, text = verdicts[0]
     if norm_job(text) != norm_job(expected):
         return [f"`{WINDOWS_VERDICT}` ({name}) must be exactly the Windows verdict job: it passes only when every "
-                "Windows job succeeded, or when the reuse decision named a run and every Windows job was skipped; "
-                "any other form could let a skipped, failed or cancelled job read as passed. Expected:\n" + expected]
+                "Windows job succeeded, or a reuse named a run and every job was skipped; any other form could let "
+                "a skipped, failed or cancelled job read as passed. Expected:\n" + expected]
     return []
 
 
@@ -665,9 +775,11 @@ def reuse_job_problems(jobs: dict[str, str]) -> list[str]:
 # condition, a forgiven exit or `continue-on-error` through (TSK-203 review),
 # so the job must match this text exactly, apart from blank lines, comments
 # and trailing spaces. Every event but a draft pull request must receive a
-# verdict; a draft's verdicts are skipped, which is neutral (TSK-449).
+# verdict; a draft's verdicts are skipped, which is neutral (TSK-449). A pull
+# request into an integration line starts no run of this workflow, so this
+# verdict has no "not selected" pass (see LINE_WORKFLOW above).
 VERDICT_JOB = """\
-    if: ${{{{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}}}
+    if: ${{{{ !cancelled() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}}}
     name: codeflow gates
     needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
@@ -688,7 +800,7 @@ VERDICT_JOB = """\
             exit 0
           fi
           if [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]; then
-            echo "::error::the Linux gates did not run; bases outside main, master or integration/** cannot supply a passing verdict"
+            echo "::error::the Linux gates did not run; bases outside main or master cannot supply a passing verdict"
             exit 1
           fi
           if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || [ "$REPORT" != success ]; then
@@ -1456,7 +1568,9 @@ def main() -> int:
     pins = (node_pin_problems(cfg, workflow) + gate_binary_problems(cfg)
             + gate_part_problems(cfg, workflow) + shared_install_problems(cfg)
             + all_timeout_problems() + all_pin_problems() + dist_problems() + playwright_problems(workflow)
-            + windows_verdict_problems(workflow) + windows_tier_problems(workflow))
+            + windows_verdict_problems(workflow)
+            + line_placement_problems(workflow, repository_text(LINE_WORKFLOW) if LINE_WORKFLOW.exists() else None)
+            + line_push_problems(workflow, repository_text(LINE_PUSH_WORKFLOW) if LINE_PUSH_WORKFLOW.exists() else None))
     for problem in pins:
         print(f"GATE PARITY DRIFT: {problem}", file=sys.stderr)
     status = rust_parity()

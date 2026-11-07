@@ -176,9 +176,16 @@ def line_of(ref: str) -> str:
     return ref[len("refs/heads/"):]
 
 
+# How a verdict job's `if:` opens. It runs unless the run was cancelled, and is
+# neutral on a draft. A gate job opens `!cancelled() && needs.reuse...` and a
+# report job `!cancelled() && needs.<job>...`, so neither matches. `always()` is
+# the form before TSK-1321, which a line not yet synced still has.
+VERDICT_IF = r"\$\{\{\s*(?:always\(\)|!cancelled\(\)\s*&&\s*!\()"
+
+
 def verdict_jobs(workflow_text: str) -> set[str]:
-    """The names of the jobs the pushed workflow runs `always()`: its verdict
-    jobs, which carry the reuse contract, so a verdict added later joins it."""
+    """The names of the pushed workflow's verdict jobs (VERDICT_IF), which carry
+    the reuse contract, so a verdict added later joins it."""
     names: set[str] = set()
     in_jobs, name, always = False, None, False
 
@@ -198,7 +205,7 @@ def verdict_jobs(workflow_text: str) -> set[str]:
             name, always = None, False
         elif (found := re.match(r"^    name:\s*(.+?)\s*$", line)):
             name = found.group(1).strip("\"'")
-        elif re.match(r"^    if:\s*\$\{\{\s*always\(\)", line):
+        elif re.match(r"^    if:\s*" + VERDICT_IF, line):
             always = True
     close()
     return names
@@ -208,7 +215,7 @@ def reused_jobs(workflow_text: str) -> list[re.Pattern[str]]:
     """Full-match patterns for the display names of the jobs the push skips
     when it reuses a verdict, read from the pushed workflow: a job whose
     `if:` reads the reuse output, and any job that needs one of those,
-    apart from the verdict jobs (`if: ${{ always()`, which run on the push
+    apart from the verdict jobs (VERDICT_IF), which run on the push
     too). Counting a job in when unsure only adds a comparison. A `${{ }}` part of a name (a
     matrix value) matches any text."""
     jobs: dict[str, dict] = {}
@@ -234,7 +241,7 @@ def reused_jobs(workflow_text: str) -> list[re.Pattern[str]]:
     while grew:
         grew = False
         for key, job in jobs.items():
-            if key not in reused and job["needs"] & reused and not re.match(r"\$\{\{\s*always\(\)", job["if"]):
+            if key not in reused and job["needs"] & reused and not re.match(VERDICT_IF, job["if"]):
                 reused.add(key)
                 grew = True
     patterns = []

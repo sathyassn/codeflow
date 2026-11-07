@@ -1,11 +1,13 @@
-# This workflow runs all Windows jobs for one line, in a run under that line's own
-# ref. windows-daily.yml starts it with workflow_dispatch at the line's ref, so
+# This workflow runs the full Linux and Windows suites for one line: the Linux
+# build and gates parts, the Linux coverage shards with their report and every
+# Windows job, in a run under that line's own ref, at the one commit the
+# dispatcher resolved. windows-daily.yml starts it with workflow_dispatch at the line's ref, so
 # GitHub runs the line's copy of this file at the line's tip, and anything the run
 # can write to a cache goes to the line's scope, never main's.
 # The run gives no verdict: windows-daily-verdict.yml, on main, judges it from what
 # GitHub records and credits it only when this file is byte-identical to main's.
 # Keep the test commands in parity with codeflow-ci.yml; test_windows_daily.py
-# compares them.
+# compares them. A daily coverage result is never merge evidence (TSK-1321).
 name: daily Windows source
 
 on:
@@ -68,13 +70,6 @@ jobs:
           cargo nextest list --archive-file target/windows-tests.tar.zst --workspace-remap . --profile codeflow --message-format json > target/windows-tests.json
           printf '%s\n' "$GITHUB_WORKSPACE" > target/windows-workspace.txt
 
-      # Fails before any partition starts when the measurements no longer
-      # cover the suite, or the plan for this exact list puts a partition
-      # past the margin; the message names the refresh command.
-      - name: The partition plan still fits the suite
-        shell: bash
-        run: python -B scripts/windows-partitions.py drift --list target/windows-tests.json
-
       - name: Keep the archive for the partitions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -95,14 +90,14 @@ jobs:
           retention-days: 7
 
   windows-tests:
-    name: windows tests (${{ matrix.partition }} of 12)
+    name: windows tests (${{ matrix.partition }} of 16)
     needs: windows-build
     runs-on: windows-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - name: Check out this run's commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -154,17 +149,17 @@ jobs:
           fi
 
       # Extracting into the checkout puts every binary at the path the build
-      # compiled in, and the report at target/nextest/codeflow/junit.xml.
+      # compiled in, and the report at target/nextest/windows-hosted/junit.xml.
       - name: cargo nextest run (one partition, from the archive)
         shell: bash
-        run: cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite --no-fail-fast --profile codeflow -E "$(python -B scripts/windows-partitions.py filter ${{ matrix.partition }} --list "$RUNNER_TEMP/windows-test-list/windows-tests.json")"
+        run: cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite --no-fail-fast --profile windows-hosted --partition hash:${{ matrix.partition }}/16
 
       - name: Keep this partition's results for the journey gate
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: daily-windows-junit-${{ matrix.partition }}
-          path: target/nextest/codeflow/junit.xml
+          path: target/nextest/windows-hosted/junit.xml
           if-no-files-found: ignore
           retention-days: 7
 
@@ -273,20 +268,259 @@ jobs:
       # here, so the steps below do not read the gap as renamed journeys or
       # failing tests; they run only when every report exists. When one
       # report survives, download-artifact writes it without its numbered
-      # directory, so the script numbers it by the tests the plan gives it.
+      # directory, so the script numbers it by the hash of its tests.
       - name: Every partition wrote its report
         id: reports
         shell: bash
-        run: python -B scripts/windows-partitions.py reports --results target/nextest/partitions --list target/nextest/list/windows-tests.json
+        run: python -B scripts/partition-check.py reports --count 16 --prefix windows-junit --results target/nextest/partitions
 
       - name: journey gate
         shell: bash
         run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/partitions --skip-benchmark --part results
 
-      # Fails when a listed test ran in no partition, in two, or outside the
-      # partition the plan gives it, or a partition's time passes the margin,
-      # and prints each partition's test time against its plan.
+      # Fails when a listed test ran in no partition, in two, outside the
+      # partition its hash gives it, or without being listed, or when a
+      # partition's test minutes plus 2 of setup pass the 24 minute margin
+      # (TSK-1063), and prints each partition's test minutes and the slowest
+      # test.
       - name: Every test ran in exactly one partition
         if: ${{ !cancelled() && steps.reports.outcome == 'success' }}
         shell: bash
-        run: python scripts/test_windows_partitions.py && python scripts/windows-partitions.py check --list target/nextest/list/windows-tests.json --results target/nextest/partitions
+        run: python scripts/test_partition_check.py && python scripts/partition-check.py check --count 16 --prefix windows-junit --margin-minutes 24 --setup-minutes 2 --list target/nextest/list/windows-tests.json --results target/nextest/partitions
+
+  # The Linux coverage shards and their report, with the commands of the jobs of
+  # the same ids in codeflow-ci.yml (test_windows_daily.py compares them), at
+  # this run's one commit (operator decisions of 2026-11-02, card 2, and
+  # 2026-11-05). The report job fails under the line floor, and the reader on
+  # main fails the line then too. Caches are restored, never saved.
+  gates-coverage:
+    name: linux coverage (${{ matrix.shard }} of 3)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - name: Check out this run's commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Report and verify the tested commit
+        shell: bash
+        run: python3 -I -B scripts/windows-daily.py identity --ref "$GITHUB_REF" --sha "$TESTED_SHA"
+      - name: Install the differential shells
+        run: sudo apt-get update && sudo apt-get install -y bash zsh dash
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: coverage-gates
+          save-if: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 26.4.0
+          # No cache: setup-node cannot restore without saving.
+          package-manager-cache: false
+      - name: Install exact npm for the owned presentation renderer
+        run: npm install --global npm@11.17.0
+      - name: Install nextest and llvm-cov
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest@0.9.129,cargo-llvm-cov@0.8.4
+      - name: present-web-build
+        shell: bash
+        run: python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version "npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web"
+      - name: Remove old coverage profiles
+        run: cargo llvm-cov clean --workspace
+      - name: cargo llvm-cov nextest (one shard)
+        shell: bash
+        env:
+          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
+        run: cargo llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow --partition hash:${{ matrix.shard }}/3
+      - name: Export this shard's coverage and list its tests
+        shell: bash
+        run: |
+          mkdir -p target/coverage-data
+          cargo llvm-cov report --json --output-path target/coverage-data/coverage.json
+          eval "$(cargo llvm-cov show-env --sh)"
+          CARGO_TARGET_DIR=target/llvm-cov-target cargo nextest list --workspace --profile codeflow --message-format json > target/nextest/codeflow/tests.json
+      - name: Keep this shard's coverage for the report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-data-${{ matrix.shard }}
+          path: target/coverage-data/coverage.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Keep this shard's results for the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          path: |
+            target/nextest/codeflow/junit.xml
+            target/nextest/codeflow/tests.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # The report's last step records the total and the commit for the daily
+  # verdict, which reports them; it runs when the floor fails too.
+  gates-coverage-report:
+    if: ${{ always() && needs.gates-coverage.result != 'skipped' }}
+    name: linux coverage report
+    needs: gates-coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out this run's commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Report and verify the tested commit
+        shell: bash
+        run: python3 -I -B scripts/windows-daily.py identity --ref "$GITHUB_REF" --sha "$TESTED_SHA"
+
+      - name: Begin journey check
+        shell: bash
+        run: |
+          rm -rf target/coverage
+          echo "CODEFLOW_GATE_STARTED_AT=$(python3 -c 'import time; print(time.time())')" >> "$GITHUB_ENV"
+
+      - name: Fetch every shard's coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-data-*
+          path: target/coverage/data
+
+      - name: Fetch every shard's results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-shard-*
+          path: target/coverage/results
+
+      - name: Line coverage of the whole suite
+        shell: bash
+        run: python3 -B scripts/test_coverage_merge.py && python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards 3 target/coverage/data
+
+      - name: journey gate
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CODEFLOW_GATE_RESULTS: target/coverage/results
+        run: python3 -B scripts/test_journey_gate.py && python3 -B scripts/journey-gate.py --part results --results "$CODEFLOW_GATE_RESULTS"
+
+      - name: Every test ran in exactly one shard
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python3 -B scripts/test_partition_check.py && python3 -B scripts/partition-check.py check --count 3 --prefix coverage-shard --margin-minutes 24 --setup-minutes 6 --list target/coverage/results/coverage-shard-1/tests.json target/coverage/results/coverage-shard-2/tests.json target/coverage/results/coverage-shard-3/tests.json --results target/coverage/results
+
+      - name: Record the coverage total for the daily verdict
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards 3 --total-file target/coverage/daily-coverage-total.json target/coverage/data
+
+      - name: Keep the coverage total for the daily verdict
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: daily-coverage-total
+          path: target/coverage/daily-coverage-total.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # The Linux build and the codeflow gates parts, with the commands of the jobs
+  # of the same ids in codeflow-ci.yml (test_windows_daily.py compares them),
+  # at this run's one commit: the daily run keeps the full Linux and Windows
+  # suites (ADR-0097). The release gates are not part of it. Caches are
+  # restored, never saved, and setup-node keeps no cache.
+  gates-build:
+    name: linux build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out this run's commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Report and verify the tested commit
+        shell: bash
+        run: python3 -I -B scripts/windows-daily.py identity --ref "$GITHUB_REF" --sha "$TESTED_SHA"
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: build-v1
+          save-if: false
+      - name: Build codeflow from source
+        run: cargo build --release -p codeflow-cli
+      - name: Keep the build for the gate parts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeflow-release
+          path: target/release/codeflow
+          retention-days: 1
+          if-no-files-found: error
+
+  gates:
+    name: linux gates (${{ matrix.part }})
+    needs: gates-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [present, checks]
+        include:
+          - part: present
+            only: present-supply-chain,cf-present-qualification
+          - part: checks
+            only: rust-format,rust-clippy,rust-doctest,rustdoc,release-automation,gate-parity,model-eval-kit,skill-triggers,herdr-delivery,docs-validation,docs-portal,docs-portal-windows,journey-python,visual-eval-controls
+    steps:
+      - name: Check out this run's commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Report and verify the tested commit
+        shell: bash
+        run: python3 -I -B scripts/windows-daily.py identity --ref "$GITHUB_REF" --sha "$TESTED_SHA"
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.part }}-v1
+          save-if: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.18.0
+          package-manager-cache: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 26.4.0
+          package-manager-cache: false
+      - name: Install exact npm for the owned presentation renderer
+        run: npm install --global npm@11.17.0
+      - name: Fetch the codeflow build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codeflow-release
+          path: ${{ runner.temp }}/codeflow-bin
+      - name: Put the codeflow build on PATH
+        run: |
+          chmod 755 "$RUNNER_TEMP/codeflow-bin/codeflow"
+          echo "$RUNNER_TEMP/codeflow-bin" >> "$GITHUB_PATH"
+      - name: Scaffold secret scan
+        if: matrix.part == 'checks'
+        run: |
+          GITLEAKS_VERSION=8.30.1
+          GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$RUNNER_TEMP/$archive"
+          printf '%s  %s\n' "$GITLEAKS_SHA256" "$RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          sh scripts/check-scaffold-gitleaks.sh "$RUNNER_TEMP/gitleaks" "$(command -v codeflow)"
+      - name: codeflow test --mode full --strict
+        shell: bash
+        env:
+          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
+        run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
