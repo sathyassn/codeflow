@@ -685,7 +685,7 @@ mod tests {
         let commit = repo
             .commit(Some("HEAD"), &who, &who, "chore: start", &tree, &[])
             .unwrap();
-        repo.remote("origin", "https://example.invalid/x.git")
+        repo.remote("origin", "file:///nonexistent/repo.git")
             .unwrap();
         repo.reference("refs/remotes/origin/work", commit, true, "fixture")
             .unwrap();
