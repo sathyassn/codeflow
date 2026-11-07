@@ -2072,6 +2072,12 @@ fn run_captured_with(
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if cmd == "gh" {
+        // Doctor reads the repository `origin` names on github.com; an
+        // inherited GH_HOST or GH_REPO cannot answer for another one
+        // (review of PR 700).
+        command.env_remove("GH_HOST").env_remove("GH_REPO");
+    }
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
@@ -3538,12 +3544,21 @@ fn check_id_registry(opts: &Options) -> CheckResult {
                 "reduced assurance: the live host rules on {registry} do not {} (`codeflow remote protect --branch {registry}` applies them); a rewrite is detected only against the last verified tip ({last})",
                 missing.join(" or ")
             )),
-            remote_perimeter::LiveRules::Unread(why) if recorded => notes.push(format!(
-                "host data profile recorded as applied, but the live rules were not read ({why}); last verified tip {last}"
-            )),
-            remote_perimeter::LiveRules::Unread(why) => unprotected(format!(
-                "reduced assurance: no host rules recorded for {registry} and the live rules were not read ({why}); `codeflow remote protect` applies them; a rewrite is detected only against the last verified tip ({last})"
-            )),
+            // A failed read is never a pass, whatever the local record says
+            // (review of PR 700, finding 2).
+            remote_perimeter::LiveRules::Unread(why) => {
+                let record = if recorded {
+                    "`remote protect` recorded the host rules as applied, but"
+                } else {
+                    "no host rules are recorded and"
+                };
+                if !status.is_warn() {
+                    status = Status::Warn(remedy::DOCTOR_REGISTRY_UNREAD.remedy());
+                }
+                notes.push(format!(
+                    "reduced assurance: {record} the live rules on {registry} were not read ({why}), so its protection is unverified; a rewrite is detected only against the last verified tip ({last})"
+                ));
+            }
         }
     }
     result(status, notes.join("; "))
