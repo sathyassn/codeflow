@@ -267,7 +267,8 @@ Other checks on these planes:
 | Baseline | pull requests 568 to 644 in `docs/verification/ceremony-baseline-2026-09-28.md`; the release checklist compares each release's window with it |
 
 Detail: [enforcement planes](architecture/enforcement-planes.md) and
-[policy reference](policy-reference.md).
+[policy reference](policy-reference.md). Every limit, with its key, default,
+bounds and class, is on the [limits page](limits.md).
 
 #### remote-protect-doctor
 
