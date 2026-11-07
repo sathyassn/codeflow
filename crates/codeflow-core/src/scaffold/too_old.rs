@@ -15,7 +15,7 @@
 use std::fmt;
 use std::path::Path;
 
-use super::state::PROJECT_TOML;
+use super::state::{read_beneath_root, PROJECT_TOML};
 use super::version::{is_older, pinned, shown};
 use crate::hooks::landed_policy::{self, INSTALL};
 use crate::remedy::{self, Remedy};
@@ -78,10 +78,11 @@ impl BinaryAge {
 
     /// The age against the working tree. Only for a reader of that same
     /// tree: it is the requester's text, so `codeflow ci` asks
-    /// [`Self::at_commit`] before it removes a finding.
+    /// [`Self::at_commit`] before it removes a finding. A state that cannot
+    /// be read, or is reached through a link, compares as unknown.
     #[must_use]
     pub fn at_root(root: &Path, binary: &str) -> Self {
-        let state = std::fs::read_to_string(root.join(PROJECT_TOML)).ok();
+        let state = read_beneath_root(root, PROJECT_TOML).ok().flatten();
         Self::from_state(state.as_deref(), binary)
     }
 
@@ -179,6 +180,21 @@ mod tests {
     #[test]
     fn the_rule_survives_the_hand_off_to_the_pre_push_hook() {
         assert!(crate::hooks::is_rule_id(RULE));
+    }
+
+    /// A linked state is project text from outside the repository.
+    #[cfg(unix)]
+    #[test]
+    fn a_state_reached_through_a_link_compares_as_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside.toml");
+        std::fs::write(&outside, "scaffold_version = \"99.0.0\"\n").unwrap();
+        let root = dir.path().join("repo");
+        std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join(PROJECT_TOML)).unwrap();
+        let age = BinaryAge::at_root(&root, "4.0.0");
+        assert!(!age.repository_is_newer());
+        assert!(age.may_be_older().is_some());
     }
 
     /// A pin is project text: an opaque suffix never reaches the message.
