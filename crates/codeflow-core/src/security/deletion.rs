@@ -187,6 +187,7 @@ fn read_deletion(command: &str, base: Option<&Path>, rooted_unplaced: bool) -> O
         rooted_unplaced,
         found: None,
         depth: 0,
+        nesting: 0,
         pipe_input: None,
         jumps: Vec::new(),
         expanding: Vec::new(),
@@ -1683,17 +1684,29 @@ struct Parser {
     toks: Vec<Tok>,
     at: usize,
     nesting: usize,
+    /// The most nesting reached, counting what the text was nested in.
+    deepest: usize,
     /// Set when the text went past [`MAX_NESTING`], leaving the rest unread.
     stopped: bool,
 }
 
 impl Parser {
     fn parse(script: &str) -> Node {
+        Self::parse_within(script, 0).0
+    }
+
+    /// `script` read as text nested `nesting` deep, so a second reading of
+    /// text already parsed, or a script inside it, spends what is left of
+    /// the one bound and never starts its own. Gives the node and the most
+    /// nesting reached; past the bound the node is marked as
+    /// [`Parser::parse`] marks it.
+    fn parse_within(script: &str, nesting: usize) -> (Node, usize) {
         let (toks, broken) = Lexer::new(script).tokens();
         let mut parser = Self {
             toks,
             at: 0,
-            nesting: 0,
+            nesting,
+            deepest: nesting,
             stopped: false,
         };
         let mut items = Vec::new();
@@ -1707,13 +1720,14 @@ impl Parser {
             }
         }
         let node = Node::Seq(items);
-        if parser.stopped {
+        let node = if parser.stopped {
             Node::Unknown(why::STRUCTURE, Box::new(node))
         } else if broken {
             Node::Unknown(why::SYNTAX, Box::new(node))
         } else {
             node
-        }
+        };
+        (node, parser.deepest)
     }
 
     fn peek(&self) -> Option<&Tok> {
@@ -1766,14 +1780,21 @@ impl Parser {
     /// The `(( … ))` word at the cursor read as `( ( … ) )`: its own text,
     /// with the first two parentheses apart, fed back through the parser.
     /// Text that does not read that way comes back marked unknown, as any
-    /// script does.
-    fn subshell_reading(&self) -> Node {
-        match self.peek() {
+    /// script does. The reading starts at this parser's nesting, and a stop
+    /// in it stops this parser too.
+    fn subshell_reading(&mut self) -> Node {
+        let reading = match self.peek() {
             Some(Tok::Word(w)) if w.src.starts_with("((") => {
-                Parser::parse(&format!("( {}", &w.src[1..]))
+                Parser::parse_within(&format!("( {}", &w.src[1..]), self.nesting)
             }
-            _ => Node::Unknown(why::SYNTAX, Box::new(Node::Seq(Vec::new()))),
+            _ => return Node::Unknown(why::SYNTAX, Box::new(Node::Seq(Vec::new()))),
+        };
+        let (node, deepest) = reading;
+        self.deepest = self.deepest.max(deepest);
+        if matches!(&node, Node::Unknown(reason, _) if *reason == why::STRUCTURE) {
+            self.stopped = true;
         }
+        node
     }
 
     /// Whether the token at `at` begins a compound command.
@@ -1890,6 +1911,7 @@ impl Parser {
             return Node::Seq(Vec::new());
         }
         self.nesting += 1;
+        self.deepest = self.deepest.max(self.nesting);
         let node = self.command_here();
         self.nesting -= 1;
         node
@@ -2976,6 +2998,11 @@ struct Reader<'a> {
     rooted_unplaced: bool,
     found: Option<Found>,
     depth: usize,
+    /// The compound nesting of the script being read, at its deepest. A
+    /// script parsed while reading it, such as a substitution, starts there,
+    /// so the line has one [`MAX_NESTING`] bound however its text is
+    /// reparsed.
+    nesting: usize,
     /// What the pipeline stage being read receives on its input.
     pipe_input: Option<Fed>,
     jumps: Vec<Frame>,
@@ -3072,8 +3099,10 @@ impl Reader<'_> {
             }
         }
         self.depth += 1;
-        let node = Parser::parse(script);
+        let (node, deepest) = Parser::parse_within(script, self.nesting);
+        let outer = std::mem::replace(&mut self.nesting, deepest);
         self.run(&node, st);
+        self.nesting = outer;
         self.depth -= 1;
     }
 
@@ -4310,7 +4339,7 @@ impl Reader<'_> {
                 if clears {
                     return;
                 }
-                let action = Parser::parse(action);
+                let action = Parser::parse_within(action, self.nesting).0;
                 for signal in signals {
                     self.register(Slot::Signal(signal.clone()), action.clone(), st);
                 }
@@ -5719,14 +5748,16 @@ impl Reader<'_> {
             self.child_script(script, &mut child);
             return Output::Unknown;
         }
-        let node = Parser::parse(script);
+        let (node, deepest) = Parser::parse_within(script, self.nesting);
         let status = self.status.take();
         self.jumps.push(Frame {
             kind: FrameKind::Child,
             left: Vec::new(),
         });
         self.depth += 1;
+        let outer = std::mem::replace(&mut self.nesting, deepest);
         let out = self.output_of(&node, &mut child);
+        self.nesting = outer;
         self.depth -= 1;
         self.jumps.pop();
         self.status = status;
@@ -8568,6 +8599,7 @@ mod tests {
                 rooted_unplaced: false,
                 found: None,
                 depth: 0,
+                nesting: 0,
                 pipe_input: None,
                 jumps: vec![],
                 expanding: vec![],
@@ -8889,6 +8921,7 @@ mod tests {
             rooted_unplaced: false,
             found: None,
             depth: 0,
+            nesting: 0,
             pipe_input: None,
             jumps: Vec::new(),
             expanding: Vec::new(),
@@ -8941,6 +8974,7 @@ mod tests {
             rooted_unplaced: false,
             found: None,
             depth: 0,
+            nesting: 0,
             pipe_input: None,
             jumps: Vec::new(),
             expanding: Vec::new(),
@@ -8992,6 +9026,7 @@ mod tests {
             rooted_unplaced: false,
             found: None,
             depth: 0,
+            nesting: 0,
             pipe_input: None,
             jumps: Vec::new(),
             expanding: Vec::new(),

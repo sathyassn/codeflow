@@ -149,6 +149,38 @@ fn a_value_from_the_substitution_reading_is_judged() {
     ]);
 }
 
+/// `inner` inside `levels` brace groups.
+fn in_braces(inner: &str, levels: usize) -> String {
+    format!("{}{inner}{}", "{ ".repeat(levels), "; }".repeat(levels))
+}
+
+/// A second reading, and a script parsed while reading the line, spend
+/// what is left of the line's one nesting bound (TSK-1374) and never start
+/// their own. Each line below nests within the bound counted on its own
+/// parse, and past it counted across the reparse, so it refuses as a line
+/// the reader could not finish; one level shallower it stays allowed.
+#[test]
+fn a_reparsed_reading_shares_the_nesting_bound() {
+    let deep = super::MAX_NESTING - 3;
+    // Three levels, as the subshell reading of the first form has.
+    let inner = in_braces("true", 2);
+    let forms: [(&str, String); 3] = [
+        ("subshell reading", "((true))".to_string()),
+        ("substitution", format!("echo \"$({inner})\"")),
+        ("nested script", format!("bash -c '{inner}'")),
+    ];
+    for (form, text) in &forms {
+        let shallower = in_braces(text, deep - 1);
+        assert_allowed(&[shallower.as_str()]);
+        let line = in_braces(text, deep);
+        let found = judged(&line).unwrap_or_else(|| panic!("{form}: not refused"));
+        assert!(found.unfinished, "{form}: {found:?}");
+        assert!(verdict(&line).is_some(), "{form}: no verdict");
+        let deletion = in_braces(&text.replace("true", "rm -rf /usr"), deep);
+        assert!(verdict(&deletion).is_some(), "{form}: deletion not refused");
+    }
+}
+
 /// Which arithmetic text is sure: numbers, names, subscripts, expansions
 /// as operands and operators in a well-formed order. Anything else is not.
 #[test]
