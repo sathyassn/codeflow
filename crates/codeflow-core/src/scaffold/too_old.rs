@@ -172,7 +172,7 @@ mod tests {
             assert!(age.too_old("x").is_none(), "{state:?}");
             let line = age.may_be_older().unwrap();
             assert!(line.contains("4.0.0"), "{line}");
-            assert!(line.contains("codeflow doctor"), "{line}");
+            assert!(line.contains("codeflow --version"), "{line}");
         }
     }
 

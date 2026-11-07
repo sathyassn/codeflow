@@ -252,7 +252,7 @@ fn ci_with_no_pin_keeps_the_record_findings_and_adds_one_line() {
     assert_eq!(out.status.code(), Some(1), "{said}");
     assert!(said.contains("lifecycle invariant work."), "{said}");
     assert_eq!(said.matches(MAY_BE_OLDER).count(), 1, "{said}");
-    assert!(said.contains("codeflow doctor"), "{said}");
+    assert!(said.contains("codeflow --version"), "{said}");
 }
 
 /// A pin at the binary's own version changes nothing.
@@ -488,16 +488,9 @@ fn a_test_config_error_at_the_binarys_own_version_stays_as_it_was() {
 /// `root` with a bare destination holding the default branch as it stands.
 fn bare_destination(dir: &Path, root: &Path) -> PathBuf {
     let origin = dir.join("origin.git");
-    git(
-        dir,
-        &[
-            "clone",
-            "-q",
-            "--bare",
-            root.to_str().unwrap(),
-            "origin.git",
-        ],
-    );
+    codeflow_fixture::clone(dir, root.to_str().unwrap(), "origin.git")
+        .bare()
+        .run();
     git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
     git(root, &["fetch", "-q", "origin"]);
     // Git before 2.48 records no remote HEAD on fetch (ADR-0091).
@@ -560,7 +553,7 @@ fn a_push_of_records_it_cannot_read_refuses_with_the_too_old_message() {
     let said = text(&out);
     assert!(!out.status.success(), "{said}");
     assert_too_old(&said);
-    assert!(said.contains("upgrade CodeFlow"), "{said}");
+    assert!(said.contains("install the newer release build"), "{said}");
     assert!(!said.contains("fix the findings above"), "{said}");
     assert!(!said.contains("lifecycle invariant work."), "{said}");
     assert!(!pushed(&origin), "{said}");

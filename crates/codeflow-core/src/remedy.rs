@@ -623,11 +623,11 @@ catalog! {
     // A binary older than the repository (TSK-1285).
 
     /// A reader failed and the repository declares a newer `CodeFlow`.
-    BINARY_TOO_OLD = Step::Codeflow("codeflow doctor"),
-        "install CodeFlow {version} or newer (`{install}`) or build it from this repository's source, then run the command again; `codeflow doctor` reports the binary the hooks run";
+    BINARY_TOO_OLD = Step::Codeflow("codeflow --version"),
+        "install the release build of CodeFlow {version} or newer (`{install}`) or build it from this repository's source, then run the command again; `codeflow --version` shows the binary on PATH, which is the one the hooks run";
     /// A reader failed and the repository declares no version to compare.
-    BINARY_MAY_BE_OLDER = Step::Codeflow("codeflow doctor"),
-        "this binary (CodeFlow {binary}) may be older than this repository, which declares no version it can compare; run `codeflow doctor` to see the binary the hooks run";
+    BINARY_MAY_BE_OLDER = Step::Codeflow("codeflow --version"),
+        "this binary (CodeFlow {binary}) may be older than this repository, which declares no version it can compare; run `codeflow --version` and compare it with the release this repository was last updated to";
 
     // The push set.
 
@@ -635,8 +635,8 @@ catalog! {
     PUSH_SET_CI = Step::Codeflow("codeflow ci"),
         "fix the findings above, then push again; `codeflow ci {args}` reruns this check on the range as pushed";
     /// A `codeflow ci` run in the push set refused by a too-old binary.
-    PUSH_SET_TOO_OLD = Step::Codeflow("codeflow doctor"),
-        "upgrade CodeFlow as the output above says, then push again; `codeflow doctor` reports the binary the hooks run";
+    PUSH_SET_TOO_OLD = Step::Codeflow("codeflow --version"),
+        "install the newer release build the output above names, then push again; `codeflow --version` shows the binary on PATH, which is the one the hooks run";
     /// A push set that could not start its checks.
     PUSH_SET_BY_HAND = Step::Codeflow("codeflow ci"),
         "run `codeflow ci` by hand";

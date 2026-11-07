@@ -371,8 +371,9 @@ task and epic records, and `scaffold_version` in `.codeflow/project.toml`
 declares a newer CodeFlow than the binary running. Findings from a binary that
 cannot read the repository are not reliable, so the message replaces them.
 Install the version it names, or build from the repository's source, then
-rerun; `codeflow doctor` reports the binary the hooks run. `codeflow ci` reads
-that version at the commit that judges the range, never at the head.
+rerun; `codeflow --version` shows the binary on PATH, which is the one the
+hooks run. `codeflow ci` reads that version at the commit that judges the
+range, never at the head.
 
 `may be older than this repository` is the same doubt with no version to
 compare: the findings are still printed. Check the binary before changing
