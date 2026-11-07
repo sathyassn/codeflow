@@ -2073,10 +2073,11 @@ fn run_captured_with(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if cmd == "gh" {
-        // Doctor reads the repository `origin` names on github.com; an
-        // inherited GH_HOST or GH_REPO cannot answer for another one
+        // Doctor reads the repository `origin` names on github.com: GH_HOST
+        // is set to it, so neither an inherited GH_HOST nor `gh`'s own
+        // default host can answer for another one, and GH_REPO is removed
         // (review of PR 700).
-        command.env_remove("GH_HOST").env_remove("GH_REPO");
+        command.env("GH_HOST", "github.com").env_remove("GH_REPO");
     }
     if let Some(cwd) = cwd {
         command.current_dir(cwd);

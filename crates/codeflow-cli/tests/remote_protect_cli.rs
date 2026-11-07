@@ -615,7 +615,8 @@ fn a_push_url_for_another_repository_is_refused() {
 /// Review of PR 700, finding 4: an inherited `GH_HOST` or `GH_REPO` never
 /// reaches `gh`, so neither can point a read or a write at another host or
 /// repository. `codeflow()` sets both to decoys. Doctor reads github.com
-/// only, so its `gh` gets no host; `remote protect` pins the host `origin`
+/// only, so its `gh` is pinned to github.com, never to `gh`'s own default
+/// host (review of PR 700, delta); `remote protect` pins the host `origin`
 /// names on every call, the login check first.
 #[cfg(unix)]
 #[test]
@@ -628,7 +629,7 @@ fn gh_never_sees_an_inherited_host_or_repository() {
     assert!(!env.is_empty());
     assert!(
         env.lines()
-            .all(|line| line == "GH_HOST=unset GH_REPO=unset"),
+            .all(|line| line == "GH_HOST=github.com GH_REPO=unset"),
         "{env}"
     );
     std::fs::remove_file(host.join("env")).unwrap();

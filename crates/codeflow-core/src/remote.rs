@@ -1594,22 +1594,13 @@ fn describe(body: &Value) -> String {
     parts.join(", ")
 }
 
-/// `owner/name` from an HTTPS, SSH or scp-style github.com URL.
+/// `owner/name` from a URL [`parse_repo_url`] reads as one on github.com,
+/// so `doctor` and `remote protect` agree on which URLs name a github.com
+/// repository (review of PR 700, delta nit 1).
 pub(crate) fn parse_github_url(url: &str) -> Option<String> {
-    let rest = [
-        "https://github.com/",
-        "http://github.com/",
-        "ssh://git@github.com/",
-        "git@github.com:",
-    ]
-    .iter()
-    .find_map(|prefix| url.strip_prefix(prefix))?;
-    let rest = rest.trim_end_matches('/');
-    let rest = rest.strip_suffix(".git").unwrap_or(rest);
-    let mut parts = rest.split('/');
-    let (owner, name) = (parts.next()?, parts.next()?);
-    (parts.next().is_none() && !owner.is_empty() && !name.is_empty())
-        .then(|| format!("{owner}/{name}"))
+    parse_repo_url(url)
+        .filter(|(host, _)| host == "github.com")
+        .map(|(_, nwo)| nwo)
 }
 
 /// The one github.com repository `origin` names, which `doctor` reads and

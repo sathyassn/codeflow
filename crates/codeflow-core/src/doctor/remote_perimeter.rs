@@ -1945,6 +1945,14 @@ mod tests {
             "https://github.com/o/r",
             "git@github.com:o/r.git",
             "ssh://git@github.com/o/r.git",
+            // The forms `remote protect` names github.com for are a GitHub
+            // origin to doctor too (review of PR 700, delta nit 1).
+            "https://user@github.com/o/r.git",
+            "https://github.com:443/o/r.git",
+            "https://GitHub.com/o/r",
+            "ssh://github.com/o/r.git",
+            "ssh://git@github.com:22/o/r.git",
+            "other@github.com:o/r.git",
         ] {
             assert_eq!(
                 remote::parse_github_url(url).as_deref(),
@@ -1954,6 +1962,7 @@ mod tests {
         }
         for url in [
             "https://gitlab.com/o/r.git",
+            "https://github.com.gitlab.com/o/r.git",
             "git@github.com:o",
             "/srv/r.git",
         ] {
