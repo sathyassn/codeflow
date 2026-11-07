@@ -17743,18 +17743,20 @@ mod tests {
     }
 
     /// A line workflow's verdict admits a line pull request, so a command
-    /// that changes either file is refused as `codeflow-ci.yml` is.
+    /// naming either file reads as naming an enforcement file, as
+    /// `codeflow-ci.yml` does. This reads the list directly: `evaluate`
+    /// under `ctx` has no repository to resolve, so it refuses any path
+    /// under `.github/workflows` with or without these entries.
     #[test]
     fn test_the_line_workflows_are_enforcement_files() {
-        let p = default_policy();
         for file in ["codeflow-line-pr.yml", "codeflow-line-push.yml"] {
-            for cmd in [
-                format!("sed -i s/a/b/ .github/workflows/{file}"),
-                format!("echo bad > .github/workflows/{file}"),
-                format!("rm .github/workflows/{file}"),
+            let path = format!(".github/workflows/{file}");
+            for text in [
+                format!("sed -i s/a/b/ {path}"),
+                format!("sh -c 'rm {path}'"),
+                format!("rm ./.GITHUB//workflows/{file}"),
             ] {
-                let v = evaluate(&cmd, &ctx(&p, "feat/x"));
-                assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+                assert_eq!(enforcement_text(&text), Some(path.as_str()), "{text}");
             }
         }
     }
