@@ -12,6 +12,8 @@ pub struct CapabilityArgs {
 pub enum CapabilityCommand {
     /// Start or resume the four-stage initial capability catalog.
     Bootstrap,
+    /// Convert the legacy fence catalog in docs/capabilities.md into one record per capability.
+    Migrate,
     /// Create a planned capability with a reserved id and stable uid.
     New {
         /// Lowercase capability slug, used in its filename.
@@ -46,6 +48,9 @@ pub fn run(args: &CapabilityArgs) -> i32 {
     };
     if matches!(args.command, CapabilityCommand::Bootstrap) {
         return run_bootstrap(&root);
+    }
+    if matches!(args.command, CapabilityCommand::Migrate) {
+        return run_migrate(&root);
     }
     let tracking = match codeflow_core::workgraph::durable_work_tracking_enabled(&root) {
         Ok(tracking) => tracking,
@@ -95,6 +100,31 @@ pub fn run(args: &CapabilityArgs) -> i32 {
         }
         Err(error) => {
             eprintln!("codeflow capability new: {}", super::shown(&error));
+            1
+        }
+    }
+}
+
+fn run_migrate(root: &std::path::Path) -> i32 {
+    match codeflow_core::capability::migrate::migrate(root) {
+        Ok(migration) => {
+            for converted in &migration.converted {
+                let how = if converted.page { "  (page kept)" } else { "" };
+                println!("{}  {}{how}", converted.id, super::shown(&converted.file));
+                eprintln!(
+                    "registry: {} {}",
+                    converted.id,
+                    converted.standing.describe()
+                );
+            }
+            println!(
+                "migrated {} capabilities; the converted sections were removed from docs/capabilities.md",
+                migration.converted.len()
+            );
+            0
+        }
+        Err(error) => {
+            eprintln!("codeflow capability migrate: {}", super::shown(&error));
             1
         }
     }

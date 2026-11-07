@@ -173,6 +173,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--json` | Print the items as JSON, with every field. |
 | | `--write` | Write project-management/feedback/INDEX.md from every item. A written index is optional; `validate --docs` warns when it goes stale. |
 | `codeflow capability bootstrap` | | Start or resume the four-stage initial capability catalog |
+| `codeflow capability migrate` | | Convert the legacy fence catalog in docs/capabilities.md into one record per capability |
 | `codeflow capability new <NAME>` | | Create a planned capability with a reserved id and stable uid |
 | | `<NAME>` | Lowercase capability slug, used in its filename. |
 | | `--summary <SUMMARY>` | One sentence describing the capability for its reader. Required. |
@@ -674,6 +675,28 @@ codeflow capability new catalog-search \
 
 `init`, `update`, `orient`, `status` and `doctor --check capabilities` report
 inventory separately from evidence declarations.
+
+Convert a legacy fence catalog with `codeflow capability migrate`:
+
+| Step | What happens |
+|---|---|
+| Plan | Every fence in `docs/capabilities.md` is read with its heading and the prose after it, up to the next heading of equal or higher depth. Any refusal below happens here, before the registry or a file changes. |
+| Register | Each legacy number is bound to a new uid in the local registry: pending until the next push or `codeflow ids sync` when an authority remote exists, local otherwise. |
+| Write | One record per entry at `docs/capabilities/CAP-NNN-<name>.md`. Its frontmatter is the fence's own lines with `uid` after `id`; its body is `# CAP-NNN: <name>` and the following prose, byte for byte. |
+| Pages | An entry that already has a page under that name keeps it: the page gains the frontmatter, its text and anchors stay as written, and the registry prose follows it. |
+| Facets | A fence without them gets `summary` (the prose's first sentence, else the name), `kind: functional`, `audience: [internal]` and, when shipped, `stage: unassessed`. Classify them afterwards. |
+| Strip | Each converted section leaves `docs/capabilities.md` in one last write, after every record has been checked against its binding. Other text stays. |
+
+| Refused before any write | Why |
+|---|---|
+| A fence with no heading of its own, text between a heading and its fence, or two fences in one section | The prose span is ambiguous. |
+| A fence key that is not a record field, or a fence that already has a `uid` | It would be lost or replaced. |
+| Two pages for one id, a page under another name, or a page that is already a record | The page to keep is ambiguous. |
+| An entry that would not validate as a record, or a number the registry already holds | The result would be invalid, or this is a rerun. |
+
+Prose moves from `docs/` to `docs/capabilities/` unchanged, and relative links in
+it are not rewritten, so check them after the run. A rerun after an interruption
+is not supported yet.
 
 ### General exit behavior
 
