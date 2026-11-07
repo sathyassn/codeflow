@@ -1,3 +1,4 @@
+import { prepareExportCapture } from "./export-capture.mjs";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { access, cp, mkdir, mkdtemp, readdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
@@ -7,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright-core";
 import axe from "axe-core";
 import { validateWindowsQualificationConfinement } from "./windows-qualification-scope.mjs";
-import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
+import { assertNoPolicyViolations, recordPolicyViolationsOutsidePage } from "./csp-violations.mjs";
 import { codeflowBinary } from "./codeflow-binary.mjs";
 import { closeWaitMs } from "./browser-close-bound.mjs";
 
@@ -180,7 +181,10 @@ try {
   recordBrowserVersion(context);
   observeContext(context, requests, responses, consoleErrors, observerTasks);
   const browserProcessesV1 = await waitForProfileProcess(browserProfileV1);
-  await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+  // Sandboxed scriptless frames refuse the trace snapshot streamer. The .state
+  // probe at 4804477cc found 40 of 43 blocked events followed captureSnapshot.
+  // DOM snapshots are diagnostic, not an assertion; keep screenshots and traces.
+  await context.tracing.start({ screenshots: true, snapshots: false, sources: false });
   tracingStarted = true;
   const page = context.pages()[0] ?? await context.newPage();
   await openAuthenticatedPresentation(page, bootstrapPath, port);
@@ -317,7 +321,10 @@ try {
   recordBrowserVersion(context);
   observeContext(context, requests, responses, consoleErrors, observerTasks);
   const browserProcessesV2 = await waitForProfileProcess(browserProfileV2);
-  await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+  // Sandboxed scriptless frames refuse the trace snapshot streamer. The .state
+  // probe at 4804477cc found 40 of 43 blocked events followed captureSnapshot.
+  // DOM snapshots are diagnostic, not an assertion; keep screenshots and traces.
+  await context.tracing.start({ screenshots: true, snapshots: false, sources: false });
   tracingStarted = true;
   const revisedPage = context.pages()[0] ?? await context.newPage();
   await openAuthenticatedPresentation(revisedPage, secondBootstrapPath, port);
@@ -325,6 +332,7 @@ try {
   const exportPath = join(output, "review.html");
   run(codeflow, ["present", "export", sessionId, "--out", exportPath, "--theme", "graphite", "--mode", "dark"], project);
   const exportPage = await context.newPage();
+  await recordPolicyViolationsOutsidePage(exportPage);
   await exportPage.goto(pathToFileURL(exportPath).href);
   await exportPage.locator("#cf-present-document").getByText("Second revision").waitFor();
   await exportPage.waitForFunction(() => (
@@ -333,12 +341,16 @@ try {
   await exportPage.waitForFunction(() => (
     document.querySelector("code[data-cf-language='rust']")?.getAttribute("data-cf-highlight") === "ready"
   ));
+  // The audit runs in this top document only. Context init scripts would
+  // also enter the scriptless measuring and exported stage frames.
+  await exportPage.evaluate(axe.source);
   const exportAccessibility = await exportPage.evaluate(async () => globalThis.axe.run(document, {
     runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"] },
   }));
   if (exportAccessibility.violations.length) {
     throw new Error(`export accessibility violations: ${exportAccessibility.violations.map((item) => item.id).join(", ")}`);
   }
+  await prepareExportCapture(exportPage);
   await exportPage.screenshot({ path: join(output, "export-dark.png"), fullPage: true });
   await assertNoPolicyViolations(exportPage, "offline export");
   await assertNoPolicyViolations(revisedPage, "second revision");
@@ -359,6 +371,7 @@ try {
   const retiredExportPath = join(output, "retired.html");
   run(codeflow, ["present", "export", sessionId, "--out", retiredExportPath], project);
   const retiredExportPage = await context.newPage();
+  await recordPolicyViolationsOutsidePage(retiredExportPage);
   await retiredExportPage.goto(pathToFileURL(retiredExportPath).href);
   await assertRetiredPage(retiredExportPage, "exported retired revision");
   await retiredExportPage.close();
@@ -644,8 +657,6 @@ async function launchBrowser(profile) {
       "--no-first-run",
     ],
   });
-  await launched.addInitScript({ content: axe.source });
-  await recordPolicyViolations(launched);
   return launched;
 }
 
@@ -703,6 +714,7 @@ function recordBrowserVersion(openContext) {
 }
 
 async function openAuthenticatedPresentation(page, bootstrapPath, servicePort) {
+  await recordPolicyViolationsOutsidePage(page);
   // The private file immediately submits into the loopback service. Waiting
   // for its full load event conflates that handoff with the destination page
   // and can hang behind long-lived application requests. A cold renderer on a

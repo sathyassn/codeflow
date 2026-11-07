@@ -256,8 +256,9 @@ external script to be a recorded built script served with its hash. Every
 inline script outside the content, in both the validator and the browser
 gate, must be on the runtime's allowlist: the fixed scripts whose hashes the
 starter commits in `scripts/runtime-scripts.json`, regenerated from a fresh
-build whenever the lockfile changes, and the pre-paint display script for the
-configured theme. The clean copy runs only those and the recorded built
+build whenever the lockfile or the tokens change, and the pre-paint display
+script for the configured theme, whose hash the same file records for every
+theme. The clean copy runs only those and the recorded built
 scripts. It compares each figure's DOM with a clean render of the pinned declaration, and
 every computed property of the companion, the figure and its descendants with
 a clean copy of the page. The figure, its title, its caption and its legend

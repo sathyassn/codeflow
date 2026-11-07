@@ -177,7 +177,8 @@ fn arm_guard_deadline(guard: &'static str) -> std::io::Result<()> {
 
 /// How long the deadline's refusal waits for its reason to be written
 /// before it exits 2 regardless.
-const REFUSAL_WRITE_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+const REFUSAL_WRITE_WAIT: std::time::Duration =
+    std::time::Duration::from_secs(codeflow_core::hooks::guard_deadline::GUARD_REFUSAL_WRITE_SECS);
 
 /// Run `write` on its own thread and wait at most `wait` for it to finish;
 /// whether it finished in time. A write that blocks keeps its thread, which
@@ -901,16 +902,20 @@ fn edit_guard(stdin: &str) -> i32 {
 }
 
 /// Resolve a `gh pr merge <arg>` target to its base branch via `gh pr view`
-/// (empty `arg` = the current branch's PR). Bounded (5s) and best-effort:
-/// any failure returns `None`, which the guard treats as doubt and blocks.
+/// (empty `arg` = the current branch's PR). Bounded by
+/// [`GUARD_PR_LOOKUP_SECS`](codeflow_core::hooks::guard_deadline::GUARD_PR_LOOKUP_SECS)
+/// and best-effort: any failure returns `None`, which the guard treats as
+/// doubt and blocks.
 fn gh_pr_base(arg: &str) -> Option<String> {
     let arg = arg.to_string();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(gh_pr_base_blocking(&arg));
     });
-    rx.recv_timeout(std::time::Duration::from_secs(5))
-        .unwrap_or(None)
+    rx.recv_timeout(std::time::Duration::from_secs(
+        codeflow_core::hooks::guard_deadline::GUARD_PR_LOOKUP_SECS,
+    ))
+    .unwrap_or(None)
 }
 
 fn gh_pr_base_blocking(arg: &str) -> Option<String> {

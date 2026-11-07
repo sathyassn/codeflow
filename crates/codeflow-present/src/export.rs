@@ -64,7 +64,7 @@ fn export_inner(
     let utility_style = store.utility_tokens()?.map(|tokens| tokens.css());
     let mut html = match revision.content {
         RevisionContent::Supported { document } => {
-            let static_html = render_document(
+            let mut static_html = render_document(
                 &document,
                 &RenderOptions {
                     session_id: "export",
@@ -83,6 +83,20 @@ fn export_inner(
                     retired: None,
                 },
             );
+            let contract = crate::stage_measurements::rendering_contract(
+                utility_style.as_deref().unwrap_or_default(),
+            );
+            let measurements: Vec<_> = store
+                .stage_measurements(session_id)?
+                .into_iter()
+                .filter(|entry| {
+                    entry
+                        .validate(&document, revision.revision, &contract)
+                        .is_ok()
+                })
+                .collect();
+            let table = json_template("cf-stage-measurements", &measurements)?;
+            static_html = static_html.replacen("</body>", &format!("{table}</body>"), 1);
             let base_bytes = static_html.len();
             let enhanced = enhance_export(
                 static_html,
@@ -191,10 +205,98 @@ fn enhance_export(
         "<meta http-equiv=\"Content-Security-Policy\" content=\"{csp}\"><meta name=\"referrer\" content=\"no-referrer\"><style data-cf-present-export-style=\"true\">{styles}\n{figure_styles}\n{system_fallback}\n{utility_style}</style>"
     );
     html = html.replacen(marker, &format!("{head}{marker}"), 1);
+    html = html.replace(
+        "</iframe>",
+        "</iframe><p data-cf-stage-notice>height not measured at this width; open the session</p>",
+    );
+    let captured_at = crate::state::now_unix()?;
+    let timestamp = capture_timestamp(captured_at);
+    let capture = format!("<aside aria-label=\"Export status\">Review capture of the session at <time datetime=\"{timestamp}\" data-cf-unix=\"{captured_at}\">{timestamp}</time>. Open the session for handover.</aside>");
+    html = html.replacen("<body>", &format!("<body>{capture}"), 1);
     let payload = format!(
         "<template id=\"cf-present-export-payload\">{encoded}</template><script>{bootstrap}</script>"
     );
     Ok(html.replacen("</body>", &format!("{payload}</body>"), 1))
+}
+
+// Howard Hinnant's civil-from-days algorithm, for post-epoch UTC captures.
+fn capture_timestamp(seconds: u64) -> String {
+    let days = seconds / 86_400 + 719_468;
+    let era = days / 146_097;
+    let day_of_era = days % 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let march_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * march_month + 2) / 5 + 1;
+    let (month, year) = if march_month < 10 {
+        (march_month + 3, year_of_era + era * 400)
+    } else {
+        (march_month - 9, year_of_era + era * 400 + 1)
+    };
+    let within_day = seconds % 86_400;
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        within_day / 3600,
+        within_day % 3600 / 60,
+        within_day % 60
+    )
+}
+
+fn json_template<T: serde::Serialize>(id: &str, value: &T) -> Result<String> {
+    let mut escaped = String::new();
+    crate::render::escape_html_to(&serde_json::to_string(value)?, &mut escaped);
+    Ok(format!("<template id=\"{id}\">{escaped}</template>"))
+}
+
+pub(crate) fn measurement_template(
+    document: &crate::document::PresentationDocument,
+    revision: u64,
+    utility_style: &str,
+) -> Result<String> {
+    if !document
+        .walk()
+        .iter()
+        .any(|block| matches!(block, crate::document::Block::Html { .. }))
+    {
+        return Ok(String::new());
+    }
+    let mut html = render_document(
+        document,
+        &RenderOptions {
+            session_id: "export",
+            revision,
+            event_sequence: 0,
+            response_sequence: 0,
+            answers: None,
+            script_path: None,
+            style_path: None,
+            prepaint_source: None,
+            utility_style: None,
+            identity: None,
+            feedback: None,
+            read_only_warning: None,
+            interactive: false,
+            retired: None,
+        },
+    );
+    let styles = include_str!("../web/src/styles.css");
+    let figures = include_str!("../web/src/figure.css");
+    let fallback = include_str!("../web/src/export-fallback.css");
+    html = html.replacen(
+        "</head>",
+        &format!("<style>{styles}\n{figures}\n{fallback}\n{utility_style}</style></head>"),
+        1,
+    );
+    json_template(
+        "cf-stage-measuring",
+        &serde_json::json!({
+            "revision": revision,
+            "widths": crate::stage_measurements::CONTENT_WIDTHS,
+            "contract": crate::stage_measurements::rendering_contract(utility_style),
+            "html": html,
+        }),
+    )
 }
 
 fn write_new_private(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -301,6 +403,42 @@ mod tests {
             Some("Visible stage".into())
         );
         assert_eq!(frame.value().attr("data-cf-export-stage"), Some(""));
+    }
+
+    #[test]
+    fn unmeasured_export_declares_height_and_capture_readiness() {
+        let rendered = "<html><head></head><body><iframe sandbox data-cf-export-stage srcdoc=\"<p>Stage</p>\"></iframe></body></html>".to_string();
+        let exported = super::enhance_export(
+            rendered,
+            super::ExportTheme::Slate,
+            super::ExportMode::Light,
+            "",
+        )
+        .unwrap();
+        assert!(exported.contains("height not measured at this width"));
+    }
+
+    #[test]
+    fn export_names_itself_as_a_review_capture() {
+        let exported = super::enhance_export(
+            "<html><head></head><body></body></html>".into(),
+            super::ExportTheme::Slate,
+            super::ExportMode::Light,
+            "",
+        )
+        .unwrap();
+        assert!(exported.contains("Review capture"));
+        assert!(exported.contains("<time datetime="));
+        assert!(!exported.contains("Unix time"));
+        assert_eq!(super::capture_timestamp(0), "1970-01-01T00:00:00Z");
+        assert_eq!(
+            super::capture_timestamp(1_709_251_199),
+            "2024-02-29T23:59:59Z"
+        );
+        assert_eq!(
+            super::capture_timestamp(1_709_251_200),
+            "2024-03-01T00:00:00Z"
+        );
     }
 
     #[test]

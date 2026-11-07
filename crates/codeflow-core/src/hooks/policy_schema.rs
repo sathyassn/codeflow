@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 79] = [
+pub const SCHEMA: [KeySpec; 85] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -368,6 +368,45 @@ pub const SCHEMA: [KeySpec; 79] = [
         notes: "Unknown creation without a sync and lines with no own commits are never flagged. \
                 The shipped policy file does not list it, so an older binary never meets the key.",
     },
+    KeySpec {
+        path: "git.remote_query_timeout_seconds",
+        kind: KeyKind::UInt,
+        valid: "a whole number of seconds, at least 1; no ceiling beyond what the number can hold",
+        purpose: "How long one `git ls-remote` attempt may take when the pre-push hook, `codeflow ci`, `task status` or the id sync asks a destination what it holds.",
+        notes: "Default 30: GitHub answered the default-branch lookup in 11.3 s and 11.6 s, over the earlier fixed 10 s (TSK-1301). \
+                A destination that does not answer in time still refuses the push or run (ci.destination_unavailable), naming the limits and the measured time. \
+                The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; \
+                `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. \
+                A very large value means effectively no limit: a silent destination is then waited on until something stops the run. \
+                The session guards never use it: they wait at most 10 s for each such lookup, their 20 s deadline bounds the whole command, \
+                and they refuse naming `git fetch <remote>`, after which they read local refs and need no network. \
+                Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.remote_query_attempts",
+        kind: KeyKind::UInt,
+        valid: "a whole number of attempts, at least 1; no ceiling beyond what the number can hold",
+        purpose: "How many attempts a timed-out `git ls-remote` gets, the first included; any other failure is final at once.",
+        notes: "Default 3. The worst wait is this times git.remote_query_timeout_seconds. \
+                The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; \
+                `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. \
+                A very large value means effectively no limit: a silent destination is then waited on until something stops the run. \
+                Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.remote_fetch_timeout_seconds",
+        kind: KeyKind::UInt,
+        valid: "a whole number of seconds, at least 1; no ceiling beyond what the number can hold",
+        purpose: "How long a fetch of the objects a judge needs may take, such as the destination's default-branch tip this clone lacks, in the pre-push hook, `codeflow ci` and `task status`.",
+        notes: "Default 120, the earlier fixed fetch wait. A fetch that does not finish in time refuses, naming this key. \
+                The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; \
+                `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. \
+                A very large value means effectively no limit: a silent destination is then waited on until something stops the run. \
+                Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
+    },
     // ---- git: root checkout ----------------------------------------------
     KeySpec {
         path: "git.root_branch",
@@ -405,6 +444,40 @@ pub const SCHEMA: [KeySpec; 79] = [
                 must be configured when work claim lists their branches. The \
                 shipped policy file does not list it, so an older binary never \
                 meets the key.",
+    },
+    KeySpec {
+        path: "git.candidate_prefix",
+        kind: KeyKind::String,
+        valid: "a branch name prefix ending in /, such as candidate/, that shares no start with \
+                a git.branch_prefixes entry, integration/ or a protected branch",
+        purpose: "The name prefix of landing candidate branches that `codeflow work remove-candidate` may remove.",
+        notes: "Default candidate/. A prefix that equals, contains or is contained by a \
+                git.branch_prefixes entry, integration/, or a protected branch name or the \
+                part of a protected pattern before its first glob character is refused, by \
+                the schema and again by the removal. A protected branch is never removed, \
+                whatever its name. The shipped policy file does not list it, so an older \
+                binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.candidate_search_depth",
+        kind: KeyKind::UInt,
+        valid: "a positive number of commits",
+        purpose: "How many commits of the line's first-parent history `codeflow work remove-candidate` searches for the candidate's tree.",
+        notes: "Default 200. A tree older than the depth is not found, so the removal is refused. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.branch_name_omit_words",
+        kind: KeyKind::StringList,
+        valid: "an array of words of lower-case letters and digits",
+        purpose: "Words that work claim and epic new --integration leave out of a \
+                  generated branch name.",
+        notes: "A loose ref is a file named after its branch, and a sandbox can refuse \
+                to read a file by its name; git then reports that ref as broken. An \
+                entry matches anywhere inside a title word. The default holds the \
+                words the Claude Code sandbox was probed to refuse; set the list your \
+                harness needs, or an empty list to keep every word. The shipped \
+                policy file does not list it, so an older binary never meets the key.",
     },
     KeySpec {
         path: "git.required_checks",
@@ -1237,6 +1310,7 @@ pub fn validate_policy_str(data: &str) -> Result<(), Vec<PolicyError>> {
     }
 
     release_pattern_errors(obj, &mut errors);
+    candidate_prefix_errors(obj, &mut errors);
 
     // Backstop: catch anything the schema walk did not model (a structural
     // error, or a registry gap) rather than let the enforcement loader
@@ -1251,6 +1325,32 @@ pub fn validate_policy_str(data: &str) -> Result<(), Vec<PolicyError>> {
         Ok(())
     } else {
         Err(errors)
+    }
+}
+
+/// Refuse a `git.candidate_prefix` the file sets that overlaps a branch
+/// prefix, the `integration/` prefix or a protected branch, judged against
+/// the file's own `git` section with defaults for what it leaves out
+/// ([`crate::hooks::policy::GitPolicy::candidate_prefix_problem`]). A `git`
+/// section that does not deserialize is left to the other checks and the
+/// final strict deserialize.
+fn candidate_prefix_errors(obj: &serde_json::Map<String, Value>, errors: &mut Vec<PolicyError>) {
+    let Some(git) = obj.get("git").and_then(Value::as_object) else {
+        return;
+    };
+    if !git.get("candidate_prefix").is_some_and(Value::is_string) {
+        return;
+    }
+    let Ok(git_policy) =
+        serde_json::from_value::<crate::hooks::policy::GitPolicy>(Value::Object(git.clone()))
+    else {
+        return;
+    };
+    if let Some(problem) = git_policy.candidate_prefix_problem() {
+        errors.push(PolicyError {
+            key: "git.candidate_prefix".to_string(),
+            message: problem,
+        });
     }
 }
 
@@ -1283,6 +1383,54 @@ fn release_pattern_errors(obj: &serde_json::Map<String, Value>, errors: &mut Vec
             key: "git.release_branch_pattern".to_string(),
             message: format!("invalid value '{pattern}' for git.release_branch_pattern; {problem}"),
         });
+    }
+}
+
+/// The value checks for the candidate-removal keys (TSK-1308):
+/// `git.candidate_prefix` is a branch name prefix ending in `/`, and
+/// `git.candidate_search_depth` is positive.
+fn validate_candidate_key(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    if path == "git.candidate_prefix" {
+        if let Some(prefix) = value.as_str() {
+            let stem = prefix.strip_suffix('/').unwrap_or("");
+            if stem.is_empty() || !crate::root_checkout::is_valid_branch_name(stem) {
+                errors.push(PolicyError {
+                    key: path.to_string(),
+                    message: format!(
+                        "invalid value '{prefix}' for {path}; use a branch name prefix that ends in /, such as candidate/"
+                    ),
+                });
+            }
+        }
+    } else if value.as_u64() == Some(0) {
+        errors.push(PolicyError {
+            key: path.to_string(),
+            message: format!(
+                "{path} is 0, so no line commit would be searched; use a positive number of commits"
+            ),
+        });
+    }
+}
+
+/// Each `git.branch_name_omit_words` entry must be one lower-case word, since
+/// a title is matched one lower-case word at a time.
+fn validate_branch_name_omit_words(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    for entry in value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        let is_word = !entry.is_empty()
+            && entry
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+        if !is_word {
+            errors.push(PolicyError {
+                key: path.to_string(),
+                message: format!("invalid word '{entry}' in {path}; use lower-case letters and digits only, because a title is matched one lower-case word at a time"),
+            });
+        }
     }
 }
 
@@ -1334,6 +1482,10 @@ fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<Policy
                 }
             }
         }
+        "git.candidate_prefix" | "git.candidate_search_depth" => {
+            validate_candidate_key(path, value, errors);
+        }
+        "git.branch_name_omit_words" => validate_branch_name_omit_words(path, value, errors),
         "git.required_checks" => {
             let entries = value.as_array().map_or(&[][..], Vec::as_slice);
             if value.is_array() && entries.is_empty() {
@@ -1406,7 +1558,19 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
             }
         }
         KeyKind::UInt => {
-            if value.as_u64().is_none_or(|n| u32::try_from(n).is_err()) {
+            if let Some(limit) = super::limits::for_key(path) {
+                // A declared limit (TSK-1301): its own bounds, up to u64.
+                if value
+                    .as_u64()
+                    .is_none_or(|n| n < limit.min || limit.max.is_some_and(|max| n > max))
+                {
+                    errors.push(PolicyError::invalid_value(
+                        path,
+                        value,
+                        &super::limits::bounds_text(limit),
+                    ));
+                }
+            } else if value.as_u64().is_none_or(|n| u32::try_from(n).is_err()) {
                 errors.push(PolicyError::invalid_value(
                     path,
                     value,
@@ -1885,6 +2049,88 @@ mod tests {
         }
     }
 
+    /// TSK-1301: the remote query keys default to their declared values,
+    /// accept any whole number from 1 up to what a u64 holds, and refuse
+    /// every other value in the validator and in the loader, naming the key.
+    #[test]
+    fn remote_query_keys_accept_whole_numbers_from_one_and_refuse_the_rest() {
+        let defaults = default_policy_value();
+        assert_eq!(defaults["git"]["remote_query_timeout_seconds"], 30);
+        assert_eq!(defaults["git"]["remote_query_attempts"], 3);
+        assert_eq!(defaults["git"]["remote_fetch_timeout_seconds"], 120);
+        for key in [
+            "remote_query_timeout_seconds",
+            "remote_query_attempts",
+            "remote_fetch_timeout_seconds",
+        ] {
+            for value in ["1", "2", "600", "4294967296", "18446744073709551615"] {
+                let text = format!(r#"{{"git":{{"{key}":{value}}}}}"#);
+                assert!(validate_policy_str(&text).is_ok(), "{text}");
+                let policy: Policy = serde_json::from_str(&text).unwrap();
+                let read = serde_json::to_value(&policy.git).unwrap()[key].clone();
+                assert_eq!(read.to_string(), value, "{text}");
+            }
+            for value in [
+                "0",
+                "-1",
+                "1.5",
+                "30.0",
+                "1e3",
+                "18446744073709551616",
+                "\"30\"",
+                "null",
+                "true",
+            ] {
+                let text = format!(r#"{{"git":{{"{key}":{value}}}}}"#);
+                let errors = validate_policy_str(&text).unwrap_err();
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.message.contains(&format!("git.{key}"))),
+                    "{text}: {errors:?}"
+                );
+                let loaded = serde_json::from_str::<Policy>(&text)
+                    .unwrap_err()
+                    .to_string();
+                assert!(loaded.contains(&format!("git.{key}")), "{text}: {loaded}");
+            }
+        }
+    }
+
+    #[test]
+    fn branch_name_omit_words_accepts_words_and_rejects_what_a_word_cannot_match() {
+        assert_eq!(
+            default_policy_value()["git"]["branch_name_omit_words"],
+            serde_json::json!(["secret", "credentials"])
+        );
+        for list in ["[]", r#"["vault","key2"]"#] {
+            let text = format!(r#"{{"git":{{"branch_name_omit_words":{list}}}}}"#);
+            validate_policy_str(&text).unwrap();
+            let policy: Policy = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                serde_json::to_value(policy).unwrap()["git"]["branch_name_omit_words"],
+                serde_json::from_str::<Value>(list).unwrap()
+            );
+        }
+        for list in [
+            r#""secret""#,
+            "[1]",
+            r#"[""]"#,
+            r#"["Secret"]"#,
+            r#"["api-key"]"#,
+            r#"["a word"]"#,
+        ] {
+            let text = format!(r#"{{"git":{{"branch_name_omit_words":{list}}}}}"#);
+            let errors = validate_policy_str(&text).unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .all(|error| error.key == "git.branch_name_omit_words"),
+                "{errors:?}"
+            );
+        }
+    }
+
     #[test]
     fn line_sync_interval_accepts_days_and_defaults_off() {
         assert_eq!(default_policy_value()["git"]["line_sync_interval"], 0);
@@ -2166,5 +2412,40 @@ mod tests {
             "commit_ticket_keys":["Refs"],"commit_ticket_required":"block",
             "commit_ticket_pattern":"^PROJ-\\d+$"}}"#;
         assert!(validate_policy_str(json).is_ok());
+    }
+
+    /// PR 600 security review finding 1: a `git.candidate_prefix` that
+    /// overlaps a sanctioned branch prefix (a shipped or a custom one), the
+    /// `integration/` prefix, the default branch or a protected pattern is
+    /// refused by the schema; a separate prefix validates.
+    #[test]
+    fn candidate_prefix_overlapping_other_branches_is_refused() {
+        for git in [
+            r#""candidate_prefix": "task/""#,
+            r#""candidate_prefix": "integration/""#,
+            r#""candidate_prefix": "main/""#,
+            r#""candidate_prefix": "release/", "protected_branches": ["main", "release/*"]"#,
+            r#""candidate_prefix": "t""#,
+            r#""candidate_prefix": "story/", "branch_prefixes": ["story/", "plan/"]"#,
+            r#""candidate_prefix": "story/cand/", "branch_prefixes": ["story/", "plan/"]"#,
+        ] {
+            let text = format!(r#"{{"git":{{{git}}}}}"#);
+            let errors = validate_policy_str(&text).unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.key == "git.candidate_prefix"
+                        && error.message.contains("overlaps")),
+                "{git}: {errors:?}"
+            );
+        }
+        for git in [
+            r#""candidate_prefix": "candidate/""#,
+            r#""candidate_prefix": "land/""#,
+            r#""candidate_prefix": "candidate/", "branch_prefixes": ["story/", "plan/"]"#,
+        ] {
+            let text = format!(r#"{{"git":{{{git}}}}}"#);
+            validate_policy_str(&text).unwrap_or_else(|errors| panic!("{git}: {errors:?}"));
+        }
     }
 }

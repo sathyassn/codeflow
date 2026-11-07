@@ -102,6 +102,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("FEEDBACK_INDEX_STALE", Runs),
     ("DOCS_CAPABILITIES_UNCHECKED", Runs),
     ("WORK_START_RECONCILE", Runs),
+    ("WORK_TARGET_TIP", Runs),
+    ("WORK_TARGET_UNVERIFIED", Runs),
     ("WORK_START_MERGE_PLANNING", Runs),
     ("WORK_START_UNBLOCK", Runs),
     ("WORK_CLASSIFICATION", Runs),
@@ -316,7 +318,11 @@ fn every_catalogued_row_is_proven_or_excluded_at_a_boundary() {
 // ---------------------------------------------------------------------------
 
 fn exe() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_codeflow"))
+    // Exercise the same proof against a preserved baseline for fail-before.
+    std::env::var_os("CODEFLOW_TEST_BINARY").map_or_else(
+        || PathBuf::from(env!("CARGO_BIN_EXE_codeflow")),
+        PathBuf::from,
+    )
 }
 
 fn home() -> &'static Path {
