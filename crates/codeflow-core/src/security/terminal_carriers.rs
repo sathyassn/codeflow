@@ -637,8 +637,9 @@ fn hc_file(args: &[String], place: &Place, out: &mut Carried) {
         return out.unread(form, "it does not name exactly one file");
     };
     if form == "hc file read" {
-        // A read is judged by the secret-read rules as `cat` of the path,
-        // where the line runs when the file is on another machine.
+        // A read is judged by the secret-read rules as `cat` of the path in
+        // its directory; a file on another machine (`--on`) has no known
+        // directory, so the form refuses (`unknown_directories`).
         return match run_directory(&parsed, place) {
             Ok(directory) => read_path(form, path, directory, out),
             Err(why) => out.unread(form, why),
@@ -718,10 +719,11 @@ fn read_path(form: &'static str, path: &str, directory: Option<PathBuf>, out: &m
 }
 
 /// Whether the carrier reader reads the call `args` (program first) in
-/// full: a known `hc` subcommand with every option known, or `herdr pane
-/// run` and `herdr agent start` read without doubt. The guards' other
-/// readers then leave the outer words to it, so its carried command is
-/// judged once, in its own directory (TSK-1344).
+/// full: a known `hc` subcommand with every option known, whose carried
+/// commands all run in a directory the guard can establish. The guards'
+/// other readers then leave the outer words to it, so its carried command
+/// is judged once, in its own directory (TSK-1344). A form with an unknown
+/// directory (`--on`, a `herdr` pane) is not fully read, and refuses.
 pub(crate) fn fully_read(args: &[String]) -> bool {
     let Some(program) = args.first() else {
         return false;

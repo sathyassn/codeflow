@@ -370,8 +370,8 @@ fn runner_violations(
 }
 
 /// Every command the line runs through `hc` or `herdr`, judged as a
-/// command of its own in the directory it runs in (where the line runs when
-/// that directory is unknown); every file `hc file write` or `hc file edit`
+/// command of its own in the directory it runs in (a form whose directory
+/// is unknown is also refused as unread); every file `hc file write` or `hc file edit`
 /// changes, held to the edit guard's path rules; and every carrier form the
 /// guard cannot read, refused on the catastrophic floor, which no policy
 /// relaxes (TSK-1344).
