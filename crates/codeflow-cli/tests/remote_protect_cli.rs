@@ -10,9 +10,7 @@
 //! `remote protect --dry-run` against a stand-in that holds split `main`
 //! rulesets and a manual registry ruleset, and refuses every write.
 
-use std::path::Path;
-#[cfg(unix)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 #[path = "support/process_folders.rs"]
