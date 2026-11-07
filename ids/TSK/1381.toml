@@ -1,0 +1,11 @@
+id = "TSK-1381"
+uid = "052686d1-b231-4365-9150-9c1661ddc3e7"
+kind = "TSK"
+title = "Guards judge commands run through other terminal launchers the same as bare commands"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-07T19:50:46Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
