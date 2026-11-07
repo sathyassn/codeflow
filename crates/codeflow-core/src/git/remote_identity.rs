@@ -265,12 +265,26 @@ fn refuse_transport_settings(entries: &[Entry], subsection: &str) -> Result<(), 
     Ok(())
 }
 
+/// The keys a path-conditional include may not set: URL rewrites, remote
+/// settings, further includes, and the SSH client git runs
+/// (`core.sshCommand`, `ssh.*`), each of which can change what a later fetch
+/// reaches without changing the URL read here.
+const PATH_CONDITIONAL_REFUSED: &[&str] = &[
+    "url.",
+    "remote.",
+    "include.",
+    "includeif.",
+    "core.sshcommand",
+    "ssh.",
+];
+
 /// Refuse when the configuration includes a file on a `gitdir` condition
-/// and that file sets a URL rewrite, a remote setting or a further include.
+/// and that file sets a URL rewrite, a remote setting, a further include or
+/// an SSH client setting ([`PATH_CONDITIONAL_REFUSED`]).
 /// Whether git applies such a file depends on the path a command reaches
 /// the repository by (a symbolic link, `GIT_DIR` as written), which this
 /// read cannot know, so its answer would not bind a later fetch or push.
-fn refuse_path_conditional_remote_settings(entries: &[Entry]) -> Result<(), String> {
+fn refuse_path_conditional_remote_settings(entries: &[Entry], root: &Path) -> Result<(), String> {
     for entry in entries {
         let Some(condition) = entry
             .key
@@ -291,15 +305,15 @@ fn refuse_path_conditional_remote_settings(entries: &[Entry]) -> Result<(), Stri
         if !(condition.starts_with("gitdir:") || condition.starts_with("gitdir/i:")) {
             continue;
         }
-        let file = included_path(entry).ok_or_else(|| {
+        let file = included_path(entry, root).ok_or_else(|| {
             format!(
                 "a configuration file is included on the condition {shown_condition} from {}, and its path cannot be resolved here, so whether it changes the remote cannot be checked",
                 super::display_text(&entry.origin)
             )
         })?;
         match crate::absence::symlink_metadata_optional(&file) {
-            // Git skips an include that names no file; absence must be
-            // proven through the file's ancestors.
+            // Git skips an include that names no file; absence is proven
+            // through the ancestors of the absolute path git reads.
             Ok(None) => continue,
             Ok(Some(_)) => {}
             Err(error) => {
@@ -323,7 +337,7 @@ fn refuse_path_conditional_remote_settings(entries: &[Entry]) -> Result<(), Stri
                 )
             })?;
         if let Some(found) = listed.iter().find(|found| {
-            ["url.", "remote.", "include.", "includeif."]
+            PATH_CONDITIONAL_REFUSED
                 .iter()
                 .any(|prefix| found.key.starts_with(prefix))
         }) {
@@ -339,8 +353,11 @@ fn refuse_path_conditional_remote_settings(entries: &[Entry]) -> Result<(), Stri
 
 /// The file an include entry names, resolved as git resolves it: `~/`
 /// under the home directory, a relative path beside the file that holds
-/// the entry. `None` when git's answer cannot be reproduced here.
-fn included_path(entry: &Entry) -> Option<std::path::PathBuf> {
+/// the entry. Git run with `-C root` names a repository file relative to
+/// `root` (`file:.git/config`), so a relative holder resolves against
+/// `root`, never against this process's directory. `None` when git's
+/// answer cannot be reproduced here.
+fn included_path(entry: &Entry, root: &Path) -> Option<std::path::PathBuf> {
     let value = entry.value.as_str();
     if value.is_empty() {
         return None;
@@ -355,8 +372,224 @@ fn included_path(entry: &Entry) -> Option<std::path::PathBuf> {
     if path.is_absolute() {
         return Some(path.to_path_buf());
     }
-    let holder = entry.origin.strip_prefix("file:")?;
-    Path::new(holder).parent().map(|dir| dir.join(path))
+    // `root` is the directory git ran in; joining keeps an absolute holder.
+    let holder = root.join(entry.origin.strip_prefix("file:")?);
+    holder.parent().map(|dir| dir.join(path))
+}
+
+/// The `ssh -G` settings that choose where an SSH connection goes: the host
+/// it reaches, its port and user, the key name it checks, and any program
+/// or host it goes through.
+pub const SSH_ENDPOINT_KEYS: &[&str] = &[
+    "hostname",
+    "port",
+    "user",
+    "hostkeyalias",
+    "proxycommand",
+    "proxyjump",
+];
+
+/// The options [`super::remote_query::advertises_any_ref`] gives `ssh`
+/// (its `HERMETIC_SSH` after the program name): no configuration file.
+const HERMETIC_SSH_OPTIONS: &[&str] = &["-F", "none", "-o", "BatchMode=yes"];
+
+/// Refuse when, for an SSH `url`, the endpoint a later git fetch or push
+/// reaches can differ from the one the hermetic query asks. The query runs
+/// plain `ssh` with no configuration file; git runs the program
+/// `GIT_SSH_COMMAND`, `core.sshCommand` or `GIT_SSH` names, or `ssh` with
+/// the user's SSH configuration (`HostName`, `Port`, `User`,
+/// `ProxyCommand`, `ProxyJump` and the like). A configured program is
+/// refused, since what it reaches cannot be read; otherwise both views are
+/// resolved with `ssh -G`, which connects nowhere, and every setting in
+/// [`SSH_ENDPOINT_KEYS`] must agree. Any doubt refuses. Other transports
+/// pass. Owned by TSK-1184; the pre-push destination check (TSK-327) can
+/// call it for the URL it asks, from the push's view of the configuration.
+///
+/// # Errors
+///
+/// The configuration cannot be read, a program is configured, the URL
+/// names no host this check can pass to `ssh`, `ssh -G` fails, or the two
+/// endpoints differ.
+pub fn require_hermetic_ssh_endpoint(
+    root: &Path,
+    url: &str,
+    limits: QueryLimits,
+) -> Result<(), String> {
+    if transport(url) != "ssh" {
+        return Ok(());
+    }
+    let entries =
+        entries(root, limits).map_err(|why| format!("the configuration cannot be read ({why})"))?;
+    ssh_endpoint_agrees(&entries, url, limits)
+}
+
+fn ssh_endpoint_agrees(entries: &[Entry], url: &str, limits: QueryLimits) -> Result<(), String> {
+    if transport(url) != "ssh" {
+        return Ok(());
+    }
+    refuse_ssh_program_choice(entries, |name| std::env::var_os(name))?;
+    let target = ssh_target(url)?;
+    let configured = ssh_endpoint(&[], &target, limits)?;
+    let hermetic = ssh_endpoint(HERMETIC_SSH_OPTIONS, &target, limits)?;
+    let differ: Vec<String> = SSH_ENDPOINT_KEYS
+        .iter()
+        .filter_map(|key| {
+            let mine = configured.get(*key);
+            let asked = hermetic.get(*key);
+            (mine != asked).then(|| {
+                format!(
+                    "{key} {} where the hermetic question uses {}",
+                    shown_setting(mine),
+                    shown_setting(asked)
+                )
+            })
+        })
+        .collect();
+    if differ.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "the SSH configuration git uses for {} reaches a different endpoint ({}) from the one the hermetic question asks, so its answer would not cover a later fetch or push",
+        shown(url),
+        differ.join("; ")
+    ))
+}
+
+fn shown_setting(value: Option<&String>) -> String {
+    value.map_or_else(|| "nothing".into(), |value| super::display_text(value))
+}
+
+/// Refuse when the SSH program git would run is configured: whatever it
+/// connects to cannot be read here. `GIT_SSH_COMMAND` and `GIT_SSH` come
+/// from `lookup` (the environment a later git inherits); `core.sshCommand`
+/// and an `ssh.variant` other than `ssh` or `auto` from the configuration.
+fn refuse_ssh_program_choice(
+    entries: &[Entry],
+    lookup: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Result<(), String> {
+    for variable in ["GIT_SSH_COMMAND", "GIT_SSH"] {
+        if lookup(variable).is_some() {
+            return Err(format!(
+                "{variable} is set, so git would run a chosen SSH program whose endpoint cannot be read here"
+            ));
+        }
+    }
+    for entry in entries {
+        let chosen = match entry.key.as_str() {
+            "core.sshcommand" => true,
+            "ssh.variant" => !matches!(entry.value.as_str(), "ssh" | "auto"),
+            _ => false,
+        };
+        if chosen {
+            return Err(format!(
+                "{} is set to {} ({}), so git would run a chosen SSH program whose endpoint cannot be read here",
+                entry.key,
+                super::display_text(&entry.value),
+                super::display_text(&entry.origin)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The arguments git passes `ssh` for `url`: an optional `-p <port>`, then
+/// `[user@]host`. A form this check cannot read as git does refuses.
+#[derive(Debug, PartialEq, Eq)]
+struct SshTarget {
+    port: Option<String>,
+    destination: String,
+}
+
+fn ssh_target(url: &str) -> Result<SshTarget, String> {
+    let cannot = || {
+        format!(
+            "the SSH address in {} cannot be read as git reads it, so its endpoint cannot be checked",
+            shown(url)
+        )
+    };
+    let (authority, scheme_form) = match url.find("://") {
+        Some(at) => {
+            let rest = &url[at + 3..];
+            (&rest[..rest.find('/').unwrap_or(rest.len())], true)
+        }
+        None => (&url[..url.find(':').ok_or_else(cannot)?], false),
+    };
+    let (user, hostport) = match authority.rfind('@') {
+        Some(at) => (Some(&authority[..at]), &authority[at + 1..]),
+        None => (None, authority),
+    };
+    let (host, port) = if !scheme_form {
+        (hostport, None)
+    } else if let Some(inner) = hostport.strip_prefix('[') {
+        let (host, after) = inner.split_once(']').ok_or_else(cannot)?;
+        (host, after.strip_prefix(':'))
+    } else {
+        match hostport.rsplit_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (hostport, None),
+        }
+    };
+    let port = port.filter(|port| !port.is_empty());
+    let plain = |text: &str| {
+        !text.is_empty()
+            && !text.starts_with('-')
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
+    };
+    if !plain(host)
+        || user.is_some_and(|user| !plain(user))
+        || port.is_some_and(|port| !port.chars().all(|c| c.is_ascii_digit()))
+    {
+        return Err(cannot());
+    }
+    Ok(SshTarget {
+        port: port.map(str::to_string),
+        destination: match user {
+            Some(user) => format!("{user}@{host}"),
+            None => host.to_string(),
+        },
+    })
+}
+
+/// The endpoint settings `ssh -G` resolves for `target` with `options`
+/// before the target. `ssh -G` prints the configuration and connects
+/// nowhere.
+fn ssh_endpoint(
+    options: &[&str],
+    target: &SshTarget,
+    limits: QueryLimits,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let mut command = std::process::Command::new("ssh");
+    command.args(options).arg("-G");
+    if let Some(port) = &target.port {
+        command.arg("-p").arg(port);
+    }
+    command.arg(&target.destination).env("LC_ALL", "C");
+    let view = if options.is_empty() {
+        "the user's SSH configuration"
+    } else {
+        "no SSH configuration"
+    };
+    let answer = super::remote_query::bounded_text(command, limits.timeout())
+        .map_err(|why| format!("ssh could not resolve its settings with {view} ({why})"))?;
+    let endpoint = parse_ssh_settings(&answer);
+    if !endpoint.contains_key("hostname") {
+        return Err(format!("ssh resolved no host name with {view}"));
+    }
+    Ok(endpoint)
+}
+
+/// The [`SSH_ENDPOINT_KEYS`] in `ssh -G` output, one `key value` per line
+/// split on the newline and the first space it prints; a value of `none`
+/// is no setting.
+fn parse_ssh_settings(answer: &str) -> std::collections::BTreeMap<String, String> {
+    answer
+        .split('\n')
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(key, value)| SSH_ENDPOINT_KEYS.contains(key) && *value != "none")
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect()
 }
 
 /// Check that remote `name`, configured as `raw`, is the remote git fetches
@@ -364,8 +597,10 @@ fn included_path(entry: &Entry) -> Option<std::path::PathBuf> {
 /// then `raw` is the identity the hermetic query may ask. Each failure is a
 /// refusal: a transport outside the list or replaced by a remote setting
 /// ([`require_native_transport`]), a remote setting that a path-dependent
-/// include may apply, an effective URL that cannot be read, and one that
-/// differs from `raw`, each named with both identities.
+/// include may apply, an effective URL that cannot be read, one that
+/// differs from `raw`, each named with both identities, and, for an SSH
+/// remote, an SSH client or configuration that reaches another endpoint
+/// ([`require_hermetic_ssh_endpoint`]).
 ///
 /// # Errors
 ///
@@ -381,7 +616,8 @@ pub fn verify(root: &Path, name: &str, raw: &str, limits: QueryLimits) -> Result
         )
     })?;
     refuse_transport_settings(&entries, name).map_err(|why| format!("{why}; {remedy}"))?;
-    refuse_path_conditional_remote_settings(&entries).map_err(|why| format!("{why}; {remedy}"))?;
+    refuse_path_conditional_remote_settings(&entries, root)
+        .map_err(|why| format!("{why}; {remedy}"))?;
     for (push, verb) in [(false, "fetches from"), (true, "pushes to")] {
         let urls = effective_urls(root, name, push, limits).map_err(|why| {
             format!(
@@ -402,7 +638,10 @@ pub fn verify(root: &Path, name: &str, raw: &str, limits: QueryLimits) -> Result
             ));
         }
     }
-    require_safe_protocol(raw).map_err(|why| format!("{why}; {remedy}"))
+    require_safe_protocol(raw).map_err(|why| format!("{why}; {remedy}"))?;
+    ssh_endpoint_agrees(&entries, raw, limits).map_err(|why| {
+        format!("{why}; the operator compares the host's resolved SSH settings with and without the SSH configuration files, or fetches the remote once it holds its default branch")
+    })
 }
 
 #[cfg(test)]
@@ -516,11 +755,11 @@ mod tests {
         assert!(!listed[0].exact);
         assert!(listed[1].exact);
         assert!(refuse_transport_settings(&listed, "origin").is_ok());
-        assert!(refuse_path_conditional_remote_settings(&listed).is_ok());
+        assert!(refuse_path_conditional_remote_settings(&listed, Path::new("/r")).is_ok());
         let include =
             parse_entries(b"file:/r/.git/config\0includeif.gitdir:/x/.git.path\n/w\xff.config\0")
                 .unwrap();
-        let error = refuse_path_conditional_remote_settings(&include).unwrap_err();
+        let error = refuse_path_conditional_remote_settings(&include, Path::new("/r")).unwrap_err();
         assert!(error.contains("not valid UTF-8"), "{error}");
     }
 
@@ -532,20 +771,31 @@ mod tests {
             value: value.into(),
             exact: true,
         };
+        let root = Path::new("/srv/repo");
         assert_eq!(
-            included_path(&entry("file:/home/u/.gitconfig", "work.config")),
+            included_path(&entry("file:/home/u/.gitconfig", "work.config"), root),
             Some(std::path::PathBuf::from("/home/u/work.config"))
         );
+        // Git run with `-C root` names the repository file relative to
+        // root; the include resolves beside it, never in this process's
+        // directory (TSK-1184 delta finding 1).
         assert_eq!(
-            included_path(&entry("file:/home/u/.gitconfig", "/etc/w.config")),
+            included_path(&entry("file:.git/config", "rel.config"), root),
+            Some(std::path::PathBuf::from("/srv/repo/.git/rel.config"))
+        );
+        assert_eq!(
+            included_path(&entry("file:/home/u/.gitconfig", "/etc/w.config"), root),
             Some(std::path::PathBuf::from("/etc/w.config"))
         );
-        assert_eq!(included_path(&entry("command line:", "rel.config")), None);
         assert_eq!(
-            included_path(&entry("file:/h/.gitconfig", "~other/x")),
+            included_path(&entry("command line:", "rel.config"), root),
             None
         );
-        assert_eq!(included_path(&entry("file:/h/.gitconfig", "")), None);
+        assert_eq!(
+            included_path(&entry("file:/h/.gitconfig", "~other/x"), root),
+            None
+        );
+        assert_eq!(included_path(&entry("file:/h/.gitconfig", ""), root), None);
     }
 
     #[test]
@@ -574,5 +824,151 @@ mod tests {
     fn userinfo_is_hidden_in_refusals() {
         let error = require_safe_protocol("ftp://user:FAKE@h/r").unwrap_err();
         assert!(!error.contains("FAKE"), "{error}");
+    }
+
+    /// Delta finding 2: the arguments git gives `ssh`, and every form this
+    /// check cannot pass on as git does refuses.
+    #[test]
+    fn ssh_targets_follow_git_and_refuse_the_unreadable() {
+        let target = |port: Option<&str>, destination: &str| SshTarget {
+            port: port.map(str::to_string),
+            destination: destination.into(),
+        };
+        for (url, expected) in [
+            ("ssh://127.0.0.1/r.git", target(None, "127.0.0.1")),
+            (
+                "ssh://git@127.0.0.1:2222/r.git",
+                target(Some("2222"), "git@127.0.0.1"),
+            ),
+            ("git+ssh://localhost:/r.git", target(None, "localhost")),
+            ("ssh://[::1]:22/r.git", target(Some("22"), "::1")),
+            ("git@127.0.0.1:owner/r.git", target(None, "git@127.0.0.1")),
+            ("localhost:r.git", target(None, "localhost")),
+        ] {
+            assert_eq!(ssh_target(url).unwrap(), expected, "{url}");
+        }
+        for url in [
+            "ssh://-oProxyCommand=x/r",
+            "ssh://127.0.0.1:22x/r",
+            "ssh://127.0.0.1%2e/r",
+            "[127.0.0.1:22]:r",
+            "ssh://a b@127.0.0.1/r",
+            "ssh:///r",
+        ] {
+            assert!(ssh_target(url).is_err(), "{url}");
+        }
+    }
+
+    /// Delta finding 2: a chosen SSH program refuses, from the environment
+    /// or the configuration; `ssh.variant` of `ssh` or `auto` does not.
+    #[test]
+    fn a_chosen_ssh_program_refuses() {
+        let none = |_: &str| None;
+        let entry = |key: &str, value: &str| Entry {
+            origin: "file:/r/.git/config".into(),
+            key: key.into(),
+            value: value.into(),
+            exact: true,
+        };
+        assert!(refuse_ssh_program_choice(&[], none).is_ok());
+        for variable in ["GIT_SSH_COMMAND", "GIT_SSH"] {
+            let error = refuse_ssh_program_choice(&[], |name: &str| {
+                (name == variable).then(|| "wrapper".into())
+            })
+            .unwrap_err();
+            assert!(error.contains(variable), "{error}");
+        }
+        let error =
+            refuse_ssh_program_choice(&[entry("core.sshcommand", "ssh -i k")], none).unwrap_err();
+        assert!(error.contains("core.sshcommand"), "{error}");
+        let error = refuse_ssh_program_choice(&[entry("ssh.variant", "plink")], none).unwrap_err();
+        assert!(error.contains("ssh.variant"), "{error}");
+        for variant in ["ssh", "auto"] {
+            assert!(refuse_ssh_program_choice(&[entry("ssh.variant", variant)], none).is_ok());
+        }
+    }
+
+    #[test]
+    fn ssh_settings_keep_only_endpoint_keys() {
+        let parsed = parse_ssh_settings(
+            "user me\nhostname h.invalid\nport 22\nproxycommand none\nidentityfile ~/.ssh/id\nproxyjump j.invalid\n",
+        );
+        assert_eq!(
+            parsed.get("hostname").map(String::as_str),
+            Some("h.invalid")
+        );
+        assert_eq!(
+            parsed.get("proxyjump").map(String::as_str),
+            Some("j.invalid")
+        );
+        assert!(!parsed.contains_key("proxycommand"));
+        assert!(!parsed.contains_key("identityfile"));
+    }
+
+    /// Delta finding 2, with the real `ssh -G` and a fixture configuration
+    /// file (never the user's): a `Host` block that moves the host and port
+    /// is a different endpoint from the hermetic view, and one that changes
+    /// nothing on the endpoint is the same.
+    #[test]
+    fn ssh_configuration_that_moves_the_endpoint_is_seen() {
+        let dir = tempfile::tempdir().unwrap();
+        let moved = dir.path().join("moved");
+        std::fs::write(
+            &moved,
+            "Host 127.0.0.1\n\tHostName 127.0.0.2\n\tPort 2222\n\tProxyJump 127.0.0.3\n",
+        )
+        .unwrap();
+        let same = dir.path().join("same");
+        std::fs::write(&same, "Host 127.0.0.1\n\tServerAliveInterval 30\n").unwrap();
+        let target = ssh_target("ssh://127.0.0.1/r.git").unwrap();
+        let limits = QueryLimits::guard();
+        let hermetic = match ssh_endpoint(HERMETIC_SSH_OPTIONS, &target, limits) {
+            Ok(view) => view,
+            Err(why)
+                if std::process::Command::new("ssh")
+                    .arg("-V")
+                    .output()
+                    .is_err() =>
+            {
+                eprintln!("skipped: no ssh on this host ({why})");
+                return;
+            }
+            Err(why) => panic!("{why}"),
+        };
+        let view =
+            |file: &Path| ssh_endpoint(&["-F", file.to_str().unwrap()], &target, limits).unwrap();
+        let moved = view(&moved);
+        assert_eq!(moved.get("hostname").map(String::as_str), Some("127.0.0.2"));
+        assert_ne!(moved.get("port"), hermetic.get("port"));
+        assert!(moved.contains_key("proxyjump"));
+        assert_eq!(
+            hermetic.get("hostname").map(String::as_str),
+            Some("127.0.0.1")
+        );
+        let same = view(&same);
+        for key in SSH_ENDPOINT_KEYS {
+            assert_eq!(same.get(*key), hermetic.get(*key), "{key}");
+        }
+    }
+
+    /// Delta finding 2: a path-conditional include that sets the SSH client
+    /// is refused by class, since the URL comparison would not move.
+    #[test]
+    fn a_path_conditional_ssh_setting_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        for (body, key) in [
+            ("[core]\n\tsshCommand = ssh -F /tmp/x\n", "core.sshcommand"),
+            ("[ssh]\n\tvariant = plink\n", "ssh.variant"),
+        ] {
+            std::fs::write(dir.path().join("ssh.config"), body).unwrap();
+            let include = [Entry {
+                origin: format!("file:{}/.git/config", dir.path().display()),
+                key: "includeif.gitdir:/elsewhere/.git.path".into(),
+                value: dir.path().join("ssh.config").to_str().unwrap().into(),
+                exact: true,
+            }];
+            let error = refuse_path_conditional_remote_settings(&include, dir.path()).unwrap_err();
+            assert!(error.contains(key), "{error}");
+        }
     }
 }
