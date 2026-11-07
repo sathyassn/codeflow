@@ -33,6 +33,8 @@ pub mod status_verb;
 pub mod store;
 pub mod work_start;
 
+pub mod main_sync;
+
 pub use allocate::{
     create_epic, create_spec, create_task, next_epic_id, next_spec_id, next_task_id, NewRecord,
 };

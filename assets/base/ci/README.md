@@ -155,8 +155,8 @@ when the checkout changes the table. Requiring the
 table there would leave a fresh `codeflow init`, and the first upgrade that
 adds it, unable to pass, since the target they are judged by has no table
 yet. A missing checksum file, a missing entry or a mismatch fails the job;
-nothing unverified is installed. The verdict job, `trusted: commit
-standards`, runs on `pull_request_target`, which takes the workflow from the
+nothing unverified is installed. The verdict job, `commit standards`,
+runs on `pull_request_target`, which takes the workflow from the
 default branch for every pull request whatever it targets. It checks that
 the run is for the default branch, checks out exactly that commit
 (`github.sha`), so the default branch's pin and policy apply to a pull
@@ -436,7 +436,10 @@ the base and waits for the fresh run first.
   the profile's approvals, and strict checks pinned to the identity that
   must produce them: the GitHub App given by `--check-app <id>` for the
   `authority:` names (Mode A), else GitHub Actions for the `trusted:` names
-  (Mode B). No force push, no deletion, no bypass.
+  (Mode B). No force push, no deletion, no bypass. Mode B is a lower
+  tier: it does not close forgery by a later producer, since a workflow
+  that runs after the verdict job can still produce a `trusted:` check;
+  only Mode A, the App authority, closes it.
 - "codeflow line checks" on the integration lines (`--lines`, default
   `integration/**`): a pull request, the `trusted:` names and the test
   verdicts pinned to GitHub Actions and strict, no force push, no deletion,

@@ -28,7 +28,9 @@
 //! integration lines, an `authority:` check pinned to GitHub Actions, an
 //! authority environment that admits more than the default branch or that
 //! a second job references, and a foreign ruleset that requires a name no
-//! workflow on the default branch produces.
+//! workflow on the default branch produces. When B pins no `authority:`
+//! name to an App, it says that Mode B does not close forgery by a later
+//! producer and that only Mode A does, without changing the status.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -38,7 +40,7 @@ use serde_json::Value;
 use super::{CheckResult, Options, Status};
 use crate::remedy;
 use crate::remote::{
-    self, Profile, Targeting, AUTHORITY_PREFIX, DEFAULT_LINES, GITHUB_ACTIONS_APP_ID,
+    self, Profile, Targeting, AUTHORITY_PREFIX, DEFAULT_LINES, GITHUB_ACTIONS_APP_ID, MODE_B_LIMIT,
     POLICY_WORKFLOW, RULESET_AUTHORITY_CHECKS, RULESET_AUTHORITY_UPDATES, RULESET_LINE_CHECKS,
 };
 
@@ -152,7 +154,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     let mut message = match &base {
         Answer::Pass(m) | Answer::Warn(m) | Answer::Note(m) => m.clone(),
     };
-    for part in extra.warns.iter().chain(&extra.unread) {
+    for part in extra.warns.iter().chain(&extra.unread).chain(&extra.tiers) {
         message = format!("{message}; {part}");
     }
     if !extra.fails.is_empty() {
@@ -237,12 +239,14 @@ fn base_answer(
 }
 
 /// What the perimeter `remote protect` writes adds to the answer: failures
-/// (an open recovery window), warnings and what could not be read.
+/// (an open recovery window), warnings, what could not be read and the
+/// check identity's tier, which is said without changing the status.
 #[derive(Default)]
 struct Perimeter {
     fails: Vec<String>,
     warns: Vec<String>,
     unread: Vec<String>,
+    tiers: Vec<String>,
 }
 
 /// Judge the owned rulesets, the line rules, the authority environment and
@@ -291,8 +295,39 @@ fn perimeter(
     line_rules(&rulesets, &lines, profile.is_some(), &mut out);
 
     loose_authority_pins(&rulesets, &mut out);
+    check_identity_tier(&rulesets, &mut out);
     declared_findings(gh, nwo, branch, &rulesets, &mut out);
     out
+}
+
+/// Mode B named as the lower tier it is (TSK-1177 F1): B requires no
+/// `authority:` name pinned to an App, so its `trusted:` names are pinned
+/// to GitHub Actions, and a producer that runs after the verdict job can
+/// still satisfy one. Said whenever B is on the host; the status is
+/// unchanged, since a private repository on GitHub Free has no Mode A.
+fn check_identity_tier(rulesets: &[Value], out: &mut Perimeter) {
+    let owned: Vec<&Value> = rulesets
+        .iter()
+        .filter(|r| r["name"] == RULESET_AUTHORITY_CHECKS && r["enforcement"] == "active")
+        .collect();
+    if owned.is_empty() {
+        return;
+    }
+    let app_pinned = owned.iter().any(|ruleset| {
+        status_checks(ruleset).any(|check| {
+            check["context"]
+                .as_str()
+                .is_some_and(|c| c.starts_with(AUTHORITY_PREFIX))
+                && check["integration_id"]
+                    .as_u64()
+                    .is_some_and(|app| app != GITHUB_ACTIONS_APP_ID)
+        })
+    });
+    if !app_pinned {
+        out.tiers.push(format!(
+            "check identity: Mode B, since {RULESET_AUTHORITY_CHECKS} pins no authority: name to an App; {MODE_B_LIMIT} (`codeflow remote protect --check-app <id>`)"
+        ));
+    }
 }
 
 /// An open recovery window: any ruleset named as B or C names a bypass
@@ -1150,7 +1185,7 @@ mod tests {
         }
     }
 
-    const SIX: &str = r#"[{"context":"codeflow gates","integration_id":15368},{"context":"trusted: commit standards","integration_id":15368},{"context":"release impact","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"windows","integration_id":15368}]"#;
+    const SIX: &str = r#"[{"context":"codeflow gates","integration_id":15368},{"context":"commit standards","integration_id":15368},{"context":"release impact","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"windows","integration_id":15368}]"#;
 
     /// The answers of a host whose default branch `main` carries `rules`
     /// (the body of `rules/branches/main`), `classic` protection (or 404)
@@ -1342,7 +1377,7 @@ mod tests {
                 args,
                 "[]",
                 Some(
-                    r#"{"required_status_checks":{"strict":true,"contexts":["codeflow gates","secret scan","security review","trusted: commit standards"]},"enforce_admins":{"enabled":false}}"#,
+                    r#"{"required_status_checks":{"strict":true,"contexts":["codeflow gates","secret scan","security review","commit standards"]},"enforce_admins":{"enabled":false}}"#,
                 ),
                 "[]",
             )
@@ -1473,7 +1508,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
         std::fs::write(
             dir.path().join(".codeflow/policy.json"),
-            r#"{"git":{"required_checks":["codeflow gates","secret scan","security review","trusted: commit standards","linux"]}}"#,
+            r#"{"git":{"required_checks":["codeflow gates","secret scan","security review","commit standards","linux"]}}"#,
         )
         .unwrap();
         let text = warn_text(&check(&opts(dir.path(), exec)));
@@ -1488,7 +1523,7 @@ mod tests {
     }
 
     /// The four policy names as ruleset check objects.
-    const FOUR: &str = r#"[{"context":"codeflow gates","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"trusted: commit standards","integration_id":15368}]"#;
+    const FOUR: &str = r#"[{"context":"codeflow gates","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"commit standards","integration_id":15368}]"#;
 
     const ONE_ACTOR: &str =
         r#"[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]"#;
@@ -1532,14 +1567,14 @@ mod tests {
                 args,
                 "[]",
                 Some(
-                    r#"{"required_status_checks":{"strict":false,"contexts":["codeflow gates","secret scan","security review","trusted: commit standards"]},"enforce_admins":{"enabled":false}}"#,
+                    r#"{"required_status_checks":{"strict":false,"contexts":["codeflow gates","secret scan","security review","commit standards"]},"enforce_admins":{"enabled":false}}"#,
                 ),
             )
         }
         let dir = project();
         let text = warn_text(&check(&opts(dir.path(), ruleset_exec)));
         assert!(
-            text.contains("ruleset 2 lets 1 actor(s) bypass it, and no rule that binds everyone requires codeflow gates, secret scan, security review, trusted: commit standards"),
+            text.contains("ruleset 2 lets 1 actor(s) bypass it, and no rule that binds everyone requires codeflow gates, secret scan, security review, commit standards"),
             "{text}"
         );
         let text = warn_text(&check(&opts(dir.path(), classic_exec)));
@@ -1864,9 +1899,7 @@ mod tests {
 on: pull_request_target
 jobs:
   commit-standards:
-    name: 'trusted: commit standards'
-  secret-scan:
-    name: 'trusted: secret scan'
+    name: 'commit standards'
   authority:
     environment: codeflow-authority
     steps:
@@ -1914,11 +1947,7 @@ jobs:
     /// A, B and C as `remote protect` writes them for the solo profile in
     /// Mode B, and the workflows that declare their names.
     fn protected_world() -> World {
-        let trusted = checks(&[
-            ("trusted: commit standards", 15368),
-            ("trusted: secret scan", 15368),
-            ("codeflow gates", 15368),
-        ]);
+        let trusted = checks(&[("commit standards", 15368), ("codeflow gates", 15368)]);
         World {
             rulesets: vec![
                 serde_json::json!({
@@ -1970,6 +1999,18 @@ jobs:
     fn the_rulesets_protect_writes_pass_for_their_profile() {
         let result = judge(protected_world(), Some("solo-administrator"));
         assert_eq!(result.status, Status::Pass, "{}", result.message);
+        // TSK-1177 F1: Mode B is named as the lower tier, without a warning.
+        for expected in [
+            "check identity: Mode B",
+            "it does not close forgery by a later producer",
+            "only Mode A, the App authority, closes it",
+        ] {
+            assert!(
+                result.message.contains(expected),
+                "{expected}: {}",
+                result.message
+            );
+        }
         // The host answers A's update rule without its parameter when it is
         // off; only an explicit `true` is a gap.
         let mut world = protected_world();
@@ -2159,6 +2200,29 @@ jobs:
         assert!(!text.contains("authority: secret scan from"), "{text}");
     }
 
+    /// TSK-1177 F1: with the `authority:` names pinned to an App (Mode A),
+    /// doctor does not name the Mode B tier; with none, it does.
+    #[test]
+    fn only_mode_b_is_named_as_the_lower_tier() {
+        let mut world = protected_world();
+        ruleset_mut(&mut world, "codeflow authority checks")["rules"][1]["parameters"]
+            ["required_status_checks"] = checks(&[
+            ("authority: commit standards", 4242),
+            ("authority: secret scan", 4242),
+            ("codeflow gates", 15368),
+        ]);
+        let result = judge(world, None);
+        assert!(!result.message.contains("Mode B"), "{}", result.message);
+        let result = judge(protected_world(), None);
+        assert!(
+            result
+                .message
+                .contains("does not close forgery by a later producer"),
+            "{}",
+            result.message
+        );
+    }
+
     /// AC-3: an authority environment that admits more than the default
     /// branch warns; one that admits `main` alone does not.
     #[test]
@@ -2227,8 +2291,8 @@ jobs:
     }
 
     /// AC-3: a foreign ruleset that requires names no workflow on the
-    /// default branch produces (this repository's 24379074 once the old
-    /// names are gone) warns with the route.
+    /// default branch produces (here `release impact` and `secret scan`,
+    /// which the fixture's workflows do not declare) warns with the route.
     #[test]
     fn a_foreign_ruleset_requiring_a_name_nothing_produces_warns() {
         let mut world = protected_world();
@@ -2239,12 +2303,12 @@ jobs:
             "rules": [{ "type": "required_status_checks", "parameters": {
                 "strict_required_status_checks_policy": true,
                 "required_status_checks": checks(&[
-                    ("codeflow gates", 15368), ("commit standards", 15368), ("secret scan", 15368)
+                    ("codeflow gates", 15368), ("release impact", 15368), ("secret scan", 15368)
                 ]) } }]
         }));
         let text = warn_text(&judge(world, None));
         assert!(
-            text.contains("ruleset 'main required checks' (24379074) requires commit standards, secret scan, which no workflow on main produces"),
+            text.contains("ruleset 'main required checks' (24379074) requires release impact, secret scan, which no workflow on main produces"),
             "{text}"
         );
         assert!(

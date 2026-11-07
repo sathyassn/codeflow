@@ -649,10 +649,10 @@ fn a_3_1_orphan_behind_a_completed_runs_record_refuses_a_reserve() {
     assert!(root.path().join("reserved-ran").exists());
 }
 
-/// TSK-1256, Windows: a killed gate's target and its grandchild end with
-/// the gate (the kill-on-close job), and an older binary's exclusive take
-/// of `full-gate.lock` succeeds only once both are gone, never while one
-/// still runs.
+/// TSK-1256, TSK-1318, Windows: when a gate is killed, its fence watcher ends
+/// the job that holds the target and its grandchild, and an older binary's
+/// exclusive take of `full-gate.lock` succeeds only once both are gone, never
+/// while one still runs.
 #[cfg(windows)]
 #[test]
 fn a_killed_gates_target_tree_ends_before_older_binaries_get_in() {
@@ -704,33 +704,143 @@ fn a_killed_gates_target_tree_ends_before_older_binaries_get_in() {
     let grandchild = wait_for_target_pid(&mut gate.0, &rx, &root.path().join("grandchild.txt"));
     let _end = (EndTarget(Some(target)), EndTarget(Some(grandchild)));
     let fence = home.path().join("locks").join("full-gate.lock");
-    assert!(still_runs(target) && still_runs(grandchild));
+    let mut tree = [
+        TreeProcess::watch("target", target),
+        TreeProcess::watch("grandchild", grandchild),
+    ];
+    assert!(tree.iter().all(TreeProcess::runs));
     assert!(
         !older_take(&fence),
         "the running gate keeps older binaries out"
     );
+    let killed = Instant::now();
     gate.0.kill().unwrap();
     gate.0.wait().unwrap();
+    let kill_to_gate_end = killed.elapsed();
     let deadline = Instant::now() + Duration::from_secs(60);
+    let mut refused_takes = 0_u32;
     loop {
-        let alive_before = still_runs(target) || still_runs(grandchild);
+        let alive_before = tree.iter().any(TreeProcess::runs);
         let taken = older_take(&fence);
-        let alive_after = still_runs(target) || still_runs(grandchild);
+        let kill_to_take = killed.elapsed();
+        let alive_after: Vec<String> = tree
+            .iter()
+            .filter(|process| process.runs())
+            .map(TreeProcess::name)
+            .collect();
         if taken {
+            let ends: Vec<String> = tree
+                .iter_mut()
+                .map(|process| process.kill_to_end(killed))
+                .collect();
+            let timing = format!(
+                "kill to gate end {} ms; kill to take {} ms after {refused_takes} refused \
+                 takes; {}",
+                kill_to_gate_end.as_millis(),
+                kill_to_take.as_millis(),
+                ends.join("; ")
+            );
+            println!("killed gate timing: {timing}");
             assert!(
-                !alive_after,
+                alive_after.is_empty(),
                 "an older take succeeded while the killed gate's target tree still ran \
-                 (alive before the take: {alive_before})"
+                 (alive before the take: {alive_before}; alive after the take: {}; {timing})",
+                alive_after.join(", ")
             );
             break;
         }
         assert!(
             Instant::now() < deadline,
-            "the fence never freed after the gate was killed (tree alive: {alive_after})"
+            "the fence never freed after the gate was killed (tree alive: {alive_after:?})"
         );
+        refused_takes += 1;
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert!(!still_runs(target) && !still_runs(grandchild));
+    assert!(!tree.iter().any(TreeProcess::runs));
+}
+
+/// One process of a killed gate's tree, read through a handle opened while
+/// it runs (TSK-1318). The open handle keeps its process ID from being
+/// reused, and the handle is signaled when the process has terminated, so
+/// neither a recycled ID nor the delay of listing processes changes a
+/// reading. A thread records the moment the process ends.
+#[cfg(windows)]
+struct TreeProcess {
+    role: &'static str,
+    pid: u32,
+    handle: std::sync::Arc<std::os::windows::io::OwnedHandle>,
+    ended: Option<std::thread::JoinHandle<Option<Instant>>>,
+}
+
+#[cfg(windows)]
+impl TreeProcess {
+    /// How long the thread waits for the process to end, in milliseconds:
+    /// past the test's own 60 second bound.
+    const END_BOUND_MS: u32 = 70_000;
+
+    fn watch(role: &'static str, pid: u32) -> Self {
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+        };
+        // SAFETY: requests only synchronization access, with handle
+        // inheritance disabled. This does not change the process.
+        let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        assert!(
+            !raw.is_null(),
+            "the {role} (pid {pid}) can be opened: {}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: OpenProcess returned a valid handle, owned here exactly once.
+        let handle = std::sync::Arc::new(unsafe { OwnedHandle::from_raw_handle(raw) });
+        let waited = std::sync::Arc::clone(&handle);
+        let ended = std::thread::spawn(move || {
+            // SAFETY: the Arc keeps the handle open throughout the wait.
+            let status = unsafe { WaitForSingleObject(waited.as_raw_handle(), Self::END_BOUND_MS) };
+            (status == WAIT_OBJECT_0).then(Instant::now)
+        });
+        Self {
+            role,
+            pid,
+            handle,
+            ended: Some(ended),
+        }
+    }
+
+    /// Whether the process still runs. Only a signaled handle reads as ended,
+    /// so a failed wait counts as running.
+    fn runs(&self) -> bool {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::WaitForSingleObject;
+        // SAFETY: the handle is open for the call, which does not wait.
+        unsafe { WaitForSingleObject(self.handle.as_raw_handle(), 0) != WAIT_OBJECT_0 }
+    }
+
+    fn name(&self) -> String {
+        format!("{} (pid {})", self.role, self.pid)
+    }
+
+    /// The time from `killed` to this process's end, waiting for it.
+    fn kill_to_end(&mut self, killed: Instant) -> String {
+        let ended = self
+            .ended
+            .take()
+            .and_then(|thread| thread.join().ok())
+            .flatten();
+        let name = self.name();
+        match ended {
+            Some(ended) => format!(
+                "{name} kill to end {} ms",
+                ended.saturating_duration_since(killed).as_millis()
+            ),
+            None => format!(
+                "{name} had not ended {} s after it was first watched",
+                Self::END_BOUND_MS / 1000
+            ),
+        }
+    }
 }
 
 #[cfg(unix)]

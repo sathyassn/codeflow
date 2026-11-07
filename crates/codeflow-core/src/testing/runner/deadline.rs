@@ -325,6 +325,33 @@ mod tests {
         );
     }
 
+    /// TSK-1318 AC-8: the supervisor's rule on both sides of a one-second
+    /// window, with samples injected once a second as the runner takes them.
+    /// CPU that rises at every sample keeps a silent target alive past many
+    /// windows. A live target whose CPU then stays flat for a full window is
+    /// stalled, whatever it used before; the replayed numbers are those of
+    /// the hosted Windows failure (job 127544514574).
+    #[test]
+    fn rising_cpu_outlasts_the_window_and_a_flat_window_stalls() {
+        let mut d = Deadline::new(Duration::from_secs(2), true, 1, None);
+        let samples = [0, 400_000, 1_000_000, 1_700_000, 2_312_500];
+        for (second, cpu) in (0_u64..).zip(samples) {
+            let now = Duration::from_secs(second);
+            d.cpu(now, Ok(cpu));
+            if second > 0 {
+                assert!(matches!(d.info.cpu_state, CpuState::Active));
+            }
+            assert_eq!(d.decision(now + Duration::from_millis(999)), None);
+        }
+        d.cpu(Duration::from_secs(5), Ok(2_312_500));
+        assert!(matches!(d.info.cpu_state, CpuState::Idle));
+        assert_eq!(
+            d.decision(Duration::from_secs(5)),
+            Some(TargetStatus::Stalled)
+        );
+        assert_eq!(d.info.cpu_usec, Some(2_312_500));
+    }
+
     #[test]
     fn unknown_or_regressing_cpu_never_authorizes_a_stall() {
         for sample in [Err("unreadable".into()), Ok(1)] {

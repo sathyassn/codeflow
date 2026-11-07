@@ -1732,6 +1732,21 @@ fn resolve_ref(
     }
 }
 
+/// TSK-1177: the one secret is the authority App's key, read only by the
+/// authority job, never by the enforcing job.
+#[test]
+fn only_the_authority_job_holds_the_app_key() {
+    assert_eq!(POLICY.matches("secrets.").count(), 1);
+    assert!(
+        job(POLICY, "authority").contains("APP_KEY: ${{ secrets.CODEFLOW_AUTHORITY_APP_KEY }}"),
+        "the authority job holds the App key"
+    );
+    assert!(
+        !job(POLICY, "commit-lint").contains("secrets."),
+        "no secret reaches the enforcing job"
+    );
+}
+
 #[test]
 fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     // pull_request_target alone, never pull_request: GitHub runs this file
@@ -1780,10 +1795,6 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     assert!(REGISTRY.contains("\npermissions:\n  contents: read\n"));
     assert!(!REGISTRY.contains("secrets.") && !REGISTRY.contains(": write"));
     assert!(POLICY.contains("\npermissions:\n  contents: read\n"));
-    assert!(
-        !POLICY.contains("secrets."),
-        "no secret reaches the enforcing job"
-    );
     assert!(!POLICY.contains(": write"), "the token stays read-only");
     // The judging run reads the body when it runs, so the newest body is
     // judged even by a run that waited in the queue; the event's copy is unused.
@@ -1796,11 +1807,12 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     assert!(POLICY.contains("--pr-body-file \"$BODY_FILE\""));
     assert!(POLICY.contains("/pulls/${PR_NUMBER}\" -o \"${RUNNER_TEMP}/pull.json\""));
 
-    // TSK-336: the verdict job, under its trusted name, is the policy
-    // workflow's only job and has no `if`, since a skipped job still
-    // reports its check; the registry check has its own workflow and name.
+    // TSK-336: the verdict job is the policy workflow's only job and has
+    // no `if`, since a skipped job still reports its check; the registry
+    // check has its own workflow and name. TSK-1368: it carries the name
+    // the rulesets require.
     let enforcing = job(POLICY, "commit-lint");
-    assert!(enforcing.contains("    name: \"trusted: commit standards\"\n"));
+    assert!(enforcing.contains("    name: \"commit standards\"\n"));
     assert!(!enforcing.contains("\n    if: "));
     assert!(!POLICY.contains("registry-check:"));
     let registry = job(REGISTRY, "registry-check");
