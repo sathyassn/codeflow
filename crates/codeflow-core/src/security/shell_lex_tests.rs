@@ -58,6 +58,19 @@ fn unmodeled_constructs_are_opaque() {
     }
 }
 
+/// Expansions nested past what the lexer reads leave the line opaque, and
+/// the lexer stops there without exhausting the stack (TSK-1374).
+#[test]
+fn deep_expansions_are_opaque_without_exhausting_the_stack() {
+    for levels in [1000, 20000, 100_000] {
+        for (open, close) in [("${x:-", "}"), ("$(echo ", ")"), ("\"${x:-", "}\"")] {
+            let line = format!("x {}y{}", open.repeat(levels), close.repeat(levels));
+            assert!(lex(&line).opaque, "{open} {levels} times");
+        }
+    }
+    assert!(!lex("x ${a:-${b:-${c:-./d}}}").opaque);
+}
+
 /// SR5-1, SR5-2: once the directory is unknown, every value filled in at
 /// run time is derived, through any assignment form.
 #[test]
