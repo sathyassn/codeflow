@@ -8,7 +8,8 @@ use clap::{Args, Subcommand};
 use codeflow_core::hooks::policy_schema;
 use codeflow_core::registry;
 use codeflow_core::remote::{
-    provider_for, Adopt, AuthorityPlan, Profile, ProtectionPlan, Scope, DEFAULT_LINES,
+    provider_for, Adopt, AuthorityPlan, Profile, ProtectReport, ProtectionPlan, Scope,
+    DEFAULT_LINES,
 };
 
 /// Arguments for `codeflow remote`.
@@ -171,24 +172,7 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
     }
     plan = plan.with_authority(authority).with_scope(scope);
 
-    // The dry run reads the host, never writes it, and prints the exact
-    // requests a run would send; without `gh` it prints the intended rules
-    // and says it read no host.
-    let report = if *dry_run {
-        match provider_for(provider, &root) {
-            Ok(adapter) => adapter.preview(&plan),
-            Err(why) => {
-                let mut report = plan.dry_run_report(provider);
-                report.limitations.push(format!(
-                    "the host was not read ({why}), so these are the intended rules, not the exact requests; --branch, --adopt and absent branches are judged only against the host"
-                ));
-                report
-            }
-        }
-    } else {
-        let adapter = provider_for(provider, &root).map_err(|e| anyhow::anyhow!(e))?;
-        adapter.apply(&plan)
-    };
+    let report = protect(provider, *dry_run, &plan, &root)?;
 
     print_block!(report.render());
     let registry = codeflow_core::ids::REGISTRY_BRANCH;
@@ -213,4 +197,29 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Run the plan, or preview it. The dry run reads the host, never writes
+/// it, and prints the exact requests a run would send; without `gh` it
+/// prints the intended rules and says it read no host.
+fn protect(
+    provider: &str,
+    dry_run: bool,
+    plan: &ProtectionPlan,
+    root: &std::path::Path,
+) -> anyhow::Result<ProtectReport> {
+    if !dry_run {
+        let adapter = provider_for(provider, root).map_err(|e| anyhow::anyhow!(e))?;
+        return Ok(adapter.apply(plan));
+    }
+    Ok(match provider_for(provider, root) {
+        Ok(adapter) => adapter.preview(plan),
+        Err(why) => {
+            let mut report = plan.dry_run_report(provider);
+            report.limitations.push(format!(
+                "the host was not read ({why}), so these are the intended rules, not the exact requests; --branch, --adopt and absent branches are judged only against the host"
+            ));
+            report
+        }
+    })
 }

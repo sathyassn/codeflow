@@ -1733,163 +1733,67 @@ impl GithubProvider {
     ) -> std::collections::BTreeMap<String, Value> {
         let mut chosen = std::collections::BTreeMap::new();
         for request in adopt {
-            let refuse = |why: String| {
-                format!(
+            let matched = self
+                .adopted_live(nwo, summaries, request, owned)
+                .and_then(|live| {
+                    let name = owned_for(request, &live, owned, summaries)?;
+                    if chosen.contains_key(&name) {
+                        return Err(format!("another --adopt already stands for '{name}'"));
+                    }
+                    Ok((name, live))
+                });
+            match matched {
+                Ok((name, live)) => {
+                    chosen.insert(name, live);
+                }
+                Err(why) => out.limitations.push(format!(
                     "--adopt {}: {why}; nothing was adopted for it",
                     request.label()
-                )
-            };
-            let found: Vec<&Value> = summaries
-                .iter()
-                .filter(|s| {
-                    s.get("id").and_then(Value::as_u64).map(|id| id.to_string())
-                        == Some(request.ruleset.clone())
-                        || s.get("name").and_then(Value::as_str) == Some(request.ruleset.as_str())
-                })
-                .collect();
-            let summary = match found.as_slice() {
-                [one] => *one,
-                [] => {
-                    out.limitations.push(refuse(
-                        "no ruleset of this repository has that id or name".into(),
-                    ));
-                    continue;
-                }
-                many => {
-                    out.limitations.push(refuse(format!(
-                        "{} rulesets match it; name it by id",
-                        many.len()
-                    )));
-                    continue;
-                }
-            };
-            let label = ruleset_label(summary);
-            let Some(id) = summary
-                .get("id")
-                .and_then(Value::as_u64)
-                .filter(|_| repository_branch_ruleset(summary))
-            else {
-                out.limitations.push(refuse(format!(
-                    "ruleset {label} is not a branch ruleset of this repository"
-                )));
-                continue;
-            };
-            let all_owned = owned.iter().map(|entry| match entry {
-                Ok(o) => o.name.as_str(),
-                Err(r) => r.name.as_str(),
-            });
-            if all_owned
-                .clone()
-                .any(|name| summary.get("name").and_then(Value::as_str) == Some(name))
-            {
-                out.limitations.push(refuse(format!(
-                    "ruleset {label} already carries an owned name"
-                )));
-                continue;
+                )),
             }
-            let live = match self.full_ruleset(nwo, id) {
-                Ok(live) => live,
-                Err(why) => {
-                    out.limitations
-                        .push(refuse(format!("ruleset {label} could not be read ({why})")));
-                    continue;
-                }
-            };
-            let entries = |list: &str| -> BTreeSet<String> {
-                live.pointer(&format!("/conditions/ref_name/{list}"))
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            };
-            let (include, exclude) = (entries("include"), entries("exclude"));
-            let wanted: Vec<&Owned> = owned
-                .iter()
-                .filter_map(|entry| entry.as_ref().ok())
-                .filter(|o| request.as_name.as_ref().is_none_or(|name| *name == o.name))
-                .collect();
-            if let (Some(name), true) = (&request.as_name, wanted.is_empty()) {
-                let why = owned.iter().find_map(|entry| match entry {
-                    Err(r) if r.name == *name => Some(r.why.clone()),
-                    _ => None,
-                });
-                out.limitations.push(refuse(match why {
-                    Some(why) => format!("'{name}' cannot be written in this run: {why}"),
-                    None => format!(
-                        "'{name}' is not a ruleset this run plans ({})",
-                        all_owned
-                            .map(|n| format!("'{n}'"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                }));
-                continue;
-            }
-            let exact: Vec<&&Owned> = wanted
-                .iter()
-                .filter(|o| {
-                    exclude.is_empty()
-                        && o.include.iter().cloned().collect::<BTreeSet<_>>() == include
-                })
-                .collect();
-            let shown = |set: &BTreeSet<String>| set.iter().cloned().collect::<Vec<_>>().join(", ");
-            let theirs = format!(
-                "ruleset {label} targets {}{}",
-                shown(&include),
-                if exclude.is_empty() {
-                    String::new()
-                } else {
-                    format!(" excluding {}", shown(&exclude))
-                }
-            );
-            let owned_one = match exact.as_slice() {
-                [one] => **one,
-                [] => {
-                    out.limitations.push(refuse(format!(
-                        "{theirs}, which is not exactly what {} target{}",
-                        wanted
-                            .iter()
-                            .map(|o| format!("'{}' ({})", o.name, o.include.join(", ")))
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        if wanted.len() == 1 { "s" } else { "" }
-                    )));
-                    continue;
-                }
-                many => {
-                    out.limitations.push(refuse(format!(
-                        "{theirs}, as {} all do; name one with --adopt {}=<name>",
-                        many.iter()
-                            .map(|o| format!("'{}'", o.name))
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        request.ruleset
-                    )));
-                    continue;
-                }
-            };
-            if let Some(existing) = summaries
-                .iter()
-                .find(|s| s.get("name").and_then(Value::as_str) == Some(owned_one.name.as_str()))
-            {
-                out.limitations.push(refuse(format!(
-                    "ruleset {} already holds the name, so remote protect keeps it and adopts nothing for it",
-                    ruleset_label(existing)
-                )));
-                continue;
-            }
-            if chosen.contains_key(&owned_one.name) {
-                out.limitations.push(refuse(format!(
-                    "another --adopt already stands for '{}'",
-                    owned_one.name
-                )));
-                continue;
-            }
-            chosen.insert(owned_one.name.clone(), live);
         }
         chosen
+    }
+
+    /// The live ruleset one `--adopt` names: exactly one branch ruleset of
+    /// this repository, by id or name, that carries no owned name, read in
+    /// full.
+    fn adopted_live(
+        &self,
+        nwo: &str,
+        summaries: &[Value],
+        request: &Adopt,
+        owned: &[Result<Owned, Refused>],
+    ) -> Result<Value, String> {
+        let found: Vec<&Value> = summaries
+            .iter()
+            .filter(|s| {
+                s.get("id").and_then(Value::as_u64).map(|id| id.to_string())
+                    == Some(request.ruleset.clone())
+                    || s.get("name").and_then(Value::as_str) == Some(request.ruleset.as_str())
+            })
+            .collect();
+        let summary = match found.as_slice() {
+            [one] => *one,
+            [] => return Err("no ruleset of this repository has that id or name".into()),
+            many => return Err(format!("{} rulesets match it; name it by id", many.len())),
+        };
+        let label = ruleset_label(summary);
+        let Some(id) = summary
+            .get("id")
+            .and_then(Value::as_u64)
+            .filter(|_| repository_branch_ruleset(summary))
+        else {
+            return Err(format!(
+                "ruleset {label} is not a branch ruleset of this repository"
+            ));
+        };
+        if owned_names(owned).any(|name| summary.get("name").and_then(Value::as_str) == Some(name))
+        {
+            return Err(format!("ruleset {label} already carries an owned name"));
+        }
+        self.full_ruleset(nwo, id)
+            .map_err(|why| format!("ruleset {label} could not be read ({why})"))
     }
 
     /// What a run does with one owned ruleset: create it, bring the one with
@@ -2246,6 +2150,108 @@ pub(crate) fn ruleset_targets(
         (Ok(true), Ok(false)) => Targeting::Targets,
         (Err(why), _) | (_, Err(why)) => Targeting::Unexplained(why),
     }
+}
+
+/// The names of every owned ruleset in a run, written or refused.
+fn owned_names(owned: &[Result<Owned, Refused>]) -> impl Iterator<Item = &str> + Clone {
+    owned.iter().map(|entry| match entry {
+        Ok(o) => o.name.as_str(),
+        Err(r) => r.name.as_str(),
+    })
+}
+
+/// The owned name an adopted ruleset stands for: the one owned ruleset in
+/// the run whose include list is exactly the adopted ruleset's, with no
+/// exclude, narrowed to `request.as_name` when given, and whose name no
+/// live ruleset holds yet.
+fn owned_for(
+    request: &Adopt,
+    live: &Value,
+    owned: &[Result<Owned, Refused>],
+    summaries: &[Value],
+) -> Result<String, String> {
+    let label = ruleset_label(live);
+    let entries = |list: &str| -> BTreeSet<String> {
+        live.pointer(&format!("/conditions/ref_name/{list}"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect()
+    };
+    let (include, exclude) = (entries("include"), entries("exclude"));
+    let wanted: Vec<&Owned> = owned
+        .iter()
+        .filter_map(|entry| entry.as_ref().ok())
+        .filter(|o| request.as_name.as_ref().is_none_or(|name| *name == o.name))
+        .collect();
+    if let (Some(name), true) = (&request.as_name, wanted.is_empty()) {
+        let why = owned.iter().find_map(|entry| match entry {
+            Err(r) if r.name == *name => Some(r.why.clone()),
+            _ => None,
+        });
+        return Err(match why {
+            Some(why) => format!("'{name}' cannot be written in this run: {why}"),
+            None => format!(
+                "'{name}' is not a ruleset this run plans ({})",
+                owned_names(owned)
+                    .map(|n| format!("'{n}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        });
+    }
+    let exact: Vec<&&Owned> = wanted
+        .iter()
+        .filter(|o| {
+            exclude.is_empty() && o.include.iter().cloned().collect::<BTreeSet<_>>() == include
+        })
+        .collect();
+    let shown = |set: &BTreeSet<String>| set.iter().cloned().collect::<Vec<_>>().join(", ");
+    let theirs = format!(
+        "ruleset {label} targets {}{}",
+        shown(&include),
+        if exclude.is_empty() {
+            String::new()
+        } else {
+            format!(" excluding {}", shown(&exclude))
+        }
+    );
+    let one = match exact.as_slice() {
+        [one] => **one,
+        [] => {
+            return Err(format!(
+                "{theirs}, which is not exactly what {} target{}",
+                wanted
+                    .iter()
+                    .map(|o| format!("'{}' ({})", o.name, o.include.join(", ")))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if wanted.len() == 1 { "s" } else { "" }
+            ))
+        }
+        many => {
+            return Err(format!(
+                "{theirs}, as {} all do; name one with --adopt {}=<name>",
+                many.iter()
+                    .map(|o| format!("'{}'", o.name))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                request.ruleset
+            ))
+        }
+    };
+    if let Some(existing) = summaries
+        .iter()
+        .find(|s| s.get("name").and_then(Value::as_str) == Some(one.name.as_str()))
+    {
+        return Err(format!(
+            "ruleset {} already holds the name, so remote protect keeps it and adopts nothing for it",
+            ruleset_label(existing)
+        ));
+    }
+    Ok(one.name.clone())
 }
 
 /// Whether a ruleset summary is a branch ruleset of this repository, not
@@ -3918,7 +3924,7 @@ jobs:
     // exact preview, against the recorded host in memory.
     // -----------------------------------------------------------------------
 
-    fn ruleset_on(id: u64, name: &str, include: &[&str], rules: Value, bypass: Value) -> Value {
+    fn ruleset_on(id: u64, name: &str, include: &[&str], rules: &Value, bypass: &Value) -> Value {
         json!({
             "id": id, "name": name, "target": "branch", "source_type": "Repository",
             "enforcement": "active",
@@ -3939,18 +3945,18 @@ jobs:
                 301,
                 "main checks",
                 &["~DEFAULT_BRANCH"],
-                json!([{ "type": "required_status_checks", "parameters": {
+                &json!([{ "type": "required_status_checks", "parameters": {
                     "strict_required_status_checks_policy": true,
                     "required_status_checks": [{ "context": "codeflow gates", "integration_id": 15368 }]
                 } }]),
-                admin_bypass(),
+                &admin_bypass(),
             ),
             ruleset_on(
                 302,
                 "main history",
                 &["~DEFAULT_BRANCH"],
-                json!([{ "type": "non_fast_forward" }, { "type": "deletion" }]),
-                json!([]),
+                &json!([{ "type": "non_fast_forward" }, { "type": "deletion" }]),
+                &json!([]),
             ),
         ]
     }
@@ -3961,8 +3967,8 @@ jobs:
             303,
             "registry guard",
             &["refs/heads/codeflow/registry"],
-            json!([{ "type": "non_fast_forward" }, { "type": "deletion" }]),
-            admin_bypass(),
+            &json!([{ "type": "non_fast_forward" }, { "type": "deletion" }]),
+            &admin_bypass(),
         )
     }
 
@@ -4071,7 +4077,7 @@ jobs:
             (&wider, "--adopt 303: ruleset 'registry guard' (303) targets refs/heads/codeflow/**, which is not exactly what 'codeflow protect main' (refs/heads/main), 'codeflow protect codeflow/registry' (refs/heads/codeflow/registry) target; nothing was adopted for it"),
             (&excluding, "targets refs/heads/codeflow/registry excluding refs/heads/codeflow/old, which is not exactly"),
         ] {
-            let host = Fake::standard(&[live.clone()]);
+            let host = Fake::standard(std::slice::from_ref(live));
             let report = host
                 .provider()
                 .apply(&plan_with(r#"["main"]"#, false, adopting(&["303"])));
@@ -4237,8 +4243,8 @@ jobs:
             400,
             "codeflow protect codeflow/registry",
             &["refs/heads/codeflow/registry"],
-            json!([{ "type": "deletion" }]),
-            json!([]),
+            &json!([{ "type": "deletion" }]),
+            &json!([]),
         ));
         let plan = || plan_with(r#"["main", "release/*"]"#, true, Scope::default());
 

@@ -2439,10 +2439,6 @@ jobs:
                 other => Err(format!("unexpected gh call {other:?}")),
             }
         }
-        assert_eq!(
-            registry(deletion_only),
-            LiveRules::Lacks(vec!["block force pushes".into()])
-        );
         fn classic_gives(_: &str, args: &[&str]) -> Result<String, String> {
             match args {
                 ["api", url] if url.starts_with(REGISTRY_RULES) => {
@@ -2455,10 +2451,6 @@ jobs:
                 other => Err(format!("unexpected gh call {other:?}")),
             }
         }
-        assert_eq!(
-            registry(classic_gives),
-            LiveRules::Holds(vec!["classic branch protection".into(), "ruleset 9".into()])
-        );
         fn classic_unread(_: &str, args: &[&str]) -> Result<String, String> {
             match args {
                 ["api", url] if url.starts_with(REGISTRY_RULES) => Ok("[]".into()),
@@ -2466,6 +2458,14 @@ jobs:
                 other => Err(format!("unexpected gh call {other:?}")),
             }
         }
+        assert_eq!(
+            registry(deletion_only),
+            LiveRules::Lacks(vec!["block force pushes".into()])
+        );
+        assert_eq!(
+            registry(classic_gives),
+            LiveRules::Holds(vec!["classic branch protection".into(), "ruleset 9".into()])
+        );
         let LiveRules::Unread(why) = registry(classic_unread) else {
             panic!("an unread classic protection that could give the rules is not a verdict")
         };
