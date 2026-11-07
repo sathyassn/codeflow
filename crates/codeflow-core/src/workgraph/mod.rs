@@ -22,7 +22,6 @@ pub mod lifecycle;
 pub mod light_paths;
 pub mod line_adoption;
 pub mod line_drift;
-pub mod main_sync;
 pub mod outcome;
 pub mod readiness;
 pub mod record_template;
@@ -33,6 +32,8 @@ pub mod status_steps;
 pub mod status_verb;
 pub mod store;
 pub mod work_start;
+
+pub mod main_sync;
 
 pub use allocate::{
     create_epic, create_spec, create_task, next_epic_id, next_spec_id, next_task_id, NewRecord,

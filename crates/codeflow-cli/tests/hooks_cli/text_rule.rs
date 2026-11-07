@@ -129,6 +129,30 @@ fn relaxed_keeps_a_retry_strict() {
     );
 }
 
+/// The relaxed rule adds no refusal of its own, so everyday nested commands
+/// reach the deletion reader alone and must stay allowed there.
+#[test]
+fn relaxed_allows_everyday_nested_commands() {
+    if cfg!(windows) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    published(dir.path(), RELAXED);
+    for line in [
+        "sh -c 'make test'",
+        "bash -lc 'cargo fmt --all -- --check && cargo clippy --workspace'",
+        "bash -lc \"sh -c 'echo one; echo two'\"",
+        "timeout 60 bash -lc 'make -C sub all'",
+        "find . -type f -exec sh -c 'echo \"$1\"' _ {} \\;",
+        "for a in 1 2 3; do for b in 1 2 3; do echo $a $b; done; done",
+        "f() { echo hi; }; g() { f; }; h() { g; }; h",
+        "rm -rf ./build && make",
+    ] {
+        let out = exec_guard(dir.path(), line, false);
+        assert!(out.status.success(), "{line}: {out:?}");
+    }
+}
+
 /// `published` with `json` as the remote's policy, where `level` is
 /// `git.hook_integrity`.
 fn policy_at(level: &str, relaxed: bool) -> String {
