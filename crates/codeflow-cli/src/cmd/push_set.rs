@@ -45,6 +45,7 @@ use codeflow_core::hooks::git_hook::{self, PushRef, PushStep, StageReport};
 use codeflow_core::hooks::policy::{GitPolicy, INTEGRATION_BRANCH_PREFIX};
 use codeflow_core::hooks::Violation;
 use codeflow_core::remedy::{self, Finding};
+use codeflow_core::scaffold::too_old;
 use codeflow_core::workgraph::release_line;
 
 #[cfg(test)]
@@ -227,6 +228,35 @@ fn check_remedy(args: &[&str]) -> codeflow_core::remedy::Remedy {
     codeflow_core::remedy::PUSH_SET_CI.with(&[("args", &rest.join(" "))])
 }
 
+/// The refusal of a push whose destination holds a policy this binary cannot
+/// use. The tip is the authority, so its pin says whether the binary is too
+/// old (TSK-1285).
+fn invalid_target_refusal(
+    root: &Path,
+    target: &str,
+    tip: &str,
+    why: &str,
+    shown_branch: &str,
+) -> Violation {
+    let age = too_old::BinaryAge::at_commit(root, tip, env!("CARGO_PKG_VERSION"));
+    if let Some(refusal) = age.too_old("the policy on the destination's default branch") {
+        return Violation::always_blocking(too_old::RULE, refusal.message, &refusal.remedy);
+    }
+    let mut message = format!(
+        "the policy at {} {}, the destination's default branch, {why}, so '{shown_branch}' is refused",
+        display_text(target),
+        short(tip)
+    );
+    if let Some(line) = age.may_be_older() {
+        let _ = write!(message, "; {line}");
+    }
+    Violation::always_blocking(
+        "git.policy_authority",
+        message,
+        "if a newer codeflow wrote that policy, upgrade this codeflow and push again; if the policy itself is malformed, repair it on the destination's default branch through a reviewed pull request",
+    )
+}
+
 /// What judges a push under [`Judged::Target`]: the policy at the
 /// destination default branch's tip, or the shipped defaults when that
 /// tip holds no policy file. The destination names its default branch, so
@@ -301,14 +331,12 @@ fn run_ci_ranges(
                 )
             }
             Judged::Invalid { target, tip, why } => {
-                report.violations.push(Violation::always_blocking(
-                    "git.policy_authority",
-                    format!(
-                        "the policy at {} {}, the destination's default branch, {why}, so '{shown_branch}' is refused",
-                        display_text(target),
-                        short(tip)
-                    ),
-                    "if a newer codeflow wrote that policy, upgrade this codeflow and push again; if the policy itself is malformed, repair it on the destination's default branch through a reviewed pull request",
+                report.violations.push(invalid_target_refusal(
+                    root,
+                    target,
+                    tip,
+                    why,
+                    &shown_branch,
                 ));
                 continue;
             }
@@ -756,10 +784,15 @@ fn run_check_with(
             // A check run at the push gate's level (R-80) that still fails
             // holds a finding that keeps its block: it stops the push.
             let kept_block = run_level.is_some() && matches!(out.status.code(), Some(1 | 2));
+            let too_old = report.refused_by.iter().any(|rule| rule == too_old::RULE);
             let mut failed = violation(
                 policy,
                 format!("push set check failed: `{shown}` (output above)"),
-                check_remedy(&rerun),
+                if too_old {
+                    remedy::PUSH_SET_TOO_OLD.remedy()
+                } else {
+                    check_remedy(&rerun)
+                },
             );
             if kept_block && policy.test_gate_on_push != codeflow_core::hooks::PolicyLevel::Block {
                 failed.level = codeflow_core::hooks::PolicyLevel::Block;
