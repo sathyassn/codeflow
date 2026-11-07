@@ -728,10 +728,10 @@ fn run_ac6(scratch: &Scratch, layout: &Layout) {
         "Counts as AC-6 evidence only when this test ran from a plain terminal; \
          inside the Claude sandbox the sandbox can block the write.\n"
     );
-    println!("| Target | Outside the Claude sandbox write list | hc exit | Timed out | Written |");
-    println!("|---|---|---|---|---|");
+    println!("| Target | hc exit | Timed out | Written |");
+    println!("|---|---|---|---|");
     println!(
-        "| {} | yes (not /tmp/claude, $TMPDIR or the worktree) | {:?} | {} | {} |",
+        "| {} | {:?} | {} | {} |",
         layout.ac6_target.display(),
         ran.code,
         ran.timed_out,
