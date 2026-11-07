@@ -1001,6 +1001,9 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     "docs/capabilities.md",
     "capabilities.md",
     "docs/capabilities/CAP-*.md",
+    // The catalog record path cf-method names when it says what a record
+    // is (TSK-1136).
+    "docs/capabilities/CAP-NNN-<slug>.md",
     "docs/architecture.md",
     "docs/architecture/<area>.md",
     "docs/decisions/template.md",
@@ -1048,6 +1051,10 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     // The rule file that defines a review pass, which the review brief
     // contract names so a seat of any family opens it (issue 121).
     ".codeflow/rules/workflow-discipline.md",
+    // The capability impact guide, installed beside the kernel at every
+    // tier; cf-method, cf-ship and the PR evidence table point at it
+    // (TSK-1136).
+    ".codeflow/rules/capabilities.md",
     ".codeflow/schemas/present/document-v1.schema.json",
     ".codeflow/schemas/present/utility-tokens-v1.schema.json",
     "DIR/settings.json",

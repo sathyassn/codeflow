@@ -1631,3 +1631,85 @@ fn the_scrubbed_script_environment_prevents_automatic_maintenance() {
         }
     }
 }
+
+/// A planned capability record that validates at any tier.
+const CAPABILITY: &str = "---\nid: CAP-001\nuid: 7d1c2f4e-0a5b-4c6d-8e9f-1a2b3c4d5e6f\nname: billing\nsummary: Bill a clinic for its visits.\narea: engine\nstatus: planned\nkind: functional\naudience: [external]\n---\n\n## Concept\n\nThe service bills each visit.\n";
+
+/// TSK-1136 AC-4 (journey): with `git.pr_capability_impact` at block on the
+/// target, a product change passes or fails the same way through every
+/// scaffolded wrapper. A body without a Capability impact section fails on
+/// the capability rule; the same change with a section that agrees with the
+/// catalog delta passes.
+#[test]
+fn a_capability_declaration_passes_or_fails_the_same_on_every_platform() {
+    for platform in PLATFORMS {
+        let fx = Fixture::new();
+        fx.project("1.2.3");
+        fx.publish("1.2.3", &Binary::Real);
+        let repo = fx.repo();
+        git(&repo, &["checkout", "-q", "main"]);
+        let policy_path = repo.join(".codeflow/policy.json");
+        let mut value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&policy_path).unwrap()).unwrap();
+        value["git"]["pr_capability_impact"] = serde_json::json!("block");
+        std::fs::write(&policy_path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+        let toml_path = repo.join(".codeflow/project.toml");
+        let toml: String = std::fs::read_to_string(&toml_path)
+            .unwrap()
+            .lines()
+            .map(|line| {
+                if line.starts_with("areas") {
+                    "areas = [\"engine\"]\n".to_string()
+                } else {
+                    format!("{line}\n")
+                }
+            })
+            .collect();
+        std::fs::write(&toml_path, toml).unwrap();
+        std::fs::create_dir_all(repo.join("docs/capabilities")).unwrap();
+        std::fs::write(
+            repo.join("docs/capabilities/vocabulary.yaml"),
+            "inventory: incomplete\ngroups: []\ntags: []\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join("docs/capabilities/CAP-001-billing.md"),
+            CAPABILITY,
+        )
+        .unwrap();
+        git(&repo, &["add", "-A"]);
+        git(
+            &repo,
+            &["commit", "-q", "-m", "chore: check capability impact"],
+        );
+        let target = git(&repo, &["rev-parse", "HEAD"]);
+        git(&repo, &["checkout", "-q", "-B", "feat/x"]);
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src/lib.rs"), "pub fn bill() {}\n").unwrap();
+        let head = fx.commit("feat: bill a visit");
+
+        let mut failing = fx.run_command(platform, Some(&target), &head);
+        failing.env("CODEFLOW_PR_BODY", BODY);
+        let out = fx.output(&mut failing);
+        assert!(!out.status.success(), "{platform:?}: {}", text(&out));
+        assert!(
+            text(&out).contains("git.pr_capability_impact")
+                && text(&out).contains("exactly one ## Capability impact"),
+            "{platform:?}: {}",
+            text(&out)
+        );
+
+        let declared = format!(
+            "{BODY}\n## Capability impact\n\n- Improved CAP-001 billing: clinics are billed per visit, entry unchanged.\n"
+        );
+        let mut passing = fx.run_command(platform, Some(&target), &head);
+        passing.env("CODEFLOW_PR_BODY", &declared);
+        let out = fx.output(&mut passing);
+        assert!(out.status.success(), "{platform:?}: {}", text(&out));
+        assert!(
+            text(&out).contains("declaration agrees with catalog delta"),
+            "{platform:?}: {}",
+            text(&out)
+        );
+    }
+}

@@ -99,6 +99,25 @@ Task: `TSK-NNN | EPC-NNN | EPC-001, EPC-002 | <unit name>`
 - Rationale:
 - Migration: `none`, steps, or "see Breaking change"
 
+## Capability impact
+
+<!-- Checked by `codeflow ci` when `git.pr_capability_impact` is warn or
+     block (`.codeflow/rules/capabilities.md`). Name each capability this PR
+     adds, changes or improves, one line each, as
+     `- <Verb> CAP-NNN <name>: <what changed for its users>`, with the
+     catalog name. Added and Changed must match the catalog records this
+     branch adds or edits; Improved means the record is unchanged and says
+     `entry unchanged`. With no capability change, write one None line with
+     the reason. A range of only ordinary Markdown under docs/ or
+     project-management/ may delete this section. For example:
+
+     - Added CAP-018 impact-check: authors learn before merge when a declaration disagrees with the catalog.
+     - Changed CAP-003 git-floor: the floor now refuses a pull request whose declaration disagrees with the catalog.
+     - Improved CAP-004 quick-gate: the quick gate runs each suite once, entry unchanged.
+     - None: internal refactoring of the release script; no behaviour changes. -->
+
+- None: <reason>
+
 <!-- Conditional sections: add each as a `##` sibling after its parent only
      when its condition holds. A PR type never cancels a condition; a mixed
      or epic PR takes the union.

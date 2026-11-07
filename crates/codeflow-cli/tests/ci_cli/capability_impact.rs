@@ -348,6 +348,29 @@ fn capability_authority_and_catalogs_ignore_the_checkout() {
         ],
     );
     refuse(&out, "PR body unavailable");
+    // Uncommitted edits in the checkout are not inputs: a broken record, an
+    // unparsable new record and a policy that turns the rule off leave both
+    // verdicts unchanged.
+    write(root, FILE, "---\nid: not-a-capability\n---\n");
+    write(
+        root,
+        "docs/capabilities/CAP-102-broken.md",
+        "not frontmatter\n",
+    );
+    write(root, ".codeflow/policy.json", &policy(Some("off")));
+    let out = super::run_in(
+        root,
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            &head,
+            "--branch",
+            "feat/example",
+        ],
+    );
+    refuse(&out, "PR body unavailable");
     let out = super::run_in(
         root,
         &[
@@ -1183,4 +1206,135 @@ fn registry_binding_fixture(root: &Path, case: &str) -> (&'static str, git2::Oid
             .unwrap();
     }
     (uid, sha)
+}
+
+/// TSK-1136 AC-3: every worked example in the shipped guide gives the outcome
+/// the guide states when the real check judges it against the fixture
+/// catalog.
+#[test]
+fn capability_guide_examples_match_the_check() {
+    const GUIDE: &str = include_str!("../../../../assets/base/rules/capabilities.md");
+    let body = |line: &str| {
+        assert!(
+            GUIDE.contains(&format!("`{line}`")),
+            "the guide shows {line}"
+        );
+        format!("## Capability impact\n\n{line}\n")
+    };
+    let status_edit = RECORD.replace("status: shipped", "status: building");
+
+    // Passes.
+    let dir = fixture(Some("block"), false, false);
+    write(dir.path(), FILE, RECORD);
+    commit(dir.path());
+    pass(&ci(
+        dir.path(),
+        Some(&body(
+            "- Added CAP-101 catalog: readers can list their capabilities.",
+        )),
+        &[],
+    ));
+
+    let dir = fixture(Some("block"), true, false);
+    write(dir.path(), FILE, &status_edit);
+    commit(dir.path());
+    pass(&ci(
+        dir.path(),
+        Some(&body(
+            "- Changed CAP-101 catalog: readers see the new status.",
+        )),
+        &[],
+    ));
+    refuse(
+        &ci(
+            dir.path(),
+            Some(&body("- None: no user-visible change.")),
+            &[],
+        ),
+        "None cannot",
+    );
+    refuse(
+        &ci(
+            dir.path(),
+            Some(&body(
+                "- Improved CAP-101 catalog: clearer, entry unchanged.",
+            )),
+            &[],
+        ),
+        "disagrees with the net catalog delta",
+    );
+
+    let dir = fixture(Some("block"), true, false);
+    product_change(dir.path());
+    pass(&ci(
+        dir.path(),
+        Some(&body(
+            "- Improved CAP-101 catalog: readers get faster listings, entry unchanged.",
+        )),
+        &[],
+    ));
+    pass(&ci(
+        dir.path(),
+        Some(&body(
+            "- None: internal refactoring preserves the catalog contract.",
+        )),
+        &[],
+    ));
+    refuse(
+        &ci(
+            dir.path(),
+            Some("## Summary\n\nNo capability section.\n"),
+            &[],
+        ),
+        "exactly one ## Capability impact",
+    );
+    refuse(
+        &ci(
+            dir.path(),
+            Some(&body("- Changed CAP-999 missing: ...")),
+            &[],
+        ),
+        "unknown id CAP-999",
+    );
+    refuse(
+        &ci(
+            dir.path(),
+            Some(&body("- Improved CAP-101 catalog: faster.")),
+            &[],
+        ),
+        "disagrees with the net catalog delta",
+    );
+
+    let dir = fixture(Some("block"), true, false);
+    git(dir.path(), &["rm", "-q", FILE]);
+    write(dir.path(), "src/lib.rs", "pub fn after_removal() {}\n");
+    commit(dir.path());
+    refuse(&ci(dir.path(), Some(NONE), &[]), "identity removed");
+}
+
+/// TSK-1136 AC-3: the template's examples use the declaration grammar, and
+/// its unfilled line is a placeholder the check refuses.
+#[test]
+fn capability_template_shows_the_grammar_and_refuses_its_placeholder() {
+    const TEMPLATE: &str = include_str!("../../../../assets/base/ci/pull_request_template.md");
+    for verb in [
+        "- Added CAP-",
+        "- Changed CAP-",
+        "- Improved CAP-",
+        "- None: ",
+    ] {
+        assert!(TEMPLATE.contains(verb), "the template shows {verb}");
+    }
+    assert!(TEMPLATE.contains("entry unchanged"));
+    assert!(TEMPLATE.contains("\n- None: <reason>\n"));
+    let dir = fixture(Some("block"), true, false);
+    product_change(dir.path());
+    refuse(
+        &ci(
+            dir.path(),
+            Some("## Capability impact\n\n- None: <reason>\n"),
+            &[],
+        ),
+        "None needs one substantive reason",
+    );
 }

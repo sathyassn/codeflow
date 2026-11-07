@@ -454,8 +454,20 @@ fn update_removes_unsupported_defaults_and_keeps_edited_values() {
             "{warnings:?}"
         );
         // A refreshed baseline must not erase the edited values on a later run.
+        // That run reads the policy with the pin the first update recorded,
+        // so it adds the capability key the 3.1.0 pin could not read (TSK-1136)
+        // and changes nothing else.
         scaffold::update(&current, project.path(), &options).unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&read(&path)).unwrap(), after);
+        let mut again = serde_json::from_str::<Value>(&read(&path)).unwrap();
+        assert_eq!(after["git"].get("pr_capability_impact"), None);
+        assert_eq!(
+            again["git"]
+                .as_object_mut()
+                .unwrap()
+                .remove("pr_capability_impact"),
+            Some(Value::from("off"))
+        );
+        assert_eq!(again, after);
     }
 }
 

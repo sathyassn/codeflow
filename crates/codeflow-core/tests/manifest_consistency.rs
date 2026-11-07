@@ -3351,3 +3351,67 @@ fn release_impact_problems(template: &str) -> Vec<String> {
     }
     problems
 }
+
+/// TSK-1136 AC-2: the instructions that shape a pull request describe the
+/// `## Capability impact` section and point at its guide, and none of them
+/// still says capability updates have no blocking gate.
+#[test]
+fn capability_impact_is_described_where_a_pull_request_is_shaped() {
+    let guide = ".codeflow/rules/capabilities.md";
+    for (rel, needles) in [
+        (
+            "assets/base/ci/pull_request_template.md",
+            &["## Capability impact", guide][..],
+        ),
+        (
+            ".github/pull_request_template.md",
+            &["## Capability impact", guide],
+        ),
+        (
+            "assets/base/agents/skills/cf-ship/references/pr-evidence.md",
+            &["| Capability impact |", guide],
+        ),
+        (
+            "assets/base/agents/skills/cf-ship/SKILL.md",
+            &["## Capability impact", guide],
+        ),
+        (
+            "assets/base/claude/skills/cf-method/SKILL.md",
+            &["## Capability impact", guide],
+        ),
+        (
+            "assets/base/claude/agents/cf-reviewer.md",
+            &["## Capability impact"],
+        ),
+        (
+            "assets/base/rule-map.toml",
+            &["## Capability impact", guide],
+        ),
+        (
+            "assets/base/docs/capabilities.md.tmpl",
+            &["## Capability impact", guide],
+        ),
+        ("docs/capabilities.md", &["## Capability impact"]),
+        (
+            "assets/base/ci/README.md",
+            &["git.pr_capability_impact", guide],
+        ),
+    ] {
+        let text = normalized_whitespace(&repo_text(rel));
+        for needle in needles {
+            assert!(text.contains(needle), "{rel} does not name {needle}");
+        }
+        for stale in [
+            "not a blocking gate",
+            "there is no blocking gate",
+            "same-PR completeness remains",
+        ] {
+            assert!(!text.contains(stale), "{rel} still says {stale:?}");
+        }
+    }
+    let manifest = repo_text("assets/base/scaffold-manifest.toml");
+    assert!(
+        manifest.contains("src = \"rules/capabilities.md\"\ndest = \".codeflow/rules/capabilities.md\"\nownership = \"managed\"\ntiers = [\"minimal\", \"standard\", \"full\"]"),
+        "the guide ships at every tier"
+    );
+}

@@ -56,6 +56,22 @@ pub enum PolicyLevel {
     Off,
 }
 
+/// The first release whose binary reads `git.pr_capability_impact`. Below it
+/// the key is an unknown key that stops every commit.
+pub const CAPABILITY_IMPACT_SINCE: &str = "4.0.0";
+
+/// The level `init` and `update` write for `git.pr_capability_impact` at each
+/// tier. It is a default: a project sets any level in its policy file, and a
+/// policy without the key is not checked.
+#[must_use]
+pub fn capability_level_default(tier: crate::scaffold::Tier) -> PolicyLevel {
+    use crate::scaffold::Tier;
+    match tier {
+        Tier::Minimal => PolicyLevel::Off,
+        Tier::Standard | Tier::Full => PolicyLevel::Warn,
+    }
+}
+
 impl PolicyLevel {
     /// `true` when the rule produces a violation (block or warn).
     #[must_use]

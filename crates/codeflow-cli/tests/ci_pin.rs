@@ -2045,3 +2045,112 @@ fn a_pull_request_into_a_non_default_target_is_judged_by_that_target() {
     assert!(text.contains("git.commit_format"), "{text}");
     assert!(text.contains("over the 10-char limit"), "{text}");
 }
+
+/// TSK-1136 AC-4 (journey), GitHub: the enforcing job's own `codeflow ci`
+/// command, read from the shipped workflow, judges a product change in the
+/// target checkout with the head fetched as data. With
+/// `git.pr_capability_impact` at block on the target, a body without the
+/// section fails on the capability rule and a body whose section agrees
+/// with the catalog delta passes. The API snapshot checks around the
+/// command need a live GitHub API and are not run here.
+#[test]
+fn the_enforcing_job_judges_a_capability_declaration() {
+    const COMMAND: &str =
+        "codeflow ci --base \"$BASE_SHA\" --head \"$HEAD_SHA\" --branch \"$HEAD_REF\" --actor \"$ACTOR\"";
+    const BODY: &str = "## Summary\n\nBills a visit.\n\n- one function\n\nTask: capability probe\n\n## Changes\n\n- add billing\n\n## Testing\n\nThe probe passes.\n\nNot tested: nothing else.\n\n## Reviews\n\nNone: probe.\n\n## Release impact\n\n- Impact: minor\n- Breaking: no\n- Rationale: new function.\n- Migration: none\n";
+    assert!(POLICY.contains(COMMAND), "the enforcing job runs {COMMAND}");
+    let dir = tempfile::tempdir().unwrap();
+    let origin = dir.path().join("origin");
+    std::fs::create_dir_all(&origin).unwrap();
+    repo(&origin, "1.2.3");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(include_str!("../../../assets/base/policy.json")).unwrap();
+    policy["git"]["pr_capability_impact"] = serde_json::json!("block");
+    std::fs::write(
+        origin.join(".codeflow/policy.json"),
+        serde_json::to_string_pretty(&policy).unwrap(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(origin.join(".github/workflows")).unwrap();
+    std::fs::write(origin.join(".github/workflows/codeflow-policy.yml"), POLICY).unwrap();
+    std::fs::create_dir_all(origin.join("docs/capabilities")).unwrap();
+    std::fs::write(
+        origin.join("docs/capabilities/vocabulary.yaml"),
+        "inventory: incomplete\ngroups: []\ntags: []\n",
+    )
+    .unwrap();
+    std::fs::write(
+        origin.join("docs/capabilities/CAP-001-billing.md"),
+        "---\nid: CAP-001\nuid: 7d1c2f4e-0a5b-4c6d-8e9f-1a2b3c4d5e6f\nname: billing\nsummary: Bill a clinic for its visits.\narea: core\nstatus: planned\nkind: functional\naudience: [external]\n---\n\n## Concept\n\nThe service bills each visit.\n",
+    )
+    .unwrap();
+    git(&origin, &["add", "."]);
+    git(&origin, &["commit", "-m", "ci: check capability impact"]);
+    let base = git(&origin, &["rev-parse", "main"]);
+    git(&origin, &["checkout", "-q", "-b", "feat/x"]);
+    std::fs::create_dir_all(origin.join("src")).unwrap();
+    std::fs::write(origin.join("src/lib.rs"), "pub fn bill() {}\n").unwrap();
+    git(&origin, &["add", "."]);
+    git(&origin, &["commit", "-m", "feat: bill a visit"]);
+    let head = git(&origin, &["rev-parse", "HEAD"]);
+    git(&origin, &["checkout", "-q", "main"]);
+
+    let target = dir.path().join("target");
+    codeflow_fixture::clone(
+        dir.path(),
+        origin.to_str().unwrap(),
+        target.to_str().unwrap(),
+    )
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
+    git(
+        &target,
+        &["fetch", "-q", "origin", "feat/x:refs/codeflow/pr-head"],
+    );
+
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    let step = |body: &str| {
+        let out = Command::new("sh")
+            .args(["-c", &format!("set -eu\n{COMMAND}")])
+            .current_dir(&target)
+            .env("PATH", &path)
+            .env("BASE_SHA", &base)
+            .env("HEAD_SHA", &head)
+            .env("HEAD_REF", "feat/x")
+            .env("ACTOR", "unknown")
+            .env("CODEFLOW_PR_BODY", body)
+            .env("CODEFLOW_HOME", dir.path().join("home"))
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env_remove("GITHUB_EVENT_NAME")
+            .env_remove("GIT_DIR")
+            .output()
+            .unwrap();
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), said)
+    };
+    let (code, said) = step(BODY);
+    assert_eq!(code, Some(1), "{said}");
+    assert!(
+        said.contains("git.pr_capability_impact")
+            && said.contains("exactly one ## Capability impact"),
+        "{said}"
+    );
+    let (code, said) = step(&format!(
+        "{BODY}\n## Capability impact\n\n- Improved CAP-001 billing: clinics are billed per visit, entry unchanged.\n"
+    ));
+    assert_eq!(code, Some(0), "{said}");
+    assert!(
+        said.contains("declaration agrees with catalog delta"),
+        "{said}"
+    );
+}
