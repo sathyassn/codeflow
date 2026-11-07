@@ -440,6 +440,120 @@ fn is_planning_move(
         && permitted_at(repo, parent, record))
 }
 
+/// The record as it stood before `landed`, when `landed` corrected a
+/// completed task's declared home to the home that already holds its work
+/// (TSK-1185 AC-10). A task that lands on a home other than the one it
+/// declared is left naming the wrong home, and a planning landing can only
+/// correct it once the task is complete, which [`is_planning_move`] refuses.
+///
+/// All of these must hold on the home's own history: `landed` is on its
+/// first-parent chain, it is an admissible planning landing, the new target
+/// is `home`, the record's only changed line is `integration_target`, and the
+/// record's reviewed commit is already in the landing's first parent. So no
+/// other edit rides along and the claim rests on commit identity, and
+/// [`prove_record`] then proves the completion at its original landing.
+///
+/// # Errors
+/// Unreadable history is an error, never a correction.
+fn home_correction(
+    repo: &Repository,
+    record: &RecordView,
+    home: &str,
+    tip: Oid,
+    landed: Oid,
+    parent: Oid,
+) -> Result<Option<RecordView>, String> {
+    let names_home = record
+        .integration_target
+        .as_deref()
+        .is_some_and(|declared| super::super::work_start::logical_target(declared) == home);
+    if record.kind != RecordKind::Task || !names_home {
+        return Ok(None);
+    }
+    let Some(before) = record_at(repo, parent, record)? else {
+        return Ok(None);
+    };
+    let reviewed = active_block(record).and_then(|block| commit_of(repo, &block.reviewed));
+    let Some(reviewed) = reviewed else {
+        return Ok(None);
+    };
+    let admitted = before.integration_target != record.integration_target
+        && changes_only_the_target(&before.content, &record.content)
+        && on_home_chain(repo, landed, tip)?
+        && is_ancestor_or_same(repo, reviewed, parent)?
+        && admissible_planning_landing(repo, landed)? == Some(parent);
+    Ok(admitted.then_some(before))
+}
+
+/// Refuse a home change an edit landed after it would hide (TSK-1185).
+/// [`matching_landing`] finds only the landing of the record's current text,
+/// whose parent already names the new home, so the commit that moved the
+/// task is found here, on the home's first-parent history past the receiver,
+/// and must be a planning move or a home correction in its own right.
+fn verify_earlier_home_move(
+    repo: &Repository,
+    record: &RecordView,
+    home: &str,
+    tip: Oid,
+    landed: Oid,
+    base: Oid,
+) -> Result<(), String> {
+    use super::super::work_start::logical_target;
+    if record.kind != RecordKind::Task {
+        return Ok(());
+    }
+    let target = record
+        .integration_target
+        .as_deref()
+        .map_or(home, logical_target);
+    let mut at = landed;
+    loop {
+        // A commit the receiver holds is past the walk; its child is not, so
+        // a move made right at the fork is still judged.
+        if is_ancestor_or_same(repo, at, base)? {
+            return Ok(());
+        }
+        let Some(parent) = first_parent(repo, at)? else {
+            return Ok(());
+        };
+        let Some(old) = record_at(repo, parent, record)? else {
+            return Ok(());
+        };
+        let Some(declared) = old.integration_target.as_deref().map(logical_target) else {
+            return Ok(());
+        };
+        if declared == target {
+            at = parent;
+            continue;
+        }
+        if at == landed {
+            return Ok(()); // verify_record_home judges this landing.
+        }
+        let version = record_at(repo, at, record)?.ok_or("the moved record is unreadable")?;
+        let planned = admissible_planning_landing(repo, at)? == Some(parent)
+            && permitted_at(repo, at, record)
+            && permitted_at(repo, parent, record);
+        if planned || home_correction(repo, &version, home, tip, at, parent)?.is_some() {
+            return Ok(());
+        }
+        return Err("the landing changes the task's declared home".into());
+    }
+}
+
+/// Whether two record texts differ in exactly one line, the
+/// `integration_target` line.
+fn changes_only_the_target(before: &str, after: &str) -> bool {
+    let (before, after): (Vec<_>, Vec<_>) =
+        (before.split('\n').collect(), after.split('\n').collect());
+    let target = |line: &str| line.starts_with("integration_target:");
+    let mut changed = before.iter().zip(&after).filter(|(old, new)| old != new);
+    before.len() == after.len()
+        && changed
+            .next()
+            .is_some_and(|(old, new)| target(old) && target(new))
+        && changed.next().is_none()
+}
+
 /// Whether the task `record` names is in a permitted state at `at`: exactly
 /// one task record there carries its id or uid, every task record there
 /// parses, and that record states `todo` or `blocked` and holds no
@@ -688,7 +802,52 @@ fn prove_record(
     if parents.len() > 1 && !is_clean_remerge(repo, &commit).map_err(|error| error.to_string())? {
         return Err("the home landing contains an unreviewed merge resolution".into());
     }
-    verify_record_home(repo, record, home, landed, &parents, base, head)?;
+    let correction = match parents.first() {
+        Some(parent) => home_correction(repo, record, home, tip, landed, *parent)?,
+        None => None,
+    };
+    verify_record_home(
+        repo,
+        record,
+        home,
+        landed,
+        &parents,
+        base,
+        head,
+        correction.is_some(),
+    )?;
+    verify_earlier_home_move(repo, record, home, tip, landed, base)?;
+    if let Some(original) = correction {
+        // The correction landed no reviewed work, so the completion is proved
+        // where it did land. This calls the proof directly: `prove_record`
+        // on the original would read its old target as a retired home.
+        let origin = matching_landing(repo, &original, tip, parents[0], None)?
+            .ok_or("the corrected record has no landing on the home")?;
+        let commit = repo
+            .find_commit(origin)
+            .map_err(|error| error.to_string())?;
+        let origin_parents = history::parents(repo, &commit).map_err(|error| error.to_string())?;
+        if origin_parents.len() > 1
+            && !is_clean_remerge(repo, &commit).map_err(|error| error.to_string())?
+        {
+            return Err("the home landing contains an unreviewed merge resolution".into());
+        }
+        let completion = prove_task_completion(
+            repo,
+            &original,
+            home,
+            tip,
+            default_tip,
+            origin,
+            &origin_parents,
+        )?;
+        return Ok(ImportedRecord {
+            path: record.path.clone(),
+            home: home.to_string(),
+            landing: landed,
+            completion: Some(completion),
+        });
+    }
     if let Some(proof) = prove_retired_record(
         repo,
         record,
@@ -760,6 +919,7 @@ fn prove_record(
     })
 }
 
+#[allow(clippy::too_many_arguments)] // The same guarded landing inputs as prove_record.
 fn verify_record_home(
     repo: &Repository,
     record: &RecordView,
@@ -768,6 +928,7 @@ fn verify_record_home(
     parents: &[Oid],
     base: Oid,
     head: Oid,
+    corrected: bool,
 ) -> Result<(), String> {
     if record.kind == RecordKind::Task {
         let uid = record_uid(&record.content);
@@ -790,7 +951,8 @@ fn verify_record_home(
                             .as_deref()
                             .map_or(home, super::super::work_start::logical_target)
                 })
-            }) && !is_planning_move(repo, record, landed, *parent, head)?
+            }) && !corrected
+                && !is_planning_move(repo, record, landed, *parent, head)?
             {
                 return Err("the landing changes the task's declared home".into());
             }

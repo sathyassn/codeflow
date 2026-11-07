@@ -340,6 +340,156 @@ fn imported_from_home(home: &str, reopen: bool, stack: bool) -> tempfile::TempDi
     dir
 }
 
+/// TSK-1185 AC-10: TSK-001 declares `LINE`, but its reviewed work landed on
+/// main, and a planning merge on main then corrects its home. The receiving
+/// branch merges main. `case` is what the correction carries or rests on.
+fn corrected_home(case: &str) -> tempfile::TempDir {
+    let dir = repo(
+        &[("TSK-001", OWN_JOURNEY), ("TSK-002", OWN_JOURNEY)],
+        ",\"test_gate_on_push\":\"block\"",
+    );
+    let root = dir.path();
+    let on_line = |status: &str, closeout: &str| {
+        task("TSK-001", status, OWN_JOURNEY, closeout).replace(
+            "integration_target: main",
+            &format!("integration_target: {LINE}"),
+        )
+    };
+    write(
+        root,
+        &record_path("TSK-001"),
+        &on_line("todo", "Pending.\n"),
+    );
+    write(
+        root,
+        &record_path("TSK-002"),
+        &task("TSK-002", "todo", OWN_JOURNEY, "Pending.\n").replace(
+            "integration_target: main",
+            &format!("integration_target: {LINE}"),
+        ),
+    );
+    commit(root, "docs: plan the work on the line");
+    git(root, &["switch", "-c", LINE]);
+    write(root, "src/receiver.rs", "pub fn previously_reviewed() {}\n");
+    let direct = commit(root, "feat: receiving line work");
+    adopt_receiver(root, &direct);
+    git(root, &["switch", "-c", RECEIVER]);
+    git(root, &["switch", "-c", "side", "main"]);
+    write(root, "src/side.rs", "pub fn never_on_main() {}\n");
+    let side = commit(root, "feat: work that never reaches main");
+    if case == "planned" {
+        git(root, &["switch", "-c", "plan/move-home", "main"]);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n"),
+        );
+        commit(root, "docs: move the task to main");
+        git(root, &["switch", "main"]);
+        merge(root, "plan/move-home");
+    }
+    git(root, &["switch", "-c", BRANCH, "main"]);
+    write(root, "src/lib.rs", "pub fn source() {}\n");
+    let landed = commit(root, "feat: source work");
+    let reviewed = if case == "reviewed elsewhere" {
+        side
+    } else {
+        landed
+    };
+    let results = ["AC-1: verified | unit", "AC-2: verified | journey"];
+    let closeout = block(&reviewed, &results, "verified | journey", "none: fixture");
+    let completed = if case == "planned" {
+        task("TSK-001", "complete", OWN_JOURNEY, &closeout)
+    } else {
+        on_line("complete", &closeout)
+    };
+    write(root, &record_path("TSK-001"), &completed);
+    commit(root, "docs: complete source work");
+    git(root, &["switch", "main"]);
+    merge(root, BRANCH);
+    if case == "planned" {
+        git(root, &["switch", RECEIVER]);
+        merge(root, "main");
+        return dir;
+    }
+    git(root, &["switch", "-c", "plan/correct-home"]);
+    let mut corrected = completed.replace(
+        &format!("integration_target: {LINE}"),
+        "integration_target: main",
+    );
+    if matches!(case, "other edit" | "filler") {
+        corrected = corrected.replace("work TSK-001", "changed TSK-001");
+    }
+    write(root, &record_path("TSK-001"), &corrected);
+    commit(root, "docs: correct the task's home");
+    git(root, &["switch", "main"]);
+    merge(root, "plan/correct-home");
+    if case == "filler" {
+        git(root, &["switch", "-c", "plan/filler"]);
+        let filler = corrected.replace("changed TSK-001", "filler TSK-001");
+        write(root, &record_path("TSK-001"), &filler);
+        commit(root, "docs: edit the record after the move");
+        git(root, &["switch", "main"]);
+        merge(root, "plan/filler");
+    }
+    git(root, &["switch", RECEIVER]);
+    merge(root, "main");
+    dir
+}
+
+#[test]
+fn tsk1185_a_home_correction_on_the_home_proves_at_the_original_landing() {
+    let dir = corrected_home("plain");
+    assert_passes(
+        &check(dir.path(), LINE, Some(RECEIVER), false),
+        "corrected home",
+    );
+}
+
+#[test]
+fn tsk1185_a_home_correction_needs_the_reviewed_head_on_the_home() {
+    let dir = corrected_home("reviewed elsewhere");
+    assert_blocks(
+        &check(dir.path(), LINE, Some(RECEIVER), false),
+        "reviewed head elsewhere",
+        &["TSK-001", "the landing changes the task's declared home"],
+    );
+}
+
+/// A task moved by a planning landing on its home and completed there later
+/// stays admitted: the earlier move is judged on the home, so it need not be
+/// on the receiving head's own chain.
+#[test]
+fn tsk1185_a_planned_re_home_completed_on_its_home_is_admitted() {
+    let dir = corrected_home("planned");
+    assert_passes(
+        &check(dir.path(), LINE, Some(RECEIVER), false),
+        "planned re-home",
+    );
+}
+
+/// A later edit must not stand in for a correction that fails the rule: the
+/// home check reads only the landing of the record's current text.
+#[test]
+fn tsk1185_a_later_edit_does_not_clear_a_bad_correction() {
+    let dir = corrected_home("filler");
+    assert_blocks(
+        &check(dir.path(), LINE, Some(RECEIVER), false),
+        "edit after a bad correction",
+        &["TSK-001", "the landing changes the task's declared home"],
+    );
+}
+
+#[test]
+fn tsk1185_a_home_correction_changes_nothing_else_in_the_record() {
+    let dir = corrected_home("other edit");
+    assert_blocks(
+        &check(dir.path(), LINE, Some(RECEIVER), false),
+        "edit beside the correction",
+        &["TSK-001", "the landing changes the task's declared home"],
+    );
+}
+
 #[test]
 fn main_and_sibling_imports_keep_home_stacking_and_reopened_criteria() {
     for home in ["main", "integration/EPC-003-source"] {

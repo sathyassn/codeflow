@@ -427,6 +427,31 @@ fn a_clean_sync_cannot_re_home_a_line_task() {
     );
 }
 
+/// TSK-1185: the import check reads only the landing of the record's current
+/// text, so it misses a re-home under a later edit. The sync route still
+/// refuses, because a sync changes no record whose home is the line.
+#[test]
+fn a_later_edit_cannot_hide_a_re_home_from_a_clean_sync() {
+    let dir = fixture();
+    let root = dir.path();
+    let path = "project-management/tasks/TSK-001.md";
+    write(root, path, &task("TSK-001", "main"));
+    commit(root, "docs: main re-homes a line task");
+    write(
+        root,
+        path,
+        &task("TSK-001", "main").replace("Work.", "Other work."),
+    );
+    commit(root, "docs: main edits it after the move");
+    sync_branch(root);
+    let refused = ci(root, "Task: EPC-001", None);
+    blocks(
+        &refused,
+        "a re-home under a later edit",
+        "work.criteria_frozen",
+    );
+}
+
 /// A task with no `integration_target`, as a hand-written record may be.
 fn untargeted_task(id: &str, epic: &str) -> String {
     task(id, LINE)
