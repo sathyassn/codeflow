@@ -76,8 +76,7 @@
 //! text outside the grammar (a reserved word out of place, a construct or
 //! quote left open, zsh's `foreach`, short `if … { … }` or `{ … } always`),
 //! which the parser keeps as an unknown node while still judging its best
-//! reading. A function call or nested script deeper than the reader
-//! follows, and a loop it cannot settle, taint what they may change. Some
+//! reading. A loop it cannot settle taints what it may change. Some
 //! constructs give an unknown value rather than an unknown state: `read`
 //! with an option it does not model or from input it cannot see,
 //! `mapfile`, `getopts`, a case-converting attribute (`declare -u`), a
@@ -90,6 +89,15 @@
 //! `every_word_part_is_modelled_or_taints` match every node and word kind
 //! without a wildcard arm, so a new kind does not compile until it is
 //! given a sample that shows it is modelled or taints.
+//!
+//! **A bound never reads as "nothing found".** Every bound below stops
+//! the reader somewhere, and it keeps that fact. A value past a bound is
+//! unknown, so a later deletion through it refuses. Code past a bound may be
+//! any command, so the line refuses through [`Reader::unfinished`]: a
+//! nested script or function past the depth it follows, compound commands
+//! past the nesting it parses, launch wrappers past those it unwraps, a
+//! script on input past the lines it keeps, and argument combinations past
+//! those it judges, when one of them may delete.
 //!
 //! **A command that may fail is read both ways.** `cd` enters only a
 //! directory the reader sees exists; otherwise it may fail, and the line
@@ -144,6 +152,9 @@ pub(super) struct Found {
     /// Set when the target cannot be proven: the operand or the working
     /// directory depends on a construct the reader does not model exactly.
     pub unproven: Option<Unproven>,
+    /// Set when the reader stopped at a bound before it read the whole line,
+    /// so `unproven` gives why and no target stands behind it.
+    pub unfinished: bool,
 }
 
 /// Why a deletion's target cannot be proven.
@@ -205,6 +216,13 @@ const MAX_VARIANTS: usize = 64;
 const MAX_DEPTH: usize = 6;
 /// Passes over a loop body before its state is taken as settled.
 const LOOP_PASSES: usize = 6;
+/// Compound commands nested inside one another in one script. Parsing and
+/// reading both recurse on this, once per nested script, so it keeps a line
+/// well inside the stack; hand-written and generated lines stay far below it.
+const MAX_NESTING: usize = 16;
+/// Brace expressions expanded in one word. Expansion recurses once per
+/// expression, so past this the word's further values are unknown.
+const MAX_BRACE_GROUPS: usize = 64;
 
 // ---------------------------------------------------------------------------
 // Words and tokens
@@ -1158,6 +1176,11 @@ fn parameter(inner: &str, quoted: bool) -> Part {
     if inner.starts_with('!') {
         return opaque(Some(why::PARAM));
     }
+    // Each expansion inside is parsed by a call of its own, so a count past
+    // the bound stops here and refuses the line where the word is read.
+    if inner.matches("${").count() >= MAX_NESTING {
+        return opaque(Some(why::EXPANSIONS));
+    }
     let name_len = if inner.starts_with(['@', '*']) {
         1
     } else {
@@ -1659,12 +1682,20 @@ const OUT_OF_PLACE: &[&str] = &[
 struct Parser {
     toks: Vec<Tok>,
     at: usize,
+    nesting: usize,
+    /// Set when the text went past [`MAX_NESTING`], leaving the rest unread.
+    stopped: bool,
 }
 
 impl Parser {
     fn parse(script: &str) -> Node {
         let (toks, broken) = Lexer::new(script).tokens();
-        let mut parser = Self { toks, at: 0 };
+        let mut parser = Self {
+            toks,
+            at: 0,
+            nesting: 0,
+            stopped: false,
+        };
         let mut items = Vec::new();
         while parser.at < parser.toks.len() {
             let before = parser.at;
@@ -1676,7 +1707,9 @@ impl Parser {
             }
         }
         let node = Node::Seq(items);
-        if broken {
+        if parser.stopped {
+            Node::Unknown(why::STRUCTURE, Box::new(node))
+        } else if broken {
             Node::Unknown(why::SYNTAX, Box::new(node))
         } else {
             node
@@ -1847,8 +1880,23 @@ impl Parser {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// One command. Past [`MAX_NESTING`] the rest of the text is left
+    /// unread, and the whole script is marked for it, since the stop may
+    /// sit in code that never runs, such as a function never called.
     fn command(&mut self) -> Node {
+        if self.nesting >= MAX_NESTING {
+            self.at = self.toks.len();
+            self.stopped = true;
+            return Node::Seq(Vec::new());
+        }
+        self.nesting += 1;
+        let node = self.command_here();
+        self.nesting -= 1;
+        node
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn command_here(&mut self) -> Node {
         let node = if self.at_op("(") {
             self.at += 1;
             if self.at_op(")") {
@@ -2239,8 +2287,12 @@ mod why {
     pub const EVAL: &str = "`eval` of text the guard cannot resolve";
     pub const ALIAS: &str = "an alias the guard cannot resolve";
     pub const DEPTH: &str = "a function call or nested script deeper than the guard follows";
+    pub const STRUCTURE: &str = "compound commands nested deeper than the guard parses";
+    pub const WRAPPERS: &str = "more launch wrappers than the guard unwraps";
+    pub const VARIANTS: &str = "more argument combinations than the guard judges";
     pub const LOOP: &str = "a loop the guard cannot settle";
     pub const MANY: &str = "more values than the guard follows";
+    pub const EXPANSIONS: &str = "parameter expansions nested deeper than the guard parses";
     pub const READ_OPTION: &str = "a `read` option the guard does not model";
     pub const READ_INPUT: &str =
         "input the guard cannot see (`read` from a file or an unknown command)";
@@ -2729,6 +2781,15 @@ impl State {
         self.set(&assign.name, new);
     }
 
+    /// Each of `names` may also hold an unknown value.
+    fn mark_unknown(&mut self, names: &BTreeSet<String>, reason: &str) {
+        for name in names {
+            if let Some(values) = self.vars.get_mut(name) {
+                values.insert(taint(reason));
+            }
+        }
+    }
+
     /// After a loop the reader could not settle: every value still
     /// changing between its last two passes is also unknown.
     fn widen(&mut self, before: &Self) {
@@ -2773,6 +2834,11 @@ fn bounded_to(values: Values, limit: usize) -> Values {
         kept.insert(value);
     }
     kept
+}
+
+/// Whether every one of `values` is an integer.
+fn holds_integers(values: &Values) -> bool {
+    values.iter().all(|value| value.parse::<i64>().is_ok())
 }
 
 /// The positional parameters a command's argument vectors give, from
@@ -2987,25 +3053,8 @@ impl Reader<'_> {
     }
 
     fn script(&mut self, script: &str, st: &mut State) {
-        if self.done() {
+        if self.done() || !self.may_descend(st) {
             return;
-        }
-        // Past the depth it follows, the reader reads once more with every
-        // value unknown, so a deletion there is still judged.
-        if self.depth > MAX_DEPTH {
-            if st.wild.is_some() {
-                if st.wild == Some(why::SCRIPT_READINGS) {
-                    self.report(
-                        Judged::Unproven(Unproven {
-                            reason: why::SCRIPT_READINGS.into(),
-                            cwd: false,
-                        }),
-                        false,
-                    );
-                }
-                return;
-            }
-            st.go_wild(why::DEPTH);
         }
         if self.depth > 0
             && !self
@@ -3028,6 +3077,44 @@ impl Reader<'_> {
         self.depth -= 1;
     }
 
+    /// The line refuses: the reader stopped at a bound for `reason`, and
+    /// what it did not read may be any command. Every stop in the line's
+    /// structure ends here. A protected target found already names the
+    /// refusal better.
+    fn unfinished(&mut self, reason: &'static str) {
+        if !self.done() {
+            self.found = Some(Found {
+                target: "unread shell code",
+                ambiguous: false,
+                unproven: Some(Unproven {
+                    reason: reason.into(),
+                    cwd: false,
+                }),
+                unfinished: true,
+            });
+        }
+    }
+
+    /// Whether a nested script or function body may be read. Past the depth
+    /// the reader follows it reads once more with every value unknown, so a
+    /// deletion there is still judged; past that read it stops, and the line
+    /// refuses.
+    fn may_descend(&mut self, st: &mut State) -> bool {
+        if self.depth <= MAX_DEPTH {
+            return true;
+        }
+        if st.wild.is_none() {
+            st.go_wild(why::DEPTH);
+            return true;
+        }
+        self.unfinished(if st.wild == Some(why::SCRIPT_READINGS) {
+            why::SCRIPT_READINGS
+        } else {
+            why::DEPTH
+        });
+        false
+    }
+
     /// Read `script` in a child shell of the line.
     fn child_script(&mut self, script: &str, child: &mut State) {
         let status = self.status.take();
@@ -3048,6 +3135,7 @@ impl Reader<'_> {
                         target,
                         ambiguous,
                         unproven: None,
+                        unfinished: false,
                     });
                 }
             }
@@ -3057,6 +3145,7 @@ impl Reader<'_> {
                         target: "unproven deletion target",
                         ambiguous: false,
                         unproven: Some(unproven),
+                        unfinished: false,
                     });
                 }
             }
@@ -3198,7 +3287,10 @@ impl Reader<'_> {
                     before = std::mem::replace(&mut acc, next);
                 }
                 if !settled {
-                    acc.widen(&before);
+                    self.read_unsettled(&mut acc, &before, &[cond, body], |reader, pass| {
+                        reader.frame(FrameKind::Loop, body, pass);
+                        reader.run(cond, pass);
+                    });
                 }
                 *st = acc;
             }
@@ -3279,6 +3371,9 @@ impl Reader<'_> {
                 self.pipe_input = outer;
             }
             Node::Unknown(reason, inner) => {
+                if *reason == why::STRUCTURE {
+                    self.unfinished(reason);
+                }
                 st.go_wild(reason);
                 self.run(inner, st);
             }
@@ -3338,9 +3433,65 @@ impl Reader<'_> {
             before = std::mem::replace(st, next);
         }
         if !settled {
-            st.widen(&before);
+            let actions = self.live_traps(st);
+            let bodies: Vec<&Node> = actions.iter().collect();
+            self.read_unsettled(st, &before, &bodies, |reader, pass| {
+                let mut next = pass.clone();
+                for action in &actions {
+                    let mut ran = pass.clone();
+                    reader.frame(FrameKind::Child, action, &mut ran);
+                    next.join(&ran);
+                }
+                *pass = next;
+            });
         }
         self.in_trap = false;
+    }
+
+    /// Finish a loop or trap the passes did not settle. A value may still
+    /// be on its way to a name the passes never saw it reach, so every name
+    /// `bodies` may assign is read as unknown, and `read` runs the bodies on
+    /// that state, so a deletion in them is judged. A name that takes an
+    /// unknown value in a read makes the next read start with it unknown.
+    /// A name still counting through integers keeps its numbers, since an
+    /// unknown number would make its own arithmetic unknown; it joins the
+    /// others the moment it takes anything else.
+    fn read_unsettled(
+        &mut self,
+        acc: &mut State,
+        before: &State,
+        bodies: &[&Node],
+        mut read: impl FnMut(&mut Self, &mut State),
+    ) {
+        let mut unknown: BTreeSet<String> = acc
+            .vars
+            .keys()
+            .filter(|name| {
+                bodies.iter().any(|body| may_assign(body, name, acc))
+                    && !(acc.var(name) != before.var(name) && holds_integers(&acc.var(name)))
+            })
+            .cloned()
+            .collect();
+        loop {
+            let mut pass = acc.clone();
+            pass.mark_unknown(&unknown, why::LOOP);
+            read(self, &mut pass);
+            let more: Vec<String> = pass
+                .vars
+                .iter()
+                .filter(|(name, values)| {
+                    !unknown.contains(*name) && values.iter().any(|v| unproven(v).is_some())
+                })
+                .map(|(name, _)| name.clone())
+                .collect();
+            acc.join(&pass);
+            if more.is_empty() || self.done() {
+                break;
+            }
+            unknown.extend(more);
+        }
+        acc.widen(before);
+        acc.mark_unknown(&unknown, why::LOOP);
     }
 
     /// The trap and hook actions `st` has not retracted.
@@ -3467,7 +3618,13 @@ impl Reader<'_> {
             before = std::mem::replace(&mut acc, next);
         }
         if !settled {
-            acc.widen(&before);
+            self.read_unsettled(&mut acc, &before, &[body], |reader, pass| {
+                pass.set(name, values.clone());
+                if select {
+                    pass.set("REPLY", [taint(why::READ_INPUT)].into());
+                }
+                reader.frame(FrameKind::Loop, body, pass);
+            });
         }
         // A fixed list the body never leaves early nor reassigns ends on its
         // last word; otherwise every word stays feasible.
@@ -3804,20 +3961,8 @@ impl Reader<'_> {
         name: &str,
         st: &mut State,
     ) {
-        if self.depth > MAX_DEPTH {
-            if st.wild.is_some() {
-                if st.wild == Some(why::SCRIPT_READINGS) {
-                    self.report(
-                        Judged::Unproven(Unproven {
-                            reason: why::SCRIPT_READINGS.into(),
-                            cwd: false,
-                        }),
-                        false,
-                    );
-                }
-                return;
-            }
-            st.go_wild(why::DEPTH);
+        if !self.may_descend(st) {
+            return;
         }
         let caller_args = std::mem::replace(&mut st.args, positionals(variants, 1));
         let caller_zero = st.arg0.clone();
@@ -4407,6 +4552,14 @@ impl Reader<'_> {
                 }
                 Part::Arith { text, .. } => self.arith(text, st),
                 Part::Array(words) => self.side_effects(words, st),
+                // Text past the bound stays unread: the word refuses the line.
+                Part::Lit { .. }
+                | Part::Tilde(_)
+                | Part::Subst { .. }
+                | Part::Opaque {
+                    unknown: Some(why::EXPANSIONS),
+                    ..
+                } => {}
                 // An expansion the reader does not resolve may still assign
                 // inside (`${V/x/${D:=…}}`); `${!V=…}` assigns a name it
                 // cannot see.
@@ -4418,7 +4571,6 @@ impl Reader<'_> {
                         self.part_effects(&lex_word(inner).parts, st);
                     }
                 }
-                Part::Lit { .. } | Part::Tilde(_) | Part::Subst { .. } => {}
             }
         }
     }
@@ -4701,21 +4853,13 @@ impl Reader<'_> {
         if self.done() {
             return;
         }
-        if self.depth > MAX_DEPTH {
-            if st.wild == Some(why::SCRIPT_READINGS) {
-                self.report(
-                    Judged::Unproven(Unproven {
-                        reason: why::SCRIPT_READINGS.into(),
-                        cwd: false,
-                    }),
-                    ambiguous,
-                );
-            }
-            return;
-        }
         let Some(run) = unwrap(argv) else {
             return;
         };
+        if run.unfinished {
+            self.unfinished(why::WRAPPERS);
+            return;
+        }
         let mut st = st.clone();
         for (name, value) in &run.env {
             st.set(name, [value.clone()].into());
@@ -4732,6 +4876,11 @@ impl Reader<'_> {
         let Some(first) = argv.first() else {
             return;
         };
+        // The unread choices may name any program, a remover included.
+        if unproven(first) == Some(why::MANY) {
+            self.unfinished(why::MANY);
+            return;
+        }
         let ambiguous = ambiguous || st.cwd.len() > 1;
         match program_name(first).as_str() {
             name if crate::hooks::git_guard::is_shell(name) => {
@@ -4748,6 +4897,13 @@ impl Reader<'_> {
                     self.child_script(&script, &mut child);
                     self.depth -= 1;
                 } else if let Some(input) = input {
+                    if input
+                        .items
+                        .iter()
+                        .any(|i| unproven(&i.value) == Some(why::MANY))
+                    {
+                        self.unfinished(why::MANY);
+                    }
                     let script: Vec<&str> = input.items.iter().map(|i| i.value.as_str()).collect();
                     child.args = Vec::new();
                     self.child_script(&script.join("\n"), &mut child);
@@ -5286,6 +5442,11 @@ impl Reader<'_> {
             .map(Vec::len)
             .try_fold(1usize, |acc, n| acc.checked_mul(n.max(1)))
             .unwrap_or(usize::MAX);
+        // Past the bound each alternative is still read, but not with every
+        // other: a remover may never meet its flag or its target.
+        if product > MAX_VARIANTS && per_word.iter().flatten().flatten().any(|f| may_delete(f)) {
+            self.unfinished(why::VARIANTS);
+        }
         let count = if product <= MAX_VARIANTS {
             product
         } else {
@@ -5433,6 +5594,10 @@ impl Reader<'_> {
                 vec![(text.clone(), kind)]
             }
             Part::Opaque { text, unknown, .. } => {
+                if *unknown == Some(why::EXPANSIONS) {
+                    self.unfinished(why::EXPANSIONS);
+                    return vec![(taint(why::EXPANSIONS), Kind::Quoted)];
+                }
                 // A substitution inside arithmetic still runs.
                 if text.contains("$(") || text.contains('`') {
                     let mut lexer = Lexer::new(text.trim_start_matches('$'));
@@ -6010,6 +6175,10 @@ impl Reader<'_> {
         if out.len() > MAX_VALUES {
             out.truncate(MAX_VALUES);
             complete = false;
+            out.push(Input {
+                value: taint(why::MANY),
+                tree: true,
+            });
         }
         Fed {
             items: out,
@@ -6746,6 +6915,10 @@ fn items(fed: Option<&Fed>, delimiter: Delimiter) -> Vec<Input> {
     fed.items
         .iter()
         .flat_map(|item| {
+            // An unknown item stays one unknown value, whatever frames it.
+            if unproven(&item.value).is_some() {
+                return vec![item.clone()];
+            }
             let values = match delimiter {
                 Delimiter::Blanks => xargs_words(&item.value),
                 Delimiter::ReplacementLines => item
@@ -6863,6 +7036,9 @@ struct Unwrapped {
     argv: Vec<String>,
     env: Vec<(String, String)>,
     cwd: Option<String>,
+    /// Set when `argv` still starts with a wrapper, so the command it runs
+    /// is unread.
+    unfinished: bool,
 }
 
 /// Remove launch wrappers (`env`, `command`, `sudo`, `nice`, `timeout`,
@@ -6871,7 +7047,8 @@ fn unwrap(argv: &[String]) -> Option<Unwrapped> {
     let mut argv = argv.to_vec();
     let mut env = Vec::new();
     let mut cwd = None;
-    for _ in 0..8 {
+    let mut unfinished = false;
+    for round in 0..=8 {
         while let Some((name, value)) = argv
             .first()
             .and_then(|w| w.split_once('='))
@@ -6918,9 +7095,18 @@ fn unwrap(argv: &[String]) -> Option<Unwrapped> {
             "sudo" | "doas" | "pkexec" | "gsudo" => unwrap_privilege(rest, &mut cwd),
             _ => break,
         };
+        if round == 8 {
+            unfinished = true;
+            break;
+        }
         argv = next;
     }
-    Some(Unwrapped { argv, env, cwd })
+    Some(Unwrapped {
+        argv,
+        env,
+        cwd,
+        unfinished,
+    })
 }
 
 /// `env`'s own options and assignments, up to the command it runs. A short
@@ -7311,15 +7497,36 @@ fn exec_bodies(expression: &[String]) -> Vec<Vec<String>> {
     bodies
 }
 
+/// Whether a word names a program the reader judges for what it deletes.
+fn may_delete(word: &str) -> bool {
+    let name = program_name(word);
+    matches!(
+        name.as_str(),
+        "rm" | "rmdir"
+            | "unlink"
+            | "shred"
+            | "srm"
+            | "find"
+            | "xargs"
+            | "parallel"
+            | "rsync"
+            | "eval"
+    ) || crate::hooks::git_guard::is_shell(&name)
+}
+
 /// Whether a command removes files: a remover, possibly behind launchers,
-/// `xargs`, or a shell whose script runs one.
+/// `xargs`, or a shell whose script runs one. A command the reader cannot
+/// read to the end counts as one.
 fn runs_remover(argv: &[String], depth: usize) -> bool {
     if depth > MAX_DEPTH {
-        return false;
+        return true;
     }
     let Some(run) = unwrap(argv) else {
         return false;
     };
+    if run.unfinished {
+        return true;
+    }
     let Some(first) = run.argv.first() else {
         return false;
     };
@@ -7334,8 +7541,12 @@ fn runs_remover(argv: &[String], depth: usize) -> bool {
                     .map(|(script, _)| script.to_string())
                     .unwrap_or_default()
             };
+            let node = Parser::parse(&script);
+            if matches!(&node, Node::Unknown(reason, _) if *reason == why::STRUCTURE) {
+                return true;
+            }
             let mut simples = Vec::new();
-            collect_simples(&Parser::parse(&script), &mut simples);
+            collect_simples(&node, &mut simples);
             simples.iter().any(|(words, _)| {
                 let argv: Vec<String> = words.iter().map(word_text).collect();
                 runs_remover(&argv, depth + 1)
@@ -7903,24 +8114,38 @@ fn brace_expand(pieces: &[(String, Kind)]) -> Vec<Vec<(String, Kind)>> {
         .flat_map(|(text, kind)| text.chars().map(move |c| (c, *kind)))
         .collect();
     let mut out = Vec::new();
-    expand_chars(chars, &mut out);
-    out.iter().map(|chars| regroup(chars)).collect()
+    let whole = expand_chars(chars, &mut out, 0);
+    let mut expanded: Vec<Vec<(String, Kind)>> = out.iter().map(|chars| regroup(chars)).collect();
+    if !whole {
+        expanded.push(vec![(taint(why::MANY), Kind::Quoted)]);
+    }
+    expanded
 }
 
-fn expand_chars(chars: Vec<(char, Kind)>, out: &mut Vec<Vec<(char, Kind)>>) {
+/// Expand into `out`, `groups` brace expressions in, and whether every
+/// choice fit under [`MAX_VALUES`] and [`MAX_BRACE_GROUPS`].
+fn expand_chars(chars: Vec<(char, Kind)>, out: &mut Vec<Vec<(char, Kind)>>, groups: usize) -> bool {
     if out.len() >= MAX_VALUES {
-        return;
+        return false;
     }
     let Some((open, close, choices)) = find_brace(&chars) else {
         out.push(chars);
-        return;
+        return true;
     };
+    if groups >= MAX_BRACE_GROUPS {
+        return false;
+    }
+    // The first choice that cannot finish ends the expansion: the rest is
+    // unknown, and reading on could only repeat the stop.
     for choice in choices {
         let mut next = chars[..open].to_vec();
         next.extend(choice);
         next.extend_from_slice(&chars[close + 1..]);
-        expand_chars(next, out);
+        if !expand_chars(next, out, groups + 1) {
+            return false;
+        }
     }
+    true
 }
 
 /// The first brace expression in `chars`: its `{`, its `}` and its
@@ -8227,6 +8452,10 @@ fn is_name(name: &str) -> bool {
 
 // Several guard-form tables feed tests that build symlinks, which run on
 // Unix only.
+#[cfg(test)]
+#[path = "deletion_bounds_tests.rs"]
+mod bounds_tests;
+
 #[cfg(test)]
 #[cfg_attr(not(unix), allow(dead_code, unused_imports))]
 mod tests {
