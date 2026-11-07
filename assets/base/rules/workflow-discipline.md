@@ -278,6 +278,13 @@ models prepare and verify evidence. For other high-blast-radius actions
 that effective host policy permits after approval, execute one bounded step
 at a time and verify it.
 
+A command started in a Herdr app terminal (`hc run`, `hc exec`) runs
+outside the harness's Bash sandbox and its permission prompts, with the
+user's full rights. The guards judge it as if typed bare and refuse a form
+they cannot read; text sent with `hc send` or `hc keys` is not judged, so
+type into a terminal only what its program may run. See
+`docs/policy-reference.md` "Terminal carriers the guards model".
+
 ## Act within authority
 
 **Act within legitimate intent/bounded authority; never unilaterally cross an ethical,
