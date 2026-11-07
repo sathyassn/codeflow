@@ -143,6 +143,27 @@ pub fn evaluate_ruled(
     root: &std::path::Path,
     outcome: &super::sandbox_state::Outcome,
 ) -> Vec<Violation> {
+    let mut violations = evaluate_spelled(command, posix, levels, integrity, cwd, root, outcome);
+    // A name the disk folds onto a protected one reaches every check of this
+    // guard in the spelling they compare (TSK-1349 AC-7).
+    if let Some(spelled) = super::repo::ascii_spelling(command) {
+        violations.extend(evaluate_spelled(
+            &spelled, posix, levels, integrity, cwd, root, outcome,
+        ));
+    }
+    violations
+}
+
+/// [`evaluate_ruled`] for the line as spelled.
+fn evaluate_spelled(
+    command: &str,
+    posix: bool,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &std::path::Path,
+    root: &std::path::Path,
+    outcome: &super::sandbox_state::Outcome,
+) -> Vec<Violation> {
     // A NUL byte ends a C string in the shell but not in the guard, so the
     // two would read different commands; refuse before any lexing (TSK-397
     // Codex review round 9).
@@ -214,6 +235,7 @@ pub fn evaluate_ruled(
             violations.push(finding);
         }
     }
+    git_guard_line_checks(command, integrity, &mut violations);
     // Programs the line's Git calls and program values run are judged as
     // commands of their own after the line's own findings, so a
     // hook-integrity refusal of the line itself still names that rule.
@@ -269,6 +291,7 @@ pub fn evaluate_ruled(
             merge_strongest(&mut violations, finding);
         }
     }
+    integrity_write_check(command, prose, cwd, integrity, &mut violations);
     violations
 }
 
@@ -360,6 +383,41 @@ fn runner_violations(
             format!("cannot verify the program Git runs: {why}"),
             crate::remedy::SECRET_SELECTION.remedy(),
         )],
+    }
+}
+
+/// git-guard's line checks that exec-guard repeats, so neither guard admits
+/// alone what the other refuses (TSK-1349 AC-4).
+fn git_guard_line_checks(command: &str, integrity: PolicyLevel, violations: &mut Vec<Violation>) {
+    // A git option that skips a client hook.
+    if let Some(finding) = super::git_guard::line_hook_skip(command, integrity) {
+        merge_strongest(violations, finding);
+    }
+    // A Git configuration-source variable set anywhere on the line, a bare
+    // `export` included.
+    if let Some(finding) = super::git_guard::line_config_source(command, integrity) {
+        merge_strongest(violations, finding);
+    }
+}
+
+/// git-guard's shell-write check on a line exec-guard would otherwise admit:
+/// a write to an enforcement path, a workflow included (TSK-1349 AC-4,
+/// AC-7). It runs last, so a line exec-guard already refuses keeps its own
+/// findings (`rm -rf /` its one catastrophic finding, an interpreter call
+/// the paths it is given), and it reads the repository only for a line
+/// nothing else refuses.
+fn integrity_write_check(
+    command: &str,
+    prose: bool,
+    cwd: &std::path::Path,
+    integrity: PolicyLevel,
+    violations: &mut Vec<Violation>,
+) {
+    if prose || violations.iter().any(|v| v.level == PolicyLevel::Block) {
+        return;
+    }
+    if let Some(finding) = super::git_guard::line_integrity_write(command, cwd, integrity) {
+        merge_strongest(violations, finding);
     }
 }
 
@@ -590,17 +648,113 @@ mod tests {
                 }
             }
         }
+        // A project deletion is judged in a project that holds the
+        // directories it names, and is never a dangerous deletion. Since
+        // TSK-1349 exec-guard repeats git-guard's write check, so a form
+        // git-guard refuses because it cannot place a glob (a `cd` inside a
+        // loop, after which `*` could name `.codeflow/policy.json`) refuses
+        // here too, with that one `git.hook_integrity` finding.
+        let project = tempfile::tempdir().unwrap();
+        let project = project.path().canonicalize().unwrap();
+        for dir in ["build", "dist", "target"] {
+            std::fs::create_dir(project.join(dir)).unwrap();
+        }
         for command in PROJECT_DELETIONS {
             for nesting in NESTINGS {
                 let nested = nesting.replace("{}", command);
-                assert!(evaluate(&nested, &section).is_empty(), "{nested}");
+                let found = evaluate_at(&nested, &section, PolicyLevel::Block, &project, &project);
+                if found.is_empty() {
+                    continue;
+                }
+                let write = super::super::git_guard::line_integrity_write(
+                    &nested,
+                    &project,
+                    PolicyLevel::Block,
+                );
+                assert!(
+                    found.len() == 1
+                        && found[0].rule == "git.hook_integrity"
+                        && write.is_some_and(|w| w.message == found[0].message),
+                    "{nested}: {found:?}"
+                );
             }
+        }
+        let looped = "for i in 1; do cd build && rm -rf *; done";
+        let found = evaluate_at(looped, &section, PolicyLevel::Block, &project, &project);
+        assert!(
+            found.len() == 1
+                && found[0].rule == "git.hook_integrity"
+                && found[0].message.contains("cannot tell the directory"),
+            "{looped}: {found:?}"
+        );
+    }
+
+    /// A checkout with no `origin/HEAD`, as a hosted pull-request checkout
+    /// is: the policy authority cannot be read. A plain path that holds
+    /// nothing needs no such read, so its deletion is admitted (TSK-1349).
+    /// What the guard must read to judge still refuses: a pattern, and a path
+    /// that exists and could hold a worktree.
+    #[test]
+    fn a_plain_deletion_does_not_rest_on_the_policy_authority() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let repo = git2::Repository::init(&root).unwrap();
+        let tree = repo
+            .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+            .unwrap();
+        let who = git2::Signature::now("t", "t@example.com").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &who, &who, "chore: start", &tree, &[])
+            .unwrap();
+        repo.remote("origin", "file:///nonexistent/repo.git")
+            .unwrap();
+        repo.reference("refs/remotes/origin/work", commit, true, "fixture")
+            .unwrap();
+        std::fs::create_dir(root.join("build")).unwrap();
+        let section = SecuritySection::default();
+        let judge =
+            |command: &str| evaluate_at(command, &section, PolicyLevel::Block, &root, &root);
+        assert!(
+            judge("rm -rf target/debug").is_empty(),
+            "{:?}",
+            judge("rm -rf target/debug")
+        );
+        for command in ["rm -rf *", "rm -rf build", "rm -rf build target/debug"] {
+            let found = judge(command);
+            assert!(
+                found.len() == 1 && found[0].rule == "git.hook_integrity",
+                "{command}: {found:?}"
+            );
+        }
+    }
+
+    /// A deletion that runs in a directory the line reaches but the guard
+    /// cannot read refuses even for a plain path: the line can make that
+    /// directory a link to an enforcement directory first (TSK-1349).
+    #[test]
+    fn a_plain_deletion_in_a_directory_that_does_not_exist_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        git2::Repository::init(&root).unwrap();
+        let section = SecuritySection::default();
+        for command in [
+            "cd missing && rm -rf target",
+            "ln -s .codeflow b && cd b && rm -rf git-hooks",
+            "ln -s .codeflow b; cd b; rm -rf git-hooks",
+        ] {
+            let found = evaluate_at(command, &section, PolicyLevel::Block, &root, &root);
+            assert!(
+                found.len() == 1 && found[0].rule == "git.hook_integrity",
+                "{command}: {found:?}"
+            );
         }
     }
 
     /// TSK-397 design D: where the strict rule applies, a run-time word
     /// given to `rm` or `find` refuses under the directory check, never as a
-    /// dangerous deletion; the baseline allows these, as the line did.
+    /// dangerous deletion. The baseline allows these, except where git-guard
+    /// already refuses the line for a word it cannot verify in a writer:
+    /// exec-guard then gives git-guard's one finding (TSK-1349 AC-4).
     #[test]
     fn run_time_project_deletions_refuse_only_when_tightened() {
         use crate::security::guard_forms::{NESTINGS, RUN_TIME_PROJECT_DELETIONS};
@@ -610,7 +764,19 @@ mod tests {
         for command in RUN_TIME_PROJECT_DELETIONS {
             for nesting in NESTINGS {
                 let nested = nesting.replace("{}", command);
-                assert!(evaluate(&nested, &section).is_empty(), "{nested}");
+                let baseline = evaluate(&nested, &section);
+                let write = super::super::git_guard::line_integrity_write(
+                    &nested,
+                    &root,
+                    PolicyLevel::Block,
+                );
+                assert!(
+                    baseline.is_empty()
+                        || (baseline.len() == 1
+                            && baseline[0].rule == "git.hook_integrity"
+                            && write.is_some_and(|w| w.message == baseline[0].message)),
+                    "{nested}: {baseline:?}"
+                );
                 let found = evaluate_ruled(
                     &nested,
                     true,

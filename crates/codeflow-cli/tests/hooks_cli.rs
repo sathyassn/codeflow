@@ -12,6 +12,9 @@ use std::process::{Command, Output, Stdio};
 #[path = "hooks_cli/checkout_identity.rs"]
 mod checkout_identity;
 
+#[path = "hooks_cli/hook_skip.rs"]
+mod hook_skip;
+
 #[path = "hooks_cli/host_isolation.rs"]
 mod host_isolation;
 use host_isolation::{git_command, isolate_clone, isolate_git};
@@ -21,6 +24,9 @@ mod target_repository;
 
 #[path = "hooks_cli/text_rule.rs"]
 mod text_rule;
+
+#[path = "hooks_cli/workflow_paths.rs"]
+mod workflow_paths;
 
 /// TSK-397: under the strict text rule, the default this suite runs in,
 /// once a line's directory is unknown, the exec guard refuses a word filled in at

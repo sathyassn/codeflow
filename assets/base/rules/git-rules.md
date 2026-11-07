@@ -89,6 +89,23 @@ missing automation for adoption rather than silently enabling publication.
   editing hooks, exporting gate tokens). Gates exist only where mistakes are
   irreversible or invisible. A guard's refusal names the policy rule it
   applied and the sanctioned path.
+- The guards refuse every git option that skips a hook, on every branch,
+  under `git.hook_integrity`: `--no-verify` on `commit`, `merge`, `pull`,
+  `push`, `rebase`, `am` and `p4 submit`, `-n` on `commit` and `am`,
+  `--no-post-rewrite` on `commit`, and `-c core.hooksPath=…`; abbreviated or
+  in a cluster of short options too. On `push` `-n` is `--dry-run`, and on
+  `merge`, `pull` and `rebase` it is `--no-stat`, so it stays allowed there.
+  An include flag (`-c include.path=…`, `includeIf.<condition>.path`) and
+  setting `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_COUNT`,
+  `GIT_CONFIG_PARAMETERS` or `GIT_CONFIG_KEY_<n>`, with any value and with or
+  without a git call on the line, refuse under the same rule.
+- Every file under `.github/workflows/`, and under the local `actions/`
+  directory beside it, new or existing, is an enforcement path, since each
+  runs as CI code: the guards refuse an agent's write there however the
+  path is spelled or reached (letter case, `..`, a symbolic or hard link)
+  and through the file tools.
+  A workflow or local action changes through the operator or
+  `codeflow update`.
 
 ## Protected branches
 

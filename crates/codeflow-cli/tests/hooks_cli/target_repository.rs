@@ -3621,11 +3621,11 @@ fn repair3_runner_configuration_and_environment_sources() {
         }
         // `EDITOR` is judged as a command on every Git line since TSK-1002
         // Fable review 14, as `GIT_EDITOR` is, whether or not the call runs
-        // the editor; the write it names is git-guard's rule.
+        // the editor. The write it names is git-guard's rule, which
+        // exec-guard repeats since TSK-1349 (AC-4), so both refuse.
         let command = "EDITOR='rm -rf .claude' git config --get user.name";
         let out = f.command(&f.linked, hook, command);
-        let code = if hook == "git-guard" { 2 } else { 0 };
-        assert_eq!(out.status.code(), Some(code), "{hook} {command}: {out:?}");
+        assert_eq!(out.status.code(), Some(2), "{hook} {command}: {out:?}");
     }
     // An out-of-band config write must be read on the next invocation.
     for hook in ["exec-guard", "git-guard"] {

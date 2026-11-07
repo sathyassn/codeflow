@@ -327,6 +327,54 @@ fn clears_hook_integrity() {
     run_printed(&root, &step, &[], &[]);
 }
 
+/// TSK-1349: a hook skip refuses on an unprotected branch in both guards;
+/// the printed step, the same commit without the flag, passes both and runs
+/// with its hooks.
+#[test]
+fn clears_hook_skip() {
+    let dir = ci_repo(DEFAULTS);
+    // Task work commits in a linked worktree, as the root-checkout rule asks.
+    git(
+        dir.path(),
+        &["worktree", "add", "-q", ".worktrees/w", "-b", "feat/w"],
+    );
+    let worktree = dir.path().join(".worktrees/w");
+    let root = worktree.as_path();
+    write(root, "y.txt", "y\n");
+    git(root, &["add", "y.txt"]);
+    let mut step = String::new();
+    for which in ["git-guard", "exec-guard"] {
+        let printed = refused(
+            root,
+            which,
+            "git commit -qn -m 'feat: add y'",
+            "git.hook_integrity",
+            "HOOK_SKIP",
+        );
+        assert!(
+            printed.contains(
+                "`git commit -n` (`--no-verify`) skips the pre-commit and commit-msg hooks"
+            ),
+            "{printed}"
+        );
+        // The finding itself quotes `git commit -n`; the step is the one
+        // the sanctioned path prints.
+        let sanctioned = printed
+            .lines()
+            .find(|line| line.contains("sanctioned:"))
+            .unwrap_or_else(|| panic!("{printed}"));
+        step = printed_command(sanctioned, "HOOK_SKIP", None);
+        assert_passes(root, which, &format!("{step} -q -m 'feat: add y'"));
+    }
+    run_printed(root, &step, &[], &["-q", "-m", "feat: add y"]);
+    assert_eq!(
+        String::from_utf8(run("git", root, &["log", "-1", "--format=%s"]).stdout)
+            .unwrap()
+            .trim(),
+        "feat: add y"
+    );
+}
+
 /// TSK-302: the interpreter argument refusal names the read route, which
 /// passes, and the update step, which runs.
 #[test]

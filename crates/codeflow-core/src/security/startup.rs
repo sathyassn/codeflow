@@ -2867,9 +2867,15 @@ fn git_setting_violation(args: &[String], line: &Line<'_>) -> Option<String> {
     while at < globals.len() {
         let arg = globals[at].as_str();
         at += 1;
-        let found = if arg == "-c" {
-            let setting = globals.get(at).map(String::as_str).unwrap_or_default();
-            at += 1;
+        // `-c<entry>` attached is read as `-c <entry>`: git 2.53 rejects it,
+        // and a git that accepts it must not set a key past the check
+        // (TSK-1349).
+        let attached = arg.strip_prefix("-c").filter(|entry| !entry.is_empty());
+        let found = if arg == "-c" || attached.is_some() {
+            let setting = attached.unwrap_or_else(|| {
+                at += 1;
+                globals.get(at - 1).map(String::as_str).unwrap_or_default()
+            });
             let (key, value) = setting.split_once('=').unwrap_or((setting, ""));
             config_setting_problem(&format!("`git -c {key}`"), key, value, line)
         } else if arg == "--config-env" || arg.starts_with("--config-env=") {

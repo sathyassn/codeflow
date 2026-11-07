@@ -205,6 +205,15 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // git's stderr after a failed `git diff --name-only`, shown in the
+    // warning only; the changed names themselves are never decoded lossily
+    (
+        "codeflow-cli/src/cmd/ci/workflow_change.rs",
+        "changed_workflows",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // output of the guard canary run in this process, shown by doctor
     (
         "codeflow-cli/src/cmd/hook.rs",
@@ -2081,6 +2090,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-cli/src/cmd/ci/workflow_change.rs",
         "bytes_at",
+        "trim",
+        1,
+        "display",
+    ),
+    // Formats Git stderr only after a failed name listing, for the warning
+    // text; the listed names are kept as bytes until they are UTF-8.
+    (
+        "crates/codeflow-cli/src/cmd/ci/workflow_change.rs",
+        "changed_workflows",
         "trim",
         1,
         "display",
@@ -7048,6 +7066,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor runs only codex, and only for the builder profile line (TSK-1003)."),
     ("crates/codeflow-cli/src/cmd/ci.rs", "run", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),
+    ("crates/codeflow-core/src/hooks/git_guard.rs", "worktree_delete_check", "is_dir", 1, "Chooses the stricter route, never infers absence: false, from a missing directory or a read error, sends the deletion to holds_registered_worktrees, whose error refuses. Only a directory that is there skips that read."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_prefix_is_contained", "is_dir", 2, "Both calls inspect FileType returned by entry.file_type(); its error returns false, which refuses the glob fallback. The calls choose canonicalization and directory traversal, never infer absence. Canonicalization and directory-read errors also refuse containment."),
     ("crates/codeflow-core/src/security/git_config.rs", "parse", "is_file", 1, "Type check on successfully obtained metadata; an existing non-file returns cannot verify. Missing includes are separately inventoried to match Git's empty contribution."),
     ("crates/codeflow-core/src/security/git_config.rs", "parse", "ErrorKind::NotFound", 1, "Only native NotFound marks an include missing; Git silently skips that file and doctor retains and names its missing inventory entry. Other metadata errors remain cannot verify."),
@@ -7125,6 +7144,11 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/delegate_turn.rs", "verify_exact_retry", "is_file", 1, "Symlink metadata was obtained fallibly; this rejects a non-regular result, not a missing input."),
     ("crates/codeflow-core/src/hooks/edit_guard.rs", "enforcement_patterns", "is_file", 1, "Git marker absence is proven; metadata errors propagate before classifying an existing linked-worktree gitfile."),
     ("crates/codeflow-core/src/hooks/edit_guard.rs", "find_candidates", "is_dir", 1, "Directory entry file_type errors propagate before testing the obtained type."),
+    ("crates/codeflow-core/src/hooks/edit_guard.rs", "hard_link_to_protected", "ErrorKind::InvalidFilename", 1, "TSK-1349: a write target the platform cannot name holds no file to share an inode with; the resolved-path check before it already judged the name, and every other metadata error refuses."),
+    ("crates/codeflow-core/src/hooks/edit_guard.rs", "hard_link_to_protected", "ErrorKind::NotADirectory", 2, "TSK-1349: a target below a file, or a protected path that is a file where a directory was listed, holds no linked file; the protected file itself is then compared by inode, and every other error refuses."),
+    ("crates/codeflow-core/src/hooks/edit_guard.rs", "hard_link_to_protected", "ErrorKind::NotFound", 3, "TSK-1349: an absent target or protected path cannot share an inode; a write that creates the target makes a new inode, and every other error refuses."),
+    ("crates/codeflow-core/src/hooks/edit_guard.rs", "hard_link_to_protected", "is_dir", 1, "TSK-1349: the type comes from a directory entry whose file_type error propagates; only directories are walked."),
+    ("crates/codeflow-core/src/hooks/edit_guard.rs", "hard_link_to_protected", "is_file", 1, "TSK-1349: the type comes from symlink_metadata already obtained; a non-file target has no hard-linked content."),
     ("crates/codeflow-core/src/hooks/git_discard.rs", "restore_paths", "is_dir", 1, "Missing paths are proven absent; existing symlink metadata errors propagate before directory classification."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "expand_components", "is_dir", 1, "Obtained entry FileType; failures produce GlobStop::Unreadable rather than omitting recursion."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_directory", "is_dir", 1, "After proven absence handling, metadata errors are unproven; a known non-directory has no glob children."),

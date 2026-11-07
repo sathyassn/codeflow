@@ -293,17 +293,49 @@ fn strict_run_time_refusal(out: &std::process::Output) -> bool {
         && stderr.contains("the strict text rule cannot verify the run-time argument")
 }
 
+/// TSK-1349 AC-4: exec-guard repeats git-guard's write check, so it refuses
+/// what git-guard refuses, for the same reason. `(cd /; pwd); rm -rf *` is
+/// judged from `/` too, and a folder there the guard cannot read refuses it
+/// where the host has one.
+#[cfg(unix)]
+fn same_write_refusal(
+    root: &std::path::Path,
+    command: &str,
+    exec_guard: &std::process::Output,
+) -> bool {
+    fn reason(out: &std::process::Output) -> Option<String> {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stderr.matches("policy rule ").count() != 1 {
+            return None;
+        }
+        stderr
+            .lines()
+            .skip_while(|line| !line.contains("policy rule git.hook_integrity"))
+            .nth(1)
+            .map(str::to_string)
+    }
+    let found = reason(exec_guard);
+    found.is_some() && found == reason(&run_codex_guard(root, "git-guard", command))
+}
+
 /// Run the shipped Codex exec-guard wiring through the shell, as Codex
 /// does, with a Bash tool call for `command` on stdin.
 #[cfg(unix)]
 fn run_codex_exec_guard(root: &std::path::Path, command: &str) -> std::process::Output {
+    run_codex_guard(root, "exec-guard", command)
+}
+
+/// Run one shipped Codex guard wiring through the shell.
+#[cfg(unix)]
+fn run_codex_guard(root: &std::path::Path, guard: &str, command: &str) -> std::process::Output {
     use std::io::Write as _;
     let mut commands = Vec::new();
     collect_hook_commands(&hooks_json()["hooks"]["PreToolUse"], &mut commands);
+    let wired = format!("codeflow hook {guard} --contract 3");
     let hook = commands
         .into_iter()
-        .find(|c| c.starts_with("codeflow hook exec-guard --contract 3"))
-        .expect("exec-guard wired");
+        .find(|c| c.starts_with(&wired))
+        .expect("guard wired");
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
     let path = std::env::join_paths(
         exe.parent()
@@ -730,10 +762,12 @@ fn the_codex_exec_guard_wiring_judges_composed_deletions_and_help() {
     }
     for command in guard_forms::PROJECT_DELETIONS {
         let out = run_codex_exec_guard(root, command);
-        if !strict_run_time_refusal(&out) {
-            assert_eq!(out.status.code(), Some(0), "{command}");
-            assert!(out.stderr.is_empty(), "{command}");
+        if strict_run_time_refusal(&out) || same_write_refusal(root, command, &out) {
+            continue;
         }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{command}: {stderr}");
+        assert!(out.stderr.is_empty(), "{command}: {stderr}");
     }
     for (help, twin) in guard_forms::HELP_PAIRS {
         let out = run_codex_exec_guard(root, help);

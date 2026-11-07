@@ -262,7 +262,15 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
     let mut seen = BTreeSet::new();
     let mut violations = Vec::new();
     let startup = crate::security::startup::StartupEnv::with_home_at(ctx.home, cwd);
-    for path in &request.paths {
+    // A name the disk folds onto a protected one is judged in the spelling
+    // the checks below compare (TSK-1349 AC-7).
+    let spelled: Vec<PathBuf> = request
+        .paths
+        .iter()
+        .filter_map(|path| path.to_str().and_then(super::repo::ascii_spelling))
+        .map(PathBuf::from)
+        .collect();
+    for path in request.paths.iter().chain(&spelled) {
         let absolute = absolute_target(path, cwd, ctx.home);
         // First, so a path past the bound reads nothing on disk (TSK-1258).
         let lexical = normalized(&absolute, false)?;
@@ -734,6 +742,36 @@ fn non_ascii_below(path: &Path, dir: &Path) -> bool {
             .any(|part| !part.as_os_str().as_encoded_bytes().is_ascii())
 }
 
+/// `path` lies directly or deeper under `root`, and its first component below
+/// `root` is a dot name holding a non-ASCII byte. APFS folds `.gro\u{212A}`
+/// onto `.grok` and `.code\u{FB02}ow` onto `.codeflow`, and a directory that
+/// does not exist yet cannot be checked against the disk, so the name is
+/// judged protected on every host, failing closed. A name such as
+/// `日本語.txt` is not a dot name and stays ordinary (TSK-1349 AC-7).
+fn non_ascii_dot_name_below(path: &Path, root: &Path) -> bool {
+    under_ignoring_case(path, root)
+        && path
+            .components()
+            .nth(root.components().count())
+            .is_some_and(|part| {
+                let name = part.as_os_str();
+                !name.as_encoded_bytes().is_ascii()
+                    && name.to_str().is_none_or(|name| {
+                        name.chars().find(|c| c.is_alphanumeric() || *c == '.') == Some('.')
+                    })
+            })
+}
+
+/// `base` is a checkout's dot directory, such as `.github` or `.codeflow`, so
+/// the entry is one of the action table's. A spelling in another case names
+/// the same file wherever a checkout's disk ignores case, and a commit carries
+/// it to such a disk, so it is matched the same on every disk (TSK-1349 AC-7).
+/// A registered checkout root is not one: its name is the operator's.
+fn dot_directory(base: &Path) -> bool {
+    base.file_name()
+        .is_some_and(|name| name.as_encoded_bytes().starts_with(b"."))
+}
+
 /// `a` and `b` name one path, components compared as [`under_ignoring_case`]
 /// compares them.
 fn same_ignoring_case(a: &Path, b: &Path) -> bool {
@@ -962,9 +1000,12 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
 struct ProtectedPath {
     path: [Result<PathBuf, String>; 2],
     directory: bool,
-    /// Under the git administrative directory, so compared without ASCII
-    /// case ([`under_ignoring_case`]).
-    git_owned: bool,
+    /// Under the git administrative directory or a checkout's dot directory
+    /// ([`dot_directory`]): compared without ASCII case
+    /// ([`under_ignoring_case`]), and a non-ASCII name below it, or in place
+    /// of it, is judged protected ([`non_ascii_below`],
+    /// [`non_ascii_dot_name_below`]).
+    fold_case: bool,
     base: PathBuf,
     resolved_base: [std::cell::OnceCell<Result<PathBuf, String>>; 2],
 }
@@ -1153,7 +1194,7 @@ fn protected_at(root: &Path) -> Result<Option<Protected>, String> {
             .map(|(path, directory, base)| ProtectedPath {
                 path: both(path),
                 directory: *directory,
-                git_owned: path.starts_with(repo.commondir()),
+                fold_case: path.starts_with(repo.commondir()) || dot_directory(base),
                 base: base.clone(),
                 resolved_base: Default::default(),
             })
@@ -1205,13 +1246,13 @@ pub(crate) fn repository_enforcement_target(
             for entry in protected.iter() {
                 let path = entry.path[reading].as_ref().map_err(Clone::clone)?;
                 let under = |inner: &Path, outer: &Path| {
-                    if entry.git_owned {
+                    if entry.fold_case {
                         under_ignoring_case(inner, outer)
                     } else {
                         inner.starts_with(outer)
                     }
                 };
-                let same = if entry.git_owned {
+                let same = if entry.fold_case {
                     same_ignoring_case(&target, path)
                 } else {
                     target == *path
@@ -1224,7 +1265,12 @@ pub(crate) fn repository_enforcement_target(
                         .as_ref()
                         .map_err(Clone::clone)
                 };
-                if entry.git_owned && non_ascii_below(&target, base()?) {
+                if entry.fold_case
+                    && (non_ascii_below(&target, base()?)
+                        || base()?
+                            .parent()
+                            .is_some_and(|root| non_ascii_dot_name_below(&target, root)))
+                {
                     return Ok(true);
                 }
                 if same
@@ -1235,7 +1281,8 @@ pub(crate) fn repository_enforcement_target(
                 }
             }
         }
-        Ok(false)
+        let resolved = normalized(target, true).map_err(|error| error.to_string())?;
+        hard_link_to_protected(&resolved, &protected)
     };
 
     for owner in super::repo::target_roots(target, root)? {
@@ -1250,6 +1297,90 @@ pub(crate) fn repository_enforcement_target(
 /// How many entries a protected directory is walked for before the walk
 /// gives up and stands for the whole directory.
 const CANDIDATE_WALK_LIMIT: usize = 4096;
+
+/// Whether `target` is an existing file with more than one hard link that
+/// shares its inode with a protected file, so a write to it changes that
+/// file under another name (TSK-1349). Only a multiply linked file is
+/// compared. A protected directory too large to walk, or one the guard
+/// cannot read, counts as holding it: the check fails closed.
+#[cfg(unix)]
+fn hard_link_to_protected(target: &Path, protected: &[ProtectedPath]) -> Result<bool, String> {
+    use std::os::unix::fs::MetadataExt as _;
+    // A path that does not exist, runs through a file, or is a name the
+    // platform refuses holds no file, so a write cannot reach one through
+    // it; any other error refuses.
+    let meta = match std::fs::symlink_metadata(target) {
+        Ok(meta) => meta,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::NotADirectory
+                    | std::io::ErrorKind::InvalidFilename
+            ) =>
+        {
+            return Ok(false)
+        }
+        Err(error) => return Err(format!("cannot inspect {}: {error}", target.display())),
+    };
+    if !meta.is_file() || meta.nlink() < 2 {
+        return Ok(false);
+    }
+    let key = (meta.dev(), meta.ino());
+    let same = |path: &Path| -> Result<bool, String> {
+        match std::fs::symlink_metadata(path) {
+            Ok(m) => Ok((m.dev(), m.ino()) == key),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(format!("cannot inspect {}: {error}", path.display())),
+        }
+    };
+    let mut walked = 0usize;
+    for entry in protected {
+        let path = entry.path[1].as_ref().map_err(Clone::clone)?;
+        if !entry.directory {
+            if same(path)? {
+                return Ok(true);
+            }
+            continue;
+        }
+        let mut pending = vec![path.clone()];
+        while let Some(dir) = pending.pop() {
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
+                    if same(&dir)? {
+                        return Ok(true);
+                    }
+                    continue;
+                }
+                Err(error) => return Err(format!("cannot read {}: {error}", dir.display())),
+            };
+            for item in entries {
+                walked += 1;
+                if walked > CANDIDATE_WALK_LIMIT {
+                    return Ok(true);
+                }
+                let item = item.map_err(|error| format!("cannot read an entry: {error}"))?;
+                let kind = item
+                    .file_type()
+                    .map_err(|error| format!("cannot inspect an entry: {error}"))?;
+                if kind.is_dir() {
+                    pending.push(item.path());
+                } else if same(&item.path())? {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(not(unix))]
+#[allow(clippy::unnecessary_wraps)]
+fn hard_link_to_protected(_target: &Path, _protected: &[ProtectedPath]) -> Result<bool, String> {
+    Ok(false)
+}
 
 /// The paths a `find` starting at `start` may hand to its action that hold
 /// enforcement state or a registered checkout, resolved through symlinks:

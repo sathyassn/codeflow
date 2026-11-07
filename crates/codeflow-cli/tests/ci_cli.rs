@@ -1252,6 +1252,27 @@ fn ci_scaffold_range_skips_unmodified_managed_files() {
     );
 }
 
+/// TSK-1349 AC-7: a workflow no manifest entry installs gets the warning
+/// too, since any file under `.github/workflows/` runs once it lands.
+#[test]
+fn ci_warns_on_a_new_unmanaged_workflow() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffolded_standard(dir.path());
+    let new = ".github/workflows/codeflow-admission.yml";
+    std::fs::write(
+        dir.path().join(new),
+        "on: pull_request\njobs:\n  admit:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", new]);
+    git(
+        dir.path(),
+        &["commit", "-q", "-m", "ci: add an admission workflow"],
+    );
+    let (_, all) = ci_scaffold_range(dir.path());
+    assert!(all.contains(&format!("this change edits {new}")), "{all}");
+}
+
 #[test]
 fn ci_adopter_edited_managed_file_is_scanned() {
     let dir = tempfile::tempdir().unwrap();

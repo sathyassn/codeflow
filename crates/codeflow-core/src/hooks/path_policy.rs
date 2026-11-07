@@ -94,7 +94,13 @@ pub fn default_names() -> Vec<BlockedName> {
 pub fn normalize(bytes: &[u8]) -> Result<String, String> {
     let name = crate::git::GitName::from_bytes(bytes);
     let text = name.rule_text().map_err(|_| "path is not UTF-8")?;
-    let text = text.nfc().collect::<String>().to_ascii_lowercase();
+    let spelled = super::repo::ascii_spelling(text);
+    let text = spelled
+        .as_deref()
+        .unwrap_or(text)
+        .nfc()
+        .collect::<String>()
+        .to_ascii_lowercase();
     if text.contains('\\')
         || text
             .split('/')
@@ -1058,6 +1064,7 @@ mod tests {
             ("deploy/private/examples/x", false, false),
             ("deep/deploy/private/x", false, false),
             ("deploy/privately/x", false, false),
+            ("foo/.aw\u{17f}/credential\u{17f}", true, false),
         ] {
             let path = normalize(path.as_bytes()).unwrap();
             assert_eq!(p.name_hit(&path), name, "{path}");

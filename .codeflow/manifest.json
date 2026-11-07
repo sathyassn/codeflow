@@ -1361,7 +1361,7 @@
     ".claude/settings.json": {
       "src": "settings/default.json",
       "ownership": "managed-region",
-      "sha256": "79f3a5d6d20644aae09671369fe9f1607271831149f14ae709b1451b3db7557a",
+      "sha256": "9f6cfa3aefa4037766f48e7c29eacf9711f31c3834278f4a545eca4add0a5657",
       "exec": false
     },
     ".claude/skills/cf-consult/SKILL.md": {
@@ -2759,7 +2759,7 @@
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "616e33de72b67be4a35471d4523210cc16124c61fc6239e2907b071779e4cf46",
+      "sha256": "f754167db9331207a7e6c07082dc64a9363a1c7c04cfe43d9c1e25d902a84eb5",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
@@ -2873,7 +2873,7 @@
     ".grok/sandbox.toml": {
       "src": "grok/sandbox.toml",
       "ownership": "user-owned",
-      "sha256": "7b0a0b6c46f9a16468d588f4db4f871302109150166bff01e644bd2c502cd686",
+      "sha256": "975bbb83ff7feaf639ef24bfb3f83ffb42613e50ef538f7912c136b0944bff12",
       "exec": false
     },
     "AGENTS.md": {

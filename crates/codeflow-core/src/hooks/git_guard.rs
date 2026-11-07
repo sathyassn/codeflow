@@ -508,7 +508,16 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
 /// Evaluate a command using the tool payload's working directory for paths.
 #[must_use]
 pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> Evaluation {
-    evaluate_report_with_runners(command, ctx, cwd, true)
+    let mut report = evaluate_report_with_runners(command, ctx, cwd, true);
+    // A name the disk folds onto a protected one reaches every check of this
+    // guard in the spelling they compare (TSK-1349 AC-7).
+    if let Some(spelled) = super::repo::ascii_spelling(command) {
+        let _reading = super::policy::SpelledReadingScope::enter();
+        let other = evaluate_report_with_runners(&spelled, ctx, cwd, true);
+        report.violations.extend(other.violations);
+        report.notes.extend(other.notes);
+    }
+    report
 }
 
 thread_local! {
@@ -897,6 +906,41 @@ fn prospective_alias_unknown(tokens: &[String]) -> bool {
         || configuration_environment_trigger(tokens).is_some()
 }
 
+/// Whether a line's operands are read through [`expanded_integrity`], which
+/// resolves the values the shell fills in: a line with an expansion, a
+/// process substitution or a heredoc, or a segment whose program changes
+/// directory, links or copies, runs git or a shell, or reads a script.
+fn expands_operands(command: &str, segments: &[String]) -> bool {
+    command.contains(['$', '`', '~'])
+        || (command.contains("<(") || command.contains("=("))
+        || command.contains("<<")
+        || segments.iter().any(|segment| {
+            let words = command_argv(segment);
+            strip_launchers(&words).is_some_and(|(program, args)| {
+                matches!(
+                    crate::security::unresolved::writer_name(program),
+                    "cd" | "chdir"
+                        | "pushd"
+                        | "popd"
+                        | "eval"
+                        | "ln"
+                        | "cp"
+                        | "link"
+                        | "pax"
+                        | "cpio"
+                        | "rsync"
+                        | "alias"
+                ) || basename(program) == "git"
+                    || is_shell(basename(program))
+                    || (matches!(basename(program), "source" | ".") && !args.is_empty())
+                    || (script_reader(&words).is_some()
+                        && (shell_c_argument(args).is_some()
+                            || args.iter().any(|a| a == "-s")
+                            || command.contains(['<', '|'])))
+            })
+        })
+}
+
 #[allow(clippy::too_many_lines)] // The ordered shell tracker and dispatch share one state transition.
 fn evaluate_report_with_runners(
     command: &str,
@@ -958,34 +1002,7 @@ fn evaluate_report_with_runners(
     let mut shell = ShellState::new(roles.is_some());
     let line = LineFacts::read(segments, roles.as_deref(), command);
     let run = run_dirs(segments, cwd);
-    let expanded_operands = command.contains(['$', '`', '~'])
-        || (command.contains("<(") || command.contains("=("))
-        || command.contains("<<")
-        || segments.iter().any(|segment| {
-            let words = command_argv(segment);
-            strip_launchers(&words).is_some_and(|(program, args)| {
-                matches!(
-                    crate::security::unresolved::writer_name(program),
-                    "cd" | "chdir"
-                        | "pushd"
-                        | "popd"
-                        | "eval"
-                        | "ln"
-                        | "cp"
-                        | "link"
-                        | "pax"
-                        | "cpio"
-                        | "rsync"
-                        | "alias"
-                ) || basename(program) == "git"
-                    || is_shell(basename(program))
-                    || (matches!(basename(program), "source" | ".") && !args.is_empty())
-                    || (script_reader(&words).is_some()
-                        && (shell_c_argument(args).is_some()
-                            || args.iter().any(|a| a == "-s")
-                            || command.contains(['<', '|'])))
-            })
-        });
+    let expanded_operands = expands_operands(command, segments);
     if expanded_operands {
         violations.extend(expanded_integrity(
             command,
@@ -1099,14 +1116,15 @@ fn evaluate_report_with_runners(
             continue;
         }
 
-        // GIT_CONFIG_* env injection of a protected config key (parallel to the
-        // hook-skip env vars) — `GIT_CONFIG_KEY_0=core.hooksPath …`.
-        if ctx.policy.hook_integrity.is_active() && git_config_env_sets_hooks_path(&tokens) {
-            violations.push(hook_integrity_violation(
-                ctx.policy.hook_integrity,
-                "command injects core.hooksPath via GIT_CONFIG_* env".to_string(),
-            ));
-            continue;
+        // A configuration-source variable (`GIT_CONFIG_GLOBAL`,
+        // `GIT_CONFIG_KEY_0`, …) set on any segment, git call or not, can
+        // redirect the hooks of every later git call; refuse it whatever the
+        // value (TSK-1349). The rest of the segment is still judged, so a
+        // git call it prefixes keeps its own findings.
+        if ctx.policy.hook_integrity.is_active() {
+            if let Some(var) = git_config_source_assignment(&tokens, segment) {
+                violations.push(git_config_source_violation(ctx.policy.hook_integrity, &var));
+            }
         }
 
         // Dispatch on the argument vector the program receives: unquoted
@@ -1435,17 +1453,177 @@ fn leading_env_assignments(tokens: &[String]) -> Vec<(&str, &str)> {
     out
 }
 
-/// Detect a `core.hooksPath` set through git's `GIT_CONFIG_*` env mechanism —
-/// `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=…` or
-/// the older `GIT_CONFIG_PARAMETERS='core.hooksPath=…'`. Parallel to the
-/// hook-skip env vars: an env-set of a protected key disarms the plane.
-fn git_config_env_sets_hooks_path(tokens: &[String]) -> bool {
-    leading_env_assignments(tokens)
-        .into_iter()
-        .any(|(name, val)| {
-            (name.starts_with("GIT_CONFIG_KEY_") || name == "GIT_CONFIG_PARAMETERS")
-                && mentions_hooks_path(val)
+/// Git's configuration-source variables (git-config(1) ENVIRONMENT, Git
+/// 2.53): each replaces a configuration file or adds entries, so each can set
+/// `core.hooksPath`, or an `include.path` to a file that does, for every git
+/// call the session runs after it. `GIT_CONFIG_VALUE_<n>` is inert without
+/// its key, which this list holds.
+fn git_config_source_variable(name: &str) -> bool {
+    matches!(
+        name,
+        "GIT_CONFIG_GLOBAL" | "GIT_CONFIG_SYSTEM" | "GIT_CONFIG_COUNT" | "GIT_CONFIG_PARAMETERS"
+    ) || name.starts_with("GIT_CONFIG_KEY_")
+}
+
+/// The first configuration-source variable a simple command sets, whatever
+/// the value (TSK-1349). The program is found the way every other check
+/// finds it, through the launchers [`strip_launchers`] removes (`builtin`,
+/// `command`, `exec`, `nohup`, the `env` family and the rest), so a wrapper
+/// cannot hide the assignment. It refuses an assignment in front of the
+/// program, one of `env`'s, and a name `export` or the declare family sets
+/// or marks for export, bare or with a value. A command whose program the
+/// reader cannot find (`env -S`, a line of assignments only) is read for any
+/// such assignment word, so it fails closed. The value is not read: a file
+/// or key the guard cannot see could hold a hook path, so any setting
+/// refuses, except the one form [`empties_config_for_a_read`] admits.
+fn git_config_source_assignment(tokens: &[String], segment: &str) -> Option<String> {
+    let name_of = |word: &str| -> Option<String> {
+        let name = word.split_once('=').map_or(word, |(name, _)| name);
+        git_config_source_variable(name).then(|| name.to_string())
+    };
+    let assigned = |word: &String| {
+        word.split_once('=')
+            .filter(|(name, _)| is_identifier(name))
+            .and_then(|_| name_of(word))
+    };
+    let Some((program, args)) = strip_launchers(tokens) else {
+        return tokens.iter().find_map(assigned);
+    };
+    let at = tokens.len() - args.len() - 1;
+    if !empties_config_for_a_read(&tokens[..at], program, args, segment) {
+        if let Some(name) = tokens[..at].iter().find_map(assigned) {
+            return Some(name);
+        }
+    }
+    if program != "export" && !is_declare_builtin(program) {
+        return None;
+    }
+    args.iter().find_map(|word| name_of(word))
+}
+
+/// `GIT_CONFIG_GLOBAL=/dev/null` or `GIT_CONFIG_SYSTEM=/dev/null` directly in
+/// front of one read-only `git <subcommand>`: the usual way to read a
+/// repository without a user's configuration. That file is known to be empty,
+/// so it can set no hooks path and no program; the prefix ends with the call,
+/// so no later call sees it; and the call runs no hook. A value the guard
+/// cannot read could hold either, and an `export` outlives the call, so both
+/// still refuse.
+///
+/// `prefix` holds the words in front of `program` with their quoting removed,
+/// so `segment` must also open with those words exactly as written: a quoted,
+/// joined or escaped spelling refuses. Every word in front must be such an
+/// assignment, so a launcher refuses too, and the subcommand must be the first
+/// word after `git`, so a git global option refuses.
+fn empties_config_for_a_read(
+    prefix: &[String],
+    program: &str,
+    args: &[String],
+    segment: &str,
+) -> bool {
+    program == "git"
+        && args
+            .first()
+            .is_some_and(|sub| super::ref_authority::read_only_subcommand(sub))
+        && !prefix.is_empty()
+        && prefix.iter().all(|word| {
+            matches!(
+                word.as_str(),
+                "GIT_CONFIG_GLOBAL=/dev/null" | "GIT_CONFIG_SYSTEM=/dev/null"
+            )
         })
+        && segment
+            .split([' ', '\t'])
+            .filter(|word| !word.is_empty())
+            .take(prefix.len())
+            .eq(prefix.iter().map(String::as_str))
+}
+
+/// The hook-integrity finding for a configuration-source assignment.
+fn git_config_source_violation(level: PolicyLevel, var: &str) -> Violation {
+    hook_integrity_violation(
+        level,
+        format!(
+            "command sets `{var}`, which can point git at another hooks path for this call and every later git call"
+        ),
+    )
+}
+
+/// The first shell write on `command` to an enforcement path, judged by
+/// git-guard's writer checks (links, `..`, case and patterns resolved), so
+/// exec-guard refuses the writes git-guard refuses, a new or edited workflow
+/// under `.github/workflows/` included (TSK-1349).
+pub(crate) fn line_integrity_write(
+    command: &str,
+    cwd: &Path,
+    level: PolicyLevel,
+) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    // Each segment re-reads the whole line's words against the repository's
+    // enforcement paths; one snapshot serves them all, as in git-guard's own
+    // evaluation. A caller's open scope is kept.
+    let _facts = super::edit_guard::RepoFactsScope::enter();
+    let segments = expand_shell_commands(command).segments;
+    let run = run_dirs(&segments, cwd);
+    // The same two passes as git-guard's evaluation: a line whose operands
+    // the shell fills in is read with those values resolved, and each
+    // segment is judged as written unless that pass owns it.
+    let expanded = expands_operands(command, &segments);
+    if expanded {
+        if let Some(finding) = expanded_integrity(command, cwd, level, &run)
+            .into_iter()
+            .next()
+        {
+            return Some(finding);
+        }
+    }
+    let unknown = Cwd::Unknown("the directory exec-guard does not track".into());
+    segments.iter().find_map(|segment| {
+        if segment == NESTING_UNREAD || segment == "__unresolved_shell_code" {
+            return Some(hook_integrity_violation(
+                level,
+                format!(
+                    "the command nests groups or substitutions more than {NESTING_LIMIT} levels deep, past what the guard reads"
+                ),
+            ));
+        }
+        let mut words = shell_tokens(segment);
+        strip_reserved_words(&mut words);
+        if words.is_empty()
+            || (expanded
+                && (unresolved_word(segment)
+                    || segment.contains("<<")
+                    || script_reader(&command_argv(segment)).is_some()))
+        {
+            return None;
+        }
+        integrity_write_in_dirs(
+            &words,
+            &redirect_writes(segment),
+            level,
+            cwd,
+            &unknown,
+            command,
+            &run,
+        )
+    })
+}
+
+/// The first simple command on `command` that sets a configuration-source
+/// variable, judged as git-guard judges each segment, so exec-guard refuses
+/// the same assignments (TSK-1349 AC-4), a bare `export` with no git call on
+/// the line included.
+pub(crate) fn line_config_source(command: &str, level: PolicyLevel) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    expand_commands(command).iter().find_map(|segment| {
+        let mut tokens = command_argv(segment);
+        strip_reserved_words(&mut tokens);
+        git_config_source_assignment(&tokens, segment)
+            .map(|var| git_config_source_violation(level, &var))
+    })
 }
 
 /// Inspect assignments before launchers are stripped, including prior exports.
@@ -1987,7 +2165,13 @@ fn cd_target(tokens: &[String]) -> Option<String> {
 
 /// The hook shims and the integrity files: directory prefixes and exact files
 /// whose mutation would disarm or falsify the enforcement plane.
-const INTEGRITY_PREFIXES: &[&str] = &[".git/hooks", ".git/refs/remotes", ".codeflow/git-hooks"];
+const INTEGRITY_PREFIXES: &[&str] = &[
+    ".git/hooks",
+    ".git/refs/remotes",
+    ".codeflow/git-hooks",
+    ".github/workflows",
+    ".github/actions",
+];
 const INTEGRITY_FILES: &[&str] = &[
     ".codeflow/policy.json",
     ".codeflow/project.toml",
@@ -3646,7 +3830,13 @@ fn word_could_name_spelled(value: &str) -> Option<&'static str> {
             let names: Vec<&str> = needle.split('/').collect();
             let whole_dir = matches!(
                 *needle,
-                ".codex" | ".grok" | ".codeflow/git-hooks" | ".git/hooks" | ".git/refs/remotes"
+                ".codex"
+                    | ".grok"
+                    | ".codeflow/git-hooks"
+                    | ".git/hooks"
+                    | ".git/refs/remotes"
+                    | ".github/workflows"
+                    | ".github/actions"
             );
             // The word's first `k` components end the needle (the unknown
             // directory supplies the rest) or hold it whole; any further
@@ -4482,7 +4672,10 @@ const ENFORCEMENT_TEXT: &[&str] = &[
     ".git/config",
     ".git/packed-refs",
     ".git/refs/remotes",
-    ".github/workflows/codeflow-ci.yml",
+    // Every workflow and local action, whatever its name: any file here
+    // runs in CI with the workflow's token (TSK-1349).
+    ".github/workflows",
+    ".github/actions",
     ".codex",
     ".grok",
 ];
@@ -4576,7 +4769,10 @@ fn names_whole_dir(after: &str) -> bool {
 /// and `/./` collapsed, and lower case, since a case-insensitive file
 /// system (the macOS default) reads `.CODEFLOW` as `.codeflow`.
 fn canonical_text(text: &str) -> String {
-    let mut out: String = text
+    let spelled = super::repo::ascii_spelling(text);
+    let mut out: String = spelled
+        .as_deref()
+        .unwrap_or(text)
         .chars()
         .filter(|c| !matches!(c, '\'' | '"'))
         .collect::<String>()
@@ -5019,17 +5215,36 @@ fn worktree_delete_check(
     line: &str,
     except: Option<&Path>,
 ) -> Option<Violation> {
-    let held = match super::edit_guard::holds_registered_worktrees(cwd) {
-        Ok(held) => held,
-        Err(error) => {
-            return Some(hook_integrity_violation(
-                level,
-                format!("cannot read registered worktrees: {error}"),
-            ))
+    let resolved: Vec<_> = targets
+        .iter()
+        .filter(|t| !t.is_empty())
+        .map(|target| (*target, resolve_targets(target, cwd, line)))
+        .collect();
+    // Whether the checkout holds worktrees matters only for a word that can
+    // reach one the guard cannot place: a pattern, a word filled in at run
+    // time or one it cannot resolve. A plain path is judged by
+    // `checkout_under` below, so deleting one never rests on this read. A
+    // directory that does not exist yet stays unread and refuses: the line
+    // can make it a link first (`ln -s .codeflow b && cd b && rm -rf x`).
+    let plain = cwd.is_dir()
+        && resolved.iter().all(|(target, paths)| {
+            matches!(paths, Ok(Some(_))) && !has_glob(target) && !target.contains('$')
+        });
+    let held = if plain {
+        false
+    } else {
+        match super::edit_guard::holds_registered_worktrees(cwd) {
+            Ok(held) => held,
+            Err(error) => {
+                return Some(hook_integrity_violation(
+                    level,
+                    format!("cannot read registered worktrees: {error}"),
+                ))
+            }
         }
     };
-    for target in targets.iter().filter(|t| !t.is_empty()) {
-        match resolve_targets(target, cwd, line) {
+    for (target, paths) in resolved {
+        match paths {
             Err(error) => return Some(hook_integrity_violation(level, error)),
             Ok(Some(paths)) => {
                 if let Some(checkout) = paths
@@ -6972,6 +7187,15 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
                 return Some(finding);
             }
         }
+        // A hard link gives its source a second name a later write can go
+        // through, so the source is judged as written (TSK-1349).
+        if makes_hard_link(cmd, &copy.flags) {
+            if let Some(path) = self.integrity(&copy.sources) {
+                return Some(self.refuse(format!(
+                    "`{cmd}` makes a hard link to the integrity path `{path}`, so a write through the link changes it"
+                )));
+            }
+        }
         if let Some(p) = self.integrity(&copy_destinations(cmd, copy)) {
             return Some(self.refuse(format!("`{cmd}` writes the integrity path `{p}`")));
         }
@@ -7107,6 +7331,21 @@ fn contained_git_directory_violation(
             ),
         )),
         Err(error) => Some(hook_integrity_violation(level, error)),
+    }
+}
+
+/// Whether a copier call makes hard links to its sources: `ln` without
+/// `-s`/`--symbolic`, and `cp -l`/`--link`.
+fn makes_hard_link(cmd: &str, flags: &[String]) -> bool {
+    let short = |letter: char| {
+        flags
+            .iter()
+            .any(|f| f.starts_with('-') && !f.starts_with("--") && f[1..].contains(letter))
+    };
+    match cmd {
+        "ln" => !(short('s') || flags.iter().any(|f| f == "--symbolic")),
+        "cp" => short('l') || flags.iter().any(|f| f == "--link"),
+        _ => false,
     }
 }
 
@@ -8811,7 +9050,7 @@ fn reads_as_data(segment: &str) -> bool {
         "git" => {
             !args
                 .iter()
-                .any(|a| a == "-c" || a.starts_with("--config-env"))
+                .any(|a| a.starts_with("-c") || a.starts_with("--config-env"))
                 && git_subcommand(args).is_some_and(|(sub, _)| {
                     matches!(
                         sub,
@@ -9638,6 +9877,8 @@ fn check_git(
             "`git worktree repair` rewrites checkout integrity pointers".to_string(),
         ));
     }
+    // An option that skips a client hook, on every branch (TSK-1349).
+    out.extend(hook_skip_violation(args, policy.hook_integrity));
     branches.head_may_move |= !discard_readonly_git(sub, rest);
     let config_env = git::config_env_changes_decision(&args[..args.len() - rest.len() - 1]);
     let trigger = moved.transport_env.clone().or_else(|| {
@@ -9838,6 +10079,12 @@ fn check_git(
         let mut case = Vec::new();
         judge_git_sub(sub, rest, branch, &view, &mut case);
         case.extend(root_checkout_case(sub, rest, branch, rules, root.as_ref()));
+        // The written line was judged first. A ref store that does not fold
+        // keeps a non-ASCII name apart from its ASCII spelling, so that
+        // spelling adds no finding about a ref name (TSK-381 SF-3).
+        if super::policy::spelled_reading() && !super::policy::non_ascii_aliasing() {
+            case.retain(|v| !REF_NAME_RULES.iter().any(|rule| v.rule == *rule));
+        }
         for v in case {
             if !found
                 .iter()
@@ -10057,6 +10304,17 @@ fn unclassifiable_git(args: &[String]) -> Option<Unclassified> {
     }
     None
 }
+
+/// The rules that judge a branch or ref by its name.
+const REF_NAME_RULES: [&str; 7] = [
+    "git.commit_to_protected",
+    "git.merge_to_protected",
+    "git.push_to_protected",
+    "git.force_push_protected",
+    "git.delete_protected",
+    "git.hard_reset_protected",
+    "git.local_ref_protection",
+];
 
 /// The rules an unknown part of a git invocation could break: every branch
 /// rule when the subcommand is unknown (`None`), else the rules of `sub`.
@@ -10328,12 +10586,12 @@ fn expand_alias(
     let mut idx = 0;
     while idx < at {
         let t = args[idx].as_str();
-        if t == "--config-env" || t.starts_with("--config-env=") {
-            return Err("`--config-env` sets configuration from the environment".to_string());
-        }
-        if t == "-c" {
-            config.extend(args.get(idx + 1).cloned());
-            idx += 2;
+        if let Some(global) = git_config_global(args, idx) {
+            if global.from_env {
+                return Err("`--config-env` sets configuration from the environment".to_string());
+            }
+            config.extend(global.entry.map(str::to_string));
+            idx += global.words;
         } else if GLOBAL_VALUE_OPTIONS.contains(&t) {
             idx += 2;
         } else {
@@ -10871,14 +11129,15 @@ fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
     let mut retarget: Option<String> = None;
     let mut idx = 0;
     while idx < args.len() {
+        if let Some(config) = git_config_global(args, idx) {
+            if config.entry.is_some_and(mentions_hooks_path) {
+                hooks_path = true;
+            }
+            idx += config.words;
+            continue;
+        }
         let t = args[idx].as_str();
         match t {
-            "-c" | "--config-env" => {
-                if args.get(idx + 1).is_some_and(|v| mentions_hooks_path(v)) {
-                    hooks_path = true;
-                }
-                idx += 2;
-            }
             t if GLOBAL_VALUE_OPTIONS.contains(&t) => {
                 if (t == "-C" || t == "--git-dir") && retarget.is_none() {
                     retarget = args.get(idx + 1).cloned();
@@ -10886,12 +11145,7 @@ fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
                 idx += 2;
             }
             _ => {
-                if let Some(v) = t.strip_prefix("--config-env=") {
-                    if mentions_hooks_path(v) {
-                        hooks_path = true;
-                    }
-                    idx += 1;
-                } else if let Some(v) = t.strip_prefix("--git-dir=") {
+                if let Some(v) = t.strip_prefix("--git-dir=") {
                     if retarget.is_none() {
                         retarget = Some(v.to_string());
                     }
@@ -10905,6 +11159,98 @@ fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
         }
     }
     (hooks_path, retarget)
+}
+
+/// The include key (`include.path` or `includeIf.<condition>.path`, in the
+/// spelling git documents) that a `-c` or `--config-env` global flag before
+/// the subcommand sets, if one does. Git reads the named file as
+/// configuration, and the guard does not read it: any include refuses, so a
+/// file the guard cannot open, or one that changes after the check, fails
+/// closed (TSK-1349).
+fn git_globals_include(args: &[String]) -> Option<&'static str> {
+    let include = |entry: &str| -> Option<&'static str> {
+        let key = entry.split_once('=').map_or(entry, |(key, _)| key);
+        let lower = key.to_ascii_lowercase();
+        if lower == "include.path" {
+            Some("include.path")
+        } else if lower.starts_with("includeif.")
+            && lower
+                .rsplit_once('.')
+                .is_some_and(|(_, last)| last == "path")
+        {
+            Some("includeIf.<condition>.path")
+        } else {
+            None
+        }
+    };
+    let mut idx = 0;
+    while idx < args.len() {
+        if let Some(config) = git_config_global(args, idx) {
+            if let Some(key) = config.entry.and_then(include) {
+                return Some(key);
+            }
+            idx += config.words;
+            continue;
+        }
+        let t = args[idx].as_str();
+        if GLOBAL_VALUE_OPTIONS.contains(&t) {
+            idx += 2;
+        } else if t.starts_with('-') {
+            idx += 1;
+        } else {
+            return None; // the subcommand
+        }
+    }
+    None
+}
+
+/// A git global option at `args[idx]` that sets configuration: the entry it
+/// sets (`None` when the value is missing), the words it takes, and whether
+/// the value is read from the environment.
+struct ConfigGlobal<'a> {
+    entry: Option<&'a str>,
+    words: usize,
+    from_env: bool,
+}
+
+/// Read `args[idx]` as a configuration global: `-c <entry>`, `--config-env
+/// <entry>`, `--config-env=<entry>`, or `-c<entry>` with the entry attached.
+/// Git 2.53 rejects the attached `-c` as an unknown option; the guards read
+/// it as the entry, so a git that accepts it cannot set a key past them
+/// (TSK-1349 delta review finding B). Every scanner of git's global options
+/// reads them through this one reader.
+fn git_config_global(args: &[String], idx: usize) -> Option<ConfigGlobal<'_>> {
+    let word = args.get(idx)?.as_str();
+    let next = || args.get(idx + 1).map(String::as_str);
+    match word {
+        "-c" => Some(ConfigGlobal {
+            entry: next(),
+            words: 2,
+            from_env: false,
+        }),
+        "--config-env" => Some(ConfigGlobal {
+            entry: next(),
+            words: 2,
+            from_env: true,
+        }),
+        _ => {
+            if let Some(entry) = word.strip_prefix("--config-env=") {
+                Some(ConfigGlobal {
+                    entry: Some(entry),
+                    words: 1,
+                    from_env: true,
+                })
+            } else {
+                word.strip_prefix("-c")
+                    .filter(|entry| !entry.is_empty())
+                    .map(|entry| ConfigGlobal {
+                        entry: Some(entry),
+                        words: 1,
+                        from_env: false,
+                    })
+            }
+        }
+    }
 }
 
 /// `true` when a `git config` invocation can write `core.hooksPath`: a set,
@@ -13191,6 +13537,9 @@ struct ParsedOptions<'a> {
     long: Vec<(&'a str, Option<&'a str>)>,
     sequence: Vec<Seen<'a>>,
     operands: Vec<&'a str>,
+    /// How many of `operands` came before the end of the options, where the
+    /// command still reads a word that begins with `-` as an option.
+    option_operands: usize,
     /// The value each value-taking option was given, attached or from the
     /// next token, in encounter order.
     values: Vec<(Seen<'a>, &'a str)>,
@@ -13242,6 +13591,7 @@ fn parse_options_mode<'a, S: AsRef<str>>(
         long: Vec::new(),
         sequence: Vec::new(),
         operands: Vec::new(),
+        option_operands: 0,
         values: Vec::new(),
     };
     let mut index = 0;
@@ -13290,6 +13640,7 @@ fn parse_options_mode<'a, S: AsRef<str>>(
         }
         let Some(cluster) = token.strip_prefix('-').filter(|rest| !rest.is_empty()) else {
             parsed.operands.push(token);
+            parsed.option_operands += 1;
             if stop_at_operand {
                 parsed
                     .operands
@@ -13397,6 +13748,343 @@ fn no_verify_violation(sub: &str, branch: &str) -> Violation {
         "git.no_verify_bypass",
         format!("`git {sub} --no-verify` skips the client hooks on protected branch '{branch}'"),
         "do not bypass the hooks with --no-verify — fix the cause the gate flags, or land via the sanctioned path (PR / `codeflow integrate`)",
+    )
+}
+
+/// One git option that skips a client hook: the subcommand, the option as
+/// git documents it, a short letter that means the same there, and the hooks
+/// it skips (git 2.53: git-commit(1), git-merge(1), git-pull(1),
+/// git-push(1), git-rebase(1), git-am(1), git-p4(1); TSK-1349 AC-1).
+struct HookSkip {
+    sub: &'static str,
+    long: &'static str,
+    short: Option<char>,
+    hooks: &'static str,
+}
+
+/// Every option of [`HookSkip`]. `-n` counts only where git documents it as
+/// the same option: `git commit` and `git am`. On `push` it is `--dry-run`,
+/// and on `merge`, `pull` and `rebase` it is `--no-stat`.
+const HOOK_SKIPS: &[HookSkip] = &[
+    HookSkip {
+        sub: "commit",
+        long: "--no-verify",
+        short: Some('n'),
+        hooks: "the pre-commit and commit-msg hooks",
+    },
+    HookSkip {
+        sub: "commit",
+        long: "--no-post-rewrite",
+        short: None,
+        hooks: "the post-rewrite hook",
+    },
+    HookSkip {
+        sub: "merge",
+        long: "--no-verify",
+        short: None,
+        hooks: "the pre-merge-commit and commit-msg hooks",
+    },
+    HookSkip {
+        sub: "pull",
+        long: "--no-verify",
+        short: None,
+        hooks: "the pre-merge-commit and commit-msg hooks",
+    },
+    HookSkip {
+        sub: "push",
+        long: "--no-verify",
+        short: None,
+        hooks: "the pre-push hook",
+    },
+    HookSkip {
+        sub: "rebase",
+        long: "--no-verify",
+        short: None,
+        hooks: "the pre-rebase hook",
+    },
+    HookSkip {
+        sub: "am",
+        long: "--no-verify",
+        short: Some('n'),
+        hooks: "the pre-applypatch and applypatch-msg hooks",
+    },
+    HookSkip {
+        sub: "p4",
+        long: "--no-verify",
+        short: None,
+        hooks: "the p4-pre-submit and p4-changelist hooks",
+    },
+];
+
+/// `git merge` (git-merge(1), Git 2.53). The options that take a value, so a
+/// value is never read as an option; an option documented `--x[=<v>]` takes
+/// one only attached. Every other option is a flag.
+const GIT_MERGE_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('m', Arity::Value),
+        ('F', Arity::Value),
+        ('s', Arity::Value),
+        ('X', Arity::Value),
+        ('S', Arity::AttachedValue),
+    ],
+    long: &[
+        ("--cleanup", Arity::Value),
+        ("--strategy", Arity::Value),
+        ("--strategy-option", Arity::Value),
+        ("--into-name", Arity::Value),
+        ("--file", Arity::Value),
+        ("--gpg-sign", Arity::AttachedValue),
+        ("--log", Arity::AttachedValue),
+        ("--verify", Arity::Flag),
+        ("--no-verify", Arity::Flag),
+        ("--verify-signatures", Arity::Flag),
+        ("--no-verify-signatures", Arity::Flag),
+        ("--stat", Arity::Flag),
+        ("--no-stat", Arity::Flag),
+        ("--summary", Arity::Flag),
+        ("--no-summary", Arity::Flag),
+        ("--squash", Arity::Flag),
+        ("--no-squash", Arity::Flag),
+        ("--signoff", Arity::Flag),
+        ("--no-signoff", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// `git pull` (git-pull(1), Git 2.53), read the same way as
+/// [`GIT_MERGE_OPTIONS`]: its merge options and the fetch options that take
+/// a value.
+const GIT_PULL_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('s', Arity::Value),
+        ('X', Arity::Value),
+        ('j', Arity::Value),
+        ('o', Arity::Value),
+        ('S', Arity::AttachedValue),
+    ],
+    long: &[
+        ("--cleanup", Arity::Value),
+        ("--strategy", Arity::Value),
+        ("--strategy-option", Arity::Value),
+        ("--depth", Arity::Value),
+        ("--deepen", Arity::Value),
+        ("--shallow-since", Arity::Value),
+        ("--shallow-exclude", Arity::Value),
+        ("--negotiation-tip", Arity::Value),
+        ("--refmap", Arity::Value),
+        ("--jobs", Arity::Value),
+        ("--upload-pack", Arity::Value),
+        ("--server-option", Arity::Value),
+        ("--recurse-submodules", Arity::AttachedValue),
+        ("--gpg-sign", Arity::AttachedValue),
+        ("--log", Arity::AttachedValue),
+        ("--rebase", Arity::AttachedValue),
+        ("--verify", Arity::Flag),
+        ("--no-verify", Arity::Flag),
+        ("--verify-signatures", Arity::Flag),
+        ("--no-verify-signatures", Arity::Flag),
+        ("--stat", Arity::Flag),
+        ("--no-stat", Arity::Flag),
+        ("--dry-run", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// `git am` (git-am(1), Git 2.53). `-n` is `--no-verify` here; `-m` is
+/// `--message-id` and `-c` is `--scissors`, both flags.
+const GIT_AM_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('C', Arity::Value),
+        ('p', Arity::Value),
+        ('S', Arity::AttachedValue),
+    ],
+    long: &[
+        ("--quoted-cr", Arity::Value),
+        ("--empty", Arity::Value),
+        ("--whitespace", Arity::Value),
+        ("--directory", Arity::Value),
+        ("--exclude", Arity::Value),
+        ("--include", Arity::Value),
+        ("--patch-format", Arity::Value),
+        ("--resolvemsg", Arity::Value),
+        ("--gpg-sign", Arity::AttachedValue),
+        ("--show-current-patch", Arity::AttachedValue),
+        ("--no-verify", Arity::Flag),
+        ("--verify", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// `git p4` (git-p4(1)), a Python program whose option parser also takes an
+/// unambiguous prefix. Its value options are not modelled, so a value is
+/// read as an option, which can only add a refusal.
+const GIT_P4_OPTIONS: OptionSpec = OptionSpec {
+    short: &[],
+    long: &[("--no-verify", Arity::Flag)],
+    git_style: true,
+};
+
+/// The option grammar the hook-skip reader uses for `sub`.
+fn hook_skip_spec(sub: &str) -> &'static OptionSpec {
+    match sub {
+        "commit" => &GIT_COMMIT_OPTIONS,
+        "merge" => &GIT_MERGE_OPTIONS,
+        "pull" => &GIT_PULL_OPTIONS,
+        "push" => &GIT_PUSH_OPTIONS,
+        "rebase" => &GIT_REBASE_OPTIONS,
+        "am" => &GIT_AM_OPTIONS,
+        _ => &GIT_P4_OPTIONS,
+    }
+}
+
+/// `true` when the long option as written selects `skip`: the option itself,
+/// or a prefix of it longer than `--no-`. Git and `git p4`'s option parser
+/// take an unambiguous prefix as the option; a prefix that is also a prefix
+/// of another option is one git rejects, so refusing it fails closed and
+/// admits nothing git would run.
+fn selects_skip(written: &str, skip: &str) -> bool {
+    written == skip || (written.len() > "--no-".len() && skip.starts_with(written))
+}
+
+/// The hook-skip finding for one git invocation, if it has one: a
+/// [`HOOK_SKIPS`] option, written whole, abbreviated or as its short letter
+/// inside a cluster, wherever git reads it as an option; or a substitution
+/// where git would read an option, since its value could be one (fail
+/// closed). A `--verify` later on the line does not clear it: the guard
+/// refuses the mixed form rather than decide which one git keeps.
+/// `args` are the words after `git`, global options included.
+pub(crate) fn hook_skip_violation(args: &[String], level: PolicyLevel) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    let (sub, rest) = git_subcommand(args)?;
+    let skips: Vec<&HookSkip> = HOOK_SKIPS.iter().filter(|s| s.sub == sub).collect();
+    if skips.is_empty() {
+        return None;
+    }
+    let parsed = parse_options(rest, hook_skip_spec(sub));
+    for skip in &skips {
+        let long = parsed
+            .long
+            .iter()
+            .any(|(written, _)| selects_skip(written, skip.long));
+        let short = skip.short.is_some_and(|letter| parsed.has_short(&[letter]));
+        if long || short {
+            let shown = match skip.short {
+                Some(letter) if short && !long => {
+                    format!("`git {sub} -{letter}` (`{}`)", skip.long)
+                }
+                _ => format!("`git {sub} {}`", skip.long),
+            };
+            return Some(hook_skip_finding(
+                level,
+                format!("{shown} skips {}", skip.hooks),
+            ));
+        }
+    }
+    let unread = parsed
+        .long
+        .iter()
+        .map(|(written, _)| *written)
+        .chain(parsed.operands[..parsed.option_operands].iter().copied())
+        .chain(parsed.unread.iter().copied())
+        .any(expands);
+    unread.then(|| {
+        hook_skip_finding(
+            level,
+            format!(
+                "`git {sub}` has an argument the shell fills in where git reads options, so the guard cannot tell whether it skips {}",
+                skips[0].hooks
+            ),
+        )
+    })
+}
+
+/// The first git call on `command` that skips a client hook, read the way
+/// git-guard reads the line's simple commands: a hook-path override in its
+/// global options (`-c core.hooksPath=…`, `--config-env`), or a
+/// [`HOOK_SKIPS`] option, also inside an alias the call defines with `-c
+/// alias.<name>=…`. exec-guard judges with it, so it never admits a form
+/// git-guard refuses (TSK-1349 AC-4). An alias from a configuration file is
+/// git-guard's to resolve: it reads the repository the call targets.
+pub(crate) fn line_hook_skip(command: &str, level: PolicyLevel) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    simple_commands(command).iter().find_map(|words| {
+        let (program, args) = words.split_first()?;
+        if !matches!(program_kind(program), ProgramKind::Git) {
+            return None;
+        }
+        git_args_hook_skip(args, level, 0)
+    })
+}
+
+/// [`line_hook_skip`] for the words after `git`, `depth` aliases deep.
+fn git_args_hook_skip(args: &[String], level: PolicyLevel, depth: usize) -> Option<Violation> {
+    if scan_git_globals(args).0 {
+        return Some(hook_integrity_violation(
+            level,
+            "a git global flag (`-c`/`--config-env` core.hooksPath=…) overrides the hook path for this command"
+                .to_string(),
+        ));
+    }
+    if let Some(key) = git_globals_include(args) {
+        return Some(hook_integrity_violation(
+            level,
+            format!(
+                "a git global flag (`-c`/`--config-env` {key}=…) includes a configuration file, which can override the hook path for this command"
+            ),
+        ));
+    }
+    if let Some(finding) = hook_skip_violation(args, level) {
+        return Some(finding);
+    }
+    let (sub, rest) = git_subcommand(args)?;
+    let globals = &args[..args.len() - rest.len() - 1];
+    let key = format!("alias.{}=", sub.to_ascii_lowercase());
+    let mut body = None;
+    let mut idx = 0;
+    while idx < globals.len() {
+        let Some(config) = git_config_global(globals, idx) else {
+            idx += 1;
+            continue;
+        };
+        idx += config.words;
+        if config.from_env {
+            continue;
+        }
+        if let Some((name, value)) = config.entry.and_then(|entry| entry.split_once('=')) {
+            if format!("{}=", name.to_ascii_lowercase()) == key {
+                body = Some(value); // the last definition wins, as in git
+            }
+        }
+    }
+    let body = body?;
+    if depth >= NESTING_LIMIT {
+        return Some(hook_skip_finding(
+            level,
+            format!("`git {sub}` nests aliases past what the guard reads, so it cannot tell whether a hook is skipped"),
+        ));
+    }
+    if let Some(shell) = body.strip_prefix('!') {
+        return line_hook_skip(&format!("{shell} {}", quote_words(rest)), level);
+    }
+    let mut expanded: Vec<String> = globals.to_vec();
+    expanded.extend(shell_tokens(body));
+    expanded.extend(rest.iter().cloned());
+    git_args_hook_skip(&expanded, level, depth + 1)
+}
+
+fn hook_skip_finding(level: PolicyLevel, message: String) -> Violation {
+    Violation::new(
+        "git.hook_integrity",
+        level,
+        message,
+        crate::remedy::HOOK_SKIP.remedy(),
     )
 }
 
@@ -16610,11 +17298,19 @@ mod tests {
         }
     }
 
+    /// TSK-1349: a hook skip refuses on an unprotected branch too, under
+    /// `git.hook_integrity`; 3.x let these through off the protected list.
     #[test]
-    fn test_no_verify_on_feature_allowed() {
+    fn test_no_verify_on_feature_refused() {
         let p = default_policy();
-        assert!(evaluate("git commit --no-verify -m 'x'", &ctx(&p, "feat/x")).is_empty());
-        assert!(evaluate("git push --no-verify origin feat/x", &ctx(&p, "feat/x")).is_empty());
+        for cmd in [
+            "git commit --no-verify -m 'x'",
+            "git push --no-verify origin feat/x",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+            assert!(!has_rule(&v, "git.no_verify_bypass"), "{cmd}: {v:?}");
+        }
     }
 
     #[test]
@@ -16622,6 +17318,187 @@ mod tests {
         // `git push -n` is --dry-run, not --no-verify: must not be flagged.
         let p = default_policy();
         assert!(evaluate("git push -n origin feat/x", &ctx(&p, "feat/x")).is_empty());
+    }
+
+    // -- hook-skip options on every branch (TSK-1349) --
+
+    fn skips_hooks(cmd: &str, branch: &str, p: &GitPolicy) -> bool {
+        evaluate(cmd, &ctx(p, branch)).iter().any(|v| {
+            v.rule == "git.hook_integrity"
+                && (v.message.contains(" skips ") || v.message.contains("cannot tell whether"))
+        })
+    }
+
+    /// AC-2: every option of the AC-1 inventory, written whole, abbreviated
+    /// or as its short letter in a cluster, refuses on a protected and an
+    /// unprotected branch.
+    #[test]
+    fn test_every_hook_skip_option_refuses_on_every_branch() {
+        let p = default_policy();
+        for cmd in [
+            "git commit --no-verify -m x",
+            "git commit -n -m x",
+            "git commit --no-verif -m x",
+            "git commit --no-v -m x",
+            "git commit -qn -m x",
+            "git commit -anm msg",
+            "git commit -m x -n",
+            "git commit -m -- -n",
+            "git commit -m --end-of-options -n",
+            "git commit -C HEAD -n",
+            "git commit --amend --no-post-rewrite --no-edit",
+            "git commit --no-post-rew --no-edit",
+            "git merge --no-verify topic",
+            "git merge --no-verif topic",
+            "git pull --no-verify",
+            "git pull --no-verify origin main",
+            "git push --no-verify origin HEAD",
+            "git push --no-verif origin HEAD",
+            "git push -u --no-verify origin HEAD",
+            "git rebase --no-verify main",
+            "git rebase --no-veri main",
+            "git am --no-verify a.patch",
+            "git am -n a.patch",
+            "git am -3n a.patch",
+            "git am --no-ver a.patch",
+            "git p4 submit --no-verify",
+            "git p4 submit --no-ver",
+            "git -C /elsewhere commit --no-verify -m x",
+            "git --no-pager commit -n -m x",
+        ] {
+            for branch in ["main", "feat/x"] {
+                assert!(skips_hooks(cmd, branch, &p), "{cmd} on {branch}");
+            }
+        }
+    }
+
+    /// AC-2: `-n` where it means another option, and words that only look
+    /// like a skip, are not refused for it.
+    #[test]
+    fn test_lookalikes_of_hook_skips_are_not_refused() {
+        let p = default_policy();
+        for cmd in [
+            "git push -n origin HEAD",
+            "git push --dry-run origin HEAD",
+            "git merge -n topic",
+            "git pull -n",
+            "git rebase -n main",
+            "git commit -m --no-verify",
+            "git commit -m x -- --no-verify",
+            "git commit -m x --end-of-options --no-verify",
+            "git commit --verify -m x",
+            "git commit --n -m x",
+            "git commit --no- -m x",
+            "git commit -mn",
+            "git commit -uno -m x",
+            "git merge --no-verify-signatures topic",
+            "git merge -m --no-verify topic",
+            "git am -m a.patch",
+            "git log --no-verify",
+            "git status -n",
+        ] {
+            for branch in ["main", "feat/x"] {
+                assert!(!skips_hooks(cmd, branch, &p), "{cmd} on {branch}");
+            }
+        }
+    }
+
+    /// AC-3: when the guard cannot tell whether a skip is in effect, it
+    /// refuses: a skip with a later `--verify`, and a word the shell fills in
+    /// where git reads options.
+    #[test]
+    fn test_uncertain_hook_skips_fail_closed() {
+        let p = default_policy();
+        for cmd in [
+            "git commit --no-verify --verify -m x",
+            "git commit -n --verify -m x",
+            "git commit --verify -n -m x",
+            "git push --no-verify --verify origin HEAD",
+            "git merge --no-verify --verify topic",
+            "git am -n --verify a.patch",
+            "git commit -m x $FLAG",
+            "F=--no-verify; git commit $F -m x",
+            "git am \"$P\"",
+            "git pull $(echo --no-verify)",
+        ] {
+            for branch in ["main", "feat/x"] {
+                assert!(skips_hooks(cmd, branch, &p), "{cmd} on {branch}");
+            }
+        }
+        // A filled-in message value is a value, not an option.
+        assert!(!skips_hooks("git commit -m \"$MSG\"", "feat/x", &p));
+    }
+
+    /// AC-4: the refusal holds through every wrapper git-guard unwraps.
+    #[test]
+    fn test_hook_skips_refuse_through_wrappers() {
+        let p = default_policy();
+        for cmd in [
+            "sh -c 'git commit --no-verify -m x'",
+            "bash -c 'git commit -n -m x'",
+            "env FOO=1 git commit --no-verify -m x",
+            "env -i git merge --no-verify topic",
+            "command git push --no-verify origin HEAD",
+            "true && git commit --no-verify -m x",
+            "true; git rebase --no-verify main",
+            "(git am -n a.patch)",
+            "{ git commit -qn -m x; }",
+            "echo $(git commit --no-verify -m x)",
+        ] {
+            assert!(skips_hooks(cmd, "feat/x", &p), "{cmd}");
+        }
+        // An alias is judged by what it expands to.
+        let r = report("git -c alias.x='commit --no-verify' x -m y", "feat/s");
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule == "git.hook_integrity" && v.message.contains(" skips ")),
+            "{:?}",
+            r.violations
+        );
+    }
+
+    /// The refusal follows `git.hook_integrity`, and the protected-branch
+    /// `git.no_verify_bypass` refusal stays whatever that level is.
+    #[test]
+    fn test_hook_skip_follows_hook_integrity_and_keeps_the_protected_refusal() {
+        let mut p = default_policy();
+        p.hook_integrity = PolicyLevel::Warn;
+        let v = evaluate("git commit --no-verify -m x", &ctx(&p, "feat/x"));
+        assert!(
+            v.iter()
+                .any(|x| x.rule == "git.hook_integrity" && x.level == PolicyLevel::Warn),
+            "{v:?}"
+        );
+        p.hook_integrity = PolicyLevel::Off;
+        assert!(!skips_hooks("git commit --no-verify -m x", "feat/x", &p));
+        let v = evaluate("git commit --no-verify -m x", &ctx(&p, "main"));
+        assert!(has_rule(&v, "git.no_verify_bypass"), "{v:?}");
+    }
+
+    /// AC-5: the message names the flag as git documents it and the hooks,
+    /// and carries no value the command wrote.
+    #[test]
+    fn test_hook_skip_message_names_flag_and_hooks_only() {
+        let p = default_policy();
+        let v = evaluate("git commit -qn -m private-text", &ctx(&p, "feat/secret"));
+        let finding = v
+            .iter()
+            .find(|x| x.rule == "git.hook_integrity")
+            .unwrap_or_else(|| panic!("{v:?}"));
+        assert_eq!(
+            finding.message,
+            "`git commit -n` (`--no-verify`) skips the pre-commit and commit-msg hooks"
+        );
+        let v = evaluate("git merge --no-verif feat/secret", &ctx(&p, "feat/x"));
+        let finding = v
+            .iter()
+            .find(|x| x.rule == "git.hook_integrity")
+            .unwrap_or_else(|| panic!("{v:?}"));
+        assert_eq!(
+            finding.message,
+            "`git merge --no-verify` skips the pre-merge-commit and commit-msg hooks"
+        );
     }
 
     // -- safe commands --
@@ -17280,11 +18157,17 @@ mod tests {
             "GIT_CONFIG=/opt/homebrew/etc/gitconfig git config --local alias.co checkout"
                 .to_string(),
             format!("GIT_CONFIG={repo_config} git config alias.co checkout"),
-            "GIT_CONFIG_GLOBAL=/dev/null git config alias.co checkout".to_string(),
         ] {
             let v = at(&cmd, &repo);
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
+        // Setting a configuration-source variable refuses whatever its value,
+        // `/dev/null` included (TSK-1349): the guard does not read the file.
+        let v = at(
+            "GIT_CONFIG_GLOBAL=/dev/null git config alias.co checkout",
+            &repo,
+        );
+        assert!(has_rule(&v, "git.hook_integrity"), "{v:?}");
         // The refusal names the file and what the value does.
         let v = at(
             "git config --file /opt/homebrew/etc/gitconfig core.pager 'sh x'",
@@ -19802,6 +20685,33 @@ mod tests {
         ));
     }
 
+    /// TSK-1349: the ASCII spelling of a line adds no ref-name finding where
+    /// the ref store keeps the names apart, and still adds every other one.
+    #[test]
+    fn test_the_ascii_spelling_judges_ref_names_only_where_they_fold() {
+        let p = default_policy();
+        let ref_lines = [
+            "git branch -f ma\u{17f}ter HEAD~1",
+            "git branch -D ma\u{17f}ter",
+            "git push origin ma\u{17f}ter",
+            "git push --force origin ma\u{17f}ter",
+            "git checkout -B ma\u{17f}ter",
+        ];
+        {
+            let _sensitive = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+            for cmd in ref_lines {
+                let v = evaluate(cmd, &ctx(&p, "feat/x"));
+                assert!(v.is_empty(), "{cmd}: {v:?}");
+            }
+            let hooks = evaluate("git config core.hook\u{17f}Path /tmp/x", &ctx(&p, "feat/x"));
+            assert!(has_rule(&hooks, "git.hook_integrity"), "{hooks:?}");
+        }
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        for cmd in ref_lines {
+            assert!(!evaluate(cmd, &ctx(&p, "feat/x")).is_empty(), "{cmd}");
+        }
+    }
+
     /// TSK-381 SF-5 and Codex F1: a retargeted command is judged by the
     /// target repository's own filesystem, read through target resolution,
     /// in both directions and for `-C`, `--git-dir` and a composed `cd`;
@@ -20088,15 +20998,27 @@ mod tests {
         for cmd in [
             "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x",
             "GIT_CONFIG_PARAMETERS='core.hooksPath=/x' git commit -m x",
+            // Any key refuses (TSK-1349): an `include.path` key, or one the
+            // guard reads as harmless, can still name a file that sets the
+            // hooks path, and exec-guard already refused this line.
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.email GIT_CONFIG_VALUE_0=x git status",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=include.path GIT_CONFIG_VALUE_0=/tmp/i git commit -m x",
+            "GIT_CONFIG_GLOBAL=/tmp/g git commit -m x",
+            "export GIT_CONFIG_GLOBAL=/tmp/g",
+            "export GIT_CONFIG_SYSTEM=/tmp/s",
+            "export GIT_CONFIG_KEY_0=core.hooksPath",
+            "GIT_CONFIG_GLOBAL=/tmp/g; export GIT_CONFIG_GLOBAL",
+            "typeset -x GIT_CONFIG_PARAMETERS=x",
         ] {
             assert!(has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"), "{cmd}");
         }
-        // A non-hooksPath GIT_CONFIG_* injection is not an integrity concern.
-        assert!(evaluate(
-            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.email GIT_CONFIG_VALUE_0=x git status",
-            &ctx(&p, "feat/x")
-        )
-        .is_empty());
+        // Naming a variable sets nothing. (`printenv GIT_CONFIG_GLOBAL`
+        // refused before this task, under the rule for a line that names a
+        // `GIT_CONFIG` variable beside a program the guard does not read.)
+        assert!(!has_rule(
+            &evaluate("echo GIT_CONFIG_GLOBAL", &ctx(&p, "feat/x")),
+            "git.hook_integrity"
+        ));
     }
 
     #[test]
@@ -20947,11 +21869,13 @@ mod tests {
                 );
             }
             // On a feature branch the target is not protected, so unknown
-            // commit arguments cannot reach a protected branch.
+            // commit arguments cannot reach a protected branch. They could
+            // still be a hook skip, which refuses on every branch (TSK-1349).
             for cmd in forms {
                 let r = evaluate_report(cmd, &ctx_with_dir_branch(&p, "feat/s", &fixture_resolver));
                 assert!(
-                    r.violations.is_empty(),
+                    r.violations.iter().all(|v| v.rule == "git.hook_integrity"
+                        && v.message.contains("cannot tell whether it skips")),
                     "{cmd} ({local:?}): {:?}",
                     r.violations
                 );
