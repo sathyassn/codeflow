@@ -906,8 +906,17 @@ pub const SCHEMA: [KeySpec; 84] = [
                 test-config target, so a push never waits for a heavy run; \
                 cite `codeflow test --mode quick` when the pull request \
                 is made ready. Tag and other non-branch pushes are outside the \
-                push set. Local-config tampering is outside the hook threat \
-                model; hosted CI checks the pushed commit.",
+                push set. The destination lookup asks only the exact URL the \
+                push uses: a `url.<base>.insteadOf` in the repository, global \
+                or system configuration that matches it, a remote configured \
+                under that URL as its name, or a legacy remotes or branches \
+                file of that name refuses the push as unverifiable \
+                (`ci.destination_unavailable`). Its ssh transport is the one \
+                git's own precedence selects (`GIT_SSH_COMMAND`, \
+                `core.sshCommand`, `GIT_SSH`, then `ssh`), read in the \
+                process that runs the lookup; no other transport runs. Other \
+                local-config tampering is outside the hook threat model; \
+                hosted CI checks the pushed commit.",
     },
     KeySpec {
         path: "git.security_review",
