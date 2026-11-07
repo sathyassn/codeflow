@@ -1,0 +1,11 @@
+id = "TSK-1378"
+uid = "7eeed23b-8b9d-4930-b432-085377c1d896"
+kind = "TSK"
+title = "A sync from main keeps a home that main moved and the line already names"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-07T17:56:24Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
