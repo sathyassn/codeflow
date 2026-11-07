@@ -1166,12 +1166,7 @@ fn harness_lines(committer: &BotCommitter) -> Vec<String> {
 fn report_committer(auth: &AppAuth<'_>, slug: &str, report: &mut SetupReport) {
     match committer_for_slug(slug, auth.http) {
         Ok(committer) => report.lines.extend(harness_lines(&committer)),
-        Err(why)
-            if matches!(
-                call_failure(&why),
-                CallFailure::Status(404) | CallFailure::Unclear
-            ) =>
-        {
+        Err(why) if call_failure(&why) == CallFailure::Status(404) => {
             report.lines.push(format!(
                 "committer lines: not printed, because GitHub does not show {slug}[bot] yet; install the App and run `codeflow remote setup-apps` again"
             ));
@@ -2785,15 +2780,15 @@ mod tests {
     /// values nor stops, and a later run prints them.
     #[test]
     fn an_unreadable_bot_user_prints_no_lines_and_does_not_stop() {
-        for bot in [
-            Err("GET failed: 404".to_string()),
-            Ok(r#"{"login":"someone","id":5,"type":"User"}"#.to_string()),
+        for error in [
+            "GET failed: curl: (22) The requested URL returned error: 404",
+            "GET failed: curl: (22) The requested URL returned error: 404 Not Found",
         ] {
             let report = run_hook(
                 &fresh_host(),
                 &mut Clicks::default(),
                 &MemoryStore::default(),
-                &HookHttp::bot(bot),
+                &HookHttp::bot(Err(error.to_string())),
             );
             let shown = report.render().into_string();
             assert_eq!(report.failure, None, "{shown}");
@@ -2809,21 +2804,32 @@ mod tests {
     /// bot user GitHub does not show, and no one is told to install the App.
     #[test]
     fn a_bot_user_github_did_not_answer_for_is_not_called_missing() {
-        for (error, named) in [
+        let failed = |error: &str| Err(error.to_string());
+        for (bot, named) in [
             (
-                "GET failed: curl: (6) Could not resolve host: api.github.com",
+                failed("GET failed: curl: (6) Could not resolve host: api.github.com"),
                 "cannot reach GitHub",
             ),
             (
-                "GET failed: curl: (22) The requested URL returned error: 502",
+                failed("GET failed: curl: (22) The requested URL returned error: 502"),
                 "GitHub failed",
+            ),
+            (
+                failed("GET failed: curl: (3) URL using bad/illegal format"),
+                "cannot tell why the request failed",
+            ),
+            (failed("GET failed"), "cannot tell why the request failed"),
+            (Ok("not json".to_string()), "is not JSON"),
+            (
+                Ok(r#"{"login":"someone","id":5,"type":"User"}"#.to_string()),
+                "is not that bot user",
             ),
         ] {
             let report = run_hook(
                 &fresh_host(),
                 &mut Clicks::default(),
                 &MemoryStore::default(),
-                &HookHttp::bot(Err(error.to_string())),
+                &HookHttp::bot(bot),
             );
             let shown = report.render().into_string();
             assert_eq!(report.failure, None, "{shown}");
