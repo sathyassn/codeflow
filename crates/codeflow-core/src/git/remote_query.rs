@@ -883,7 +883,7 @@ fn push_view() -> std::process::Command {
 /// query does not apply and that could change how it connects: a key in the
 /// `http`, `protocol`, `remote`, `ssh` or `transfer` sections, or
 /// `core.gitProxy` (TSK-327). The query reads no command-line configuration
-/// except `core.sshCommand` (see [`batch_ssh_command`]), and a command-line
+/// except `core.sshCommand`, which selects its ssh program, and a command-line
 /// rewrite has already been applied to the URL the hook is given, so under
 /// such a setting the query and the push could get different answers for
 /// the same URL. Read through git, which parses the command line.
@@ -1124,6 +1124,25 @@ mod tests {
         );
     }
 
+    /// The ssh selection cases: (`GIT_SSH_COMMAND`, `core.sshCommand`,
+    /// `GIT_SSH`, command-line overlay, deprecated file) and the one run.
+    #[cfg(unix)]
+    const SSH_SELECTION_CASES: [([bool; 5], &str); 13] = [
+        ([false, false, false, false, false], "ssh"),
+        ([true, false, false, false, false], "rec-command"),
+        ([false, true, false, false, false], "rec-config"),
+        ([false, false, true, false, false], "rec-program"),
+        ([true, true, false, false, false], "rec-command"),
+        ([true, false, true, false, false], "rec-command"),
+        ([false, true, true, false, false], "rec-config"),
+        ([true, true, true, false, false], "rec-command"),
+        ([false, false, false, true, false], "rec-overlay"),
+        ([false, true, false, true, false], "rec-overlay"),
+        ([true, false, false, true, false], "rec-command"),
+        ([false, false, false, false, true], "ssh"),
+        ([false, true, false, false, true], "rec-config"),
+    ];
+
     /// TSK-327 AC-3: the query runs only the transport git's precedence
     /// selects among `GIT_SSH_COMMAND`, `core.sshCommand` and `GIT_SSH`,
     /// for each one alone, each pair and all three, and plain `ssh` with
@@ -1168,24 +1187,7 @@ mod tests {
         .unwrap();
         let file = dir.path().join("deprecated-file");
         std::fs::write(&file, "[core]\n\tsshCommand = rec-file\n").unwrap();
-        // (GIT_SSH_COMMAND, core.sshCommand, GIT_SSH, overlay, deprecated
-        // file) and the one run.
-        let cases: [([bool; 5], &str); 13] = [
-            ([false, false, false, false, false], "ssh"),
-            ([true, false, false, false, false], "rec-command"),
-            ([false, true, false, false, false], "rec-config"),
-            ([false, false, true, false, false], "rec-program"),
-            ([true, true, false, false, false], "rec-command"),
-            ([true, false, true, false, false], "rec-command"),
-            ([false, true, true, false, false], "rec-config"),
-            ([true, true, true, false, false], "rec-command"),
-            ([false, false, false, true, false], "rec-overlay"),
-            ([false, true, false, true, false], "rec-overlay"),
-            ([true, false, false, true, false], "rec-command"),
-            ([false, false, false, false, true], "ssh"),
-            ([false, true, false, false, true], "rec-config"),
-        ];
-        for ([command, config, program, overlay, deprecated], expected) in cases {
+        for ([command, config, program, overlay, deprecated], expected) in SSH_SELECTION_CASES {
             let root = tempfile::tempdir().unwrap();
             let repo = git2::Repository::init(root.path()).unwrap();
             if config {
