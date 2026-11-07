@@ -51,7 +51,8 @@ pub enum RemoteCommand {
 
         /// The id of the GitHub App that creates the authority: checks
         /// (Mode A). Without it, the trusted: checks are pinned to GitHub
-        /// Actions (Mode B).
+        /// Actions (Mode B), a lower tier that does not close forgery by a
+        /// later producer; only Mode A, the App authority, closes it.
         #[arg(long, value_name = "APP_ID")]
         check_app: Option<u64>,
 

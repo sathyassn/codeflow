@@ -36,7 +36,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.worktree_locations` | string list | `[".worktrees",".claude/worktrees","$CODEX_HOME/worktrees","$GROK_HOME/worktrees","$GROK_HOME/worktree_pool"]` | folders: relative to the root checkout, absolute, ~/..., $CODEX_HOME/... or $GROK_HOME/... | Where linked worktrees may live; doctor reports one outside them. | The default covers .worktrees and the folders the Claude desktop app, Codex and Grok manage. |
 | `git.claim_remotes` | string list | `[]` | an array of configured remote names, none starting with a dash | Additional remotes whose branches count as advisory work claims. | Origin and the target's fetch remote always count. Empty by default; other remote branches are reported as information. Named remotes must be configured when work claim lists their branches. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.branch_name_omit_words` | string list | `["secret","credentials"]` | an array of words of lower-case letters and digits | Words that work claim and epic new --integration leave out of a generated branch name. | A loose ref is a file named after its branch, and a sandbox can refuse to read a file by its name; git then reports that ref as broken. An entry matches anywhere inside a title word. The default holds the words the Claude Code sandbox was probed to refuse; set the list your harness needs, or an empty list to keep every word. The shipped policy file does not list it, so an older binary never meets the key. |
-| `git.required_checks` | string list | `["codeflow gates","secret scan","security review","trusted: commit standards"]` | a non-empty array of status check names, none blank | Status checks a protected branch requires before merging, on a branch that is up to date with its base. | Defaults to the shipped CI job names: codeflow gates, secret scan, security review and trusted: commit standards. `codeflow remote protect` requires them, on an up-to-date branch, on each protected branch other than the default branch, whose own rulesets require the names its policy workflow declares; `codeflow doctor --check remote-perimeter` warns when the default branch's live rules do not require them. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.required_checks` | string list | `["codeflow gates","secret scan","security review","commit standards"]` | a non-empty array of status check names, none blank | Status checks a protected branch requires before merging, on a branch that is up to date with its base. | Defaults to the shipped CI job names: codeflow gates, secret scan, security review and commit standards. `codeflow remote protect` requires them, on an up-to-date branch, on each protected branch other than the default branch, whose own rulesets require the names its policy workflow declares; `codeflow doctor --check remote-perimeter` warns when the default branch's live rules do not require them. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.commit_format` | Level | `block` | off \| warn \| allow \| block | Conventional-commit subject shape: `type(scope): description`. | Governs three checks: commit_types, commit_desc_max_len, and commit_subject_max_len; off/allow disables all of them. |
 | `git.commit_types` | string list | `["feat","fix","docs","refactor","test","chore","ci","perf","build","revert"]` | an array of lower-case conventional commit types | The whitelist of commit types. | Enforced under commit_format. |
 | `git.commit_desc_max_len` | uint | `50` | a non-negative integer (character count) | Max length of the description, the text after `type(scope): `. | Enforced under commit_format. |
@@ -1173,7 +1173,12 @@ The flags:
 - **`--check-app <id>`**: Mode A, where B requires the `authority:` names
   pinned to that GitHub App. Without it, Mode B: B requires the `trusted:`
   names pinned to GitHub Actions (15368). GitHub Actions' own id is
-  refused.
+  refused. Mode B is a lower tier: it does not close forgery by a later
+  producer. Its refusal step reads the producers once, when each verdict
+  job ends, and GitHub takes the newest check run of a name, so a
+  workflow that runs later, for example on an event the policy workflow
+  does not run on, can still satisfy a `trusted:` name. Only Mode A, the
+  App authority, closes it.
 - **`--lines <pattern>`**: the pattern C targets, below `refs/heads/`;
   default `integration/**`.
 
@@ -1183,13 +1188,18 @@ an administrator can bypass a rule that names the maintain role (TSK-1080
 Findings). A bypass actor merges into the default branch with `gh pr merge
 --admin`.
 
-- **What B and C require.** B: the `trusted:` names (Mode B) or the matching
-  `authority:` names (Mode A), plus `codeflow gates`, `security review` and
-  `windows` where a workflow on the default branch declares them. C: the
-  `trusted:` names plus `codeflow gates` and `windows` where declared, each
-  pinned to GitHub Actions. `remote protect` refuses B and C while the
-  default branch's `.github/workflows/codeflow-policy.yml` does not declare
-  `trusted: commit standards` and `trusted: secret scan` as job names (and,
+- **What B and C require.** B: the trusted verdict names (Mode B) or the
+  matching `authority:` names (Mode A), plus `codeflow gates`, `secret scan`,
+  `security review` and `windows` where a workflow on the default branch
+  declares them. C: the trusted verdict names plus `codeflow gates` and
+  `windows` where declared, each pinned to GitHub Actions. The trusted
+  verdicts are an explicit list, `commit standards` and
+  `trusted: release impact`, counted only where the policy workflow declares
+  them; a name is never trusted for its `trusted:` spelling. `secret scan` is
+  still a head-built job, so it is a test verdict, not a trusted one.
+  `remote protect` refuses B and C while the default branch's
+  `.github/workflows/codeflow-policy.yml` does not declare
+  `commit standards` as a job name (and,
   in Mode A, does not name each `authority:` check it creates), or no workflow there
   declares `codeflow gates`: a rule that requires a name nothing produces
   blocks every pull request. A is written either way.
@@ -1260,7 +1270,8 @@ one session. Step 7 has no ordering dependency.
    remove the operator's login from the seats' credential stores.
 
 On GitHub Free, environment secrets exist only in public repositories; a
-private repository on Free uses Mode B.
+private repository on Free uses Mode B, which does not close forgery by a
+later producer.
 
 ### Recovery window
 
