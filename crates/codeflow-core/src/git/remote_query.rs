@@ -337,7 +337,7 @@ fn overlay_in(listed: &[u8], url: &[u8]) -> Option<String> {
             // Git refuses a valueless rewrite when it reads remotes, so the
             // query would not run as asked either. An empty value never
             // matches: git takes only a longer prefix than none.
-            let rewrites = value.map_or(true, |prefix| !prefix.is_empty() && url.starts_with(prefix));
+            let rewrites = value.is_none_or(|prefix| !prefix.is_empty() && url.starts_with(prefix));
             if rewrites {
                 return Some(format!(
                     "the setting url.{}.insteadOf",
@@ -872,7 +872,7 @@ fn has_exited(child: &mut std::process::Child) -> std::io::Result<bool> {
             libc::waitid(
                 libc::P_PID,
                 pid,
-                &mut info,
+                &raw mut info,
                 libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
             )
         };
@@ -1064,7 +1064,13 @@ mod tests {
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
         let log = dir.path().join("ran.log");
-        for name in ["rec-command", "rec-config", "rec-program", "rec-overlay", "ssh"] {
+        for name in [
+            "rec-command",
+            "rec-config",
+            "rec-program",
+            "rec-overlay",
+            "ssh",
+        ] {
             let script = bin.join(name);
             std::fs::write(
                 &script,
@@ -1162,7 +1168,10 @@ mod tests {
                 false,
             ),
             (
-                vec!["remote.origin.url\n/srv/dest.git", "remote.pushdefault\norigin"],
+                vec![
+                    "remote.origin.url\n/srv/dest.git",
+                    "remote.pushdefault\norigin",
+                ],
                 false,
             ),
             (vec!["remote./SRV/DEST.GIT.url\nx"], false),
@@ -1201,7 +1210,11 @@ mod tests {
         let repo = git2::Repository::init(clean.path()).unwrap();
         assert!(require_unredirected(clean.path(), "dest").is_ok());
         std::fs::create_dir_all(repo.path().join("remotes")).unwrap();
-        std::fs::write(repo.path().join("remotes").join("dest"), "URL: /elsewhere\n").unwrap();
+        std::fs::write(
+            repo.path().join("remotes").join("dest"),
+            "URL: /elsewhere\n",
+        )
+        .unwrap();
         let refused = require_unredirected(clean.path(), "dest").unwrap_err();
         assert!(refused.contains("remotes/dest"), "{refused}");
         assert!(require_unredirected(clean.path(), "./dest").is_ok());

@@ -5543,11 +5543,24 @@ fn push_set_refuses_a_destination_query_a_rewrite_would_redirect() {
     let decoy = dir.path().join(".git").join("decoy.git");
     git(
         dir.path(),
-        &["init", "-q", "--bare", "-b", "main", decoy.to_str().unwrap()],
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            decoy.to_str().unwrap(),
+        ],
     );
     git(
         dir.path(),
-        &["push", "-q", decoy.to_str().unwrap(), "main", "main:decoy-only"],
+        &[
+            "push",
+            "-q",
+            decoy.to_str().unwrap(),
+            "main",
+            "main:decoy-only",
+        ],
     );
     let good = rev(dir.path(), "feat/good");
     let stdin = format!("refs/heads/feat/good {good} refs/heads/feat/good {ZERO_SHA}\n");
@@ -5555,10 +5568,7 @@ fn push_set_refuses_a_destination_query_a_rewrite_would_redirect() {
         let mut cmd = codeflow();
         cmd.args(["git-hook", "pre-push", "upstream", &url])
             .current_dir(dir.path());
-        let rewrite = format!(
-            "[url \"{}\"]\n\tinsteadOf = {url}\n",
-            decoy.display()
-        );
+        let rewrite = format!("[url \"{}\"]\n\tinsteadOf = {url}\n", decoy.display());
         let file = dir.path().join(".git").join("planted-config");
         match scope {
             Some("global") => {
@@ -5837,6 +5847,48 @@ fn stable_destination(legacy_subject: &str) -> (tempfile::TempDir, tempfile::Tem
         r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block"}}"#,
     );
     (bare, local)
+}
+
+#[path = "../../codeflow-core/tests/support/forged_graph.rs"]
+mod forged_graph;
+
+/// TSK-327 AC-2, the preserved invariant of TSK-287 AC-1 and AC-2 on the
+/// combined push set: a forged commit-graph file, a graft or a replace ref
+/// that makes a pushed commit's parent the destination's tip, hiding the
+/// bad commit between them, never shortens the range. The push is refused,
+/// either because the hidden commit is judged or because the overlay
+/// leaves the history unverifiable; it never passes. Without an overlay
+/// the same push is refused for the bad commit itself.
+#[test]
+fn push_set_range_ignores_forged_graphs_grafts_and_replace_refs() {
+    for overlay in ["none", "commit-graph", "graft", "replace"] {
+        let (_bare, local) = stable_destination("chore: legacy base");
+        let root = local.path();
+        git(root, &["checkout", "-q", "-b", "feat/x", "dest/stable"]);
+        let base = rev(root, "HEAD");
+        commit_file(root, "x.txt", "x\n", "Not conventional.");
+        let forged = commit_file(root, "f.txt", "f\n", "feat: add f");
+        let head = commit_file(root, "h.txt", "h\n", "feat: add h");
+        match overlay {
+            "commit-graph" => forged_graph::plant(root, &forged, &base),
+            "graft" => {
+                let info = root.join(".git").join("info");
+                std::fs::create_dir_all(&info).unwrap();
+                std::fs::write(info.join("grafts"), format!("{forged} {base}\n")).unwrap();
+            }
+            "replace" => git(root, &["replace", "--graft", &forged, &base]),
+            _ => {}
+        }
+        let (code, err) = push_hook_onto(root, "dest", "feat/x", &head, ZERO_SHA);
+        assert_eq!(code, Some(1), "{overlay}: {err}");
+        assert!(
+            err.contains("Not conventional.") || err.contains("cannot"),
+            "{overlay}: {err}"
+        );
+        if overlay == "none" {
+            assert!(err.contains("Not conventional."), "{err}");
+        }
+    }
 }
 
 #[test]

@@ -219,17 +219,18 @@ pub fn ask(
 ///
 /// Returns why the destination could not be asked.
 pub fn advertisement(repo_root: &Path, url: &str, limits: QueryLimits) -> Result<String, String> {
-    crate::git::remote_query::require_unredirected(repo_root, url).and_then(|()| {
-        crate::git::remote_query::ls_remote(
-            repo_root,
-            &["--symref", url, "HEAD", "refs/heads/*", "refs/tags/*"],
-            limits,
-        )
-    })
-    .map_err(|why| {
-        let shown = crate::git::remote_query::display_url(url);
-        format!("asking the destination {shown} for its default branch: {why}")
-    })
+    crate::git::remote_query::require_unredirected(repo_root, url)
+        .and_then(|()| {
+            crate::git::remote_query::ls_remote(
+                repo_root,
+                &["--symref", url, "HEAD", "refs/heads/*", "refs/tags/*"],
+                limits,
+            )
+        })
+        .map_err(|why| {
+            let shown = crate::git::remote_query::display_url(url);
+            format!("asking the destination {shown} for its default branch: {why}")
+        })
 }
 
 /// The destination `url` is, read from its [`advertisement`].

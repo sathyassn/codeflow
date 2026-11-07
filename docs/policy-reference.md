@@ -81,7 +81,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.secret_scan_engine` | enum | `builtin` | builtin \| gitleaks | The engine the commit-time secret scan runs beside the built-in patterns. | builtin runs the built-in patterns only. gitleaks also runs the gitleaks release the managed CI scan pins over the staged diff, after the built-in patterns, reading the working tree's .gitleaksignore and .gitleaks.toml. A gitleaks binary that is missing, not the pinned version or not the pinned checksum is a finding at the git.secret_scan level, so at block it refuses the commit; `codeflow doctor --check secret-engine` reports where it looked. The hook never downloads it. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.secret_scan_inline_allow` | enum | `trusted` | trusted \| never | Inline gitleaks:allow handling in the managed CI secret scan. | Read from the trusted commit (the pull request base, or the pushed commit). Missing means trusted: only allows on commits it already holds count. With never, every inline allow is ignored; other trusted exemptions still apply. A pull request's head-only policy change cannot change its own scan. This key does not affect the pre-commit scan. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.conflict_markers` | Level | `block` | off \| warn \| allow \| block | Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170). | Defaults to block. Only added lines are judged. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in .gitattributes to a length its markers do not have. Suspended by bootstrap grace. |
-| `git.test_gate_on_push` | Level | `block` | off \| warn \| allow \| block | Run the push set before a push (pre-push hook). | The push set runs `codeflow ci` over each pushed range, which includes the conflict-marker check, and the release preflight where the project adopted it. It runs no `codeflow validate --docs` (`codeflow ci` checks the work graph) and no test-config target, so a push never waits for a heavy run; cite `codeflow test --mode quick` when the pull request is made ready. Tag and other non-branch pushes are outside the push set. Local-config tampering is outside the hook threat model; hosted CI checks the pushed commit. |
+| `git.test_gate_on_push` | Level | `block` | off \| warn \| allow \| block | Run the push set before a push (pre-push hook). | The push set runs `codeflow ci` over each pushed range, which includes the conflict-marker check, and the release preflight where the project adopted it. It runs no `codeflow validate --docs` (`codeflow ci` checks the work graph) and no test-config target, so a push never waits for a heavy run; cite `codeflow test --mode quick` when the pull request is made ready. Tag and other non-branch pushes are outside the push set. The destination lookup asks only the exact URL the push uses: a `url.<base>.insteadOf` in the repository, global or system configuration that matches it, a remote configured under that URL as its name, or a legacy remotes or branches file of that name refuses the push as unverifiable (`ci.destination_unavailable`). Its ssh transport is the one git's own precedence selects (`GIT_SSH_COMMAND`, `core.sshCommand`, `GIT_SSH`, then `ssh`), read in the process that runs the lookup; no other transport runs. Other local-config tampering is outside the hook threat model; hosted CI checks the pushed commit. |
 | `git.security_review` | Level | `warn` | off \| warn \| allow \| block | The umbrella gate for the CI security-review job. | Ships at warn (ADR-0016); harden to block when ready. |
 | `git.dep_audit` | Level | `warn` | off \| warn \| allow \| block | The dependency-audit gate in CI. | Ships at warn (ADR-0016); harden to block when ready. |
 | `git.discard_uncommitted` | Level | `block` | off \| warn \| allow \| block | Commands in an agent session that discard locally unique uncommitted work (ADR-0075). | Default block. The in-session guard judges it; a human terminal and the git hooks are unaffected. |
@@ -949,6 +949,19 @@ child checks. A final error refuses the set before those children run.
 Local tracking refs, including `origin/HEAD`, never replace that answer.
 A destination with no branches yet keeps the existing bootstrap behavior;
 a release push still needs a default target to judge against.
+
+The lookup never follows a second rewrite. Git hands the pre-push hook the
+URL the push uses, after its own rewrites; a `url.<base>.insteadOf` that
+matches that URL, a `remote.<url>` section or a legacy `remotes/<url>` or
+`branches/<url>` file would send the lookup, or the fetch of an object it
+needs, to another repository. Each refuses as unverifiable under
+`ci.destination_unavailable`, naming the setting, and so does a
+configuration that cannot be read.
+
+A helper that keeps git's error output open after git has exited, such as
+an ssh or credential helper, costs one short grace and is then ended with
+git's process group; the lookup returns in one wait, and a lookup that
+failed still refuses.
 
 Messages and printed commands name a destination without credentials: the
 userinfo of a URL such as `https://user:token@host/path` is shown as
