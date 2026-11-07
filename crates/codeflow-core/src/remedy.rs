@@ -594,6 +594,18 @@ catalog! {
     /// A project setup hook change that runs with the gate's authority.
     CI_SETUP_HOOK_CHANGED = Step::Edit(".codeflow/ci-setup.sh"),
         "restore .codeflow/ci-setup.sh to its target state; a change kept on purpose prints this note until it lands, so the operator reviews it as they would the CI file";
+    /// A change to a file a declared trusted-base check runs from, or to
+    /// the declaration itself (TSK-1103).
+    CI_BASE_CHECK_CHANGED = Step::Edit("{path}"),
+        "restore {path} to its target state if that was not meant; the trusted-base checks run from the default branch's copy until this change lands there, so a change kept on purpose prints this note until it lands and the operator reviews it as they would the CI file";
+    /// A change to the dependency-audit exception hook or a file it reads
+    /// (TSK-1103, from TSK-1107).
+    CI_AUDIT_EXCEPTIONS_CHANGED = Step::Edit("{path}"),
+        "restore {path} to its target state if that was not meant; the security review accepts findings only through the trusted commit's hook and register, so a change kept on purpose prints this note until it lands and the operator reviews it as an exception to the dependency audit";
+    /// A declared trusted-base check that refused the change or could not
+    /// run (TSK-1103).
+    CI_BASE_CHECK_FAILED = Step::Codeflow("codeflow ci base-checks"),
+        "fix what the named check refuses in this change, then rerun `codeflow ci base-checks`; a declaration or script that is broken is fixed on the default branch first, since only its copy decides";
     /// A change to a managed workflow or the release workflow (TSK-336).
     CI_WORKFLOW_CHANGED = Step::Edit("{path}"),
         "review {path} as a change to who judges pull requests, and restore it to its target state if that was not meant; the default branch's copy judges until this change lands there, and the operator lands it";
@@ -742,6 +754,12 @@ catalog! {
     /// A CI workflow whose install step is still the placeholder.
     DOCTOR_CI_PLACEHOLDER = Step::Edit("{path}"),
         "replace the PLACEHOLDER install step in {path} with the release installer, so the test and validate gates run";
+    /// Declared trusted-base checks that no managed CI file runs (TSK-1103).
+    DOCTOR_BASE_CHECKS_UNRUN = Step::Edit("{path}"),
+        "add the shipped `codeflow ci base-checks` step back to {path}, as assets/base/ci/README.md shows it, so the declared checks run before a pull request is judged";
+    /// A declaration doctor cannot read (TSK-1103).
+    DOCTOR_BASE_CHECKS_UNREADABLE = Step::Edit(".codeflow/base-checks.json"),
+        "fix .codeflow/base-checks.json so it matches .codeflow/schemas/base-checks.schema.json; the managed step fails every pull request while the default branch's copy cannot be read";
     /// A checkout that pins no codeflow version for CI to install.
     DOCTOR_CI_PIN_MISSING = Step::Edit(".codeflow/project.toml"),
         "set scaffold_version in .codeflow/project.toml to the codeflow version CI installs";

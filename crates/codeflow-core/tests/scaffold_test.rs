@@ -1226,6 +1226,48 @@ fn update_three_way_merges_user_modified_file() {
     assert!(!root.join(".claude/workflows/develop.md.new").exists());
 }
 
+/// TSK-1103 AC-4: the project-owned trusted-base check declaration survives
+/// an update that 3-way merges a managed file, byte for byte, and the
+/// shipped manifest never names it, so no update writes it.
+#[test]
+fn update_keeps_the_base_checks_declaration_through_a_three_way_merge() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let declaration = "{\"version\": 1, \"checks\": [{\"name\": \"boundary\", \"script\": \".codeflow/checks/boundary.sh\", \"interpreter\": \"bash\"}]}\n";
+    std::fs::write(root.join(codeflow_core::base_checks::DECLARATION), declaration).unwrap();
+    let mine =
+        read(&root, ".claude/workflows/develop.md").replace("step eight", "step eight (mine)");
+    std::fs::write(root.join(".claude/workflows/develop.md"), &mine).unwrap();
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::Merged
+    );
+    assert_eq!(
+        read(&root, codeflow_core::base_checks::DECLARATION),
+        declaration
+    );
+    assert!(report
+        .files
+        .iter()
+        .all(|file| file.dest != codeflow_core::base_checks::DECLARATION));
+
+    let shipped: toml::Value =
+        toml::from_str(include_str!("../../../assets/base/scaffold-manifest.toml")).unwrap();
+    let dests: Vec<&str> = shipped["entry"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry["dest"].as_str())
+        .collect();
+    assert!(!dests.contains(&codeflow_core::base_checks::DECLARATION));
+    assert!(dests.contains(&".codeflow/schemas/base-checks.schema.json"));
+}
+
 #[test]
 fn update_twice_preserves_merged_user_edits() {
     // Regression: after a clean 3-way merge, a SECOND `codeflow update` must not
