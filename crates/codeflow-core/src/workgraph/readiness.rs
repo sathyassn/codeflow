@@ -341,34 +341,48 @@ struct WorkBranches {
     /// Branches on remotes outside the claim scope by task id: the remote
     /// and the branch name on it.
     unrelated: BTreeMap<String, Vec<(GitName, GitName)>>,
+    /// Leftover local branches by task id: no remote holds them and no
+    /// worktree has them checked out (TSK-1308). Filled only when the scan
+    /// is given the clone's [`LocalBranches`].
+    leftovers: BTreeMap<String, Vec<GitName>>,
 }
 
 impl WorkBranches {
     fn information(&self, task_id: &str, target: &str) -> Vec<String> {
-        self.unrelated
-            .get(task_id)
-            .into_iter()
-            .flatten()
-            .map(|(remote, branch)| {
-                let remote = remote.display();
-                format!(
-                    "also on {remote}: {} (not a claim: {remote} does not carry work to {})",
-                    branch.display(),
-                    crate::git::display_text(&shown(target))
-                )
-            })
-            .collect()
+        let unrelated =
+            self.unrelated
+                .get(task_id)
+                .into_iter()
+                .flatten()
+                .map(|(remote, branch)| {
+                    let remote = remote.display();
+                    format!(
+                        "also on {remote}: {} (not a claim: {remote} does not carry work to {})",
+                        branch.display(),
+                        crate::git::display_text(&shown(target))
+                    )
+                });
+        let leftovers = self.leftovers.get(task_id).into_iter().flatten().map(|branch| {
+            format!(
+                "local only: {} (not a claim: no remote holds it and no worktree has it checked out)",
+                branch.display()
+            )
+        });
+        unrelated.chain(leftovers).collect()
     }
 }
 
 /// Local branches and branches on claim remotes, plus information about
 /// branches on unrelated remotes. Origin's published copy shares its local
-/// branch name; other claim remotes keep their remote name.
+/// branch name; other claim remotes keep their remote name. With `local`,
+/// a local branch that is not live work is a leftover, reported as
+/// information instead of a claim (TSK-1308).
 fn visible_work_branches(
     repo: &Repository,
     prefixes: &[String],
     ids: &BTreeSet<String>,
     scope: &BTreeSet<String>,
+    local: Option<&super::local_branches::LocalBranches>,
 ) -> Result<WorkBranches, String> {
     let mut carried = WorkBranches::default();
     let branches = repo.branches(None).map_err(|error| error.to_string())?;
@@ -422,12 +436,16 @@ fn visible_work_branches(
         let Some(id) = carried_task_id_name(&suffix, ids) else {
             continue;
         };
+        let leftover = kind == BranchType::Local
+            && local.is_some_and(|local| !local.is_live(branch.get().name_bytes()));
         if let Some(remote) = unrelated {
             carried
                 .unrelated
                 .entry(id)
                 .or_default()
                 .push((remote, short));
+        } else if leftover {
+            carried.leftovers.entry(id).or_default().push(name);
         } else if seen.insert((name.clone(), oid)) {
             carried.claims.entry(id).or_default().push((name, oid));
         }
@@ -448,7 +466,7 @@ fn scope_scan<'a>(
     match scans.entry(remotes) {
         Slot::Occupied(found) => Ok(found.into_mut()),
         Slot::Vacant(slot) => {
-            let scan = visible_work_branches(repo, prefixes, ids, slot.key())?;
+            let scan = visible_work_branches(repo, prefixes, ids, slot.key(), None)?;
             Ok(slot.insert(scan))
         }
     }
@@ -1581,6 +1599,8 @@ pub struct Claim {
     pub pushed: bool,
     /// Unrelated remote branches visible in the last-fetched refs.
     pub informational_branches: Vec<String>,
+    /// Title words left out of the name (`git.branch_name_omit_words`).
+    pub omitted_words: Vec<String>,
 }
 
 /// `git <args>` with its output as exact bytes.
@@ -1848,7 +1868,8 @@ fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
 /// Refresh the refs used to resolve a claim before looking up review pins.
 ///
 /// # Errors
-/// Reports target or fetch errors without creating a claim.
+/// Reports target or fetch errors without creating a claim. A task with no
+/// visible record is not an error here: its caller reports that finding.
 pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
     // OS text rule (issue 79): a remote is fetched by name, and a name that is
     // not valid UTF-8 cannot be given to git as text, so claim refresh refuses
@@ -1873,11 +1894,15 @@ pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
         .is_none()
     {
         for remote in &remotes {
-            git(repo_root, &["fetch", "--prune", "--quiet", remote])?;
+            fetch_for_admission(repo_root, remote)?;
         }
     }
-    let declared = claim_target(repo_root, task_id)?
-        .ok_or_else(|| format!("{task_id} has no visible record with an integration_target"))?;
+    // No visible record: every remote was fetched above. The missing record
+    // is a planning finding the caller reports at its policy level; `claim`
+    // refuses it and `start` follows `git.work_planning` (AC-2).
+    let Some(declared) = claim_target(repo_root, task_id)? else {
+        return Ok(());
+    };
     let has_origin = remotes.iter().any(|remote| remote == "origin");
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     // Fetch the remote the target resolves through (never substituting
@@ -1888,10 +1913,41 @@ pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
     if has_origin && !fetch.contains(&"origin") {
         fetch.push("origin");
     }
+    let mut refreshed: BTreeSet<_> = fetch.iter().map(|r| (*r).to_string()).collect();
     for remote in fetch {
-        git(repo_root, &["fetch", "--prune", "--quiet", remote])
-            .map_err(|error| format!("fetch {remote} failed: {error}"))?;
+        fetch_for_admission(repo_root, remote)?;
     }
+    // Discover code sources from the freshly fetched target, never the ledger.
+    let (_, tip) = super::claim_base::source(&repo, &declared)?;
+    let tree = repo
+        .find_commit(tip)
+        .and_then(|c| c.tree())
+        .map_err(|e| e.to_string())?;
+    let records = records_from_tree(&repo, &tree).map_err(|e| e.to_string())?;
+    for dep in records.get(task_id).into_iter().flat_map(|r| &r.depends_on) {
+        if dep.kind != super::deps::DependencyKind::Code {
+            continue;
+        }
+        if let Some(line) = records
+            .get(&dep.id)
+            .and_then(|r| r.integration_target.as_deref())
+        {
+            if let Some(remote) = target_fetch_remote(&repo, line)? {
+                if remotes.contains(&remote) && refreshed.insert(remote.clone()) {
+                    fetch_for_admission(repo_root, &remote)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn fetch_for_admission(root: &Path, remote: &str) -> Result<(), String> {
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let last = fetched_at(&repo).unwrap_or_else(|| "unknown".into());
+    git(root, &["fetch", "--prune", "--quiet", "--", remote]).map_err(|error| {
+        format!("fetch {remote} failed (last fetch before this attempt: {last}): {error}")
+    })?;
     Ok(())
 }
 
@@ -1927,6 +1983,59 @@ fn standalone_claim_base(
     Ok(Some((head.id(), task.clone(), current)))
 }
 
+/// Refuse a claim on `task_id` that a visible branch already holds, or whose
+/// work has already landed on `reference`, and return the informational
+/// branches a claim reports. `renamed` is the standalone branch the claim
+/// renames, which never counts against itself.
+fn refuse_claimed_or_landed(
+    repo: &Repository,
+    repo_root: &Path,
+    task_id: &str,
+    reference: &str,
+    remotes: &BTreeSet<String>,
+    renamed: Option<&GitName>,
+    target_tip: git2::Oid,
+) -> Result<Vec<String>, String> {
+    let ids = BTreeSet::from([task_id.to_string()]);
+    let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
+    // A leftover local branch, such as one from an earlier use of the id,
+    // is not a claim (TSK-1308); the claim names it.
+    let local = super::local_branches::LocalBranches::read(repo);
+    let mut visible = visible_work_branches(repo, &prefixes, &ids, remotes, Some(&local))?;
+    let information = visible.information(task_id, reference);
+    let mut carried = visible.claims.remove(task_id).unwrap_or_default();
+    for remote in remotes {
+        carried.extend(remote_claims(repo, repo_root, &prefixes, task_id, remote)?);
+    }
+    if let Some(current) = renamed {
+        carried.retain(|(name, _)| name != current);
+    }
+    let (open, done) = split_landed(repo, repo_root, &carried, target_tip);
+    if !open.is_empty() {
+        let shown: Vec<String> = open.iter().map(|name| name.display().to_string()).collect();
+        return Err(format!(
+            "{task_id} is already claimed by a visible branch: {}",
+            shown.join(", ")
+        ));
+    }
+    // Finished work is not claimed again (TSK-1038): the landed branch and
+    // the one command that settles the record are named.
+    let landed = landed_work_branches(repo, &LandLine::new(), &carried, &done, target_tip, task_id);
+    if !landed.is_empty() {
+        let names: Vec<String> = landed
+            .iter()
+            .map(|name| name.display().to_string())
+            .collect();
+        return Err(format!(
+            "{task_id} has already landed on {} in {} while its record is still open; settle the record with `{}`",
+            shown(reference),
+            names.join(", "),
+            landed_status_command(task_id)
+        ));
+    }
+    Ok(information)
+}
+
 /// Claim from reviewed predecessors, or rename the branch holding a new standalone record.
 ///
 /// # Errors
@@ -1945,9 +2054,10 @@ pub fn claim_on(
     let (reference, target_tip) = resolve_target(repo_root, &repo, &declared)?
         .ok_or_else(|| format!("target '{declared}' does not resolve here"))?;
     let stack = super::work_start::stack_base(repo_root, pins)?;
-    let mut tip = stack.unwrap_or(target_tip);
+    let selected = super::claim_base::select(repo_root, task_id, &declared, pins)?;
+    let mut tip = git2::Oid::from_str(&selected.revision).map_err(|e| e.to_string())?;
     let tree = repo
-        .find_commit(tip)
+        .find_commit(if stack.is_some() { tip } else { target_tip })
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
     let mut records = records_from_tree(&repo, &tree).map_err(|error| error.to_string())?;
@@ -1964,57 +2074,31 @@ pub fn claim_on(
         }
     }
     let reference_shown = shown(&reference);
+    super::claim_base::project_dependencies(&repo, &mut records, task_id, target_tip, tip, pins)?;
     super::work_start::validate_anchored_task_on(&repo, &records, task_id, &reference, pins)
         .map_err(|error| format!("not ready on {reference_shown}: {error}"))?;
-    let ids = BTreeSet::from([task_id.to_string()]);
-    let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
-    let mut visible = visible_work_branches(&repo, &prefixes, &ids, &remotes)?;
-    let information = visible.information(task_id, &reference);
-    let mut carried = visible.claims.remove(task_id).unwrap_or_default();
-    for remote in &remotes {
-        carried.extend(remote_claims(&repo, repo_root, &prefixes, task_id, remote)?);
-    }
-    if let Some(current) = &renamed {
-        carried.retain(|(name, _)| name != current);
-    }
-    let (open, done) = split_landed(&repo, repo_root, &carried, target_tip);
-    if !open.is_empty() {
-        let shown: Vec<String> = open.iter().map(|name| name.display().to_string()).collect();
-        return Err(format!(
-            "{task_id} is already claimed by a visible branch: {}",
-            shown.join(", ")
-        ));
-    }
-    // Finished work is not claimed again (TSK-1038): the landed branch and
-    // the one command that settles the record are named.
-    let landed = landed_work_branches(
+    let information = refuse_claimed_or_landed(
         &repo,
-        &LandLine::new(),
-        &carried,
-        &done,
-        target_tip,
+        repo_root,
         task_id,
-    );
-    if !landed.is_empty() {
-        let shown: Vec<String> = landed
-            .iter()
-            .map(|name| name.display().to_string())
-            .collect();
-        return Err(format!(
-            "{task_id} has already landed on {reference_shown} in {} while its record is still open; settle the record with `{}`",
-            shown.join(", "),
-            landed_status_command(task_id)
-        ));
-    }
+        &reference,
+        &remotes,
+        renamed.as_ref(),
+        target_tip,
+    )?;
     let title = records
         .get(task_id)
         .map_or("", |record| record.title.as_str());
-    let branch = format!("task/{task_id}-{}", super::light_paths::slug(title));
+    let policy = crate::hooks::policy::Policy::load(repo_root)?;
+    let named = super::light_paths::branch_slug(title, &policy.git.branch_name_omit_words);
+    let branch = format!("task/{task_id}-{}", named.slug);
     if let Some(current) = &renamed {
         rename_standalone_branch(repo_root, current, &branch, tip)?;
     } else {
         git(repo_root, &["branch", &branch, &tip.to_string()])?;
     }
+    super::claim_base::record(repo_root, task_id, &branch, &declared, &selected)
+        .map_err(|error| format!("created {branch} locally; recording its base failed: {error}"))?;
     if has_origin {
         // Create only: an existing remote branch of that name is never moved.
         let destination = format!("refs/heads/{branch}");
@@ -2032,9 +2116,10 @@ pub fn claim_on(
     }
     Ok(Claim {
         branch,
-        from: format!("{reference_shown}@{}", &tip.to_string()[..9]),
+        from: format!("{}@{}", shown(&selected.source), &tip.to_string()[..9]),
         pushed: has_origin,
         informational_branches: information,
+        omitted_words: named.omitted,
     })
 }
 
@@ -2186,7 +2271,7 @@ pub fn other_branches(repo_root: &Path, task_id: &str, own: &str) -> Result<Vec<
     let ids = BTreeSet::from([task_id.to_string()]);
     let prefixes =
         work_prefixes(repo_root).map_err(|error| format!("cannot read work prefixes: {error}"))?;
-    let carried = visible_work_branches(&repo, &prefixes, &ids, &remotes)
+    let carried = visible_work_branches(&repo, &prefixes, &ids, &remotes, None)
         .map_err(|error| format!("cannot read work branches: {error}"))?
         .claims
         .remove(task_id)
@@ -2969,19 +3054,29 @@ mod tests {
         fs::write(root.join(".git").join("packed-refs"), packed).unwrap();
         let repository = Repository::open(root).unwrap();
         let ids = BTreeSet::from(["TSK-238".to_string()]);
-        let carried =
-            visible_work_branches(&repository, &["task/".to_string()], &ids, &BTreeSet::new())
-                .unwrap()
-                .claims;
+        let carried = visible_work_branches(
+            &repository,
+            &["task/".to_string()],
+            &ids,
+            &BTreeSet::new(),
+            None,
+        )
+        .unwrap()
+        .claims;
         let claims = &carried["TSK-238"];
         assert_eq!(claims.len(), 1, "{carried:?}");
         assert_eq!(claims[0].0, GitName::from_bytes(b"task/TSK-238-caf\xe9"));
         // A real U+FFFD in another branch is another claim, not the same one.
         run(root, &["branch", "task/TSK-238-caf\u{fffd}"]);
-        let carried =
-            visible_work_branches(&repository, &["task/".to_string()], &ids, &BTreeSet::new())
-                .unwrap()
-                .claims;
+        let carried = visible_work_branches(
+            &repository,
+            &["task/".to_string()],
+            &ids,
+            &BTreeSet::new(),
+            None,
+        )
+        .unwrap()
+        .claims;
         let names: BTreeSet<_> = carried["TSK-238"]
             .iter()
             .map(|(name, _)| name.clone())
@@ -3226,9 +3321,8 @@ mod tests {
         let claimed = claim(root, "TSK-002").unwrap();
         assert_eq!(claimed.branch, "task/TSK-002-work-tsk-002");
         assert!(claimed.pushed);
-        // `main` tracks `origin/main` and equals it: the local branch is read,
-        // as `work start` reads it.
-        assert!(claimed.from.starts_with("main@"), "{}", claimed.from);
+        // The claim names the fetched remote tip it was cut from (TSK-1047).
+        assert!(claimed.from.starts_with("origin/main@"), "{}", claimed.from);
         let remote = run(bare.path(), &["branch", "--list"]);
         assert!(remote.contains("task/TSK-002-work-tsk-002"), "{remote}");
 
@@ -3572,6 +3666,65 @@ mod tests {
         );
     }
 
+    /// TSK-1308: a local task branch left from an earlier use of the id,
+    /// which no remote holds and no worktree has checked out, is a leftover
+    /// copy, not a claim. `codeflow work claim TSK-1306` was refused by
+    /// `task/TSK-1306-the-landing-gate-is-chosen-by-what-the-candida`
+    /// (05f7e3cd9). The claim goes ahead and names the leftover; the same
+    /// branch is still a claim once a worktree uses it or a remote holds it.
+    #[test]
+    fn a_leftover_local_task_branch_is_not_a_claim() {
+        for case in ["leftover", "checked out", "on the remote"] {
+            let dir = repo();
+            let root = dir.path();
+            task(root, "TSK-194", "todo", "[]", "");
+            commit(root, "plan");
+            let _origin = with_origin(root);
+            run(root, &["branch", "task/TSK-194-an-earlier-use", "main"]);
+            let trees = tempfile::tempdir().unwrap();
+            match case {
+                "checked out" => {
+                    let at = trees.path().join("earlier");
+                    run(
+                        root,
+                        &[
+                            "worktree",
+                            "add",
+                            "-q",
+                            at.to_str().unwrap(),
+                            "task/TSK-194-an-earlier-use",
+                        ],
+                    );
+                }
+                "on the remote" => {
+                    run(
+                        root,
+                        &["push", "-q", "origin", "task/TSK-194-an-earlier-use"],
+                    );
+                    run(root, &["fetch", "-q", "origin"]);
+                }
+                _ => {}
+            }
+            let claimed = claim(root, "TSK-194");
+            if case == "leftover" {
+                let claimed = claimed.unwrap();
+                assert!(claimed.pushed);
+                assert_eq!(
+                    claimed.informational_branches,
+                    ["local only: task/TSK-194-an-earlier-use (not a claim: no remote holds it and no worktree has it checked out)"]
+                );
+            } else {
+                let refused = claimed.unwrap_err();
+                assert!(
+                    refused.contains(
+                        "already claimed by a visible branch: task/TSK-194-an-earlier-use"
+                    ),
+                    "{case}: {refused}"
+                );
+            }
+        }
+    }
+
     /// AC-3: fork targets count origin and upstream, without counting archives.
     #[test]
     fn a_fork_counts_origin_and_upstream_claims_but_not_archive() {
@@ -3638,7 +3791,7 @@ mod tests {
         );
         let ids = BTreeSet::from(["TSK-001".to_string()]);
         let prefixes = work_prefixes(root).unwrap();
-        let scanned = visible_work_branches(&repo, &prefixes, &ids, &remotes).unwrap();
+        let scanned = visible_work_branches(&repo, &prefixes, &ids, &remotes, None).unwrap();
         let local_names: BTreeSet<_> = scanned.claims["TSK-001"]
             .iter()
             .map(|(name, _)| name.clone())
@@ -3986,7 +4139,8 @@ mod tests {
     }
 
     /// R2-1, the other direction: upstream is ready and the fork adds a
-    /// Blocker. All three accept, and the claim is cut from `main`.
+    /// Blocker. All three accept, and the claim is cut from the configured
+    /// upstream's fetched `main`, which it names.
     #[test]
     fn a_ready_upstream_is_ready_whatever_the_fork_says() {
         let dir = repo();
@@ -3995,7 +4149,11 @@ mod tests {
         let backlog = backlog(root).unwrap();
         assert_eq!(entry(&backlog, "TSK-001").state, State::Ready);
         let claimed = claim(root, "TSK-001").unwrap();
-        assert!(claimed.from.starts_with("main@"), "{}", claimed.from);
+        assert!(
+            claimed.from.starts_with("upstream/main@"),
+            "{}",
+            claimed.from
+        );
         let published = run(origin.path(), &["branch", "--list"]);
         assert!(published.contains(&claimed.branch), "{published}");
         start_from(root, &claimed.branch).unwrap();
