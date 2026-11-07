@@ -278,14 +278,14 @@ changed path prints one note naming it and what reads it. A rename names the
 old path removed and the new one added, a file replaced by a symbolic link
 is an edit, and a tree that cannot be read is named unknown, never a removal.
 
-| Input | Read by | Remedy code |
-|---|---|---|
-| `git.security_review`, `git.dep_audit` in `.codeflow/policy.json` | the security review | `CI_SECURITY_LEVEL_LOWERED` |
-| `.codeflow/ci-setup.sh` | the gates job, in its own step before the gate step, and the shared pinned run, sourced before `codeflow test` | `CI_SETUP_HOOK_CHANGED` |
-| `.codeflow/base-checks.json` | the trusted-base project checks (TSK-1103) | `CI_BASE_CHECK_CHANGED` |
-| each `script` and `inputs` path it declares, on either side of the range | the same checks | `CI_BASE_CHECK_CHANGED` |
-| `.codeflow/audit-exceptions.sh` | the security review's project exception hook (TSK-294) | `CI_AUDIT_EXCEPTIONS_CHANGED` |
-| each `audit_exception_inputs` path in `.codeflow/base-checks.json` | the files that hook reads, such as its register | `CI_AUDIT_EXCEPTIONS_CHANGED` |
+Each input, what reads it and its remedy code:
+
+- `git.security_review`, `git.dep_audit` in `.codeflow/policy.json`: read by the security review; remedy `CI_SECURITY_LEVEL_LOWERED`.
+- `.codeflow/ci-setup.sh`: read by the gates job, in its own step before the gate step, and the shared pinned run, sourced before `codeflow test`; remedy `CI_SETUP_HOOK_CHANGED`.
+- `.codeflow/base-checks.json`: read by the trusted-base project checks (TSK-1103); remedy `CI_BASE_CHECK_CHANGED`.
+- each `script` and `inputs` path it declares, on either side of the range: read by the same checks; remedy `CI_BASE_CHECK_CHANGED`.
+- `.codeflow/audit-exceptions.sh`: read by the security review's project exception hook (TSK-294); remedy `CI_AUDIT_EXCEPTIONS_CHANGED`.
+- each `audit_exception_inputs` path in `.codeflow/base-checks.json`: read by the exception hook, such as its register; remedy `CI_AUDIT_EXCEPTIONS_CHANGED`.
 
 `.codeflow/test-config.json` and `.codeflow/policy.json` are read by the
 gates job's gate step from the base branch's tip, after the project setup
