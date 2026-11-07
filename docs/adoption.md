@@ -25,7 +25,9 @@ much working method comes with it.
   one branch. A protected branch in the policy that the host does not have
   is reported and gets no ruleset. `codeflow doctor` accepts any active
   ruleset or branch protection on `codeflow/registry` that blocks force
-  pushes and deletion, whoever created it.
+  pushes and deletion for everyone, whoever created it: a ruleset counts
+  only with an empty bypass list, and branch protection only when it binds
+  administrators. Rules it cannot read are a warning, never a pass.
 - A project can start at minimal and move up later. A lower-tier request
   never removes files.
 

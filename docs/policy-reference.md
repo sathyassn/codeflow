@@ -1214,6 +1214,11 @@ Findings). A bypass actor merges into the default branch with `gh pr merge
   B do, `--adopt <ruleset>=<owned name>` says which. Any other target is
   refused and the ruleset is left as it is. The dry run and the report name
   the adopted ruleset, its id and its new name.
+- **One repository.** `remote protect` and `doctor` act on the github.com
+  repository `origin` fetches from. A push URL that names another
+  repository is refused, `gh repo view` is asked about that repository and
+  an answer for another one is refused, and `GH_HOST` and `GH_REPO` are not
+  passed to `gh`, so neither can point a read or a write elsewhere.
 - **The dry run is exact.** `--dry-run` reads the host with GET calls only
   and prints each request a run would send (method, path and body); a run
   sends exactly those. Without a readable host it prints the intended rules
@@ -1222,9 +1227,12 @@ Findings). A bypass actor merges into the default branch with `gh pr merge
   it, is never written. Every
   write sends `name`, `target`, `enforcement`, `conditions`,
   `bypass_actors` and `rules`, because GitHub does not document what an
-  update does with omitted fields, and the bypass list the host answers is
-  checked against the one sent. An update makes the ruleset active, joins
-  its include patterns and drops its excludes, adds a missing rule, raises
+  update does with omitted fields, and the answer must carry every field
+  as sent: the bypass list exactly, conditions and rules with only the
+  host's own defaults added. An update makes the ruleset active, joins its
+  include patterns and keeps its excludes, naming them in the report; an
+  exclude that leaves out a branch the ruleset must cover is refused, and
+  the ruleset is left unwritten. It adds a missing rule, raises
   an approval count and turns review flags on, makes checks strict and adds
   missing names. It never lowers an approval count, removes a rule, changes
   which app produces a check (that ruleset is left unwritten and reported)
