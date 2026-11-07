@@ -1033,7 +1033,9 @@ fn fork(root: &Path, url: Option<&str>) -> Result<Option<String>, String> {
 /// shipped defaults. A destination that advertises no branches is
 /// initialization only while this clone holds no tracking refs for it;
 /// otherwise the tracking refs and the destination disagree and the push
-/// is refused with the fetch route, never judged by the working copy.
+/// is refused with the fetch route, never judged by the working copy. It is
+/// refused too when the push connected with a command-line transport setting
+/// the query does not apply ([`remote_query::command_line_transport`]).
 fn judged_by(
     root: &Path,
     destination: &Destination<'_>,
@@ -1048,6 +1050,13 @@ fn judged_by(
         // Only a destination that answered with no branches is
         // initialization; one that was not asked, or could not be, refuses.
         destination.listing(root).map_err(str::to_string)?;
+        // An empty answer is trusted only when the query connected as the
+        // push did (TSK-327).
+        if let Some(setting) = remote_query::command_line_transport(root)? {
+            return Err(format!(
+                "the destination advertises no branches, but the push connected with {setting}, which the destination query does not apply, so the empty answer may not be the destination's; push without it, or set it in the repository configuration"
+            ));
+        }
         let Some(remote) = destination.tracking else {
             return Ok(Judged::Initialization);
         };

@@ -908,15 +908,19 @@ pub const SCHEMA: [KeySpec; 84] = [
                 is made ready. Tag and other non-branch pushes are outside the \
                 push set. The destination lookup asks only the exact URL the \
                 push uses: a `url.<base>.insteadOf` in the repository, global \
-                or system configuration that matches it, a remote configured \
-                under that URL as its name, or a legacy remotes or branches \
-                file of that name refuses the push as unverifiable \
-                (`ci.destination_unavailable`). Its ssh transport is the one \
-                git's own precedence selects (`GIT_SSH_COMMAND`, \
-                `core.sshCommand`, `GIT_SSH`, then `ssh`), read in the \
-                process that runs the lookup; no other transport runs. Other \
-                local-config tampering is outside the hook threat model; \
-                hosted CI checks the pushed commit.",
+                or system configuration that matches it (an empty one matches \
+                every URL), a remote configured under that URL as its name, \
+                or a legacy remotes or branches file of that name refuses the \
+                push as unverifiable (`ci.destination_unavailable`). Its ssh \
+                transport is the one git's own precedence selects \
+                (`GIT_SSH_COMMAND`, `core.sshCommand`, `GIT_SSH`, then \
+                `ssh`), read as the push read it, `git -c` settings \
+                included; no other transport runs. A destination with no \
+                branches is not taken as initialization when the push \
+                connected with a `git -c` http, protocol, remote, ssh or \
+                transfer setting, or `core.gitProxy`, that the lookup does \
+                not apply. Other local-config tampering is outside the hook \
+                threat model; hosted CI checks the pushed commit.",
     },
     KeySpec {
         path: "git.security_review",

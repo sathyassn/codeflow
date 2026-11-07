@@ -5580,6 +5580,12 @@ fn push_set_refuses_a_destination_query_a_rewrite_would_redirect() {
                 cmd.env("GIT_CONFIG_SYSTEM", &file)
                     .env_remove("GIT_CONFIG_NOSYSTEM");
             }
+            // The deprecated file only `git config` reads hides the
+            // repository's rewrite from that read, not from the query.
+            Some("hidden") => {
+                std::fs::write(&file, "").unwrap();
+                cmd.env("GIT_CONFIG", &file);
+            }
             _ => {}
         }
         run_with_stdin(&mut cmd, &stdin)
@@ -5592,8 +5598,8 @@ fn push_set_refuses_a_destination_query_a_rewrite_would_redirect() {
         String::from_utf8_lossy(&control.stderr)
     );
     let key = format!("url.{}.insteadOf", decoy.display());
-    for scope in ["repository", "global", "system"] {
-        if scope == "repository" {
+    for scope in ["repository", "global", "system", "hidden"] {
+        if scope == "repository" || scope == "hidden" {
             git(dir.path(), &["config", &key, &url]);
         }
         let out = hook(Some(scope));
@@ -5602,10 +5608,43 @@ fn push_set_refuses_a_destination_query_a_rewrite_would_redirect() {
         assert!(err.contains("ci.destination_unavailable"), "{scope}: {err}");
         assert!(err.contains("cannot be verified"), "{scope}: {err}");
         assert!(err.contains("insteadOf"), "{scope}: {err}");
-        if scope == "repository" {
+        if scope == "repository" || scope == "hidden" {
             git(dir.path(), &["config", "--unset", &key]);
         }
     }
+}
+
+#[test]
+fn push_set_refuses_initialization_under_a_command_line_transport_setting() {
+    // TSK-327: an empty destination is initialization only when the query
+    // connected as the push did; a command-line transport setting the query
+    // does not apply refuses, and other command-line settings do not.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    git(dir.path(), &["checkout", "-b", "feat/x"]);
+    let head = commit_file(dir.path(), "x.txt", "x\n", "Not conventional.");
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "--bare", "-q"]);
+    let path = bare.path().to_str().unwrap();
+    let hook = |parameters: &str| {
+        let mut cmd = codeflow();
+        cmd.args(["git-hook", "pre-push", path, path])
+            .current_dir(dir.path())
+            .env("GIT_CONFIG_PARAMETERS", parameters);
+        run_with_stdin(
+            &mut cmd,
+            &format!("refs/heads/feat/x {head} refs/heads/feat/x {ZERO_SHA}\n"),
+        )
+    };
+    let out = hook("'user.name=Tester'");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    assert!(err.contains("initialization:"), "{err}");
+    let out = hook("'http.proxy=http://proxy.invalid'");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(out.status.code(), Some(0), "{err}");
+    assert!(err.contains("the command-line setting http.proxy"), "{err}");
+    assert!(!err.contains("initialization:"), "{err}");
 }
 
 /// A minimal scaffold on `feat/probe` whose test config holds a heavy quick

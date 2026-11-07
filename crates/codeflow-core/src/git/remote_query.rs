@@ -266,7 +266,7 @@ pub fn ls_remote(root: &Path, args: &[&str], limits: QueryLimits) -> Result<Stri
 /// refuses when any of these would apply to `url`:
 ///
 /// - a `url.<base>.insteadOf` value that is a prefix of `url`, which git
-///   rewrites before it connects;
+///   rewrites before it connects; an empty value is a prefix of every URL;
 /// - a `remote.<url>.*` section, which makes git read `url` as a configured
 ///   remote with its own URL, upload command or helper;
 /// - a `remotes/<url>` or `branches/<url>` file, when `url` has no directory
@@ -286,6 +286,10 @@ pub fn require_unredirected(root: &Path, url: &str) -> Result<(), String> {
             "the destination {shown} cannot be verified: {why}; the hook asks only the exact URL the push uses"
         )
     };
+    // Git would read such a URL as an option of the query.
+    if url.is_empty() || url.starts_with('-') {
+        return Err(refuse("the URL is empty or starts with '-'".to_string()));
+    }
     if let Some(overlay) = destination_overlay(root, url).map_err(refuse)? {
         return Err(refuse(format!(
             "{overlay} would send the destination query somewhere other than this URL; remove it, or push to the URL it names"
@@ -335,10 +339,9 @@ fn overlay_in(listed: &[u8], url: &str) -> Option<String> {
             .and_then(|rest| rest.strip_suffix(b".insteadof"))
         {
             // Git refuses a valueless rewrite when it reads remotes, so the
-            // query would not run as asked either. An empty value never
-            // matches: git takes only a longer prefix than none.
-            let rewrites =
-                value.is_none_or(|prefix| !prefix.is_empty() && url.as_bytes().starts_with(prefix));
+            // query would not run as asked either. An empty value is a
+            // prefix of every URL, and git applies it.
+            let rewrites = value.is_none_or(|prefix| url.as_bytes().starts_with(prefix));
             if rewrites {
                 // Shown only: the base is escaped and any userinfo hidden.
                 let shown = crate::git::GitName::from_bytes(base).display().to_string();
@@ -789,11 +792,12 @@ fn text_answer(bytes: &[u8]) -> Result<String, Failure> {
 /// The SSH command git would use, with password and host-key prompts off.
 /// A configured command is kept, selected by git's own precedence:
 /// `GIT_SSH_COMMAND`, then `core.sshCommand`, then `GIT_SSH`, then `ssh`
-/// (TSK-327 AC-3). `core.sshCommand` is read through
-/// [`crate::git::judging_command`], the process the query itself runs in, so
-/// a command-line overlay the query ignores cannot select it. The one
-/// selected command is passed on as `GIT_SSH_COMMAND`, which git prefers to
-/// every other selector, so no unselected transport runs. When the selection
+/// (TSK-327 AC-3). `core.sshCommand` is read as the push read it, through
+/// [`push_view`]: the files every git command reads, and the command-line
+/// configuration (`git -c`) git hands the hook, which the push connected
+/// with. The one selected command is passed on as `GIT_SSH_COMMAND`, which
+/// git prefers to every other selector, so no unselected transport runs and
+/// the query connects with the program the push used. When the selection
 /// cannot be read, the query refuses.
 ///
 /// OS text rule (issue 79): the command is executed, so it must be exactly what
@@ -818,7 +822,7 @@ fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
     // another program.
     let mut configured = from_env("GIT_SSH_COMMAND")?;
     if configured.is_none() {
-        let out = crate::git::judging_command()
+        let out = push_view()
             .arg("-C")
             .arg(root)
             .args(["config", "--null", "--get", "core.sshCommand"])
@@ -857,6 +861,77 @@ fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
     }
     let configured = configured.unwrap_or_else(|| "ssh".to_string());
     Ok(format!("{configured} -o BatchMode=yes"))
+}
+
+/// A `git` that reads configuration as the push did: a
+/// [`crate::git::judging_command`] given back the command-line configuration
+/// this process inherited (`git -c`, `--config-env`), which git hands the
+/// hook from the push. Only for reading settings the push connected with;
+/// the destination query itself never runs in this view, since a
+/// command-line rewrite was already applied to the URL the hook is given.
+fn push_view() -> std::process::Command {
+    let mut command = crate::git::judging_command();
+    for (key, setting) in std::env::vars_os() {
+        if crate::git::is_command_line_config(&key) {
+            command.env(key, setting);
+        }
+    }
+    command
+}
+
+/// The command-line setting the push connected with that the destination
+/// query does not apply and that could change how it connects: a key in the
+/// `http`, `protocol`, `remote`, `ssh` or `transfer` sections, or
+/// `core.gitProxy` (TSK-327). The query reads no command-line configuration
+/// except `core.sshCommand` (see [`batch_ssh_command`]), and a command-line
+/// rewrite has already been applied to the URL the hook is given, so under
+/// such a setting the query and the push could get different answers for
+/// the same URL. Read through git, which parses the command line.
+///
+/// # Errors
+///
+/// Returns why the command-line configuration could not be read.
+pub fn command_line_transport(root: &Path) -> Result<Option<String>, String> {
+    let out = push_view()
+        .arg("-C")
+        .arg(root)
+        .args(["config", "-z", "--list", "--show-scope"])
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("cannot read the command-line git configuration: {error}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "cannot read the command-line git configuration: git config failed ({})",
+            out.status
+        ));
+    }
+    Ok(transport_in(&out.stdout))
+}
+
+/// [`command_line_transport`] over `git config -z --list --show-scope`
+/// output: each entry is its scope and a NUL, then the key with a newline
+/// and its value, or the key alone, and a NUL. Keys are lowercase there.
+fn transport_in(listed: &[u8]) -> Option<String> {
+    const SECTIONS: [&[u8]; 5] = [b"http", b"protocol", b"remote", b"ssh", b"transfer"];
+    let mut fields = listed.split(|byte| *byte == 0);
+    while let (Some(scope), Some(entry)) = (fields.next(), fields.next()) {
+        if scope != b"command" {
+            continue;
+        }
+        let key = entry
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap_or_default();
+        let section = key.split(|byte| *byte == b'.').next().unwrap_or_default();
+        if SECTIONS.contains(&section) || key == b"core.gitproxy" {
+            // Shown only: the key is escaped and any userinfo in a URL
+            // subsection hidden.
+            let shown = crate::git::GitName::from_bytes(key).display().to_string();
+            return Some(format!("the command-line setting {}", display_urls(&shown)));
+        }
+    }
+    None
 }
 
 /// How long a helper may hold git's stderr open after git has exited before
@@ -1052,8 +1127,10 @@ mod tests {
     /// TSK-327 AC-3: the query runs only the transport git's precedence
     /// selects among `GIT_SSH_COMMAND`, `core.sshCommand` and `GIT_SSH`,
     /// for each one alone, each pair and all three, and plain `ssh` with
-    /// none. A `core.sshCommand` given only as a command-line overlay,
-    /// which the query itself never reads, selects nothing.
+    /// none. A `core.sshCommand` given as a command-line overlay is the
+    /// push's own, so it selects as git selects it, over the repository's.
+    /// One named only in the deprecated file that `git config` alone reads
+    /// selects nothing, since the push never read it.
     #[cfg(unix)]
     #[test]
     fn the_query_runs_only_the_selected_ssh_transport() {
@@ -1074,6 +1151,7 @@ mod tests {
             "rec-config",
             "rec-program",
             "rec-overlay",
+            "rec-file",
             "ssh",
         ] {
             let script = bin.join(name);
@@ -1088,19 +1166,26 @@ mod tests {
             &std::env::var_os("PATH").unwrap_or_default(),
         )))
         .unwrap();
-        // (GIT_SSH_COMMAND, core.sshCommand, GIT_SSH, overlay) and the one run.
-        let cases: [([bool; 4], &str); 9] = [
-            ([false, false, false, false], "ssh"),
-            ([true, false, false, false], "rec-command"),
-            ([false, true, false, false], "rec-config"),
-            ([false, false, true, false], "rec-program"),
-            ([true, true, false, false], "rec-command"),
-            ([true, false, true, false], "rec-command"),
-            ([false, true, true, false], "rec-config"),
-            ([true, true, true, false], "rec-command"),
-            ([false, false, false, true], "ssh"),
+        let file = dir.path().join("deprecated-file");
+        std::fs::write(&file, "[core]\n\tsshCommand = rec-file\n").unwrap();
+        // (GIT_SSH_COMMAND, core.sshCommand, GIT_SSH, overlay, deprecated
+        // file) and the one run.
+        let cases: [([bool; 5], &str); 13] = [
+            ([false, false, false, false, false], "ssh"),
+            ([true, false, false, false, false], "rec-command"),
+            ([false, true, false, false, false], "rec-config"),
+            ([false, false, true, false, false], "rec-program"),
+            ([true, true, false, false, false], "rec-command"),
+            ([true, false, true, false, false], "rec-command"),
+            ([false, true, true, false, false], "rec-config"),
+            ([true, true, true, false, false], "rec-command"),
+            ([false, false, false, true, false], "rec-overlay"),
+            ([false, true, false, true, false], "rec-overlay"),
+            ([true, false, false, true, false], "rec-command"),
+            ([false, false, false, false, true], "ssh"),
+            ([false, true, false, false, true], "rec-config"),
         ];
-        for ([command, config, program, overlay], expected) in cases {
+        for ([command, config, program, overlay, deprecated], expected) in cases {
             let root = tempfile::tempdir().unwrap();
             let repo = git2::Repository::init(root.path()).unwrap();
             if config {
@@ -1136,6 +1221,9 @@ mod tests {
             if overlay {
                 child.env("GIT_CONFIG_PARAMETERS", "'core.sshCommand=rec-overlay'");
             }
+            if deprecated {
+                child.env("GIT_CONFIG", &file);
+            }
             let out = child.output().unwrap();
             assert!(
                 out.status.success(),
@@ -1149,7 +1237,7 @@ mod tests {
                 ran,
                 std::collections::BTreeSet::from([expected]),
                 "case {:?}",
-                (command, config, program, overlay)
+                (command, config, program, overlay, deprecated)
             );
         }
     }
@@ -1166,7 +1254,7 @@ mod tests {
             (vec!["url./srv/decoy.git.insteadof\n/srv/dest.git"], true),
             (vec!["url.x.insteadof"], true),
             (vec!["remote./srv/dest.git.uploadpack\nevil"], true),
-            (vec!["url./srv/decoy.git.insteadof\n"], false),
+            (vec!["url./srv/decoy.git.insteadof\n"], true),
             (vec!["url./srv/decoy.git.insteadof\n/srv/other"], false),
             (
                 vec!["url./srv/decoy.git.pushinsteadof\n/srv/dest.git"],
@@ -1183,6 +1271,45 @@ mod tests {
         ] {
             assert_eq!(
                 overlay_in(&listed(&entries), url).is_some(),
+                named,
+                "{entries:?}"
+            );
+        }
+    }
+
+    /// TSK-327: a command-line setting that could change how the query
+    /// connects is named; other command-line settings and every file scope
+    /// are not.
+    #[test]
+    fn a_command_line_transport_setting_is_named() {
+        let listed = |entries: &[&str]| entries.join("\0").into_bytes();
+        for (entries, named) in [
+            (vec!["command", "http.proxy\nhttp://proxy.invalid"], true),
+            (
+                vec!["command", "http.https://h.invalid/.extraheader\nx"],
+                true,
+            ),
+            (vec!["command", "protocol.allow\nalways"], true),
+            (vec!["command", "remote.origin.uploadpack\nx"], true),
+            (vec!["command", "ssh.variant\nsimple"], true),
+            (vec!["command", "transfer.fsckobjects"], true),
+            (vec!["command", "core.gitproxy\nx"], true),
+            (
+                vec![
+                    "command",
+                    "maintenance.auto\nfalse",
+                    "command",
+                    "gc.auto\n0",
+                ],
+                false,
+            ),
+            (vec!["command", "core.sshcommand\nx"], false),
+            (vec!["command", "url./srv/a.insteadof\n/srv/b"], false),
+            (vec!["local", "http.proxy\nhttp://proxy.invalid"], false),
+            (vec!["global", "remote.origin.url\n/srv/a"], false),
+        ] {
+            assert_eq!(
+                transport_in(&listed(&entries)).is_some(),
                 named,
                 "{entries:?}"
             );
@@ -1223,6 +1350,8 @@ mod tests {
         let refused = require_unredirected(clean.path(), "dest").unwrap_err();
         assert!(refused.contains("remotes/dest"), "{refused}");
         assert!(require_unredirected(clean.path(), "./dest").is_ok());
+        let refused = require_unredirected(clean.path(), "--upload-pack=x").unwrap_err();
+        assert!(refused.contains("starts with '-'"), "{refused}");
     }
 
     #[test]
