@@ -54,7 +54,7 @@
         "worker_budget": {
           "type": "integer",
           "minimum": 1,
-          "description": "Workers one run allocates across its concurrent heavy targets, capped at the host job budget. Omitted, a run uses the host budget."
+          "description": "Workers one run allocates across its concurrent heavy targets. Used as set, with a warning above a budget computed from memory; a host_jobs value the project sets bounds it. Omitted, a run uses the host budget."
         },
         "quick_default_class": {
           "type": "string",
