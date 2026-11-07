@@ -5295,3 +5295,62 @@ fn resolve_relative(from: &str, specifier: &str) -> String {
     }
     parts.join("/")
 }
+
+/// Fixtures whose managed runtime differs from its recorded pristine hash on
+/// purpose: each case is about that drift.
+const DOCS_PORTAL_DELIBERATE_DRIFT: &[(&str, &str)] = &[
+    ("docs-portal-preserves-runtime-drift", "runtime.js"),
+    ("docs-portal-explicit-runtime-transfer", "runtime.js"),
+    ("docs-portal-retained-project-ownership", "runtime.js"),
+    ("docs-portal-legacy-integrity-recovery", "runtime.js"),
+];
+
+/// A docs-portal fixture's integrity record matches the files it ships, so a
+/// fixture edit cannot leave a case starting from a drift it does not state.
+#[test]
+fn docs_portal_fixture_integrity_records_match_their_files() {
+    use sha2::{Digest, Sha256};
+    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
+    let mut checked = 0;
+    let mut drifted = BTreeSet::new();
+    for fixture in fixtures["fixtures"].as_array().expect("fixtures") {
+        let id = fixture["id"].as_str().expect("fixture id");
+        let files = &fixture["files"];
+        let Some(record) = files[".codeflow/docs-portal.json"].as_str() else {
+            continue;
+        };
+        let record: Value = serde_json::from_str(record)
+            .unwrap_or_else(|error| panic!("{id}: parse docs-portal.json: {error}"));
+        let root = record["root"].as_str().expect("portal root");
+        let Some(entries) = record["files"].as_object() else {
+            continue;
+        };
+        for (name, entry) in entries {
+            let Some(pristine) = entry["pristine_sha256"].as_str() else {
+                continue;
+            };
+            let Some(body) = files[format!("{root}/{name}")].as_str() else {
+                continue;
+            };
+            let actual: String = Sha256::digest(body.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            if actual == pristine {
+                checked += 1;
+            } else {
+                assert!(
+                    DOCS_PORTAL_DELIBERATE_DRIFT.contains(&(id, name.as_str())),
+                    "{id}: {root}/{name} hashes to {actual}, but its record says {pristine}"
+                );
+                drifted.insert((id.to_owned(), name.clone()));
+            }
+        }
+    }
+    assert!(checked > 0, "no docs-portal integrity record was checked");
+    let expected: BTreeSet<_> = DOCS_PORTAL_DELIBERATE_DRIFT
+        .iter()
+        .map(|(id, name)| ((*id).to_owned(), (*name).to_owned()))
+        .collect();
+    assert_eq!(drifted, expected, "a deliberate drift no longer drifts");
+}
