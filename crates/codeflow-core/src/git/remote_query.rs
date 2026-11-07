@@ -311,7 +311,7 @@ fn destination_overlay(root: &Path, url: &str) -> Result<Option<String>, String>
             out.status
         ));
     }
-    if let Some(overlay) = overlay_in(&out.stdout, url.as_bytes()) {
+    if let Some(overlay) = overlay_in(&out.stdout, url) {
         return Ok(Some(overlay));
     }
     legacy_remote_file(root, url)
@@ -321,7 +321,7 @@ fn destination_overlay(root: &Path, url: &str) -> Result<Option<String>, String>
 /// in NUL, and a key is followed by a newline and its value, or by nothing
 /// for a key with no value. Section and variable names are lowercase there;
 /// a subsection keeps its case, as git compares it.
-fn overlay_in(listed: &[u8], url: &[u8]) -> Option<String> {
+fn overlay_in(listed: &[u8], url: &str) -> Option<String> {
     for entry in listed.split(|byte| *byte == 0) {
         if entry.is_empty() {
             continue;
@@ -337,11 +337,14 @@ fn overlay_in(listed: &[u8], url: &[u8]) -> Option<String> {
             // Git refuses a valueless rewrite when it reads remotes, so the
             // query would not run as asked either. An empty value never
             // matches: git takes only a longer prefix than none.
-            let rewrites = value.is_none_or(|prefix| !prefix.is_empty() && url.starts_with(prefix));
+            let rewrites =
+                value.is_none_or(|prefix| !prefix.is_empty() && url.as_bytes().starts_with(prefix));
             if rewrites {
+                // Shown only: the base is escaped and any userinfo hidden.
+                let shown = crate::git::GitName::from_bytes(base).display().to_string();
                 return Some(format!(
                     "the setting url.{}.insteadOf",
-                    display_urls(&String::from_utf8_lossy(base))
+                    display_urls(&shown)
                 ));
             }
         }
@@ -350,10 +353,10 @@ fn overlay_in(listed: &[u8], url: &[u8]) -> Option<String> {
                 .iter()
                 .rposition(|byte| *byte == b'.')
                 .map(|dot| &rest[..dot]);
-            if subsection == Some(url) {
+            if subsection == Some(url.as_bytes()) {
                 return Some(format!(
                     "a remote configured under the name {}",
-                    display_url(&String::from_utf8_lossy(url))
+                    display_url(url)
                 ));
             }
         }
@@ -373,14 +376,16 @@ fn legacy_remote_file(root: &Path, url: &str) -> Result<Option<String>, String> 
         .map_err(|error| format!("cannot open the repository: {}", error.message()))?;
     for folder in ["remotes", "branches"] {
         let file = repo.commondir().join(folder).join(url);
-        match std::fs::symlink_metadata(&file) {
-            Ok(_) => {
+        // Absent only when proven through its ancestors; anything else that
+        // stops the read refuses, since git might read the file.
+        match crate::absence::symlink_metadata_optional(&file) {
+            Ok(None) => {}
+            Ok(Some(_)) => {
                 return Ok(Some(format!(
                     "the legacy remote file {folder}/{}",
                     display_url(url)
                 )))
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 return Err(format!(
                     "cannot read the legacy remote file {folder}/{}: {error}",
@@ -1154,7 +1159,7 @@ mod tests {
     /// and a remote under another name are not.
     #[test]
     fn a_redirecting_setting_is_named_and_others_are_not() {
-        let url = b"/srv/dest.git";
+        let url = "/srv/dest.git";
         let listed = |entries: &[&str]| entries.join("\0").into_bytes();
         for (entries, named) in [
             (vec!["url./srv/decoy.git.insteadof\n/srv/dest"], true),
