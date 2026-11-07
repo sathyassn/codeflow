@@ -1,0 +1,11 @@
+id = "TSK-1377"
+uid = "7e6182b1-9e91-4c31-84a7-9b811e8890f9"
+kind = "TSK"
+title = "Coordinating sessions message on events, batch under the harness ceiling and fan out one level"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-07T17:47:55Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
