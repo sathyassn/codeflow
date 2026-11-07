@@ -1231,17 +1231,17 @@ and reports B and C as not applied.
 
 1. TSK-336 reaches the default branch through the line's reviewed pull
    request, under the existing rules.
-2. From that merge, the old names (`commit standards`, `secret scan`,
-   `release impact`) have no producer, so every pull request into the
-   default branch and the lines is blocked by the rulesets that still
-   require them. This fails closed by design.
+2. The names existing rulesets require keep their producers: the policy
+   verdict job is still named `commit standards` (TSK-1368), `secret scan`
+   is the head-built CI job and `release impact` is posted by
+   `codeflow-release.yml`. A ruleset that already requires them stays
+   satisfiable.
 3. In the same session, an administrator runs `codeflow remote protect`
    (with `--check-app <id>` in Mode A, and `--lines` for the line pattern),
    which writes A, B and C.
-4. The administrator retires, on the host, every foreign ruleset that
-   requires an old name. In this repository those are 24379074 (`main`)
-   and 25435656 (`integration/**`). `codeflow doctor --check
-   remote-perimeter` names each one, and is green only after.
+4. A foreign ruleset that requires only those names does not need to be
+   retired for them. In this repository 24379074 (`main`) and 25435656
+   (`integration/**`) require `commit standards` and stay in place.
 
 ### Mode A setup (operator)
 
