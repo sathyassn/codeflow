@@ -448,10 +448,12 @@ the base and waits for the fresh run first.
 It never writes a ruleset with another name, and an update never lowers an
 approval count, removes a rule or widens a bypass list; reducing a rule is
 an administrator's edit on the host. It refuses the checks rulesets until
-the default branch's `codeflow-policy.yml` declares the `trusted:` names,
-then the operator retires any older ruleset that requires the old names
-(`commit standards`, `secret scan`, `release impact`), which `doctor`
-names. The Mode A App and environment setup, the enablement order and the
+the default branch's `codeflow-policy.yml` declares the trusted verdicts
+(`commit standards`, and `trusted: release impact` where it declares it).
+An older ruleset that requires `commit standards` or `secret scan` can stay,
+since the shipped workflows still produce both. `doctor` names any ruleset
+that requires a name no workflow on the default branch produces; retire
+that one on the host. The Mode A App and environment setup, the enablement order and the
 recovery window are in the policy reference's "Remote protection" section.
 
 ## Optional external add-ons
