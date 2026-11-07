@@ -1065,7 +1065,7 @@ static GENERATED: std::sync::LazyLock<Vec<KeySpec>> = std::sync::LazyLock::new(|
             notes: leak(format!(
                 "Class: {}. {}. The shipped policy file does not list it, so an older binary \
                  never meets the key.",
-                limit.class.name(),
+                limit.class.label(),
                 limit.reason.trim_end_matches('.')
             )),
         });

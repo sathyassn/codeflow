@@ -53,7 +53,7 @@ pub enum LimitClass {
 impl LimitClass {
     /// The class as the limits page names it.
     #[must_use]
-    pub const fn name(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Operational => "operational",
             Self::Security => "security",
@@ -82,7 +82,7 @@ pub enum Route {
 impl Route {
     /// Where to set the limit, as the limits page names it.
     #[must_use]
-    pub const fn name(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Policy => "`.codeflow/policy.json`",
             Self::TestConfig => "test configuration",

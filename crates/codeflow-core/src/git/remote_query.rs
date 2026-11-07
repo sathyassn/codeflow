@@ -361,8 +361,7 @@ pub fn output_within(
     let drain = |mut stream: Box<dyn std::io::Read + Send>| {
         std::thread::spawn(move || {
             let mut bytes = Vec::new();
-            let _ = stream.read_to_end(&mut bytes);
-            bytes
+            stream.read_to_end(&mut bytes).map(|_| bytes)
         })
     };
     let stdout = child.stdout.take().map(|out| drain(Box::new(out)));
@@ -378,15 +377,20 @@ pub fn output_within(
         }
         std::thread::sleep(codeflow_limits::POLL_WAIT_MILLIS.wait());
     };
-    let collect = |reader: Option<std::thread::JoinHandle<Vec<u8>>>| {
-        reader
-            .and_then(|reader| reader.join().ok())
-            .unwrap_or_default()
+    let collect = |reader: Option<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>| {
+        reader.map_or_else(
+            || Ok(Vec::new()),
+            |reader| {
+                reader
+                    .join()
+                    .map_err(|_| std::io::Error::other("the output reader stopped"))?
+            },
+        )
     };
     Ok(Some(std::process::Output {
         status,
-        stdout: collect(stdout),
-        stderr: collect(stderr),
+        stdout: collect(stdout)?,
+        stderr: collect(stderr)?,
     }))
 }
 

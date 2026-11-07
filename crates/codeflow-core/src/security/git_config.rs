@@ -816,7 +816,9 @@ mod tests {
         .unwrap();
         env.insert("GIT_CONFIG_GLOBAL".into(), global.to_str().unwrap().into());
         let start = Instant::now();
-        assert!(read(dir.path(), &[], &env).unwrap_err().contains("4 MiB"));
+        assert!(read(dir.path(), &[], &env)
+            .unwrap_err()
+            .contains("4194304 bytes"));
         assert!(start.elapsed() < Duration::from_secs(5));
     }
 

@@ -15,7 +15,6 @@
       "enabled": true,
       "cwd": "services/api",
       "runner": "go",
-      "timeout_seconds": 600,
       "modes": {
         "essential": {
           "command": "go test ./..."
@@ -33,14 +32,14 @@
             "minimum": 85
           }
         ]
-      }
+      },
+      "timeout_seconds": 600
     },
     {
       "name": "web-node",
       "enabled": true,
       "cwd": "apps/web",
       "runner": "vitest",
-      "timeout_seconds": 600,
       "modes": {
         "essential": {
           "command": "pnpm test --run"
@@ -58,14 +57,14 @@
             "minimum": 85
           }
         ]
-      }
+      },
+      "timeout_seconds": 600
     },
     {
       "name": "tools-python",
       "enabled": true,
       "cwd": "tools",
       "runner": "pytest",
-      "timeout_seconds": 600,
       "modes": {
         "essential": {
           "command": "pytest -q"
@@ -83,7 +82,8 @@
             "minimum": 85
           }
         ]
-      }
+      },
+      "timeout_seconds": 600
     }
   ]
 }

@@ -14,7 +14,6 @@
       "name": "app",
       "enabled": true,
       "runner": "custom",
-      "timeout_seconds": 600,
       "modes": {
         "essential": {
           "command": "bash scripts/run-tests.sh essential"
@@ -22,7 +21,8 @@
         "full": {
           "command": "bash scripts/run-tests.sh full"
         }
-      }
+      },
+      "timeout_seconds": 600
     }
   ]
 }
