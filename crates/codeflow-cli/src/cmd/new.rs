@@ -290,6 +290,12 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
                     ", local only (no origin remote)"
                 }
             );
+            if !branch.omitted_words.is_empty() {
+                println!(
+                    "  {}",
+                    light_paths::omitted_words_note(&branch.omitted_words)
+                );
+            }
             0
         }
         Err(error) => {

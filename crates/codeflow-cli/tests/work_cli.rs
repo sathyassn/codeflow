@@ -1,6 +1,11 @@
 //! Real CLI coverage of reviewed stacks and standalone claims.
+#[path = "work_cli/live_base.rs"]
+mod live_base;
 use std::path::Path;
 use std::process::{Command, Output};
+
+#[cfg(unix)]
+use codeflow_core::workgraph::work_start::REVIEW_LOOKUP_TIMEOUT;
 
 fn git(root: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -46,7 +51,11 @@ fn fixture() -> tempfile::TempDir {
     dir
 }
 fn cli(root: &Path, args: &[&str], bin: Option<&Path>) -> Output {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+    // Run the same regression fixtures against a released baseline when
+    // collecting fail-before evidence. Production code never reads this.
+    let binary = std::env::var_os("CODEFLOW_TEST_BINARY")
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_codeflow").into());
+    let mut cmd = Command::new(binary);
     cmd.current_dir(root)
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -212,6 +221,88 @@ fn claim_renames_branch_holding_new_standalone_record() {
     succeeds(&cli(root, &["work", "start", "TSK-003"], None));
 }
 
+/// Commit a ready task with this title on the fixture's `main`.
+fn titled_task(root: &Path, id: &str, title: &str) {
+    write(
+        root,
+        &format!("project-management/tasks/{id}.md"),
+        &record(id, "[]").replace(&format!("title: work {id}"), &format!("title: {title}")),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: plan a task"]);
+}
+
+/// The name that a sandbox left unreadable on 2026-11-03: the claim leaves
+/// the word out and says so, then the task starts on the shortened branch.
+#[test]
+fn claim_leaves_a_sandbox_denied_word_out_of_the_branch_name_and_says_so() {
+    let dir = fixture();
+    let root = dir.path();
+    titled_task(
+        root,
+        "TSK-003",
+        "Deleting a configured secret store is refused",
+    );
+    let out = cli(root, &["work", "claim", "TSK-003"], None);
+    succeeds(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("task/TSK-003-deleting-a-configured-store-is-refused"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("left \"secret\" out of the branch name"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("git.branch_name_omit_words"), "{stdout}");
+    git(
+        root,
+        &[
+            "switch",
+            "-q",
+            "task/TSK-003-deleting-a-configured-store-is-refused",
+        ],
+    );
+    succeeds(&cli(root, &["work", "start", "TSK-003"], None));
+}
+
+/// A title with no listed word gets its full name and no note.
+#[test]
+fn claim_says_nothing_when_it_left_nothing_out() {
+    let dir = fixture();
+    let root = dir.path();
+    titled_task(root, "TSK-003", "A credential token store");
+    let out = cli(root, &["work", "claim", "TSK-003"], None);
+    succeeds(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("task/TSK-003-a-credential-token-store"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("out of the branch name"), "{stdout}");
+}
+
+/// The list belongs to the project: its own words replace the default.
+#[test]
+fn claim_follows_the_project_word_list() {
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        ".codeflow/policy.json",
+        r#"{"git":{"branch_name_omit_words":["vault"]}}"#,
+    );
+    titled_task(root, "TSK-003", "Rotate the secret vault");
+    let out = cli(root, &["work", "claim", "TSK-003"], None);
+    succeeds(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("task/TSK-003-rotate-the-secret"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("left \"vault\" out"), "{stdout}");
+}
+
 #[test]
 #[cfg(unix)]
 fn review_lookup_binds_repository_and_bounds_descendant_stdout() {
@@ -263,6 +354,199 @@ fn review_lookup_binds_repository_and_bounds_descendant_stdout() {
         started.elapsed() < std::time::Duration::from_secs(7),
         "lookup exceeded its deadline"
     );
+}
+
+// These fixtures call the real CLI; only the hosted review transport is fake.
+#[cfg(unix)]
+fn pinned_review_fixture(level: &str) -> (tempfile::TempDir, tempfile::TempDir, String) {
+    let dir = fixture();
+    let root = dir.path();
+    let bin = tempfile::tempdir().unwrap();
+    write(
+        root,
+        ".codeflow/policy.json",
+        &format!(r#"{{"git": {{"work_planning": "{level}"}}}}"#),
+    );
+    git(root, &["add", ".codeflow/policy.json"]);
+    git(root, &["commit", "-qm", "chore: set planning policy"]);
+    let branch = "task/TSK-001-work";
+    git(
+        root,
+        &[
+            "config",
+            "remote.review.url",
+            "https://github.com/owner/project.git",
+        ],
+    );
+    git(
+        root,
+        &["config", &format!("branch.{branch}.remote"), "review"],
+    );
+    git(root, &["switch", "-qc", branch]);
+    let pin = git(root, &["rev-parse", "HEAD"]);
+    review_tool(bin.path(), branch, &pin, true);
+    git(root, &["switch", "-q", "main"]);
+    (dir, bin, pin)
+}
+
+#[test]
+#[cfg(unix)]
+fn a_slow_review_provider_allows_pinned_claim_and_start() {
+    for level in ["block", "warn"] {
+        slow_review_provider(level);
+    }
+}
+
+#[cfg(unix)]
+fn slow_review_provider(level: &str) {
+    use std::time::{Duration, Instant};
+    let (dir, bin, pin) = pinned_review_fixture(level);
+    let root = dir.path();
+    let script = bin.path().join("gh");
+    let original = std::fs::read_to_string(&script).unwrap();
+    // Six seconds exceeds the old five-second limit. Count invocations so
+    // a retry cannot silently turn this successful slow call into two calls.
+    std::fs::write(
+        &script,
+        original.replace("cat <<", "echo call >> \"$0.calls\"\nsleep 6\ncat <<"),
+    )
+    .unwrap();
+    let on = format!("TSK-001@{pin}");
+    for command in ["claim", "start"] {
+        let started = Instant::now();
+        succeeds(&cli(
+            root,
+            &["work", command, "TSK-002", "--on", &on],
+            Some(bin.path()),
+        ));
+        let elapsed = started.elapsed();
+        assert!(elapsed >= Duration::from_secs(6), "{elapsed:?}");
+        // Five seconds of scheduling/cleanup tolerance beyond the product
+        // deadline; this is a test ceiling, not a longer provider deadline.
+        assert!(elapsed < Duration::from_secs(20), "{elapsed:?}");
+        if command == "claim" {
+            git(root, &["switch", "-q", "task/TSK-002-work-tsk-002"]);
+            assert_eq!(git(root, &["rev-parse", "HEAD"]), pin);
+        }
+    }
+    assert_eq!(
+        std::fs::read_to_string(bin.path().join("gh.calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        2,
+        "each lookup must make only one attempt"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn failed_review_providers_refuse_pins_without_mutating_the_branch() {
+    for level in ["block", "warn"] {
+        failed_review_providers(level);
+    }
+}
+
+#[cfg(unix)]
+fn failed_review_providers(level: &str) {
+    use std::time::{Duration, Instant};
+    let (dir, bin, pin) = pinned_review_fixture(level);
+    let root = dir.path();
+    let script = bin.path().join("gh");
+    let on = format!("TSK-001@{pin}");
+    let child = "task/TSK-002-work-tsk-002";
+    let timeout_reason = format!(
+        "provider timed out after {} seconds",
+        REVIEW_LOOKUP_TIMEOUT.as_secs()
+    );
+    for (provider, reason, hangs) in [
+        ("exit 1", "provider failed", false),
+        (
+            "printf 'not json'",
+            "cannot parse predecessor review",
+            false,
+        ),
+        (
+            "dd if=/dev/zero bs=1048577 count=1 2>/dev/null",
+            "cannot verify review for this pin: review response too large",
+            false,
+        ),
+        ("sleep 60", timeout_reason.as_str(), true),
+    ] {
+        std::fs::write(&script, format!("#!/bin/sh\n{provider}\n")).unwrap();
+        for command in ["claim", "start"] {
+            if command == "start" {
+                git(root, &["switch", "-qc", child, &pin]);
+            }
+            let before = git(root, &["rev-parse", "HEAD"]);
+            let branch = git(root, &["branch", "--show-current"]);
+            let started = Instant::now();
+            let out = cli(
+                root,
+                &["work", command, "TSK-002", "--on", &on],
+                Some(bin.path()),
+            );
+            let elapsed = started.elapsed();
+            assert!(!out.status.success(), "{command} admitted {provider}");
+            let error = String::from_utf8_lossy(&out.stderr);
+            assert!(error.contains(reason), "{command}: {error}");
+            if hangs {
+                assert!(elapsed >= REVIEW_LOOKUP_TIMEOUT, "{elapsed:?}");
+                // Include startup, Git checks and cleanup on a loaded host.
+                assert!(elapsed < Duration::from_secs(30), "{elapsed:?}");
+            } else {
+                assert!(elapsed < Duration::from_secs(20), "{elapsed:?}");
+            }
+            assert_eq!(git(root, &["rev-parse", "HEAD"]), before);
+            assert_eq!(git(root, &["branch", "--show-current"]), branch);
+            if command == "claim" {
+                assert!(git(root, &["branch", "--list", child]).is_empty());
+            } else {
+                git(root, &["switch", "-q", "main"]);
+                git(root, &["branch", "-D", child]);
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn an_unverifiable_pin_refuses_warn_start() {
+    let (dir, bin, pin) = pinned_review_fixture("warn");
+    let root = dir.path();
+    git(root, &["switch", "-qc", "task/TSK-002-work-tsk-002", &pin]);
+    std::fs::write(bin.path().join("gh"), "#!/bin/sh\nexit 1\n").unwrap();
+    let out = cli(
+        root,
+        &[
+            "work",
+            "start",
+            "TSK-002",
+            "--on",
+            &format!("TSK-001@{pin}"),
+        ],
+        Some(bin.path()),
+    );
+    let error = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{error}");
+    assert!(error.contains("provider failed"), "{error}");
+    assert!(!error.contains("continuing"), "{error}");
+}
+
+#[test]
+#[cfg(unix)]
+fn ordinary_planning_findings_keep_their_policy_level() {
+    for level in ["block", "warn"] {
+        let (dir, _, _) = pinned_review_fixture(level);
+        let out = cli(dir.path(), &["work", "start", "TSK-002"], None);
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(i32::from(level == "block")),
+            "{error}"
+        );
+        assert_eq!(error.contains("continuing"), level == "warn", "{error}");
+    }
 }
 
 #[test]
@@ -2759,4 +3043,98 @@ fn a_claim_that_cannot_write_the_config_renames_nothing() {
     assert!(text(&out).contains("nothing was renamed"), "{}", text(&out));
     assert_eq!(git(root, &["branch", "--show-current"]), "fix/standalone");
     assert!(git(root, &["branch", "--list", "task/TSK-003*"]).is_empty());
+}
+
+/// TSK-1308 AC-4: `work remove-candidate` prints the proof, removes the
+/// candidate whose tree the line landed by another commit, and records it in
+/// the ledger. `gh` answers no open pull request; a `gh` that fails refuses.
+#[test]
+#[cfg(unix)]
+fn remove_candidate_prints_the_proof_and_records_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = fixture();
+    let root = dir.path();
+    let _origin = with_origin(root);
+    git(root, &["switch", "-q", "-c", "feature"]);
+    write(root, "src/a.rs", "pub fn a() {}\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: a"]);
+    git(root, &["switch", "-q", "-c", "candidate/c1", "main"]);
+    git(
+        root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "chore(merge): candidate",
+            "feature",
+        ],
+    );
+    git(root, &["switch", "-q", "-c", "landing", "main"]);
+    git(
+        root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "Merge pull request #1",
+            "feature",
+        ],
+    );
+    git(root, &["push", "-q", "origin", "landing:integration/x"]);
+    let landed = git(root, &["rev-parse", "landing"]);
+    git(root, &["switch", "-q", "main"]);
+    let tip = git(root, &["rev-parse", "candidate/c1"]);
+    let bin = tempfile::tempdir().unwrap();
+    write(
+        bin.path(),
+        "gh",
+        "#!/bin/sh\necho 'not signed in' >&2\nexit 1\n",
+    );
+    std::fs::set_permissions(
+        bin.path().join("gh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let args = [
+        "work",
+        "remove-candidate",
+        "candidate/c1",
+        "--line",
+        "integration/x",
+    ];
+    let out = cli(root, &args, Some(bin.path()));
+    assert!(!out.status.success());
+    assert!(
+        text(&out).contains("cannot tell whether `candidate/c1` has an open pull request"),
+        "{}",
+        text(&out)
+    );
+    write(bin.path(), "gh", "#!/bin/sh\necho '[]'\n");
+    let out = cli(root, &args, Some(bin.path()));
+    succeeds(&out);
+    let shown = text(&out);
+    assert!(
+        shown.contains(&format!(
+            "work remove-candidate: removed candidate/c1 (tip {tip})"
+        )),
+        "{shown}"
+    );
+    assert!(
+        shown.contains(&format!(
+            "of {landed} on the first-parent history of origin/integration/x"
+        )),
+        "{shown}"
+    );
+    assert!(git(root, &["branch", "--list", "candidate/c1"]).is_empty());
+    let ledger = std::fs::read_to_string(
+        root.join(".git/codeflow/ledger/memory-events/memory-events.jsonl"),
+    )
+    .unwrap();
+    let event: serde_json::Value = serde_json::from_str(ledger.lines().last().unwrap()).unwrap();
+    assert_eq!(event["event"], "candidate_removed");
+    assert_eq!(event["tip"], tip);
+    assert_eq!(event["line_commit"], landed);
 }

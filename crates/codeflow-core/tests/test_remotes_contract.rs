@@ -25,9 +25,9 @@
 //! - it is bound to a name by `const`, `static` or `let`, because a bound URL
 //!   can be handed to any registering call from anywhere.
 //!
-//! [`ALLOWED`] binds each reviewed exception to its file, host and exact
-//! count of occurrences, so a new registration anywhere else fails, and an
-//! entry that no longer matches fails too.
+//! [`ALLOWED`] binds each reviewed exception to its file and host, with any
+//! number of occurrences, so a new registration in another file or on another
+//! host fails, and an entry that no longer matches fails too.
 //!
 //! A `git config remote.<name>.url <URL>` (or `.pushurl`) argument list is a
 //! registration too, and a literal `remote.<name>.url=<URL>` is read as the
@@ -47,79 +47,68 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// `(file under crates/, host, occurrences, reason)`: a network remote that
-/// is reviewed and allowed. The count is exact.
-const ALLOWED: &[(&str, &str, usize, &str)] = &[
+/// `(file under crates/, host, reason)`: a network remote that is reviewed
+/// and allowed, in any number of occurrences. A new file or a new host needs
+/// its own entry; an entry that matches nothing fails until it is removed.
+const ALLOWED: &[(&str, &str, &str)] = &[
     (
         "codeflow-cli/tests/acceptance_cli.rs",
         "example.invalid",
-        1,
         "the transport is the subject: git runs a stub ssh command, so the host is never looked up",
     ),
     (
         "codeflow-cli/tests/ci_cli/destination.rs",
         "upstream.invalid",
-        1,
         "the configured upstream is only shown in the destination message; the logging-proxy run of this module saw no request",
     ),
     (
         "codeflow-cli/tests/ci_cli/destination.rs",
         "example.test",
-        1,
         "the transport is the subject: git runs a stub ssh command, so the host is never looked up",
     ),
     (
         "codeflow-core/src/doctor/remote_perimeter.rs",
         "github.com",
-        1,
         "a unit test that classifies a URL's host name; it asks no remote",
     ),
     (
         "codeflow-core/src/doctor/remote_perimeter.rs",
         "gitlab.com",
-        1,
         "a unit test that classifies a URL's host name; it asks no remote",
     ),
     (
         "codeflow-core/src/hooks/ref_authority.rs",
         "example.invalid",
-        1,
         "the default URL of a fixture whose tests read configuration only; the logging-proxy run of this module saw no request",
     ),
     (
         "codeflow-core/src/ids/git.rs",
         "host.invalid",
-        1,
         "text for a redaction test; it is never given to a transport",
     ),
     (
         "codeflow-core/src/hooks/gitleaks.rs",
         "github.com",
-        1,
         "production constant naming the gitleaks release page, not a test remote",
     ),
     (
         "codeflow-core/src/scaffold/release_pin.rs",
         "github.com",
-        1,
         "production constant naming the release download base, not a test remote",
     ),
     (
         "codeflow-core/tests/model_eval_contract.rs",
         "github.com",
-        1,
         "text of a pull request link in a redaction assertion; never given to a transport",
     ),
     (
         "codeflow-cli/tests/work_cli.rs",
         "github.com",
-        10,
         "ten `git config remote.<name>.url` writes that only name a GitHub project for the work-start check; the logging-proxy run of this binary saw no request",
     ),
     (
         "codeflow-core/tests/wp7_contract.rs",
         "github.com",
-        2,
         "remote URLs that only name a GitHub project for the work-start check; the proxy run of this binary saw no request",
     ),
 ];
@@ -484,28 +473,24 @@ fn scan_text(text: &str) -> Vec<(usize, String, &'static str)> {
 /// The violations among `found` (`file -> host -> count`) against `allowed`.
 fn judge(
     found: &BTreeMap<String, BTreeMap<String, usize>>,
-    allowed: &[(&str, &str, usize, &str)],
+    allowed: &[(&str, &str, &str)],
 ) -> Vec<String> {
     let mut violations = Vec::new();
     for (file, hosts) in found {
         for (host, count) in hosts {
-            let entry = allowed
+            let listed = allowed
                 .iter()
-                .find(|entry| entry.0 == file && entry.1 == host);
-            match entry {
-                None => violations.push(format!("{file}: {count} remote(s) on {host}")),
-                Some((_, _, expected, _)) if expected != count => violations.push(format!(
-                    "{file}: {count} remote(s) on {host}, but ALLOWED expects {expected}"
-                )),
-                Some(_) => {}
+                .any(|entry| entry.0 == file && entry.1 == host);
+            if !listed {
+                violations.push(format!("{file}: {count} remote(s) on {host}"));
             }
         }
     }
-    for (path, host, expected, _) in allowed {
+    for (path, host, _) in allowed {
         let seen = found.get(*path).and_then(|hosts| hosts.get(*host)).copied();
         if seen.is_none() {
             violations.push(format!(
-                "ALLOWED entry for {path} on {host} (expects {expected}) matches nothing; remove it"
+                "ALLOWED entry for {path} on {host} matches nothing; remove it"
             ));
         }
     }
@@ -677,7 +662,7 @@ fn no_test_registers_a_remote_on_the_network() {
         violations.is_empty(),
         "a test registers a remote on the network, which a Codex builder seat blocks and aborts on; \
          use a file:// remote (for example file:///nonexistent/repo.git) or a loopback address, or \
-         add the exact file, host and count to ALLOWED with the reason it is never contacted:\n{}",
+         add the file and host to ALLOWED with the reason it is never contacted:\n{}",
         violations.join("\n")
     );
 }
@@ -787,14 +772,13 @@ fn the_lint_leaves_alone_what_is_not_a_network_remote() {
 }
 
 #[test]
-fn an_allowance_is_bound_to_its_file_host_and_count() {
+fn an_allowance_is_bound_to_its_file_and_host() {
     let mut found: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     found
         .entry("crate/tests/listed.rs".into())
         .or_default()
         .insert("github.com".into(), 2);
-    let allowed: &[(&str, &str, usize, &str)] =
-        &[("crate/tests/listed.rs", "github.com", 2, "reviewed")];
+    let allowed: &[(&str, &str, &str)] = &[("crate/tests/listed.rs", "github.com", "reviewed")];
     assert!(judge(&found, allowed).is_empty());
     // A new GitHub registration in another file is not covered.
     found
@@ -802,12 +786,18 @@ fn an_allowance_is_bound_to_its_file_host_and_count() {
         .or_default()
         .insert("github.com".into(), 1);
     assert_eq!(judge(&found, allowed).len(), 1);
-    // A third occurrence in the listed file is not covered.
+    // A third occurrence in the listed file and host is covered.
     found.remove("crate/tests/new.rs");
     found
         .get_mut("crate/tests/listed.rs")
         .unwrap()
         .insert("github.com".into(), 3);
+    assert!(judge(&found, allowed).is_empty());
+    // An unlisted host in the listed file is not covered.
+    found
+        .get_mut("crate/tests/listed.rs")
+        .unwrap()
+        .insert("gitlab.com".into(), 1);
     assert_eq!(judge(&found, allowed).len(), 1);
     // An entry that matches nothing is stale.
     found.clear();

@@ -620,23 +620,27 @@ fn work_start_proves_a_merged_planning_anchor_without_mutation() {
     assert!(porcelain.stdout.is_empty());
 }
 
-/// Make `remote` a configured remote and `main`'s upstream.
+/// Make `remote` `main`'s upstream.
 fn set_upstream(dir: &Path, remote: &str) {
-    git(
-        dir,
-        &["config", &format!("remote.{remote}.url"), "/nowhere"],
-    );
-    git(
-        dir,
-        &[
-            "config",
-            "--replace-all",
-            &format!("remote.{remote}.fetch"),
-            &format!("+refs/heads/*:refs/remotes/{remote}/*"),
-        ],
-    );
     git(dir, &["config", "branch.main.remote", remote]);
     git(dir, &["config", "branch.main.merge", "refs/heads/main"]);
+}
+
+/// A configured bare remote whose `main` is `rev`, fetched. A tracking ref
+/// is verified only through its configured remote (TSK-1047 AC-6).
+fn bare_remote(dir: &Path, remote: &str, rev: &str) -> tempfile::TempDir {
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "-q", "--bare"]);
+    git(
+        dir,
+        &["remote", "add", remote, bare.path().to_str().unwrap()],
+    );
+    git(
+        dir,
+        &["push", "-q", remote, &format!("{rev}:refs/heads/main")],
+    );
+    git(dir, &["fetch", "-q", remote]);
+    bare
 }
 
 fn rev_parse(dir: &Path, rev: &str) -> String {
@@ -670,10 +674,8 @@ fn work_start_anchors_on_the_tracking_ref_past_a_stale_local_target() {
     );
     git(dir.path(), &["add", "project-management"]);
     git(dir.path(), &["commit", "-m", "plan: anchor durable task"]);
-    git(
-        dir.path(),
-        &["update-ref", "refs/remotes/origin/main", "HEAD"],
-    );
+    let planned = rev_parse(dir.path(), "HEAD");
+    let _origin = bare_remote(dir.path(), "origin", &planned);
     git(dir.path(), &["switch", "-c", "task/TSK-001-implement"]);
 
     // AC-6: without an upstream, the newer fetched origin target is used.
@@ -687,12 +689,9 @@ fn work_start_anchors_on_the_tracking_ref_past_a_stale_local_target() {
 
     // A fork: `main` tracks `upstream/main`, which lacks the planning. The
     // fork's newer `origin/main` is not the target.
-    set_upstream(dir.path(), "upstream");
     let base = rev_parse(dir.path(), "main");
-    git(
-        dir.path(),
-        &["update-ref", "refs/remotes/upstream/main", &base],
-    );
+    let _upstream = bare_remote(dir.path(), "upstream", &base);
+    set_upstream(dir.path(), "upstream");
     let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
     assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
     assert!(

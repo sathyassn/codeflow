@@ -3,10 +3,57 @@
 use std::io;
 use std::path::Path;
 
+#[cfg(test)]
+thread_local! {
+    static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static NAMED: std::cell::RefCell<Option<(String, usize)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Entries this thread read through this module, so a test can prove a walk's
+/// cost on every host whatever the host's path limit.
+#[cfg(test)]
+pub(crate) fn reads() -> usize {
+    READS.with(std::cell::Cell::get)
+}
+
+/// Run `body` and count its reads through this module of a path holding a
+/// component called `name`, so a test can see whether a target was inspected.
+#[cfg(test)]
+pub(crate) fn reads_naming<T>(name: &str, body: impl FnOnce() -> T) -> (T, usize) {
+    NAMED.with(|named| *named.borrow_mut() = Some((name.to_owned(), 0)));
+    let value = body();
+    let (_, count) = NAMED
+        .with(|named| named.borrow_mut().take())
+        .expect("the count started above");
+    (value, count)
+}
+
+#[cfg(test)]
+fn note_read(path: &Path) {
+    READS.with(|reads| reads.set(reads.get() + 1));
+    NAMED.with(|named| {
+        if let Some((name, count)) = named.borrow_mut().as_mut() {
+            if path
+                .components()
+                .any(|part| part.as_os_str() == name.as_str())
+            {
+                *count += 1;
+            }
+        }
+    });
+}
+
+fn read_entry(path: &Path) -> io::Result<std::fs::Metadata> {
+    #[cfg(test)]
+    note_read(path);
+    std::fs::symlink_metadata(path)
+}
+
 /// A missing leaf is absent only beneath a directory that can be resolved.
 /// An existing leaf, including a dangling link, must be read by the caller.
 pub(crate) fn proven_absent(path: &Path) -> io::Result<bool> {
-    match std::fs::symlink_metadata(path) {
+    match read_entry(path) {
         Ok(_) => return Ok(false),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
@@ -34,37 +81,108 @@ enum Missing {
 }
 
 fn missing_leaf(path: &Path) -> io::Result<Missing> {
-    for ancestor in path.ancestors().skip(1) {
-        let metadata = match std::fs::symlink_metadata(ancestor) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) if refuses_name(&error) => return Ok(Missing::Unnameable(error)),
-            Err(error) => return Err(error),
-        };
-        let metadata = if metadata.file_type().is_symlink() {
-            std::fs::metadata(ancestor).map_err(|error| {
-                if error.kind() == io::ErrorKind::NotFound {
-                    io::Error::other(format!("dangling link at {}", ancestor.display()))
-                } else {
-                    error
-                }
-            })?
+    let not_found = |error: &io::Error| error.kind() == io::ErrorKind::NotFound;
+    let Some((ancestor, read)) = nearest_ancestor(path, not_found) else {
+        // A relative path may have no existing ancestor (including its empty one).
+        return if path.is_relative() {
+            Ok(Missing::Absent)
         } else {
-            metadata
+            Err(io::Error::other(format!(
+                "cannot establish a directory ancestor for {}",
+                path.display()
+            )))
         };
-        if !metadata.is_dir() {
-            return Ok(Missing::BelowNonDirectory(ancestor.to_path_buf()));
-        }
-        return Ok(Missing::Absent);
-    }
-    // A relative path may have no existing ancestor (including its empty one).
-    if path.is_relative() {
+    };
+    let metadata = match read {
+        Ok(metadata) => metadata,
+        Err(error) if refuses_name(&error) => return Ok(Missing::Unnameable(error)),
+        Err(error) => return Err(error),
+    };
+    let metadata = if metadata.file_type().is_symlink() {
+        std::fs::metadata(ancestor).map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                io::Error::other(format!("dangling link at {}", ancestor.display()))
+            } else {
+                error
+            }
+        })?
+    } else {
+        metadata
+    };
+    if metadata.is_dir() {
         Ok(Missing::Absent)
     } else {
-        Err(io::Error::other(format!(
-            "cannot establish a directory ancestor for {}",
-            path.display()
-        )))
+        Ok(Missing::BelowNonDirectory(ancestor.to_path_buf()))
+    }
+}
+
+/// The nearest ancestor of `path` whose read `passes` does not accept, with
+/// that read. `None` when every ancestor passes.
+///
+/// A guard asks about each name of a path, so one read per ancestor is
+/// quadratic in depth, and only the host's path limit hides it: Windows reads
+/// a path of 32 KiB, Unix stops near 1 or 4 KiB (TSK-1258). Nothing lies below
+/// a missing name, so the reads step out in doubling strides and then bisect.
+/// The nearest ancestor is read first, so an ordinary missing leaf costs what
+/// it always did.
+///
+/// A name Windows refuses can lie below a missing name, where its read differs
+/// from its neighbours'. The bisection may then settle on the missing name's
+/// parent instead. Nothing exists at the leaf on either reading.
+fn nearest_ancestor(
+    path: &Path,
+    passes: impl Fn(&io::Error) -> bool,
+) -> Option<(&Path, io::Result<std::fs::Metadata>)> {
+    let ancestors: Vec<&Path> = path.ancestors().skip(1).collect();
+    let read = |at: usize| match read_entry(ancestors[at]) {
+        Err(error) if passes(&error) => None,
+        read => Some(read),
+    };
+    // Every ancestor before `near` passed.
+    let mut near = 0;
+    let mut stride = 1;
+    let (mut far, mut found) = loop {
+        if near == ancestors.len() {
+            return None;
+        }
+        let at = (near + stride - 1).min(ancestors.len() - 1);
+        if let Some(found) = read(at) {
+            break (at, found);
+        }
+        near = at + 1;
+        stride *= 2;
+    };
+    while near < far {
+        let middle = near + (far - near) / 2;
+        match read(middle) {
+            Some(closer) => (far, found) = (middle, closer),
+            None => near = middle + 1,
+        }
+    }
+    Some((ancestors[far], found))
+}
+
+/// The deepest of `path` and its ancestors with an entry on disk, so a walk
+/// over ancestors can skip the ones nothing can lie below. A relative path
+/// with no such ancestor gives its empty last ancestor, the working directory.
+/// A read failure that does not prove absence is returned, so a caller fails
+/// closed as it would on reading a name below it.
+pub(crate) fn deepest_entry(path: &Path) -> io::Result<&Path> {
+    // `InvalidInput` is the NUL byte no platform can hold in a name.
+    let no_entry = |error: &io::Error| {
+        error.kind() == io::ErrorKind::NotFound
+            || error.kind() == io::ErrorKind::InvalidInput
+            || refuses_name(error)
+    };
+    match read_entry(path) {
+        Ok(_) => return Ok(path),
+        Err(error) if no_entry(&error) => {}
+        Err(error) => return Err(error),
+    }
+    match nearest_ancestor(path, no_entry) {
+        Some((ancestor, Ok(_))) => Ok(ancestor),
+        Some((_, Err(error))) => Err(error),
+        None => Ok(path.ancestors().last().unwrap_or(path)),
     }
 }
 
@@ -83,7 +201,7 @@ pub(crate) fn cannot_exist(path: &Path) -> io::Result<bool> {
     if path.as_os_str().as_encoded_bytes().contains(&0) {
         return Ok(true);
     }
-    match std::fs::symlink_metadata(path) {
+    match read_entry(path) {
         Ok(_) => Ok(false),
         Err(error) if failure_proves_no_entry(path, &error)? => Ok(true),
         Err(error) => Err(error),
@@ -96,7 +214,7 @@ pub(crate) fn existing_metadata(path: &Path) -> io::Result<Option<std::fs::Metad
     if path.as_os_str().as_encoded_bytes().contains(&0) {
         return Ok(None);
     }
-    match std::fs::symlink_metadata(path) {
+    match read_entry(path) {
         Ok(metadata) => Ok(Some(metadata)),
         Err(error) if failure_proves_no_entry(path, &error)? => Ok(None),
         Err(error) => Err(error),
@@ -121,7 +239,7 @@ pub(crate) fn entry(path: &Path) -> io::Result<Entry> {
     if path.as_os_str().as_encoded_bytes().contains(&0) {
         return Ok(Entry::Impossible);
     }
-    match std::fs::symlink_metadata(path) {
+    match read_entry(path) {
         Ok(_) => Ok(Entry::Exists),
         Err(error) if refuses_name(&error) => Ok(Entry::Impossible),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(match missing_leaf(path)? {
@@ -177,7 +295,7 @@ fn windows_error_refuses_name(code: i32) -> bool {
 
 /// Obtain leaf metadata, returning None only for proven absence through its ancestors.
 pub(crate) fn symlink_metadata_optional(path: &Path) -> io::Result<Option<std::fs::Metadata>> {
-    match std::fs::symlink_metadata(path) {
+    match read_entry(path) {
         Ok(metadata) => Ok(Some(metadata)),
         Err(error) if error.kind() == io::ErrorKind::NotFound && proven_absent(path)? => Ok(None),
         Err(error) => Err(error),
@@ -187,6 +305,8 @@ pub(crate) fn symlink_metadata_optional(path: &Path) -> io::Result<Option<std::f
 /// Obtain metadata through symbolic links, returning None only for proven
 /// absence. A dangling link exists, so it is an error, never absence.
 pub(crate) fn metadata_optional(path: &Path) -> io::Result<Option<std::fs::Metadata>> {
+    #[cfg(test)]
+    note_read(path);
     match std::fs::metadata(path) {
         Ok(metadata) => Ok(Some(metadata)),
         Err(error) if error.kind() == io::ErrorKind::NotFound && proven_absent(path)? => Ok(None),
@@ -309,7 +429,11 @@ mod optional_metadata_tests {
 
 #[cfg(test)]
 mod cannot_exist_tests {
-    use super::{cannot_exist, existing_metadata, proven_absent, windows_error_refuses_name};
+    use super::{
+        cannot_exist, deepest_entry, existing_metadata, proven_absent, reads,
+        windows_error_refuses_name,
+    };
+    use std::path::Path;
 
     /// Windows maps three codes to `InvalidFilename`. Only a name it cannot
     /// store (123) or a malformed path (161) names nothing; a path past the
@@ -414,5 +538,107 @@ mod cannot_exist_tests {
             assert!(result.is_err(), "{result:?}");
             assert!(metadata.is_err(), "{metadata:?}");
         }
+    }
+
+    /// A missing leaf is settled in reads that grow with the logarithm of its
+    /// missing depth. One read per ancestor made a guard that asks this for
+    /// every component quadratic in reads, which only the host's path limit
+    /// hid: Windows reads a path of about 32 KiB, Unix stops near 1 or 4 KiB
+    /// (TSK-1258, PR 552's Windows hang).
+    #[test]
+    fn a_deep_missing_leaf_is_settled_without_reading_each_ancestor() {
+        let dir = tempfile::tempdir().unwrap();
+        let leaf = dir.path().join("a/".repeat(400));
+        let before = reads();
+        assert!(cannot_exist(&leaf).unwrap());
+        let spent = reads() - before;
+        assert!(spent <= 20, "{spent} reads for a leaf 400 names deep");
+    }
+
+    /// However far out the nearest entry lies, the walk settles the leaf the
+    /// way one read per ancestor did: a file, a dangling link or a directory.
+    #[test]
+    fn the_stepped_walk_settles_a_leaf_at_every_distance() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, "x").unwrap();
+        for depth in 1..40 {
+            let below = "n/".repeat(depth);
+            assert!(cannot_exist(&dir.path().join(&below)).unwrap(), "{depth}");
+            assert!(proven_absent(&dir.path().join(&below)).unwrap(), "{depth}");
+            assert!(cannot_exist(&file.join(&below)).unwrap(), "{depth}");
+            assert!(proven_absent(&file.join(&below)).is_err(), "{depth}");
+        }
+        assert!(proven_absent(Path::new("codeflow-no-such-name/n/n/n")).unwrap());
+    }
+
+    /// A link with no target, or a directory the guard cannot read, stays a
+    /// failure at every distance, so a guard fails closed on it.
+    #[cfg(unix)]
+    #[test]
+    fn the_stepped_walk_fails_closed_at_every_distance() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("link");
+        symlink(dir.path().join("missing"), &link).unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = std::fs::read_dir(&locked).is_ok();
+        let results: Vec<_> = (1..40)
+            .map(|depth| {
+                let below = "n/".repeat(depth);
+                (
+                    cannot_exist(&link.join(&below)),
+                    cannot_exist(&locked.join(&below)),
+                )
+            })
+            .collect();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for (at_link, at_locked) in results {
+            assert!(at_link.is_err(), "{at_link:?}");
+            assert!(readable || at_locked.is_err(), "{at_locked:?}");
+        }
+    }
+
+    /// What each host does with a path of 32,767 characters, which a guard
+    /// can reach only through a link or short name that expands past its
+    /// bound. Windows reports `os error 206`, which proves nothing about the
+    /// path, so the read fails closed. Unix refuses the name, so nothing can
+    /// exist there and the search moves outward.
+    #[test]
+    fn a_path_at_the_windows_limit_fails_closed_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut path = dir.path().to_path_buf();
+        while path.as_os_str().len() < 32_700 {
+            path.push("a");
+        }
+        path.push("a".repeat(32_767 - path.as_os_str().len() - 1));
+        assert_eq!(path.as_os_str().len(), 32_767);
+        if cfg!(windows) {
+            let error = deepest_entry(&path).unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(206), "{error}");
+            assert!(cannot_exist(&path).is_err());
+        } else {
+            assert_eq!(deepest_entry(&path).unwrap(), dir.path());
+            assert!(cannot_exist(&path).unwrap());
+        }
+    }
+
+    #[test]
+    fn the_deepest_entry_is_the_last_name_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let file = root.join("file");
+        std::fs::write(&file, "x").unwrap();
+        assert_eq!(deepest_entry(root).unwrap(), root);
+        assert_eq!(deepest_entry(&file).unwrap(), file);
+        assert_eq!(deepest_entry(&root.join("n/n/n/n/n")).unwrap(), root);
+        assert_eq!(deepest_entry(&file.join("n/n/n/n")).unwrap(), file);
+        assert_eq!(deepest_entry(&root.join("a\0b/n")).unwrap(), root);
+        assert_eq!(
+            deepest_entry(Path::new("codeflow-no-such-name/n/n")).unwrap(),
+            Path::new("")
+        );
     }
 }

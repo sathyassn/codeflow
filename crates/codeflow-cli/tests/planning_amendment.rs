@@ -442,7 +442,10 @@ fn an_amendment_names_every_epic_it_changes() {
     assert_blocks(
         &ci(root, "plan/standalone", "Task: EPC-001, EPC-009"),
         "an epic with no record",
-        &["work.classification", "EPC-009, which has no epic record"],
+        &[
+            "work.classification",
+            "names an epic that has no epic record",
+        ],
     );
 }
 

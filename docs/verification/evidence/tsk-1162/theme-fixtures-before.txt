@@ -1,0 +1,162 @@
+✖ planted cast is rejected (15.299375ms)
+✖ planted white is rejected (0.546042ms)
+✖ planted black is rejected (0.3345ms)
+✖ planted Neutral is rejected (0.162875ms)
+✖ planted one accent is rejected (0.139583ms)
+✖ planted contrast is rejected (0.13075ms)
+✖ planted status hue is rejected (0.147084ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 0
+ℹ fail 7
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 197.00975
+
+✖ failing tests:
+
+test at assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts:16:13
+✖ planted cast is rejected (15.299375ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(validateColours(copy,floors).some(f=>f.rule===rule))
+
+      at TestContext.<anonymous> (file:///Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1162/assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts:18:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts:16:13
+✖ planted white is rejected (0.546042ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(validateColours(copy,floors).some(f=>f.rule===rule))
+
+      at TestContext.<anonymous> (file:///Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1162/assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts:18:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts:16:13
+✖ planted black is rejected (0.3345ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(validateColours(copy,floors).some(f=>f.rule===rule))
+
+      at TestContext.<anonymous> (file:///Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1162/assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts:18:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts:16:13
+✖ planted Neutral is rejected (0.162875ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(validateColours(copy,floors).some(f=>f.rule===rule))
+
+      at TestContext.<anonymous> (file:///Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1162/assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts:18:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts:16:13
+✖ planted one accent is rejected (0.139583ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(validateColours(copy,floors).some(f=>f.rule===rule))
+
+      at TestContext.<anonymous> (file:///Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1162/assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts:18:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts:16:13
+✖ planted contrast is rejected (0.13075ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(validateColours(copy,floors).some(f=>f.rule===rule))
+
+      at TestContext.<anonymous> (file:///Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1162/assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts:18:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts:16:13
+✖ planted status hue is rejected (0.147084ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(validateColours(copy,floors).some(f=>f.rule===rule))
+
+      at TestContext.<anonymous> (file:///Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1162/assets/base/agents/skills/cf-present/resources/design-system/source/validate.test.ts:18:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

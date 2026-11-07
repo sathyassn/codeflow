@@ -12,27 +12,70 @@ use std::process::{Command, Output};
 
 const PRESENT_SKILL_FILES: &[&str] = &[
     "SKILL.md",
+    "agents/openai.yaml",
+    "assets/config.example.toml",
+    "assets/primitive-tokens.example.json",
+    "assets/review-document.example.json",
     "references/document-authoring.md",
     "references/feedback-loop.md",
     "references/visual-craft.md",
-    "resources/explanation-method.md",
-    "resources/how-presentation-works.md",
-    "resources/utility-presentation-system.md",
-    "resources/figure-grammar.md",
-    "resources/figure-grammar-specimens.md",
-    "resources/present-document.example.json",
     "resources/design-system/README.md",
-    "resources/design-system/tokens.json",
-    "resources/design-system/tokens.css",
     "resources/design-system/chrome.css",
-    "resources/design-system/figure.css",
     "resources/design-system/chrome.js",
+    "resources/design-system/count-charts.js",
+    "resources/design-system/counts.reference.html",
+    "resources/design-system/export-fallback.css",
+    "resources/design-system/figure-roles.css",
+    "resources/design-system/figure.css",
+    "resources/design-system/portal.css",
     "resources/design-system/portal.reference.html",
+    "resources/design-system/present.css",
     "resources/design-system/present.reference.html",
-    "assets/review-document.example.json",
-    "assets/config.example.toml",
-    "assets/primitive-tokens.example.json",
-    "agents/openai.yaml",
+    "resources/design-system/settings.js",
+    "resources/design-system/source/accent.ts",
+    "resources/design-system/source/colour.json",
+    "resources/design-system/source/colour.test.ts",
+    "resources/design-system/source/colour.ts",
+    "resources/design-system/source/count-charts.ts",
+    "resources/design-system/source/elevation.json",
+    "resources/design-system/source/floors.json",
+    "resources/design-system/source/generate.test.ts",
+    "resources/design-system/source/generate.ts",
+    "resources/design-system/source/geometry.json",
+    "resources/design-system/source/layout.json",
+    "resources/design-system/source/lint.test.ts",
+    "resources/design-system/source/lint.ts",
+    "resources/design-system/source/matrices.json",
+    "resources/design-system/source/measure.ts",
+    "resources/design-system/source/motion.json",
+    "resources/design-system/source/named-colours.json",
+    "resources/design-system/source/radius.json",
+    "resources/design-system/source/space.json",
+    "resources/design-system/source/stage-geometry.test.ts",
+    "resources/design-system/source/stage-geometry.ts",
+    "resources/design-system/source/stages.json",
+    "resources/design-system/source/styles/chrome.css.in",
+    "resources/design-system/source/styles/export-fallback.css.in",
+    "resources/design-system/source/styles/figure-roles.css.in",
+    "resources/design-system/source/styles/figure.css.in",
+    "resources/design-system/source/styles/portal.css.in",
+    "resources/design-system/source/styles/present.css.in",
+    "resources/design-system/source/styles/utility-tokens.css.in",
+    "resources/design-system/source/type.json",
+    "resources/design-system/source/validate.test.ts",
+    "resources/design-system/source/validate.ts",
+    "resources/design-system/stage-geometry.js",
+    "resources/design-system/tokens.css",
+    "resources/design-system/tokens.js",
+    "resources/design-system/tokens.json",
+    "resources/design-system/tokens.ts",
+    "resources/design-system/utility-tokens.css",
+    "resources/explanation-method.md",
+    "resources/figure-grammar-specimens.md",
+    "resources/figure-grammar.md",
+    "resources/how-presentation-works.md",
+    "resources/present-document.example.json",
+    "resources/utility-presentation-system.md",
 ];
 const PRESENT_SCHEMAS: &[&str] = &[
     "document-v1.schema.json",
@@ -245,7 +288,10 @@ fn assert_design_kit_matches_in_docs_portal(root: &Path) {
         }
         checked += 1;
     }
-    assert_eq!(checked, 8, "the design kit is eight files");
+    assert_eq!(
+        checked, 51,
+        "the design kit ships 51 source and generated files"
+    );
 }
 
 /// Placeholders: everything the engine substitutes must be gone. Scoped to
@@ -1051,7 +1097,18 @@ fn rewind_to_whole_files(root: &Path) {
 
 #[test]
 fn split_references_install_and_update_replaces_whole_files_at_standard_and_full() {
-    for tier in ["--standard", "--full"] {
+    assert_split_references_install_and_update(&["--standard", "--full"]);
+}
+
+/// TSK-356: the representative of the tier matrix above, which runs only in
+/// the full gate: the full tier carries every split file.
+#[test]
+fn split_references_install_and_update_replaces_whole_files_at_full() {
+    assert_split_references_install_and_update(&["--full"]);
+}
+
+fn assert_split_references_install_and_update(tiers: &[&str]) {
+    for &tier in tiers {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("proj");
         std::fs::create_dir(&root).unwrap();
@@ -1612,13 +1669,13 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
     }
 }
 
-/// Run the stub delivery cases of `evals/herdr-delivery` against the
-/// `cf-herdr` installed at `skill`.
-fn run_herdr_delivery_cases(skill: &Path) -> Output {
+/// Run the stub delivery cases of `evals/herdr-delivery` named by `case`
+/// against the `cf-herdr` installed at `skill`.
+fn run_herdr_delivery_cases(skill: &Path, case: &str) -> Output {
     Command::new("python3")
         .arg("-B")
         .arg(repo_root().join("evals/herdr-delivery/test_delivery.py"))
-        .arg("StubDeliveryTests")
+        .arg(case)
         .env("CF_HERDR_SKILL_DIR", skill)
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env_remove("HERDR_ENV")
@@ -1626,36 +1683,97 @@ fn run_herdr_delivery_cases(skill: &Path) -> Output {
         .expect("python3 runs the herdr delivery cases")
 }
 
+/// Every file of the `cf-herdr` skill at `skill`, by path below it, with
+/// its bytes: what the stub cases read.
+fn herdr_implementation(skill: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files = Vec::new();
+    walk_files(skill, &mut files);
+    let mut implementation: Vec<_> = files
+        .into_iter()
+        .map(|file| {
+            let rel = file
+                .strip_prefix(skill)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            (rel, std::fs::read(&file).unwrap())
+        })
+        .collect();
+    implementation.sort();
+    implementation
+}
+
+/// The stub corpus against each installed `cf-herdr` (TSK-356 AC-1): the
+/// whole corpus once per distinct implementation, and one representative
+/// case for every other install of the same bytes.
+#[derive(Default)]
+struct HerdrCorpus {
+    seen: std::collections::BTreeSet<Vec<(String, Vec<u8>)>>,
+    corpus_runs: usize,
+    installs: usize,
+}
+
+impl HerdrCorpus {
+    const REPRESENTATIVE: &'static str =
+        "StubDeliveryTests.test_a_seat_that_starts_is_confirmed_after_one_enter";
+
+    /// Check the install at `skill` byte for byte against its asset, then
+    /// run the delivery cases it needs.
+    fn check(&mut self, skill: &Path, assets: &[(String, Vec<u8>)], label: &str) {
+        let installed = herdr_implementation(skill);
+        let as_text = |files: &[(String, Vec<u8>)]| -> Vec<(String, String)> {
+            files
+                .iter()
+                .map(|(rel, bytes)| (rel.clone(), normalize_crlf(&String::from_utf8_lossy(bytes))))
+                .collect()
+        };
+        assert_eq!(
+            as_text(&installed),
+            as_text(assets),
+            "{label}: cf-herdr differs from its asset"
+        );
+        self.installs += 1;
+        // Herdr is a Unix terminal multiplexer, reached over a Unix socket;
+        // native Windows has no Herdr to deliver to.
+        if cfg!(windows) {
+            return;
+        }
+        let case = if self.seen.insert(installed) {
+            self.corpus_runs += 1;
+            "StubDeliveryTests"
+        } else {
+            Self::REPRESENTATIVE
+        };
+        let cases = run_herdr_delivery_cases(skill, case);
+        assert!(
+            cases.status.success(),
+            "{label}: cf-herdr fails {case}:\n{}",
+            output_text(&cases)
+        );
+    }
+}
+
 /// TSK-144 AC-5 (journey): a fresh standard and full project carries the
 /// confirmed Herdr delivery, the installed script passes the AC-1 and AC-2
 /// stub cases, and `codeflow update` brings it to a project installed before
-/// it.
+/// it. TSK-356 AC-1: the corpus runs once per distinct installed
+/// implementation; every fresh and updated install of both tiers and both
+/// mirrors is checked byte for byte and runs a representative case.
 #[test]
 fn fresh_scaffolds_install_the_confirmed_herdr_delivery_and_update_brings_it() {
     const SCRIPT: &str = "skills/cf-herdr/scripts/deliver.py";
     const SKILL: &str = "skills/cf-herdr/SKILL.md";
-    let assets = repo_root().join("assets/base/agents");
+    let assets = herdr_implementation(&repo_root().join("assets/base/agents/skills/cf-herdr"));
+    assert!(
+        assets.iter().any(|(rel, _)| rel == "scripts/deliver.py"),
+        "{assets:?}"
+    );
+    let mut corpus = HerdrCorpus::default();
     for tier in ["--standard", "--full"] {
         let (_tmp, root) = fresh(tier);
         for tree in [".claude", ".agents"] {
-            for rel in [SCRIPT, SKILL] {
-                assert_eq!(
-                    normalize_crlf(&read(&root, &format!("{tree}/{rel}"))),
-                    normalize_crlf(&std::fs::read_to_string(assets.join(rel)).unwrap()),
-                    "{tier}: {tree}/{rel} differs from its asset"
-                );
-            }
-            // Herdr is a Unix terminal multiplexer, reached over a Unix
-            // socket; native Windows has no Herdr to deliver to.
-            if cfg!(windows) {
-                continue;
-            }
-            let cases = run_herdr_delivery_cases(&root.join(tree).join("skills/cf-herdr"));
-            assert!(
-                cases.status.success(),
-                "{tier}: installed {tree} cf-herdr fails the delivery cases:\n{}",
-                output_text(&cases)
-            );
+            let skill = root.join(tree).join("skills/cf-herdr");
+            corpus.check(&skill, &assets, &format!("{tier} fresh {tree}"));
         }
         let fresh_skills = skill_tree_snapshot(&root);
 
@@ -1678,17 +1796,20 @@ fn fresh_scaffolds_install_the_confirmed_herdr_delivery_and_update_brings_it() {
             fresh_skills,
             "{tier}: update left the skill trees different from a fresh scaffold"
         );
-        // As above: no Herdr to deliver to on native Windows.
-        if cfg!(windows) {
-            continue;
+        for tree in [".claude", ".agents"] {
+            let skill = root.join(tree).join("skills/cf-herdr");
+            corpus.check(&skill, &assets, &format!("{tier} updated {tree}"));
         }
-        let cases = run_herdr_delivery_cases(&root.join(".agents/skills/cf-herdr"));
-        assert!(
-            cases.status.success(),
-            "{tier}: updated cf-herdr fails the delivery cases:\n{}",
-            output_text(&cases)
-        );
     }
+    // Eight installs, all the same bytes: before TSK-356 the corpus ran six
+    // times here; now it runs once (none on Windows).
+    assert_eq!(corpus.installs, 8);
+    assert_eq!(corpus.corpus_runs, corpus.seen.len());
+    assert_eq!(corpus.corpus_runs, usize::from(!cfg!(windows)));
+    eprintln!(
+        "herdr corpus: {} full run(s) for {} installs",
+        corpus.corpus_runs, corpus.installs
+    );
 }
 
 /// TSK-163 AC-4 (serves EPC-020 AC-13): fresh standard and full scaffolds
@@ -2682,11 +2803,22 @@ fn a_refused_push_shows_in_the_ceremony_report_and_a_warned_push_does_not() {
 /// a fresh install within its guidelines.
 #[test]
 fn init_and_update_bring_the_plain_writing_rule_at_every_tier() {
+    assert_plain_writing_install_and_update(&["--minimal", "--standard", "--full"]);
+}
+
+/// TSK-356: the representative of the tier matrix above, which runs only in
+/// the full gate: the full tier installs every carrier of the rule.
+#[test]
+fn init_and_update_bring_the_plain_writing_rule_at_full() {
+    assert_plain_writing_install_and_update(&["--full"]);
+}
+
+fn assert_plain_writing_install_and_update(tiers: &[&str]) {
     const RULE_LINE: &str =
         "- **Write plainly.** Everything you write, replies and status updates included";
     const LEAD: &str = "**Write plainly.** Everything you write, replies and status updates";
     const SHORT: &str = "Write the synthesis plainly:";
-    for tier in ["--minimal", "--standard", "--full"] {
+    for &tier in tiers {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("proj");
         std::fs::create_dir(&root).unwrap();

@@ -29,6 +29,13 @@ PATH="$PWD/target/release:$PATH" codeflow test --mode full --strict
 - Measure coverage locally with the full gate's `rust-coverage` target, the one
   instrumented `cargo llvm-cov nextest` run. Do not leave the numbers for CI to
   fill in.
+- The full gate runs every Rust test. The essential gate leaves out the
+  exhaustive tier, harness, crash-point and random-input matrices and the one
+  test that waits a real minute; `.config/nextest.toml` names each, and a
+  smaller test of the same boundary stays in essential.
+- A slow test fixture can be built once per run with
+  `crates/codeflow-cli/tests/support/fixture_seed.rs`; each test gets its own
+  copy.
 - Write the PR Summary and Changes from the whole `base...HEAD` diff, not from
   the last commit or last review.
 

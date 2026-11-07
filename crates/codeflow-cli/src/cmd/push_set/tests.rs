@@ -159,6 +159,7 @@ impl History {
         let anchor = OnceCell::new();
         let fetch_failed = OnceCell::new();
         let destination = Destination {
+            limits: codeflow_core::git::remote_query::QueryLimits::default(),
             listing: &listing,
             answer: &answer,
             anchor: &anchor,
@@ -541,6 +542,7 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
     let anchor = OnceCell::new();
     let fetch_failed = OnceCell::new();
     let destination = Destination {
+        limits: codeflow_core::git::remote_query::QueryLimits::default(),
         listing: &listing,
         answer: &answer,
         anchor: &anchor,
@@ -765,6 +767,7 @@ fn round_two_hook_and_local_plans_use_the_same_epic_target() {
             OnceCell::new(),
         );
         let destination = Destination {
+            limits: codeflow_core::git::remote_query::QueryLimits::default(),
             listing: &listing,
             answer: &answer,
             anchor: &anchor,
@@ -847,6 +850,7 @@ fn round_two_unavailable_destination_refuses_before_ci() {
     let anchor = OnceCell::new();
     let fetch_failed = OnceCell::new();
     let destination = Destination {
+        limits: codeflow_core::git::remote_query::QueryLimits::default(),
         listing: &listing,
         answer: &answer,
         anchor: &anchor,
@@ -955,11 +959,13 @@ fn judged_against(h: &History, name: &str, tip: &str, pushed: &[PushRef]) -> Vec
         url: h.remote.path().to_str().map(str::to_string),
         default: Some((name.to_string(), oid)),
         heads: vec![(name.to_string(), oid)],
+        limits: codeflow_core::git::remote_query::QueryLimits::default(),
     }));
     let advertised = OnceCell::new();
     let anchor = OnceCell::new();
     let fetch_failed = OnceCell::new();
     let destination = Destination {
+        limits: codeflow_core::git::remote_query::QueryLimits::default(),
         listing: &listing,
         answer: &answer,
         anchor: &anchor,
@@ -1077,9 +1083,11 @@ fn judged_by_an_empty_destination(h: &History, tracking: Option<&str>) -> (Vec<S
         url: h.remote.path().to_str().map(str::to_string),
         default: None,
         heads: Vec::new(),
+        limits: codeflow_core::git::remote_query::QueryLimits::default(),
     }));
     let (advertised, anchor, fetch_failed) = (OnceCell::new(), OnceCell::new(), OnceCell::new());
     let destination = Destination {
+        limits: codeflow_core::git::remote_query::QueryLimits::default(),
         listing: &listing,
         answer: &answer,
         anchor: &anchor,

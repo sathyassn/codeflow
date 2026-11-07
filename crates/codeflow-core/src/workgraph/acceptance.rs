@@ -462,6 +462,7 @@ mod authority {
 pub use authority::{CriteriaBases, RunBases, StackingTips};
 
 mod imports;
+mod planning_move;
 mod receiving_merges;
 pub(crate) use imports::clear_cache as clear_import_cache;
 pub use imports::{imported_record_paths, imported_records, ImportedRecord};
@@ -502,8 +503,8 @@ impl From<Vec<Finding>> for BindingResult {
 /// Closeout may differ in the reviewed segment. A clean task landing can
 /// transport that segment onto a line; a reopening range reviews its own
 /// work and takes no landing's review. `base` pins the range's anchored old review when supplied.
-/// A waiver names the criterion's record-only amendment on its target;
-/// `bind_completion_with_amendment` adds the task's own range.
+/// A waiver names a planning-only amendment of the criterion on its
+/// target; `bind_completion_with_amendment` adds the task's own range.
 #[must_use]
 pub fn bind_completion(
     repo: &Repository,
@@ -559,9 +560,10 @@ fn task_reopen_history(
 
 /// [`bind_completion`] with the own-task waiver allowance (TSK-184): in the
 /// task's own pull request, before the task was ever complete on its
-/// target, a waiver may also name a record-only amendment commit of this
-/// record in that range, after `own_range_base` and strictly before the
-/// reviewed commit. Once the pull request lands, that commit is on the
+/// target, a waiver may also name a planning-only amendment commit of this
+/// record's criterion in that range, after `own_range_base` and strictly
+/// before the reviewed commit. Like an amendment on the target, it may also
+/// change other planning records, such as the epic plan (issue 465). Once the pull request lands, that commit is on the
 /// target, so a line and the release judge accept the same waiver under
 /// the target rule. `None`, or a range that reopens a landed completion,
 /// keeps the target rule alone; a range that reopens only a completion it
@@ -1156,14 +1158,18 @@ fn epic_waiver_problem(
         Ok(parents) => parents.first().copied(),
         Err(error) => return Some(error.to_string()),
     };
-    match non_planning_change(repo, parent, amendment) {
+    match waiver_amendment_change(repo, parent, amendment, &[reviewed]) {
         Ok(None) => {}
         Ok(Some(path)) => {
             return Some(format!(
                 "names {named}, which also changes {path}; a planning amendment changes planning records only"
             ));
         }
-        Err(_) => return Some(format!("names {named}, whose change cannot be read")),
+        Err(reason) => {
+            return Some(format!(
+                "names {named}, whose change cannot be read: {reason}"
+            ))
+        }
     }
     let criterion = |oid: Option<Oid>| {
         oid.map(|oid| record_at(repo, oid, epic))
@@ -1373,7 +1379,9 @@ enum Stacking<'a> {
 /// With `stacking`, a task pull request's own chain may also re-merge its
 /// integration target cleanly after the review (TSK-184), a reopening one
 /// included (TSK-340); direct work and a completion bound at a head
-/// (SPC-013 R-120) never stack.
+/// (SPC-013 R-120) never stack. A stacked chain's clean merges may also
+/// bring one landed planning move of the task's epic
+/// ([`planning_move`], TSK-1320).
 fn reviewed_span_problem(
     repo: &Repository,
     task: &RecordView,
@@ -1419,9 +1427,10 @@ fn reviewed_span_problem(
     // this record's status and Closeout. Anything else is judged as the
     // whole change from the reviewed commit to C, naming the commit that
     // stopped the stack.
-    let stack = match stacking {
-        Stacking::OnTarget(tips) => stacked(repo, task, reviewed, at, tips),
-        Stacking::Never => Stacked::No(None),
+    let no_tips = StackingTips::default();
+    let (stack, tips) = match stacking {
+        Stacking::OnTarget(tips) => (stacked(repo, task, reviewed, at, tips), tips),
+        Stacking::Never => (Stacked::No(None), &no_tips),
     };
     match stack {
         Stacked::Clean => {
@@ -1431,8 +1440,14 @@ fn reviewed_span_problem(
                     task.path
                 ));
             };
-            (reviewed_part(&then) != reviewed_part(&completed))
-                .then(|| "the record changed outside its status and Closeout after the reviewed commit; review the result again".into())
+            // A landed planning move of the task's epic, brought by the
+            // clean merges, is the one admitted difference (TSK-1320).
+            if reviewed_part(&then) == reviewed_part(&completed) {
+                return None;
+            }
+            planning_move::refusal(repo, &task.path, reviewed, at, &then, &completed, tips).map(
+                |why| format!("the record changed outside its status and Closeout after the reviewed commit {reviewed} ({why}); review the result again"),
+            )
         }
         Stacked::Unclean(merge) => Some(format!(
             "merge {merge} is not a clean re-merge from the task's integration target; review the result again"
@@ -1442,7 +1457,9 @@ fn reviewed_span_problem(
         // (SPC-013 R-60: the task's own later commits change only this
         // record's status and Closeout), leading with the net change when
         // there is one and naming the commit that stopped it.
-        Stacked::No(None) => later_change_finding(repo, &task.path, &completed, reviewed, at, None),
+        Stacked::No(None) => {
+            later_change_finding(repo, &task.path, &completed, reviewed, at, None)
+        }
         Stacked::No(Some(stop)) => {
             let detail = match stop {
                 Stop::Commit { commit, changed } => format!("commit {commit}: {changed}"),
@@ -1968,6 +1985,17 @@ pub fn owned_paths(
     head: &str,
     hide: &[&str],
 ) -> Result<Vec<String>, String> {
+    owned_paths_except(repo_root, head, hide, &std::collections::BTreeSet::new())
+}
+
+/// Exclude exact commits whose own work has been proved reviewed, without
+/// excluding the unreviewed work they may have imported through other parents.
+fn owned_paths_except(
+    repo_root: &std::path::Path,
+    head: &str,
+    hide: &[&str],
+    reviewed_own: &std::collections::BTreeSet<Oid>,
+) -> Result<Vec<String>, String> {
     let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
@@ -1984,9 +2012,11 @@ pub fn owned_paths(
     }
     let mut paths = std::collections::BTreeSet::new();
     for commit in walk {
-        let commit = repo
-            .find_commit(commit.map_err(unreadable)?)
-            .map_err(unreadable)?;
+        let commit = commit.map_err(unreadable)?;
+        if reviewed_own.contains(&commit) {
+            continue;
+        }
+        let commit = repo.find_commit(commit).map_err(unreadable)?;
         let parents = history::parents(&repo, &commit).map_err(unreadable)?;
         if parents.len() > 1 {
             match read_merge(&repo, &commit) {
@@ -2444,14 +2474,21 @@ pub struct OwnLine {
 pub use super::landing::Replaced;
 
 /// What a run's judgement of task records may take beyond its bases:
-/// the bounded own-line exception, and the remote-tracking ref the run
-/// replaces (TSK-350).
+/// the bounded own-line exception, the remote-tracking ref the run
+/// replaces (TSK-350), and the work branch prefixes of the policy the run
+/// judges with (TSK-1309 AC-6).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Scope<'a> {
     /// The own-line exception, when the caller verified one.
     pub own_line: Option<&'a OwnLine>,
     /// The remote-tracking ref this run replaces.
     pub replaced: Option<&'a super::landing::Replaced>,
+    /// The judged policy's `git.branch_prefixes`, from which the judged
+    /// branch's task is read, as [`super::work_start::judged_task_id`]
+    /// reads it. `None` reads them from the checkout's policy, for a
+    /// library caller that judges with the checkout; `codeflow ci` always
+    /// passes the policy it judges with.
+    pub branch_prefixes: Option<&'a [String]>,
 }
 
 /// Whether a record of a task shows a completion of it: it is complete,
@@ -2861,28 +2898,22 @@ fn waiver_problem(
         };
         if before_base || reviewed == Some(amendment) || !before_review {
             return Some(format!(
-                "names {}, which is not on the target or a record-only amendment strictly before the reviewed revision in this task's range; {ON_TARGET}; {WAIVER_ROUTE}",
+                "names {}, which is not on the target or an amendment strictly before the reviewed revision in this task's range; {ON_TARGET}; {WAIVER_ROUTE}",
                 evidence.trim()
             ));
         }
-        let Ok(commit) = repo.find_commit(amendment) else {
-            return Some("amendment cannot be read".into());
-        };
-        let paths = super::lifecycle::changed_paths(
-            repo,
-            &history::parent_id(repo, &commit, 0).map_or_else(|_| String::new(), |p| p.to_string()),
-            Some(&amendment.to_string()),
-        );
-        if paths.is_err()
-            || paths
-                .is_ok_and(|paths| paths.is_empty() || paths.iter().any(|path| path != &task.path))
-        {
-            return Some(format!(
-                "names {}, which must change only this task's record to count as an amendment in its own range, and is not on the target; {ON_TARGET}; {WAIVER_ROUTE}",
-                evidence.trim()
-            ));
-        }
+        // In its own range the amendment meets the same test as one on the
+        // target (issue 465): the checks below refuse it unless it changes
+        // planning records only and amends this criterion of this record,
+        // so it may update the epic plan beside the record.
     }
+    // A refusal of a commit off the target also says what the target route
+    // requires (TSK-340 AC-7).
+    let route = if off_target {
+        format!("; it is not on the target either: {ON_TARGET}; {WAIVER_ROUTE}")
+    } else {
+        String::new()
+    };
     let contains = match is_ancestor_or_same(repo, amendment, landing.commit()) {
         Ok(contains) => contains,
         Err(error) => return Some(error),
@@ -2922,18 +2953,19 @@ fn waiver_problem(
         Err(error) => return Some(error.to_string()),
     };
     // What the amendment brought onto the target (for a merge, against the
-    // target-side parent) changes planning records only (R-52, R-60).
-    match non_planning_change(repo, parent, amendment) {
+    // target-side parent) changes planning records only (R-52, R-60), as
+    // the pinned targets' policy classifies them, on either route.
+    match waiver_amendment_change(repo, parent, amendment, pinned) {
         Ok(None) => {}
         Ok(Some(path)) => {
             return Some(format!(
-                "names {}, which also changes {path}; a planning amendment changes planning records only",
+                "names {}, which also changes {path}; a planning amendment changes planning records only{route}",
                 evidence.trim()
             ));
         }
-        Err(_) => {
+        Err(reason) => {
             return Some(format!(
-                "names {}, whose change cannot be read",
+                "names {}, whose change cannot be read: {reason}",
                 evidence.trim()
             ));
         }
@@ -2956,7 +2988,7 @@ fn waiver_problem(
     match (criterion(parent), criterion(Some(amendment))) {
         (Some(before), Some(after)) if before != after => None,
         _ => Some(format!(
-            "names {}, which does not amend {id} of {}",
+            "names {}, which does not amend {id} of {}{route}",
             evidence.trim(),
             task.id
         )),
@@ -2982,6 +3014,67 @@ pub(super) fn non_planning_change(
         .find(|path| {
             path.rule_text()
                 .map_or(true, |text| text.contains('\\') || !is_planning_path(text))
+        })
+        .map(|path| path.display().to_string());
+    Ok(outside)
+}
+
+/// The first path a waiver's amendment changes that is not a planning
+/// record or plan, or `None` when every path is one. A path counts only
+/// when [`super::classify::amendment_path`] admits it as a record under the
+/// policy at each commit of `policy_from` (the pinned targets, or the
+/// reviewed commit for an epic's own waiver): a hidden file, a harness
+/// instruction file or an adopter-facing path is refused even inside
+/// `project-management/` or `docs/plan/`, and an ordinary document is
+/// refused too. A symbolic link or submodule on either side refuses under
+/// any name, by the rule a planning pull request applies
+/// ([`super::amendment::irregular_entry`]), and so does a name that is not
+/// plain text (issue 79).
+///
+/// # Errors
+///
+/// Returns why a tree, the diff or a policy cannot be read, so the caller
+/// refuses.
+fn waiver_amendment_change(
+    repo: &Repository,
+    parent: Option<Oid>,
+    commit: Oid,
+    policy_from: &[Oid],
+) -> Result<Option<String>, String> {
+    if policy_from.is_empty() {
+        return Err("no policy to classify its paths".into());
+    }
+    let projects = policy_from
+        .iter()
+        .map(|at| super::amendment::project_at(repo, *at))
+        .collect::<Result<Vec<_>, _>>()?;
+    let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree());
+    let after = tree(commit).map_err(|error| error.message().to_string())?;
+    let before = parent
+        .map(tree)
+        .transpose()
+        .map_err(|error| error.message().to_string())?;
+    let diff = repo
+        .diff_tree_to_tree(before.as_ref(), Some(&after), None)
+        .map_err(|error| error.message().to_string())?;
+    // The entry first, on both sides, as the planning pull request reads it
+    // (ADR-0078): a symbolic link or submodule is no planning record under
+    // any admitted name.
+    if let Some((shown, kind)) = super::amendment::irregular_entry(&diff) {
+        return Ok(Some(
+            kind.map_or(shown.clone(), |kind| format!("the {kind} {shown}")),
+        ));
+    }
+    let outside = crate::git::diff_paths(&diff)
+        .into_iter()
+        .find(|path| {
+            path.rule_text().map_or(true, |text| {
+                text.contains('\\')
+                    || projects.iter().any(|project| {
+                        super::classify::amendment_path(text, project)
+                            != Some(super::classify::AmendmentPath::Record)
+                    })
+            })
         })
         .map(|path| path.display().to_string());
     Ok(outside)
@@ -3511,6 +3604,7 @@ impl<'r> Judging<'r> {
         let scope = Scope {
             own_line: self.own_line.as_ref(),
             replaced: self.replaced.as_ref(),
+            branch_prefixes: None,
         };
         judge_in_range(
             &mut self.store,
@@ -4031,6 +4125,7 @@ pub fn completions_in_range(
         run,
         (line, receiving_line(line, None), None),
         stacked,
+        None,
     )
 }
 
@@ -4063,11 +4158,12 @@ fn completions_received(
     run: &RunBases,
     (line, receiving, sync_tip): (Option<&str>, Option<&str>, Option<LineSyncTip>),
     stacked: &[StackedHead],
+    prefixes: Option<&[String]>,
 ) -> Result<Vec<Finding>, String> {
     let _judgment = history::judgment();
     let amendable = criteria.amends();
     // The task a task pull request is for may waive a criterion by a
-    // record-only amendment in its own range (TSK-184); no other record may.
+    // planning amendment in its own range (TSK-184); no other record may.
     let own_task = match criteria {
         Criteria::OwnTask(id) => Some(id.as_str()),
         _ => None,
@@ -4103,6 +4199,22 @@ fn completions_received(
         &local,
         *criteria == Criteria::Amendable,
     );
+    let branch_task = if receiving.is_some() && receiving_line(line, None).is_none() {
+        let root = repo.workdir().unwrap_or_else(|| repo.path());
+        // The judged policy's prefixes, as `codeflow ci` reads its own
+        // task (TSK-1309 AC-6): the checkout's policy may name others.
+        line.map(|branch| {
+            match prefixes {
+                Some(prefixes) => super::work_start::judged_task_id(root, prefixes, branch, head),
+                None => super::work_start::task_id_from_branch_at(root, branch, head),
+            }
+            .map_err(|error| error.to_string())
+        })
+        .transpose()?
+        .flatten()
+    } else {
+        None
+    };
     let mut reviewed = Vec::new();
     let mut proofs = LineProofs::default();
     for task in after
@@ -4200,7 +4312,22 @@ fn completions_received(
                 ),
             );
             if let Some(proof) = bound.proof {
-                reviewed.push(proof.reviewed);
+                let branch_base =
+                    (branch_task.as_deref() == Some(task.id.as_str())).then_some(base_oid);
+                reviewed.push(receiving_merges::ReviewedTaskHead {
+                    head: proof.reviewed,
+                    branch_base,
+                    made_at: None,
+                });
+                reviewed.extend(archived_reviews(
+                    repo,
+                    task,
+                    anchor,
+                    head_oid,
+                    default_target,
+                    &with_own_line(run.stacking(), line, task, amendable.then_some(head_oid)),
+                    branch_base,
+                )?);
             }
             // A completion made before the range head but bound at it (a
             // frozen range) did not make the head's change: name the head.
@@ -4221,6 +4348,71 @@ fn completions_received(
         repo, base_oid, head_oid, receiving, &after, &reviewed, sync_tip,
     )?);
     Ok(findings)
+}
+
+/// The earlier completions of a reopened `task` whose reviews still credit
+/// its own work. An archived block counts only as strictly as an active
+/// one: this range's history made it at a commit (`at`) where it binds
+/// again through the same reviewed-span check ([`binding_source`]) to the
+/// same reviewed commit, and that commit is inside the judged head. Where
+/// `at` lies is judged by [`receiving_merges`]. A block the range did not
+/// make, that does not parse, or that no longer binds, credits nothing; an
+/// unreadable history is an error.
+fn archived_reviews(
+    repo: &Repository,
+    task: &RecordView,
+    anchor: Oid,
+    head: Oid,
+    default_target: Option<Oid>,
+    stacking: &StackingTips,
+    branch_base: Option<Oid>,
+) -> Result<Vec<receiving_merges::ReviewedTaskHead>, String> {
+    let archive = task.superseded_blocks();
+    if archive.is_empty() {
+        return Ok(Vec::new());
+    }
+    let made = completions_made(repo, task, Some(anchor), Landing::Commit(head))?;
+    let mut credited = Vec::new();
+    for archived in archive {
+        let Ok(mut block) = archived.parsed else {
+            continue;
+        };
+        block.superseded = false;
+        block.reason = None;
+        let Some(reviewed) = commit_of(repo, &block.reviewed) else {
+            continue;
+        };
+        if !is_ancestor_or_same(repo, reviewed, head)? {
+            continue;
+        }
+        for at in made
+            .iter()
+            .filter(|made| made.block == block)
+            .map(|made| made.at)
+        {
+            let Some(then) = record_at(repo, at, task)? else {
+                continue;
+            };
+            let bound = binding_source(
+                repo,
+                &then,
+                Landing::Commit(at),
+                reviewed,
+                Carried::Transport(Transport::TaskLanding),
+                stacking,
+                default_target,
+                Some(anchor),
+            );
+            if bound.is_ok_and(|proof| proof.reviewed == reviewed) {
+                credited.push(receiving_merges::ReviewedTaskHead {
+                    head: reviewed,
+                    branch_base,
+                    made_at: Some(at),
+                });
+            }
+        }
+    }
+    Ok(credited)
 }
 
 /// The target tips a completion in a range may stack merges from: the run's
@@ -4757,6 +4949,7 @@ pub fn pull_request_findings_into(
         &run,
         (branch, receiving_line(branch, into), sync_tip),
         &stacked,
+        scope.branch_prefixes,
     )?);
     Ok(found)
 }

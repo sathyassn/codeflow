@@ -27,8 +27,14 @@ pub const TEST_CONFIG_PATH: &str = ".codeflow/test-config.json";
 /// Result of one target's run through the gate.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GateTargetResult {
+    pub status: super::runner::deadline::TargetStatus,
+    pub supervision: Option<super::runner::deadline::Supervision>,
+    pub termination_unconfirmed: bool,
     pub name: String,
-    /// Process exit code; `-1` when the command could not run at all.
+    /// Child exit code when available. `-1` is a runner sentinel for missing
+    /// exit status, failure to start, an unrun target or incomplete cleanup.
+    /// Consult `status`, `error` and cleanup details; `-1` does not imply that
+    /// the child itself failed to start.
     pub exit_code: i32,
     pub duration_ms: u64,
     pub stdout: String,
@@ -49,7 +55,7 @@ impl GateTargetResult {
     /// Whether this target passed.
     #[must_use]
     pub fn passed(&self) -> bool {
-        self.exit_code == 0 && self.error.is_none()
+        self.exit_code == 0 && self.error.is_none() && !self.termination_unconfirmed
     }
 }
 
@@ -416,6 +422,9 @@ fn run_configured(
                     .and_then(|t| validation::parse_target_report(t, &run).ok().flatten())
                     .map(|rep| summarize_report(&rep));
                 GateTargetResult {
+                    status: run.status(),
+                    supervision: run.supervision,
+                    termination_unconfirmed: run.termination_unconfirmed,
                     name: run.target_name,
                     exit_code: run.exit_code,
                     duration_ms: run.duration_ms,
@@ -426,6 +435,9 @@ fn run_configured(
                 }
             }
             Err(e) => GateTargetResult {
+                status: super::runner::deadline::TargetStatus::Failed,
+                supervision: None,
+                termination_unconfirmed: false,
                 name: "(gate)".to_string(),
                 exit_code: -1,
                 duration_ms: 0,
@@ -980,6 +992,9 @@ mod tests {
     }
     fn ok_result() -> GateTargetResult {
         GateTargetResult {
+            status: crate::testing::runner::deadline::TargetStatus::Passed,
+            supervision: None,
+            termination_unconfirmed: false,
             name: "t".into(),
             exit_code: 0,
             duration_ms: 1,

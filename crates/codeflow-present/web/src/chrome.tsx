@@ -1,3 +1,5 @@
+import { runtime } from "./tokens.ts";
+import { settings } from "./tokens.ts";
 /**
  * Present review chrome — utility presentation system Comment SM + craft.
  * Rust owns #cf-present-document; this Preact tree owns chrome only (ADR-0049).
@@ -115,7 +117,7 @@ const COMMENT_INSTRUCTION = "Select words, click any part, or drag a box; hold S
 const TOUCH_INSTRUCTION = "Select words, tap a part, or use Select area to drag a box.";
 /** The instruction for this screen: a phone or touch screen has no Shift key. */
 function commentInstruction(): string {
-  return window.matchMedia("(max-width: 879.98px)").matches || navigator.maxTouchPoints > 0 ? TOUCH_INSTRUCTION : COMMENT_INSTRUCTION;
+  return window.matchMedia(runtime.compactQuery).matches || navigator.maxTouchPoints > 0 ? TOUCH_INSTRUCTION : COMMENT_INSTRUCTION;
 }
 
 
@@ -280,22 +282,22 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     if (target) {
       const width = float.offsetWidth;
       const height = float.offsetHeight;
-      const clampTop = (top: number) => Math.min(Math.max(8, top), window.innerHeight - height - 8);
-      let left = Math.min(Math.max(8, target.left), right - width - 8);
-      let top = target.bottom + 12;
-      if (top + height > window.innerHeight - 64) top = target.top - height - 12;
-      if (top < 8 && target.right + width + 8 <= right - 8) {
-        left = target.right + 8;
+      const clampTop = (top: number) => Math.min(Math.max(runtime.lengths.px8, top), window.innerHeight - height - runtime.lengths.px8);
+      let left = Math.min(Math.max(runtime.lengths.px8, target.left), right - width - runtime.lengths.px8);
+      let top = target.bottom + runtime.lengths.px12;
+      if (top + height > window.innerHeight - runtime.lengths.px64) top = target.top - height - runtime.lengths.px12;
+      if (top < runtime.lengths.px8 && target.right + width + runtime.lengths.px8 <= right - runtime.lengths.px8) {
+        left = target.right + runtime.lengths.px8;
         top = clampTop(target.top);
-      } else if (top < 8 && target.left - width - 8 >= 8) {
-        left = target.left - width - 8;
+      } else if (top < runtime.lengths.px8 && target.left - width - runtime.lengths.px8 >= runtime.lengths.px8) {
+        left = target.left - width - runtime.lengths.px8;
         top = clampTop(target.top);
-      } else if (top < 8) top = clampTop(target.bottom + 8);
+      } else if (top < runtime.lengths.px8) top = clampTop(target.bottom + runtime.lengths.px8);
       float.style.left = `${left}px`;
       float.style.top = `${top}px`;
     }
-    const overflow = float.getBoundingClientRect().right - (right - 8);
-    if (overflow > 0) float.style.left = `${Math.max(8, float.offsetLeft - overflow)}px`;
+    const overflow = float.getBoundingClientRect().right - (right - runtime.lengths.px8);
+    if (overflow > 0) float.style.left = `${Math.max(runtime.lengths.px8, float.offsetLeft - overflow)}px`;
   }, [pendingPin, composerOpen, discardPrompt]);
   settingsOpenRef.current = settingsOpen;
   const railVisible = commentMode && panelOpen;
@@ -1663,7 +1665,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
               </div>
               <div>
                 <div class="lbl">
-                  Palette<span class="d">Surfaces and accent</span>
+                  Theme<span class="d">Surfaces</span>
                 </div>
                 <div class="pills" data-testid="skin-pills">
                   {skinPills.map((t) => (
@@ -1671,7 +1673,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                       type="button"
                       data-skin={t}
                       aria-pressed={appearance.theme === t}
-                      onClick={() => setAppearance((c) => ({ ...c, theme: t }))}
+                      onClick={() => setAppearance((c) => ({ ...c, theme: t, accent: (settings.themes[t] as readonly string[]).includes(c.accent) ? c.accent : settings.defaultAccent }))}
                     >
                       <span class="sw" aria-hidden="true">
                         <i class="sw-canvas" />
@@ -1684,7 +1686,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
               </div>
               <div>
                 <div class="lbl">
-                  Appearance<span class="d">Light, dark or the system</span>
+                  Mode<span class="d">Light, dark or the system</span>
                 </div>
                 <div class="pills">
                   {(Object.keys(modeLabels) as AppearanceMode[]).map((m) => (
@@ -1694,6 +1696,18 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                       onClick={() => setAppearance((c) => ({ ...c, mode: m }))}
                     >
                       {modeLabels[m]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div class="lbl">Accent<span class="d">Curated for this theme</span></div>
+                <div class="pills" data-testid="accent-pills">
+                  {settings.themes[appearance.theme].map((accent) => (
+                    <button type="button" data-accent={accent}
+                      aria-pressed={appearance.accent === accent}
+                      onClick={() => setAppearance((current) => ({ ...current, accent }))}>
+                      {accent === "green" ? "Deep green" : accent === "plum" ? "Plum" : "Violet"}
                     </button>
                   ))}
                 </div>
@@ -1734,7 +1748,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           class="cf-float on"
           data-testid="float-chip"
           ref={floatRef}
-          style={`left:${Math.max(8, pendingPin.clientX - 40)}px;top:${Math.min(Math.max(8, pendingPin.clientY + 8), window.innerHeight - 48)}px`}
+          style={`left:${Math.max(runtime.lengths.px8, pendingPin.clientX - runtime.lengths.px40)}px;top:${Math.min(Math.max(runtime.lengths.px8, pendingPin.clientY + runtime.lengths.px8), window.innerHeight - runtime.lengths.px48)}px`}
         >
           <button type="button" class="main" data-testid="float-comment" onClick={openComposerFromFloat}>
             <span class="ico" aria-hidden="true">
@@ -2087,13 +2101,13 @@ function regionDraftStyle(draft: RegionDraft): string {
 
 /** The width at which the notes rail becomes a bottom sheet (styles.css). */
 function sheetLayout(): boolean {
-  return window.matchMedia("(max-width: 879.98px)").matches;
+  return window.matchMedia(runtime.compactQuery).matches;
 }
 
 function composerPositionStyle(clientX: number, clientY: number): string {
-  const width = Math.min(360, Math.max(240, window.innerWidth - 24));
-  const left = Math.min(Math.max(12, clientX - 20), Math.max(12, window.innerWidth - width - 12));
-  const top = Math.min(Math.max(12, clientY + 16), Math.max(12, window.innerHeight - 280));
+  const width = Math.min(runtime.lengths.px360, Math.max(runtime.lengths.px240, window.innerWidth - runtime.lengths.px24));
+  const left = Math.min(Math.max(runtime.lengths.px12, clientX - runtime.lengths.px20), Math.max(runtime.lengths.px12, window.innerWidth - width - runtime.lengths.px12));
+  const top = Math.min(Math.max(runtime.lengths.px12, clientY + runtime.lengths.px16), Math.max(runtime.lengths.px12, window.innerHeight - runtime.lengths.px280));
   return `left:${left}px;top:${top}px;width:${width}px`;
 }
 
@@ -2124,7 +2138,7 @@ interface MarkerSpot {
 
 /** The width of a marker whose number has as many digits as `index + 1`. */
 function markerWidth(index: number): number {
-  return 46 + 8 * (String(index + 1).length - 1);
+  return runtime.lengths.px46 + runtime.lengths.px8 * (String(index + 1).length - 1);
 }
 
 /** The height of one line of a text note's block, for how far its marker may move down. */
@@ -2143,7 +2157,7 @@ function lineHeightOf(documentRoot: HTMLElement, blockId: string): number {
  */
 function markerFloor(root: DOMRect): number {
   const route = document.querySelector<HTMLElement>(".cf-section-route")?.getBoundingClientRect();
-  return route && route.width > 0 ? route.right + 2 - root.left : 2 - root.left;
+  return route && route.width > 0 ? route.right + runtime.lengths.px2 - root.left : runtime.lengths.px2 - root.left;
 }
 
 /**
@@ -2176,21 +2190,21 @@ function markerPlacement(
   const top = rect.top - root.top;
   const width = markerWidth(index);
   const floor = markerFloor(root);
-  const clamp = (x: number): number => Math.max(floor, Math.min(x, innerWidth - root.left - width * 1.03 - 8));
+  const clamp = (x: number): number => Math.max(floor, Math.min(x, innerWidth - root.left - width * 1.03 - runtime.lengths.px8));
   const line = text && !words ? top + (meta?.ay ?? 0) * rect.height : top;
-  // A marker beside its line may move down while it still covers 10 px of
+  // A marker beside its line may move down while it still covers runtime.lengths.px10 px of
   // the line: of the selected line for a text note, else of its anchor.
   const extent = text ? lineHeightOf(documentRoot, note.block_id) : rect.height;
-  const reach = Math.max(0, extent - 10);
+  const reach = Math.max(0, extent - runtime.lengths.px10);
   // A gutter narrowed by the sections list keeps the marker past the list,
   // closer to its line, up to touching it but never over it.
-  const gutter = Math.max(left - width - 8, floor);
-  if (gutter >= 2 && gutter + width <= left) return { left: clamp(gutter), top: Math.max(2, line - 2), width, side: "gutter", reach, below: 0 };
-  const right = left + rect.width + 8;
-  if (right + width <= root.width - 2) return { left: clamp(right), top: Math.max(2, line - 2), width, side: "right", reach, below: 0 };
-  const end = Math.min(left + rect.width, root.width - 2) - width;
-  const above = Math.max(2, line - markerHeight() - 4);
-  return { left: clamp(Math.max(2, end)), top: above, width, side: "above", reach: 4, below: line + extent + 4 };
+  const gutter = Math.max(left - width - runtime.lengths.px8, floor);
+  if (gutter >= runtime.lengths.px2 && gutter + width <= left) return { left: clamp(gutter), top: Math.max(runtime.lengths.px2, line - runtime.lengths.px2), width, side: "gutter", reach, below: 0 };
+  const right = left + rect.width + runtime.lengths.px8;
+  if (right + width <= root.width - runtime.lengths.px2) return { left: clamp(right), top: Math.max(runtime.lengths.px2, line - runtime.lengths.px2), width, side: "right", reach, below: 0 };
+  const end = Math.min(left + rect.width, root.width - runtime.lengths.px2) - width;
+  const above = Math.max(runtime.lengths.px2, line - markerHeight() - runtime.lengths.px4);
+  return { left: clamp(Math.max(runtime.lengths.px2, end)), top: above, width, side: "above", reach: runtime.lengths.px4, below: line + extent + runtime.lengths.px4 };
 }
 
 /**
@@ -2214,10 +2228,10 @@ function markerPlacements(
 ): (MarkerSpot | null)[] {
   const spots = notes.map((note, index) => markerPlacement(documentRoot, note, meta.get(note.client_id), index, markerEpoch));
   const height = markerHeight();
-  const gap = 2;
+  const gap = runtime.lengths.px2;
   const root = documentRoot.getBoundingClientRect();
   const floor = markerFloor(root);
-  const ceiling = innerWidth - root.left - 8;
+  const ceiling = innerWidth - root.left - runtime.lengths.px8;
   const placed: MarkerSpot[] = [];
   const hit = (box: MarkerSpot): MarkerSpot | undefined =>
     placed.find((other) => box.left < other.left + other.width + gap && other.left < box.left + box.width + gap && box.top < other.top + height + gap && other.top < box.top + height + gap);
@@ -2227,7 +2241,7 @@ function markerPlacements(
     const box = { ...spot, left };
     for (let other = hit(box); other; other = hit(box)) {
       box.top = up ? other.top - height - gap : other.top + height + gap;
-      if (Math.abs(box.top - spot.top) > reach || box.top < 2) return null;
+      if (Math.abs(box.top - spot.top) > reach || box.top < runtime.lengths.px2) return null;
     }
     return box;
   };
@@ -2258,7 +2272,7 @@ function markerPlacements(
 
 /** A marker's height: 26 px, raised by the button minimum of 2.25rem (styles.css). */
 function markerHeight(): number {
-  return Math.max(26, 2.25 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16));
+  return Math.max(runtime.lengths.px26, runtime.minimumMarkerRem * (parseFloat(getComputedStyle(document.documentElement).fontSize) || runtime.lengths.px16));
 }
 
 /** The faint outline of a saved area, in document coordinates; none for a whole-document note. */

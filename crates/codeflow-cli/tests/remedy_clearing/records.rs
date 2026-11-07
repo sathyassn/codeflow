@@ -76,9 +76,9 @@ impl Hosted {
         commit_all(&self.root, "docs: plan the work");
     }
 
-    /// Land `branch` on the destination's target, as a reviewed merge on
-    /// the platform does, then fast-forward the local target to it.
-    fn land(&self, branch: &str) {
+    /// Land `branch` on the destination and fetch its remote-tracking refs.
+    /// The local target branch stays where it was.
+    fn land_on_destination(&self, branch: &str) {
         git(
             &self.dest,
             &[
@@ -89,6 +89,11 @@ impl Hosted {
             ],
         );
         git(&self.root, &["fetch", "-q", "origin"]);
+    }
+
+    /// Land `branch`, then fast-forward the local target to it.
+    fn land(&self, branch: &str) {
+        self.land_on_destination(branch);
         git(
             &self.root,
             &[
@@ -572,6 +577,63 @@ fn clears_work_start_reconcile() {
             git(root, &["branch", "-f", target, &hosted.upstream()]);
             let step = printed_command(printed, "WORK_START_RECONCILE", None);
             run_printed(root, &step, &[], &[]);
+        },
+    );
+}
+
+#[test]
+fn clears_work_target_tip() {
+    const BRANCH: &str = "task/TSK-001-work";
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    hosted.plan_task("plan/work");
+    hosted.land("plan/work");
+    let old_target = rev(root, &hosted.target);
+    hosted.branch(BRANCH);
+    commit(root, "x.txt", "feat: add x");
+    hosted.branch("plan/advance");
+    commit(root, "target.txt", "docs: advance target");
+    hosted.land_on_destination("plan/advance");
+    git(root, &["switch", "-q", BRANCH]);
+    // Fetching the remote does not keep the local target branch current.
+    // The printed fix must merge the verified remote commit, not this ref.
+    assert_eq!(rev(root, &hosted.target), old_target);
+    prove(
+        "WORK_TARGET_TIP",
+        "work.target_tip",
+        || hosted.ci(BRANCH, &["--into", &hosted.target]),
+        |printed| {
+            let step = printed_command(printed, "WORK_TARGET_TIP", None);
+            run_printed(root, &step, &[], &[]);
+        },
+    );
+}
+
+#[test]
+fn clears_work_target_unverified() {
+    const LINE: &str = "integration/x";
+    let dir = ci_repo("{}");
+    let root = dir.path();
+    git(root, &["branch", LINE, "main"]);
+    commit(root, "x.txt", "feat: add x");
+    // The target's tip cannot be read here, so containment is unverified.
+    git(root, &["branch", "-D", LINE]);
+    let args = [
+        "--base", "main", "--head", "HEAD", "--branch", "feat/x", "--into", LINE,
+    ];
+    prove(
+        "WORK_TARGET_UNVERIFIED",
+        "work.target_tip",
+        || {
+            let mut full = vec!["ci"];
+            full.extend(args);
+            codeflow(root, &full)
+        },
+        |printed| {
+            // Repair the target read as the finding says, then rerun.
+            git(root, &["branch", LINE, "main"]);
+            let step = printed_command(printed, "WORK_TARGET_UNVERIFIED", None);
+            run_printed(root, &step, &[], &args);
         },
     );
 }

@@ -612,6 +612,22 @@ fn a_cancelled_only_journey_criterion_needs_the_journey_in_the_own_block() {
     close("verified | fresh init").unwrap();
 }
 
+/// Commit the working tree with `path` staged as a symbolic link into
+/// product code, by its entry mode, so the fixture is the same on every
+/// platform.
+fn commit_with_link(repo: &Repo, path: &str) {
+    repo.git(&["config", "core.symlinks", "false"]);
+    repo.write(path, "../../src/lib.rs");
+    repo.git(&["add", "-A"]);
+    let link = repo.git(&["hash-object", "-w", path]);
+    repo.git(&[
+        "update-index",
+        "--cacheinfo",
+        &format!("120000,{link},{path}"),
+    ]);
+    repo.git(&["commit", "-q", "-m", "amend beside a link"]);
+}
+
 /// An epic's own acceptance block binds as a task's does (R-60): its
 /// reviewed commit exists and nothing but the record changed after it, and
 /// a waiver names a planning amendment of that criterion the review saw.
@@ -643,7 +659,17 @@ fn an_epic_own_block_binds_its_review_and_its_waivers() {
     );
     repo.write("src/lib.rs", "pub fn code() {}\n");
     let with_code = repo.commit("amend AC-1 beside code");
-    let head = repo.git(&["rev-parse", "HEAD"]);
+    repo.write(
+        EPIC_PATH,
+        &epic(
+            "planning",
+            "",
+            &amended_criteria.replace("or is waived.\n", "or is waived by link.\n"),
+        ),
+    );
+    commit_with_link(&repo, "docs/plan/EPC-001.md");
+    let with_link = repo.git(&["rev-parse", "HEAD"]);
+    let head = with_link.clone();
     let own = |reviewed: &str, ac1: &str, ac2: &str| {
         format!(
             "acceptance:\n  reviewed: {reviewed}\n  review: session:abc@sha256:00\n  criteria:\n    AC-1: {ac1}\n    AC-2: {ac2}\n  journey: none | n/a\n  not_verified: none\n  follow_ups: none: nothing left\n  verdict: approved\n"
@@ -682,6 +708,11 @@ fn an_epic_own_block_binds_its_review_and_its_waivers() {
             "an amendment that also changes code",
             own(&head, &format!("waived | {with_code}"), verified),
             "also changes src/lib.rs",
+        ),
+        (
+            "an amendment beside a symbolic link under the plan folder",
+            own(&head, &format!("waived | {with_link}"), verified),
+            "also changes the symbolic link docs/plan/EPC-001.md",
         ),
         (
             "an amendment the review did not see",

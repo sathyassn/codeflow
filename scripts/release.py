@@ -1298,7 +1298,7 @@ def pr_verdict(
     head = git("rev-parse", f"{args.head}^{{commit}}", cwd=args.root)
     base = current_base(event_base, target, head, cwd=args.root)
     body = (
-        args.body_file.read_text(encoding="utf-8")
+        read_source(args.body_file)
         if args.body_file
         else os.getenv(args.body_env, "")
     )
@@ -1923,7 +1923,7 @@ def preflight(args: argparse.Namespace) -> None:
             notes.append("marker floor and entry equality not checked: no PR body; set CODEFLOW_PR_DRAFT")
         else:
             try:
-                intent = parse_release_impact(draft.read_text(encoding="utf-8"), codeflow_bin(args))["impact"]
+                intent = parse_release_impact(read_source(draft), codeflow_bin(args))["impact"]
                 verdict_args = argparse.Namespace(**{
                     **vars(args), "base": base, "target_ref": base, "body_file": draft,
                 })

@@ -3084,7 +3084,32 @@ fn exec_doctor_step(
 ///    remedy: switch that worktree to its feature branch.
 ///
 /// Passes when every input is proven; unreadable repository evidence fails.
+///
+/// A file the process is refused is named here too, on every outcome, so a
+/// sandbox's refusal is never read as damage (see [`crate::git::unreadable`]).
 fn check_repo_integrity(opts: &Options) -> CheckResult {
+    let mut result = check_repo_layout(opts);
+    let here = if opts.project_dir.is_empty() {
+        "."
+    } else {
+        opts.project_dir.as_str()
+    };
+    let Ok(repo) = git2::Repository::open(here) else {
+        return result;
+    };
+    let found = crate::git::unreadable::scan(&repo);
+    for line in found.report_lines() {
+        result.message.push_str("\n      ");
+        result.message.push_str(&line);
+    }
+    if found.needs_action() && result.status == Status::Pass {
+        result.status = Status::Warn(crate::remedy::DOCTOR_ROOT_CHECKOUT.remedy());
+    }
+    result
+}
+
+/// The bare state, linked worktrees and root checkout of the repository.
+fn check_repo_layout(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
     let pass = |msg: &str| CheckResult {

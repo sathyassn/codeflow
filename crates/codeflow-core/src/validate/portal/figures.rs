@@ -1256,10 +1256,25 @@ fn verify_rendered_figures(
 /// The committed list of the runtime's fixed inline scripts, in the portal.
 pub(super) const RUNTIME_SCRIPTS_FILE: &str = "scripts/runtime-scripts.json";
 const REGENERATE: &str = "npm run build && node scripts/runtime-scripts.mjs dist";
+/// What an owner does about a list from before version 2, word for word the
+/// starter's `SCHEMA_UPGRADE` (`scripts/runtime-scripts.mjs`); the shared
+/// list cases hold both to the same text. The old
+/// generator keeps the committed `schema_version`, so regenerating alone
+/// writes version 1 again: the version 2 generator comes first.
+const SCHEMA_UPGRADE: &str = "adopt the version 2 generator first (`codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\"";
+
+/// The version of the runtime script list this validator reads. Version 2
+/// records the pre-paint script's hash for every theme; version 1 recorded
+/// only its template, which the validator would have to rebuild.
+const RUNTIME_SCRIPTS_SCHEMA: u64 = 2;
 
 /// The hashes an inline script outside the page content may have: the
-/// runtime's fixed scripts as committed, and the pre-paint display script the
-/// configuration's theme writes into the committed template.
+/// runtime's fixed scripts as committed, and the pre-paint display script's
+/// hash for the configured theme as the portal's own generator
+/// (`scripts/runtime-scripts.mjs`) recorded it. The validator never rebuilds
+/// the pre-paint script, so the generator stays its one source. An older
+/// list, a theme map that is not exactly the configurable themes, or a
+/// missing or malformed hash fails closed.
 pub(super) fn runtime_inline_scripts(
     list: &[u8],
     config: &[u8],
@@ -1272,10 +1287,44 @@ pub(super) fn runtime_inline_scripts(
         .get("theme")
         .and_then(serde_json::Value::as_str)
         .ok_or("the configuration names no theme")?;
-    let template = list
-        .get("pre_paint_template")
+    // Read as a JSON number, as the starter's reader reads it, so `2.0` is
+    // version 2 on both sides and a fraction or a string is no version.
+    let schema = list
+        .get("schema_version")
+        .and_then(serde_json::Value::as_f64);
+    #[allow(clippy::float_cmp, clippy::cast_precision_loss)]
+    if schema != Some(RUNTIME_SCRIPTS_SCHEMA as f64) {
+        let shown = schema
+            .filter(|version| {
+                version.fract() == 0.0 && (0.0..=9_007_199_254_740_991.0).contains(version)
+            })
+            .map_or_else(|| "none".to_string(), |version| format!("{version:.0}"));
+        return Err(format!(
+            "it has schema_version {shown}, and this codeflow reads version {RUNTIME_SCRIPTS_SCHEMA}; {SCHEMA_UPGRADE}"
+        ));
+    }
+    let hashes = list
+        .get("pre_paint_sha256")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| {
+            format!("it records no pre-paint script hashes; regenerate it: {REGENERATE}")
+        })?;
+    let recorded: BTreeSet<&str> = hashes.keys().map(String::as_str).collect();
+    let themes: BTreeSet<&str> = super::PORTAL_THEMES.into_iter().collect();
+    if recorded != themes {
+        return Err(format!(
+            "its pre-paint script hashes name the themes {}, not {}; regenerate it: {REGENERATE}",
+            recorded.into_iter().collect::<Vec<_>>().join(", "),
+            themes.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    let pre_paint = hashes
+        .get(theme)
         .and_then(serde_json::Value::as_str)
-        .ok_or("it has no pre-paint template")?;
+        .filter(|sha| valid_sha256(sha))
+        .ok_or_else(|| {
+            format!("it records no pre-paint script hash for the theme {theme:?}; regenerate it: {REGENERATE}")
+        })?;
     let mut allowed: BTreeSet<String> = list
         .get("scripts")
         .and_then(serde_json::Value::as_array)
@@ -1290,10 +1339,7 @@ pub(super) fn runtime_inline_scripts(
                 .ok_or_else(|| "a script entry has no sha256".to_string())
         })
         .collect::<Result<_, _>>()?;
-    let theme = serde_json::to_string(theme).map_err(|error| error.to_string())?;
-    allowed.insert(sha256_hex(
-        template.replacen("__THEME__", &theme, 1).as_bytes(),
-    ));
+    allowed.insert(pre_paint.to_string());
     Ok(allowed)
 }
 
@@ -3022,29 +3068,41 @@ mod tests {
     }
 
     /// Every inline script outside the content is one the runtime emits: the
-    /// committed fixed scripts, and the pre-paint script the configured theme
-    /// writes into the committed template. Any other names the regeneration.
+    /// committed fixed scripts, and the pre-paint script for the configured
+    /// theme. The expected pre-paint script and its hash come from the
+    /// fixture the portal's generator writes (`scripts/runtime-scripts.mjs`),
+    /// never from this crate, so a validator that rebuilt or hashed the
+    /// script differently from the generator fails here. Any other script
+    /// names the regeneration.
     #[test]
     fn inline_scripts_are_held_to_the_runtime_list() {
-        let list = std::fs::read(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../docs-portal/scripts/runtime-scripts.json"),
+        let portal = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs-portal");
+        let list = std::fs::read(portal.join("scripts/runtime-scripts.json")).unwrap();
+        let committed: serde_json::Value = serde_json::from_slice(&list).unwrap();
+        let fixture: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(portal.join("tests/fixtures/pre-paint-script.json")).unwrap(),
         )
         .unwrap();
-        let committed: serde_json::Value = serde_json::from_slice(&list).unwrap();
-        let allowed = runtime_inline_scripts(&list, br#"{"theme": "signal"}"#).unwrap();
+        let theme = fixture["theme"].as_str().unwrap();
+        let pre_paint = fixture["script"].as_str().unwrap().to_string();
+        // The generator's hash is the hash of the script it wrote, on this
+        // side too, and the list records it for that theme.
+        assert_eq!(
+            sha256_hex(pre_paint.as_bytes()),
+            fixture["sha256"].as_str().unwrap()
+        );
+        assert_eq!(committed["pre_paint_sha256"][theme], fixture["sha256"]);
+        let config = format!("{{\"theme\": {theme:?}}}");
+        let allowed = runtime_inline_scripts(&list, config.as_bytes()).unwrap();
         assert_eq!(
             allowed.len(),
             committed["scripts"].as_array().unwrap().len() + 1
         );
-        let pre_paint = committed["pre_paint_template"].as_str().unwrap().replacen(
-            "__THEME__",
-            "\"signal\"",
-            1,
-        );
         assert!(allowed.contains(&sha256_hex(pre_paint.as_bytes())));
+        // Another theme admits its own pre-paint script, not this one.
         let folio = runtime_inline_scripts(&list, br#"{"theme": "folio"}"#).unwrap();
         assert!(!folio.contains(&sha256_hex(pre_paint.as_bytes())));
+        assert!(folio.contains(committed["pre_paint_sha256"]["folio"].as_str().unwrap()));
         let built = |head: &str| {
             format!("<!doctype html><html><head><script>{pre_paint}</script>{head}</head><body><main><div class=\"sl-markdown-content\"><p>Text.</p></div></main></body></html>")
         };
@@ -3067,6 +3125,68 @@ mod tests {
         assert_eq!(report.issues.len(), 1, "{:?}", report.issues);
         assert!(report.issues[0].starts_with("built page dist/a/index.html carries inline scripts the site's runtime does not emit (sha256 "));
         assert!(report.issues[0].ends_with("if the runtime changed, regenerate scripts/runtime-scripts.json: npm run build && node scripts/runtime-scripts.mjs dist"));
+    }
+
+    /// A list the validator cannot read exactly fails closed with the same
+    /// reason the starter's JavaScript reader gives. The cases and their
+    /// reasons are a shared fixture (`tests/fixtures/runtime-scripts-cases.json`)
+    /// that `chrome.test.mjs` runs through `runtimeScriptsFailure`, so the two
+    /// readers accept and refuse the same lists: a version 1 list, whose fix
+    /// is the version 2 generator first, a theme map missing another theme or
+    /// carrying an extra one, an unknown theme and malformed hashes.
+    #[test]
+    fn runtime_script_list_fails_closed_like_the_starter_reader() {
+        let portal = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs-portal");
+        let list: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(portal.join("scripts/runtime-scripts.json")).unwrap(),
+        )
+        .unwrap();
+        let fixture: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(portal.join("tests/fixtures/runtime-scripts-cases.json")).unwrap(),
+        )
+        .unwrap();
+        let cases = fixture["cases"].as_array().unwrap();
+        assert!(cases.len() >= 10);
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let mut edited = list.clone();
+            for (pointer, value) in case["set"].as_object().into_iter().flatten() {
+                let (parent, key) = pointer.rsplit_once('/').unwrap();
+                match edited.pointer_mut(parent).unwrap() {
+                    serde_json::Value::Object(map) => {
+                        map.insert(key.to_string(), value.clone());
+                    }
+                    serde_json::Value::Array(items) => {
+                        items[key.parse::<usize>().unwrap()] = value.clone();
+                    }
+                    other => panic!("{name}: cannot set {pointer} in {other}"),
+                }
+            }
+            for pointer in case["remove"].as_array().into_iter().flatten() {
+                let (parent, key) = pointer.as_str().unwrap().rsplit_once('/').unwrap();
+                edited
+                    .pointer_mut(parent)
+                    .and_then(serde_json::Value::as_object_mut)
+                    .unwrap()
+                    .remove(key)
+                    .unwrap();
+            }
+            let theme = case["theme"].as_str().unwrap();
+            let read = runtime_inline_scripts(
+                &serde_json::to_vec(&edited).unwrap(),
+                serde_json::json!({ "theme": theme }).to_string().as_bytes(),
+            );
+            match case["error"].as_str() {
+                None => {
+                    let allowed = read.unwrap_or_else(|error| panic!("{name}: {error}"));
+                    assert!(
+                        allowed.contains(list["pre_paint_sha256"][theme].as_str().unwrap()),
+                        "{name}"
+                    );
+                }
+                Some(error) => assert_eq!(read.unwrap_err(), error, "{name}"),
+            }
+        }
     }
 
     #[test]

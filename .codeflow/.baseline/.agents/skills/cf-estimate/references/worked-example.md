@@ -42,6 +42,14 @@ scenario assumptions, not P10/P50/P90 or guarantees. A material unknown about
 who owns the filtering behavior would instead make the package UNSIZED until
 resolved; ordinary duration uncertainty does not.
 
+Under an adopted time-box profile with the starting bands (operating-model.md),
+the Easy grade stays, and the planning scenario's 160 minutes sit above the
+Easy top of 2 hours. The planner records a one-step band move to Medium
+(2 to 4 hours) for proof volume, a reason apart from the score: three
+refusal obligations and a backing-service integration to verify. The points
+stay at 1, and the band top is the stop rule for this one package, not a
+forecast of when it lands.
+
 For a fully serial allocation beginning at 09:00, the planning active work ends
 at 11:40 if all resources are available. If release access first opens at 13:00,
 the release waits until then and finishes at 13:10: **4h10 calendar lead time**,

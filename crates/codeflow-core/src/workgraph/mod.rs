@@ -10,6 +10,8 @@
 pub mod acceptance;
 pub mod allocate;
 pub mod amendment;
+pub mod candidate_removal;
+pub mod claim_base;
 pub mod classify;
 pub mod deps;
 mod format_id;
@@ -21,6 +23,7 @@ pub mod lifecycle;
 pub mod light_paths;
 pub mod line_adoption;
 pub mod line_drift;
+pub(crate) mod local_branches;
 pub mod outcome;
 pub mod readiness;
 pub mod record_template;

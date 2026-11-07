@@ -20,6 +20,7 @@ use crate::{
     error::{PresentError, Result},
     limits,
     platform::is_link_like,
+    stage_measurements::StageMeasurementOutcome,
 };
 
 #[cfg(not(windows))]
@@ -1166,6 +1167,92 @@ impl SessionStore {
             )));
         }
         Ok(record)
+    }
+
+    /// Measurements are bounded advisory state, replaced atomically under the
+    /// same session lock as revision changes. Valid late reports are checked
+    /// against their source revision and ignored without altering current state.
+    pub(crate) fn record_stage_measurement(
+        &self,
+        id: Uuid,
+        measurement: crate::stage_measurements::StageMeasurement,
+    ) -> Result<StageMeasurementOutcome> {
+        let _project_lease = self.lock_project_mutation()?;
+        let _lock = self.lock_session(id)?;
+        let current = self.current_revision(id)?;
+        let stale = measurement.revision > 0 && measurement.revision < current.revision;
+        let revision = if stale {
+            self.revision(id, measurement.revision)?
+        } else {
+            current
+        };
+        let RevisionContent::Supported { document } = revision.content else {
+            return Err(PresentError::InvalidRequest(
+                "this revision cannot be measured".into(),
+            ));
+        };
+        let utility = self
+            .utility_tokens()?
+            .map(|tokens| tokens.css())
+            .unwrap_or_default();
+        let contract = crate::stage_measurements::rendering_contract(&utility);
+        measurement.validate(&document, revision.revision, &contract)?;
+        if stale {
+            return Ok(StageMeasurementOutcome::IgnoredStaleRevision);
+        }
+        let mut records = self.stage_measurements(id)?;
+        records.retain(|entry| {
+            entry
+                .validate(&document, revision.revision, &contract)
+                .is_ok()
+                && !entry.same_key(&measurement)
+        });
+        if records
+            .iter()
+            .filter(|entry| entry.stage_id == measurement.stage_id)
+            .count()
+            >= crate::stage_measurements::MAX_ENTRIES_PER_STAGE
+        {
+            return Err(PresentError::InvalidRequest(
+                "stage measurement entry limit reached for this revision".into(),
+            ));
+        }
+        records.push(measurement);
+        let bytes = serialized_json_bytes(&records)?;
+        if bytes > limits::MAX_REVISION_STATE_BYTES {
+            return Err(PresentError::InvalidRequest(
+                "stage measurements exceed the session bound".into(),
+            ));
+        }
+        self.ensure_project_capacity_unlocked(bytes, true)?;
+        write_json_atomic(
+            &self.session_dir(id).join("stage-measurements.json"),
+            &records,
+        )?;
+        Ok(StageMeasurementOutcome::Recorded)
+    }
+
+    pub(crate) fn stage_measurements(
+        &self,
+        id: Uuid,
+    ) -> Result<Vec<crate::stage_measurements::StageMeasurement>> {
+        self.ensure_session_layout(id)?;
+        let path = self.session_dir(id).join("stage-measurements.json");
+        let result = match fs::symlink_metadata(&path) {
+            Ok(_) => read_json(&path, limits::MAX_REVISION_STATE_BYTES),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(PresentError::io(path, error)),
+        };
+        match result {
+            Ok(records) => Ok(records),
+            Err(error) => {
+                eprintln!(
+                    "present: warning: advisory stage measurements ignored: {}",
+                    crate::output::display_message(&error.to_string())
+                );
+                Ok(Vec::new())
+            }
+        }
     }
 
     pub fn current_revision(&self, id: Uuid) -> Result<RevisionRecord> {

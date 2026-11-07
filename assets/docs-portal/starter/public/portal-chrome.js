@@ -20,9 +20,9 @@
   const mq = q => window.matchMedia(q);
   const mqDark = mq('(prefers-color-scheme: dark)');
   const mqReduce = mq('(prefers-reduced-motion: reduce)');
-  const mqNavSheet = mq('(max-width: 879.98px)');
-  const mqTocSheet = mq('(max-width: 1119.98px)');
-  const mqPhone = mq('(max-width: 599.98px)');
+  const mqNavSheet = mq(globalThis.CF_RUNTIME_LAYOUT.compactQuery);
+  const mqTocSheet = mq(globalThis.CF_RUNTIME_LAYOUT.tocQuery);
+  const mqPhone = mq(globalThis.CF_RUNTIME_LAYOUT.phoneQuery);
   const editable = el => !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const mk = (tag, cls) => { const el = d.createElement(tag); if (cls) el.className = cls; return el; };
@@ -32,15 +32,18 @@
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const CF = window.CF = {};
   /* ---------- Display preferences ---------- */
+  const choices = globalThis.CF_DISPLAY_SETTINGS;
+  const accentLabel = value => value === 'green' ? 'Deep green' : value === 'plum' ? 'Plum' : 'Violet';
   const PREFS = {
+    accent: { key: 'cf-portal-accent', attr: 'data-cf-accent', label: 'Accent', desc: 'Curated for this theme', def: choices.defaultAccent, options: [...new Set(Object.values(choices.themes).flat())].map(v => [v, accentLabel(v)]) },
     typeface: { key: 'cf-portal-typeface', attr: 'data-cfp-typeface', label: 'Font', desc: 'Body and headings', def: 'inter', options: [['archivo', 'Archivo'], ['inter', 'Inter'], ['plex', 'Plex Sans']] },
-    scale: { key: 'cf-portal-scale', attr: 'data-cfp-scale', label: 'Size', desc: 'Text and controls', def: 'default', options: [['compact', 'Compact'], ['default', 'Default'], ['large', 'Large']] },
-    skin: { key: 'cf-portal-skin', attr: 'data-cfp-skin', label: 'Palette', desc: 'Surfaces and accent', def: 'graphite', options: [['graphite', 'Graphite'], ['slate', 'Slate'], ['sage', 'Sage']] },
-    theme: { key: 'starlight-theme', attr: null, label: 'Appearance', desc: 'Light, dark or the system', def: 'system', options: [['light', 'Light'], ['dark', 'Dark'], ['system', 'System']] }
+    scale: { key: 'cf-portal-scale', attr: 'data-cfp-scale', label: 'Size', desc: 'Text and controls', def: 'default', options: choices.sizes.map(v => [v, v[0].toUpperCase() + v.slice(1)]) },
+    skin: { key: 'cf-portal-skin', attr: 'data-cfp-skin', label: 'Theme', desc: 'Surfaces', def: 'graphite', options: Object.keys(choices.themes).map(v => [v, v[0].toUpperCase() + v.slice(1)]) },
+    theme: { key: 'starlight-theme', attr: null, label: 'Mode', desc: 'Light, dark or the system', def: 'system', options: choices.modes.map(v => [v, v[0].toUpperCase() + v.slice(1)]) }
   };
   function getPref(name) {
     const p = PREFS[name], saved = store.get(p.key);
-    const aliases = name === 'skin' ? {instrument: 'graphite', technical: 'graphite', editorial: 'slate', ink: 'sage'} : name === 'typeface' ? {instrument: 'archivo', editorial: 'inter'} : {};
+    const aliases = name === 'skin' ? {instrument: 'graphite', technical: 'graphite', editorial: 'slate', ink: 'sage'} : name === 'typeface' ? {instrument: 'archivo', editorial: 'inter'} : name === 'theme' ? {auto: 'system'} : {};
     const v = Object.hasOwn(aliases, saved) ? aliases[saved] : saved;
     return p.options.some(o => o[0] === v) ? v : (p.attr && root.getAttribute(p.attr)) || p.def;
   }
@@ -49,8 +52,11 @@
     root.setAttribute('data-theme', pref === 'system' ? (mqDark.matches ? 'dark' : 'light') : pref);
   }
   function setPref(name, value) {
-    store.set(PREFS[name].key, value);
+    store.set(PREFS[name].key, name === 'theme' && value === 'system' ? 'auto' : value);
     if (name === 'theme') applyTheme(); else root.setAttribute(PREFS[name].attr, value);
+    const allowed = choices.themes[getPref('skin')];
+    if (!allowed.includes(getPref('accent'))) store.set(PREFS.accent.key, choices.defaultAccent);
+    root.setAttribute('data-cf-accent', getPref('accent'));
     syncDisplay();
     d.dispatchEvent(new CustomEvent('cf:prefs', { detail: { name, value } }));
   }
@@ -115,6 +121,7 @@
     setPref(name, pill.dataset.value);
   }
   function syncDisplay() {
+    for (const pill of $$('[data-pref="accent"] [data-value]')) pill.hidden = !choices.themes[getPref('skin')].includes(pill.dataset.value);
     if (!displayEl) return;
     $$('.cf-pills', displayEl).forEach(g => {
       const v = getPref(g.dataset.pref);
