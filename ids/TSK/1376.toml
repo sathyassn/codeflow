@@ -1,0 +1,11 @@
+id = "TSK-1376"
+uid = "309e1f8f-80ae-4b50-88e7-d053f5facf2e"
+kind = "TSK"
+title = "A project can raise the guard readers' bounds"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-07T17:46:08Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
