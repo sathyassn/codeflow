@@ -14,33 +14,65 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-R35KF7CY.js",
-      "present.style": "/app/assets/app-XOLPL54V.css"
+      "present.app": "/app/assets/app-KACSZ2NG.js",
+      "present.style": "/app/assets/app-GBKP73KV.css"
     },
     "inline": {
       "present.prepaint": {
-        "source": "\"use strict\";(()=>{function c(e){switch(e){case\"instrument\":case\"technical\":return\"graphite\";case\"editorial\":return\"slate\";case\"ink\":return\"sage\";default:return e}}function o(e){switch(e){case\"instrument\":return\"archivo\";case\"editorial\":return\"inter\";default:return e}}(()=>{let e=new Set([\"graphite\",\"slate\",\"sage\"]),i=new Set([\"system\",\"light\",\"dark\"]),m=new Set([\"archivo\",\"inter\",\"plex\"]),d=new Set([\"compact\",\"default\",\"large\"]),a=null,n=null,s=null,r=null;try{a=c(localStorage.getItem(\"cf-present-theme\")),n=localStorage.getItem(\"cf-present-mode\"),s=o(localStorage.getItem(\"cf-present-typeface\")),r=localStorage.getItem(\"cf-present-scale\")}catch{}let u=a&&e.has(a)?a:\"graphite\",l=n&&i.has(n)?n:\"system\",f=s&&m.has(s)?s:\"inter\",g=r&&d.has(r)?r:\"default\",h=l===\"system\"?matchMedia(\"(prefers-color-scheme: dark)\").matches?\"dark\":\"light\":l,t=document.documentElement;t.dataset.cfTheme=u,t.dataset.cfMode=l,t.dataset.cfModeResolved=h,t.dataset.cfTypeface=f,t.dataset.cfScale=g})();})();",
-        "sha256": "f50958fb63ba9c4dae14106c89be5fb5cf6e6b6e4635ab0e68f2df1052ec0425",
-        "csp_sha256": "sha256-9QlY+2O6nE2uFBBsib5ftc9ua25GNasOaPLfEFLsBCU="
+        "source": "\"use strict\";(()=>{var n={themes:{graphite:[\"green\",\"plum\"],slate:[\"green\",\"violet\"],sage:[\"green\",\"plum\"]},modes:[\"system\",\"light\",\"dark\"],sizes:[\"compact\",\"default\",\"large\"],defaultTheme:\"graphite\",defaultAccent:\"green\"};function h(e){switch(e){case\"instrument\":case\"technical\":return\"graphite\";case\"editorial\":return\"slate\";case\"ink\":return\"sage\";default:return e}}function p(e){switch(e){case\"instrument\":return\"archivo\";case\"editorial\":return\"inter\";default:return e}}(()=>{let e=new Set(Object.keys(n.themes)),m=new Set(n.modes),i=new Set([\"archivo\",\"inter\",\"plex\"]),o=new Set(n.sizes),a=null,r=null,l=null,g=null,c=null;try{a=h(localStorage.getItem(\"cf-present-theme\")),r=localStorage.getItem(\"cf-present-mode\"),l=p(localStorage.getItem(\"cf-present-typeface\")),g=localStorage.getItem(\"cf-present-scale\"),c=localStorage.getItem(\"cf-present-accent\")}catch{}let f=a&&e.has(a)?a:\"graphite\",s=r&&m.has(r)?r:\"system\",d=l&&i.has(l)?l:\"inter\",x=g&&o.has(g)?g:\"default\",u=s===\"system\"?matchMedia(\"(prefers-color-scheme: dark)\").matches?\"dark\":\"light\":s,t=document.documentElement;t.dataset.cfTheme=f;let v=n.themes[f];t.dataset.cfAccent=c&&v.includes(c)?c:n.defaultAccent,t.dataset.cfMode=s,t.dataset.cfModeResolved=u,t.dataset.cfTypeface=d,t.dataset.cfScale=x})();})();",
+        "sha256": "b6dba5a3c2ff3d467423325b404de0cd585b0aae4d691761c12f84d3d6f8a9b9",
+        "csp_sha256": "sha256-ttulo8L/PUZ0IzJbQE3gzVhbCq5NaRdhwS+E09b4qbk="
       }
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-R35KF7CY.js",
-        "stored_path": "service/app-R35KF7CY.js.br",
+        "request_path": "/app/assets/app-GBKP73KV.css",
+        "stored_path": "service/app-GBKP73KV.css.br",
+        "media_type": "text/css; charset=utf-8",
+        "content_encoding": "br",
+        "raw_bytes": 72924,
+        "encoded_bytes": 11924,
+        "sha256": "13df288a6e1d29de0776ef2e9b6ade0cb19bb4c3bfecbced4bc58361217fa7de",
+        "etag": "\"sha256-E98oim4dKd4Hdu8um2reDLGbtMO/7LztS8WDYSF/p94=\"",
+        "imports": [
+          {
+            "request_path": "/app/assets/svg%3E",
+            "kind": "url-token"
+          }
+        ]
+      },
+      {
+        "request_path": "/app/assets/app-GBKP73KV.css",
+        "stored_path": "service/app-GBKP73KV.css.gz",
+        "media_type": "text/css; charset=utf-8",
+        "content_encoding": "gzip",
+        "raw_bytes": 72924,
+        "encoded_bytes": 13885,
+        "sha256": "73e9414694ac541efbfcdcaecc4ac08d0e05560243e84bc6013009c4053d302b",
+        "etag": "\"sha256-c+lBRpSsVB77/NyuzErAjQ4FVgJD6EvGATAJxAU9MCs=\"",
+        "imports": [
+          {
+            "request_path": "/app/assets/svg%3E",
+            "kind": "url-token"
+          }
+        ]
+      },
+      {
+        "request_path": "/app/assets/app-KACSZ2NG.js",
+        "stored_path": "service/app-KACSZ2NG.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 125942,
-        "encoded_bytes": 36886,
-        "sha256": "6598172e9791502eb835d04072d70a5dbc9af4b52e43e084bb7c27bee791d1ef",
-        "etag": "\"sha256-ZZgXLpeRUC64NdBActcKXbya9LUuQ+CEu3wnvueR0e8=\"",
+        "raw_bytes": 127794,
+        "encoded_bytes": 37362,
+        "sha256": "50309b4769f97b4dc36505525367179d2664de24a1f3fa5b72a812b79939d8d0",
+        "etag": "\"sha256-UDCbR2n5e03DZQVSU2cXnSZk3iSh8/pbcqgSt5k52NA=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
             "kind": "import-statement"
           },
           {
-            "request_path": "/app/assets/chunk-chunk-IUZKPEZP.js",
+            "request_path": "/app/assets/chunk-chunk-OCQU5QXX.js",
             "kind": "import-statement"
           },
           {
@@ -52,11 +84,11 @@
             "kind": "dynamic-import"
           },
           {
-            "request_path": "/app/assets/chunk-fonts-7JIYOW2B.js",
+            "request_path": "/app/assets/chunk-fonts-LHZ6URKT.js",
             "kind": "dynamic-import"
           },
           {
-            "request_path": "/app/assets/chunk-stage-measuring-4Y5PNQNM.js",
+            "request_path": "/app/assets/chunk-stage-measuring-5AQNJYGX.js",
             "kind": "dynamic-import"
           },
           {
@@ -66,21 +98,21 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-R35KF7CY.js",
-        "stored_path": "service/app-R35KF7CY.js.gz",
+        "request_path": "/app/assets/app-KACSZ2NG.js",
+        "stored_path": "service/app-KACSZ2NG.js.gz",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "gzip",
-        "raw_bytes": 125942,
-        "encoded_bytes": 41403,
-        "sha256": "92369492ff5f84b1cdb6f9c729555b58a3081454b904e8616f52da869681dd4b",
-        "etag": "\"sha256-kjaUkv9fhLHNtvnHKVVbWKMIFFS5BOhhb1LahpaB3Us=\"",
+        "raw_bytes": 127794,
+        "encoded_bytes": 41962,
+        "sha256": "0cbcb8f9101f4d5ea1050fcb4d1bdaa9c3f483a87ae002b2423c45c2f69c30ad",
+        "etag": "\"sha256-DLy4+RAfTV6hBQ/LTRvaqcP0g6h64AKyQjxFwvacMK0=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
             "kind": "import-statement"
           },
           {
-            "request_path": "/app/assets/chunk-chunk-IUZKPEZP.js",
+            "request_path": "/app/assets/chunk-chunk-OCQU5QXX.js",
             "kind": "import-statement"
           },
           {
@@ -92,48 +124,16 @@
             "kind": "dynamic-import"
           },
           {
-            "request_path": "/app/assets/chunk-fonts-7JIYOW2B.js",
+            "request_path": "/app/assets/chunk-fonts-LHZ6URKT.js",
             "kind": "dynamic-import"
           },
           {
-            "request_path": "/app/assets/chunk-stage-measuring-4Y5PNQNM.js",
+            "request_path": "/app/assets/chunk-stage-measuring-5AQNJYGX.js",
             "kind": "dynamic-import"
           },
           {
             "request_path": "/app/assets/chunk-syntax-64CEMTPY.js",
             "kind": "dynamic-import"
-          }
-        ]
-      },
-      {
-        "request_path": "/app/assets/app-XOLPL54V.css",
-        "stored_path": "service/app-XOLPL54V.css.br",
-        "media_type": "text/css; charset=utf-8",
-        "content_encoding": "br",
-        "raw_bytes": 67685,
-        "encoded_bytes": 11435,
-        "sha256": "6c14d043fc6551cdea85dac69e4ce65956bf471cb6730279cfe956199f3a0980",
-        "etag": "\"sha256-bBTQQ/xlUc3qhdrGnkzmWVa/Rxy2cwJ5z+lWGZ86CYA=\"",
-        "imports": [
-          {
-            "request_path": "/app/assets/svg%3E",
-            "kind": "url-token"
-          }
-        ]
-      },
-      {
-        "request_path": "/app/assets/app-XOLPL54V.css",
-        "stored_path": "service/app-XOLPL54V.css.gz",
-        "media_type": "text/css; charset=utf-8",
-        "content_encoding": "gzip",
-        "raw_bytes": 67685,
-        "encoded_bytes": 13214,
-        "sha256": "bc6cf439aabf7085e114e980c531826c2f2cb257fbcf82539618be49e6b78572",
-        "etag": "\"sha256-vGz0Oaq/cIXhFOmAxTGCbC8sslf7z4JTlhi+Sea3hXI=\"",
-        "imports": [
-          {
-            "request_path": "/app/assets/svg%3E",
-            "kind": "url-token"
           }
         ]
       },
@@ -192,28 +192,6 @@
         "imports": []
       },
       {
-        "request_path": "/app/assets/chunk-chunk-IUZKPEZP.js",
-        "stored_path": "service/chunk-chunk-IUZKPEZP.js.br",
-        "media_type": "text/javascript; charset=utf-8",
-        "content_encoding": "br",
-        "raw_bytes": 5277,
-        "encoded_bytes": 1634,
-        "sha256": "ec6557cf21844a0ceb7f6d5e52376d98ae6484dfa1a034956da19c0b39126f97",
-        "etag": "\"sha256-7GVXzyGESgzrf21eUjdtmK5khN+hoDSVbaGcCzkSb5c=\"",
-        "imports": []
-      },
-      {
-        "request_path": "/app/assets/chunk-chunk-IUZKPEZP.js",
-        "stored_path": "service/chunk-chunk-IUZKPEZP.js.gz",
-        "media_type": "text/javascript; charset=utf-8",
-        "content_encoding": "gzip",
-        "raw_bytes": 5277,
-        "encoded_bytes": 1898,
-        "sha256": "84aa0d2dd49c4a303ffdc8bb0b8c2cf5339e758478c9eef543b98e6dfada4e04",
-        "etag": "\"sha256-hKoNLdScSjA//ci7C4ws9TOedYR4ye71Q7mObfraTgQ=\"",
-        "imports": []
-      },
-      {
         "request_path": "/app/assets/chunk-chunk-L5C6Y2FG.js",
         "stored_path": "service/chunk-chunk-L5C6Y2FG.js.br",
         "media_type": "text/javascript; charset=utf-8",
@@ -233,6 +211,28 @@
         "encoded_bytes": 129480,
         "sha256": "5ffd9bea182b51032c89d1400c742ad4c87706483b7d470b11dd8e050e051bc1",
         "etag": "\"sha256-X/2b6hgrUQMsidFADHQq1Mh3Bkg7fUcLEd2OBQ4FG8E=\"",
+        "imports": []
+      },
+      {
+        "request_path": "/app/assets/chunk-chunk-OCQU5QXX.js",
+        "stored_path": "service/chunk-chunk-OCQU5QXX.js.br",
+        "media_type": "text/javascript; charset=utf-8",
+        "content_encoding": "br",
+        "raw_bytes": 5277,
+        "encoded_bytes": 1635,
+        "sha256": "c6c1b69a167cdc9622889bdcbce391cc9ec5303e35c4e7ef5c2c03efe1764d4c",
+        "etag": "\"sha256-xsG2mhZ83JYiiJvcvOORzJ7FMD41xOfvXCwD7+F2TUw=\"",
+        "imports": []
+      },
+      {
+        "request_path": "/app/assets/chunk-chunk-OCQU5QXX.js",
+        "stored_path": "service/chunk-chunk-OCQU5QXX.js.gz",
+        "media_type": "text/javascript; charset=utf-8",
+        "content_encoding": "gzip",
+        "raw_bytes": 5277,
+        "encoded_bytes": 1899,
+        "sha256": "df24c4fc0bf7d175a9b50ff78a3c3d7c15093b817fb645b17cf4106c97452a54",
+        "etag": "\"sha256-3yTE/Av30XWptQ/3ijw9fBUJO4F/tkWxfPQQbJdFKlQ=\"",
         "imports": []
       },
       {
@@ -300,14 +300,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/chunk-fonts-7JIYOW2B.js",
-        "stored_path": "service/chunk-fonts-7JIYOW2B.js.br",
+        "request_path": "/app/assets/chunk-fonts-LHZ6URKT.js",
+        "stored_path": "service/chunk-fonts-LHZ6URKT.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 14366,
-        "encoded_bytes": 1995,
-        "sha256": "5470f6a56e9dffd715b2954743d8653393156368975ff8fa26fafaeae24d03de",
-        "etag": "\"sha256-VHD2pW6d/9cVspVHQ9hlM5MVY2iXX/j6Jvr66uJNA94=\"",
+        "raw_bytes": 14397,
+        "encoded_bytes": 1989,
+        "sha256": "5d25009dbe75a7debe0e3cea09200a673e7915f7659ce08ebc49ebfea8380bea",
+        "etag": "\"sha256-XSUAnb51p96+DjzqCSAKZz55FfdlnOCOvEnr/qg4C+o=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -320,14 +320,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/chunk-fonts-7JIYOW2B.js",
-        "stored_path": "service/chunk-fonts-7JIYOW2B.js.gz",
+        "request_path": "/app/assets/chunk-fonts-LHZ6URKT.js",
+        "stored_path": "service/chunk-fonts-LHZ6URKT.js.gz",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "gzip",
-        "raw_bytes": 14366,
-        "encoded_bytes": 2738,
-        "sha256": "2c5710f0de6fbe23004a8add61e279cde96a294e9b67c58b57c0a232d42373e3",
-        "etag": "\"sha256-LFcQ8N5vviMASordYeJ5zelqKU6bZ8WLV8CiMtQjc+M=\"",
+        "raw_bytes": 14397,
+        "encoded_bytes": 2736,
+        "sha256": "dec7097d1f124eb8161088cbf377363487639f84b81b7628b0cc49e7401ad607",
+        "etag": "\"sha256-3scJfR8STrgWEIjL83c2NIdjn4S4G3YosMxJ50Aa1gc=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -468,49 +468,49 @@
         ]
       },
       {
-        "request_path": "/app/assets/chunk-stage-measuring-4Y5PNQNM.js",
-        "stored_path": "service/chunk-stage-measuring-4Y5PNQNM.js.br",
+        "request_path": "/app/assets/chunk-stage-measuring-5AQNJYGX.js",
+        "stored_path": "service/chunk-stage-measuring-5AQNJYGX.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
         "raw_bytes": 2897,
-        "encoded_bytes": 1191,
-        "sha256": "fdba687800c87c41bccf25d20d0ec1251149b6fdc14c200a3f3007643c28aa58",
-        "etag": "\"sha256-/bpoeADIfEG8zyXSDQ7BJRFJtv3BTCAKPzAHZDwoqlg=\"",
+        "encoded_bytes": 1190,
+        "sha256": "7865f0b0bc48004051f41695b3c67a6b683505e4d18dbd6a3792439700f1209f",
+        "etag": "\"sha256-eGXwsLxIAEBR9BaVs8Z6a2g1BeTRjb1qN5JDlwDxIJ8=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
             "kind": "import-statement"
           },
           {
-            "request_path": "/app/assets/chunk-chunk-IUZKPEZP.js",
+            "request_path": "/app/assets/chunk-chunk-L5C6Y2FG.js",
             "kind": "import-statement"
           },
           {
-            "request_path": "/app/assets/chunk-chunk-L5C6Y2FG.js",
+            "request_path": "/app/assets/chunk-chunk-OCQU5QXX.js",
             "kind": "import-statement"
           }
         ]
       },
       {
-        "request_path": "/app/assets/chunk-stage-measuring-4Y5PNQNM.js",
-        "stored_path": "service/chunk-stage-measuring-4Y5PNQNM.js.gz",
+        "request_path": "/app/assets/chunk-stage-measuring-5AQNJYGX.js",
+        "stored_path": "service/chunk-stage-measuring-5AQNJYGX.js.gz",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "gzip",
         "raw_bytes": 2897,
         "encoded_bytes": 1412,
-        "sha256": "ba5584ceded1a83ef0a15249b153811db4bd34b35b9f25decedec5b98e6780d0",
-        "etag": "\"sha256-ulWEzt7RqD7woVJJsVOBHbS9NLNbnyXezt7FuY5ngNA=\"",
+        "sha256": "b5378d085c213ee0429e68a466bcb66aa68679ffa8db66259f2343907d5bf49b",
+        "etag": "\"sha256-tTeNCFwhPuBCnmikZry2aqaGef+o22YlnyNDkH1b9Js=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
             "kind": "import-statement"
           },
           {
-            "request_path": "/app/assets/chunk-chunk-IUZKPEZP.js",
+            "request_path": "/app/assets/chunk-chunk-L5C6Y2FG.js",
             "kind": "import-statement"
           },
           {
-            "request_path": "/app/assets/chunk-chunk-L5C6Y2FG.js",
+            "request_path": "/app/assets/chunk-chunk-OCQU5QXX.js",
             "kind": "import-statement"
           }
         ]
@@ -719,9 +719,9 @@
     "metrics": {
       "asset_count": 18,
       "representation_count": 36,
-      "raw_corpus_bytes": 1096809,
-      "brotli_corpus_bytes": 286975,
-      "gzip_corpus_bytes": 313770,
+      "raw_corpus_bytes": 1103931,
+      "brotli_corpus_bytes": 287934,
+      "gzip_corpus_bytes": 314999,
       "largest_gzip_chunk_bytes": 129480,
       "largest_raw_chunk_bytes": 181112,
       "largest_brotli_chunk_bytes": 129209
@@ -729,12 +729,12 @@
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-498c7ec9948d26a4.js.gz",
+      "stored_path": "export/renderer-6ec9ffeb95a15244.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 985742,
-      "encoded_bytes": 274232,
-      "sha256": "498c7ec9948d26a473f601a0f7156641118e430e3e2529c7f430d93ab3c36ae6"
+      "raw_bytes": 991685,
+      "encoded_bytes": 274950,
+      "sha256": "6ec9ffeb95a15244d0e988a63f0173b667d8a913cbf877d5d62ec16f043e3545"
     }
   },
   "budgets": {
@@ -746,5 +746,5 @@
     "largest_gzip_chunk_bytes": 150000,
     "export_gzip_bytes": 295000
   },
-  "corpus_sha256": "0ebd5eef82e57f46683d0d5cb18fcb188db7366cc3e737eceff0c81743153d7a"
+  "corpus_sha256": "3de32eb1f30e9264cd44bb3689ebd0a39fe1d67cc71d01dcdee38cf05f6c998d"
 }

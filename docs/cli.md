@@ -244,14 +244,18 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow work next` | | List ready tasks first, then landed (work merged), waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
 | | `--epic <EPC-NNN>` | Only tasks of this epic. |
 | | `--json` | Print the same facts as JSON, each task with its `state`; a landed task adds `landed_branches` and `suggested_command`. |
-| `codeflow work claim <TASK_ID>` | | Fetch, check the task is ready and unclaimed on its target tip, then create and push `task/<id>-<slug>` from that tip. The pushed branch is an advisory mark others can see |
+| `codeflow work claim <TASK_ID>` | | Fetch, choose the live target tip or the single line holding a completed predecessor the target has not received, then create and push `task/<id>-<slug>` from that base. The pushed branch is an advisory mark others can see |
 | | `<TASK_ID>` | Stable task id. |
 | | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin, repeat once per code dependency. |
-| `codeflow work start <TASK_ID>` | | Verify that a durable task was planned and anchored before implementation |
+| `codeflow work start <TASK_ID>` | | Fetch, verify planning, and require HEAD to contain its recorded claim base or the current selected base |
 | | `<TASK_ID>` | Stable task id. |
 | | `--into <REF>` | Non-task branch/ref this task will merge into. |
 | | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin already contained in HEAD. |
 | `codeflow work status` | | List, per task, each worktree with uncommitted changes, unpushed commits or commits on no branch, read from git; work that cannot be recovered is named. Reads only |
+| `codeflow work remove-candidate <BRANCH>` | | Remove a local landing candidate branch whose tree landed on its line by another commit: fetch the line from origin, find a commit on its first-parent history with the same tree, check no worktree uses the branch and no pull request is open from it, delete it and record the proof in the ledger |
+| | `<BRANCH>` | The candidate branch, named with `git.candidate_prefix`. |
+| | `--line <BRANCH>` | The line on origin the candidate landed on: a protected branch or an `integration/` line. Required. |
+| | `--dry-run` | Check and print the proof without removing anything. |
 
 ### Remember
 
@@ -588,6 +592,17 @@ primary handles the remote landing through the project's PR flow.
   blocked.
 - After landing, clean linked worktrees that have the target checked out are
   reset to the tested tip, and a dirty one is reported.
+
+| Claim or start case | Base and admission behavior |
+|---|---|
+| Predecessor complete on another line | `codeflow work claim TSK-NNN` selects that line's live tip without changing the target. Create a linked worktree on the reported branch, then run `codeflow work start TSK-NNN`. |
+| Two unmerged sources, or missing shared planning | Claim refuses and names the line-sync route. |
+| Fixed claim evidence | Local annotated Git object at `refs/codeflow/claims/<task branch>`, shared by linked worktrees; records the base, source and reviewed pins independently of the ledger and shared Git configuration. |
+| Source advances after claim | Start retains the recorded base and reports the new tip. |
+| Metadata absent or corrupt | Absent metadata uses the current selected base, including in a fresh clone; corrupt metadata refuses admission. |
+| Unlanded reviewed stack | Supply current reviewed `--on TSK@SHA` pins. After rebasing, explicit replacement pins renew only a reviewed claim once current review, ancestry and planning checks pass and Git records the new base. Once the predecessor lands, ordinary completion checks replace the pin requirement. |
+| Source fetch fails | Claim and start refuse, naming the remote and last fetch time, or unknown; missing live evidence blocks even at `git.work_planning: warn`. |
+| Head lacks the current target | Before review, merge the target into the task branch. CI's `work.target_tip` warns, or reports an unreadable tip as unverified; existing planning and record checks still apply. |
 
 A `work start --on` pin names the predecessor branch tip. Its Reviews section
 must approve that tip or an ancestor whose later commits touch only the
