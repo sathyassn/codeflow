@@ -390,7 +390,7 @@ fn fresh_full_project_exemption_keeps_security_jobs_and_review_requirements() {
     assert!(scan["env"]["TRUSTED_SHA"]
         .as_str()
         .unwrap()
-        .contains("pull_request.base.sha"));
+        .contains("github.event_name != 'pull_request' && github.sha"));
     assert!(scan["run"]
         .as_str()
         .unwrap()

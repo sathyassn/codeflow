@@ -65,28 +65,14 @@ pub fn run(args: &BaseChecksArgs) -> i32 {
     let repo = match git2::Repository::discover(".") {
         Ok(repo) => repo,
         Err(error) => {
-            eprintln!("{PLANE}: error: not in a git repository: {}", error.message());
+            eprintln!(
+                "{PLANE}: error: not in a git repository: {}",
+                error.message()
+            );
             return 2;
         }
     };
-    let resolve = |label: &str, rev: &str| -> Result<String, String> {
-        repo.revparse_single(rev)
-            .and_then(|object| object.peel_to_commit())
-            .map(|commit| commit.id().to_string())
-            .map_err(|error| format!("the {label} commit {rev} cannot be resolved: {}", error.message()))
-    };
-    let named = (|| -> Result<_, String> {
-        let trusted = resolve("trusted", &args.trusted)?;
-        let base = resolve("base", &args.base)?;
-        let head = resolve("head", &args.head)?;
-        let merge = if args.merge.is_empty() {
-            String::new()
-        } else {
-            resolve("merge", &args.merge)?
-        };
-        Ok((trusted, base, head, merge))
-    })();
-    let (trusted, base, head, merge) = match named {
+    let (trusted, base, head, merge) = match resolve_named(&repo, args) {
         Ok(named) => named,
         Err(error) => {
             eprintln!(
@@ -126,18 +112,27 @@ pub fn run(args: &BaseChecksArgs) -> i32 {
         if merge.is_empty() { "(none)" } else { &merge },
         if args.head_repo.is_empty() { "(not given)" } else { &args.head_repo },
     );
-    let work = match tempfile::Builder::new().prefix("codeflow-base-checks-").tempdir() {
+    let work = match tempfile::Builder::new()
+        .prefix("codeflow-base-checks-")
+        .tempdir()
+    {
         Ok(work) => work,
         Err(error) => return refuse(&format!("cannot make a working folder: {error}")),
     };
     let git_dir = work.path().join("git");
-    if let Err(error) = borrowed_git_dir(&repo, &git_dir, &[
-        ("trusted", &trusted),
-        ("base", &base),
-        ("head", &head),
-        ("merge", &merge),
-    ]) {
-        return refuse(&format!("cannot prepare the checks' git directory: {error}"));
+    if let Err(error) = borrowed_git_dir(
+        &repo,
+        &git_dir,
+        &[
+            ("trusted", &trusted),
+            ("base", &base),
+            ("head", &head),
+            ("merge", &merge),
+        ],
+    ) {
+        return refuse(&format!(
+            "cannot prepare the checks' git directory: {error}"
+        ));
     }
     let run = Run {
         trusted: &trusted,
@@ -147,17 +142,59 @@ pub fn run(args: &BaseChecksArgs) -> i32 {
         head_repo: &args.head_repo,
         git_dir: &git_dir,
     };
+    run_all(&repo, &tree, &declaration.checks, work.path(), &run)
+}
+
+/// The four named commits as full ids; the merge is empty when not given.
+fn resolve_named(
+    repo: &git2::Repository,
+    args: &BaseChecksArgs,
+) -> Result<(String, String, String, String), String> {
+    let resolve = |label: &str, rev: &str| -> Result<String, String> {
+        repo.revparse_single(rev)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id().to_string())
+            .map_err(|error| {
+                format!(
+                    "the {label} commit {rev} cannot be resolved: {}",
+                    error.message()
+                )
+            })
+    };
+    let trusted = resolve("trusted", &args.trusted)?;
+    let base = resolve("base", &args.base)?;
+    let head = resolve("head", &args.head)?;
+    let merge = if args.merge.is_empty() {
+        String::new()
+    } else {
+        resolve("merge", &args.merge)?
+    };
+    Ok((trusted, base, head, merge))
+}
+
+/// Runs every declared check, each in its own folder under `work`; 1 when
+/// any failed, else 0.
+fn run_all(
+    repo: &git2::Repository,
+    tree: &git2::Tree<'_>,
+    checks: &[Check],
+    work: &Path,
+    run: &Run<'_>,
+) -> i32 {
     let mut failed = 0;
-    for (index, check) in declaration.checks.iter().enumerate() {
-        let folder = work.path().join(format!("check-{index}"));
-        match run_check(&repo, &tree, check, &folder, &run) {
+    for (index, check) in checks.iter().enumerate() {
+        let folder = work.join(format!("check-{index}"));
+        match run_check(repo, tree, check, &folder, run) {
             Ok(()) => println!("{PLANE}: {} passed", check.name),
             Err(why) => {
                 failed += 1;
                 eprintln!(
                     "{}",
                     Finding::new(
-                        format!("check {} ({} in {DECLARATION}) {why}", check.name, check.script),
+                        format!(
+                            "check {} ({} in {DECLARATION}) {why}",
+                            check.name, check.script
+                        ),
                         CI_BASE_CHECK_FAILED.remedy()
                     )
                     .line(PLANE, "error")
@@ -168,7 +205,7 @@ pub fn run(args: &BaseChecksArgs) -> i32 {
     if failed > 0 {
         eprintln!(
             "{PLANE}: {failed} of {} check(s) failed; the pull request is refused",
-            declaration.checks.len()
+            checks.len()
         );
         return 1;
     }
@@ -220,8 +257,13 @@ fn borrowed_git_dir(
             continue;
         }
         let oid = git2::Oid::from_str(sha).map_err(|error| error.message().to_string())?;
-        bare.reference(&format!("refs/codeflow/{name}"), oid, true, "codeflow base checks")
-            .map_err(|error| format!("cannot name {name} {sha}: {}", error.message()))?;
+        bare.reference(
+            &format!("refs/codeflow/{name}"),
+            oid,
+            true,
+            "codeflow base checks",
+        )
+        .map_err(|error| format!("cannot name {name} {sha}: {}", error.message()))?;
     }
     bare.set_head("refs/codeflow/trusted")
         .map_err(|error| error.message().to_string())?;
@@ -241,7 +283,8 @@ fn run_check(
     let home = folder.join("home");
     let temp = folder.join("tmp");
     for dir in [&root, &home, &temp] {
-        std::fs::create_dir_all(dir).map_err(|error| format!("cannot make {}: {error}", dir.display()))?;
+        std::fs::create_dir_all(dir)
+            .map_err(|error| format!("cannot make {}: {error}", dir.display()))?;
     }
     export(repo, tree, &check.script, &root, false)?;
     for input in &check.inputs {
@@ -254,7 +297,8 @@ fn run_check(
         )
     })?;
     let empty_config = folder.join("gitconfig");
-    std::fs::write(&empty_config, "").map_err(|error| format!("cannot write {}: {error}", empty_config.display()))?;
+    std::fs::write(&empty_config, "")
+        .map_err(|error| format!("cannot write {}: {error}", empty_config.display()))?;
     let mut command = Command::new(&interpreter);
     command
         .arg(root.join(&check.script))
@@ -346,14 +390,19 @@ fn export(
 ) -> Result<(), String> {
     let what = if folder_allowed { "input" } else { "script" };
     let Some((mode, id)) = entry_in(tree, path)? else {
-        return Err(format!("cannot run: its {what} {path} is missing on the trusted commit"));
+        return Err(format!(
+            "cannot run: its {what} {path} is missing on the trusted commit"
+        ));
     };
     match mode {
         MODE_FILE | MODE_EXECUTABLE => write_blob(repo, id, path, &root.join(path)),
         MODE_TREE if folder_allowed => {
-            let sub = repo
-                .find_tree(id)
-                .map_err(|error| format!("cannot run: its input {path} cannot be read: {}", error.message()))?;
+            let sub = repo.find_tree(id).map_err(|error| {
+                format!(
+                    "cannot run: its input {path} cannot be read: {}",
+                    error.message()
+                )
+            })?;
             let mut failure = None;
             sub.walk(git2::TreeWalkMode::PreOrder, |prefix, entry| {
                 let name = String::from_utf8_lossy(entry.name_bytes());
@@ -386,14 +435,24 @@ fn export(
     }
 }
 
-fn write_blob(repo: &git2::Repository, id: git2::Oid, shown: &str, to: &Path) -> Result<(), String> {
-    let blob = repo
-        .find_blob(id)
-        .map_err(|error| format!("cannot run: {shown} cannot be read on the trusted commit: {}", error.message()))?;
+fn write_blob(
+    repo: &git2::Repository,
+    id: git2::Oid,
+    shown: &str,
+    to: &Path,
+) -> Result<(), String> {
+    let blob = repo.find_blob(id).map_err(|error| {
+        format!(
+            "cannot run: {shown} cannot be read on the trusted commit: {}",
+            error.message()
+        )
+    })?;
     if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| format!("cannot run: cannot make {}: {error}", parent.display()))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot run: cannot make {}: {error}", parent.display()))?;
     }
-    std::fs::write(to, blob.content()).map_err(|error| format!("cannot run: cannot write {shown}: {error}"))
+    std::fs::write(to, blob.content())
+        .map_err(|error| format!("cannot run: cannot write {shown}: {error}"))
 }
 
 /// The first executable file named `name` on PATH.
@@ -405,7 +464,9 @@ fn on_path(name: &str) -> Option<PathBuf> {
         } else {
             vec![dir.join(name)]
         };
-        candidates.into_iter().find(|candidate| executable(candidate))
+        candidates
+            .into_iter()
+            .find(|candidate| executable(candidate))
     })
 }
 

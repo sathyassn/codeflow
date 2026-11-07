@@ -180,10 +180,7 @@ fn repo_path(path: &str) -> Result<(), String> {
 ///
 /// # Errors
 /// A tree git cannot read.
-pub fn entry_in(
-    tree: &git2::Tree<'_>,
-    path: &str,
-) -> Result<Option<(i32, git2::Oid)>, String> {
+pub fn entry_in(tree: &git2::Tree<'_>, path: &str) -> Result<Option<(i32, git2::Oid)>, String> {
     match tree.get_path(Path::new(path)) {
         Ok(entry) => Ok(Some((entry.filemode(), entry.id()))),
         Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
@@ -207,12 +204,18 @@ pub fn tree_at<'r>(repo: &'r git2::Repository, rev: &str) -> Result<git2::Tree<'
 /// # Errors
 /// A declaration that is not a regular file (a symbolic link, a folder or a
 /// gitlink), that cannot be read, or that [`parse`] refuses.
-pub fn read_in(repo: &git2::Repository, tree: &git2::Tree<'_>) -> Result<Option<Declaration>, String> {
+pub fn read_in(
+    repo: &git2::Repository,
+    tree: &git2::Tree<'_>,
+) -> Result<Option<Declaration>, String> {
     let Some((mode, id)) = entry_in(tree, DECLARATION)? else {
         return Ok(None);
     };
     if mode != MODE_FILE && mode != MODE_EXECUTABLE {
-        return Err(format!("{DECLARATION} is not a regular file ({})", describe_mode(mode)));
+        return Err(format!(
+            "{DECLARATION} is not a regular file ({})",
+            describe_mode(mode)
+        ));
     }
     let blob = repo
         .find_blob(id)
@@ -269,8 +272,10 @@ mod tests {
         );
         let bare = parse(br#"{"version": 1}"#).unwrap();
         assert!(bare.checks.is_empty());
-        let one = parse(br#"{"version": 1, "checks": [{"name": "a", "script": "a.sh", "interpreter": "sh"}]}"#)
-            .unwrap();
+        let one = parse(
+            br#"{"version": 1, "checks": [{"name": "a", "script": "a.sh", "interpreter": "sh"}]}"#,
+        )
+        .unwrap();
         assert_eq!(one.checks[0].timeout(), DEFAULT_TIMEOUT_SECONDS);
     }
 
@@ -281,15 +286,42 @@ mod tests {
             (r#"{"version": 2}"#, "version 2"),
             (r#"{"version": 1, "version": 1}"#, "duplicate"),
             (r#"{"version": 1, "extra": 1}"#, "unknown field"),
-            (r#"{"version": 1, "checks": [{"name": "A", "script": "a", "interpreter": "sh"}]}"#, "check name"),
-            (r#"{"version": 1, "checks": [{"name": "a", "script": "a", "interpreter": "sh"}, {"name": "a", "script": "b", "interpreter": "sh"}]}"#, "used twice"),
-            (r#"{"version": 1, "checks": [{"name": "a", "script": "../a", "interpreter": "sh"}]}"#, "`..`"),
-            (r#"{"version": 1, "checks": [{"name": "a", "script": "/etc/a", "interpreter": "sh"}]}"#, "relative"),
-            (r#"{"version": 1, "checks": [{"name": "a", "script": ".git/hooks/x", "interpreter": "sh"}]}"#, "inside .git"),
-            (r#"{"version": 1, "checks": [{"name": "a", "script": "a", "interpreter": "/bin/sh"}]}"#, "bare command"),
-            (r#"{"version": 1, "checks": [{"name": "a", "script": "a", "interpreter": "sh", "timeout_seconds": 0}]}"#, "between 1"),
-            (r#"{"version": 1, "checks": [{"name": "a", "script": "a", "interpreter": "sh", "timeout_seconds": 901}]}"#, "between 1"),
-            (r#"{"version": 1, "audit_exception_inputs": ["a//b"]}"#, "empty"),
+            (
+                r#"{"version": 1, "checks": [{"name": "A", "script": "a", "interpreter": "sh"}]}"#,
+                "check name",
+            ),
+            (
+                r#"{"version": 1, "checks": [{"name": "a", "script": "a", "interpreter": "sh"}, {"name": "a", "script": "b", "interpreter": "sh"}]}"#,
+                "used twice",
+            ),
+            (
+                r#"{"version": 1, "checks": [{"name": "a", "script": "../a", "interpreter": "sh"}]}"#,
+                "`..`",
+            ),
+            (
+                r#"{"version": 1, "checks": [{"name": "a", "script": "/etc/a", "interpreter": "sh"}]}"#,
+                "relative",
+            ),
+            (
+                r#"{"version": 1, "checks": [{"name": "a", "script": ".git/hooks/x", "interpreter": "sh"}]}"#,
+                "inside .git",
+            ),
+            (
+                r#"{"version": 1, "checks": [{"name": "a", "script": "a", "interpreter": "/bin/sh"}]}"#,
+                "bare command",
+            ),
+            (
+                r#"{"version": 1, "checks": [{"name": "a", "script": "a", "interpreter": "sh", "timeout_seconds": 0}]}"#,
+                "between 1",
+            ),
+            (
+                r#"{"version": 1, "checks": [{"name": "a", "script": "a", "interpreter": "sh", "timeout_seconds": 901}]}"#,
+                "between 1",
+            ),
+            (
+                r#"{"version": 1, "audit_exception_inputs": ["a//b"]}"#,
+                "empty",
+            ),
         ] {
             let error = parse(text.as_bytes()).unwrap_err();
             assert!(error.contains(why), "{text}: {error}");

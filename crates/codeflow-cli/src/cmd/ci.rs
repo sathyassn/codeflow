@@ -2203,7 +2203,10 @@ fn project_input_notes(root: &Path, base: &str, head: &str) -> Vec<String> {
         checks.extend(declaration.check_paths());
         audit.extend(declaration.audit_exception_inputs.iter().cloned());
     }
-    let audit: Vec<String> = audit.into_iter().filter(|path| !checks.contains(path)).collect();
+    let audit: Vec<String> = audit
+        .into_iter()
+        .filter(|path| !checks.contains(path))
+        .collect();
     let mut notes = Vec::new();
     let mut compare = |path: &str, role: &str, remedy: &'static codeflow_core::remedy::Clearing| {
         let entries = (

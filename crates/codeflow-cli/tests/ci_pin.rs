@@ -1732,6 +1732,13 @@ fn resolve_ref(
     }
 }
 
+/// TSK-1103 AC-15: the verdict job fetches the base branch's current tip by
+/// its ref and judges from the merge base of that tip and the head.
+fn fetches_the_base_tip(job: &str) -> bool {
+    job.contains("\"+refs/heads/${BASE_REF}:refs/codeflow/pr-base-tip\"")
+        && job.contains("git update-ref refs/codeflow/pr-base \"$base\"")
+}
+
 #[test]
 fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     // pull_request_target alone, never pull_request: GitHub runs this file
@@ -1838,7 +1845,7 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     );
     // The base and the head are fetched as refs and only named by sha.
     assert!(enforcing.contains("refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"));
-    assert!(enforcing.contains("\"+${BASE_SHA}:refs/codeflow/pr-base\""));
+    assert!(fetches_the_base_tip(enforcing), "{enforcing}");
     for forbidden in [
         "git checkout",
         "git switch",

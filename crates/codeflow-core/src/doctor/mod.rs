@@ -3380,7 +3380,11 @@ fn base_check_runners(root: &Path) -> Vec<String> {
                 .map(|(dest, _)| dest.clone())
         })
         .unwrap_or_else(|| ".github/workflows/codeflow-policy.yml".to_string());
-    vec![policy, ".gitlab-ci.yml".into(), "bitbucket-pipelines.yml".into()]
+    vec![
+        policy,
+        ".gitlab-ci.yml".into(),
+        "bitbucket-pipelines.yml".into(),
+    ]
 }
 
 /// The doctor line for the trusted-base checks (TSK-1103): `None` when the
@@ -3408,15 +3412,31 @@ fn base_checks_report(root: &Path) -> Option<(Status, String)> {
         match crate::absence::proven_absent(&path) {
             Ok(true) => continue,
             Ok(false) => {}
-            Err(error) => return Some((Status::Fail, format!("base checks: cannot inspect {dest}: {error}"))),
+            Err(error) => {
+                return Some((
+                    Status::Fail,
+                    format!("base checks: cannot inspect {dest}: {error}"),
+                ))
+            }
         }
         match crate::bounded_file::read_regular_to_string(&path) {
-            Ok(content) if content.contains("codeflow ci base-checks") => running.push(dest.clone()),
+            Ok(content) if content.contains("codeflow ci base-checks") => {
+                running.push(dest.clone());
+            }
             Ok(_) => silent.push(dest.clone()),
-            Err(error) => return Some((Status::Fail, format!("base checks: cannot read {dest}: {error}"))),
+            Err(error) => {
+                return Some((
+                    Status::Fail,
+                    format!("base checks: cannot read {dest}: {error}"),
+                ))
+            }
         }
     }
-    if let Some(dest) = silent.first().or(if running.is_empty() { runners.first() } else { None }) {
+    if let Some(dest) = silent.first().or(if running.is_empty() {
+        runners.first()
+    } else {
+        None
+    }) {
         return Some((
             Status::Warn(remedy::DOCTOR_BASE_CHECKS_UNRUN.with(&[("path", dest)])),
             format!("base checks: {DECLARATION} declares {names}, but {dest} does not run them (no `codeflow ci base-checks` step)"),
@@ -3424,7 +3444,10 @@ fn base_checks_report(root: &Path) -> Option<(Status, String)> {
     }
     Some((
         Status::Pass,
-        format!("base checks: {DECLARATION} declares {names}, run from the trusted commit by {}", running.join(", ")),
+        format!(
+            "base checks: {DECLARATION} declares {names}, run from the trusted commit by {}",
+            running.join(", ")
+        ),
     ))
 }
 
@@ -7861,8 +7884,15 @@ mod tests {
         assert_unverified(&r);
         let head = edit_line(
             SHIPPED_GITHUB_CI,
-            "PIN_REF: ${{ github.event.pull_request.base.sha || github.sha }}",
+            "PIN_REF: ${{ steps.base.outputs.tip || github.sha }}",
             "PIN_REF: ${{ github.event.pull_request.head.sha || github.sha }}",
+        );
+        assert_unverified(&perimeter(CI_DEFAULT_DEST, &head));
+        // The step that resolves the base tip decides the pin too.
+        let head = edit_line(
+            SHIPPED_GITHUB_CI,
+            "tip=$(git rev-parse --verify 'refs/codeflow/base-tip^{commit}')",
+            "tip=\"$HEAD_SHA\"",
         );
         assert_unverified(&perimeter(CI_DEFAULT_DEST, &head));
         let head = edit_line(

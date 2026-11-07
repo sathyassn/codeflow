@@ -406,7 +406,8 @@ branch's tip once, at its start, and uses that commit for every later step:
 the pinned install, the pin comparison, the secret scan's trusted commit and
 range, the security review's trusted commit, and in the verdict job the range
 `codeflow ci` and `codeflow ids check` judge, merge-base(head, tip)..head.
-The event's base commit is never read, because it is the base when the event
+The secret scan resolves the tip inside its gitleaks step, so that nothing
+but the checkout runs before the scan. The event's base commit is never read, because it is the base when the event
 fired, and a later run would judge an old base's policy. On a pull request
 the gates job also reads `.codeflow/test-config.json` and
 `.codeflow/policy.json` from that tip, replacing the change's copies before

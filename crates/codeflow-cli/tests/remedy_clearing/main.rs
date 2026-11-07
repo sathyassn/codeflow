@@ -1191,12 +1191,23 @@ fn base_checks_repo() -> tempfile::TempDir {
         BASE_CHECKS,
         &format!("{{\"version\": 1, \"checks\": [{{\"name\": \"boundary\", \"script\": \"{BASE_CHECK_SCRIPT}\", \"interpreter\": \"sh\", \"inputs\": [\"docs/boundary.txt\"]}}], \"audit_exception_inputs\": [\"{AUDIT_REGISTER}\"]}}\n"),
     );
-    write(root, BASE_CHECK_SCRIPT, "git diff --name-only \"$1\" \"$2\" | grep -q '^vendor/' && exit 1\nexit 0\n");
+    write(
+        root,
+        BASE_CHECK_SCRIPT,
+        "git diff --name-only \"$1\" \"$2\" | grep -q '^vendor/' && exit 1\nexit 0\n",
+    );
     write(root, "docs/boundary.txt", "vendor/\n");
-    write(root, ".codeflow/audit-exceptions.sh", "cat \"$CODEFLOW_AUDIT_FINDINGS\" | grep -F -f docs/dependency-register.csv || true\n");
+    write(
+        root,
+        ".codeflow/audit-exceptions.sh",
+        "cat \"$CODEFLOW_AUDIT_FINDINGS\" | grep -F -f docs/dependency-register.csv || true\n",
+    );
     write(root, AUDIT_REGISTER, "GHSA-xxxx\n");
     git(root, &["add", "."]);
-    git(root, &["commit", "-q", "-m", "ci: declare a trusted-base check"]);
+    git(
+        root,
+        &["commit", "-q", "-m", "ci: declare a trusted-base check"],
+    );
     git(root, &["switch", "-q", "feat/x"]);
     git(root, &["merge", "--ff-only", "main"]);
     dir
@@ -1214,15 +1225,24 @@ fn clears_ci_base_check_changed() {
         let (status, _) = ci_status(root, &[]);
         write(root, path, &format!("{original}\n"));
         git(root, &["add", path]);
-        git(root, &["commit", "-q", "-m", "ci: change a base check file"]);
+        git(
+            root,
+            &["commit", "-q", "-m", "ci: change a base check file"],
+        );
         let (changed, before) = ci_status(root, &[]);
         assert_eq!(changed, status, "the note changed the verdict:\n{before}");
         let finding = format!("this change edits {path}");
         assert_prints_row(block(&before, &finding), "CI_BASE_CHECK_CHANGED");
-        assert!(before.contains(&format!("restore {path} to its target state")), "{before}");
+        assert!(
+            before.contains(&format!("restore {path} to its target state")),
+            "{before}"
+        );
         write(root, path, &original);
         git(root, &["add", path]);
-        git(root, &["commit", "-q", "-m", "ci: restore the base check file"]);
+        git(
+            root,
+            &["commit", "-q", "-m", "ci: restore the base check file"],
+        );
         let after = ci(root, &[]);
         assert!(!after.contains("codeflow ci: note: this change"), "{after}");
     }
@@ -1262,11 +1282,28 @@ fn clears_ci_base_check_failed() {
     write(root, "vendor/lib.rs", "// copied in\n");
     git(root, &["add", "."]);
     git(root, &["commit", "-q", "-m", "feat: vendor a library"]);
-    let run = || codeflow(root, &["ci", "base-checks", "--trusted", "main", "--base", "main", "--head", "HEAD"]);
+    let run = || {
+        codeflow(
+            root,
+            &[
+                "ci",
+                "base-checks",
+                "--trusted",
+                "main",
+                "--base",
+                "main",
+                "--head",
+                "HEAD",
+            ],
+        )
+    };
     let before = run();
     assert_prints_row(block(&before, "check boundary"), "CI_BASE_CHECK_FAILED");
     git(root, &["rm", "-q", "-r", "vendor"]);
-    git(root, &["commit", "-q", "-m", "fix: drop the vendored library"]);
+    git(
+        root,
+        &["commit", "-q", "-m", "fix: drop the vendored library"],
+    );
     let after = run();
     assert!(after.contains("boundary passed"), "{after}");
     assert!(!after.contains("check boundary"), "{after}");
@@ -2982,10 +3019,16 @@ fn clears_doctor_base_checks_unrun() {
     );
     let declared = doctor(&root, "ci-perimeter");
     assert!(
-        declared.contains(&format!(".codeflow/base-checks.json declares boundary, run from the trusted commit by {path}")),
+        declared.contains(&format!(
+            ".codeflow/base-checks.json declares boundary, run from the trusted commit by {path}"
+        )),
         "{declared}"
     );
-    write(&root, path, &wired.replace("codeflow ci base-checks", "true"));
+    write(
+        &root,
+        path,
+        &wired.replace("codeflow ci base-checks", "true"),
+    );
     prove(
         "DOCTOR_BASE_CHECKS_UNRUN",
         &format!("but {path} does not run them"),

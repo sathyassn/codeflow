@@ -35,7 +35,9 @@ fn declaration(script: &str, interpreter: &str, inputs: &[&str], timeout: Option
         .map(|input| format!("\"{input}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    let timeout = timeout.map_or(String::new(), |seconds| format!(", \"timeout_seconds\": {seconds}"));
+    let timeout = timeout.map_or(String::new(), |seconds| {
+        format!(", \"timeout_seconds\": {seconds}")
+    });
     format!(
         "{{\"version\": 1, \"checks\": [{{\"name\": \"boundary\", \"script\": \"{script}\", \"interpreter\": \"{interpreter}\", \"inputs\": [{inputs}]{timeout}}}]}}\n"
     )
@@ -65,7 +67,10 @@ impl Repo {
         let repo = Self::new();
         repo.write(SCRIPT, BOUNDARY_CHECK);
         repo.write(BOUNDARY, "vendor/\n");
-        repo.write(DECLARATION, &declaration(SCRIPT, "bash", &[BOUNDARY], Some(60)));
+        repo.write(
+            DECLARATION,
+            &declaration(SCRIPT, "bash", &[BOUNDARY], Some(60)),
+        );
         repo.write(".codeflow/ci-setup.sh", "export TOOL=1\n");
         repo.write(
             ".github/workflows/codeflow-policy.yml",
@@ -107,14 +112,36 @@ impl Repo {
 
     pub(super) fn commit(&self, message: &str) -> String {
         self.git(&["add", "-A"]);
-        self.git(&["commit", "-q", "--no-verify", "--allow-empty", "-m", message]);
+        self.git(&[
+            "commit",
+            "-q",
+            "--no-verify",
+            "--allow-empty",
+            "-m",
+            message,
+        ]);
         self.git(&["rev-parse", "HEAD"])
     }
 
     /// Run the checks; the exit code and everything printed.
-    pub(super) fn checks(&self, trusted: &str, base: &str, head: &str, extra: &[&str]) -> (i32, String) {
+    pub(super) fn checks(
+        &self,
+        trusted: &str,
+        base: &str,
+        head: &str,
+        extra: &[&str],
+    ) -> (i32, String) {
         let out = codeflow()
-            .args(["ci", "base-checks", "--trusted", trusted, "--base", base, "--head", head])
+            .args([
+                "ci",
+                "base-checks",
+                "--trusted",
+                trusted,
+                "--base",
+                base,
+                "--head",
+                head,
+            ])
             .args(extra)
             .current_dir(&self.root)
             .output()
@@ -133,7 +160,11 @@ impl Repo {
 fn assert_refused(result: &(i32, String), needles: &[&str]) {
     assert_ne!(result.0, 0, "{}", result.1);
     for needle in needles {
-        assert!(result.1.contains(needle), "missing {needle:?}:\n{}", result.1);
+        assert!(
+            result.1.contains(needle),
+            "missing {needle:?}:\n{}",
+            result.1
+        );
     }
 }
 
@@ -157,14 +188,21 @@ fn the_trusted_commit_decides_whatever_the_head_edits() {
     let bad = repo.commit("feat: vendor a library");
     assert_refused(
         &repo.checks("main", "main", &bad, &[]),
-        &["boundary: this change adds a file under vendor/", "check boundary", DECLARATION],
+        &[
+            "boundary: this change adds a file under vendor/",
+            "check boundary",
+            DECLARATION,
+        ],
     );
 
     repo.write(SCRIPT, "exit 0\n");
     repo.write(BOUNDARY, "");
     repo.write(".codeflow/ci-setup.sh", "exit 0\n");
     repo.write(DECLARATION, "{\"version\": 1}\n");
-    for workflow in [".github/workflows/codeflow-policy.yml", ".github/workflows/codeflow-ci.yml"] {
+    for workflow in [
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-ci.yml",
+    ] {
         let text = std::fs::read_to_string(repo.path(workflow)).unwrap();
         repo.write(workflow, &text.replace("codeflow ci base-checks", "true"));
     }
@@ -189,7 +227,10 @@ fn a_checker_read_from_the_trusted_commit_cannot_be_replaced() {
         ".codeflow/checks/generated.sh",
         "set -eu\ngit show \"$CODEFLOW_TRUSTED_SHA:tools/check.py\" > \"$TMPDIR/check.py\"\npython3 \"$TMPDIR/check.py\" \"$1\" \"$2\"\n",
     );
-    repo.write(DECLARATION, &declaration(".codeflow/checks/generated.sh", "sh", &[], None));
+    repo.write(
+        DECLARATION,
+        &declaration(".codeflow/checks/generated.sh", "sh", &[], None),
+    );
     repo.commit("chore: seed");
     repo.git(&["switch", "-q", "-c", "feat/x"]);
     repo.write("generated/api.rs", "// by hand\n");
@@ -197,7 +238,10 @@ fn a_checker_read_from_the_trusted_commit_cannot_be_replaced() {
     let head = repo.commit("feat: edit generated code and the checker");
     assert_refused(
         &repo.checks("main", "main", &head, &[]),
-        &["generated files edited by hand: ['generated/api.rs']", ".codeflow/checks/generated.sh"],
+        &[
+            "generated files edited by hand: ['generated/api.rs']",
+            ".codeflow/checks/generated.sh",
+        ],
     );
 }
 
@@ -222,11 +266,14 @@ fn the_default_branch_copy_decides_for_a_line() {
     assert_eq!(line_trusted.0, 0, "{}", line_trusted.1);
 }
 
+/// How a fail-closed case breaks the trusted commit.
+type Breaks = Box<dyn Fn(&Repo)>;
+
 /// AC-2: each declared file the step cannot run fails it, naming the
 /// declaration and the path.
 #[test]
 fn the_step_fails_closed() {
-    let cases: Vec<(&str, Box<dyn Fn(&Repo)>, Vec<&str>)> = vec![
+    let cases: Vec<(&str, Breaks, Vec<&str>)> = vec![
         (
             "a missing script",
             Box::new(|repo: &Repo| {
@@ -261,9 +308,15 @@ fn the_step_fails_closed() {
         (
             "an interpreter not on PATH",
             Box::new(|repo: &Repo| {
-                repo.write(DECLARATION, &declaration(SCRIPT, "codeflow-no-such-shell", &[BOUNDARY], None));
+                repo.write(
+                    DECLARATION,
+                    &declaration(SCRIPT, "codeflow-no-such-shell", &[BOUNDARY], None),
+                );
             }),
-            vec![SCRIPT, "its interpreter codeflow-no-such-shell is not on PATH"],
+            vec![
+                SCRIPT,
+                "its interpreter codeflow-no-such-shell is not on PATH",
+            ],
         ),
         (
             "a declaration that cannot be parsed",
@@ -289,29 +342,50 @@ fn the_step_fails_closed() {
         let result = repo.checks(&trusted, &trusted, &trusted, &[]);
         assert_ne!(result.0, 0, "{case}: {}", result.1);
         for needle in needles {
-            assert!(result.1.contains(needle), "{case}: missing {needle:?}:\n{}", result.1);
+            assert!(
+                result.1.contains(needle),
+                "{case}: missing {needle:?}:\n{}",
+                result.1
+            );
         }
-        if case != "a declaration that cannot be parsed" && case != "a declaration that is a symbolic link" {
+        if case != "a declaration that cannot be parsed"
+            && case != "a declaration that is a symbolic link"
+        {
             assert!(result.1.contains(DECLARATION), "{case}: {}", result.1);
         }
     }
+}
 
+/// AC-2: a gitlink or an unreadable object in the script's place, and a
+/// named commit that does not resolve, fail closed too.
+#[test]
+fn the_step_refuses_gitlinks_unreadable_objects_and_unknown_commits() {
     // A gitlink in the script's place.
     let repo = Repo::with_boundary();
     let seed = repo.git(&["rev-parse", "HEAD"]);
     repo.git(&["rm", "-q", "--cached", SCRIPT]);
     std::fs::remove_file(repo.path(SCRIPT)).unwrap();
-    repo.git(&["update-index", "--add", "--cacheinfo", &format!("160000,{seed},{SCRIPT}")]);
+    repo.git(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("160000,{seed},{SCRIPT}"),
+    ]);
     repo.git(&["commit", "-q", "--no-verify", "-m", "chore: a gitlink"]);
     assert_refused(
         &repo.checks("HEAD", "HEAD", "HEAD", &[]),
-        &[SCRIPT, "is a gitlink (submodule) on the trusted commit", DECLARATION],
+        &[
+            SCRIPT,
+            "is a gitlink (submodule) on the trusted commit",
+            DECLARATION,
+        ],
     );
 
     // A script whose object cannot be read.
     let repo = Repo::with_boundary();
     let blob = repo.git(&["rev-parse", &format!("HEAD:{SCRIPT}")]);
-    std::fs::remove_file(repo.path(&format!(".git/objects/{}/{}", &blob[..2], &blob[2..]))).unwrap();
+    std::fs::remove_file(repo.path(&format!(".git/objects/{}/{}", &blob[..2], &blob[2..])))
+        .unwrap();
     assert_refused(
         &repo.checks("HEAD", "HEAD", "HEAD", &[]),
         &[SCRIPT, "cannot be read on the trusted commit", DECLARATION],
@@ -321,8 +395,16 @@ fn the_step_fails_closed() {
     let repo = Repo::with_boundary();
     let result = repo.checks("no-such-ref", "HEAD", "HEAD", &[]);
     assert_eq!(result.0, 2, "{}", result.1);
-    for needle in ["the trusted commit no-such-ref cannot be resolved", "nothing is judged", "git fetch"] {
-        assert!(result.1.contains(needle), "missing {needle:?}:\n{}", result.1);
+    for needle in [
+        "the trusted commit no-such-ref cannot be resolved",
+        "nothing is judged",
+        "git fetch",
+    ] {
+        assert!(
+            result.1.contains(needle),
+            "missing {needle:?}:\n{}",
+            result.1
+        );
     }
 }
 
@@ -334,14 +416,24 @@ fn a_check_past_its_timeout_is_stopped_with_its_children() {
     let pid_file = repo.root.parent().unwrap().join("child.pid");
     repo.write(
         SCRIPT,
-        &format!("sleep 120 &\necho $! > '{}'\nsleep 120\n", pid_file.display()),
+        &format!(
+            "sleep 120 &\necho $! > '{}'\nsleep 120\n",
+            pid_file.display()
+        ),
     );
     repo.write(DECLARATION, &declaration(SCRIPT, "sh", &[], Some(1)));
     let trusted = repo.commit("chore: a slow check");
     let started = Instant::now();
     let result = repo.checks(&trusted, &trusted, &trusted, &[]);
-    assert!(started.elapsed() < Duration::from_secs(30), "{:?}", started.elapsed());
-    assert_refused(&result, &[SCRIPT, "ran past its timeout of 1 seconds and was stopped"]);
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_refused(
+        &result,
+        &[SCRIPT, "ran past its timeout of 1 seconds and was stopped"],
+    );
     let pid = std::fs::read_to_string(&pid_file).unwrap();
     std::thread::sleep(Duration::from_millis(200));
     let alive = std::process::Command::new("kill")
@@ -358,7 +450,11 @@ fn a_check_past_its_timeout_is_stopped_with_its_children() {
 #[test]
 fn the_check_sees_the_commits_and_no_credential() {
     let repo = Repo::with_boundary();
-    repo.git(&["config", "http.https://github.com/.extraheader", "AUTHORIZATION: basic c2VjcmV0LWhlYWRlcg=="]);
+    repo.git(&[
+        "config",
+        "http.https://github.com/.extraheader",
+        "AUTHORIZATION: basic c2VjcmV0LWhlYWRlcg==",
+    ]);
     repo.write(
         SCRIPT,
         "echo \"args=$# base=$1 head=$2 merge=[$3] repo=[$4]\"\nenv | sort\ngit config --list --show-origin || true\necho \"head file: $(git show \"$2:src/head.rs\")\"\necho \"trusted ref: $(git rev-parse refs/codeflow/trusted)\"\necho \"cwd holds: $(find . -type f | sort | tr '\\n' ' ')\"\n",
@@ -368,14 +464,29 @@ fn the_check_sees_the_commits_and_no_credential() {
     repo.write("src/head.rs", "// from the head\n");
     let head = repo.commit("feat: a head file");
     let out = codeflow()
-        .args(["ci", "base-checks", "--trusted", &trusted, "--base", &trusted, "--head", &head, "--head-repo", "fork/repo"])
+        .args([
+            "ci",
+            "base-checks",
+            "--trusted",
+            &trusted,
+            "--base",
+            &trusted,
+            "--head",
+            &head,
+            "--head-repo",
+            "fork/repo",
+        ])
         .env("GITHUB_TOKEN", "ghs_secret_token_value")
         .env("GH_TOKEN", "ghs_secret_token_value")
         .env("ACTIONS_RUNTIME_TOKEN", "ghs_secret_token_value")
         .current_dir(&repo.root)
         .output()
         .unwrap();
-    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(out.status.success(), "{text}");
     for needle in [
         format!("args=4 base={trusted} head={head} merge=[] repo=[fork/repo]"),
@@ -388,7 +499,13 @@ fn the_check_sees_the_commits_and_no_credential() {
     ] {
         assert!(text.contains(&needle), "missing {needle:?}:\n{text}");
     }
-    for leak in ["ghs_secret_token_value", "c2VjcmV0LWhlYWRlcg", "extraheader", "GITHUB_TOKEN", "GH_TOKEN"] {
+    for leak in [
+        "ghs_secret_token_value",
+        "c2VjcmV0LWhlYWRlcg",
+        "extraheader",
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+    ] {
         assert!(!text.contains(leak), "{leak} reached the check:\n{text}");
     }
 }
@@ -402,7 +519,13 @@ fn no_declaration_passes_and_says_so() {
     let trusted = repo.commit("chore: seed");
     let result = repo.checks(&trusted, &trusted, &trusted, &[]);
     assert_eq!(result.0, 0, "{}", result.1);
-    assert!(result.1.contains("declares no checks (.codeflow/base-checks.json is absent)"), "{}", result.1);
+    assert!(
+        result
+            .1
+            .contains("declares no checks (.codeflow/base-checks.json is absent)"),
+        "{}",
+        result.1
+    );
     repo.write(DECLARATION, "{\"version\": 1, \"checks\": []}\n");
     let trusted = repo.commit("chore: an empty declaration");
     let result = repo.checks(&trusted, &trusted, &trusted, &[]);
@@ -412,11 +535,17 @@ fn no_declaration_passes_and_says_so() {
 /// `codeflow ci` over `main..HEAD`: everything printed.
 fn ci_notes(repo: &Repo) -> String {
     let out = codeflow()
-        .args(["ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x"])
+        .args([
+            "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x",
+        ])
         .current_dir(&repo.root)
         .output()
         .unwrap();
-    format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
 }
 
 /// AC-14's adjacent cases: a rename names the old path removed and the new
@@ -428,7 +557,10 @@ fn the_notes_name_renames_links_and_each_changed_input() {
     let repo = Repo::with_boundary();
     repo.git(&["switch", "-q", "-c", "feat/x"]);
     repo.git(&["mv", SCRIPT, ".codeflow/checks/edges.sh"]);
-    repo.write(DECLARATION, &declaration(".codeflow/checks/edges.sh", "bash", &[BOUNDARY], Some(60)));
+    repo.write(
+        DECLARATION,
+        &declaration(".codeflow/checks/edges.sh", "bash", &[BOUNDARY], Some(60)),
+    );
     repo.commit("ci: rename the check");
     let notes = ci_notes(&repo);
     for needle in [
@@ -443,7 +575,10 @@ fn the_notes_name_renames_links_and_each_changed_input() {
     repo.write("docs/a.txt", "x.txt");
     repo.write("docs/b.txt", "b\n");
     repo.write(SCRIPT, "exit 0\n");
-    repo.write(DECLARATION, &declaration(SCRIPT, "sh", &["docs/a.txt", "docs/b.txt"], None));
+    repo.write(
+        DECLARATION,
+        &declaration(SCRIPT, "sh", &["docs/a.txt", "docs/b.txt"], None),
+    );
     repo.commit("chore: seed");
     repo.git(&["switch", "-q", "-c", "feat/x"]);
     std::fs::remove_file(repo.path("docs/a.txt")).unwrap();
@@ -462,9 +597,13 @@ fn the_notes_name_renames_links_and_each_changed_input() {
     }
 
     let tree = repo.git(&["rev-parse", "HEAD:docs"]);
-    std::fs::remove_file(repo.path(&format!(".git/objects/{}/{}", &tree[..2], &tree[2..]))).unwrap();
+    std::fs::remove_file(repo.path(&format!(".git/objects/{}/{}", &tree[..2], &tree[2..])))
+        .unwrap();
     let notes = ci_notes(&repo);
-    assert!(notes.contains("whether this change edits docs/a.txt"), "{notes}");
+    assert!(
+        notes.contains("whether this change edits docs/a.txt"),
+        "{notes}"
+    );
     assert!(notes.contains("cannot be told"), "{notes}");
     assert!(!notes.contains("this change removes docs/a.txt"), "{notes}");
 }
@@ -474,7 +613,18 @@ fn the_notes_name_renames_links_and_each_changed_input() {
 fn the_subcommand_refuses_range_flags() {
     let repo = Repo::new();
     let out = codeflow()
-        .args(["ci", "--base", "main", "base-checks", "--trusted", "x", "--base", "x", "--head", "x"])
+        .args([
+            "ci",
+            "--base",
+            "main",
+            "base-checks",
+            "--trusted",
+            "x",
+            "--base",
+            "x",
+            "--head",
+            "x",
+        ])
         .current_dir(&repo.root)
         .output()
         .unwrap();

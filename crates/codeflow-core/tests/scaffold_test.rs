@@ -1235,7 +1235,11 @@ fn update_keeps_the_base_checks_declaration_through_a_three_way_merge() {
     let (_p, root) = project_dir();
     let _v1 = init_v1(&root);
     let declaration = "{\"version\": 1, \"checks\": [{\"name\": \"boundary\", \"script\": \".codeflow/checks/boundary.sh\", \"interpreter\": \"bash\"}]}\n";
-    std::fs::write(root.join(codeflow_core::base_checks::DECLARATION), declaration).unwrap();
+    std::fs::write(
+        root.join(codeflow_core::base_checks::DECLARATION),
+        declaration,
+    )
+    .unwrap();
     let mine =
         read(&root, ".claude/workflows/develop.md").replace("step eight", "step eight (mine)");
     std::fs::write(root.join(".claude/workflows/develop.md"), &mine).unwrap();
