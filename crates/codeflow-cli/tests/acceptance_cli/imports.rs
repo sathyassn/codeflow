@@ -1698,3 +1698,241 @@ fn a_home_move_through_no_planning_landing_stays_refused() {
 fn a_home_move_off_the_checked_line_stays_refused() {
     home_moves_refused(&[("second parent", MOVED), ("twice bad", MOVED)]);
 }
+
+/// `commit` with `date` as its author and committer date, which a requester
+/// controls and the ordering must never read.
+fn commit_dated(root: &Path, message: &str, date: &str) -> String {
+    git(root, &["add", "-A"]);
+    let out = Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_DATE", date)
+        .env("GIT_COMMITTER_DATE", date)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    head(root)
+}
+
+// TSK-1185: a planning branch can introduce V2 before the merges that
+// reintroduce V1, then land V2 on the source after those merges.
+// `new_version_date` forges the date of the commit that writes V2.
+fn early_fork_import(
+    receiver_second_resolution: bool,
+    divergent: bool,
+    new_version_date: Option<&str>,
+) -> tempfile::TempDir {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY), ("TSK-002", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let path = record_path("TSK-001");
+    let older = head(root);
+    write(
+        root,
+        &path,
+        &task(
+            "TSK-001",
+            "todo",
+            &OWN_JOURNEY.replace("shall work", "shall work well"),
+            "Pending.\n",
+        ),
+    );
+    let base = commit(root, "docs: write the criteria the syncs keep");
+    git(root, &["switch", "-c", "plan/new-version"]);
+    write(
+        root,
+        &path,
+        &task(
+            "TSK-001",
+            "todo",
+            &OWN_JOURNEY.replace("shall work", "shall work safely"),
+            "Pending.\n",
+        ),
+    );
+    let introduction = match new_version_date {
+        Some(date) => commit_dated(root, "docs: introduce the superseding criteria", date),
+        None => commit(root, "docs: introduce the superseding criteria"),
+    };
+
+    // M1 keeps V1 against a side parent that still holds the version V1
+    // replaced, as the real sync merges do. The planning branch already
+    // forked at B, so M1 is not an ancestor of C.
+    git(root, &["switch", "-c", "plan/other-version", &older]);
+    write(root, "docs/other.md", "A side line.\n");
+    commit(root, "docs: advance a side line");
+    git(root, &["switch", "main"]);
+    merge(root, "plan/other-version");
+    let first_resolution = head(root);
+
+    // A second line independently keeps V1. The real 1097 and 1062 histories
+    // both have unordered old-version merges; their receiver retains a
+    // different one while the source eventually contains both.
+    git(root, &["switch", "-c", "plan/another-version", &older]);
+    write(root, "docs/another.md", "Another side line.\n");
+    commit(root, "docs: advance another side line");
+    git(root, &["switch", "-c", "test/old-version-line", &base]);
+    merge(root, "plan/another-version");
+    let second_resolution = head(root);
+    let retained = if receiver_second_resolution {
+        &second_resolution
+    } else {
+        &first_resolution
+    };
+    git(root, &["switch", "-c", RECEIVER, retained]);
+    // Keep the receiving tip outside the source's ancestry.
+    write(root, "docs/receiver.md", "The receiving line.\n");
+    commit(root, "docs: advance the receiver");
+    let receiving_base = head(root);
+    git(root, &["branch", "test/receiving-base"]);
+    git(root, &["switch", "main"]);
+    merge(root, "test/old-version-line");
+    merge(root, "plan/new-version");
+    let landing = head(root);
+
+    let repository = git2::Repository::open(root).unwrap();
+    let oid = |text: &str| git2::Oid::from_str(text).unwrap();
+    assert!(!repository
+        .graph_descendant_of(oid(&first_resolution), oid(&second_resolution))
+        .unwrap());
+    assert!(!repository
+        .graph_descendant_of(oid(&second_resolution), oid(&first_resolution))
+        .unwrap());
+    for resolution in [&first_resolution, &second_resolution] {
+        assert!(repository
+            .graph_descendant_of(oid(&landing), oid(resolution))
+            .unwrap());
+        assert!(!repository
+            .graph_descendant_of(oid(&introduction), oid(resolution))
+            .unwrap());
+    }
+    assert!(repository
+        .graph_descendant_of(oid(&landing), oid(&first_resolution))
+        .unwrap());
+    assert!(!repository
+        .graph_descendant_of(oid(&landing), oid(&receiving_base))
+        .unwrap());
+    git(root, &["switch", RECEIVER]);
+    merge(root, "main");
+    // The target independently edits its criteria after the sync branch
+    // forks. Its new tip is outside the candidate, so import ordering must
+    // reject it even though the candidate is a clean merge of source bytes.
+    if divergent {
+        git(root, &["switch", "test/receiving-base"]);
+        write(
+            root,
+            &path,
+            &task(
+                "TSK-001",
+                "todo",
+                &OWN_JOURNEY.replace("shall work", "shall work independently"),
+                "Pending.\n",
+            ),
+        );
+        commit(root, "docs: independently amend the receiving criteria");
+        git(root, &["switch", RECEIVER]);
+    }
+    dir
+}
+
+const LONG_AGO: &str = "2001-01-01T00:00:00Z";
+const FAR_AHEAD: &str = "2040-01-01T00:00:00Z";
+
+#[test]
+fn tsk1185_1097_sync_then_early_fork_amendment_orders_the_new_version() {
+    let dir = early_fork_import(true, false, None);
+    assert_passes(
+        &check(dir.path(), "test/receiving-base", Some(RECEIVER), false),
+        "1097: sync, early-fork planning landing, second sync",
+    );
+}
+
+#[test]
+fn tsk1185_1062_reintroduced_version_yields_to_early_fork_landing() {
+    let dir = early_fork_import(false, false, None);
+    assert_passes(
+        &check(dir.path(), "test/receiving-base", Some(RECEIVER), false),
+        "1062: main retains one of two old-version reintroductions",
+    );
+}
+
+#[test]
+fn tsk1185_two_sided_criteria_divergence_still_refuses() {
+    let dir = early_fork_import(false, true, None);
+    let result = check(dir.path(), "test/receiving-base", Some(RECEIVER), false);
+    assert_blocks(
+        &result,
+        "independent receiving criteria remain competing authority",
+        &["work.import_authority", "none of them is newer"],
+    );
+    eprintln!("two-sided divergence control:\n{}", result.1);
+}
+
+/// AC-6: the same three answers through `--into`, the form a sync uses.
+#[test]
+fn tsk1185_journey_through_into_a_line() {
+    let into = ["--into", "test/receiving-base"];
+    for receiver_second_resolution in [true, false] {
+        let dir = early_fork_import(receiver_second_resolution, false, None);
+        assert_passes(
+            &check_as(
+                dir.path(),
+                "test/receiving-base",
+                Some(RECEIVER),
+                false,
+                &into,
+            ),
+            "a sync over the superseded record",
+        );
+    }
+    let dir = early_fork_import(false, true, None);
+    assert_blocks(
+        &check_as(
+            dir.path(),
+            "test/receiving-base",
+            Some(RECEIVER),
+            false,
+            &into,
+        ),
+        "a real two-sided divergence through --into",
+        &["work.import_authority", "none of them is newer"],
+    );
+}
+
+/// AC-3: V2's commit dated before every V1 resolution is still newer, because
+/// ancestry orders it.
+#[test]
+fn tsk1185_an_old_date_does_not_make_the_new_version_older() {
+    let dir = early_fork_import(true, false, Some(LONG_AGO));
+    assert_passes(
+        &check(dir.path(), "test/receiving-base", Some(RECEIVER), false),
+        "V2 forged to 2001",
+    );
+}
+
+/// AC-3: a date far ahead does not settle a real divergence for V2.
+#[test]
+fn tsk1185_a_future_date_does_not_settle_a_divergence() {
+    let dir = early_fork_import(false, true, Some(FAR_AHEAD));
+    assert_blocks(
+        &check(dir.path(), "test/receiving-base", Some(RECEIVER), false),
+        "V2 forged to 2040",
+        &["work.import_authority", "none of them is newer"],
+    );
+}
+
+/// AC-3: naming the branch like a line does not settle a real divergence.
+#[test]
+fn tsk1185_a_line_name_does_not_settle_a_divergence() {
+    let dir = early_fork_import(false, true, None);
+    git(dir.path(), &["branch", "-m", RECEIVER, LINE]);
+    assert_blocks(
+        &check(dir.path(), "test/receiving-base", Some(LINE), false),
+        "a branch named like the epic line",
+        &["work.import_authority", "none of them is newer"],
+    );
+}

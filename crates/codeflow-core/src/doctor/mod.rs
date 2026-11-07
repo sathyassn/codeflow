@@ -25,6 +25,7 @@ use crate::scaffold::state::InstalledManifest;
 mod ci_pin;
 mod codex_profile;
 mod git_config;
+mod git_version;
 mod grok_hooks;
 mod guard_timeouts;
 mod remote_perimeter;
@@ -305,6 +306,7 @@ const CHECK_NAMES: &[&str] = &[
     "startup-files",
     "sandbox",
     "git-config-includes",
+    "git-version",
     "config",
     "permissions",
     "policy-source",
@@ -347,6 +349,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("startup-files", startup_files::check);
     m.insert("sandbox", sandbox::check);
     m.insert("git-config-includes", git_config::check);
+    m.insert("git-version", git_version::check);
     m.insert("config", check_config);
     m.insert("permissions", check_permissions);
     m.insert("network", check_network);
@@ -4479,7 +4482,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 26);
+        assert_eq!(check_names().len(), 27);
     }
 
     #[test]

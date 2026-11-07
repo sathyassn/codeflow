@@ -219,6 +219,10 @@ A receiver's first push still proves its own task landings.
 - Criteria amendments, reopenings and records brought unchanged from the
   target stay attributed to its history. A task PR does not claim those
   records as its own additions.
+- When two lines hold different criteria for a task, the check orders them
+  by ancestry on the fetched history and reads no branch name or date. When
+  both lines wrote their own criteria, neither is older and the sync
+  refuses (SPC-013).
 - Receiving-line record edits and competing criteria introductions still
   need their own judgment. A source landing with an unreviewed resolution,
   an unavailable home without a proven default-target landing, or an

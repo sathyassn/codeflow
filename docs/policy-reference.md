@@ -1058,8 +1058,9 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   not hold yet. Git attributes come from the empty tree, with `diff` set on
   every path, so a `.gitattributes` entry (`-diff`, `binary` or a `textconv`
   driver) cannot hide a staged line and a file holding a NUL byte is read as
-  text. This needs git 2.41 or later, as the CI scan does; an older git is a
-  failed scan. The scan sets `GIT_NO_LAZY_FETCH=1` for gitleaks and every git it runs, overriding an
+  text. This needs git 2.41 or later, as the CI scan and the merge judgment
+  in `codeflow ci` do; an older git is a failed scan and a refused judgment,
+  and `codeflow doctor --check git-version` reports it early. The scan sets `GIT_NO_LAZY_FETCH=1` for gitleaks and every git it runs, overriding an
   inherited value, so in a partial clone a missing object is a failed scan
   and never a fetch from the promisor remote. A repository with a promisor
   remote (a partial clone) also needs git 2.46 or later: the setting arrives
