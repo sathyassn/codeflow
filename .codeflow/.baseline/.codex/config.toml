@@ -207,6 +207,8 @@ glob_scan_max_depth = 6
 ".codeflow/git-hooks" = "read"
 ".grok" = "read"
 ".github/workflows/codeflow-ci.yml" = "read"
+".github/workflows/codeflow-line-pr.yml" = "read"
+".github/workflows/codeflow-line-push.yml" = "read"
 # A direnv `.envrc` runs in every shell that enters its directory (TSK-242).
 # Only the workspace root's: a wildcard directory part would block every
 # directory delete, as for `.env` above, so a nested `.envrc`, including one

@@ -142,6 +142,8 @@
       "Edit(/.codex/**)",
       "Edit(/.grok/**)",
       "Edit(/.github/workflows/codeflow-ci.yml)",
+      "Edit(/.github/workflows/codeflow-line-pr.yml)",
+      "Edit(/.github/workflows/codeflow-line-push.yml)",
       "Edit(~/.claude/settings.json)",
       "Edit(~/.codex/config.toml)",
       "Edit(~/.codex/rules/**)",

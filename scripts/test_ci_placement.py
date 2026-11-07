@@ -754,6 +754,8 @@ class AdmissionTests(unittest.TestCase):
     a real repository, with a stand-in `gh` and `python3` and the real `git`."""
 
     LINE_FILE = ".github/workflows/codeflow-line-pr.yml"
+    PUSH_FILE = ".github/workflows/codeflow-line-push.yml"
+    NO_GH = 'echo "gh must not be called" >&2\nexit 9\n'
 
     @classmethod
     def setUpClass(cls):
@@ -783,6 +785,7 @@ class AdmissionTests(unittest.TestCase):
         self.line = self.commit("line work")
         self.git("switch", "-q", "main")
         self.write(self.LINE_FILE, "the line workflow\n")
+        self.write(self.PUSH_FILE, "the line workflow\n")
         self.write("main.txt", "main work\n")
         self.main = self.commit("the placement")
 
@@ -852,6 +855,12 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--workflow") + 1], self.LINE_FILE)
         self.assertEqual([argv[at + 1] for at, word in enumerate(argv) if word == "--require"],
                          ["codeflow gates (line)"])
+
+    def assertRefused(self, result):
+        code, out, argv = result
+        self.assertNotEqual(code, 0, out)
+        self.assertIsNone(argv, "the step went on to read a verdict")
+        self.assertIn("line workflow", out)
 
     def test_a_pull_request_into_main_needs_both_required_verdicts(self):
         head = self.sync()
@@ -926,15 +935,55 @@ class AdmissionTests(unittest.TestCase):
         broken = 'if [ "$1" = merge-tree ]; then exit 2; fi\nexec REAL "$@"\n'
         self.assertBoth(self.admit(head, git=broken))
 
-    def test_once_the_line_has_the_placement_the_exception_is_off(self):
-        # The base commit decides: every pull request is on the line verdict,
-        # with no call to GitHub and whatever the head holds.
+    def place_line(self, text="the line workflow\n"):
+        """The line has synced: it holds both line workflows."""
         self.git("switch", "-q", "integration/x")
-        self.write(self.LINE_FILE, "the line workflow\n")
+        self.write(self.LINE_FILE, text)
+        self.write(self.PUSH_FILE, text)
         self.line = self.commit("synced")
+
+    def test_once_the_line_has_the_placement_the_exception_is_off(self):
+        # The base commit decides: a pull request is on the line verdict with
+        # no call to GitHub, whatever other files the head changes.
+        self.place_line()
         self.branch("task")
-        self.git("rm", "-q", self.LINE_FILE)
-        self.assertLine(self.admit(self.commit("drop it"), 'echo "gh must not be called" >&2\nexit 9\n'))
+        self.write("task.txt", "task work\n")
+        self.assertLine(self.admit(self.commit("task work"), self.NO_GH))
+
+    def test_a_head_that_changes_a_line_workflow_is_refused(self):
+        # `pull_request` runs the workflow from the head's merge, so a head that
+        # edits it could post its own green verdict. It waits for no run.
+        for name in (self.LINE_FILE, self.PUSH_FILE):
+            for label, change in (("edited", lambda n: self.write(n, "steps: []\n")),
+                                  ("deleted", lambda n: self.git("rm", "-q", n))):
+                with self.subTest(name=name, change=label):
+                    self.place_line()
+                    self.branch(f"task-{label}-{Path(name).stem}")
+                    change(name)
+                    self.assertRefused(self.admit(self.commit("weaken the proof"), self.NO_GH))
+                    self.git("switch", "-q", "main")
+                    self.git("branch", "-q", "-f", "integration/x", self.line + "~1")
+
+    def test_a_head_may_bring_main_s_reviewed_line_workflows(self):
+        self.place_line("an older line workflow\n")
+        self.branch("task")
+        self.write(self.LINE_FILE, "the line workflow\n")
+        self.write(self.PUSH_FILE, "the line workflow\n")
+        self.assertLine(self.admit(self.commit("take main's copies"), self.NO_GH))
+
+    def test_a_head_that_matches_neither_base_nor_main_is_refused_even_if_one_file_matches(self):
+        self.place_line("an older line workflow\n")
+        self.branch("task")
+        self.write(self.LINE_FILE, "the line workflow\n")
+        self.write(self.PUSH_FILE, "a third line workflow\n")
+        self.assertRefused(self.admit(self.commit("one reviewed, one not"), self.NO_GH))
+
+    def test_a_blob_read_that_fails_is_refused(self):
+        self.place_line()
+        self.branch("task")
+        self.write("task.txt", "task work\n")
+        broken = 'case "$*" in rev-parse*refs/codeflow/pr-head:*) exit 2 ;; esac\nexec REAL "$@"\n'
+        self.assertRefused(self.admit(self.commit("task work"), self.NO_GH, git=broken))
 
     def test_a_draft_does_not_wait(self):
         code, out, argv = self.admit(self.sync(), ready=False)

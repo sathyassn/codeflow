@@ -135,8 +135,16 @@ const DEFAULT_BRANCH_TEST_VERDICTS: &[&str] = &[
 ];
 
 /// The test verdicts C requires, each where a workflow on the default
-/// branch declares it; `codeflow gates` is required outright.
+/// branch declares it; `codeflow gates` is required outright. A repository
+/// that declares [`LINE_PLACEMENT_VERDICT`] requires that name instead.
 const LINE_TEST_VERDICTS: &[&str] = &["codeflow gates", "windows"];
+
+/// The verdict of a line pull request's short checks. Declaring it means a
+/// line pull request runs a line workflow and posts neither of
+/// [`LINE_TEST_VERDICTS`], so C requires this name alone: requiring the
+/// others would wait on checks nothing posts (ADR-0097). The shipped
+/// scaffold declares no such job, so an adopter keeps the two names.
+const LINE_PLACEMENT_VERDICT: &str = "codeflow gates (line)";
 
 /// The test verdict every pull request needs.
 const REQUIRED_TEST_VERDICT: &str = "codeflow gates";
@@ -400,7 +408,7 @@ impl AuthorityPlan {
                 vec![
                     "a pull request, no approval required".into(),
                     format!(
-                        "strict status checks on an up-to-date branch: the trusted verdict names the policy workflow declares and the declared test verdicts ({}), pinned to GitHub Actions",
+                        "strict status checks on an up-to-date branch: the trusted verdict names the policy workflow declares and {LINE_PLACEMENT_VERDICT} where a workflow declares it, else the declared test verdicts ({}), pinned to GitHub Actions",
                         LINE_TEST_VERDICTS.join(", ")
                     ),
                     "block force pushes".into(),
@@ -1045,7 +1053,13 @@ fn planned_checks(
         checks
     });
     let mut line = pinned_trusted;
-    line.extend(tests(LINE_TEST_VERDICTS));
+    line.extend(tests(
+        if declared.job_names.contains(LINE_PLACEMENT_VERDICT) {
+            &[LINE_PLACEMENT_VERDICT]
+        } else {
+            LINE_TEST_VERDICTS
+        },
+    ));
     (default_branch, Ok(line))
 }
 
@@ -3123,6 +3137,59 @@ jobs:
                 "{kinds:?}"
             );
         }
+    }
+
+    /// A repository whose default branch declares the line verdict requires
+    /// it on lines, and protect never puts back the two names a line
+    /// pull request does not post. A repository that does not declare it,
+    /// every adopter today, keeps those two (the test above).
+    #[test]
+    fn a_declared_line_verdict_replaces_the_two_names_on_lines_and_only_there() {
+        let line_workflow = "
+name: codeflow-line-pr
+on: pull_request
+jobs:
+  line-verdict:
+    name: codeflow gates (line)
+";
+        let workflows = [
+            (POLICY_WORKFLOW, POLICY_WITH_TRUSTED),
+            (".github/workflows/codeflow-ci.yml", CI_WORKFLOW),
+            (".github/workflows/codeflow-line-pr.yml", line_workflow),
+        ];
+        let want = pins(&[
+            ("commit standards", 15368),
+            ("trusted: release impact", 15368),
+            ("codeflow gates (line)", 15368),
+        ]);
+        let host = Fake::new(&workflows, &[]);
+        let report = apply_authority(&host, solo());
+        let text = report.render();
+        assert_eq!(report.status, ProtectStatus::Applied, "{text:?}");
+        let mut line = host.body(RULESET_LINE_CHECKS);
+        assert_eq!(check_pins(&line), want);
+        let default_branch = check_pins(&host.body(RULESET_AUTHORITY_CHECKS));
+        for name in ["codeflow gates", "windows"] {
+            assert!(default_branch.iter().any(|(n, _)| n == name), "{name}");
+        }
+
+        // A line ruleset as ruleset step 1 leaves it: an update adds the
+        // line verdict and neither removed name.
+        line["id"] = json!(77);
+        line["rules"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|r| r["type"] == "required_status_checks")
+            .unwrap()["parameters"]["required_status_checks"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+        let host = Fake::new(&workflows, &[line]);
+        let report = apply_authority(&host, solo());
+        let text = report.render();
+        assert_eq!(report.status, ProtectStatus::Applied, "{text:?}");
+        assert_eq!(check_pins(&host.body(RULESET_LINE_CHECKS)), want);
     }
 
     /// AC-1: B and C are refused while the default branch's policy

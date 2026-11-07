@@ -4483,6 +4483,8 @@ const ENFORCEMENT_TEXT: &[&str] = &[
     ".git/packed-refs",
     ".git/refs/remotes",
     ".github/workflows/codeflow-ci.yml",
+    ".github/workflows/codeflow-line-pr.yml",
+    ".github/workflows/codeflow-line-push.yml",
     ".codex",
     ".grok",
 ];
@@ -17737,6 +17739,23 @@ mod tests {
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    /// A line workflow's verdict admits a line pull request, so a command
+    /// that changes either file is refused as `codeflow-ci.yml` is.
+    #[test]
+    fn test_the_line_workflows_are_enforcement_files() {
+        let p = default_policy();
+        for file in ["codeflow-line-pr.yml", "codeflow-line-push.yml"] {
+            for cmd in [
+                format!("sed -i s/a/b/ .github/workflows/{file}"),
+                format!("echo bad > .github/workflows/{file}"),
+                format!("rm .github/workflows/{file}"),
+            ] {
+                let v = evaluate(&cmd, &ctx(&p, "feat/x"));
+                assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+            }
         }
     }
 
