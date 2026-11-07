@@ -5310,6 +5310,7 @@ const DOCS_PORTAL_DELIBERATE_DRIFT: &[(&str, &str)] = &[
 #[test]
 fn docs_portal_fixture_integrity_records_match_their_files() {
     use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
     let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
     let mut checked = 0;
     let mut drifted = BTreeSet::new();
@@ -5332,10 +5333,13 @@ fn docs_portal_fixture_integrity_records_match_their_files() {
             let Some(body) = files[format!("{root}/{name}")].as_str() else {
                 continue;
             };
-            let actual: String = Sha256::digest(body.as_bytes())
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect();
+            let actual =
+                Sha256::digest(body.as_bytes())
+                    .iter()
+                    .fold(String::new(), |mut out, byte| {
+                        write!(out, "{byte:02x}").expect("writing to a String cannot fail");
+                        out
+                    });
             if actual == pristine {
                 checked += 1;
             } else {
