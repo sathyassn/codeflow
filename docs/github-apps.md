@@ -1,13 +1,64 @@
 # Set up the GitHub Apps
 
 This guide is for a repository administrator who wants agent sessions to stop
-acting under their own GitHub login. One command creates two GitHub Apps, and
-each App takes two browser clicks.
+acting under their own GitHub login, and for each developer on that repository.
+One command creates two GitHub Apps, and each App takes two browser clicks. The
+agent App takes one more click to turn on its device flow.
+
+This page is the one place where the setup is described. Other CodeFlow pages
+link here.
+
+## How agent identity works
+
+This holds for CodeFlow's own repository and for every project that uses
+CodeFlow. Agent pull requests show the developer as author, never the App's
+bot.
+
+| What GitHub records | Who it is | Set by |
+|---|---|---|
+| Commit author | The developer, always | git, unchanged |
+| Commit committer | `<slug>[bot]` in an agent session that has the two committer values; otherwise the developer | The harness settings ([Author and committer](#author-and-committer)) |
+| Pull request author | The developer, with the App's badge | The developer's user access token for the agent App ([Pull requests as you](#pull-requests-as-you)) |
+| Pusher | The agent App | The App's installation token |
+
+Which token does what:
+
+- **User access token** (`codeflow remote agent-login` once, then
+  `codeflow remote agent-token --user`): opens and edits pull requests. It can
+  do only what both the developer and the agent App may do.
+- **Installation token** (`codeflow remote agent-token`): pushes, by default.
+  It has the agent App's permissions only and lasts one hour.
+- **Neither:** the session uses the developer's own login.
+
+What is optional: all of it. The agent App, the committer values and the
+developer's authorization are each optional, per project and per developer.
+Without them, agent work runs under the developer's own login.
+
+Which checks enforce what:
+
+- **Commit message rules never relax for agent work**, whoever is author or
+  committer: conventional commits, the commit-msg hook and `git.ai_attribution`
+  at block. The bot committer is not a route around them, and the agent App is
+  never added to `git.automation_profiles`.
+- **Identity checks are project policy: off by default for a project that uses
+  CodeFlow, on in CodeFlow's own repository.** No CodeFlow check reads a commit
+  author, a committer or a pull request author. The identity checks are who
+  may produce a required check, which `codeflow remote protect` pins to the
+  App that must create it, and which automation actors
+  `git.automation_profiles` exempts from the branch naming and message shape
+  rules, empty by default. A project turns them on itself. CodeFlow's own `main` pins its required checks to GitHub Actions.
+- **GitHub enforces one more rule:** "Pull request authors cannot approve their
+  own pull requests"
+  ([approving a pull request with required reviews](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/approving-a-pull-request-with-required-reviews)).
+  With the developer as author, someone else approves where a ruleset needs an
+  approval.
+
+## The two Apps
 
 | App | Permissions | What it is for |
 |---|---|---|
 | Authority App | Checks write | Creates the `authority:` check runs from the default branch |
-| Agent App | Contents and Pull requests write | Gives agent sessions their own identity on GitHub |
+| Agent App | Contents and Pull requests write | Gives agent sessions a limited token on GitHub, and opens their pull requests as the developer |
 
 GitHub adds Metadata read to every App. The agent App has no Administration,
 Workflows, Environments, Deployments, Commit statuses or Checks permission.
@@ -15,13 +66,15 @@ Workflows, Environments, Deployments, Commit statuses or Checks permission.
 ## The agent App is optional
 
 Nothing requires the agent App, for a project or for a developer. Each computer
-sits at one of three levels, and developers on one repository can differ.
+sits at one of four levels, and developers on one repository can differ. The
+last level is the default this guide sets up.
 
-| Level | What it needs | Commits record | Pushes and pull requests run as | What it gives up |
-|---|---|---|---|---|
-| No App | Nothing | You as author and committer | Your login | Agent work looks like yours, and the session has everything your login has |
-| Committer values only | The two values in the harness settings; no key on this computer | You as author, `<slug>[bot]` as committer | Your login | The session still has everything your login has; the committer is a record only |
-| Key on the computer | The values, plus this computer's key for the App | You as author, `<slug>[bot]` as committer | The App's limited token | One key to hold and rotate per computer, and a credential store |
+| Level | What it needs | Commits record | Pushes run as | Pull requests show as author | What it gives up |
+|---|---|---|---|---|---|
+| No App | Nothing | You as author and committer | Your login | You | Agent work looks like yours, and the session has everything your login has |
+| Committer values only | The two values in the harness settings; no key on this computer | You as author, `<slug>[bot]` as committer | Your login | You | The session still has everything your login has; the committer is a record only |
+| Key on the computer | The values, plus this computer's key for the App | You as author, `<slug>[bot]` as committer | The App's installation token | `<slug>[bot]` | One key to hold and rotate per computer, and a credential store |
+| Key and your authorization (default) | The above, plus your one `agent-login` | You as author, `<slug>[bot]` as committer | The App's installation token | You, with the App's badge | One authorization to renew every six months |
 
 The committer field needs no key and no signature. It is text in the commit, so
 the second level works on any computer that has the settings.
@@ -63,6 +116,20 @@ The command also creates the environment `codeflow-authority`, restricted to
 the default branch, with the secret `CODEFLOW_AUTHORITY_APP_KEY` and the
 variable `CODEFLOW_AUTHORITY_APP_ID`. The agent App's key goes to the
 credential store. Every write is printed with what undoes it.
+
+Then turn on the agent App's device flow. A GitHub App manifest has no setting
+for it, so the command cannot do this for you, and it prints the click with
+the page:
+
+1. Open the agent App's settings page,
+   `https://github.com/settings/apps/<slug>`, or
+   `https://github.com/organizations/<org>/settings/apps/<slug>` for an
+   organization.
+2. Under "Identifying and authorizing users", select "Enable Device Flow" and
+   save.
+
+Leave expiring user access tokens on. GitHub turns them on for a new App unless
+you opt out, and without them a user access token cannot be renewed.
 
 ## Run it again
 
@@ -136,36 +203,102 @@ codeflow remote setup-apps --authority-name codeflow-authority-app --agent-name 
 It writes nothing to an environment that is already restricted to the default
 branch.
 
+## Pull requests as you
+
+This is the default for a project that uses CodeFlow. Each developer does it
+once per computer, after the agent App exists, has its device flow on, and has
+this computer's key (from `setup-apps` or `import-agent-key`).
+
+```sh
+codeflow remote agent-login
+```
+
+The command prints an address and a code. Open the address, enter the code and
+approve the agent App. It uses GitHub's device flow, so it needs no personal
+access token, no `gh` login and no App client secret. The grant is kept in this
+computer's credential store under the service `codeflow-agent-user`, account
+`<owner>/<repo>`, apart from the App's key. The command prints the login it
+authorized and the command that removes the grant.
+
+In a session, `codeflow remote agent-token --user` prints your user access
+token for the agent App, for `GH_TOKEN`. See
+[Use the agent App in a session](#use-the-agent-app-in-a-session).
+
+- **Renewal is silent.** GitHub ends a user access token after 8 hours and its
+  refresh token after six months. Near the token's end the command renews it
+  with the refresh token. GitHub stops accepting a refresh token once it is
+  used, so the new grant is stored before the new token is printed, and a lock
+  under `~/.codeflow/locks` lets only one renewal run at a time on a computer.
+- **One message asks you to authorize again**, and only when GitHub refuses the
+  saved authorization or it has expired: `authorize again with codeflow remote
+  agent-login --repo <owner>/<repo>`. A network failure or a GitHub error names
+  its own cause and keeps the saved authorization.
+- **A revoked authorization is noticed.** Before it prints a saved token, the
+  command asks GitHub who the token belongs to (`GET /user`). A token GitHub no
+  longer takes leads to a renewal, which a revoked authorization refuses.
+- **The token is limited twice.** It has only the permissions both you and the
+  agent App have, on resources both of you can reach.
+
+When the device flow is off, `agent-login` says so and names the App's settings
+page.
+
 ## Use the agent App in a session
+
+| Action | Token | Command |
+|---|---|---|
+| Open, edit or comment on a pull request (`gh`) | Your user access token for the App | `codeflow remote agent-token --user` |
+| `git push` | The App's installation token (default) | `codeflow remote agent-token --git-credential` |
+| `git push`, if you choose | Your user access token for the App | `codeflow remote agent-token --user --git-credential` |
 
 `codeflow remote agent-token` prints an installation token for this repository,
 valid for one hour. It reads the key from the credential store and never prints
 it.
 
-- `gh`:
+- `gh`, as you (the default for pull requests):
 
   ```sh
-  TOKEN="$(codeflow remote agent-token)" && GH_TOKEN="$TOKEN" gh pr create ...
+  TOKEN="$(codeflow remote agent-token --user)" && GH_TOKEN="$TOKEN" gh pr create ...
   ```
 
   Keep the `&&`. Without it, a failed token leaves `GH_TOKEN` empty, and `gh`
-  may fall back to your own login, so the action would run as you.
-- `git push`:
+  may fall back to your own login, so the action would run with everything
+  your login has.
+- `gh`, as the App's bot: use `codeflow remote agent-token` without `--user`.
+  A pull request opened this way shows `<slug>[bot]` as its author.
+- `git push`, with the installation token (the default):
 
   ```sh
   git -c credential.helper= -c 'credential.helper=!codeflow remote agent-token --git-credential' push
   ```
 
-The key's custody rests on the session's sandbox. A sandboxed session must not
-reach the credential store, and only `codeflow remote agent-token` runs outside
-the sandbox. Check this on your host: from a sandboxed session, run the
-following. It prints only a byte count, and that count must be 0.
+- `git push`, with your user access token, if you prefer pushes to carry your
+  authorization too:
+
+  ```sh
+  git -c credential.helper= -c 'credential.helper=!codeflow remote agent-token --user --git-credential' push
+  ```
+
+  Limit: GitHub's pages on user access tokens do not mention git over HTTPS.
+  The helper answers with the user name `x-access-token` and the token as the
+  password, as for the installation token. CodeFlow has not tested this push
+  against GitHub.
+
+Either way the commit identity does not change: you are the author and the App's
+bot is the committer.
+
+The custody of the key and the grant rests on the session's sandbox. A
+sandboxed session must not reach the credential store, and only `codeflow
+remote agent-token` runs outside the sandbox. Check this on your host: from a
+sandboxed session, run the following. Each prints only a byte count, and each
+count must be 0.
 
 ```sh
 security find-generic-password -s codeflow-agent-app -a <owner>/<repo> -w | wc -c
+security find-generic-password -s codeflow-agent-user -a <owner>/<repo> -w | wc -c
 ```
 
-When the count is not 0, stop: the session can read the key on this host.
+When a count is not 0, stop: the session can read the key or the grant on this
+host.
 
 ## Author and committer
 
@@ -253,12 +386,20 @@ What GitHub shows:
 |---|---|
 | A commit made in a session with the two variables | author: the human; committer: `<slug>[bot]` |
 | A commit made without them | the human author and committer |
-| A pull request opened with the agent App's token | author `<slug>[bot]` |
-| A merge made with the agent App's token | merged by `<slug>[bot]` |
+| A pull request opened with your user access token for the App (`--user`, the default) | author: you, with the App's badge |
+| A pull request opened with the agent App's installation token | author `<slug>[bot]` |
+| A merge made with the agent App's installation token | merged by `<slug>[bot]` |
 | A merge commit GitHub makes for that merge | author `<slug>[bot]` |
 
 The first two rows state what git records. How GitHub displays a pushed commit
 with a bot committer has not been observed yet.
+
+The row for your user access token rests on GitHub's statement that "API
+requests made by an app on behalf of a user will be attributed to that user",
+and that the GitHub UI shows "the user's avatar photo along with the app's
+identicon badge as the author". GitHub's page gives an issue as its example and
+does not name pull requests or merge commits. CodeFlow has not yet observed a
+pull request opened this way.
 
 ## Signed commits
 
@@ -327,6 +468,10 @@ page, generate a new one and import that.
 When a computer is lost, or a developer leaves, delete that computer's key on the
 same page. The other keys keep working.
 
+Each developer then runs `codeflow remote agent-login` on their own computer, as
+in [Pull requests as you](#pull-requests-as-you). An authorization is one
+person's, so it is never copied between developers.
+
 ## A computer with the settings but no key
 
 A clone brings the committer settings with it, so this state is normal until the
@@ -336,6 +481,7 @@ developer imports a key.
 |---|---|
 | `git commit` | Works, and names the agent App as committer. No key is involved |
 | `codeflow remote agent-token` | Fails with a non-zero exit and prints no token: "no agent App entry for <owner>/<repo>" |
+| `codeflow remote agent-token --user` with no `agent-login` yet | Fails with a non-zero exit and prints no token, naming `codeflow remote agent-login --repo <owner>/<repo>` |
 | `git push` through the credential helper | Gets no token, so it fails in a session and asks for a login in a terminal |
 | `TOKEN=... && GH_TOKEN=... gh ...` | Stops at the `&&` |
 
@@ -348,6 +494,35 @@ shows them as the pusher.
 Every write is printed with what undoes it. To remove an App, delete it on its
 settings page under "Advanced", which is a web step. Then run the printed
 commands for the variable, the secret and the stored key.
+
+To withdraw your own authorization, revoke it on GitHub: Settings,
+"Applications", the "Authorized GitHub Apps" tab, "Revoke". Only the person who
+authorized an App can revoke it. Then remove the grant from this computer with
+the command `agent-login` printed, such as
+`security delete-generic-password -s codeflow-agent-user -a <owner>/<repo>` on
+macOS or `secret-tool clear service codeflow-agent-user account <owner>/<repo>`
+on Linux.
+
+## Sources
+
+GitHub's pages, read 2026-11-07. Where a page is silent, this guide says so
+above.
+
+- [Generating a user access token for a GitHub App](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app):
+  the 8 hour token, the device flow, and "only has permissions that both the
+  user and the app have".
+- [Refreshing user access tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/refreshing-user-access-tokens):
+  the six month refresh token, and that a used refresh token stops working.
+- [Authorizing OAuth apps](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps):
+  the device flow's requests and answers.
+- [Modifying a GitHub App registration](https://docs.github.com/en/apps/maintaining-github-apps/modifying-a-github-app-registration):
+  "Enable Device Flow".
+- [Registering a GitHub App from a manifest](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest):
+  the manifest's parameters, none of which is the device flow.
+- [Authenticating with a GitHub App on behalf of a user](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-with-a-github-app-on-behalf-of-a-user):
+  attribution to the user.
+- [Reviewing and revoking authorization of GitHub Apps](https://docs.github.com/en/apps/using-github-apps/reviewing-and-revoking-authorization-of-github-apps):
+  revoking.
 
 ## More detail
 

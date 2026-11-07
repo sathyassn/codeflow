@@ -462,11 +462,13 @@ App's key secret `CODEFLOW_AUTHORITY_APP_KEY` and id variable
 `CODEFLOW_AUTHORITY_APP_ID`, and the agent App (Contents and Pull requests
 write only), whose key stays in the administrator's operating system
 credential store. The two clicks are "Create GitHub App" on GitHub and
-"Install" on the link the command prints. Agent sessions then act on GitHub
-as `<slug>[bot]` with a token from `codeflow remote agent-token`. The steps,
-the attribution each token gives and the differences between personal and
-organization accounts are in the policy reference's "Mode A setup", and
-`docs/github-apps.md` is the guide for an adopter.
+"Install" on the link the command prints. By default agent pull requests
+then show the developer as author: each developer runs `codeflow remote
+agent-login` once, sessions open pull requests with `codeflow remote
+agent-token --user`, and pushes use the App's installation token. The setup,
+including the agent App's device flow click, is in `docs/github-apps.md`, the
+guide for an adopter; the policy reference's "Mode A setup" states how each
+token is handled.
 
 ## Optional external add-ons
 

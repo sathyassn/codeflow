@@ -1288,7 +1288,11 @@ the default branch, in one session.
    `codeflow doctor --check remote-perimeter` and stop only when it is green
    with no recovery window open.
 7. Point the agent sessions at the agent App (below), and remove the
-   administrator's login from the sessions' credential stores.
+   administrator's login from the sessions' credential stores. The default
+   for a consuming project is pull requests that show the developer as
+   author: turn on the agent App's device flow and have each developer run
+   `codeflow remote agent-login` once, as the
+   [GitHub Apps guide](github-apps.md#pull-requests-as-you) describes.
 
 Every write is printed with what undoes it: a `gh` command for the
 environment, its branch policy, the secret and the variable, a `security`
@@ -1339,16 +1343,33 @@ never sees the token. A proxy that must read that traffic with its own
 certificate authority is not supported. The agent App is
 optional: nothing in `codeflow doctor`, the hooks, the policy or `codeflow ci`
 requires it or its key, and the [GitHub Apps guide](github-apps.md) gives the
-three levels a computer can sit at.
+levels a computer can sit at. The guide is where the setup is described;
+this section states how the tokens are handled.
 
-- `gh`: `TOKEN="$(codeflow remote agent-token)" && GH_TOKEN="$TOKEN" gh pr
-  create ...`. Keep the `&&`: a failed token must stop the line, because an
-  empty `GH_TOKEN` may leave `gh` on the stored login.
+- `gh`: `TOKEN="$(codeflow remote agent-token --user)" && GH_TOKEN="$TOKEN"
+  gh pr create ...` opens the pull request with the developer's user access
+  token for the agent App, so the developer is its author; without `--user`
+  the installation token makes `<slug>[bot]` the author. Keep the `&&`: a
+  failed token must stop the line, because an empty `GH_TOKEN` may leave `gh`
+  on the stored login.
+- The user access token: `codeflow remote agent-login` runs GitHub's device
+  flow once per developer and computer, with no client secret, personal
+  access token or `gh` login. The grant (an 8 hour access token and a six
+  month refresh token) is kept in the credential store under the service
+  `codeflow-agent-user`, account `owner/name`. `agent-token --user` checks a
+  saved token with `GET /user`, renews it near its end under a file lock,
+  and stores the new grant before it prints the token, because GitHub stops
+  accepting a used refresh token. Only an OAuth refusal or a passed expiry
+  names `agent-login` again; a network failure or a GitHub error names its
+  cause and keeps the grant. The form, which holds the device code or the
+  refresh token, goes to curl on standard input, never in its arguments.
 - `git push`: name the command as the credential helper for this push only,
   `git -c credential.helper= -c 'credential.helper=!codeflow remote
   agent-token --git-credential' push`. It answers `get` for
   `https://github.com` only, with the user `x-access-token` and the token;
-  any other host gets no answer.
+  any other host gets no answer. Pushes use the installation token by
+  default; `--user --git-credential` answers with the developer's user
+  access token instead, which CodeFlow has not tested against GitHub.
 - Committer: `codeflow remote agent-token --committer name` and
   `--committer email` print the two values below, one each, confirmed with
   GitHub. They mint no token, and they print nothing on standard output when
@@ -1360,9 +1381,9 @@ three levels a computer can sit at.
   read and an existing entry, and stores nothing until GitHub has answered as
   the App with this repository's installation. It leaves the file for the
   developer to delete, and says so.
-- The key's custody rests on the session's sandbox: a sandboxed session
-  must not reach the credential store, and only `codeflow remote
-  agent-token` runs outside the sandbox. On macOS the key is a login
+- The custody of the key and the grant rests on the session's sandbox: a
+  sandboxed session must not reach the credential store, and only `codeflow
+  remote agent-token` runs outside the sandbox. On macOS the key is a login
   keychain item (service `codeflow-agent-app`, account `owner/name`); on
   Linux a Secret Service entry through `secret-tool`. Windows has no
   supported store yet, so there the command refuses the agent App before
@@ -1379,8 +1400,12 @@ Nothing about the commit rules relaxes: agent commits still pass conventional
 commits, the commit-msg hook and `git.ai_attribution` at block, and no policy,
 hook or check is special-cased for bot-committed commits. The committer field
 is a provenance record, not proof: git lets anyone set it, and proof of who
-pushed is the token. GitHub records the agent App as `<slug>[bot]` on what it
-does through its token:
+pushed is the token. A pull request opened with the developer's user access
+token for the App is attributed to the developer: GitHub states that "API
+requests made by an app on behalf of a user will be attributed to that user",
+shown with the user's avatar and the app's badge; not yet observed for a pull
+request, until TSK-1348 AC-7 records it. GitHub records the agent App as
+`<slug>[bot]` on what it does through its installation token:
 
 - A pull request it opens: author `<slug>[bot]`.
 - A merge it makes: merged by `<slug>[bot]`.
