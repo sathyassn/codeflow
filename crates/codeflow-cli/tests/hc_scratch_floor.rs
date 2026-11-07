@@ -16,14 +16,18 @@
 //!
 //! - AC-6: `hc run` writes a file in the scratch directory, a path outside
 //!   the Claude Bash sandbox's write list. The table records whether the
-//!   file was written.
+//!   file was written. The row counts as AC-6 evidence only when the
+//!   operator runs this test from a plain terminal: run inside the Claude
+//!   sandbox, the sandbox itself can block the write, and the table would
+//!   still call the path outside the sandbox.
 //! - AC-7: in a repository whose `main` is protected by the codeflow git
 //!   hooks, a force push to the bare remote runs through `hc run`, once
 //!   plainly and once with `--no-verify`. The table records the remote refs
 //!   before and after each push and which floor, if any, stopped it. The
 //!   outcome is reported as found and never asserted.
 //!
-//! Run from the worktree:
+//! Run from the worktree, in a plain terminal (not inside an hc terminal
+//! or the Claude sandbox):
 //! `CODEFLOW_SCRATCH_HC=1 cargo test -p codeflow-cli --test hc_scratch_floor -- --ignored --nocapture`
 
 use std::collections::BTreeMap;
@@ -720,6 +724,10 @@ fn run_ac6(scratch: &Scratch, layout: &Layout) {
     );
     let written = layout.ac6_target.exists();
     println!("\n### AC-6: a write through hc run\n");
+    println!(
+        "Counts as AC-6 evidence only when this test ran from a plain terminal; \
+         inside the Claude sandbox the sandbox can block the write.\n"
+    );
     println!("| Target | Outside the Claude sandbox write list | hc exit | Timed out | Written |");
     println!("|---|---|---|---|---|");
     println!(
