@@ -136,6 +136,15 @@ pub fn parse(bytes: &[u8]) -> Result<Declaration, String> {
                 "check {name}: interpreter {interpreter:?} is not a bare command name such as bash or python3"
             ));
         }
+        // A check runs git from its script, under the borrowed git
+        // directory; git itself is never the interpreter.
+        if interpreter.eq_ignore_ascii_case("git")
+            || interpreter.to_ascii_lowercase().starts_with("git-")
+        {
+            return Err(format!(
+                "check {name}: interpreter {interpreter:?} is git; name the interpreter that runs the script, such as bash"
+            ));
+        }
         if let Some(seconds) = check.timeout_seconds {
             if seconds == 0 || seconds > MAX_TIMEOUT_SECONDS {
                 return Err(format!(
@@ -309,6 +318,14 @@ mod tests {
             (
                 r#"{"version": 1, "checks": [{"name": "a", "script": "a", "interpreter": "/bin/sh"}]}"#,
                 "bare command",
+            ),
+            (
+                r#"{"version": 1, "checks": [{"name": "a", "script": "a", "interpreter": "git"}]}"#,
+                "is git",
+            ),
+            (
+                r#"{"version": 1, "checks": [{"name": "a", "script": "a", "interpreter": "git-shell"}]}"#,
+                "is git",
             ),
             (
                 r#"{"version": 1, "checks": [{"name": "a", "script": "a", "interpreter": "sh", "timeout_seconds": 0}]}"#,

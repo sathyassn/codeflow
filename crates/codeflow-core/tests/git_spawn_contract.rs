@@ -60,6 +60,12 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
         "tests re-running their own binary with an inherited CDPATH (TSK-397)",
     ),
     (
+        "codeflow-cli/src/cmd/ci/base_checks.rs",
+        "&interpreter",
+        1,
+        "a declared base check's interpreter, a bare name found on PATH that `base_checks::parse` refuses when it is git or a git- program, so the spawn runs the project's script, never git (TSK-1103)",
+    ),
+    (
         "codeflow-core/src/git/ci.rs",
         "gh_program()",
         2,

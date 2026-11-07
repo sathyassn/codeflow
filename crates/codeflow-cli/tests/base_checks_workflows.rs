@@ -263,16 +263,9 @@ fn moved_base() -> (tempfile::TempDir, PathBuf, String, String, String) {
     write(&work, "c.txt", "c\n");
     let new = commit(&work, "chore: the base moves");
     let origin = dir.path().join("origin.git");
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "-q",
-            "--bare",
-            work.to_str().unwrap(),
-            origin.to_str().unwrap(),
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), &work, &origin)
+        .bare()
+        .run();
     git(
         &work,
         &[
@@ -284,16 +277,9 @@ fn moved_base() -> (tempfile::TempDir, PathBuf, String, String, String) {
     );
     // The runner's checkout knows only the event's old base.
     let runner = dir.path().join("runner");
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "-q",
-            "--no-checkout",
-            origin.to_str().unwrap(),
-            runner.to_str().unwrap(),
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), &origin, &runner)
+        .no_checkout()
+        .run();
     git(
         &runner,
         &["fetch", "-q", "origin", "refs/pull/1/head:refs/pr-head"],
@@ -685,16 +671,9 @@ impl Job {
         write(&work, "src/lib.rs", "// lib\n");
         commit(&work, "chore: seed");
         let origin = dir.path().join("origin.git");
-        git(
-            dir.path(),
-            &[
-                "clone",
-                "-q",
-                "--bare",
-                work.to_str().unwrap(),
-                origin.to_str().unwrap(),
-            ],
-        );
+        codeflow_fixture::clone(dir.path(), &work, &origin)
+            .bare()
+            .run();
         // The pinned install's stand-ins: the binary under test, and a curl
         // that serves the pull request from PULL_JSON.
         let bin = dir.path().join("bin");
@@ -740,15 +719,7 @@ impl Job {
     fn run(&self, number: u32, branch: &str, head: &str) -> (Option<String>, String) {
         let runner = self.dir.path().join(format!("runner-{number}"));
         let _ = std::fs::remove_dir_all(&runner);
-        git(
-            self.dir.path(),
-            &[
-                "clone",
-                "-q",
-                self.origin.to_str().unwrap(),
-                runner.to_str().unwrap(),
-            ],
-        );
+        codeflow_fixture::clone(self.dir.path(), &self.origin, &runner).run();
         let authority = git(&runner, &["rev-parse", "HEAD"]);
         // GitHub reads the workflow from the default branch's commit.
         let workflow = git(

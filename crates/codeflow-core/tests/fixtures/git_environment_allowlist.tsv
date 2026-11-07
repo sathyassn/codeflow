@@ -3,12 +3,15 @@ crates/codeflow-cli/tests/hooks_cli.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alia
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.hidden GIT_CONFIG_VALUE_0='config core.bare true' git rebase -x 'git hidden' HEAD~1"	1	Inert hook payload for command-local alias inheritance; no process environment or Git configuration is changed by this string.
 crates/codeflow-cli/src/cmd/ci.rs	env(key)	4	Reads CI variables through injected lookup closures, including branch and head detection; not a process mutation.
 crates/codeflow-cli/src/cmd/ci/adopter.rs	env(key)	1	Reads CI variables through the environment lookup closure; not a process mutation.
+crates/codeflow-cli/src/cmd/ci/base_checks.rs	env_clear()	1	A declared base check runs with a cleared environment, so no CI token, runner credential or inherited Git configuration reaches the project script it runs (TSK-1103).
+crates/codeflow-cli/src/cmd/ci/base_checks.rs	env(key,value)	1	Sets the check's fixed variables after the clear: PATH, HOME, TMPDIR, LANG, the borrowed GIT_DIR, GIT_CONFIG_NOSYSTEM, an empty GIT_CONFIG_GLOBAL, GIT_TERMINAL_PROMPT=0 and the commit ids; it keeps Git configuration out by design (TSK-1103).
 crates/codeflow-cli/src/cmd/mod.rs	env(CHILD,&gone)	1	A test re-runs its own binary from a removed directory; this call sets only the child marker CODEFLOW_R22_REMOVED_CWD (the directory to remove) and leaves Git configuration untouched.
 crates/codeflow-cli/src/cmd/present.rs	env(STAGE,"inner")	1	Presentation service and canary environment controls; these children perform no Git operations.
 crates/codeflow-cli/src/cmd/present.rs	env(STAGE,"outer")	1	Presentation service and canary environment controls; these children perform no Git operations.
 crates/codeflow-cli/src/cmd/present.rs	env(name,value)	2	Presentation service and canary environment controls; these children perform no Git operations.
 crates/codeflow-cli/src/cmd/present.rs	env(secret,"sentinel")	1	Presentation service and canary environment controls; these children perform no Git operations.
 crates/codeflow-cli/src/cmd/present.rs	env_clear()	1	Presentation service and canary environment controls; these children perform no Git operations.
+crates/codeflow-cli/tests/base_checks_workflows.rs	envs(env.iter().copied())	1	Runs a shipped workflow step's script with that step's own env values in a disposable fixture; leaves the inherited Git configuration in place (TSK-1103).
 crates/codeflow-cli/tests/ci_cli.rs	env_remove(name)	1	Removes only root_checkout::AGENT_MARKERS from fixture Git commands; preserves inherited Git configuration (TSK-351 review finding 2).
 crates/codeflow-cli/tests/ci_cli/pr_body_fixtures.rs	env(key,value)	2	Sets or clears CI platform and PR-body controls; leaves inherited Git configuration intact.
 crates/codeflow-cli/tests/ci_cli/pr_body_fixtures.rs	env_remove(key)	1	Sets or clears CI platform and PR-body controls; leaves inherited Git configuration intact.
