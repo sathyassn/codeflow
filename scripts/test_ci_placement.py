@@ -1023,6 +1023,67 @@ class AdmissionTests(unittest.TestCase):
         self.write(self.PUSH_FILE, "a third line workflow\n")
         self.assertRefused(self.admit(self.commit("one reviewed, one not"), self.NO_GH))
 
+    def resolve(self, text):
+        """Finish a merge that conflicted on both line workflows."""
+        self.write(self.LINE_FILE, text)
+        self.write(self.PUSH_FILE, text)
+        return self.commit("resolved")
+
+    def test_a_blob_only_a_merged_side_branch_held_keeps_both_verdicts(self):
+        # Main merged a side branch whose copies it never held itself. Only
+        # main's first-parent history counts, so a line that installs the side
+        # branch's copies is judged on both verdicts.
+        self.git("switch", "-q", "-c", "side", self.main)
+        self.write(self.LINE_FILE, "a side-branch workflow\n")
+        self.write(self.PUSH_FILE, "a side-branch workflow\n")
+        side = self.commit("side copies")
+        self.git("switch", "-q", "main")
+        self.main_moves("main's next workflow\n")
+        merged = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "merge", "-q", "side"],
+                                cwd=self.repo, capture_output=True, text=True)
+        self.assertNotEqual(merged.returncode, 0)
+        self.main = self.resolve("the merged workflow\n")
+        self.assertIn(side, self.git("rev-list", self.main, "--", self.LINE_FILE).split())
+        self.assertNotIn(side, self.git("rev-list", "--first-parent", self.main, "--", self.LINE_FILE).split())
+        self.place_line("a side-branch workflow\n")
+        self.branch("task")
+        self.write("task.txt", "task work\n")
+        self.assertBoth(self.admit(self.commit("task work"), self.NO_GH))
+
+    def test_an_exact_sync_that_keeps_a_line_made_workflow_is_refused(self):
+        # The line once held main's copies, then changed them. Syncing main,
+        # which did not change them, merges clean and keeps the line's copies.
+        # The exact sync is judged on the line verdict only when its copies are
+        # main's.
+        self.git("switch", "-q", "integration/x")
+        self.git("merge", "-q", "--no-edit", self.main)
+        self.place_line("a line-made workflow\n")
+        self.git("switch", "-q", "main")
+        self.write("more.txt", "more main work\n")
+        self.main = self.commit("more main work")
+        head = self.sync()
+        self.assertEqual(self.git("rev-parse", f"{head}:{self.LINE_FILE}"),
+                         self.git("rev-parse", f"{self.line}:{self.LINE_FILE}"))
+        self.assertRefused(self.admit(head))
+
+    def test_a_clean_merge_of_two_reviewed_copies_into_a_third_is_refused(self):
+        # `pull_request` runs the merge of base and head. The base holds one of
+        # main's copies and the head another, from an older line commit, so the
+        # merge is a copy main never held.
+        first, top, bottom = ("a\nb\nc\nd\ne\nf\ng\n", "A\nb\nc\nd\ne\nf\ng\n", "a\nb\nc\nd\ne\nf\nG\n")
+        for text in (first, top, bottom):
+            self.main_moves(text)
+        self.place_line(first)
+        synced = self.line
+        self.place_line(top)
+        self.branch("task", synced)
+        self.write(self.LINE_FILE, bottom)
+        self.write(self.PUSH_FILE, bottom)
+        head = self.commit("take main's newest copies")
+        tree = self.git("merge-tree", "--write-tree", self.line, head)
+        self.assertEqual(self.git("cat-file", "-p", f"{tree}:{self.LINE_FILE}"), "A\nb\nc\nd\ne\nf\nG")
+        self.assertRefused(self.admit(head, self.NO_GH))
+
     def test_a_blob_read_that_fails_is_refused(self):
         self.place_line()
         self.branch("task")
