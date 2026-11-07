@@ -252,7 +252,10 @@ def release_section_rule(binary: Path, root: Path, base: str, head: str, into: s
     when it may leave the section out (TSK-1291). `codeflow ci` decides it
     with the one rule it applies itself (`release_section_rule`), under the
     checkout's policy, so the two never disagree on whether a body needs the
-    section."""
+    section. A target given as a commit id names no branch, so nothing shows
+    it is unprotected and the section is required."""
+    if re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", into):
+        return "block"
     try:
         done = subprocess.run(
             [str(binary), "ci", "--release-impact-rule", "--base", base, "--head", head, "--into", into],
