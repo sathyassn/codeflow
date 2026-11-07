@@ -352,7 +352,10 @@ fn command(program: &str, dir: &Path) -> Command {
         .env_remove("BITBUCKET_PR_ID")
         .env_remove("GITHUB_EVENT_NAME")
         .env_remove("CODEX_HOME")
-        .env_remove("GROK_HOME");
+        .env_remove("GROK_HOME")
+        // A push gate keeps its evidence under the fixture's own `target`,
+        // never the test process's build folder (TSK-1369).
+        .env_remove("CARGO_TARGET_DIR");
     cmd
 }
 
