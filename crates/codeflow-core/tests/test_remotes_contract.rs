@@ -72,6 +72,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "a unit test that classifies a URL's host name; it asks no remote",
     ),
     (
+        "codeflow-cli/tests/remote_protect_cli.rs",
+        "github.com",
+        "the origin URL only names the repository to a gh stub on PATH; the repository sets protocol.https.allow=never, so git never contacts the host",
+    ),
+    (
         "codeflow-core/src/doctor/remote_perimeter.rs",
         "gitlab.com",
         "a unit test that classifies a URL's host name; it asks no remote",

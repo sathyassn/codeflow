@@ -414,7 +414,10 @@ fn doctor_reads_the_live_registry_rules_and_the_dry_run_leaves_split_main_alone(
     let seed = codeflow(&root, Some(exe_dir), &["ids", "seed"]);
     assert!(seed.status.success(), "{}", text(&seed));
     git(&root, &["fetch", "-q", "origin"]);
-    // The fetched refs stay; from here the host is the stand-in.
+    // The fetched refs stay; from here the host is the stand-in. The URL
+    // only names the repository to the gh stub: git in this repository
+    // refuses https, so no git transport reaches the network.
+    git(&root, &["config", "protocol.https.allow", "never"]);
     git(
         &root,
         &["remote", "set-url", "origin", "https://github.com/o/r.git"],
