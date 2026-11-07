@@ -268,6 +268,30 @@ weights, datasets and fixtures, media, vendored binaries and installers
 belong in Git LFS, or in a release asset or package registry that the
 repository references by digest.
 
+## Project-owned CI inputs `codeflow ci` notes
+
+The managed CI reads some files a project owns and `codeflow update` never
+writes. A change to one of them prints a `codeflow ci` note with its own
+remedy code and leaves the verdict unchanged, since the trusted commit's
+copy decides until the change lands; its reviewer is the boundary. Each
+changed path prints one note naming it and what reads it. A rename names the
+old path removed and the new one added, a file replaced by a symbolic link
+is an edit, and a tree that cannot be read is named unknown, never a removal.
+
+| Input | Read by | Remedy code |
+|---|---|---|
+| `git.security_review`, `git.dep_audit` in `.codeflow/policy.json` | the security review | `CI_SECURITY_LEVEL_LOWERED` |
+| `.codeflow/ci-setup.sh` | the gates job and the shared pinned run, sourced before `codeflow test` | `CI_SETUP_HOOK_CHANGED` |
+| `.codeflow/base-checks.json` | the trusted-base project checks (TSK-1103) | `CI_BASE_CHECK_CHANGED` |
+| each `script` and `inputs` path it declares, on either side of the range | the same checks | `CI_BASE_CHECK_CHANGED` |
+| `.codeflow/audit-exceptions.sh` | the security review's project exception hook (TSK-294) | `CI_AUDIT_EXCEPTIONS_CHANGED` |
+| each `audit_exception_inputs` path in `.codeflow/base-checks.json` | the files that hook reads, such as its register | `CI_AUDIT_EXCEPTIONS_CHANGED` |
+
+`.codeflow/test-config.json` and `.codeflow/policy.json` are read by the
+gates job from the base branch's tip, so a pull request's own copy never
+runs its gate, and the managed workflow files are judged by
+`CI_WORKFLOW_CHANGED`.
+
 ## Unsupported policy keys
 
 `security.script_bypass`, `security.sandbox_retry` and
