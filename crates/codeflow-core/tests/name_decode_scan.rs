@@ -3861,10 +3861,26 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // A write answer that does not parse reads as Null, whose bypass list differs from the one sent, so the ruleset is reported unconfirmed, never applied.
     (
         "crates/codeflow-core/src/remote.rs",
-        "GithubProvider::apply_owned",
+        "GithubProvider::send",
         "obtain-absent:from_str",
         1,
         "unproven",
+    ),
+    // An --adopt ruleset or owned name that is blank after trimming is refused; the untrimmed text is what is matched, exactly.
+    (
+        "crates/codeflow-core/src/remote.rs",
+        "Adopt::parse",
+        "trim",
+        2,
+        "schema-reject-only",
+    ),
+    // A blank --branch is refused; the untrimmed name is what limits the run and is looked up on the host.
+    (
+        "crates/codeflow-cli/src/cmd/remote.rs",
+        "run",
+        "trim",
+        1,
+        "schema-reject-only",
     ),
     // A bypass actor's missing type or mode is shown as a placeholder in a report or failure line; the non-empty list alone decides.
     (
