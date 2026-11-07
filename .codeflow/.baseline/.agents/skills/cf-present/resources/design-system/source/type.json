@@ -1,0 +1,60 @@
+[
+  {
+    "selector": ":root",
+    "values": {
+      "font-sans": "\"Inter\", \"Archivo\", \"IBM Plex Sans\", ui-sans-serif, -apple-system, \"Segoe UI\", sans-serif",
+      "font-mono": "\"IBM Plex Mono\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "font-features": "normal",
+      "ui-scale": "1",
+      "fs-display": "calc(34px * var(--cf-ui-scale))",
+      "fs-lede": "calc(19px * var(--cf-ui-scale))",
+      "fs-h2": "calc(24px * var(--cf-ui-scale))",
+      "fs-h3": "calc(18px * var(--cf-ui-scale))",
+      "fs-body": "max(15px, calc(15px * var(--cf-ui-scale)))",
+      "fs-title": "max(15px, calc(15px * var(--cf-ui-scale)))",
+      "fs-ui": "max(13.5px, calc(13.5px * var(--cf-ui-scale)))",
+      "fs-caption": "max(13px, calc(13px * var(--cf-ui-scale)))",
+      "fs-micro": "max(12.5px, calc(12.5px * var(--cf-ui-scale)))",
+      "measure": "68ch"
+    }
+  },
+  {
+    "selector": "[data-cf-typeface=\"archivo\"]",
+    "values": {
+      "font-sans": "\"Archivo\", \"Helvetica Neue\", Arial, ui-sans-serif, sans-serif",
+      "font-features": "normal"
+    }
+  },
+  {
+    "selector": "[data-cf-typeface=\"inter\"]",
+    "values": {
+      "font-sans": "\"Inter\", ui-sans-serif, -apple-system, \"Segoe UI\", sans-serif",
+      "font-features": "\"cv11\", \"ss01\", \"calt\""
+    }
+  },
+  {
+    "selector": "[data-cf-typeface=\"plex\"]",
+    "values": {
+      "font-sans": "\"IBM Plex Sans\", \"Avenir Next\", \"Segoe UI\", ui-sans-serif, sans-serif",
+      "font-features": "normal"
+    }
+  },
+  {
+    "selector": "[data-cf-scale=\"compact\"]",
+    "values": {
+      "ui-scale": "0.94"
+    }
+  },
+  {
+    "selector": "[data-cf-scale=\"default\"]",
+    "values": {
+      "ui-scale": "1"
+    }
+  },
+  {
+    "selector": "[data-cf-scale=\"large\"]",
+    "values": {
+      "ui-scale": "1.12"
+    }
+  }
+]

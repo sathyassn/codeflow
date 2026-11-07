@@ -27,9 +27,30 @@ on:
     - cron: "37 5 * * 1"
   workflow_dispatch:
 
+# A newer push to an integration line cancels the older push run of that
+# line, running or pending (TSK-1313). Only the current tip's verdicts count
+# for the next landing, so an older tip's run is never that evidence. The
+# event is part of the group, so a dispatch on a line shares no group with
+# that line's pushes. Pull request runs, reruns included, keep one group per
+# ref and cancel as before. A push to main or master and every schedule or
+# dispatch run is never cancelled in progress and cancels nothing; GitHub may
+# still replace a pending run in the same group.
+# A push rerun (run_attempt above 1) gets a group of its own run id and
+# attempt and cancels nothing, so rerunning an old push cannot cancel or
+# replace a newer run.
+# Limits: GitHub does not promise that runs start in push order, so an older
+# tip's run that starts late can cancel the newest tip's run. Recovery: rerun
+# the newest tip's run. GitHub compares group names without regard to case,
+# so two integration lines whose names differ only in case would share a
+# group; line names must not form such a pair. `codeflow epic new
+# --integration` names a line `integration/EPC-NNN-<lower-case slug>`, so two
+# lines it makes never differ only in case, and
+# scripts/test_gate_contracts.py fails if the recorded lines form a pair.
+# A cancelled push run is never a reuse source: scripts/ci-reuse.py reads
+# only pull_request runs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ (github.event_name != 'push' || github.run_attempt == 1) && format('{0}-{1}-{2}', github.workflow, github.event_name, github.ref) || format('{0}-push-rerun-{1}-{2}', github.workflow, github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.run_attempt == 1 && startsWith(github.ref, 'refs/heads/integration/')) }}
 
 permissions:
   contents: read
@@ -143,7 +164,7 @@ jobs:
           WORKFLOW_REF: ${{ github.workflow_ref }}
           WINDOWS_IMAGE_OS: ${{ needs.windows-image.outputs.os }}
           WINDOWS_IMAGE_VERSION: ${{ needs.windows-image.outputs.version }}
-          DECIDER_SHA256: b5a53a3f1239670b107c71f370534715ca66c6f32174c48a193e01dda38198af
+          DECIDER_SHA256: 4d3b132da04ce6cbb3bc3a0ffd2e1978603f52a4462b93064889fffc44059d24
         run: |
           actual=$(sha256sum scripts/ci-reuse.py | cut -d ' ' -f 1)
           if [ "$actual" != "$DECIDER_SHA256" ]; then
@@ -559,70 +580,6 @@ jobs:
   # after a build and setup of about 4 to 6 minutes, and gets the Windows
   # partitions' 30; the report job only reads files and fails a shard past
   # the 24 minute margin (TSK-1063).
-  # Measure beside the instrumented shards at the same workflow SHA.
-  # This manual-only job supplies evidence, never a required verdict.
-  linux-measurement:
-    if: github.event_name == 'workflow_dispatch'
-    name: measure uninstrumented Linux tests
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - name: Record the measured revision and runner
-        shell: bash
-        run: |
-          git rev-parse HEAD
-          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
-          echo "run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-      - name: Install the differential shells
-        run: sudo apt-get update && sudo apt-get install -y bash zsh dash
-      - name: Install Rust (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: linux-uninstrumented-v1
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 26.4.0
-          cache: npm
-          cache-dependency-path: crates/codeflow-present/web/package-lock.json
-      - name: Install exact npm for the owned presentation renderer
-        run: npm install --global npm@11.17.0
-      - name: Install nextest
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
-        with:
-          tool: cargo-nextest@0.9.129
-      - name: present-web-build
-        shell: bash
-        run: python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version "npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web"
-      - name: Remove previous test evidence
-        shell: bash
-        run: |
-          rm -rf target/nextest/codeflow
-          mkdir -p target/nextest/codeflow
-      - name: Run the full Linux suite without instrumentation
-        run: cargo nextest run --workspace --no-fail-fast --profile codeflow
-      - name: List the same build's tests
-        if: ${{ !cancelled() }}
-        shell: bash
-        run: cargo nextest list --workspace --profile codeflow --message-format json > target/nextest/codeflow/tests.json
-      - name: Check Rust journey evidence
-        if: ${{ !cancelled() }}
-        run: python3 -I scripts/journey-gate.py --part results --results target/nextest/codeflow/junit.xml
-      - name: Check every test ran exactly once
-        if: ${{ !cancelled() }}
-        run: python3 -I scripts/linux-test-results.py --list target/nextest/codeflow/tests.json --results target/nextest/codeflow/junit.xml
-      - name: Keep the uninstrumented results
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: linux-measurement-results
-          path: |
-            target/nextest/codeflow/junit.xml
-            target/nextest/codeflow/tests.json
-          if-no-files-found: error
-          retention-days: 7
-
   gates-coverage:
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: codeflow gates (coverage ${{ matrix.shard }} of 2)
@@ -795,6 +752,42 @@ jobs:
           fi
           echo "every part of the full gate passed"
 
+  # The reduced Windows tier (TSK-1242). Its switch is the REDUCED_TIER value in
+  # this job, off until a manual run of this workflow on the integration line
+  # has passed all twelve partitions at an exact commit (operator decision,
+  # 2026-11-03). With it on, a pull request into an integration line skips the
+  # test build, the twelve partitions and their journeys job, and runs the
+  # supported Windows journey tests in `windows-tier-journeys` beside the checks
+  # and the release journey. Pull requests into main, pushes, and scheduled and
+  # manual runs keep every partition. The `windows` verdict accepts exactly those
+  # skips, and scripts/ci-reuse.py refuses a reduced-tier run, so the push to the
+  # line runs every job. Until the daily run reaches main, those pushes are the
+  # only partition coverage of a line. scripts/gate-parity.py pins both jobs and
+  # accepts the switch only off or on.
+  windows-tier:
+    if: github.event_name == 'pull_request'
+    name: windows tier
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tier: ${{ steps.tier.outputs.tier }}
+    steps:
+      - name: Choose the Windows tier
+        id: tier
+        shell: bash
+        env:
+          REDUCED_TIER: "on"
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          tier=full
+          if [ "$REDUCED_TIER" = on ]; then
+            case "$BASE" in
+              integration/*) tier=reduced ;;
+            esac
+          fi
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          echo "Windows tier: $tier (reduced tier switch: $REDUCED_TIER, base: $BASE)"
+
   # Native Windows is a release target again (TSK-197). The raw referee is
   # split up so the longest path is short (TSK-265): one job builds the test
   # binaries once into a nextest archive; the partitions run that archive
@@ -816,9 +809,9 @@ jobs:
   # partition took more than the margin, and names a partition that ended
   # without its report (a timeout or a cancellation) as not finished.
   windows-build:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows test build
-    needs: reuse
+    needs: [reuse, windows-tier]
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -1064,14 +1057,59 @@ jobs:
         shell: bash
         run: python scripts/test_windows_partitions.py && python scripts/windows-partitions.py check --list target/nextest/list/windows-tests.json --results target/nextest/partitions
 
+  # The reduced tier's runtime journeys: the same journey map and results check
+  # as the windows-journeys job, on tests this job runs itself. Its compile
+  # shares the test build's dependency cache and gets the 45 minute job limit.
+  windows-tier-journeys:
+    if: ${{ !cancelled() && needs.windows-tier.outputs.tier == 'reduced' && !github.event.pull_request.draft }}
+    name: windows tier journeys
+    needs: windows-tier
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Install the differential shells
+        id: shells
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: MSYS
+          install: bash zsh dash
+      - name: Select the differential shell directory
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.shells.outputs.msys2-location }}
+        run: Add-Content -Path $env:GITHUB_ENV -Value "CODEFLOW_DIFFERENTIAL_SHELL_DIR=$env:MSYS2_LOCATION\usr\bin"
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: windows-tests
+          cache-on-failure: true
+      - name: Install nextest
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest@0.9.129
+      - name: Begin journey check
+        shell: bash
+        run: |
+          rm -rf target/nextest/codeflow
+          echo "CODEFLOW_GATE_STARTED_AT=$(python -c 'import time; print(time.time())')" >> "$GITHUB_ENV"
+      - name: Run every supported Windows journey test
+        shell: bash
+        run: cargo nextest run --workspace --no-fail-fast --profile codeflow -E "$(python -B scripts/journey-gate.py --nextest-filter --skip-benchmark)"
+      - name: journey gate
+        shell: bash
+        run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/codeflow/junit.xml --skip-benchmark --part results
+
   # The required Windows check runs on every event, even
   # when a job fails, is cancelled or did not run. Draft integration pull
   # requests and unsupported bases fail. It passes only when all Windows
-  # jobs passed, or reuse named a run and all were skipped.
+  # jobs passed, reuse named a run and all were skipped, or the reduced tier
+  # took exactly its declared skips on a pull request into an integration line.
   windows-verdict:
     if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
     name: windows
-    needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
+    needs: [reuse, windows-tier, windows, windows-build, windows-tests, windows-journeys, windows-release-journey, windows-tier-journeys]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -1086,7 +1124,26 @@ jobs:
           JOURNEYS: ${{ needs.windows-journeys.result }}
           RELEASE: ${{ needs.windows-release-journey.result }}
           MISSING: ${{ needs.windows-journeys.outputs.missing }}
+          TIER: ${{ needs.windows-tier.outputs.tier }}
+          TIER_JOURNEYS: ${{ needs.windows-tier-journeys.result }}
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.ref }}
         run: |
+          if [ "$TIER" = reduced ]; then
+            if [ "$EVENT" = pull_request ] && [ "${BASE#integration/}" != "$BASE" ] \
+              && [ "$BUILD $TESTS $JOURNEYS" = "skipped skipped skipped" ] \
+              && [ "$CHECKS $RELEASE $TIER_JOURNEYS" = "success success success" ]; then
+              echo "Windows reduced tier passed at ${GITHUB_SHA}: the twelve test partitions were skipped by tier"
+              echo "Windows reduced tier at ${GITHUB_SHA}: the twelve test partitions were skipped by tier. This is not full Windows evidence; the push to the line runs them." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::error::the reduced Windows tier accepts only the skipped build, partitions and partition journeys on a pull request into an integration line; event=${EVENT} base=${BASE} checks=${CHECKS} build=${BUILD} tests=${TESTS} journeys=${JOURNEYS} release journey=${RELEASE} tier journeys=${TIER_JOURNEYS}"
+            exit 1
+          fi
+          if [ "$TIER_JOURNEYS" != skipped ]; then
+            echo "::error::the reduced tier's journey job concluded ${TIER_JOURNEYS} outside the reduced tier"
+            exit 1
+          fi
           if [ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ] \
             && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "Windows passed on pull request run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSED}, which tested this exact tree"
