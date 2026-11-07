@@ -529,15 +529,11 @@ checkout; how it judges a task's own criteria on its integration line is
 in the [policy reference](policy-reference.md#own-task-criteria-on-an-integration-line).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
 another provider prints the manual checklist. It writes only rulesets it owns
-by name, and a ruleset `--adopt` names that targets exactly what an owned one
-targets; never another ruleset or classic branch protection, and it never
-weakens a rule. The dry run reads the host and prints the exact requests a run
-sends; without a readable host it prints the intended rules and says so. The
-rulesets, profiles and recovery window are in the
+or `--adopt` names, and never weakens a rule; the rulesets, profiles, dry run
+and recovery window are in the
 [policy reference](policy-reference.md#remote-protection). A live read that
-fails or does not parse writes nothing. `codeflow doctor --check
-remote-perimeter` reads the default branch's live rules back, and `codeflow
-doctor --check id-registry` reads the rules on `codeflow/registry`.
+fails or does not parse writes nothing. `codeflow doctor` reads the live rules
+back.
 
 ### Verify notes
 
