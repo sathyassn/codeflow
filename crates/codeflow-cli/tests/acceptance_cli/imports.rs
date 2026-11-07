@@ -340,6 +340,101 @@ fn imported_from_home(home: &str, reopen: bool, stack: bool) -> tempfile::TempDi
     dir
 }
 
+/// A task reviewed and closed on its branch lands on its home, and a line
+/// imports it. `catch_up` merges the home into the branch after the review;
+/// `later_edit` edits the record on the home after the landing, which moves
+/// the landing the import finds to the planning merge.
+fn landed_on_a_home(catch_up: bool, later_edit: bool) -> tempfile::TempDir {
+    let home = "integration/EPC-003-source";
+    let dir = repo(
+        &[("TSK-001", OWN_JOURNEY), ("TSK-002", OWN_JOURNEY)],
+        ",\"test_gate_on_push\":\"block\"",
+    );
+    let root = dir.path();
+    let source_task = |status: &str, closeout: &str| {
+        task("TSK-001", status, OWN_JOURNEY, closeout)
+            .replace(
+                "integration_target: main",
+                &format!("integration_target: {home}"),
+            )
+            .replace("EPC-001", "EPC-003")
+    };
+    write(
+        root,
+        &record_path("TSK-001"),
+        &source_task("todo", "Pending.\n"),
+    );
+    write(
+        root,
+        &record_path("TSK-002"),
+        &task("TSK-002", "todo", OWN_JOURNEY, "Pending.\n").replace(
+            "integration_target: main",
+            &format!("integration_target: {LINE}"),
+        ),
+    );
+    write(
+        root,
+        "project-management/epics/EPC-003.md",
+        &EPIC.replace("EPC-001", "EPC-003"),
+    );
+    commit(root, "docs: plan homes");
+    git(root, &["branch", home]);
+    git(root, &["switch", "-c", LINE]);
+    write(root, "src/receiver.rs", "pub fn previously_reviewed() {}\n");
+    let direct = commit(root, "feat: receiving line work");
+    adopt_receiver(root, &direct);
+    git(root, &["switch", "-c", RECEIVER]);
+    git(root, &["switch", "-c", BRANCH, home]);
+    write(root, "src/lib.rs", "pub fn source() {}\n");
+    let reviewed = commit(root, "feat: source work");
+    let results = ["AC-1: verified | unit", "AC-2: verified | journey"];
+    let closeout = block(&reviewed, &results, "verified | journey", "none: fixture");
+    let completed = source_task("complete", &closeout);
+    write(root, &record_path("TSK-001"), &completed);
+    commit(root, "docs: complete source work");
+    if catch_up {
+        git(root, &["switch", "-c", "plan/home-advance", home]);
+        write(root, "docs/source-note.md", "Home planning.\n");
+        commit(root, "docs: advance home planning");
+        git(root, &["switch", home]);
+        merge(root, "plan/home-advance");
+        git(root, &["switch", BRANCH]);
+        merge(root, home);
+    }
+    git(root, &["switch", home]);
+    merge(root, BRANCH);
+    if later_edit {
+        git(root, &["switch", "-c", "plan/record-edit"]);
+        let edited = completed.replace("work TSK-001", "edited TSK-001");
+        assert_ne!(edited, completed, "the edit changes the record");
+        write(root, &record_path("TSK-001"), &edited);
+        commit(root, "docs: edit the record after landing");
+        git(root, &["switch", home]);
+        merge(root, "plan/record-edit");
+    }
+    git(root, &["switch", RECEIVER]);
+    merge(root, home);
+    write(root, "src/lib.rs", "pub fn later_receiver_work() {}\n");
+    commit(root, "feat: receiving work after import");
+    dir
+}
+
+/// A clean merge of the home into the task branch after review is no change
+/// to the reviewed work, wherever a later record edit moves the landing the
+/// import finds: the recheck of that landing allows it as the task's own
+/// landing does.
+#[test]
+fn tsk1185_a_later_record_edit_keeps_a_catch_up_landing_proved() {
+    for (catch_up, later_edit) in [(false, false), (false, true), (true, false), (true, true)] {
+        let dir = landed_on_a_home(catch_up, later_edit);
+        let (code, said) = check(dir.path(), LINE, Some(RECEIVER), false);
+        assert_eq!(
+            code, 0,
+            "catch_up {catch_up}, later_edit {later_edit}: {said}"
+        );
+    }
+}
+
 /// TSK-1185 AC-10: TSK-001 declares `LINE`, but its reviewed work landed on
 /// main, and a planning merge on main then corrects its home. The receiving
 /// branch merges main. `case` is what the correction carries or rests on.

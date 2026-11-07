@@ -1356,9 +1356,13 @@ fn binding_source(
     ) {
         Landed::NoMerge => Err(direct),
         Landed::Span { merge, head } => {
-            if let Some(problem) =
-                reviewed_span_problem(repo, task, Landing::Commit(head), reviewed, Stacking::Never)
-            {
+            if let Some(problem) = reviewed_span_problem(
+                repo,
+                task,
+                Landing::Commit(head),
+                reviewed,
+                Stacking::OnTarget(receiving),
+            ) {
                 return Err(format!("the landing merge {merge} brings {head}, and {problem}; review the result that landed"));
             }
             Ok(CompletionProof {
