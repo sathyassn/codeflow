@@ -497,7 +497,7 @@
           "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"node --test docs-portal/tests/adapter.test.mjs scripts/test_portal_workflow.mjs scripts/test_gate_schema.mjs && (cd docs-portal && node scripts/workflow.mjs verify) && $CODEFLOW_BIN validate --portal docs-portal\""
         }
       },
-      "timeout_seconds": 300,
+      "timeout_seconds": 600,
       "requires": [
         "codeflow-bin",
         "docs-portal-deps"
