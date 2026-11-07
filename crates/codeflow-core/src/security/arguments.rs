@@ -1497,13 +1497,25 @@ fn tail_names_authority(value: &str) -> Option<&'static str> {
     })
 }
 
+/// The authority metadata files of a repository, as far as a bounded walk
+/// lists them.
+struct AuthorityFiles {
+    files: Vec<PathBuf>,
+    /// The remote-tracking directory when the walk stopped before listing
+    /// all of it: any path under it may be authority metadata.
+    unlisted: Option<PathBuf>,
+}
+
 /// The authority metadata files of the repository at `root`: its config,
 /// packed refs, worktree configs and remote-tracking refs, as far as a
 /// bounded walk lists them.
-fn authority_files(root: &Path) -> Vec<PathBuf> {
+fn authority_files(root: &Path) -> AuthorityFiles {
     const WALK_LIMIT: usize = 4096;
     let Ok(Some(repo)) = crate::hooks::repo::open(root) else {
-        return Vec::new();
+        return AuthorityFiles {
+            files: Vec::new(),
+            unlisted: None,
+        };
     };
     let common = repo.commondir().to_path_buf();
     let mut files = vec![
@@ -1520,17 +1532,24 @@ fn authority_files(root: &Path) -> Vec<PathBuf> {
     }
     // Each path under refs/remotes is listed; one that reads as a
     // directory is walked in turn.
-    let mut stack = vec![common.join("refs/remotes")];
+    let remotes = common.join("refs/remotes");
+    let mut stack = vec![remotes.clone()];
     while let Some(path) = stack.pop() {
         if files.len() >= WALK_LIMIT {
-            break;
+            return AuthorityFiles {
+                files,
+                unlisted: Some(remotes),
+            };
         }
         if let Ok(entries) = std::fs::read_dir(&path) {
             stack.extend(entries.flatten().map(|entry| entry.path()));
         }
         files.push(path);
     }
-    files
+    AuthorityFiles {
+        files,
+        unlisted: None,
+    }
 }
 
 /// The arguments `xargs` or `find -exec` gives an interpreter. `xargs`
@@ -1597,7 +1616,7 @@ fn find_reach(
             continue;
         };
         let resolved = std::fs::canonicalize(&start).unwrap_or_else(|_| start.clone());
-        if let Some(path) = authority.iter().find(|path| {
+        if let Some(path) = authority.files.iter().find(|path| {
             let real = std::fs::canonicalize(path).unwrap_or_else(|_| (*path).clone());
             (real.starts_with(&resolved) || path.starts_with(&start))
                 && git_guard::find_name_matches(filter.as_deref(), path)
@@ -1606,6 +1625,22 @@ fn find_reach(
                 "`find` can give an interpreter policy authority metadata `{}`",
                 path.display()
             )));
+        }
+        // Past the walk's bound the names are unknown, so no `-name` test
+        // can rule them out.
+        if let Some(remotes) = &authority.unlisted {
+            let real = std::fs::canonicalize(remotes).unwrap_or_else(|_| remotes.clone());
+            if real.starts_with(&resolved)
+                || resolved.starts_with(&real)
+                || remotes.starts_with(&start)
+                || start.starts_with(remotes)
+            {
+                return Some(Reach::Authority(format!(
+                    "`find` can give an interpreter policy authority metadata under `{}`, \
+                     which holds more entries than the guard lists",
+                    remotes.display()
+                )));
+            }
         }
         let candidates = match edit_guard::find_candidates(&start, facts.payload_cwd) {
             Ok(candidates) => candidates,

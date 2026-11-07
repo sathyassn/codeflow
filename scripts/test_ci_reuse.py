@@ -818,6 +818,331 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn("refused: the decision failed", text)
 
 
+ADMISSION_SPEC = importlib.util.spec_from_file_location("policy_admission", ROOT / "scripts" / "policy-admission.py")
+admission = importlib.util.module_from_spec(ADMISSION_SPEC)
+ADMISSION_SPEC.loader.exec_module(admission)
+POLICY = ".github/workflows/codeflow-policy.yml"
+STANDARDS = "commit standards"
+CREATED = "2026-11-05T10:00:00Z"
+
+
+def pull_record(**changes):
+    record = {"number": 95, "state": "open", "draft": False, "head": {"sha": HEAD}, "base": {"ref": "main"}}
+    record.update(changes)
+    return record
+
+
+def policy_run(**changes):
+    record = {"id": 500, "run_number": 9, "run_attempt": 1, "event": "pull_request_target", "head_sha": HEAD,
+              "path": POLICY, "status": "completed", "conclusion": "failure",
+              "pull_requests": [{"number": 95, "base": {"ref": "main"}}]}
+    record.update(changes)
+    return record
+
+
+class AdmissionApi(FakeApi):
+    """The API boundary of policy-admission.py: GET records by path, the
+    paged lists, and the one POST, which is recorded, never sent."""
+
+    def __init__(self, pull=None, timeline=None, policy_runs=None, policy_jobs=None, created=CREATED, broken=(),
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.pull = pull if pull is not None else pull_record()
+        self.timeline = timeline if timeline is not None else [{"event": "labeled", "created_at": CREATED}]
+        self.policy_runs = policy_runs if policy_runs is not None else [policy_run()]
+        self.policy_jobs = policy_jobs if policy_jobs is not None else {500: [{"id": 9001, "name": STANDARDS},
+                                                                               {"id": 9002, "name": "trusted: release impact"}]}
+        self.created, self.broken, self.posts = created, set(broken), []
+
+    def fail(self, what):
+        if what in self.broken:
+            raise OSError(f"{what} unreachable")
+
+    def get(self, path):
+        if path == "pulls/95":
+            self.fail("pull")
+            return self.pull
+        if path.startswith("actions/runs/"):
+            self.fail("run")
+            run_id = int(path.rsplit("/", 1)[1])
+            found = [r for r in self.run_list if r.get("id") == run_id]
+            return {**found[0], "created_at": self.created} if found else {"message": "Not Found"}
+        raise AssertionError(f"unexpected GET {path}")
+
+    def pages(self, path, key):
+        if path == "issues/95/timeline":
+            self.fail("timeline")
+            return self.timeline
+        if path.startswith("actions/runs?") and "pull_request_target" in path:
+            self.fail("policy runs")
+            return self.policy_runs
+        raise AssertionError(f"unexpected list {path}")
+
+    def jobs(self, run_id):
+        if run_id in self.policy_jobs:
+            self.fail("policy jobs")
+            return self.policy_jobs[run_id]
+        return super().jobs(run_id)
+
+    def post(self, path):
+        self.fail("post")
+        self.posts.append(path)
+
+
+class CompletionAdmissionTests(unittest.TestCase):
+    """TSK-1239 AC-2 to AC-4: the commit standards job judges once, with
+    the TSK-449 predicate, and rechecks the pull request's identity, head,
+    target and readiness; a pending run refuses without waiting."""
+
+    def admitted(self, api, base="main"):
+        return admission.admit(HEAD, 95, base, WORKFLOW, REQUIRED, api)
+
+    def refused(self, api, pending=False, base="main"):
+        with self.assertRaises(admission.Skip) as caught:
+            self.admitted(api, base)
+        self.assertEqual(isinstance(caught.exception, admission.Pending), pending, str(caught.exception))
+        return str(caught.exception)
+
+    def test_a_completed_green_run_at_the_exact_head_admits(self):
+        self.assertEqual(self.admitted(AdmissionApi()), 77)
+
+    def test_the_predicate_is_the_newest_run_with_every_named_verdict(self):
+        newer = AdmissionApi(runs=[run(), run(id=78, run_number=6, status="in_progress", conclusion=None)])
+        self.assertIn("run 78", self.refused(newer, pending=True))
+        self.assertIn("'windows' of run 77 concluded nothing",
+                      self.refused(AdmissionApi(jobs={77: [job("codeflow gates")]})))
+
+    def test_a_missing_or_pending_run_refuses_at_once(self):
+        self.assertIn("exists for head", self.refused(AdmissionApi(runs=[]), pending=True))
+        for status in ("queued", "in_progress", "waiting"):
+            with self.subTest(status=status):
+                api = AdmissionApi(runs=[run(status=status, conclusion=None)])
+                self.assertIn(f"is {status}", self.refused(api, pending=True))
+
+    def test_a_cancelled_or_failed_run_refuses(self):
+        for conclusion in ("cancelled", "failure", "timed_out", "skipped"):
+            with self.subTest(conclusion=conclusion):
+                self.assertIn(f"concluded {conclusion}",
+                              self.refused(AdmissionApi(runs=[run(conclusion=conclusion)])))
+
+    def test_a_wrongly_skipped_verdict_refuses(self):
+        for name in sorted(REQUIRED):
+            with self.subTest(verdict=name):
+                jobs = [job(other) if other != name else job(name, "skipped") for other in sorted(REQUIRED)]
+                self.assertIn(f"{name!r} of run 77 concluded skipped", self.refused(AdmissionApi(jobs={77: jobs})))
+
+    def test_a_head_that_moved_refuses(self):
+        api = AdmissionApi(pull=pull_record(head={"sha": MAIN}))
+        self.assertIn(f"now at {MAIN}", self.refused(api))
+
+    def test_a_retargeted_pull_request_refuses(self):
+        # The base read now differs from the base the check judged.
+        self.assertIn("now targets main, not the judged integration/x",
+                      self.refused(AdmissionApi(), base="integration/x"))
+        # A run created before the newest retarget tested the old target,
+        # even though its pull_requests entry names the current base.
+        for at in ("2026-11-05T10:00:00Z", "2026-11-05T11:00:00Z"):
+            with self.subTest(retargeted=at):
+                api = AdmissionApi(timeline=[{"event": "base_ref_changed", "created_at": "2026-11-05T09:00:00Z"},
+                                             {"event": "base_ref_changed", "created_at": at}])
+                self.assertIn("was retargeted", self.refused(api))
+        earlier = AdmissionApi(timeline=[{"event": "base_ref_changed", "created_at": "2026-11-05T09:59:59Z"}])
+        self.assertEqual(self.admitted(earlier), 77)
+
+    def test_a_body_edit_admits_on_the_same_completed_run(self):
+        # A body edit queues a policy run (never cancelling the earlier one,
+        # TSK-1040) and starts no codeflow-ci run, so that run judges the
+        # same completed run and admits; its last read rechecks the body.
+        api = AdmissionApi(timeline=[{"event": "renamed", "created_at": "2026-11-05T12:00:00Z"}])
+        self.assertEqual(self.admitted(api), 77)
+
+    def test_a_rerun_attempt_replaces_the_older_one(self):
+        # A re-run keeps the run id and raises run_attempt; the record read
+        # is the newest attempt, so a failed or pending newer attempt refuses.
+        self.assertIn("concluded failure",
+                      self.refused(AdmissionApi(runs=[run(run_attempt=2, conclusion="failure")])))
+        self.assertIn("is in_progress",
+                      self.refused(AdmissionApi(runs=[run(run_attempt=2, status="in_progress", conclusion=None)]),
+                                   pending=True))
+        self.assertEqual(self.admitted(AdmissionApi(runs=[run(run_attempt=2)])), 77)
+
+    def test_a_closed_draft_or_unknown_pull_request_refuses(self):
+        self.assertIn("is closed", self.refused(AdmissionApi(pull=pull_record(state="closed"))))
+        self.assertIn("is a draft", self.refused(AdmissionApi(pull=pull_record(draft=True))))
+        self.assertIn("is a draft", self.refused(AdmissionApi(pull=pull_record(draft=None))))
+        self.assertIn("no record for pull request", self.refused(AdmissionApi(pull={"message": "Not Found"})))
+
+    def test_an_unreadable_record_refuses(self):
+        self.assertIn("no record for run", self.refused(_MissingRun()))
+        self.assertIn("has no timestamp", self.refused(AdmissionApi(created=None)))
+        self.assertIn("unreadable timestamp", self.refused(AdmissionApi(created="yesterday")))
+        bad = AdmissionApi(timeline=[{"event": "base_ref_changed", "created_at": None}])
+        self.assertIn("has no timestamp", self.refused(bad))
+
+    def test_main_refuses_any_api_error_and_never_waits(self):
+        def run_main(api, *extra):
+            out = io.StringIO()
+            with mock.patch.object(admission.reuse, "Api", return_value=api), \
+                    mock.patch.object(admission.reuse.time, "sleep") as sleep, redirect_stdout(out):
+                code = admission.admit_main(["--repo", "o/r", "--head", HEAD, "--pull", "95", "--base", "main",
+                                             "--workflow", WORKFLOW, "--require", "codeflow gates",
+                                             "--require", "windows", *extra])
+            self.assertEqual(sleep.call_count, 0)
+            return code, out.getvalue()
+        self.assertEqual(run_main(AdmissionApi())[0], 0)
+        code, text = run_main(AdmissionApi(runs=[run(status="queued", conclusion=None)]))
+        self.assertEqual(code, 1)
+        self.assertIn("runs again when that run completes", text)
+        code, text = run_main(AdmissionApi(pull=pull_record(state="closed")))
+        self.assertEqual((code, "refused: pull request #95 is closed" in text), (1, True), text)
+        with self.assertRaises(admission.Skip):
+            admission.admit("not-a-sha", 95, "main", WORKFLOW, REQUIRED, AdmissionApi())
+        for broken in ("pull", "run", "timeline"):
+            with self.subTest(broken=broken):
+                code, text = run_main(AdmissionApi(broken={broken}))
+                self.assertEqual(code, 1)
+                self.assertIn("refused: the decision failed (OSError", text)
+
+        class RunsDown(AdmissionApi):
+            def runs(self, head):
+                raise OSError("network down")
+        self.assertEqual(run_main(RunsDown())[0], 1)
+        with self.assertRaises(SystemExit):
+            with redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                admission.admit_main(["--repo", "o/r", "--head", HEAD, "--pull", "95", "--base", "main",
+                                      "--workflow", WORKFLOW, "--require", "windows", "--wait", "60"])
+
+    def test_no_named_verdict_refuses(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = admission.admit_main(["--repo", "o/r", "--head", HEAD, "--pull", "95", "--base", "main",
+                                         "--workflow", WORKFLOW])
+        self.assertEqual(code, 1)
+        self.assertIn("no verdict job is named", out.getvalue())
+
+
+class _MissingRun(AdmissionApi):
+    def get(self, path):
+        if path.startswith("actions/runs/"):
+            return {"message": "Not Found"}
+        return super().get(path)
+
+
+class CompletionRerunTests(unittest.TestCase):
+    """TSK-1239 AC-2 and AC-4: on codeflow-ci completion the commit
+    standards job is re-run once, only for the run's own open, ready pull
+    request at that head; nothing is written but the job re-run."""
+
+    def rerun(self, api, run_id=77, head=HEAD):
+        return admission.rerun(run_id, head, WORKFLOW, POLICY, STANDARDS, api)
+
+    def test_a_completed_run_reruns_the_newest_policy_job(self):
+        api = AdmissionApi(policy_runs=[policy_run(id=499, run_number=8), policy_run()],
+                           policy_jobs={500: [{"id": 9001, "name": STANDARDS}], 499: [{"id": 8001, "name": STANDARDS}]})
+        self.assertIn("re-ran", self.rerun(api))
+        self.assertEqual(api.posts, ["actions/jobs/9001/rerun"])
+
+    def test_a_failed_or_cancelled_run_still_reruns_so_the_check_refuses(self):
+        for conclusion in ("failure", "cancelled", "skipped"):
+            with self.subTest(conclusion=conclusion):
+                api = AdmissionApi(runs=[run(conclusion=conclusion)], policy_runs=[policy_run(conclusion="success")])
+                self.rerun(api)
+                self.assertEqual(api.posts, ["actions/jobs/9001/rerun"])
+
+    def test_a_policy_run_not_yet_completed_is_left_to_judge_itself(self):
+        for status in ("queued", "in_progress", "pending"):
+            with self.subTest(status=status):
+                api = AdmissionApi(policy_runs=[policy_run(), policy_run(id=501, run_number=10, status=status)])
+                self.assertIn("judges completed run 77 itself", self.rerun(api))
+                self.assertEqual(api.posts, [])
+
+    def test_nothing_is_rerun_for_a_moved_draft_closed_or_unmatched_pull_request(self):
+        cases = {
+            "moved": AdmissionApi(pull=pull_record(head={"sha": MAIN})),
+            "draft": AdmissionApi(pull=pull_record(draft=True)),
+            "closed": AdmissionApi(pull=pull_record(state="closed")),
+            "fork": AdmissionApi(runs=[run(pull_requests=[])]),
+            "two": AdmissionApi(runs=[run(pull_requests=[{"number": 95}, {"number": 96}])]),
+            "no policy run": AdmissionApi(policy_runs=[]),
+            "other pull request": AdmissionApi(policy_runs=[policy_run(pull_requests=[{"number": 96}])]),
+            "other head": AdmissionApi(policy_runs=[policy_run(head_sha=MAIN)]),
+            "other workflow": AdmissionApi(policy_runs=[policy_run(path=".github/workflows/other.yml")]),
+            "other event": AdmissionApi(policy_runs=[policy_run(event="pull_request")]),
+        }
+        for name, api in cases.items():
+            with self.subTest(case=name):
+                self.assertIn("nothing re-run", self.rerun(api))
+                self.assertEqual(api.posts, [])
+
+    def test_an_untrusted_completion_record_refuses(self):
+        cases = {
+            "bad head": (AdmissionApi(), 77, "not-a-sha"),
+            "head mismatch": (AdmissionApi(), 77, MAIN),
+            "push run": (AdmissionApi(runs=[run(event="push")]), 77, HEAD),
+            "other workflow": (AdmissionApi(runs=[run(path=".github/workflows/x.yml")]), 77, HEAD),
+            "still running": (AdmissionApi(runs=[run(status="in_progress", conclusion=None)]), 77, HEAD),
+            "unknown run": (AdmissionApi(), 1234, HEAD),
+            "no job": (AdmissionApi(policy_jobs={500: [{"id": 9002, "name": "trusted: release impact"}]}), 77, HEAD),
+            "two jobs": (AdmissionApi(policy_jobs={500: [{"id": 1, "name": STANDARDS}, {"id": 2, "name": STANDARDS}]}),
+                         77, HEAD),
+        }
+        for name, (api, run_id, head) in cases.items():
+            with self.subTest(case=name):
+                with self.assertRaises(admission.Skip):
+                    self.rerun(api, run_id, head)
+                self.assertEqual(api.posts, [])
+
+    def test_main_reruns_nothing_on_any_api_error(self):
+        def run_main(api):
+            out = io.StringIO()
+            with mock.patch.object(admission, "Writer", return_value=api), redirect_stdout(out):
+                code = admission.rerun_main(["--repo", "o/r", "--run", "77", "--head", HEAD, "--workflow", WORKFLOW,
+                                             "--policy-workflow", POLICY, "--job", STANDARDS])
+            return code, out.getvalue()
+        self.assertEqual(run_main(AdmissionApi())[0], 0)
+        for broken in ("run", "pull", "policy runs", "policy jobs", "post"):
+            with self.subTest(broken=broken):
+                api = AdmissionApi(broken={broken})
+                code, text = run_main(api)
+                self.assertEqual(code, 1, text)
+                self.assertIn("refused", text)
+                self.assertEqual(api.posts, [])
+        code, text = run_main(AdmissionApi(policy_jobs={500: []}))
+        self.assertEqual(code, 1)
+        self.assertIn("lists 0 jobs", text)
+
+    def test_the_writer_posts_only_to_the_api_host_and_refuses_a_bad_status(self):
+        writer = admission.Writer("https://api.example", "o/r", "t0k")
+        seen = []
+
+        class Response:
+            def __init__(self, status):
+                self.status = status
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def opener(status):
+            def urlopen(request, timeout):
+                seen.append((request.get_method(), request.full_url, request.get_header("Authorization")))
+                return Response(status)
+            return urlopen
+        with mock.patch.object(admission.urllib.request, "urlopen", opener(201)):
+            writer.post("actions/jobs/9001/rerun")
+        self.assertEqual(seen, [("POST", "https://api.example/repos/o/r/actions/jobs/9001/rerun", "Bearer t0k")])
+        with mock.patch.object(admission.urllib.request, "urlopen", opener(202)), self.assertRaises(admission.Skip):
+            writer.post("actions/jobs/9001/rerun")
+
+    def test_the_command_line_names_its_two_commands(self):
+        err = io.StringIO()
+        with mock.patch.object(admission.sys, "argv", ["policy-admission.py"]), mock.patch("sys.stderr", err):
+            self.assertEqual(admission.main(), 2)
+        self.assertIn("policy-admission.py admit", err.getvalue())
+
+
 class WindowsTierTests(unittest.TestCase):
     """A reduced-tier result never counts as full-tier evidence, so a line
     push from such a run runs every job and the partitions run there."""

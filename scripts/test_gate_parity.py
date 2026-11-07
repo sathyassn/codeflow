@@ -1231,6 +1231,7 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
     or ships, not only codeflow-ci.yml."""
 
     OWN = {
+        ".github/workflows/codeflow-admission.yml",
         ".github/workflows/codeflow-ci.yml", ".github/workflows/codeflow-line-pr.yml",
         ".github/workflows/codeflow-line-push.yml", ".github/workflows/codeflow-policy.yml",
         ".github/workflows/codeflow-registry.yml", ".github/workflows/codeflow-release.yml",

@@ -295,24 +295,96 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(re.findall(r'^    name: (.+)$', registry, re.M), ['registry check'])
         self.assertIn('run: codeflow ids check\n', registry)
 
-    def test_commit_standards_admits_only_the_exact_heads_ready_run(self):
-        # TSK-449 AC-6: merge admission is the required `commit standards`
-        # check. It reruns when a draft is made ready, reads run records with
-        # a read-only token from the trusted target checkout, and refuses a
-        # draft at once (no wait) while a ready head waits for its run.
+    def test_commit_standards_admits_once_and_never_waits(self):
+        # TSK-449 AC-6, TSK-1239 AC-2: merge admission is the required
+        # `commit standards` check. It reads run records with a read-only
+        # token from the trusted target checkout and judges once: a pending
+        # run refuses at once, holding no runner, and the run's completion
+        # starts the job again (codeflow-admission.yml).
         workflow = read('.github/workflows/codeflow-policy.yml')
         self.assertIn('    types: [opened, synchronize, reopened, edited, ready_for_review]\n', workflow)
-        step = workflow.split("      - name: the exact head's ready codeflow-ci run passed\n", 1)[1]
+        job = workflow.split('  commit-lint:\n', 1)[1].split('\n  release-impact:\n', 1)[0]
+        step = job.split("      - name: the exact head's ready codeflow-ci run passed\n", 1)[1].split('      - name:', 1)[0]
         self.assertIn("        if: github.event_name == 'pull_request_target'\n", step)
-        self.assertIn('python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER"', step)
+        self.assertIn('python3 -I scripts/policy-admission.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER"', step)
         self.assertIn('          PR_NUMBER: ${{ github.event.pull_request.number }}\n', step)
+        self.assertIn('          BASE_REF: ${{ github.event.pull_request.base.ref }}\n', step)
+        # TSK-1321: the base commit chooses the workflow and its verdicts;
+        # both verdicts of codeflow-ci.yml stay the default.
         self.assertIn('workflow=.github/workflows/codeflow-ci.yml\n          set -- --require "codeflow gates" --require windows\n', step)
-        self.assertIn('--workflow "$workflow" "$@" --wait "$wait"', step)
+        self.assertIn('--base "$BASE_REF" --workflow "$workflow" "$@"', step)
         self.assertIn('          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n', step)
-        self.assertIn('          if [ "$DRAFT" = true ]; then wait=0; fi\n', step)
-        wait = int(re.search(r'^          wait=(\d+)$', step, re.M).group(1))
-        self.assertLessEqual(wait, 40 * 60, 'the wait stays inside the 45-minute job bound')
         self.assertNotIn('pull_request.head.ref', step)
+        for polling in ('--wait', 'wait=', 'sleep', 'ci-reuse.py admit'):
+            self.assertNotIn(polling, step, 'the admission step judges once and never waits')
+        self.assertNotIn('sleep ', job)
+        # The job's token stays read-only; it never writes a check.
+        self.assertIn('    permissions:\n      contents: read\n      pull-requests: read\n      actions: read\n', job)
+        self.assertNotIn(': write', job)
+        # The script it runs holds no wait either.
+        script = read('scripts/policy-admission.py')
+        self.assertNotIn('sleep', script)
+        self.assertNotIn('--wait', script)
+
+    def test_ci_completion_reruns_the_native_commit_standards_job(self):
+        # TSK-1239 AC-2 and AC-4: codeflow-admission.yml starts on a
+        # completed codeflow-ci run, runs only the default branch's script,
+        # shares the policy workflow's per-pull-request concurrency group
+        # without cancelling, and writes no check or status.
+        admission = read('.github/workflows/codeflow-admission.yml')
+        policy = read('.github/workflows/codeflow-policy.yml')
+        self.assertEqual(re.search(r'^name: (.+)$', read('.github/workflows/codeflow-ci.yml'), re.M).group(1),
+                         'codeflow-ci')
+        self.assertEqual(re.search(r'^name: (.+)$', policy, re.M).group(1), 'codeflow-policy')
+        self.assertIn('on:\n  workflow_run:\n    workflows: [codeflow-ci]\n    types: [completed]\n\n', admission)
+        self.assertIn('\npermissions: {}\n', admission)
+        self.assertIn("format('{0}-pr-{1}', github.workflow, github.event.pull_request.number)", policy)
+        self.assertIn("format('codeflow-policy-pr-{0}', github.event.workflow_run.pull_requests[0].number)", admission)
+        self.assertIn("format('codeflow-admission-run-{0}', github.event.workflow_run.id)", admission)
+        for text in (admission, policy):
+            self.assertIn('  cancel-in-progress: false\n  queue: max\n', text)
+        self.assertIn("    if: github.event.workflow_run.event == 'pull_request'\n", admission)
+        self.assertIn('    permissions:\n      actions: write\n      contents: read\n      pull-requests: read\n    steps:',
+                      admission)
+        self.assertEqual(re.findall(r'(?m)^\s+([\w-]+): write$', admission), ['actions'],
+                         'actions: write is the only write scope')
+        self.assertNotIn('checks:', admission)
+        self.assertNotIn('statuses:', admission)
+        # Only the authority is checked out, without credentials; nothing of
+        # the pull request is fetched, downloaded or expanded into a script.
+        self.assertIn('          ref: ${{ github.sha }}\n          persist-credentials: false\n', admission)
+        self.assertEqual(admission.count('uses: '), 1)
+        for untrusted in ('download-artifact', 'git fetch', 'head_branch', 'display_title', 'head_commit',
+                          'pull_requests[0].head', 'refs/pull'):
+            self.assertNotIn(untrusted, admission)
+        for line in admission.splitlines():
+            if line.lstrip().startswith(('run:', 'python3', 'if ', 'echo')):
+                self.assertNotIn('${{', line, f'event data reaches a script only through env: {line}')
+        self.assertIn('python3 -I scripts/policy-admission.py rerun --repo "$REPOSITORY" --run "$RUN_ID" --head "$HEAD_SHA"',
+                      admission)
+        self.assertIn('--job "commit standards"', admission)
+        self.assertIn('    name: "commit standards"\n', policy)
+        self.assertNotRegex(admission, r'(?m)^    name: "?trusted:', 'the re-run job is never a trusted name')
+
+    def test_the_consumer_scaffold_gains_no_admission_mechanism(self):
+        # TSK-1239 AC-5: CI completion admission is this repository's own;
+        # the scaffold's policy workflow neither waits for nor re-runs on
+        # codeflow-ci, and ships no admission workflow. The trigger is matched
+        # as a word, so the API field `workflow_runs` in the Mode B producer
+        # check is not a trigger, and the inline forms `on: [workflow_run]`
+        # and `on: workflow_run` still are.
+        trigger = r'\bworkflow_run\b'
+        self.assertNotRegex('[(.workflow_runs[0].event // "(no run)")]', trigger)
+        with self.assertRaises(AssertionError):
+            self.assertNotRegex('on: [workflow_run]\n', trigger)
+        for path in ('assets/base/ci/codeflow-policy.yml', '.codeflow/.baseline/.github/workflows/codeflow-policy.yml'):
+            scaffold = read(path)
+            self.assertNotRegex(scaffold, trigger, f'{path} holds a workflow_run trigger')
+            for mechanism in ('policy-admission', 'ci-reuse.py', '--wait', 'actions: write',
+                              'codeflow-admission'):
+                self.assertNotIn(mechanism, scaffold, f'{path} holds {mechanism}')
+        self.assertFalse((ROOT / 'assets' / 'base' / 'ci' / 'codeflow-admission.yml').exists())
+        self.assertFalse(any('admission' in p.name for p in (ROOT / 'assets').rglob('*.yml')))
 
     def test_release_tier_targets_leave_the_hosted_landing_gate(self):
         # TSK-449 AC-4: prose-exhaustive, read-benchmark, present-browser and
