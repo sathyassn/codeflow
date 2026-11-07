@@ -471,7 +471,11 @@ fn run_gate(root: &Path, event: &str, base_tip: &str) -> GateRun {
 
     let mut env: Vec<(&str, &str)> = vec![("PATH", path.as_str())];
     env.extend(runner);
-    let (ok, mut log, outputs) = run_step(&script("Find the codeflow binary the gate runs"), root, &env);
+    let (ok, mut log, outputs) = run_step(
+        &script("Find the codeflow binary the gate runs"),
+        root,
+        &env,
+    );
     assert!(ok, "{log}");
     let (hook_ok, hook_log, _) = run_step(&script("Project setup hook"), root, &env);
     log.push_str(&hook_log);
@@ -635,7 +639,11 @@ fn a_setup_hook_cannot_skip_the_gate_or_change_what_it_reads() {
         (format!("{rewrite}trap - EXIT\nexit 0\n"), "unset"),
         (shadow, "set"),
     ] {
-        write(root, ".codeflow/ci-setup.sh", &format!("export TOOL=set\n{hook}"));
+        write(
+            root,
+            ".codeflow/ci-setup.sh",
+            &format!("export TOOL=set\n{hook}"),
+        );
         let run = run_gate(root, "pull_request", &base);
         assert!(run.hook_ok, "{hook}: {}", run.log);
         assert_eq!(run.gate_ok, Some(true), "{hook}: {}", run.log);
@@ -648,7 +656,11 @@ fn a_setup_hook_cannot_skip_the_gate_or_change_what_it_reads() {
     let run = run_gate(root, "pull_request", &base);
     assert!(!run.hook_ok, "{}", run.log);
     assert_eq!(run.gate_ok, None);
-    assert!(run.log.contains("a project setup hook must not exit"), "{}", run.log);
+    assert!(
+        run.log.contains("a project setup hook must not exit"),
+        "{}",
+        run.log
+    );
 }
 
 /// AC-16: a base copy that is a link or cannot be read fails the job, as
@@ -661,7 +673,11 @@ fn the_gate_refuses_a_base_copy_it_cannot_read() {
         run_step(
             &script,
             root,
-            &[("EVENT", event), ("BASE_TIP", tip), ("CODEFLOW_BIN", "/usr/bin/true")],
+            &[
+                ("EVENT", event),
+                ("BASE_TIP", tip),
+                ("CODEFLOW_BIN", "/usr/bin/true"),
+            ],
         )
     };
     let dir = tempfile::tempdir().unwrap();
@@ -709,7 +725,10 @@ fn the_gate_refuses_a_base_copy_it_cannot_read() {
         &[("EVENT", "push"), ("BASE_TIP", ""), ("CODEFLOW_BIN", "")],
     );
     assert!(!ok);
-    assert!(log.contains("the gate's codeflow binary was not found"), "{log}");
+    assert!(
+        log.contains("the gate's codeflow binary was not found"),
+        "{log}"
+    );
 
     // A push judges the pushed commit with its own copies.
     let (ok, log, _) = gate(root, "push", "");
@@ -741,7 +760,11 @@ fn the_gates_job_reads_the_base_before_the_gate() {
     assert!(gates.iter().all(|s| s.condition.is_none()));
     let (find, hook, gate) = (&gates[3], &gates[4], &gates[5]);
     assert_eq!(find.id.as_deref(), Some("gate"));
-    assert!(hook.run.as_deref().unwrap().contains("\n. ./.codeflow/ci-setup.sh\n"));
+    assert!(hook
+        .run
+        .as_deref()
+        .unwrap()
+        .contains("\n. ./.codeflow/ci-setup.sh\n"));
     let run = gate.run.as_deref().unwrap();
     assert!(!run.contains("ci-setup.sh"), "{run}");
     let at = |text: &str| run.find(text).unwrap_or_else(|| panic!("{text}: {run}"));

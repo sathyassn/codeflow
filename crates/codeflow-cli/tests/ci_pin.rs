@@ -964,6 +964,32 @@ fn carried_env(text: &str) -> Vec<(String, String)> {
     out
 }
 
+/// Commit `repo`'s working tree, making the repository first if needed,
+/// and return the commit: the base a pull request's gate reads.
+fn commit_as_base(repo: &Path) -> String {
+    if !repo.join(".git").exists() {
+        git(repo, &["init", "-q"]);
+    }
+    git(repo, &["add", "-A"]);
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "chore: the base",
+        ],
+    );
+    git(repo, &["rev-parse", "HEAD"])
+}
+
 /// The runner's order: the step that finds the binary, the project setup
 /// hook in its own step, then the gate step with what the hook carried
 /// through `GITHUB_ENV` and `GITHUB_PATH` and its own `env:` last. A failed
@@ -994,30 +1020,11 @@ fn run_test_step_on(repo: &Path, event: Option<&str>) -> (Output, String) {
     for name in ["output", "env", "path"] {
         std::fs::write(files.join(name), "").unwrap();
     }
-    let mut tip = String::new();
-    if event == Some("pull_request") {
-        if !repo.join(".git").exists() {
-            git(repo, &["init", "-q"]);
-        }
-        git(repo, &["add", "-A"]);
-        git(
-            repo,
-            &[
-                "-c",
-                "user.name=Fixture",
-                "-c",
-                "user.email=fixture@example.com",
-                "-c",
-                "commit.gpgsign=false",
-                "commit",
-                "-q",
-                "--allow-empty",
-                "-m",
-                "chore: the base",
-            ],
-        );
-        tip = git(repo, &["rev-parse", "HEAD"]);
-    }
+    let tip = if event == Some("pull_request") {
+        commit_as_base(repo)
+    } else {
+        String::new()
+    };
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
     let run = |name: &str, carried: &[(&str, &str)], path: &str, step: [&str; 3]| {
         Command::new("bash")
@@ -1038,7 +1045,12 @@ fn run_test_step_on(repo: &Path, event: Option<&str>) -> (Output, String) {
             .unwrap()
     };
     let read = |out: Output| (out, std::fs::read_to_string(&log).unwrap_or_default());
-    let found = run("Find the codeflow binary the gate runs", &[], &path, ["", "", ""]);
+    let found = run(
+        "Find the codeflow binary the gate runs",
+        &[],
+        &path,
+        ["", "", ""],
+    );
     if !found.status.success() {
         return read(found);
     }
@@ -1123,11 +1135,19 @@ fn the_gates_job_sources_the_project_setup_hook_before_the_test_gate() {
     let (out, log) = run_test_step(&work);
     assert!(!out.status.success(), "{out:?}");
     assert_eq!(log.trim(), "hook");
+}
 
-    // sathyassn/codeflow#81: the hook cannot move what the gate calls. A
-    // `codeflow` function, a `codeflow` earlier on PATH, `set +e` and a new
-    // value for the gate's binary leave the real gate running: the binary
-    // was found before the hook ran, in a step of its own.
+/// sathyassn/codeflow#81: the hook cannot move what the gate calls. A
+/// `codeflow` function, a `codeflow` earlier on PATH, `set +e` and a new
+/// value for the gate's binary leave the real gate running: the binary was
+/// found before the hook ran, in a step of its own. An `exit` fails the
+/// hook's step unless it clears the step's trap, and then the gate runs.
+#[test]
+fn the_project_setup_hook_cannot_move_or_skip_the_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(work.join(".codeflow")).unwrap();
+    let root = work.canonicalize().unwrap();
     let decoy = dir.path().join("decoy");
     std::fs::create_dir_all(&decoy).unwrap();
     std::fs::write(
