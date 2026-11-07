@@ -1,0 +1,11 @@
+id = "TSK-1373"
+uid = "17d8d5de-aa79-40c9-a352-b144a0883833"
+kind = "TSK"
+title = "A published release proves verdict reuse and run provenance on an adopter's hosted runs"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-07T06:27:00Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
