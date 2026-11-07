@@ -55,7 +55,9 @@ pub enum WorkCommand {
         /// Non-task branch/ref this task will merge into.
         #[arg(long = "into", value_name = "REF")]
         target: Option<String>,
-        /// Reviewed predecessor pin already contained in HEAD.
+        /// Reviewed predecessor pin already contained in HEAD. Its code
+        /// dependency edge may be on the target or added by this task's own
+        /// committed record.
         #[arg(long, value_name = "TSK-NNN@SHA")]
         on: Vec<String>,
     },

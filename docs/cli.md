@@ -250,7 +250,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow work start <TASK_ID>` | | Fetch, verify planning, and require HEAD to contain its recorded claim base or the current selected base |
 | | `<TASK_ID>` | Stable task id. |
 | | `--into <REF>` | Non-task branch/ref this task will merge into. |
-| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin already contained in HEAD. |
+| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin already contained in HEAD. Its code dependency edge may be on the target or added by this task's own committed record. |
 | `codeflow work status` | | List, per task, each worktree with uncommitted changes, unpushed commits or commits on no branch, read from git; work that cannot be recovered is named. Reads only |
 
 ### Remember

@@ -1884,10 +1884,23 @@ impl PinBranches {
             .collect::<Vec<_>>()
             .join(", ");
         let matching: Vec<_> = visible
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|(_, tips)| tips.contains(&pin.revision))
             .collect();
         let [(name, tips)] = matching.as_slice() else {
+            // Issue 603: every visible copy behind the pin means the
+            // reviewed head is not pushed or fetched yet, not that the
+            // branch advanced.
+            if matching.is_empty() && !visible.is_empty() {
+                let mut behind = true;
+                for tip in visible.iter().flat_map(|(_, tips)| tips.iter()) {
+                    behind &= history::descendant_of(repo, pin.revision, *tip).unwrap_or(false);
+                }
+                if behind {
+                    return Err(format!("{} predecessor branch is behind the pin {}; visible heads: {heads}; push the reviewed head to the predecessor's branch or wait for its push, then fetch and recheck", pin.task_id, pin.revision));
+                }
+            }
             return Err(format!("{} pin is not the unique predecessor branch tip; visible heads: {heads}; rebase on its new reviewed head and recheck", pin.task_id));
         };
         for other in tips.iter().filter(|tip| **tip != pin.revision) {
@@ -2743,6 +2756,7 @@ fn check_task_anchor(
         pins,
     )
     .map_err(WorkStartError::Repository)?;
+    own_pin_edges(&repo, &mut records, task_id, head_id, pins)?;
     let anchored = validate_task_structure(
         &repo,
         &records,
@@ -3240,6 +3254,53 @@ pub(crate) fn validate_anchored_task_in(
     Ok(result)
 }
 
+/// Issue 603: a reviewed pin may name a code dependency that the task's
+/// own change adds. The edge is read from the task's record in the judged
+/// head commit, never the working tree, and projected onto the anchored
+/// record only for a pinned predecessor the merge-base record does not name
+/// at all. The pin itself is then checked as every pinned code dependency
+/// is; every other planning input keeps the merge-base's authority.
+///
+/// # Errors
+/// Returns why the head's records cannot be read.
+fn own_pin_edges(
+    repo: &Repository,
+    records: &mut BTreeMap<String, Record>,
+    task_id: &str,
+    head: Oid,
+    pins: &[ReviewedPin],
+) -> Result<(), WorkStartError> {
+    let Some(task) = records.get_mut(task_id) else {
+        return Ok(());
+    };
+    let unnamed: Vec<&str> = pins
+        .iter()
+        .map(|pin| pin.task_id.as_str())
+        .filter(|id| !task.depends_on.iter().any(|dep| dep.id == *id))
+        .collect();
+    if unnamed.is_empty() {
+        return Ok(());
+    }
+    let tree = repo
+        .find_commit(head)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let at_head = records_from_tree_matching(repo, &tree, |path, kind| {
+        kind == RecordKind::Task && path.rsplit('/').next().and_then(markdown_stem) == Some(task_id)
+    })?;
+    if let Some(own) = at_head.get(task_id) {
+        task.depends_on.extend(
+            own.depends_on
+                .iter()
+                .filter(|dep| {
+                    dep.kind == DependencyKind::Code && unnamed.contains(&dep.id.as_str())
+                })
+                .cloned(),
+        );
+    }
+    Ok(())
+}
+
 fn validate_task_structure(
     repo: &Repository,
     records: &BTreeMap<String, Record>,
@@ -3306,15 +3367,16 @@ fn validate_task_structure(
         }
     }
     validate_specs(records, task_id, &specs)?;
-    if pins.iter().any(|pin| {
+    if let Some(pin) = pins.iter().find(|pin| {
         !task
             .depends_on
             .iter()
             .any(|dep| dep.id == pin.task_id && dep.kind == DependencyKind::Code)
     }) {
-        return Err(WorkStartError::InvalidGraph(
-            "--on pin does not name a code dependency of this task".into(),
-        ));
+        return Err(WorkStartError::InvalidGraph(format!(
+            "--on pin does not name a code dependency of this task: {task_id} does not depend on {} at the target or in its own committed record; add {} to depends_on in {task_id}'s record on its branch, commit it and rerun",
+            pin.task_id, pin.task_id
+        )));
     }
     if dependencies_required {
         validate_dependencies(
@@ -6857,6 +6919,34 @@ mod stale_copy_tests {
         let error = pin_name_of(root, &s.pin).unwrap_err();
         assert!(error.contains("cannot read the ancestry"), "{error}");
         assert!(error.contains(&broken), "{error}");
+    }
+
+    /// Issue 603: when every copy of the predecessor branch is behind the
+    /// pin, the refusal says so and names the push, never "advanced" or a
+    /// rebase; a copy beside the pin that is not behind it keeps the old
+    /// refusal.
+    #[test]
+    fn pin_name_says_behind_when_every_copy_is_behind_the_pin() {
+        let dir = fixture();
+        let root = dir.path();
+        let s = shapes(root);
+        copies(root, &s.before, &s.before);
+        let error = pin_name_of(root, &s.pin).unwrap_err();
+        for part in [
+            "TSK-001 predecessor branch is behind the pin",
+            s.pin.as_str(),
+            s.before.as_str(),
+            "push the reviewed head",
+        ] {
+            assert!(error.contains(part), "{part}: {error}");
+        }
+        assert!(!error.contains("rebase"), "{error}");
+        copies(root, &s.before, &s.sibling);
+        let error = pin_name_of(root, &s.pin).unwrap_err();
+        assert!(
+            error.contains("not the unique predecessor branch tip"),
+            "{error}"
+        );
     }
 
     /// The task branch of TSK-002 with one commit on the pin, and its head.

@@ -3330,6 +3330,61 @@ fn tsk416_a_copy_behind_the_pin_is_accepted_and_an_ahead_or_diverged_one_refused
     }
 }
 
+/// TSK-416 AC-21 (issue 603): `work start --on` accepts a pin whose
+/// depends_on edge arrives in the task's own committed change, and still
+/// checks the pin. An edge only in the working tree is not read, and the
+/// refusal names the sanctioned path.
+#[test]
+#[cfg(unix)]
+fn tsk416_start_on_accepts_a_pin_whose_edge_the_task_adds() {
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        "project-management/tasks/TSK-003.md",
+        &record("TSK-003", "[]"),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: plan TSK-003"]);
+    let bin = tempfile::tempdir().unwrap();
+    let branch = "task/TSK-001-work";
+    let (_, pin) = reviewed_predecessor(root, branch);
+    review_tool(bin.path(), branch, &pin, true);
+    let on = format!("TSK-001@{pin}");
+    let child = "task/TSK-003-work-tsk-003";
+    git(root, &["switch", "-q", "-c", child, &pin]);
+    write(
+        root,
+        "project-management/tasks/TSK-003.md",
+        &record("TSK-003", "[TSK-001]"),
+    );
+    let out = cli(
+        root,
+        &["work", "start", "TSK-003", "--on", &on],
+        Some(bin.path()),
+    );
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("add TSK-001 to depends_on in TSK-003's record on its branch"),
+        "{}",
+        text(&out)
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: TSK-003 builds on TSK-001"]);
+    succeeds(&cli(
+        root,
+        &["work", "start", "TSK-003", "--on", &on],
+        Some(bin.path()),
+    ));
+    review_tool(bin.path(), branch, &pin, false);
+    let out = cli(
+        root,
+        &["work", "start", "TSK-003", "--on", &on],
+        Some(bin.path()),
+    );
+    assert!(!out.status.success(), "{}", text(&out));
+}
+
 /// TSK-416 AC-18 (issue 547): a failed review lookup names its cause and
 /// the provider's own words, redacted, never only "provider failed".
 #[test]
