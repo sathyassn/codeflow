@@ -103,16 +103,9 @@ fn fixture() -> Fixture {
     let init = codeflow(&root, &["init", "--minimal", "--yes"]);
     assert!(init.contains("git hooks wired"), "{init}");
     let origin = dir.path().join("origin.git");
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "-q",
-            "--bare",
-            root.to_str().unwrap(),
-            origin.to_str().unwrap(),
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), &root, &origin)
+        .bare()
+        .run();
     git(
         &root,
         &["remote", "add", "origin", origin.to_str().unwrap()],

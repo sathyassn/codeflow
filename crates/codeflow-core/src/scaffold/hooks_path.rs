@@ -62,6 +62,10 @@ pub fn classify(root: &Path, value: &str) -> Result<HooksPathForm, ScaffoldError
     if !names_managed_folder(value) {
         return Ok(HooksPathForm::Foreign(value.to_string()));
     }
+    // Outside a working tree no working tree can hold the managed hooks.
+    if !gitutil::is_repo(root)? {
+        return Ok(HooksPathForm::Stale(value.to_string()));
+    }
     let configured = Path::new(value);
     for top in gitutil::working_trees(root)? {
         let managed = top.join(CODEFLOW_HOOKS_PATH);
@@ -133,6 +137,10 @@ pub fn migrate(
     root: &Path,
     wire_unset: bool,
 ) -> Result<Option<(Option<String>, String)>, ScaffoldError> {
+    // Outside a working tree there is no repository configuration to wire.
+    if !gitutil::is_repo(root)? {
+        return Ok(None);
+    }
     let previous = match form(root)? {
         HooksPathForm::Managed | HooksPathForm::Foreign(_) => return Ok(None),
         HooksPathForm::Unset if !wire_unset => return Ok(None),
@@ -216,16 +224,9 @@ mod tests {
         std::fs::create_dir_all(&seed).unwrap();
         project(&seed);
         let bare = tmp.path().join("repo.git");
-        git(
-            tmp.path(),
-            &[
-                "clone",
-                "-q",
-                "--bare",
-                seed.to_str().unwrap(),
-                bare.to_str().unwrap(),
-            ],
-        );
+        codeflow_fixture::clone(tmp.path(), &seed, &bare)
+            .bare()
+            .run();
         let tree = tmp.path().join("tree one");
         git(
             &bare,
@@ -279,6 +280,12 @@ mod tests {
             super::super::detect::configured_hooks_path(root).unwrap(),
             Some(".husky".into())
         );
+    }
+
+    #[test]
+    fn migrate_outside_a_repository_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(migrate(tmp.path(), true).unwrap(), None);
     }
 
     #[test]
