@@ -504,6 +504,83 @@ change.
 5. The authority job, the recheck, and cargo-dist's upload, announcement and
    verification run as the remaining Architecture rows describe.
 
+### What stops an agent from releasing
+
+Agents here push and call the API as the operator's account, so GitHub
+cannot tell an agent's request from the operator's. Two layers keep agents
+from releasing: the session guard, which judges each command an agent runs,
+and the remote settings, which GitHub enforces for every request.
+
+The guard (`exec-guard`, rule `security.outward_actions`) refuses these
+routes and names the form it refused:
+
+| Route | Refused forms |
+|---|---|
+| Dispatch of a release workflow | `gh workflow run`, and the workflow dispatch API through `gh api` or `curl`, dry runs included |
+| Repository dispatch | An event type a release workflow listens for, or one the guard cannot read |
+| Deployment approval | `pending_deployments` and `deployment_protection_rule` writes |
+| Release or tag creation | `gh release create`, `edit`, `upload` and `delete`; API writes under `releases`, `git/tags` and `git/refs/tags`; a `git/refs` POST whose ref is not a branch; the matching GraphQL mutations |
+| Release tag push | `refs/tags/` refspecs, `--tags`, `--follow-tags`, and a bare `v*` or digit-led name with or without a local tag |
+| Removing a floor | Writes to Actions policies, environments and rulesets, for a repository or an organization |
+
+A release workflow is a workflow file at the policy authority (the remote's
+default branch as last fetched) that runs on `workflow_dispatch` or
+`repository_dispatch` and can publish: its token can write contents,
+packages, deployments, pages, attestations or an OIDC token, or its
+permissions are left to the repository default, or it deploys to an
+environment, calls a reusable workflow, or reads a secret other than
+`GITHUB_TOKEN`. A file the guard cannot read or parse counts as a release
+workflow. The guard also refuses what it cannot map: a numeric workflow id,
+a name that matches no workflow file, a repository other than the
+authority's, an unresolved variable in the path, and a `--ref` whose copy
+of the workflow file is not in a fetched tracking ref or is a release
+workflow there.
+
+The guard cannot judge these routes, so a remote setting is their floor:
+
+| Route the guard cannot judge | Floor |
+|---|---|
+| A script or program that calls the API itself | The remote settings below |
+| `curl` or another client with the URL in a variable | The remote settings below |
+| A workflow file changed on a branch, pushed, then dispatched from that branch | An Actions policy actor rule on the release workflow, once agents have their own identity |
+| A tag created by a step the guard does not model and pushed under a name without the release tag shape | A `creation` rule on the `release tags` ruleset |
+
+The floors and who can set them:
+
+- **A `creation` rule on the `release tags` ruleset (`refs/tags/v*`).**
+  `codeflow remote protect` can write it under an administrator's token.
+- **A `release` environment with the operator as required reviewer.**
+  While agents and the operator share one account, this is a floor only
+  together with the guard's `pending_deployments` refusal, because an agent
+  holding that token can approve through the API. "Prevent self-review"
+  would stop the operator approving their own dispatch. It becomes a floor
+  on its own once agents have their own identity.
+- **An Actions policy actor rule on the release dispatch workflow,** naming
+  only the operator's user id, once agents have their own identity. An
+  actor rule applies to every run of the files it targets, whatever the
+  event, so the dispatch must first move out of `release.yml`, which also
+  runs on `pull_request`, into its own workflow file.
+
+Any change to these settings is the operator's decision.
+
+For an adopter, the token an agent holds decides what the remote refuses:
+
+- a token without Actions write cannot dispatch a workflow;
+- a token without Deployments write cannot approve a pending deployment;
+- a token without Administration write cannot remove these floors.
+
+A repository dispatch needs only Contents write, so withholding Actions
+write does not stop it; the guard's refusal does not depend on the token.
+A fine-grained token for an agent can be started from this pre-filled link,
+which the operator reviews and generates:
+[new agent token](https://github.com/settings/personal-access-tokens/new?name=codeflow-agent&description=Agent+token+without+release+rights&expires_in=30&contents=write&pull_requests=write&issues=write&actions=read&statuses=read)
+(contents and pull requests write, issues write, actions and statuses
+read; no deployments, environments, administration or workflows).
+
+The pre-push hook does not refuse release tag pushes. It runs for humans
+and agents alike, so a refusal there would also stop a human whose own
+release starts with a tag push, as many adopters' releases do.
+
 ### Public version baseline
 
 A baseline advances automatically only from a stable public release with an
