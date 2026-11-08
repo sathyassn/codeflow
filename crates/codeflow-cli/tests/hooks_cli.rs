@@ -2225,12 +2225,14 @@ fn edit_guard_refuses_a_case_different_remote_tracking_path() {
 }
 
 /// TSK-1184 delta 4: the SSH configuration allow lives in
-/// `~/.codeflow/authority/config.toml`, which agents cannot write: the edit
-/// guard refuses a Write or Edit of it, and every shipped preset denies the
-/// directory to the harness sandbox (Claude `denyWrite` and an `Edit` deny,
-/// Grok `deny`; the Codex profile is checked in `codex_config.rs`). The user
-/// config the allow used to live in, `~/.codeflow/config.toml`, is a file the
-/// edit guard lets an agent write, so it could not hold the allow.
+/// `~/.codeflow/authority/config.toml`: the edit guard refuses a Write or
+/// Edit of it, and every shipped preset denies the directory to the harness
+/// sandbox (Claude `denyWrite` and an `Edit` deny, Grok `deny`; the Codex
+/// profile is checked in `codex_config.rs`). A Bash write that spells the
+/// path in full rests on that sandbox (TSK-1386 covers it in the shell
+/// guards). The user config the allow used to live in,
+/// `~/.codeflow/config.toml`, is a file the edit guard lets an agent write,
+/// so it could not hold the allow.
 #[test]
 fn agents_cannot_write_the_ssh_configuration_allow() {
     let tmp = tempfile::tempdir().unwrap();

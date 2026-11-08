@@ -516,8 +516,8 @@ fn ssh_homes(
 }
 
 /// Where the SSH configuration allow lives under the account's home: the
-/// operator-authority directory, which the shipped agent presets and the
-/// guards refuse to write.
+/// operator-authority directory, which the shipped agent presets deny to
+/// the harness sandbox and edit-guard refuses to edit.
 const SSH_ALLOW_FILE: &str = ".codeflow/authority/config.toml";
 
 /// The allow file's `[policy_authority]` table.
@@ -717,7 +717,7 @@ const SSH_CONFIG_BYTES: u64 = 1 << 20;
 const SSH_COMMAND_KEYWORDS: &[&str] = &["proxycommand", "knownhostscommand", "localcommand"];
 
 /// What an adopter does about a refusal of their SSH configuration.
-const SSH_CONFIGURATION_REMEDY: &str = "remove that line or move it out of the files ssh reads by default; or fetch the remote once it holds its default branch; or, to let ssh read this account's SSH configuration as it is, set accept_ssh_configuration = true under [policy_authority] in ~/.codeflow/authority/config.toml, which the operator edits and the agent guards refuse to write";
+const SSH_CONFIGURATION_REMEDY: &str = "remove that line or move it out of the files ssh reads by default; or fetch the remote once it holds its default branch; or, to let ssh read this account's SSH configuration as it is, set accept_ssh_configuration = true under [policy_authority] in ~/.codeflow/authority/config.toml, which the operator edits and the shipped agent presets deny to agents";
 
 /// Compare the endpoint `view` resolves for `target` with the hermetic one.
 /// Unless `view.accept`, every configuration file is first proven by
