@@ -200,6 +200,43 @@ fn tsk1390_a_stash_that_changes_the_policy_refuses() {
     );
 }
 
+/// Review PW-1 to PW-4: a one-shot alias of a path writer, a filter setting
+/// on a branch switch and `git sparse-checkout` refuse as the literal
+/// writers do; after an index plant, so do `checkout-index -n` and
+/// `sparse-checkout disable`.
+#[test]
+fn tsk1390_aliases_branch_switch_settings_and_sparse_checkout_refuse() {
+    let j = Journey::new();
+    let refused = j.both(&[
+        "git -c alias.co=checkout co stale -- .",
+        "git -c alias.rs=restore rs --source=stale .codeflow",
+        "git -c alias.hard='reset --hard' hard stale",
+        "git -c filter.evil.smudge=cat -c core.attributesFile=attrs checkout -b planted stale",
+        "git -c filter.evil.smudge=cat switch -c planted stale",
+        "git sparse-checkout set --cone src",
+    ]);
+    let allowed = j.both(&[
+        "git -c alias.co=checkout co stale -- src/a.txt",
+        "git checkout -b fresh stale",
+        "git sparse-checkout set --cone src .codeflow",
+        "git sparse-checkout list",
+    ]);
+    j.assert(&refused, &allowed);
+    for dir in [&j.b, &j.a] {
+        git(
+            dir,
+            &["restore", "--staged", "--source=stale", "--", POLICY],
+        );
+    }
+    let refused = j.both(&[
+        "git checkout-index -n -f -a",
+        "git checkout-index --no-create -f -a",
+        "git -c alias.ci='checkout-index -f -a' ci",
+        "git sparse-checkout disable",
+    ]);
+    j.assert(&refused, &j.both(&["git checkout-index --temp -a"]));
+}
+
 fn git_output(dir: &Path, args: &[&str]) -> String {
     let out = super::git_command()
         .args(args)

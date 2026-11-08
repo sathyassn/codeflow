@@ -261,7 +261,15 @@ fn a_two_step_plant_is_refused_at_its_work_tree_step() {
             "git checkout-index -f -- .codeflow/policy.json",
             writes(POLICY),
         ),
+        // `-n` still overwrites files that exist (review PW-2).
+        ("git checkout-index -n -f -a", writes(POLICY)),
+        ("git checkout-index --no-create -f -a", writes(POLICY)),
+        (
+            "git checkout-index -n -f -- .codeflow/policy.json",
+            writes(POLICY),
+        ),
         ("git checkout -- src", Passes),
+        ("git checkout-index --temp -a", Passes),
     ];
     // Each index-only first step, run for real in the fixture.
     let firsts: [&[&str]; 3] = [
@@ -288,6 +296,7 @@ fn a_two_step_plant_is_refused_at_its_work_tree_step() {
         &f.root,
         &[
             ("git checkout-index -a -f", Passes),
+            ("git checkout-index -n -f -a", Passes),
             ("git checkout -- .", Passes),
             ("git checkout-index --temp -a", Passes),
             // A prefix is judged by the shared path check, which reads an
@@ -441,6 +450,94 @@ fn no_commit_picks_and_reverts_are_judged_by_the_commits_they_apply() {
     );
 }
 
+/// Review PW-4: `git sparse-checkout` writes the work tree from the index
+/// and removes what the new set leaves out.
+#[test]
+fn sparse_checkout_is_judged_by_the_index_and_the_set_it_keeps() {
+    let f = Fixture::new();
+    let settings = ".claude/settings.json";
+    expect(
+        &f.root,
+        &[
+            // The set must keep every enforcement path HEAD holds.
+            ("git sparse-checkout set --cone src", writes(settings)),
+            ("git sparse-checkout set --cone src .claude", writes(POLICY)),
+            (
+                "git sparse-checkout set --cone src .codeflow .claude",
+                Passes,
+            ),
+            ("git sparse-checkout set --cone .codeflow/ /.claude", Passes),
+            // `init` and `reapply` with no patterns keep root files only.
+            ("git sparse-checkout init", writes(settings)),
+            ("git sparse-checkout reapply", writes(settings)),
+            ("git sparse-checkout add src", Passes),
+            ("git sparse-checkout disable", Passes),
+            ("git sparse-checkout list", Passes),
+            // Fail closed.
+            ("git sparse-checkout set src .codeflow .claude", Unknown),
+            (
+                "git sparse-checkout set --no-cone src .codeflow .claude",
+                Unknown,
+            ),
+            ("git sparse-checkout set --cone --stdin", Unknown),
+            (
+                "git sparse-checkout set --cone 'src/*' .codeflow .claude",
+                Unknown,
+            ),
+            ("git sparse-checkout add --stdin", Unknown),
+            ("git sparse-checkout add '!/.codeflow/'", Unknown),
+            ("git sparse-checkout set --frobnicate", Unknown),
+            ("git sparse-checkout frobnicate", Unknown),
+        ],
+    );
+    // Run from a subdirectory, Git may read the directories from there.
+    expect(
+        &f.root.join("src"),
+        &[(
+            "git sparse-checkout set --cone src .codeflow .claude",
+            Unknown,
+        )],
+    );
+    git(&f.root, &["config", "core.sparseCheckoutCone", "true"]);
+    expect(
+        &f.root,
+        &[
+            ("git sparse-checkout set src", writes(settings)),
+            ("git sparse-checkout set src .codeflow .claude", Passes),
+        ],
+    );
+    // The patterns already written decide `init` and `reapply`.
+    let patterns = f.root.join(".git/info/sparse-checkout");
+    std::fs::create_dir_all(patterns.parent().unwrap()).unwrap();
+    std::fs::write(&patterns, "/*\n!/*/\n/.claude/\n/.codeflow/\n/src/\n").unwrap();
+    expect(
+        &f.root,
+        &[
+            ("git sparse-checkout reapply", Passes),
+            ("git sparse-checkout init", Passes),
+        ],
+    );
+    std::fs::write(&patterns, "/*\n!/*/\n/.claude/\n!/.claude/*/\n/src/\n").unwrap();
+    expect(&f.root, &[("git sparse-checkout reapply", writes(POLICY))]);
+    std::fs::write(&patterns, "src\n").unwrap();
+    expect(&f.root, &[("git sparse-checkout reapply", Unknown)]);
+    std::fs::remove_file(&patterns).unwrap();
+    // An index plant is written by every form that writes files.
+    f.plant_index(POLICY, "{\"planted\":true}\n");
+    expect(
+        &f.root,
+        &[
+            ("git sparse-checkout disable", writes(POLICY)),
+            ("git sparse-checkout add src", writes(POLICY)),
+            (
+                "git sparse-checkout set --cone src .codeflow .claude",
+                writes(POLICY),
+            ),
+            ("git sparse-checkout list", Passes),
+        ],
+    );
+}
+
 #[test]
 fn reset_to_a_revision_is_judged_by_that_revision() {
     let f = Fixture::new();
@@ -483,11 +580,52 @@ fn settings_that_move_the_repository_index_or_objects_refuse() {
                 "git -c Color.UI=false -c user.name=t checkout -- src",
                 Passes,
             ),
+            ("git -c alias.co=checkout checkout -- src", Passes),
             // A form that writes no work-tree file is not refused for them.
-            ("git -c core.editor=true reset --soft HEAD", Passes),
-            ("git -c core.editor=true am --show-current-patch", Passes),
-            ("git -c core.editor=true cherry-pick old", Passes),
+            ("git -c filter.x.smudge=cat reset --soft HEAD", Passes),
+            ("git -c filter.x.smudge=cat am --show-current-patch", Passes),
+            ("git -c filter.x.smudge=cat stash list", Passes),
+            (
+                "git -c filter.x.smudge=cat checkout-index --temp -a",
+                Passes,
+            ),
+            ("git -c filter.x.smudge=cat sparse-checkout list", Passes),
             ("GIT_INDEX_FILE=x git restore --staged src", Passes),
+            // Every other form that writes work-tree files refuses them,
+            // its content compared or not (review PW-2 and PW-3).
+            (
+                "git -c filter.x.smudge=cat checkout-index -n -f -a",
+                Unknown,
+            ),
+            ("git -c filter.x.smudge=cat checkout -b fresh old", Unknown),
+            ("git -c filter.x.smudge=cat checkout -B fresh old", Unknown),
+            (
+                "git -c filter.x.smudge=cat checkout --orphan o old",
+                Unknown,
+            ),
+            ("git -c filter.x.smudge=cat checkout --detach old", Unknown),
+            ("git -c filter.x.smudge=cat checkout old --", Unknown),
+            ("git -c filter.x.smudge=cat checkout same", Unknown),
+            ("git -c filter.x.smudge=cat switch -c fresh old", Unknown),
+            ("git -c filter.x.smudge=cat merge same", Unknown),
+            ("git -c filter.x.smudge=cat rebase old", Unknown),
+            ("git -c filter.x.smudge=cat pull", Unknown),
+            ("git -c filter.x.smudge=cat bisect start", Unknown),
+            ("git -c filter.x.smudge=cat worktree add ../w", Unknown),
+            ("git -c filter.x.smudge=cat stash", Unknown),
+            ("git -c filter.x.smudge=cat stash push -u", Unknown),
+            ("git -c filter.x.smudge=cat reset --hard", Unknown),
+            ("git -c filter.x.smudge=cat am --abort", Unknown),
+            ("git -c filter.x.smudge=cat cherry-pick old", Unknown),
+            ("git -c include.path=x switch same", Unknown),
+            ("GIT_DIR=elsewhere git switch same", Unknown),
+            // Without such a setting a branch switch keeps its verdict.
+            ("git -c core.editor=true cherry-pick old", Passes),
+            ("git -c user.name=t checkout -b fresh old", Passes),
+            ("git switch -c fresh old", Passes),
+            ("git merge same", Passes),
+            ("git stash", Passes),
+            ("git am --abort", Passes),
         ],
     );
     git(&f.root, &["replace", "-f", "HEAD", "old"]);

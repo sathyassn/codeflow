@@ -6341,16 +6341,46 @@ fn integrity_write_violation(
 /// `args` of a `git` command with the literal values the line assigned
 /// before it filled in.
 fn filled_git_args(cmd: &str, args: &[String], line: &str) -> Vec<String> {
+    filled_words(cmd, args, args, line)
+}
+
+/// `words` with the literal values the line assigned before the command
+/// `cmd args` filled in.
+fn filled_words(cmd: &str, args: &[String], words: &[String], line: &str) -> Vec<String> {
     let mut literals = Literals::default();
-    for words in &*line_argvs(line) {
-        if strip_launchers(words)
+    for argv in &*line_argvs(line) {
+        if strip_launchers(argv)
             .is_some_and(|(program, rest)| basename(program) == cmd && rest == args)
         {
             break;
         }
-        literals.note(words);
+        literals.note(argv);
     }
-    args.iter().map(|word| literals.fill(word)).collect()
+    words.iter().map(|word| literals.fill(word)).collect()
+}
+
+/// A Git alias whose expansion `expanded` is a path writer, judged as that
+/// command from every directory the op can run in (issue 633, review PW-1).
+/// `args` is the op as written, which the line's assignments precede.
+fn alias_path_writer_violation(
+    args: &[String],
+    expanded: &[String],
+    moved: &Moves<'_>,
+    level: PolicyLevel,
+    line: &str,
+    cwd: &Path,
+) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    let filled = filled_words("git", args, expanded, line);
+    let (verb, rest) = git_subcommand(&filled)?;
+    match &moved.cwd {
+        Cwd::Paths(dirs) => dirs.iter().find_map(|dir| {
+            path_writers::violation(verb, &filled, rest, level, (&cwd.join(dir), cwd), line)
+        }),
+        Cwd::Unknown(why) => path_writers::unknown_directory(verb, rest, level, why),
+    }
 }
 
 /// A Git command that writes work-tree files without moving HEAD, judged by
@@ -9694,6 +9724,16 @@ fn check_git(
         match expand_alias(args, sub, moved, ctx, depth, branches.config_changed) {
             Ok(expansions) => {
                 for expanded in expansions {
+                    // The alias body may be a path writer; judge it as the
+                    // literal command (issue 633).
+                    out.extend(alias_path_writer_violation(
+                        args,
+                        &expanded,
+                        moved,
+                        ctx.policy.hook_integrity,
+                        &branches.line,
+                        cwd,
+                    ));
                     check_git(&expanded, branches, moved, ctx, out, notes, depth + 1, cwd);
                     branches.discard_state_changed |= git_subcommand(&expanded)
                         .is_none_or(|(sub, rest)| !discard_readonly_git(sub, rest));

@@ -125,17 +125,44 @@ pub(super) fn violation(
     Some(super::hook_integrity_violation(level, message))
 }
 
+/// The finding for a path writer run from a directory the guard cannot
+/// tell, such as one an alias reaches after a `cd` it cannot read.
+pub(super) fn unknown_directory(
+    verb: &str,
+    rest: &[String],
+    level: PolicyLevel,
+    why: &str,
+) -> Option<Violation> {
+    (level.is_active() && candidate(verb, rest)).then(|| {
+        super::hook_integrity_violation(
+            level,
+            format!("cannot tell what `git {verb}` writes on enforcement paths: it runs in a directory the guard cannot tell ({why})"),
+        )
+    })
+}
+
 /// Whether `verb` is one of the commands this module judges. Cheap: it
 /// reads no repository.
 fn candidate(verb: &str, rest: &[String]) -> bool {
     match verb {
         "checkout" | "restore" | "checkout-index" | "read-tree" | "apply" | "am"
-        | "cherry-pick" | "revert" | "reset" => true,
-        "stash" => rest
-            .first()
-            .is_some_and(|sub| matches!(sub.as_str(), "apply" | "pop" | "branch")),
+        | "cherry-pick" | "revert" | "reset" | "sparse-checkout" | "switch" | "merge"
+        | "rebase" | "pull" | "bisect" => true,
+        "worktree" => rest.first().is_some_and(|sub| sub == "add"),
+        "stash" => {
+            stash_pushes(rest)
+                || rest
+                    .first()
+                    .is_some_and(|sub| matches!(sub.as_str(), "apply" | "pop" | "branch"))
+        }
         _ => false,
     }
+}
+
+/// Whether a `git stash` form saves the changes and restores HEAD's files.
+fn stash_pushes(rest: &[String]) -> bool {
+    rest.first()
+        .is_none_or(|sub| sub.starts_with('-') || matches!(sub.as_str(), "push" | "save"))
 }
 
 /// Resolve where the command runs and judge it there. `Ok(None)` when it
@@ -256,8 +283,9 @@ const INERT_SETTINGS: &[&str] = &[
     "sequence.editor",
 ];
 
-/// Sections whose every key is inert in the same way.
-const INERT_SECTIONS: &[&str] = &["advice.", "color.", "pager.", "user."];
+/// Sections whose every key is inert in the same way. An `alias.` key only
+/// names another command, which the guard judges as written in its place.
+const INERT_SECTIONS: &[&str] = &["advice.", "alias.", "color.", "pager.", "user."];
 
 /// Whether a `-c` setting is literal and sets an inert key.
 fn inert_setting(setting: &str) -> bool {
@@ -336,11 +364,14 @@ fn judge(place: &Place<'_>, verb: &str, rest: &[String]) -> Result<Option<Verdic
         "restore" => restore(place, rest),
         "checkout-index" => checkout_index(place, rest),
         "read-tree" => read_tree(place, rest),
+        "stash" if stash_pushes(rest) => switch(place),
         "stash" => stash(place, rest),
+        "switch" | "merge" | "rebase" | "pull" | "bisect" | "worktree" => switch(place),
         "apply" => apply(place, rest),
         "am" => am(place, rest),
         "cherry-pick" | "revert" => pick(place, verb, rest),
         "reset" => reset(place, rest),
+        "sparse-checkout" => sparse_checkout(place, rest),
         _ => Ok(None),
     }
 }
@@ -872,13 +903,25 @@ fn overlay(parsed: &ParsedOptions<'_>, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+/// A command that writes work-tree files whose content is not compared
+/// here: a branch switch, merge, rebase or pull moves HEAD with the files
+/// (TSK-325 AC-7), and `stash` push, `reset --hard` without a revision and
+/// `am --abort` restore HEAD's. It still writes work-tree files, so a setting
+/// that changes how Git writes them (a filter, an include, attributes) or
+/// what it reads refuses as for any other writer (review PW-3).
+fn switch(place: &Place<'_>) -> Result<Option<Verdict>, String> {
+    match &place.unreadable {
+        Some(why) => Err(why.clone()),
+        None => Ok(None),
+    }
+}
+
 /// `git checkout` of paths. A branch switch (`-b`, `-B`, `--orphan`,
-/// `--detach`, or one commit and no paths) moves HEAD and is not judged
-/// here (TSK-325 AC-7).
+/// `--detach`, or one commit and no paths) is judged by [`switch`].
 fn checkout(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, String> {
     let parsed = options("checkout", rest, &CHECKOUT)?;
     if parsed.has_short(&['b', 'B']) || parsed.has_long("--orphan") || parsed.has_long("--detach") {
-        return Ok(None);
+        return switch(place);
     }
     let patch = parsed.has_short(&['p']) || parsed.has_long("--patch");
     let from_file = parsed.has_long("--pathspec-from-file");
@@ -896,11 +939,11 @@ fn checkout(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, Strin
             [rev] => {
                 if paths.is_empty() && !whole {
                     // `git checkout <commit> --` switches.
-                    return Ok(None);
+                    return switch(place);
                 }
                 readings.push((Some(*rev), paths));
             }
-            _ => return Ok(None),
+            _ => return switch(place),
         },
         None => match before.split_first() {
             None => {
@@ -1046,10 +1089,12 @@ const CHECKOUT_INDEX: OptionSpec = OptionSpec {
 
 /// `git checkout-index` writes index entries: every one with `-a`, those
 /// read from stdin with `--stdin`, otherwise the files named. A `--prefix`
-/// is joined to each path as text.
+/// is joined to each path as text. `-n` (`--no-create`) still overwrites
+/// files that exist, so it is judged the same way (review PW-2); `--temp`
+/// writes temporary names, never the tracked paths.
 fn checkout_index(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, String> {
     let parsed = options("checkout-index", rest, &CHECKOUT_INDEX)?;
-    if parsed.has_long("--temp") || parsed.has_short(&['n']) || parsed.has_long("--no-create") {
+    if parsed.has_long("--temp") {
         return Ok(None);
     }
     let reader = Reader::new(place.repo()?);
@@ -1628,11 +1673,15 @@ const AM: OptionSpec = OptionSpec {
 /// `--retry` the session in progress.
 fn am(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, String> {
     let parsed = options("am", rest, &AM)?;
-    if ["--abort", "--quit", "--show-current-patch"]
+    if ["--quit", "--show-current-patch"]
         .iter()
         .any(|name| parsed.has_long(name))
     {
         return Ok(None);
+    }
+    if parsed.has_long("--abort") {
+        // Restores the original HEAD's files.
+        return switch(place);
     }
     let strip = strip_count(parsed.values_of('p', "").last().copied())?;
     let directory = parsed.values_of('\0', "--directory").last().copied();
@@ -1735,7 +1784,7 @@ fn pick(place: &Place<'_>, verb: &str, rest: &[String]) -> Result<Option<Verdict
         };
     }
     if !no_commit {
-        return Ok(None);
+        return switch(place);
     }
     if let Some(word) = parsed.unread.first() {
         return Err(format!(
@@ -1869,13 +1918,239 @@ fn reset(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, String> 
     }
     let (before, _) = split(&parsed);
     let Some(rev) = before.first() else {
-        return Ok(None);
+        return switch(place);
     };
     let reader = Reader::new(place.repo()?);
     let head = reader.head()?;
     let target = reader.revision(rev)?;
     Ok(differs(&target, &head, &Selection::Whole, false)
         .map(|path| writes(path, format!("the revision `{rev}`"))))
+}
+
+const SPARSE_CHECKOUT: OptionSpec = OptionSpec {
+    short: &[],
+    long: &[
+        ("--cone", Arity::Flag),
+        ("--no-cone", Arity::Flag),
+        ("--sparse-index", Arity::Flag),
+        ("--no-sparse-index", Arity::Flag),
+        ("--skip-checks", Arity::Flag),
+        ("--stdin", Arity::Flag),
+        (super::END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// `git sparse-checkout` `set`, `add`, `init`, `reapply` and `disable` write
+/// the work tree from the index: files the sparse set takes in are written
+/// from the index, and files it leaves out are removed (review PW-4). The
+/// index is compared with HEAD, and the new sparse set must keep every
+/// enforcement path HEAD holds. The guard reads the set only in cone form.
+fn sparse_checkout(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, String> {
+    let Some((sub, args)) = rest.split_first() else {
+        return Err("`git sparse-checkout` has no subcommand".into());
+    };
+    let sub = sub.as_str();
+    if matches!(sub, "list" | "check-rules") {
+        return Ok(None);
+    }
+    if !matches!(sub, "set" | "add" | "init" | "reapply" | "disable") {
+        return Err(format!(
+            "`git sparse-checkout {sub}` is not a form the guard reads"
+        ));
+    }
+    let parsed = options("sparse-checkout", args, &SPARSE_CHECKOUT)?;
+    let repo = place.repo()?;
+    let reader = Reader::new(repo);
+    let head = reader.head()?;
+    if let Some(path) = differs(&reader.index()?, &head, &Selection::Whole, true) {
+        return Ok(Some(writes(path, "the index")));
+    }
+    let cone = match sub {
+        // `disable` writes every index entry and removes nothing.
+        "disable" => return Ok(None),
+        "add" => {
+            // `add` only widens the set, unless a non-cone `!` pattern
+            // narrows it.
+            if parsed.has_long("--stdin") {
+                return Err(
+                    "`git sparse-checkout add --stdin` reads patterns the guard cannot see".into(),
+                );
+            }
+            if let Some(word) = parsed.operands.iter().find(|word| word.starts_with('!')) {
+                return Err(format!("the pattern `{word}` can leave files out"));
+            }
+            return Ok(None);
+        }
+        "set" => Cone::from_directories(place, &parsed, repo)?,
+        // `init` and `reapply` keep the patterns already written, if any.
+        _ => Cone::read_file(repo)?,
+    };
+    Ok(head.keys().find(|path| !cone.keeps(path)).map(|path| {
+        writes(
+            path.clone(),
+            "the sparse-checkout patterns, which remove it from the work tree",
+        )
+    }))
+}
+
+/// A cone-mode sparse set: the directories taken in whole, and the
+/// directories whose own files only are taken in. Root files are always in.
+#[derive(Default)]
+struct Cone {
+    whole: Vec<Vec<String>>,
+    files: BTreeSet<Vec<String>>,
+}
+
+impl Cone {
+    /// The set `git sparse-checkout set <dir>...` writes in cone mode: each
+    /// directory whole, and the files of each directory above one.
+    fn from_directories(
+        place: &Place<'_>,
+        parsed: &ParsedOptions<'_>,
+        repo: &git2::Repository,
+    ) -> Result<Self, String> {
+        if parsed.has_long("--stdin") {
+            return Err(
+                "`git sparse-checkout set --stdin` reads patterns the guard cannot see".into(),
+            );
+        }
+        let flag = parsed.long.iter().rev().find_map(|(name, _)| match *name {
+            "--cone" => Some(true),
+            "--no-cone" => Some(false),
+            _ => None,
+        });
+        let cone = match flag {
+            Some(cone) => cone,
+            None => match repo
+                .config()
+                .and_then(|config| config.get_bool("core.sparseCheckoutCone"))
+            {
+                Ok(cone) => cone,
+                Err(e) if e.code() == git2::ErrorCode::NotFound => {
+                    return Err("the sparse-checkout mode is not set; pass `--cone`".into())
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "cannot read the sparse-checkout mode: {}",
+                        e.message()
+                    ))
+                }
+            },
+        };
+        if !cone {
+            return Err("non-cone sparse-checkout patterns are not read by the guard".into());
+        }
+        if !place.prefix.is_empty() {
+            return Err("`git sparse-checkout set` runs below the top of the work tree, where Git may read its directories from there".into());
+        }
+        let mut set = Cone::default();
+        for word in &parsed.operands {
+            if expands(word) || word.contains(['*', '?', '[', '\\', '!']) {
+                return Err(format!("the directory `{word}` is not one the guard reads"));
+            }
+            let parts: Vec<String> = word
+                .trim_matches('/')
+                .split('/')
+                .map(str::to_string)
+                .collect();
+            if parts
+                .iter()
+                .any(|part| matches!(part.as_str(), "" | "." | ".."))
+            {
+                return Err(format!("the directory `{word}` is not one the guard reads"));
+            }
+            set.add_whole(parts);
+        }
+        Ok(set)
+    }
+
+    /// The set the sparse-checkout file holds, read in the cone form Git
+    /// writes: `/*`, `!/*/`, then `/dir/` lines, each directory whose
+    /// subdirectories are left out followed by `!/dir/*/`. No file is the
+    /// set `init` writes: root files only.
+    fn read_file(repo: &git2::Repository) -> Result<Self, String> {
+        let file = repo.path().join("info").join("sparse-checkout");
+        let unread = |e: std::io::Error| format!("cannot read the sparse-checkout patterns: {e}");
+        if crate::absence::symlink_metadata_optional(&file)
+            .map_err(unread)?
+            .is_none()
+        {
+            return Ok(Cone::default());
+        }
+        let text = std::fs::read_to_string(&file).map_err(unread)?;
+        let not_cone =
+            || "the sparse-checkout patterns are not in the cone form the guard reads".to_string();
+        let mut lines = text
+            .split('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line))
+            .filter(|line| !line.is_empty() && !line.starts_with('#'));
+        if lines.next() != Some("/*") || lines.next() != Some("!/*/") {
+            return Err(not_cone());
+        }
+        let mut included = Vec::new();
+        let mut files_only = BTreeSet::new();
+        for line in lines {
+            let (negated, body) = match line.strip_prefix('!') {
+                Some(body) => (true, body.strip_suffix("*/").ok_or_else(not_cone)?),
+                None => (false, line),
+            };
+            let inner = body
+                .strip_prefix('/')
+                .and_then(|body| body.strip_suffix('/'))
+                .ok_or_else(not_cone)?;
+            if inner.contains(['*', '?', '[', '\\', '!']) {
+                return Err(not_cone());
+            }
+            let parts: Vec<String> = inner.split('/').map(str::to_string).collect();
+            if parts
+                .iter()
+                .any(|part| matches!(part.as_str(), "" | "." | ".."))
+            {
+                return Err(not_cone());
+            }
+            if negated {
+                files_only.insert(parts);
+            } else {
+                included.push(parts);
+            }
+        }
+        let mut set = Cone::default();
+        for parts in included {
+            if files_only.contains(&parts) {
+                set.files.insert(parts);
+            } else {
+                set.add_whole(parts);
+            }
+        }
+        Ok(set)
+    }
+
+    fn add_whole(&mut self, parts: Vec<String>) {
+        for end in 1..parts.len() {
+            self.files.insert(parts[..end].to_vec());
+        }
+        self.whole.push(parts);
+    }
+
+    /// Whether the stored path stays in the work tree. Names compare exactly,
+    /// so a spelling that differs only by case is left out, which refuses.
+    fn keeps(&self, path: &str) -> bool {
+        let parts: Vec<&str> = path.split('/').collect();
+        let Some((_, directory)) = parts.split_last() else {
+            return true;
+        };
+        let same = |dir: &[String], with: &[&str]| dir.iter().zip(with).all(|(a, b)| a == b);
+        directory.is_empty()
+            || self
+                .files
+                .iter()
+                .any(|dir| dir.len() == directory.len() && same(dir, directory))
+            || self
+                .whole
+                .iter()
+                .any(|dir| dir.len() <= directory.len() && same(dir, directory))
+    }
 }
 
 #[cfg(test)]
