@@ -1450,6 +1450,26 @@ fn validate_branch_name_omit_words(path: &str, value: &Value, errors: &mut Vec<P
 /// The value checks for the root-checkout keys that their kind alone does
 /// not catch: `git.root_branch` must be a branch name, and each
 /// `git.worktree_locations` entry must be a folder `doctor` can expand.
+/// `security.trusted_client_configs` names only tools the guard knows; an
+/// unknown name trusts nothing and is an error.
+fn validate_trusted_client_configs(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    for entry in value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        if !crate::hooks::policy::TRUSTED_CLIENT_CONFIG_TOOLS.contains(&entry) {
+            errors.push(PolicyError {
+                key: path.to_string(),
+                message: format!(
+                    "unknown tool '{entry}' in {path}; use curl, wget, httpie, xh or gh_aliases"
+                ),
+            });
+        }
+    }
+}
+
 fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
     match path {
         "git.document_indexes" => {
@@ -1499,21 +1519,7 @@ fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<Policy
             validate_candidate_key(path, value, errors);
         }
         "git.branch_name_omit_words" => validate_branch_name_omit_words(path, value, errors),
-        "security.trusted_client_configs" => {
-            for entry in value
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-            {
-                if !crate::hooks::policy::TRUSTED_CLIENT_CONFIG_TOOLS.contains(&entry) {
-                    errors.push(PolicyError {
-                        key: path.to_string(),
-                        message: format!("unknown tool '{entry}' in {path}; use curl, wget, httpie, xh or gh_aliases"),
-                    });
-                }
-            }
-        }
+        "security.trusted_client_configs" => validate_trusted_client_configs(path, value, errors),
         "git.required_checks" => {
             let entries = value.as_array().map_or(&[][..], Vec::as_slice);
             if value.is_array() && entries.is_empty() {

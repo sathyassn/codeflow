@@ -164,7 +164,7 @@ struct Parsed {
     /// The config variables a segment assigns before its program, with the
     /// program and its arguments: they reach that one call for certain
     /// (TSK-1346).
-    inline_env: Option<(Vec<(String, String)>, Vec<String>)>,
+    inline_env: Option<InlineEnv>,
     /// The committed policy's `security.trusted_client_configs`.
     trusted_client_configs: Vec<String>,
     unreadable: Vec<String>,
@@ -709,8 +709,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
         persistent = crate::hooks::git_guard::configuration_shell_change(&segment).or(persistent);
         out.config_trigger = trigger.or_else(|| persistent.clone());
         note_gh_repo(&words[..words.len() - skip_assignments(&words).len()], out);
-        note_client_env_expansion(&segment, out);
-        out.inline_env = Some(inline_assignments(&words));
+        note_client_env(&segment, &words, out);
         let mut assigned = skip_assignments(&words).to_vec();
         let mut assigned_patterns = patterns[words.len() - assigned.len()..].to_vec();
         if let Some(setting) = words
@@ -3364,7 +3363,7 @@ fn env_unknown_option(rest: &[String]) -> Option<&String> {
 
 /// The config variables `words` assigns before its program, and the program
 /// with its arguments.
-fn inline_assignments(words: &[String]) -> (Vec<(String, String)>, Vec<String>) {
+fn inline_assignments(words: &[String]) -> InlineEnv {
     let call = skip_assignments(words);
     let assigned = words[..words.len() - call.len()]
         .iter()
@@ -3375,9 +3374,16 @@ fn inline_assignments(words: &[String]) -> (Vec<(String, String)>, Vec<String>) 
     (assigned, call.to_vec())
 }
 
-/// Note a `${NAME=value}` or `${NAME:=value}` expansion in `segment` that
-/// assigns a variable placing a client's config file.
-fn note_client_env_expansion(segment: &str, out: &mut Parsed) {
+/// The config variables a segment assigns before its program, and the
+/// program with its arguments.
+type InlineEnv = (Vec<(String, String)>, Vec<String>);
+
+/// Note what `segment`, read as `words`, does to the environment a client
+/// call runs with: its assignments before the program, and a
+/// `${NAME=value}` or `${NAME:=value}` expansion that assigns a variable
+/// placing a client's config file.
+fn note_client_env(segment: &str, words: &[String], out: &mut Parsed) {
+    out.inline_env = Some(inline_assignments(words));
     let assigns = super::release_routes::CONFIG_VARIABLES.iter().any(|var| {
         segment.contains(&format!("${{{var}=")) || segment.contains(&format!("${{{var}:="))
     });
