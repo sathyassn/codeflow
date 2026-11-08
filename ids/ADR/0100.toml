@@ -1,0 +1,11 @@
+id = "ADR-0100"
+uid = "fd62e1f9-e756-4115-9252-badc57a861f7"
+kind = "ADR"
+title = "Projects choose up-to-date branches, no requirement, or a merge queue"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-08T23:46:07Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
