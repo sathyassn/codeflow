@@ -105,6 +105,7 @@ crates/codeflow-core/src/hooks/git_guard.rs	starts_with("GIT_CONFIG")	1	Guard vo
 crates/codeflow-core/src/hooks/git_guard.rs	starts_with("GIT_CONFIG_KEY_")	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
 crates/codeflow-core/src/hooks/git_guard.rs	var("GIT_CONFIG")	1	Reads the GIT_CONFIG file a judged command names or inherits, to classify the write; never sets a process environment.
 crates/codeflow-core/src/hooks/git_guard.rs	words(&["GIT_CONFIG=/x/gitconfig","git","config","a.b","c"])	1	Command text passed to guard evaluation, not an executed command or environment mutation.
+crates/codeflow-core/src/hooks/git_guard/data_operands.rs	starts_with("GIT_")	1	TSK-326 vocabulary check: a `GIT_*` name assigned for git is read as a git environment variable to judge; no process environment or Git configuration is changed.
 crates/codeflow-core/src/hooks/ref_authority.rs	env(CHILD,test)	1	A test re-runs its own binary with git absent from PATH; this call sets only the child marker CODEFLOW_R20_REF_AUTHORITY_CHILD (the test name) and leaves Git configuration untouched.
 crates/codeflow-core/src/ids/git.rs	env(CHILD,"1")	1	A test re-runs its own binary; this call sets only the child marker CODEFLOW_R20_SHALLOW_CHILD, and leaves Git configuration untouched.
 crates/codeflow-core/src/ids/git.rs	env(CHILD,test)	1	A test re-runs its own binary with a stub git on PATH; this call sets only the child marker CODEFLOW_R20_IDS_ANSWER_CHILD (the test name) and leaves Git configuration untouched.

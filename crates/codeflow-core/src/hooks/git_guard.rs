@@ -26,6 +26,7 @@ use super::policy::{GitPolicy, PolicyLevel};
 use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 use crate::root_checkout::RootCheckout;
 
+pub(crate) mod data_operands;
 pub(crate) mod line_home;
 mod runners;
 
@@ -904,6 +905,11 @@ fn evaluate_report_with_runners(
     cwd: &Path,
     read_runners: bool,
 ) -> Evaluation {
+    // Bracket arithmetic that holds only integer arithmetic is read as the
+    // value the shell gives it, so `HEAD:v$[2]` is judged as `HEAD:v2`;
+    // any other `$[…]` stays unresolved and refuses (TSK-326).
+    let rewritten = data_operands::resolve_bracket_arithmetic(command);
+    let command = rewritten.as_deref().unwrap_or(command);
     // A Git line naming a share, verbatim or device path refuses before any
     // repository or configuration lookup (TSK-1002 Codex review 10).
     if let Some(finding) = crate::security::git_preflight::namespace_violation(command) {
@@ -1125,9 +1131,54 @@ fn evaluate_report_with_runners(
         if top_level {
             shell.observe(program, args);
         }
+        // A program, a git environment assignment or a command `xargs` or
+        // `find` runs that the line supplies as data refuses as unresolved,
+        // before any decision reads it; an operand of a git subcommand is
+        // judged in `check_git` with that subcommand's rules (TSK-326).
+        let no_vars = HashMap::new();
+        let marked = data_operands::mark_text(&words, &command_argv_live(segment));
+        let data = {
+            let moved = line.moves_for(&shell, top_level, &tokens);
+            data_operands::command_data(
+                &marked,
+                moved.vars.unwrap_or(&no_vars),
+                data_operands::Reader::GitGuard,
+            )
+        };
+        match data {
+            Err(form) if !form.operand && !form.substitution => {
+                violations.extend(unclassifiable_violation(
+                    ctx.policy,
+                    form.sub.as_deref(),
+                    &form.what,
+                    &crate::remedy::GUARD_UNCLASSIFIABLE,
+                ));
+                continue;
+            }
+            // `PROG=git; $PROG push …`: the program is git, read through the
+            // literal the line assigned.
+            Ok(Some(call))
+                if call.program_filled && !matches!(program_kind(program), ProgramKind::Git) =>
+            {
+                let moved = line.moves_for(&shell, top_level, &tokens);
+                check_git(
+                    &call.args,
+                    &mut branches,
+                    &moved,
+                    ctx,
+                    violations,
+                    &mut notes,
+                    0,
+                    cwd,
+                );
+                continue;
+            }
+            _ => {}
+        }
         match program_kind(program) {
             ProgramKind::Git => {
-                let moved = line.moves_for(&shell, top_level, &tokens);
+                let mut moved = line.moves_for(&shell, top_level, &tokens);
+                moved.marked = Some(marked);
                 check_git(
                     args,
                     &mut branches,
@@ -9485,6 +9536,7 @@ impl LineFacts {
             git_config_var: self.mentions.git_config_var,
             narrows: tracked,
             tokens,
+            marked: None,
         }
     }
 }
@@ -9509,6 +9561,10 @@ struct Moves<'r> {
     narrows: bool,
     /// The op's full token list (its leading assignments and launchers).
     tokens: &'r [String],
+    /// The op's argument vector with each `$` and backtick the shell
+    /// passes as text marked ([`data_operands::mark_text`]), when the
+    /// segment loop read it.
+    marked: Option<Vec<String>>,
 }
 
 fn check_authority(
@@ -9617,7 +9673,46 @@ fn check_git(
 
     // Classification uncertainty adds its own verdict; it never ends the
     // judgment, so every other applicable rule still runs (R4-1).
-    let mut unclassified = unclassifiable_git(args);
+    // A word a judged decision reads is filled in from the literals the
+    // line assigned before it; one the line supplies as data refuses as
+    // unresolved before the alias, transport and push decisions read it
+    // (TSK-326).
+    let no_vars = HashMap::new();
+    let mut data_form = None;
+    let filled_args;
+    // The words as the segment loop marked them, when they are these
+    // words: a `$` the shell passes as text is never read as a variable.
+    let marked = moved
+        .marked
+        .as_deref()
+        .and_then(|marked| marked.get(marked.len().checked_sub(args.len())?..))
+        .filter(|marked| {
+            depth == 0
+                && marked
+                    .iter()
+                    .zip(args)
+                    .all(|(mark, word)| data_operands::unmark(mark) == *word)
+        })
+        .unwrap_or(args);
+    let args = match data_operands::git_args(
+        marked,
+        moved.vars.unwrap_or(&no_vars),
+        data_operands::Reader::GitGuard,
+    ) {
+        Ok((filled, true)) => {
+            filled_args = filled;
+            filled_args.as_slice()
+        }
+        Ok(_) => args,
+        // A substitution written on the command is judged by the reader
+        // below with its alias and message rules (TSK-112).
+        Err(form) if form.substitution => args,
+        Err(form) => {
+            data_form = Some(Unclassified::Data(form.what));
+            args
+        }
+    };
+    let mut unclassified = unclassifiable_git(args).or(data_form);
     let Some((sub, rest)) = git_subcommand(args) else {
         if let Some(u) = &unclassified {
             out.extend(u.violation(ctx.policy, None));
@@ -9755,7 +9850,7 @@ fn check_git(
     if let Some(u) = &unclassified {
         let known = match u {
             Unclassified::Subcommand(_) | Unclassified::Alias(_) => None,
-            Unclassified::Arguments(_) => Some(sub),
+            Unclassified::Arguments(_) | Unclassified::Data(_) => Some(sub),
         };
         // A subcommand that acts on the branch it runs on can only reach a
         // protected branch through its target, which is judged below; its
@@ -9978,6 +10073,9 @@ enum Unclassified {
     Arguments(&'static str),
     /// An alias the guard cannot resolve; the reason. Any git command may run.
     Alias(String),
+    /// A word of a judged subcommand that the line supplies as data
+    /// (TSK-326); the form, in words.
+    Data(String),
 }
 
 impl Unclassified {
@@ -9992,6 +10090,9 @@ impl Unclassified {
             ),
             Self::Alias(reason) => {
                 unclassifiable_violation(policy, sub, reason, &crate::remedy::GUARD_ALIAS)
+            }
+            Self::Data(form) => {
+                unclassifiable_violation(policy, sub, form, &crate::remedy::GUARD_UNCLASSIFIABLE)
             }
         }
     }
@@ -13741,6 +13842,16 @@ pub(crate) fn command_argv_literal(segment: &str) -> (Vec<String>, Vec<bool>) {
         .unzip()
 }
 
+/// For each word of [`command_argv`], whether the shell fills in part of it
+/// when the command runs: a `$` or backtick outside single quotes and not
+/// escaped, or a command substitution.
+pub(crate) fn command_argv_live(segment: &str) -> Vec<bool> {
+    argv_words(segment)
+        .into_iter()
+        .map(|word| word.expands || has_substitution(&word.text))
+        .collect()
+}
+
 /// The words of [`command_argv`] with their parse.
 fn argv_words(segment: &str) -> Vec<ShellWord> {
     let words = shell_words(segment);
@@ -15709,6 +15820,119 @@ mod tests {
         GitPolicy::default()
     }
 
+    /// TSK-326: the policy of the data-operand tests. Hook integrity is
+    /// relaxed so the runner reader's own refusal of an expanding operand
+    /// does not stand in for the data-operand refusal under test, and `v2`
+    /// is protected for the bracket arithmetic cases.
+    fn data_policy() -> GitPolicy {
+        GitPolicy {
+            hook_integrity: PolicyLevel::Allow,
+            protected_branches: vec!["main".into(), "master".into(), "v2".into()],
+            ..GitPolicy::default()
+        }
+    }
+
+    /// The refusal a data-supplied form gets: unresolved, naming the form,
+    /// with the sanctioned path.
+    fn data_refusal(command: &str) -> Option<Violation> {
+        let policy = data_policy();
+        evaluate(command, &ctx(&policy, "feat/x"))
+            .into_iter()
+            .find(|v| v.message.contains("is filled in at run time"))
+    }
+
+    /// TSK-326 AC-1 and AC-2: a variable assigned from a substitution or
+    /// `read`, and `xargs` input, refuse as unresolved wherever they reach a
+    /// git ref, a remote, an environment assignment or the program.
+    #[test]
+    fn data_supplied_git_operands_refuse_as_unresolved() {
+        for command in [
+            "V=$(cat refs); git push origin \"$V\"",
+            "V=$(cat cmdfile); $V push origin HEAD:main",
+            "V=$(cat envpush3); env \"$V\" git push origin",
+            "read V < refs; git push origin \"$V\"",
+            "V=$(cat refs); git push \"$V\" HEAD",
+            "V=$(cat refs); git -c \"$V\" push origin",
+            "V=$(cat refs); GIT_DIR=\"$V\" git push origin",
+            "git push origin \"$INHERITED\"",
+            "V=$(cat refs); git ship \"$V\"",
+            "xargs git push origin < refs",
+            "xargs -I{} env {} git push origin < envpush2",
+            "cat refs | xargs -I{} git push origin HEAD:{}",
+            "find . -name x -exec git push origin {} ;",
+        ] {
+            let found =
+                data_refusal(command).unwrap_or_else(|| panic!("{command}: refused as unresolved"));
+            assert_eq!(found.level, PolicyLevel::Block, "{command}");
+            assert!(
+                found.message.starts_with("command unresolved: `"),
+                "{command}: {}",
+                found.message
+            );
+            assert!(
+                found.remedy.to_string().contains("pass it as a literal"),
+                "{command}: names the sanctioned path"
+            );
+        }
+        // The push decision itself is not what refuses the first form.
+        let found = data_refusal("V=$(cat refs); git push origin \"$V\"").unwrap();
+        assert_eq!(found.rule, "git.push_to_protected");
+        assert!(found.message.contains("`$V` in a `git push` operand"));
+    }
+
+    /// TSK-326 AC-4: bracket arithmetic in a ref resolves as the shell
+    /// computes it and the resolved ref is judged; `$((2))` stays refused.
+    #[test]
+    fn bracket_arithmetic_refs_are_judged_resolved() {
+        let policy = data_policy();
+        let judged = |command: &str| evaluate(command, &ctx(&policy, "feat/x"));
+        let protected = judged("git push origin HEAD:v$[2]");
+        assert!(
+            protected
+                .iter()
+                .any(|v| v.rule == "git.push_to_protected" && v.message.contains("'v2'")),
+            "{protected:?}"
+        );
+        assert!(!judged("git push origin HEAD:v$((2))").is_empty());
+        assert!(judged("git push origin HEAD:v$[3]").is_empty());
+        assert!(judged("git push origin HEAD:v$[1+2]").is_empty());
+        assert!(data_refusal("git push origin HEAD:v$[x]").is_some());
+    }
+
+    /// TSK-326 AC-5: operands in the command's own text, variables assigned
+    /// literals, and data pipelines that reach no git operand still pass; a
+    /// literal that names a protected branch is judged as that branch.
+    #[test]
+    fn literal_operands_and_data_pipelines_stay_allowed() {
+        let policy = data_policy();
+        for command in [
+            "git push origin HEAD",
+            "git push origin HEAD:feat/x",
+            "V=feat/x; git push origin \"$V\"",
+            "B=feat/x && git push origin \"HEAD:$B\"",
+            "PROG=git; $PROG push origin feat/x",
+            "cat refs | grep x | wc -l",
+            "V=$(cat refs); echo \"$V\"",
+            "git commit -m \"$(cat msg)\"",
+            "V=$(cat refs); git log \"$V\"",
+            "git ls-files | xargs git add",
+            // A `$` in single quotes or escaped is text, not a variable.
+            "git push origin 'HEAD:feat/a$b'",
+            "git push origin HEAD:feat/a\\$b",
+            // A program with no sign of git is exec-guard's to judge.
+            "$CMD args",
+            "$TOOL < data/in.txt",
+        ] {
+            let found = evaluate(command, &ctx(&policy, "feat/x"));
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+        let found = evaluate("V=main; git push origin \"$V\"", &ctx(&policy, "feat/x"));
+        assert!(
+            found.iter().any(|v| v.message.contains("'main'")),
+            "{found:?}"
+        );
+    }
+
     /// A resolver answer for a directory inside the session repository.
     #[allow(clippy::unnecessary_wraps)] // the resolver's return type
     fn same_repo(branch: &str) -> Option<TargetRepo> {
@@ -17533,6 +17757,7 @@ mod tests {
                 git_config_var: mentions,
                 narrows: false,
                 tokens,
+                marked: None,
             };
             format!(
                 "{:?}|{:?}|{:?}",

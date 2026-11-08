@@ -23,6 +23,7 @@ pub(crate) fn evaluate_at(
 ) -> Vec<Violation> {
     let mut parsed = Parsed::default();
     visit(command, cwd, 0, &mut parsed);
+    let unresolved = read_data_operands(command, cwd, &mut parsed);
     let mut embedded = Parsed::default();
     for code in &parsed.code {
         let words = literal_words(code);
@@ -105,7 +106,40 @@ pub(crate) fn evaluate_at(
             })
         })
         .collect::<Vec<_>>());
+    violations.extend(unresolved.and_then(|what| unresolved_violation(&what, levels)));
     violations
+}
+
+/// Reads the git words `command` fills in (TSK-326). A word the line fills
+/// in from a literal it assigned is judged as that literal: each git call
+/// so filled is added to `parsed`. One it supplies as data (a substitution,
+/// `read`, an inherited variable, `xargs` or `find` input) is returned, in
+/// words, to refuse as unresolved before the push, alias, transport and
+/// release decisions.
+fn read_data_operands(command: &str, cwd: Option<&Path>, parsed: &mut Parsed) -> Option<String> {
+    let data = crate::hooks::git_guard::data_operands::line_data(
+        command,
+        crate::hooks::git_guard::data_operands::Reader::ExecGuard,
+    );
+    for words in &data.filled {
+        argv(words, None, cwd, 0, parsed);
+    }
+    data.unresolved.map(|form| form.what)
+}
+
+/// The outward-action finding for an unresolved git word, when that rule
+/// is active.
+fn unresolved_violation(what: &str, levels: &SecuritySection) -> Option<Violation> {
+    levels.outward_actions.is_active().then(|| {
+        Violation::new(
+            "security.outward_actions",
+            levels.outward_actions,
+            format!(
+                "command unresolved: {what}, so the guard cannot judge the push, alias, transport or release decision it reaches"
+            ),
+            crate::remedy::GUARD_UNCLASSIFIABLE.remedy(),
+        )
+    })
 }
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Hash)]
@@ -3775,6 +3809,88 @@ fn shell_inputs(command: &str, out: &mut Parsed) {
 
 #[cfg(test)]
 mod tests {
+    /// The exec-guard finding a data-supplied form gets (TSK-326).
+    fn data_refusal(command: &str) -> Option<Violation> {
+        evaluate(command, &SecuritySection::default())
+            .into_iter()
+            .find(|v| v.message.contains("is filled in at run time"))
+    }
+
+    /// TSK-326 AC-1 and AC-2: a variable assigned from a substitution or
+    /// `read`, and `xargs` or `find` input, refuse as unresolved where they
+    /// reach a git ref, a remote, an environment assignment or the program,
+    /// under the outward-action rule with its sanctioned path.
+    #[test]
+    fn data_supplied_git_operands_refuse_as_unresolved() {
+        for command in [
+            "V=$(cat refs); git push origin \"$V\"",
+            "V=$(cat cmdfile); $V push origin HEAD:main",
+            "V=$(cat envpush3); env \"$V\" git push origin",
+            "read V < refs; git push origin \"$V\"",
+            "V=$(cat refs); git -c \"$V\" push origin",
+            "V=$(cat refs); git tag \"$V\"",
+            "V=$(cat refs); git ship \"$V\"",
+            "xargs git push origin < refs",
+            "xargs -I{} env {} git push origin < envpush2",
+            "cat refs | xargs -I{} git push origin HEAD:{}",
+            "find . -name x -exec git push origin {} ;",
+        ] {
+            let found =
+                data_refusal(command).unwrap_or_else(|| panic!("{command}: refused as unresolved"));
+            assert_eq!(found.rule, "security.outward_actions", "{command}");
+            assert!(
+                found.message.starts_with("command unresolved: `")
+                    || found.message.starts_with("command unresolved: the git"),
+                "{command}: {}",
+                found.message
+            );
+            assert!(
+                found.remedy.to_string().contains("pass it as a literal"),
+                "{command}: names the sanctioned path"
+            );
+        }
+    }
+
+    /// TSK-326 AC-3: a literal the line assigns is judged as that literal by
+    /// the release decision, so a tag ref in a variable is a tag push.
+    #[test]
+    fn literal_operands_are_judged_by_the_release_decision() {
+        let found = evaluate(
+            "V=refs/tags/v1.0.0; git push origin \"$V\"",
+            &SecuritySection::default(),
+        );
+        assert!(
+            found
+                .iter()
+                .any(|v| v.rule == "security.outward_actions"
+                    && v.message.starts_with("release action")),
+            "{found:?}"
+        );
+    }
+
+    /// TSK-326 AC-5: operands in the command's own text, literal variables
+    /// and data pipelines that reach no git operand still pass.
+    #[test]
+    fn literal_operands_and_data_pipelines_stay_allowed() {
+        for command in [
+            "git push origin HEAD",
+            "V=feat/x; git push origin \"$V\"",
+            "PROG=git; $PROG push origin feat/x",
+            "cat refs | grep x | wc -l",
+            "V=$(cat refs); echo \"$V\"",
+            "V=$(cat refs); git log \"$V\"",
+            "V=$(cat refs); git branch -D \"$V\"",
+            "git commit -m \"$(cat msg)\"",
+            "git ls-files | xargs git add",
+            // A `$` in single quotes is text, not a variable.
+            "git submodule foreach 'echo $name'",
+            "git push origin 'HEAD:feat/a$b'",
+        ] {
+            let found = evaluate(command, &SecuritySection::default());
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
     #[test]
     fn fd_hands_its_roots_to_the_command_it_runs() {
         let read = |line: &str| {
@@ -4582,8 +4698,11 @@ mod tests {
                             "{}: {command}: {found:?}",
                             family.id
                         );
+                        // An `xargs` wrapper also supplies data to the
+                        // command, which refuses as unresolved (TSK-326).
                         assert!(
-                            found.iter().all(|v| v.remedy.contains("operator")),
+                            found.iter().all(|v| v.remedy.contains("operator")
+                                || v.message.contains("is filled in at run time")),
                             "{command}"
                         );
                         for level in [
@@ -4701,6 +4820,12 @@ mod tests {
                         findings.iter().any(|v| v.message.contains("env -i")),
                         "{findings:?}"
                     );
+                    continue;
+                }
+                // `xargs` appends its input to the push as a refspec, so the
+                // push is data-supplied and refuses as unresolved (TSK-326).
+                if command == "xargs -n 1 git push origin task/x" {
+                    assert!(data_refusal(&command).is_some(), "{command}");
                     continue;
                 }
                 assert!(

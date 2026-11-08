@@ -2362,6 +2362,59 @@ fn exec_guard_alone_refuses_environment_release_aliases() {
     }
 }
 
+/// TSK-326: each shell guard, run on its own, refuses git operands,
+/// programs and environment the line supplies as data, naming the rule and
+/// the sanctioned path, and lets a literal push through.
+#[test]
+fn each_guard_alone_refuses_git_operands_supplied_as_data() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/data");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    std::fs::write(dir.path().join("refs"), "main\n").unwrap();
+    std::fs::write(dir.path().join("cmdfile"), "git\n").unwrap();
+    std::fs::write(dir.path().join("envpush3"), "GIT_DIR=/tmp/x\n").unwrap();
+    std::fs::write(dir.path().join("envpush2"), "GIT_DIR=/tmp/x\n").unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "V=$(cat refs); git push origin \"$V\"",
+            "V=$(cat cmdfile); $V push origin HEAD:main",
+            "xargs git push origin < refs",
+            "V=$(cat envpush3); env \"$V\" git push origin",
+            "xargs -I{} env {} git push origin < envpush2",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            // Under active hook integrity git-guard's own `xargs` refusal
+            // names that form first; every other form is named as
+            // unresolved with the sanctioned path.
+            let xargs_integrity = hook == "git-guard"
+                && command.starts_with("xargs git")
+                && stderr.contains("xargs supplies operands to a guarded Git command");
+            assert!(
+                xargs_integrity
+                    || (stderr.contains("command unresolved:")
+                        && stderr.contains("filled in at run time")
+                        && stderr.contains("pass it as a literal")),
+                "{hook}: {command}: {stderr}"
+            );
+        }
+        let out = run_with_stdin(
+            codeflow().args(["hook", hook]).current_dir(dir.path()),
+            &guard_payload("git push origin HEAD", dir.path()),
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{hook}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 #[test]
 fn assignment_prefixes_do_not_hide_git_paths_containing_equals() {
     let dir = tempfile::tempdir().unwrap();
