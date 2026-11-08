@@ -1720,8 +1720,16 @@ checked, so a symlink does not remove the target owner's protection.
   input that `xargs`, `parallel` and `fd -x` or `-X` append or put in
   place of a replacement string, and that `find -exec` puts in place of
   `{}`. The git command a launcher runs (`watch`, `flock`, `script -c`) is
-  read the same way. Such a word in the program position (`$V push origin
-  HEAD:main`, `env "$V" git push`), in a `GIT_*` or other git
+  read the same way. When one of those suppliers runs a shell `-c` script
+  or `eval`, the script is read as a command line in which the replacement
+  strings and the positional parameters (`$1`, `"$@"`, `$0`) are the
+  supplied input; input spliced into the script text, and a script the
+  guard cannot read (a file, standard input, a variable), refuse as well,
+  so pass the input as `sh -c '... "$1"' _ {}` with a literal script. An
+  unquoted brace list or sequence (`{feat/x,main}`, `{1..3}`) in a judged
+  git word refuses too, since the shell makes it several words; a quoted
+  or escaped brace is text. Such a word in the program position (`$V push
+  origin HEAD:main`, `env "$V" git push`), in a `GIT_*` or other git
   configuration, location or program variable assigned for git, in a git
   subcommand or `-c` value, or in an operand of a subcommand a decision
   reads refuses before the push, alias, transport and release decisions
@@ -1733,8 +1741,10 @@ checked, so a symlink does not remove the target owner's protection.
   value in the command, or to compute it first and pass it as a literal. A
   variable the line assigned a literal before the word is filled in and
   judged as that literal, so a tag name held in a variable is judged as a
-  tag push and `main` held in one as a push to `main`. Commit messages
-  stay data, and a `$` in single quotes or escaped is text, in this check
+  tag push and `main` held in one as a push to `main`. Messages stay data
+  where `-m` takes one (`commit`, `tag`, `merge`, `notes add` and `append`,
+  and a `stash` that saves); on `git branch` the names after `-m` are
+  judged. A `$` in single quotes or escaped is text, in this check
   and in the check before a forced branch delete. A program position
   refuses under this rule only when the words after it show git (a git
   subcommand or global option first, or a word naming `git`); exec-guard's
