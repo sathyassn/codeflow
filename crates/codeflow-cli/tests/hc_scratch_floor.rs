@@ -18,8 +18,7 @@
 //!   the Claude Bash sandbox's write list. The table records whether the
 //!   file was written. The row counts as AC-6 evidence only when the
 //!   operator runs this test from a plain terminal: run inside the Claude
-//!   sandbox, the sandbox itself can block the write, and the table would
-//!   still call the path outside the sandbox.
+//!   sandbox, the sandbox itself can block the write.
 //! - AC-7: in a repository whose `main` is protected by the codeflow git
 //!   hooks, a force push to the bare remote runs through `hc run`, once
 //!   plainly and once with `--no-verify`. The table records the remote refs
