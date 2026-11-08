@@ -1,0 +1,11 @@
+id = "ADR-0099"
+uid = "ef785c47-cfaf-4545-bc68-54bc344df23c"
+kind = "ADR"
+title = "Git hooks are wired by one absolute path"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-08T17:18:51Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
