@@ -34,7 +34,12 @@ hooks folder of the repository's main working tree, spelled as git spells
 working trees (forward slashes on Windows). Linked worktrees share it through
 the common configuration. A bare repository with only linked worktrees takes
 the working tree the writing command ran in, and so does a repository whose
-main working tree does not hold the managed hooks. `codeflow update`
+main working tree does not hold the managed hooks. That working tree must be
+one `git worktree list` names for the repository, or nothing is written: a
+directory git treats as the working tree without listing it is not tied to
+the repository. After the write, the value git reads is read back, and a
+value that a configuration outranking the repository's own still supplies is
+refused rather than reported as written. `codeflow update`
 rewrites the relative form, and a path that no current working tree of the
 repository holds (a moved or renamed repository, a removed worktree), and
 wires an unset path where the project records its hooks as wired; a path to
@@ -51,7 +56,12 @@ ADR-0055 item 5's hooks sentences; the rest of that item stands.
   and testing a shim change needs a scratch project.
 - The path is machine-specific. Moving or renaming the repository, or
   removing the working tree it names, leaves it stale until `codeflow
-  update` runs; doctor reports it.
+  update` runs; doctor reports it. Until then git runs the hooks in a folder
+  still at the old path, and no CodeFlow hooks when that folder is gone.
+- A repository whose git directory is kept apart from its working tree (a
+  separate git directory, a submodule) has no listed working tree to tie the
+  path to, so init and update refuse and name the step; the path is then set
+  by hand.
 - Per-worktree configuration (`extensions.worktreeConfig`) was not used: it
   turns on a repository extension, and a worktree made by plain `git
   worktree add` would fall back to the shared value anyway.

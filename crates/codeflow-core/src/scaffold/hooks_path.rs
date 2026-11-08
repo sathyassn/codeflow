@@ -3,11 +3,15 @@
 //! Git reads a relative `core.hooksPath` against the directory a command
 //! runs in, so `CodeFlow` writes one absolute path: the managed hooks folder
 //! of the repository's main working tree, which linked worktrees share
-//! through the common configuration. A repository with no main working tree
-//! (a bare repository with only linked worktrees) takes the working tree
-//! the writing command ran in. `codeflow update` rewrites the relative form
-//! earlier releases wrote, and a path a move or a removed worktree left
-//! behind; `codeflow doctor` reports both.
+//! through the common configuration. When the main working tree holds no
+//! managed hooks, or there is none (a bare repository with only linked
+//! worktrees), it takes the working tree the writing command ran in. Either
+//! way the command's working tree must be one git lists for the repository,
+//! or nothing is written. After a write the value git reads is read back,
+//! and a value a higher-precedence configuration still supplies is refused.
+//! `codeflow update` rewrites the relative form earlier releases wrote, and
+//! a path a move or a removed worktree left behind; `codeflow doctor`
+//! reports both.
 
 use std::path::Path;
 
@@ -105,18 +109,51 @@ fn holds_hooks(dir: &Path) -> bool {
 /// path is spelled as git spells working trees, so a Windows path keeps
 /// git's forward slashes.
 ///
+/// `root`'s working tree must be one `git worktree list` names for the
+/// repository. A directory git treats as the working tree without listing
+/// it (a `.git` link that names another repository's git directory, or a
+/// work tree set by configuration or the environment) is refused, so the
+/// value never names a folder the repository does not own.
+///
 /// # Errors
-/// Git cannot list the working trees or name `root`'s top level, or the
-/// working tree's path is not UTF-8 text.
+/// Git cannot list the working trees or name `root`'s top level, `root`'s
+/// working tree is not one git lists, or the working tree's path is not
+/// UTF-8 text.
 pub fn target(root: &Path) -> Result<String, ScaffoldError> {
+    let top = gitutil::top_level(root)?;
+    let Some(current) = gitutil::working_trees(root)?
+        .into_iter()
+        .find(|tree| same_dir(tree, &top))
+    else {
+        return Err(ScaffoldError::Git(Shown::fixed(
+            "core.hooksPath not written: this working tree is not one git lists for the repository (`git worktree list`), so the managed hooks folder cannot be tied to the repository; run the command from a listed working tree",
+        )));
+    };
     if let Some(main) = gitutil::main_working_tree(root)? {
-        let managed = main.join(CODEFLOW_HOOKS_PATH);
-        if holds_hooks(&managed) {
+        if holds_hooks(&main.join(CODEFLOW_HOOKS_PATH)) {
             return spelled(&main);
         }
     }
-    let top = gitutil::top_level(root)?;
-    spelled(&top)
+    spelled(&current)
+}
+
+/// Write the managed form for `root` and return it. The value git then
+/// reads is checked: a value an included file or a per-worktree
+/// configuration supplies outranks the repository's own, and the write is
+/// refused as not taking effect.
+///
+/// # Errors
+/// [`target`] refuses, git cannot write or read the configuration, or git
+/// still reads another value after the write.
+pub fn wire(root: &Path) -> Result<String, ScaffoldError> {
+    let value = target(root)?;
+    gitutil::config_set(root, "core.hooksPath", &value)?;
+    if super::detect::configured_hooks_path(root)?.as_deref() != Some(value.as_str()) {
+        return Err(ScaffoldError::Git(Shown::fixed(
+            "core.hooksPath was written to the repository configuration, but git still reads another value from a configuration that outranks it (an included file or a per-worktree configuration); `git config --show-origin --get core.hooksPath` names the file that sets it",
+        )));
+    }
+    Ok(value)
 }
 
 /// `<top>/.codeflow/git-hooks` with `/` between the parts git gave and the
@@ -138,10 +175,10 @@ fn spelled(top: &Path) -> Result<String, ScaffoldError> {
 /// Write the managed form when `core.hooksPath` holds a `CodeFlow` form that
 /// is not it (relative or stale), or is unset and `wire_unset` holds. A
 /// foreign path is left as it is. Returns the previous and the new value
-/// when it wrote.
+/// only when the value git reads changed.
 ///
 /// # Errors
-/// Git cannot read or write the configuration.
+/// [`wire`] refuses, or git cannot read or write the configuration.
 pub fn migrate(
     root: &Path,
     wire_unset: bool,
@@ -157,8 +194,10 @@ pub fn migrate(
         HooksPathForm::Relative => Some(CODEFLOW_HOOKS_PATH.to_string()),
         HooksPathForm::Stale(value) => Some(value),
     };
-    let value = target(root)?;
-    gitutil::config_set(root, "core.hooksPath", &value)?;
+    if previous.is_some() && previous == Some(target(root)?) {
+        return Ok(None);
+    }
+    let value = wire(root)?;
     Ok(Some((previous, value)))
 }
 
@@ -289,6 +328,117 @@ mod tests {
             super::super::detect::configured_hooks_path(root).unwrap(),
             Some(".husky".into())
         );
+    }
+
+    fn bare_project(dir: &Path) {
+        git(dir, &["init", "-q", "-b", "main"]);
+        git(dir, &["commit", "-q", "--allow-empty", "-m", "chore: init"]);
+    }
+
+    #[test]
+    fn a_working_tree_git_does_not_list_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        bare_project(&repo);
+        // A folder whose `.git` link names the repository's git directory.
+        let other = tmp.path().join("other");
+        let hooks = other.join(CODEFLOW_HOOKS_PATH);
+        std::fs::create_dir_all(&hooks).unwrap();
+        std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\n").unwrap();
+        let link = format!("gitdir: {}\n", repo.join(".git").display());
+        std::fs::write(other.join(".git"), link).unwrap();
+        assert!(target(&other).is_err());
+        assert!(migrate(&other, true).is_err());
+        assert_eq!(
+            super::super::detect::configured_hooks_path(&repo).unwrap(),
+            None
+        );
+        // The repository's own working tree still takes its own folder.
+        assert_eq!(target(&repo).unwrap(), spelled(&top(&repo)).unwrap());
+    }
+
+    #[test]
+    fn a_work_tree_set_by_configuration_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        bare_project(&repo);
+        let other = tmp.path().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        git(&repo, &["config", "core.worktree", other.to_str().unwrap()]);
+        // Git now treats `other` as the working tree, which it does not list.
+        assert!(target(&repo).is_err());
+        assert_eq!(migrate(&repo, true).ok().flatten(), None);
+        assert_eq!(
+            super::super::detect::configured_hooks_path(&repo.join(".git")).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_git_directory_kept_apart_from_its_working_tree_is_refused() {
+        // Git lists such a repository's git directory as its main working
+        // tree, so the working tree cannot be tied to it and nothing is
+        // written.
+        let tmp = tempfile::tempdir().unwrap();
+        let tree = tmp.path().join("tree");
+        let store = tmp.path().join("store.git");
+        git(
+            tmp.path(),
+            &[
+                "init",
+                "-q",
+                "-b",
+                "main",
+                "--separate-git-dir",
+                store.to_str().unwrap(),
+                tree.to_str().unwrap(),
+            ],
+        );
+        git(
+            &tree,
+            &["commit", "-q", "--allow-empty", "-m", "chore: init"],
+        );
+        assert!(target(&tree).is_err());
+        assert!(migrate(&tree, true).is_err());
+        assert_eq!(
+            super::super::detect::configured_hooks_path(&tree).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_value_an_include_still_supplies_is_refused_not_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        project(tmp.path());
+        let root = tmp.path();
+        gitutil::config_set(root, "core.hooksPath", CODEFLOW_HOOKS_PATH).unwrap();
+        let include = tmp.path().join("extra.config");
+        std::fs::write(
+            &include,
+            format!("[core]\n\thooksPath = {CODEFLOW_HOOKS_PATH}\n"),
+        )
+        .unwrap();
+        git(root, &["config", "include.path", include.to_str().unwrap()]);
+        assert!(migrate(root, false).is_err());
+        assert_eq!(
+            super::super::detect::configured_hooks_path(root).unwrap(),
+            Some(CODEFLOW_HOOKS_PATH.into())
+        );
+    }
+
+    #[test]
+    fn an_unchanged_value_is_not_reported_as_a_move() {
+        let tmp = tempfile::tempdir().unwrap();
+        bare_project(tmp.path());
+        let root = tmp.path();
+        // The folder is missing, so the value reads as stale, and the value
+        // `CodeFlow` would write is the same one.
+        let value = target(root).unwrap();
+        gitutil::config_set(root, "core.hooksPath", &value).unwrap();
+        assert_eq!(form(root).unwrap(), HooksPathForm::Stale(value.clone()));
+        assert_eq!(migrate(root, false).unwrap(), None);
     }
 
     #[test]

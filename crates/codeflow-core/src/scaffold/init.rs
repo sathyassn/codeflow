@@ -330,9 +330,8 @@ fn init_writes(
     match hook_manager {
         None => {
             // One absolute path, so git finds the hooks however a command
-            // names the repository (ADR-0099).
-            let hooks = super::hooks_path::target(root)?;
-            gitutil::config_set(root, "core.hooksPath", &hooks)?;
+            // names the repository (ADR-0099), checked as the value git reads.
+            let hooks = super::hooks_path::wire(root)?;
             report.notes.push(shown!(
                 "git hooks wired: core.hooksPath = {}",
                 Shown::path(&hooks)
