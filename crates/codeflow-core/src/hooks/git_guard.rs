@@ -9643,7 +9643,6 @@ fn check_authority(
     }
 }
 
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // Ordered checks share the parsed command and its exact cwd.
 /// The words the segment loop marked for this op ([`Moves::marked`]) that
 /// stand for `words`, its last words, when they are the same words.
 fn marked_tail<'m>(moved: &'m Moves<'_>, words: &[String]) -> Option<&'m [String]> {
@@ -9655,6 +9654,7 @@ fn marked_tail<'m>(moved: &'m Moves<'_>, words: &[String]) -> Option<&'m [String
         .then_some(tail)
 }
 
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // Ordered checks share the parsed command and its exact cwd.
 fn check_git(
     args: &[String],
     branches: &mut BranchTracker,
@@ -21832,9 +21832,10 @@ fn discard_intent(
     }
     let no_vars = HashMap::new();
     let vars = moved.vars.unwrap_or(&no_vars);
-    // A word the shell passes as text (a quoted or escaped `$`) is read as
-    // written, never expanded (TSK-326).
-    let marked = marked_tail(moved, rest);
+    // A branch name the shell passes as text (a quoted or escaped `$`) is
+    // read as written, never expanded (TSK-326). Other operands, such as a
+    // worktree path, keep refusing a `$` they cannot resolve.
+    let marked = marked_tail(moved, rest).filter(|_| sub == "branch");
     let text_at = |at: usize| marked.is_some_and(|marked| !expands(&marked[at]));
     // The words that hold a `$` only as text, unless the same word is also
     // written where the shell expands it.
