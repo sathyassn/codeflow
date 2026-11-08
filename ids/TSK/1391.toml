@@ -1,0 +1,11 @@
+id = "TSK-1391"
+uid = "c004d5df-2775-4735-982a-37c09e1c0fd0"
+kind = "TSK"
+title = "The docs-portal gate intermittently reads an empty Pagefind index entry under load"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-08T09:22:56Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
