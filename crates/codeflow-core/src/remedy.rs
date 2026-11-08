@@ -671,7 +671,7 @@ catalog! {
     // Doctor.
 
     /// Git hooks that do not run the codeflow shims, or a `core.hooksPath`
-    /// CodeFlow wrote in its earlier relative form or that a move left
+    /// `CodeFlow` wrote in its earlier relative form or that a move left
     /// stale (ADR-0099).
     DOCTOR_HOOKS_PATH = Step::Codeflow("codeflow update"),
         "run `codeflow update` in the project: it sets core.hooksPath to the absolute path of the managed hooks folder, which every worktree of the repository shares";

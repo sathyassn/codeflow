@@ -1,7 +1,7 @@
-//! Where `core.hooksPath` points, and the form CodeFlow writes (ADR-0099).
+//! Where `core.hooksPath` points, and the form `CodeFlow` writes (ADR-0099).
 //!
 //! Git reads a relative `core.hooksPath` against the directory a command
-//! runs in, so CodeFlow writes one absolute path: the managed hooks folder
+//! runs in, so `CodeFlow` writes one absolute path: the managed hooks folder
 //! of the repository's main working tree, which linked worktrees share
 //! through the common configuration. A repository with no main working tree
 //! (a bare repository with only linked worktrees) takes the working tree
@@ -14,13 +14,13 @@ use std::path::Path;
 use super::detect::CODEFLOW_HOOKS_PATH;
 use super::{gitutil, ScaffoldError};
 
-/// What `core.hooksPath` holds, as CodeFlow reads it.
+/// What `core.hooksPath` holds, as `CodeFlow` reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HooksPathForm {
     /// Not set: git uses the common directory's `hooks/`.
     Unset,
     /// The absolute path of a working tree's managed hooks folder that
-    /// holds the hooks: the form CodeFlow writes.
+    /// holds the hooks: the form `CodeFlow` writes.
     Managed,
     /// The project-relative form earlier releases wrote.
     Relative,
@@ -28,12 +28,12 @@ pub enum HooksPathForm {
     /// current working tree's managed hooks, or that holds no hooks (a moved
     /// or renamed repository, or a removed worktree).
     Stale(String),
-    /// A path CodeFlow did not write (another hook manager's folder).
+    /// A path `CodeFlow` did not write (another hook manager's folder).
     Foreign(String),
 }
 
 impl HooksPathForm {
-    /// Whether CodeFlow wrote this value, in any of its forms.
+    /// Whether `CodeFlow` wrote this value, in any of its forms.
     #[must_use]
     pub fn is_codeflow(&self) -> bool {
         matches!(self, Self::Managed | Self::Relative | Self::Stale(_))
@@ -78,7 +78,7 @@ fn names_managed_folder(value: &str) -> bool {
     if !path.is_absolute() {
         return false;
     }
-    let mut parts = path.components().rev().map(|part| part.as_os_str());
+    let mut parts = path.components().rev().map(std::path::Component::as_os_str);
     parts.next().is_some_and(|last| last == "git-hooks")
         && parts.next().is_some_and(|parent| parent == ".codeflow")
 }
@@ -96,7 +96,7 @@ fn holds_hooks(dir: &Path) -> bool {
     std::fs::symlink_metadata(dir.join("pre-commit")).is_ok_and(|meta| meta.is_file())
 }
 
-/// The value CodeFlow writes for `root`: the main working tree's managed
+/// The value `CodeFlow` writes for `root`: the main working tree's managed
 /// hooks when that tree holds them, else `root`'s own working tree's. The
 /// path is spelled as git spells working trees, so a Windows path keeps
 /// git's forward slashes.
@@ -122,7 +122,7 @@ fn spelled(top: &Path) -> String {
     format!("{top}/{CODEFLOW_HOOKS_PATH}")
 }
 
-/// Write the managed form when `core.hooksPath` holds a CodeFlow form that
+/// Write the managed form when `core.hooksPath` holds a `CodeFlow` form that
 /// is not it (relative or stale), or is unset and `wire_unset` holds. A
 /// foreign path is left as it is. Returns the previous and the new value
 /// when it wrote.

@@ -1,4 +1,4 @@
-//! TSK-1395 (ADR-0099): CodeFlow's git hooks run however a git invocation
+//! TSK-1395 (ADR-0099): `CodeFlow`'s git hooks run however a git invocation
 //! names its repository and working directory. `codeflow init` writes one
 //! absolute `core.hooksPath` to the main working tree's managed hooks,
 //! `codeflow update` migrates the earlier relative form and a stale path,
@@ -8,6 +8,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+
+/// One invocation class: its label, the directory git runs in, the git
+/// arguments, and the environment it sets.
+type Case<'a> = (&'a str, PathBuf, Vec<String>, Vec<(&'a str, &'a Path)>);
 
 #[path = "support/process_folders.rs"]
 mod process_folders;
@@ -167,7 +171,7 @@ fn assert_every_class_refuses_the_ref_update(fx: &Fixture) {
             .map(|s| (*s).to_string())
             .collect()
     };
-    let cases: Vec<(&str, PathBuf, Vec<String>, Vec<(&str, &Path)>)> = vec![
+    let cases: Vec<Case> = vec![
         ("project root", root.clone(), with(&[]), vec![]),
         ("subfolder", root.join("sub"), with(&[]), vec![]),
         ("git directory", git_dir.clone(), with(&[]), vec![]),
