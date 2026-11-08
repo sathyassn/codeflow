@@ -1,0 +1,11 @@
+id = "TSK-1392"
+uid = "11902006-52c7-4236-b98a-76ac5cb4caaf"
+kind = "TSK"
+title = "Shell word reader keeps a dollar inside ANSI-C quoting as text"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-08T13:37:06Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
