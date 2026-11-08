@@ -2224,6 +2224,30 @@ fn edit_guard_refuses_a_case_different_remote_tracking_path() {
     );
 }
 
+/// This account's home from the password database, whatever `HOME` says.
+#[cfg(unix)]
+fn password_database_home() -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStrExt as _;
+    let mut buffer = vec![0_u8; 1 << 16];
+    // SAFETY: an all-zero `passwd` is a valid plain C struct; `getpwuid_r`
+    // fills it, and `buffer` outlives every use of its strings.
+    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    let code = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            &raw mut entry,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &raw mut result,
+        )
+    };
+    assert!(code == 0 && !result.is_null() && !entry.pw_dir.is_null());
+    // SAFETY: `pw_dir` is a NUL-terminated string inside `buffer`.
+    let dir = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) };
+    std::path::PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes()))
+}
+
 /// TSK-1184 delta 4: the SSH configuration allow lives in
 /// `~/.codeflow/authority/config.toml`: the edit guard refuses a Write or
 /// Edit of it, and every shipped preset denies the directory to the harness
@@ -2233,6 +2257,12 @@ fn edit_guard_refuses_a_case_different_remote_tracking_path() {
 /// guards). The user config the allow used to live in,
 /// `~/.codeflow/config.toml`, is a file the edit guard lets an agent write,
 /// so it could not hold the allow.
+///
+/// Delta 5: while the directory does not exist, a Write under another case
+/// of it (`Authority`) is refused, since a volume that folds case opens it
+/// for the allow; and with `HOME` elsewhere, a Write of the allow under the
+/// account's home from the password database, where the reader opens it, is
+/// refused. The guard only judges these paths; nothing is written.
 #[test]
 fn agents_cannot_write_the_ssh_configuration_allow() {
     let tmp = tempfile::tempdir().unwrap();
@@ -2241,10 +2271,17 @@ fn agents_cannot_write_the_ssh_configuration_allow() {
     let home = tmp.path().join("home");
     std::fs::create_dir_all(home.join(".codeflow")).unwrap();
     let mut wrong = Vec::new();
-    for (file, code) in [
+    let mut cases = vec![
         (home.join(".codeflow/authority/config.toml"), 2),
+        (home.join(".codeflow/Authority/config.toml"), 2),
         (home.join(".codeflow/config.toml"), 0),
-    ] {
+    ];
+    #[cfg(unix)]
+    cases.push((
+        password_database_home().join(".codeflow/authority/config.toml"),
+        2,
+    ));
+    for (file, code) in cases {
         for tool in ["Write", "Edit"] {
             let payload = serde_json::json!({"tool_name": tool, "tool_input":{
                 "file_path": file, "content": "[policy_authority]\n",

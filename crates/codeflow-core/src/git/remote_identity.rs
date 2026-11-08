@@ -581,12 +581,63 @@ fn accepts_ssh_configuration(account: &Path) -> Result<bool, String> {
     if meta.len() > SSH_CONFIG_BYTES {
         return Err(refuse("is over 1 MiB".into()));
     }
+    if let Some(entry) = misspelled_allow_entry(account)? {
+        return Err(refuse(format!(
+            "is reached through {}, spelled differently from {SSH_ALLOW_FILE}",
+            entry.display()
+        )));
+    }
     let mut text = String::new();
-    file.read_to_string(&mut text)
+    (&mut file)
+        .take(SSH_CONFIG_BYTES + 1)
+        .read_to_string(&mut text)
         .map_err(|e| refuse(format!("cannot be read ({e})")))?;
+    if text.len() as u64 > SSH_CONFIG_BYTES {
+        return Err(refuse("is over 1 MiB".into()));
+    }
     toml::from_str::<SshAllowFile>(&text)
         .map(|allow| allow.policy_authority.accept_ssh_configuration)
         .map_err(|e| refuse(format!("cannot be parsed ({e})")))
+}
+
+/// The first entry on the way to the allow file whose stored name differs
+/// from [`SSH_ALLOW_FILE`] only by case. On a volume that folds case, the
+/// open above reaches `.codeflow/Authority/config.toml` too, a spelling a
+/// guard matching the exact path may not have refused, so it does not count
+/// as the allow.
+fn misspelled_allow_entry(account: &Path) -> Result<Option<std::path::PathBuf>, String> {
+    let mut dir = account.to_path_buf();
+    for name in SSH_ALLOW_FILE.split('/') {
+        let entries = std::fs::read_dir(&dir).map_err(|e| {
+            format!(
+                "the directory {} cannot be listed ({e}), so the SSH configuration allow's spelling is unknown",
+                dir.display()
+            )
+        })?;
+        let mut exact = false;
+        for entry in entries {
+            let entry = entry.map_err(|e| {
+                format!(
+                    "the directory {} cannot be listed ({e}), so the SSH configuration allow's spelling is unknown",
+                    dir.display()
+                )
+            })?;
+            let found = entry.file_name();
+            if found == name {
+                exact = true;
+            } else if found
+                .to_str()
+                .is_some_and(|found| found.eq_ignore_ascii_case(name))
+            {
+                return Ok(Some(dir.join(found)));
+            }
+        }
+        if !exact {
+            return Ok(Some(dir.join(name)));
+        }
+        dir.push(name);
+    }
+    Ok(None)
 }
 
 /// The `ssh` a shell finds first on `PATH`, as git's `ssh` resolves. An
@@ -667,9 +718,10 @@ fn system_config_names(bytes: &[u8]) -> Vec<std::path::PathBuf> {
 }
 
 /// The account's home directory, where OpenSSH looks for `~/.ssh/config`
-/// whatever `HOME` says.
+/// whatever `HOME` says. A relative entry would name a directory that
+/// depends on where the command runs, so it refuses.
 #[cfg(unix)]
-fn account_home() -> Result<std::path::PathBuf, String> {
+pub(crate) fn account_home() -> Result<std::path::PathBuf, String> {
     use std::os::unix::ffi::OsStrExt as _;
     let mut buffer = vec![0_u8; 1 << 16];
     // SAFETY: an all-zero `passwd` is a valid value of a plain C struct;
@@ -692,13 +744,18 @@ fn account_home() -> Result<std::path::PathBuf, String> {
     }
     // SAFETY: `pw_dir` is a NUL-terminated string inside `buffer`.
     let dir = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) };
-    Ok(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(
-        dir.to_bytes(),
-    )))
+    let dir = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes()));
+    if !dir.is_absolute() {
+        return Err(format!(
+            "the account's home directory is {}, which is not an absolute path, so its SSH configuration cannot be checked",
+            dir.display()
+        ));
+    }
+    Ok(dir)
 }
 
 #[cfg(not(unix))]
-fn account_home() -> Result<std::path::PathBuf, String> {
+pub(crate) fn account_home() -> Result<std::path::PathBuf, String> {
     Err(
         "the SSH configuration files cannot be located on this platform, so the check refuses an SSH remote"
             .into(),
@@ -1851,6 +1908,32 @@ mod tests {
             std::fs::create_dir(&file).unwrap();
             let error = accepts_ssh_configuration(account).unwrap_err();
             assert!(error.contains("not a regular file"), "{error}");
+        }
+    }
+
+    /// An allow under a different case of the authority directory never
+    /// counts: on a volume that folds case the open reaches it and the
+    /// spelling check refuses; elsewhere it is not found and the allow is off.
+    #[test]
+    fn an_allow_spelled_in_another_case_never_counts() {
+        let allow = "[policy_authority]\naccept_ssh_configuration = true\n";
+        for spelling in [".codeflow/Authority", ".Codeflow/authority"] {
+            let account = tempfile::tempdir().unwrap();
+            let dir = account.path().join(spelling);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("config.toml"), allow).unwrap();
+            match accepts_ssh_configuration(account.path()) {
+                Ok(accepted) => assert!(!accepted, "{spelling}"),
+                Err(error) => assert!(error.contains("spelled differently"), "{error}"),
+            }
+        }
+        let account = tempfile::tempdir().unwrap();
+        let dir = account.path().join(".codeflow/authority");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Config.toml"), allow).unwrap();
+        match accepts_ssh_configuration(account.path()) {
+            Ok(accepted) => assert!(!accepted),
+            Err(error) => assert!(error.contains("spelled differently"), "{error}"),
         }
     }
 

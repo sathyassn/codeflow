@@ -259,6 +259,11 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
     } else {
         Vec::new()
     };
+    let authority_dirs = if ctx.level.is_active() {
+        authority_directories(ctx.home)
+    } else {
+        Vec::new()
+    };
     let mut seen = BTreeSet::new();
     let mut violations = Vec::new();
     let startup = crate::security::startup::StartupEnv::with_home_at(ctx.home, cwd);
@@ -281,8 +286,8 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
             let enforcement = ctx.level.is_active()
                 && !authority
                 && repository_enforcement_target(candidate, ctx.root, false).map_err(EditError)?;
-            let mut covered = false;
-            if ctx.level.is_active() && !authority {
+            let mut covered = in_authority_directory(candidate, &authority_dirs);
+            if ctx.level.is_active() && !authority && !covered {
                 for pattern in &protected {
                     if covers(&text, pattern)? {
                         covered = true;
@@ -310,6 +315,39 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
         }
     }
     Ok(violations)
+}
+
+/// The operator-authority directory, `.codeflow/authority`, under the
+/// guard's home and under the account's home from the password database,
+/// each as given and resolved, with ASCII case folded. The SSH
+/// configuration allow (TSK-1184) is read under the account's home, which
+/// can differ from `HOME`, and a volume that folds case opens
+/// `.codeflow/Authority` for `.codeflow/authority`, so the exact-spelling
+/// pattern under `HOME` alone does not cover it.
+fn authority_directories(home: &Path) -> Vec<PathBuf> {
+    let mut homes = vec![home.to_path_buf()];
+    homes.extend(crate::git::remote_identity::account_home().ok());
+    let resolved: Vec<PathBuf> = homes
+        .iter()
+        .filter_map(|home| std::fs::canonicalize(home).ok())
+        .collect();
+    homes.extend(resolved);
+    homes
+        .iter()
+        .map(|home| folded_path(&home.join(".codeflow/authority")))
+        .collect()
+}
+
+/// `path` with ASCII letters lowercased, compared by component.
+fn folded_path(path: &Path) -> PathBuf {
+    PathBuf::from(path.to_string_lossy().to_ascii_lowercase())
+}
+
+/// Whether `candidate` is one of `dirs` or inside one, ignoring ASCII case,
+/// whether or not the directory exists yet.
+fn in_authority_directory(candidate: &Path, dirs: &[PathBuf]) -> bool {
+    let candidate = folded_path(candidate);
+    dirs.iter().any(|dir| candidate.starts_with(dir))
 }
 
 fn enforcement_patterns(ctx: &EditContext<'_>) -> Result<Vec<String>, EditError> {
@@ -1766,6 +1804,49 @@ mod tests {
             );
         }
         assert!(enforcement_path("~/.codex/config.toml", &f.root, &f.root, Some(&f.home)).unwrap());
+    }
+
+    /// TSK-1184 delta 5: the operator-authority directory, where the SSH
+    /// configuration allow lives, is covered in any ASCII case while it does
+    /// not exist yet, and under the account's home from the password
+    /// database as well as the guard's home.
+    #[test]
+    fn the_authority_directory_is_covered_in_any_case_and_under_the_account_home() {
+        let f = Fixture::new();
+        for path in [
+            "~/.codeflow/authority/config.toml",
+            "~/.codeflow/Authority/config.toml",
+            "~/.CODEFLOW/AUTHORITY",
+            "~/.codeflow/authority/new/file",
+        ] {
+            assert!(
+                enforcement_path(path, &f.root, &f.root, Some(&f.home)).unwrap(),
+                "{path}"
+            );
+        }
+        for path in ["~/.codeflow/config.toml", "~/.codeflow/authority-notes"] {
+            assert!(
+                !enforcement_path(path, &f.root, &f.root, Some(&f.home)).unwrap(),
+                "{path}"
+            );
+        }
+        #[cfg(unix)]
+        {
+            let account = crate::git::remote_identity::account_home().unwrap();
+            assert_ne!(account, f.home);
+            for name in [
+                ".codeflow/authority/config.toml",
+                ".codeflow/Authority/config.toml",
+            ] {
+                let path = account.join(name);
+                assert!(
+                    enforcement_path(path.to_str().unwrap(), &f.root, &f.root, Some(&f.home))
+                        .unwrap(),
+                    "{}",
+                    path.display()
+                );
+            }
+        }
     }
 
     #[cfg(unix)]
