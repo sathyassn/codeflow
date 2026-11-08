@@ -364,11 +364,15 @@ pub fn run(args: &CiArgs) -> i32 {
 
 /// What `codeflow ci` says about the installed Git, when it cannot judge a
 /// merge. The judgment itself still refuses; this only says so sooner.
-fn git_floor_notice(version: Result<String, String>) -> Option<String> {
-    match version {
-        Ok(version) => history::merge_git_refusal(&version),
-        Err(reason) => Some(reason),
-    }
+fn git_floor_notice(version: Result<String, String>) -> Option<codeflow_core::remedy::Finding> {
+    let text = match version {
+        Ok(version) => history::merge_git_refusal(&version)?,
+        Err(reason) => reason,
+    };
+    Some(codeflow_core::remedy::Finding::new(
+        text,
+        codeflow_core::remedy::GIT_MERGE_FLOOR.remedy(),
+    ))
 }
 
 #[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
@@ -397,7 +401,7 @@ fn run_checks(args: &CiArgs) -> i32 {
     // Early notice of the Git floor: the refusal itself only comes when a
     // merge on the range is judged, which can be at landing (TSK-1185 AC-9).
     if let Some(notice) = git_floor_notice(history::installed_git_version()) {
-        eprintln!("codeflow ci: warning: {notice}");
+        eprintln!("{}", notice.line("codeflow ci", "warning"));
     }
     // An invalid policy cannot verify the consumer's intent — fail loudly,
     // naming each offending key, rather than silently verify against the
@@ -3561,10 +3565,27 @@ mod tests {
     #[test]
     fn tsk1185_ci_warns_early_of_a_git_too_old_to_judge_a_merge() {
         let notice = super::git_floor_notice(Ok("git version 2.34.1".into())).unwrap();
-        assert!(notice.contains("Git 2.34.1 is too old"), "{notice}");
-        assert!(notice.contains("not a bad merge"), "{notice}");
+        assert!(notice.text.contains("Git 2.34.1 is too old"), "{notice}");
+        assert!(notice.text.contains("not a bad merge"), "{notice}");
+        // The remedy names the same floor the refusal enforces.
+        let (major, minor) = codeflow_core::workgraph::history::MERGE_GIT_FLOOR;
+        assert!(
+            notice
+                .remedy
+                .contains(&format!("Git release build of {major}.{minor} or later")),
+            "{notice}"
+        );
+        let line = notice.line("codeflow ci", "warning");
+        assert!(
+            line.starts_with("codeflow ci: warning: Git 2.34.1"),
+            "{line}"
+        );
+        assert!(
+            line.contains("\n  clear it: install a Git release build"),
+            "{line}"
+        );
         assert_eq!(
-            super::git_floor_notice(Err("no git".into())).unwrap(),
+            super::git_floor_notice(Err("no git".into())).unwrap().text,
             "no git"
         );
         assert_eq!(
