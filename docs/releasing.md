@@ -256,7 +256,7 @@ resolve to that same repository:
 | Deployment approval | `pending_deployments` and `deployment_protection_rule` writes |
 | Starting a run another way | Deployment and deployment status writes, `createDeployment`; `gh workflow enable` or the enable API for a release workflow |
 | Changing what a release run reads | A variable a release workflow reads (`vars.NAME`, or any name when it indexes or serializes `vars`), set or deleted through `gh variable` or the API; secrets the same way, which the account rule also refuses |
-| Release or tag creation | `gh release create`, `edit`, `upload` and `delete`; API writes under `releases`, `git/tags` and `git/refs/tags`; a `git/refs` POST whose ref is not a branch; the matching GraphQL mutations sent by any client to a GraphQL path of an API host, and a GraphQL body the guard cannot read |
+| Release or tag creation | `gh release create`, `edit`, `upload` and `delete`; API writes under `releases`, `git/tags` and `git/refs/tags`; a `git/refs` POST whose ref is not a branch; the matching GraphQL mutations sent by any client to a GraphQL path of an API host, and a GraphQL write whose body holds no query the guard can read |
 | Release tag push | `refs/tags/` refspecs, `--tags`, `--follow-tags`, and a bare `v*` or digit-led name with or without a local tag |
 | Removing a floor | Writes to Actions policies, environments, rulesets and branch protection, for a repository or an organization where one exists |
 
@@ -271,19 +271,67 @@ environment, calls a reusable workflow, or reads a secret other than
 workflow. The guard also refuses what it cannot map: a numeric workflow id,
 a name that matches no workflow file, a repository other than the
 authority's, repositories in `-R`, `GH_REPO` and the path that disagree,
-an unresolved variable in the path, and a `--ref` whose copy of the
-workflow file is not in a fetched tracking ref or is a release workflow
-there. A write is refused when the guard cannot read where it goes: a
-host held in a variable, userinfo with a second `@`, a port that is not a
-number, a `.` or `..` path segment, braces or brackets `curl` would
-expand, a Host header, a `curl --connect-to`, `--resolve` or
-`--request-target`, or options or URLs read from a file.
+a repository named by number (`repositories/{id}`), an unresolved variable
+in the path, and a `--ref` whose copy of the workflow file is not in a
+fetched tracking ref or is a release workflow there.
+
+An HTTP client write to a host other than GitHub's, such as
+`curl -X POST https://localhost:8080/x -d a`, is allowed. The guard
+refuses a client call only when it may reach a GitHub API host:
+
+- a write to a destination that parses as a GitHub API host and is a
+  route above;
+- a write the guard cannot rule out as GitHub: an option it does not know,
+  a destination that does not parse, a redirect, a proxy, a remapped host
+  or a Host header, or options or URLs read from a file;
+- any call, reads included, when a config file the client reads may add a
+  URL, a method or a body.
+
+The clients are read this way:
+
+- **`curl`:** a write option is `-X` other than GET or HEAD, `-d` and every
+  `--data` form, `--json`, `-F`, `--form-string`, `-T` or `-K`. Each
+  `--next` request is judged with its own method, and `--expand-url` is
+  read as a URL. Without `-q` or `--disable` as the first argument, curl
+  reads `$CURL_HOME/.curlrc`, `$XDG_CONFIG_HOME/curlrc`, `$HOME/.curlrc`
+  and the account home's `.curlrc`. When any of them exists, every curl
+  call without `-q` first is refused, and the message names the file. On
+  Windows curl also reads a file beside `curl.exe`, so every curl call
+  there needs `-q` first.
+- **`wget`:** wget reads a system `wgetrc` at a path built into it, which
+  the guard cannot check, so every wget call needs `--no-config`. A write
+  also needs `--max-redirect=0` and known options only. `-e`, `--config`
+  and `-i` are refused.
+- **HTTPie and xh:** both read default options from a `config.json` that
+  no flag skips: `HTTPie` in `$HTTPIE_CONFIG_DIR`, `$XDG_CONFIG_HOME/httpie`,
+  `~/.config/httpie` and `~/.httpie`; xh in `$XH_CONFIG_DIR`,
+  `$XDG_CONFIG_HOME/xh`, `~/.config/xh` and, on macOS,
+  `~/Library/Application Support/xh`. When one exists, every call is
+  refused, naming the file and the variable. A write with known options to
+  a parsed host other than GitHub's passes.
+- **`gh`:** an alias is read from every config gh may read and judged as
+  its expansion. A shell alias, or a config the guard cannot read, is
+  refused.
+
+The config files are found through the environment the call runs with:
+an inline assignment (`CURL_HOME=/x curl`), an `env` prefix and its `-i`,
+`-u` and `-C` options, an `export` or assignment earlier on the line, the
+guard's own environment, and the account home from the password database.
+Every value any of these gives is checked. When a value cannot be resolved
+(an expansion, a command substitution, `~`, an `env` option the guard does
+not read, or `source`, `eval`, `read` or `${NAME:=value}` that may set
+one), the guard counts a config file as present.
+
+A URL that does not parse is refused in a write: a host held in a
+variable, userinfo with a second `@`, a port that is not a number, a `.`
+or `..` path segment, or braces or brackets `curl` would expand.
 
 The guard cannot judge these routes, so a remote setting is their floor:
 
 | Route the guard cannot judge | Floor |
 |---|---|
-| A script or program that calls the API itself | The remote settings below |
+| A script or program that calls the API itself, a gh extension included | The remote settings below |
+| A client that reads a config file from a path the guard does not check, such as one a patched build adds | The remote settings below |
 | A client that reaches the API at an IP address, or through a name the guard does not know as an API host | The remote settings below |
 | A workflow file changed on a branch, pushed, then dispatched from that branch | An Actions policy actor rule on the release workflow, once agents have their own identity |
 | A tag created by a step the guard does not model and pushed under a name without the release tag shape | A `creation` rule on the `release tags` ruleset |
