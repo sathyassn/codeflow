@@ -22,6 +22,14 @@ use tempfile::TempDir;
 const PASTE_START: &[u8] = b"\x1b[200~";
 const PASTE_END: &[u8] = b"\x1b[201~";
 const DIALOG_MARKER: &str = "FAKE_TUI_DIALOG: continue?";
+/// The longest a test waits for a lifecycle event it expects (ready,
+/// accepted, terminal, a PTY marker, the fake TUI's exit). Each wait returns
+/// when the event lands, so the bound costs nothing on a pass; it is generous
+/// so a loaded runner, which starts the fake TUI and its hook calls slowly,
+/// does not fail a test for time alone (TSK-1253). A wait that proves an
+/// event does not happen keeps its short 1 s bound, and the fake TUI's 10 s
+/// sleeps only have to outlast that.
+const EVENT_WAIT_SECONDS: u64 = 30;
 
 fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_codeflow")
@@ -222,7 +230,7 @@ impl FakeTui {
             if let Some(status) = child.try_wait().expect("poll fake TUI") {
                 break status;
             }
-            if started.elapsed() >= Duration::from_secs(5) {
+            if started.elapsed() >= Duration::from_secs(EVENT_WAIT_SECONDS) {
                 child.kill().expect("kill stalled fake TUI");
                 break child.wait().expect("wait killed fake TUI");
             }
@@ -266,7 +274,7 @@ fn delayed_lifecycle_preserves_unicode_lf_multiline_and_large_prompts() {
     let started = Instant::now();
     let mut tui = FakeTui::spawn(&fixture, "delay-ready-and-accept", 3);
 
-    let ready = fixture.wait("ready", None, 3);
+    let ready = fixture.wait("ready", None, EVENT_WAIT_SECONDS);
     assert_exit(&ready, 0, "delayed ready");
     assert!(started.elapsed() >= Duration::from_millis(75));
 
@@ -281,10 +289,10 @@ fn delayed_lifecycle_preserves_unicode_lf_multiline_and_large_prompts() {
         let turn_id = format!("turn-{}", index + 1);
         fixture.arm(&turn_id, prompt);
         tui.send_frame(prompt, 1);
-        let accepted = fixture.wait("accepted", Some(&turn_id), 3);
+        let accepted = fixture.wait("accepted", Some(&turn_id), EVENT_WAIT_SECONDS);
         assert_exit(&accepted, 0, "delayed acceptance");
         assert_eq!(parse_json(&accepted)["turn_id"], turn_id);
-        let terminal = fixture.wait("terminal", Some(&turn_id), 3);
+        let terminal = fixture.wait("terminal", Some(&turn_id), EVENT_WAIT_SECONDS);
         assert_exit(&terminal, 0, "terminal");
         assert_eq!(parse_json(&terminal)["status"], "completed");
     }
@@ -336,11 +344,11 @@ fn arm_rejects_noncanonical_or_editor_control_input_before_delivery() {
 fn duplicate_enter_does_not_duplicate_delivery() {
     let fixture = LifecycleFixture::new("duplicate-enter");
     let mut tui = FakeTui::spawn(&fixture, "normal", 1);
-    assert_exit(&fixture.wait("ready", None, 2), 0, "ready");
+    assert_exit(&fixture.wait("ready", None, EVENT_WAIT_SECONDS), 0, "ready");
 
     fixture.arm("turn-1", b"exactly once");
     tui.send_frame(b"exactly once", 2);
-    let accepted = fixture.wait("accepted", Some("turn-1"), 2);
+    let accepted = fixture.wait("accepted", Some("turn-1"), EVENT_WAIT_SECONDS);
     assert!(
         accepted.status.code() == Some(0),
         "accepted: stdout={}\nstderr={}\nPTY={}",
@@ -348,7 +356,11 @@ fn duplicate_enter_does_not_duplicate_delivery() {
         String::from_utf8_lossy(&accepted.stderr),
         tui.output_text()
     );
-    assert_exit(&fixture.wait("terminal", Some("turn-1"), 2), 0, "terminal");
+    assert_exit(
+        &fixture.wait("terminal", Some("turn-1"), EVENT_WAIT_SECONDS),
+        0,
+        "terminal",
+    );
     tui.finish(true);
 
     let turn_dirs = std::fs::read_dir(fixture.state.join("turns"))
@@ -363,16 +375,24 @@ fn concurrent_pty_sessions_cannot_cross_deliver() {
     let right = LifecycleFixture::new("isolation-right");
     let mut left_tui = FakeTui::spawn(&left, "normal", 1);
     let mut right_tui = FakeTui::spawn(&right, "normal", 1);
-    assert_exit(&left.wait("ready", None, 2), 0, "left ready");
-    assert_exit(&right.wait("ready", None, 2), 0, "right ready");
+    assert_exit(
+        &left.wait("ready", None, EVENT_WAIT_SECONDS),
+        0,
+        "left ready",
+    );
+    assert_exit(
+        &right.wait("ready", None, EVENT_WAIT_SECONDS),
+        0,
+        "right ready",
+    );
 
     left.arm("left-turn", b"left-only");
     right.arm("right-turn", b"right-only");
     right_tui.send_frame(b"right-only", 1);
     left_tui.send_frame(b"left-only", 1);
 
-    let left_result = left.wait("terminal", Some("left-turn"), 2);
-    let right_result = right.wait("terminal", Some("right-turn"), 2);
+    let left_result = left.wait("terminal", Some("left-turn"), EVENT_WAIT_SECONDS);
+    let right_result = right.wait("terminal", Some("right-turn"), EVENT_WAIT_SECONDS);
     assert_exit(&left_result, 0, "left terminal");
     assert_exit(&right_result, 0, "right terminal");
     assert_ne!(
@@ -389,7 +409,7 @@ fn concurrent_pty_sessions_cannot_cross_deliver() {
 fn wrong_pane_prompt_is_rejected_by_the_armed_digest() {
     let fixture = LifecycleFixture::new("misdirected-prompt");
     let mut tui = FakeTui::spawn(&fixture, "reject-accept", 1);
-    assert_exit(&fixture.wait("ready", None, 2), 0, "ready");
+    assert_exit(&fixture.wait("ready", None, EVENT_WAIT_SECONDS), 0, "ready");
     fixture.arm("turn-1", b"right-pane-only");
 
     tui.send_frame(b"left-pane-prompt", 1);
@@ -413,7 +433,7 @@ fn spinner_and_silent_panes_never_count_as_ready() {
         let ready = fixture.wait("ready", None, 1);
         assert_exit(&ready, 124, "ready timeout");
         if let Some(marker) = output_marker {
-            tui.wait_for_output(marker, Duration::from_secs(1));
+            tui.wait_for_output(marker, Duration::from_secs(EVENT_WAIT_SECONDS));
         } else {
             assert!(
                 !tui.output_text().contains("FAKE_TUI_SPINNER"),
@@ -435,7 +455,11 @@ fn kill_at_each_nonterminal_stage_yields_only_explicit_timeouts() {
     // After ready, before arm.
     let pre_arm = LifecycleFixture::new("kill-pre-arm");
     let mut tui = FakeTui::spawn(&pre_arm, "normal", 1);
-    assert_exit(&pre_arm.wait("ready", None, 2), 0, "pre-arm ready");
+    assert_exit(
+        &pre_arm.wait("ready", None, EVENT_WAIT_SECONDS),
+        0,
+        "pre-arm ready",
+    );
     tui.kill();
     assert_exit(
         &pre_arm.wait("accepted", Some("turn-1"), 1),
@@ -446,7 +470,11 @@ fn kill_at_each_nonterminal_stage_yields_only_explicit_timeouts() {
     // After arm, before acceptance.
     let pre_accept = LifecycleFixture::new("kill-pre-accept");
     let mut tui = FakeTui::spawn(&pre_accept, "normal", 1);
-    assert_exit(&pre_accept.wait("ready", None, 2), 0, "pre-accept ready");
+    assert_exit(
+        &pre_accept.wait("ready", None, EVENT_WAIT_SECONDS),
+        0,
+        "pre-accept ready",
+    );
     pre_accept.arm("turn-1", b"never delivered");
     tui.kill();
     assert_exit(
@@ -459,14 +487,14 @@ fn kill_at_each_nonterminal_stage_yields_only_explicit_timeouts() {
     let pre_terminal = LifecycleFixture::new("kill-pre-terminal");
     let mut tui = FakeTui::spawn(&pre_terminal, "delay-terminal-long", 1);
     assert_exit(
-        &pre_terminal.wait("ready", None, 2),
+        &pre_terminal.wait("ready", None, EVENT_WAIT_SECONDS),
         0,
         "pre-terminal ready",
     );
     pre_terminal.arm("turn-1", b"accepted then killed");
     tui.send_frame(b"accepted then killed", 1);
     assert_exit(
-        &pre_terminal.wait("accepted", Some("turn-1"), 2),
+        &pre_terminal.wait("accepted", Some("turn-1"), EVENT_WAIT_SECONDS),
         0,
         "accepted before kill",
     );
@@ -482,10 +510,14 @@ fn kill_at_each_nonterminal_stage_yields_only_explicit_timeouts() {
 fn malformed_terminal_event_never_becomes_completion() {
     let fixture = LifecycleFixture::new("malformed-terminal");
     let mut tui = FakeTui::spawn(&fixture, "malformed-terminal", 1);
-    assert_exit(&fixture.wait("ready", None, 2), 0, "ready");
+    assert_exit(&fixture.wait("ready", None, EVENT_WAIT_SECONDS), 0, "ready");
     fixture.arm("turn-1", b"malformed terminal");
     tui.send_frame(b"malformed terminal", 1);
-    assert_exit(&fixture.wait("accepted", Some("turn-1"), 2), 0, "accepted");
+    assert_exit(
+        &fixture.wait("accepted", Some("turn-1"), EVENT_WAIT_SECONDS),
+        0,
+        "accepted",
+    );
     assert_exit(
         &fixture.wait("terminal", Some("turn-1"), 1),
         124,
@@ -498,11 +530,15 @@ fn malformed_terminal_event_never_becomes_completion() {
 fn dialog_is_interaction_not_completion() {
     let fixture = LifecycleFixture::new("dialog");
     let mut tui = FakeTui::spawn(&fixture, "dialog", 1);
-    assert_exit(&fixture.wait("ready", None, 2), 0, "ready");
+    assert_exit(&fixture.wait("ready", None, EVENT_WAIT_SECONDS), 0, "ready");
     fixture.arm("turn-1", b"ask before finishing");
     tui.send_frame(b"ask before finishing", 1);
-    assert_exit(&fixture.wait("accepted", Some("turn-1"), 2), 0, "accepted");
-    tui.wait_for_output(DIALOG_MARKER, Duration::from_secs(2));
+    assert_exit(
+        &fixture.wait("accepted", Some("turn-1"), EVENT_WAIT_SECONDS),
+        0,
+        "accepted",
+    );
+    tui.wait_for_output(DIALOG_MARKER, Duration::from_secs(EVENT_WAIT_SECONDS));
     assert_exit(
         &fixture.wait("terminal", Some("turn-1"), 1),
         124,
@@ -510,7 +546,7 @@ fn dialog_is_interaction_not_completion() {
     );
     tui.send_frame(b"continue", 1);
     assert_exit(
-        &fixture.wait("terminal", Some("turn-1"), 2),
+        &fixture.wait("terminal", Some("turn-1"), EVENT_WAIT_SECONDS),
         0,
         "terminal after dialog answer",
     );

@@ -466,7 +466,7 @@
         [
           "B: body of work",
           "agents land each task with `codeflow integrate`",
-          "a person merges the finished body",
+          "a person merges each checkpoint pull request",
           "a red required check on the integration pull request"
         ]
       ]

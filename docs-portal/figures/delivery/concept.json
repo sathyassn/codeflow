@@ -65,10 +65,10 @@
       {
         "claim": "only a person merges into main",
         "source": "docs/delivery.md#concept",
-        "derive": "the last sentence of the first paragraph",
+        "derive": "the last sentence of the landing bullet",
         "check": {
           "kind": "contains",
-          "text": "person merges there."
+          "text": "Only a person merges into `main`."
         },
         "value": true
       }
@@ -632,7 +632,7 @@
         [
           "close",
           "the epic",
-          "proved once by the primary, then one pull request into `main`",
+          "proved once by the primary on the line; the next checkpoint pull request carries it into `main`",
           "the operator merges"
         ],
         [
