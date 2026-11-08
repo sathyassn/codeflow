@@ -13559,6 +13559,7 @@ pub fn shell_tokens(segment: &str) -> Vec<String> {
 /// One shell word after quote removal, with the length of its leading run of
 /// unquoted, unescaped characters: a redirection operator only counts when it
 /// was written there (`2>/dev/null` redirects, `'2>/dev/null'` is text).
+#[allow(clippy::struct_excessive_bools)] // One flag per shell feature the parse records.
 struct ShellWord {
     text: String,
     unquoted_prefix: usize,
