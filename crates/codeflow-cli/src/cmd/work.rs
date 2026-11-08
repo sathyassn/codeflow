@@ -628,7 +628,8 @@ fn provider_failure(stderr: &str) -> String {
     // command does not name the coordination module (ledger_free_cli).
     let urls = codeflow_core::git::remote_query::display_urls(first);
     let flat = urls
-        .lines()
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
         .map(|line| {
             if codeflow_core::hooks::scan::scan_line(line).is_some() {
                 "[redacted]"
