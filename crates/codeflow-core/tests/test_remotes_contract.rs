@@ -82,6 +82,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "the guard reads the repository name from a github.com remote URL; the fixture reads refs and blobs locally and never fetches or pushes",
     ),
     (
+        "codeflow-core/src/security/release_routes_tests.rs",
+        "api.github.com",
+        "an API URL inside a curl, wget or HTTPie command string the guard judges as text; nothing is sent",
+    ),
+    (
         "codeflow-core/src/hooks/ref_authority.rs",
         "example.invalid",
         "the default URL of a fixture whose tests read configuration only; the logging-proxy run of this module saw no request",
