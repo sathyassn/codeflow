@@ -21,7 +21,7 @@
 //! the whole tree. Branch switches, merge, rebase, pull and committing
 //! cherry-pick and revert move HEAD with the files and keep their verdict.
 
-use super::{expands, integrity_shell_path, parse_options, Arity, OptionSpec, ParsedOptions};
+use super::{expands, integrity_shell_path, parse_options, Arity, OptionSpec, ParsedOptions, Seen};
 use crate::hooks::policy::PolicyLevel;
 use crate::hooks::Violation;
 use std::collections::{BTreeMap, BTreeSet};
@@ -172,7 +172,8 @@ fn candidate(verb: &str, rest: &[String]) -> bool {
     }
 }
 
-/// Whether a `git stash` form saves the changes and restores HEAD's files.
+/// Whether a `git stash` form is a push: it saves the changes and resets
+/// the work tree, to HEAD or, with keep-index, to the index.
 fn stash_pushes(rest: &[String]) -> bool {
     rest.first()
         .is_none_or(|sub| sub.starts_with('-') || matches!(sub.as_str(), "push" | "save"))
@@ -377,7 +378,7 @@ fn judge(place: &Place<'_>, verb: &str, rest: &[String]) -> Result<Option<Verdic
         "restore" => restore(place, rest),
         "checkout-index" => checkout_index(place, rest),
         "read-tree" => read_tree(place, rest),
-        "stash" if stash_pushes(rest) => switch(place),
+        "stash" if stash_pushes(rest) => stash_push(place, rest),
         "stash" => stash(place, rest),
         "switch" | "merge" | "rebase" | "pull" | "bisect" | "worktree" => switch(place),
         "apply" => apply(place, rest),
@@ -918,8 +919,9 @@ fn overlay(parsed: &ParsedOptions<'_>, default: bool) -> bool {
 
 /// A command that writes work-tree files whose content is not compared
 /// here: a branch switch, merge, rebase or pull moves HEAD with the files
-/// (TSK-325 AC-7), and `stash` push, `reset --hard` without a revision and
-/// `am --abort` restore HEAD's. It still writes work-tree files, so a setting
+/// (TSK-325 AC-7), and `stash` push without `--keep-index` or `--patch`,
+/// `reset --hard` without a revision and `am --abort` restore HEAD's. It
+/// still writes work-tree files, so a setting
 /// that changes how Git writes them (a filter, an include, attributes) or
 /// where it reads them from (another repository written into this work tree)
 /// refuses as for any other writer (review PW-3).
@@ -1246,6 +1248,68 @@ fn read_tree(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, Stri
         }
     }
     Ok(None)
+}
+
+const STASH_PUSH: OptionSpec = OptionSpec {
+    short: &[
+        ('p', Arity::Flag),
+        ('k', Arity::Flag),
+        ('S', Arity::Flag),
+        ('q', Arity::Flag),
+        ('u', Arity::Flag),
+        ('a', Arity::Flag),
+        ('m', Arity::Value),
+    ],
+    long: &[
+        ("--patch", Arity::Flag),
+        ("--no-patch", Arity::Flag),
+        ("--keep-index", Arity::Flag),
+        ("--no-keep-index", Arity::Flag),
+        ("--staged", Arity::Flag),
+        ("--no-staged", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--no-quiet", Arity::Flag),
+        ("--include-untracked", Arity::Flag),
+        ("--no-include-untracked", Arity::Flag),
+        ("--all", Arity::Flag),
+        ("--no-all", Arity::Flag),
+        ("--message", Arity::Value),
+        ("--pathspec-from-file", Arity::Value),
+        ("--pathspec-file-nul", Arity::Flag),
+        (super::END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// `git stash`, `git stash push` and `git stash save` reset the work tree
+/// to HEAD. With `--keep-index` (`-k`), or with `--patch` while keep-index
+/// is left unset, Git then checks the index tree out over the work tree, so
+/// an index-only plant lands there; those forms are judged like
+/// `checkout-index -a` (review PW-5). The last of `-k`, `--keep-index` and
+/// `--no-keep-index` wins, as in Git.
+fn stash_push(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, String> {
+    switch(place)?;
+    let args = match rest.first().map(String::as_str) {
+        Some("push" | "save") => &rest[1..],
+        _ => rest,
+    };
+    let parsed = options("stash", args, &STASH_PUSH)?;
+    let (mut keep, mut patch) = (None, false);
+    for seen in &parsed.sequence {
+        match seen {
+            Seen::Short('k') | Seen::Long("--keep-index", _) => keep = Some(true),
+            Seen::Long("--no-keep-index", _) => keep = Some(false),
+            Seen::Short('p') | Seen::Long("--patch", _) => patch = true,
+            Seen::Long("--no-patch", _) => patch = false,
+            _ => {}
+        }
+    }
+    if !keep.unwrap_or(patch) {
+        return Ok(None);
+    }
+    let reader = Reader::new(place.repo()?);
+    let (index, head) = (reader.index()?, reader.head()?);
+    Ok(differs(&index, &head, &Selection::Whole, true).map(|path| writes(path, "the index")))
 }
 
 const STASH_APPLY: OptionSpec = OptionSpec {

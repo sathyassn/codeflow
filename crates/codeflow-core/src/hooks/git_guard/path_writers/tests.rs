@@ -268,6 +268,21 @@ fn a_two_step_plant_is_refused_at_its_work_tree_step() {
             "git checkout-index -n -f -- .codeflow/policy.json",
             writes(POLICY),
         ),
+        // Keep-index checks the index tree out after the reset, and
+        // `--patch` sets keep-index when it is left unset (review PW-5).
+        ("git stash -k", writes(POLICY)),
+        ("git stash push --keep-index", writes(POLICY)),
+        ("git stash --keep", writes(POLICY)),
+        ("git stash save -k", writes(POLICY)),
+        ("git stash push -ku", writes(POLICY)),
+        ("git stash push -p", writes(POLICY)),
+        ("git stash --no-keep-index -k", writes(POLICY)),
+        ("git stash", Passes),
+        ("git stash push -u", Passes),
+        ("git stash -k --no-keep-index", Passes),
+        ("git stash push -p --no-keep-index", Passes),
+        // `-m` takes the next word as its message.
+        ("git stash push -m -k", Passes),
         ("git checkout -- src", Passes),
         ("git checkout-index --temp -a", Passes),
     ];
@@ -299,6 +314,9 @@ fn a_two_step_plant_is_refused_at_its_work_tree_step() {
             ("git checkout-index -n -f -a", Passes),
             ("git checkout -- .", Passes),
             ("git checkout-index --temp -a", Passes),
+            ("git stash -k", Passes),
+            ("git stash push -p", Passes),
+            ("git stash push --nonesuch", Unknown),
             // A prefix is judged by the shared path check, which reads an
             // enforcement file's name under any directory.
             (

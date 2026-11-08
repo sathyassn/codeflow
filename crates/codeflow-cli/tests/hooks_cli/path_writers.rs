@@ -202,8 +202,8 @@ fn tsk1390_a_stash_that_changes_the_policy_refuses() {
 
 /// Review PW-1 to PW-4: a one-shot alias of a path writer, a filter setting
 /// on a branch switch and `git sparse-checkout` refuse as the literal
-/// writers do; after an index plant, so do `checkout-index -n` and
-/// `sparse-checkout disable`.
+/// writers do; after an index plant, so do `checkout-index -n`,
+/// `sparse-checkout disable` and a keep-index stash (review PW-5).
 #[test]
 fn tsk1390_aliases_branch_switch_settings_and_sparse_checkout_refuse() {
     let j = Journey::new();
@@ -233,8 +233,21 @@ fn tsk1390_aliases_branch_switch_settings_and_sparse_checkout_refuse() {
         "git checkout-index --no-create -f -a",
         "git -c alias.ci='checkout-index -f -a' ci",
         "git sparse-checkout disable",
+        // Review PW-5: keep-index checks the planted index out.
+        "git stash -k",
+        "git stash push --keep-index",
+        "git stash save -k",
+        "git stash push -p",
+        "git -c alias.sk='stash -k' sk",
     ]);
-    j.assert(&refused, &j.both(&["git checkout-index --temp -a"]));
+    j.assert(
+        &refused,
+        &j.both(&[
+            "git checkout-index --temp -a",
+            "git stash",
+            "git stash push -u",
+        ]),
+    );
 }
 
 /// A path writer's finding stands beside the other git rules: with
