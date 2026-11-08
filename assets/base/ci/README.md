@@ -461,12 +461,14 @@ environment `codeflow-authority` restricted to the default branch with the
 App's key secret `CODEFLOW_AUTHORITY_APP_KEY` and id variable
 `CODEFLOW_AUTHORITY_APP_ID`, and the agent App (Contents and Pull requests
 write only), whose key stays in the administrator's operating system
-credential store. The two clicks are "Create GitHub App" on GitHub and
-"Install" on the link the command prints. By default agent pull requests
-then show the developer as author: each developer runs `codeflow remote
-agent-login` once, sessions open pull requests with `codeflow remote
-agent-token --user`, and pushes use the App's installation token. The setup,
-including the agent App's device flow click, is in `docs/github-apps.md`, the
+credential store, and the PR App (Pull requests write and Contents read),
+whose secrets CodeFlow never keeps. The two clicks are "Create GitHub App" on
+GitHub and "Install" on the link the command prints. With the PR App, agent
+pull requests show the developer as author: each developer runs the printed
+`codeflow remote pr-login` line once, sessions open pull requests with
+`codeflow remote pr-token`, and pushes use the agent App's installation
+token. The setup, including the PR App's device flow click, is in
+`docs/github-apps.md`, the
 guide for an adopter; the policy reference's "Mode A setup" states how each
 token is handled.
 

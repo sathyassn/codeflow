@@ -25,6 +25,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.hard_reset_protected` | Level | `block` | off \| warn \| allow \| block | A hard reset on a protected branch. |  |
 | `git.merge_to_protected` | Level | `block` | off \| warn \| allow \| block | A merge commit landing on a protected branch. | PR merge and `codeflow integrate` are the sanctioned paths; a human may override the git layer with CODEFLOW_HUMAN_OVERRIDE=1. |
 | `git.pr_merge_to_protected` | Level | `block` | off \| warn \| allow \| block | A `gh pr merge` whose base branch is protected (git-guard only). |  |
+| `git.pr_review_approval` | Level | `block` | off \| warn \| allow \| block | A pull request review approval or dismissal an agent session makes (git-guard only). | Covers `gh pr review --approve`, and a `gh api` or `curl` request that posts an `APPROVE` review or event or puts a review dismissal, whatever token it carries. On when absent. GitHub still accepts these calls from outside the guard (docs/github-apps.md). |
 | `git.local_ref_protection` | Level | `block` | off \| warn \| allow \| block | Any local update of a protected ref that did not come from the remote. | The reference-transaction backstop (ADR-0007): catches fast-forward merges, reset --hard, and branch -D that classic client hooks miss. In session, git-guard also refuses a forced branch move aimed at a protected branch (`git branch -f`, `-M` or `-C`, `git checkout -B`, `git switch -C`, `git worktree add -B`, flag clusters and abbreviations included), resolving `@{-N}` and `@{upstream}` in the target repository and refusing one it cannot resolve or that an earlier git command on the line may change. |
 | `git.hook_integrity` | Level | `block` | off \| warn \| allow \| block | Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes). | Agent guards (ADR-0009). A write to Git's alternate object lists (`objects/info/alternates`, `objects/info/http-alternates`, in the common directory a linked worktree shares) refuses like a write to hooks, refs or config, since an alternate store adds objects Git reads as its own; reading them stays allowed. Local-edit relief never disables protection of remote-tracking refs, packed-refs or Git config authority metadata. git-guard refuses a `sed`, `find`, `xargs` or `parallel` that can change files when its command line names an enforcement path in any spelling the file system reads as one (a search pattern in the command an `xargs` or `find` runs names nothing), a recursive `rm` or a `chmod` or `chown` of a directory holding enforcement files, and a recursive `rm`, `trash`, `find -delete` or `git clean -ff` of a registered worktree, a directory holding one, or a target it cannot resolve where worktrees live. exec-guard refuses an interpreter (`python`, `python3`, `node`, `nodejs`, `perl`, `ruby`, a version suffix included) whose inline code or arguments name an enforcement path: a script's arguments, every word after inline code or stdin `-`, a `--name=value` option or an attached short value in a cluster (`-oFILE`, `-voFILE`), and string literals in its code. It judges every directory the line may run the interpreter in: the session directory and every one any directory change may reach, success or not. Within the modeled grammar (`cd`, `chdir`, `pushd`, `popd`; the launchers `command`, `builtin`, `exec`, `nohup`, `nice`, `timeout`, `stdbuf`, `time`, `env`, `xargs`, `caffeinate`, `xcrun` and `ionice` with their options, GNU-prefixed names such as `genv` and `gtimeout` and every `env -C` spelling included; the zsh precommands `noglob`, `nocorrect` and `-`; `git -C`; composed `ruby -C`; `find -execdir` from every directory in the set, a file start in its parent, `-path` against find's own spelling) the set is exact. Anything outside it (`source`, `.`, `sudo`, `env -S`, an option it does not list, or any other word followed by `cd`, `chdir`, `pushd`, `popd`, or `-C` or `--chdir` after an env-like word) makes the directory unknown, and so does an unknown program that launches a modeled launcher or an interpreter later in its words (after a `--` too), and a script string an unknown program is given, a `-c` or `-e` value or any quoted word (`expect -c`, `osascript -e`, `ssh host '...'`), which is read as a command line; `echo` and `printf` operands stay data. Resolved builtin output, shell here-strings and sourced process substitutions are also read as code. When an interpreter takes code from an external producer the guard cannot read, or a shell or interpreter takes its code from anything other than a literal argument or a heredoc body the guard reads (a pipe, a here-string, a descriptor such as `/dev/stdin` or `/dev/fd/N`, a process substitution, or a `-c`/`-e` value holding a substitution), every word on the line is judged by its trailing components. On a line where a shell (`source` and `.` included) or an interpreter runs, every quoted string anywhere on the line is judged as possible code the same way, so a line that mixes an interpreter with an unrelated quoted protected path refuses; unquoted operands of other programs stay data. Quoted strings are read as the shell builds them: `$'...'` decoded, adjacent quoted pieces joined, and a `printf` of `%s` pieces read as the value it joins. A composed text (a `printf` escape or `%b`/`%q`, an `echo -e` or `print` decode, or a join of on-line assignments) is resolved exactly where the guard can and judged by the tail rule, and on a running line a composing construct it cannot resolve refuses as cannot-verify, naming it. That reading is closed-world: a value is resolved only when every input is a literal read exactly through a construct the guard models and the result equals what bash and zsh produce; any other construct feeding it is unresolved, named by its family. The output of a program other than the modelled builtins is outside text, judged by its trailing components as an unassigned variable is, and also as if empty, the spelled pieces around it joined. A word is also read without one surrounding `{}` pair; every known word is then judged by its trailing components at the same levels: it never fails open on grammar it does not understand. The model is conservative, so an odd shape like `cd .claude && cd .. && python3 tool.py settings.json`, and a repo-root `find . -execdir python3 lint.py notes.txt`, which can really run in a hook directory, are refused. An operand naming policy authority metadata refuses in every form whatever the level. It reads an enforcement file passed as an argument as a possible write, so read one with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin. An argument it cannot read (a variable, a substitution, a directory after a `cd` it cannot follow) refuses when its spelled part could name an enforcement path or the line names one, as git-guard judges a writer's operands. Code in a file the guard does not read, and a path a script builds at run time, stay past the guard; the OS sandbox's write denies are the backstop. The guard stops at shell grammar, so a path built by interpreter code, such as Python adjacent string literals or a node `+` concatenation, is part of that residual. |
 | `git.line_sync_interval` | uint | `0` | days; 0 disables reminders | Orient flags integration lines past this interval since their last sync or evidenced creation. | Unknown creation without a sync and lines with no own commits are never flagged. The shipped policy file does not list it, so an older binary never meets the key. |
@@ -1283,15 +1284,20 @@ the default branch, in one session.
    Checks permission. Its key goes to the administrator's operating system
    credential store, never to a file, the repository or an environment
    variable (below). `--no-agent` skips it.
-6. Run `codeflow remote protect --check-app <authority App id> --lines
+6. The PR App (`codeflow-pr-<repo>`, `--pr-name`): Pull requests write and
+   Contents read, no webhook, not public. CodeFlow keeps none of its
+   secrets: GitHub creates a key with the App, and the run drops it. Its
+   slug, id and client id go to the repository variable `CODEFLOW_PR_APP`.
+   Click two installs it; a third click turns on its device flow.
+   `--no-pr-app` skips it.
+7. Run `codeflow remote protect --check-app <authority App id> --lines
    "integration/**"` as the administrator; retire the foreign rulesets; run
    `codeflow doctor --check remote-perimeter` and stop only when it is green
    with no recovery window open.
-7. Point the agent sessions at the agent App (below), and remove the
-   administrator's login from the sessions' credential stores. The default
-   for a consuming project is pull requests that show the developer as
-   author: turn on the agent App's device flow and have each developer run
-   `codeflow remote agent-login` once, as the
+8. Point the agent sessions at the Apps (below), and remove the
+   administrator's login from the sessions' credential stores. With the PR
+   App, pull requests show the developer as author: each developer runs the
+   `codeflow remote pr-login` line the run printed once, as the
    [GitHub Apps guide](github-apps.md#pull-requests-as-you) describes.
 
 Every write is printed with what undoes it: a `gh` command for the
@@ -1346,30 +1352,35 @@ requires it or its key, and the [GitHub Apps guide](github-apps.md) gives the
 levels a computer can sit at. The guide is where the setup is described;
 this section states how the tokens are handled.
 
-- `gh`: `TOKEN="$(codeflow remote agent-token --user)" && GH_TOKEN="$TOKEN"
-  gh pr create ...` opens the pull request with the developer's user access
-  token for the agent App, so the developer is its author; without `--user`
-  the installation token makes `<slug>[bot]` the author. Keep the `&&`: a
-  failed token must stop the line, because an empty `GH_TOKEN` may leave `gh`
-  on the stored login.
-- The user access token: `codeflow remote agent-login` runs GitHub's device
-  flow once per developer and computer, with no client secret, personal
-  access token or `gh` login. The grant (an 8 hour access token and a six
-  month refresh token) is kept in the credential store under the service
-  `codeflow-agent-user`, account `owner/name`. `agent-token --user` checks a
-  saved token with `GET /user`, renews it near its end under a file lock,
-  and stores the new grant before it prints the token, because GitHub stops
-  accepting a used refresh token. Only an OAuth refusal or a passed expiry
-  names `agent-login` again; a network failure or a GitHub error names its
-  cause and keeps the grant. The form, which holds the device code or the
-  refresh token, goes to curl on standard input, never in its arguments.
+- `gh`: `TOKEN="$(codeflow remote pr-token)" && GH_TOKEN="$TOKEN" gh pr
+  create ...` opens the pull request with the developer's user access token
+  for the PR App, so the developer is its author. Without the PR App,
+  `codeflow remote agent-token` gives the installation token, which makes
+  `<slug>[bot]` the author. Keep the `&&`: a failed token must stop the
+  line, because an empty `GH_TOKEN` may leave `gh` on the stored login.
+- The PR token: `codeflow remote pr-login` runs GitHub's device flow once
+  per developer and computer, with no client secret, personal access token
+  or `gh` login. Before it stores anything it reads the grant's
+  installations and their repositories, every page, and refuses unless each
+  installation is the recorded PR App with exactly Pull requests write,
+  Contents read and Metadata read, and this repository, matched by its id,
+  is among them. The grant (an 8 hour access token and a six month refresh
+  token) is kept in the credential store under the service
+  `codeflow-pr-user`, account `owner/name`. `pr-token` checks a saved token
+  with `GET /user`, renews it near its end under a file lock, and stores the
+  new grant before it prints the token, because GitHub stops accepting a
+  used refresh token. Only an OAuth refusal or a passed expiry names
+  `pr-login` again; a network failure or a GitHub error names its cause and
+  keeps the grant. The form, which holds the device code or the refresh
+  token, goes to curl on standard input, never in its arguments. Neither
+  token appears in any output but the one `pr-token` prints. The PR token
+  has no Contents write, so it can neither push nor merge, and it is never a
+  git credential.
 - `git push`: name the command as the credential helper for this push only,
   `git -c credential.helper= -c 'credential.helper=!codeflow remote
   agent-token --git-credential' push`. It answers `get` for
-  `https://github.com` only, with the user `x-access-token` and the token;
-  any other host gets no answer. Pushes use the installation token by
-  default; `--user --git-credential` answers with the developer's user
-  access token instead, which CodeFlow has not tested against GitHub.
+  `https://github.com` only, with the user `x-access-token` and the agent
+  App's installation token; any other host gets no answer.
 - Committer: `codeflow remote agent-token --committer name` and
   `--committer email` print the two values below, one each, confirmed with
   GitHub. They mint no token, and they print nothing on standard output when
@@ -1383,8 +1394,10 @@ this section states how the tokens are handled.
   developer to delete, and says so.
 - The custody of the key and the grant rests on the session's sandbox: a
   sandboxed session must not reach the credential store, and only `codeflow
-  remote agent-token` runs outside the sandbox. On macOS the key is a login
-  keychain item (service `codeflow-agent-app`, account `owner/name`); on
+  remote agent-token` and `codeflow remote pr-token` run outside the
+  sandbox. On macOS the key is a login keychain item (service
+  `codeflow-agent-app`, account `owner/name`) and the PR grant another
+  (service `codeflow-pr-user`); on
   Linux a Secret Service entry through `secret-tool`. Windows has no
   supported store yet, so there the command refuses the agent App before
   creating it and `--no-agent` sets up the authority App alone.
@@ -1401,7 +1414,7 @@ commits, the commit-msg hook and `git.ai_attribution` at block, and no policy,
 hook or check is special-cased for bot-committed commits. The committer field
 is a provenance record, not proof: git lets anyone set it, and proof of who
 pushed is the token. A pull request opened with the developer's user access
-token for the App is attributed to the developer: GitHub states that "API
+token for the PR App is attributed to the developer: GitHub states that "API
 requests made by an app on behalf of a user will be attributed to that user",
 shown with the user's avatar and the app's badge; not yet observed for a pull
 request, until TSK-1348 AC-7 records it. GitHub records the agent App as
