@@ -28,6 +28,11 @@ pub fn isolate_git() {
         std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
         std::env::set_var("GIT_CONFIG_SYSTEM", "/dev/null");
         std::env::set_var("GIT_CEILING_DIRECTORIES", ceiling());
+        // A gate these tests run in process keeps its evidence under the
+        // fixture's own `target`, never this test process's build folder
+        // (TSK-1369). The library reads the variable where its unit tests
+        // cannot stand in for it, so it is cleared here with the rest.
+        std::env::remove_var("CARGO_TARGET_DIR");
     });
 }
 

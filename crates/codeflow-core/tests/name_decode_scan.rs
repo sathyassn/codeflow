@@ -4338,18 +4338,10 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // var_os returns OS bytes or genuine unset; an unset CARGO_TARGET_DIR is `target`; a build-output folder whose last name is not UTF-8 is refused, and the other components stay native path bytes, never decoded lossily (TSK-1044).
+    // var_os returns OS bytes or genuine unset; an unset CARGO_TARGET_DIR is `target`; present bytes become the native path without decoding or normalization; target_anchor_for refuses a build-output folder whose last name is not UTF-8 and keeps the other components as native path bytes, never decoded lossily (TSK-1044). The one read serves target_dir and target_anchor (TSK-1369).
     (
         "crates/codeflow-core/src/testing/delivery.rs",
-        "target_anchor",
-        "obtain-absent:var_os",
-        1,
-        "format-contract",
-    ),
-    // var_os returns OS bytes or genuine unset; present CARGO_TARGET_DIR bytes become the native PathBuf without decoding or normalization.
-    (
-        "crates/codeflow-core/src/testing/delivery.rs",
-        "target_dir",
+        "build_output_setting",
         "obtain-absent:var_os",
         1,
         "format-contract",
