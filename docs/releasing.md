@@ -293,9 +293,12 @@ The clients are read this way:
   `--data` form, `--json`, `-F`, `--form-string`, `-T` or `-K`. Each
   `--next` request is judged with its own method, and `--expand-url` is
   read as a URL. Without `-q` or `--disable` as the first argument, curl
-  reads `$CURL_HOME/.curlrc`, `$XDG_CONFIG_HOME/curlrc`, `$HOME/.curlrc`
-  and the account home's `.curlrc`. When any of them exists, every curl
-  call without `-q` first is refused, and the message names the file. On
+  reads `$CURL_HOME/.curlrc`, `$XDG_CONFIG_HOME/curlrc`, `$HOME/.curlrc`,
+  then, when `XDG_CONFIG_HOME` is unset or empty,
+  `$CURL_HOME/.config/curlrc` and `$HOME/.config/curlrc`, and the account
+  home's `.curlrc` (curl's `src/tool_findfile.c`). The guard checks all of
+  them whatever `XDG_CONFIG_HOME` holds. When any of them exists, every
+  curl call without `-q` first is refused, and the message names the file. On
   Windows curl also reads a file beside `curl.exe`, so every curl call
   there needs `-q` first.
 - **`wget`:** wget reads a system `wgetrc` at a path built into it, which
@@ -307,13 +310,42 @@ The clients are read this way:
   `~/.config/httpie` and `~/.httpie`; xh in `$XH_CONFIG_DIR`,
   `$XDG_CONFIG_HOME/xh`, `~/.config/xh` and, on macOS,
   `~/Library/Application Support/xh`. When one exists, every call is
-  refused, naming the file and the variable. A write with known options to
-  a parsed host other than GitHub's passes.
+  refused, naming the file. The fix is to set the variable on the call to
+  a directory without a `config.json`
+  (`HTTPIE_CONFIG_DIR=/path/to/empty-dir http ...`): set that way, the
+  variable is the only directory the client reads. Set through `env`,
+  `export` or an expansion, it is not certain to reach the call, so the
+  other paths still count. A write with known options to a parsed host
+  other than GitHub's passes.
 - **`gh`:** an alias is read from every config gh may read and judged as
   its expansion. A shell alias, or a config the guard cannot read, is
-  refused.
+  refused, naming the alias and the config file; the fix is to call the gh
+  command the alias stands for. `GH_CONFIG_DIR` set on the call is the
+  only config gh reads.
 
-The config files are found through the environment the call runs with:
+Each refusal names its fix: `-q` first for curl, `--no-config` for wget,
+the variable to set for HTTPie and xh, and the gh command for an alias.
+
+A project whose clients legitimately read a config file can opt out of
+the config-file refusal per tool with `security.trusted_client_configs`
+in `.codeflow/policy.json`, listing any of `curl`, `wget`, `httpie`, `xh`
+and `gh_aliases`. The list is empty by default. It is read only from the
+policy on the remote's default branch as last fetched, never from a
+working copy, a local commit or the environment, so a requester cannot
+set it without a reviewed merge. A tool is trusted only when every policy
+source the guard reads lists it: the call's repository and, for a Claude
+Code call made outside it, the session project. An opt-out lifts only that tool's
+config-file refusal. Every GitHub destination check stays: a write to a
+GitHub API route, an unknown option, an unparsed destination and a
+redirect are still refused, and a readable gh alias is still judged as its
+expansion. The cost is the threat the refusal closed: with the opt-out on,
+a config file the requester can write can redirect that tool's call to a
+GitHub write.
+
+An empty variable counts as the current directory, since `HTTPie` joins
+an empty `XDG_CONFIG_HOME`, xh an empty `XH_CONFIG_DIR` and gh an empty
+`HOME` onto it. The config files are found through the environment the
+call runs with:
 an inline assignment (`CURL_HOME=/x curl`), an `env` prefix and its `-i`,
 `-u` and `-C` options, an `export` or assignment earlier on the line, the
 guard's own environment, and the account home from the password database.
@@ -375,7 +407,7 @@ sits in every publishing job, before any step that publishes:
   shell: bash
   run: |
     if [ "$GITHUB_RUN_ATTEMPT" != 1 ] && [ "$GITHUB_EVENT_NAME" != pull_request ]; then
-      echo "::error::Dispatch a fresh run instead of a re-run."
+      echo "::error::This job publishes, and attempt $GITHUB_RUN_ATTEMPT is a re-run. Dispatch a fresh run instead; a re-run would publish without the jobs that passed before."
       exit 1
     fi
 ```
@@ -386,10 +418,15 @@ draft release. The `release_rerun_contract` test requires the check first
 in every job that has an `environment`, a publishing action, a publishing
 command, a `gh api` call that writes (an implied POST included) or an HTTP
 write to the API host. A job that calls a reusable workflow must call one
-the test also reads. The test reads the step for what it does: the first
-command compares `GITHUB_RUN_ATTEMPT` to 1, that branch exits non-zero,
-and no `if`, `continue-on-error` or `env` undoes it. CodeFlow installs no release workflow, so an adopter adds the same
-step to each publishing job of their own.
+the test also reads. The step's `run` must be the text above byte for
+byte once YAML has parsed it, with `shell: bash`; the step may have no
+`if`, neither it nor its job `continue-on-error`, and no `env` may set
+`GITHUB_RUN_ATTEMPT` or `GITHUB_EVENT_NAME`. No later step of the job may
+have an `if` that calls a status function (`always`, `failure`,
+`cancelled`, `success`), since that step would run after the check fails.
+A test also compares the example above with that text. CodeFlow installs
+no release workflow, so an adopter copies the step unchanged into each
+publishing job of their own.
 
 For an adopter, the token an agent holds decides what the remote refuses:
 
