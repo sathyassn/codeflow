@@ -237,6 +237,42 @@ fn tsk1390_aliases_branch_switch_settings_and_sparse_checkout_refuse() {
     j.assert(&refused, &j.both(&["git checkout-index --temp -a"]));
 }
 
+/// A path writer's finding stands beside the other git rules: with
+/// `hook_integrity` at warn, its warning does not hide the authority block
+/// for a repository the guard cannot read.
+#[test]
+fn tsk1390_a_warn_level_finding_keeps_the_authority_block() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = codeflow_core::portable_path::canonicalize(temp.path())
+        .unwrap()
+        .join("repo");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    init_repo(&root, "main");
+    git(&root, &["switch", "-q", "-c", "task/warn"]);
+    write_agent_policy(
+        &root,
+        r#"{"git":{"protected_branches":["main"],"root_checkout_commits":"off","hook_integrity":"warn"}}"#,
+    );
+    let missing = shell_path(&temp.path().join("missing/.git"));
+    for command in [
+        format!("git --git-dir='{missing}' checkout HEAD -- src"),
+        format!("GIT_DIR='{missing}' git restore --source=HEAD src"),
+    ] {
+        let mut cmd = expansion_codeflow();
+        cmd.args(["hook", "git-guard", "--contract", "3"])
+            .current_dir(&root)
+            .env("HOME", temp.path())
+            .env("USERPROFILE", temp.path());
+        let out = run_with_stdin(&mut cmd, &guard_payload(&command, &root));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.code() == Some(2) && err.contains("git.policy_authority"),
+            "{command}: {:?}: {err}",
+            out.status.code()
+        );
+    }
+}
+
 fn git_output(dir: &Path, args: &[&str]) -> String {
     let out = super::git_command()
         .args(args)

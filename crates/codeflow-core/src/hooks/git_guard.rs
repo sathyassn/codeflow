@@ -1064,8 +1064,13 @@ fn evaluate_report_with_runners(
                 v.level_fixed = true;
             }
             if authority || ctx.policy.hook_integrity.is_active() {
+                // A path writer's finding stands beside the git rules that
+                // follow, so at warn it cannot hide their blocks (TSK-1390).
+                let beside = path_writers::is_finding(&v);
                 violations.push(v);
-                continue;
+                if !beside {
+                    continue;
+                }
             }
         }
 

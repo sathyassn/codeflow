@@ -116,10 +116,10 @@ pub(super) fn violation(
     };
     let message = match verdict {
         Verdict::Writes { path, source } => format!(
-            "`git {verb}` would put content other than HEAD's on the enforcement path `{path}` (from {source}); restore HEAD's content instead, or have a person make this change"
+            "`git {verb}` {WRITES_MARK} `{path}` (from {source}); restore HEAD's content instead, or have a person make this change"
         ),
         Verdict::Unknown(why) => {
-            format!("cannot tell what `git {verb}` writes on enforcement paths: {why}")
+            format!("cannot tell what `git {verb}` {UNKNOWN_MARK}: {why}")
         }
     };
     Some(super::hook_integrity_violation(level, message))
@@ -136,9 +136,22 @@ pub(super) fn unknown_directory(
     (level.is_active() && candidate(verb, rest)).then(|| {
         super::hook_integrity_violation(
             level,
-            format!("cannot tell what `git {verb}` writes on enforcement paths: it runs in a directory the guard cannot tell ({why})"),
+            format!("cannot tell what `git {verb}` {UNKNOWN_MARK}: it runs in a directory the guard cannot tell ({why})"),
         )
     })
+}
+
+/// The words of this module's findings, which [`is_finding`] reads.
+const WRITES_MARK: &str = "would put content other than HEAD's on the enforcement path";
+const UNKNOWN_MARK: &str = "writes on enforcement paths";
+
+/// Whether `v` is this module's finding. It is reported beside the other
+/// rules for the same command, never in place of them, so a finding at warn
+/// level cannot hide a block a later check makes (`git.policy_authority`
+/// among them).
+pub(super) fn is_finding(v: &Violation) -> bool {
+    v.rule == "git.hook_integrity"
+        && (v.message.contains(WRITES_MARK) || v.message.contains(UNKNOWN_MARK))
 }
 
 /// Whether `verb` is one of the commands this module judges. Cheap: it
@@ -182,7 +195,7 @@ fn judge_line(
             .find(|name| line.contains(*name))
             .map(|name| {
                 format!(
-                    "the line sets or names `{name}`, which changes which repository, index or objects Git reads"
+                    "the line sets or names the environment variable `{name}`, which changes which repository, index, objects or configuration Git reads"
                 )
             });
     }
@@ -908,7 +921,8 @@ fn overlay(parsed: &ParsedOptions<'_>, default: bool) -> bool {
 /// (TSK-325 AC-7), and `stash` push, `reset --hard` without a revision and
 /// `am --abort` restore HEAD's. It still writes work-tree files, so a setting
 /// that changes how Git writes them (a filter, an include, attributes) or
-/// what it reads refuses as for any other writer (review PW-3).
+/// where it reads them from (another repository written into this work tree)
+/// refuses as for any other writer (review PW-3).
 fn switch(place: &Place<'_>) -> Result<Option<Verdict>, String> {
     match &place.unreadable {
         Some(why) => Err(why.clone()),
