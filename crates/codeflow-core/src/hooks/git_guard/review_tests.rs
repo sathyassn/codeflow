@@ -213,15 +213,15 @@ fn an_owner_or_repository_named_pulls_hides_no_review() {
     let benign = dir.path().join("benign.txt");
     std::fs::write(&benign, "nothing here").unwrap();
     let benign = benign.display();
-    let reviews = "https://api.github.com/repos/o/r/pulls/12/reviews";
+    let curl = "curl https://api.github.com/repos/o/r/pulls/12/reviews";
     for command in [
-        format!("curl {reviews} --data-urlencode 'event=APPROVE@{benign}'"),
-        format!("curl {reviews} -F 'event=APPROVE=@{benign}'"),
+        format!("{curl} --data-urlencode 'event=APPROVE@{benign}'"),
+        format!("{curl} -F 'event=APPROVE=@{benign}'"),
     ] {
         assert!(refused(&command), "{command}");
     }
     assert!(!refused(&format!(
-        "curl {reviews} --data-urlencode 'body=fine@/no/such/file'"
+        "{curl} --data-urlencode 'body=fine@/no/such/file'"
     )));
 }
 
