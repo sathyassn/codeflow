@@ -147,6 +147,14 @@ struct Parsed {
     /// It stays set for the rest of the line, which can only make a `gh`
     /// call name another repository and so refuse more (TSK-1346).
     gh_repo: Option<String>,
+    /// The variables that place an HTTP client's or gh's config file, as
+    /// the line sets them, so the files checked are the ones the call
+    /// reads (TSK-1346).
+    client_env: Vec<(String, String)>,
+    /// Why the line may set one of those variables in a way the guard
+    /// cannot read, such as `source`, `eval` or an `env` option it does not
+    /// know (TSK-1346).
+    client_env_unresolved: Option<String>,
     unreadable: Vec<String>,
     families: Vec<(&'static str, Option<PathBuf>)>,
     code: Vec<String>,
@@ -689,6 +697,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
         persistent = crate::hooks::git_guard::configuration_shell_change(&segment).or(persistent);
         out.config_trigger = trigger.or_else(|| persistent.clone());
         note_gh_repo(&words[..words.len() - skip_assignments(&words).len()], out);
+        note_client_env_expansion(&segment, out);
         let mut assigned = skip_assignments(&words).to_vec();
         let mut assigned_patterns = patterns[words.len() - assigned.len()..].to_vec();
         if let Some(setting) = words
@@ -1654,6 +1663,7 @@ fn argv(
     ) {
         note_gh_repo(&args[1..], out);
     }
+    note_client_env_change(name, &args[1..], out);
     let command_at = out.commands.len();
     out.commands.push(Unwrapped {
         input: out.literal_input.clone(),
@@ -3221,12 +3231,14 @@ fn release_route(
     let session = std::env::var_os("GH_REPO")
         .map(|value| value.into_string().unwrap_or_else(|_| "$GH_REPO".into()));
     let gh_repo = out.gh_repo.clone().or(session);
-    let ctx = super::release_routes::Ctx::new(cwd, gh_repo.as_deref());
+    let env =
+        super::release_routes::ClientEnv::new(&out.client_env, out.client_env_unresolved.clone());
+    let ctx = super::release_routes::Ctx::new(cwd, gh_repo.as_deref()).with_env(&env);
     let reason = match name {
         "gh" => super::release_routes::gh(rest, &canonical[1..], ctx),
-        "curl" => super::release_routes::curl(rest, cwd),
+        "curl" => super::release_routes::curl(rest, ctx),
         "wget" | "http" | "https" | "xh" | "xhs" => {
-            super::release_routes::http_client(name, rest, cwd)
+            super::release_routes::http_client(name, rest, ctx)
         }
         _ => None,
     };
@@ -3236,10 +3248,98 @@ fn release_route(
     }
 }
 
-/// Record a `GH_REPO=` among `words`, assignments or `export` operands.
+/// Record a `GH_REPO=` among `words`, assignments or `export` operands, and
+/// the variables that place a client's config file.
 fn note_gh_repo(words: &[String], out: &mut Parsed) {
     if let Some(value) = words.iter().rev().find_map(|w| w.strip_prefix("GH_REPO=")) {
         out.gh_repo = Some(value.to_owned());
+    }
+    for word in words {
+        if let Some((key, value)) = word.split_once('=') {
+            if super::release_routes::CONFIG_VARIABLES.contains(&key) {
+                out.client_env.push((key.to_owned(), value.to_owned()));
+            }
+        }
+    }
+}
+
+/// Note a command that may set a variable placing a client's config file
+/// where the guard cannot read the value: `source`, `.` and `eval`; `read`,
+/// `mapfile`, `readarray`, `getopts`, `let` and `printf -v` naming such a
+/// variable or an expansion; and an `env` option the guard does not know.
+fn note_client_env_change(name: &str, rest: &[String], out: &mut Parsed) {
+    if out.client_env_unresolved.is_some() {
+        return;
+    }
+    let names_variable = |word: &str| {
+        word.contains('$')
+            || super::release_routes::CONFIG_VARIABLES.iter().any(|var| {
+                word.strip_prefix(var).is_some_and(|tail| {
+                    tail.is_empty()
+                        || !tail.starts_with(|c: char| c == '_' || c.is_ascii_alphanumeric())
+                })
+            })
+    };
+    let why = match name {
+        "source" | "." | "eval" => {
+            Some(format!("`{name}` may set a variable the guard cannot read"))
+        }
+        "read" | "mapfile" | "readarray" | "getopts" | "let"
+            if rest.iter().any(|w| names_variable(w)) =>
+        {
+            Some(format!(
+                "`{name}` may set a variable to a value the guard cannot read"
+            ))
+        }
+        "printf"
+            if rest.iter().any(|w| w.starts_with("-v"))
+                && rest.iter().any(|w| names_variable(w)) =>
+        {
+            Some("`printf -v` may set a variable to a value the guard cannot read".into())
+        }
+        "env" => env_unknown_option(rest).map(|option| {
+            format!(
+                "`env {}` is an option the guard does not read",
+                crate::git::display_text(option)
+            )
+        }),
+        _ => None,
+    };
+    if why.is_some() {
+        out.client_env_unresolved = why;
+    }
+}
+
+/// The first `env` option before its command that the guard does not read;
+/// assignments and the options that only clear, unset or move are read.
+fn env_unknown_option(rest: &[String]) -> Option<&String> {
+    let mut words = rest.iter();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "-i" | "--ignore-environment" | "-" | "-0" | "--null" | "-v" | "--debug" => {}
+            "-u" | "--unset" | "-C" | "--chdir" => {
+                words.next();
+            }
+            "--" => return None,
+            w if w.starts_with("--unset=") || w.starts_with("--chdir=") => {}
+            w if (w.starts_with("-u") || w.starts_with("-C")) && w.len() > 2 => {}
+            w if w.starts_with('-') => return Some(word),
+            w if w.contains('=') => {}
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Note a `${NAME=value}` or `${NAME:=value}` expansion in `segment` that
+/// assigns a variable placing a client's config file.
+fn note_client_env_expansion(segment: &str, out: &mut Parsed) {
+    let assigns = super::release_routes::CONFIG_VARIABLES.iter().any(|var| {
+        segment.contains(&format!("${{{var}=")) || segment.contains(&format!("${{{var}:="))
+    });
+    if assigns && out.client_env_unresolved.is_none() {
+        out.client_env_unresolved =
+            Some("a `${NAME=value}` expansion may set a variable the guard cannot read".into());
     }
 }
 

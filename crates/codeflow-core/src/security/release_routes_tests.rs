@@ -124,7 +124,31 @@ fn standard() -> tempfile::TempDir {
     )
 }
 
+/// The guard's environment for a test: unless the test set its own, no
+/// config variables and an account home that does not exist, so no client
+/// config file on the host changes a verdict.
+fn hermetic() {
+    super::TEST_SESSION.with(|session| {
+        session
+            .borrow_mut()
+            .get_or_insert_with(|| (Vec::new(), Some("/nonexistent/account-home".into())));
+    });
+}
+
+/// Run the checks with the guard's environment set to `values` and the
+/// account home `home`.
+fn with_session(values: &[(&str, &str)], home: Option<&Path>) {
+    let values = values
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+    super::TEST_SESSION.with(|session| {
+        *session.borrow_mut() = Some((values, home.map(Path::to_path_buf)));
+    });
+}
+
 fn refused(dir: &Path, command: &str) -> Option<String> {
+    hermetic();
     let found = evaluate_at(command, &SecuritySection::default(), Some(dir));
     let messages: Vec<_> = found
         .iter()
@@ -145,6 +169,7 @@ fn assert_refused(dir: &Path, command: &str, names: &str) {
 
 #[track_caller]
 fn assert_passes(dir: &Path, command: &str) {
+    hermetic();
     let found = evaluate_at(command, &SecuritySection::default(), Some(dir));
     assert!(found.is_empty(), "{command}: {found:?}");
 }
@@ -359,7 +384,7 @@ fn ac6_other_dispatches_reads_and_run_queries_still_pass() {
         "gh api -X POST repos/acme/widget/issues/1/comments -f body=hi",
         "gh api -X POST \"repos/acme/widget/issues/$N/comments\" -f body=hi",
         "curl -s https://api.github.com/repos/acme/widget/releases",
-        "curl -X POST https://example.invalid/releases -d x",
+        "curl -q -X POST https://example.invalid/releases -d x",
         // coordination/scripts/candidate-hosted-check.sh, as the script runs them.
         "gh pr view \"$pr\" -R \"$REPO\" --json headRefOid --jq .headRefOid",
         "gh api \"repos/$REPO/commits/$head/check-runs?per_page=100\" --paginate --jq '.check_runs[]'",
@@ -579,8 +604,8 @@ fn sweep_other_http_clients_are_read() {
         assert_refused(dir, command, names);
     }
     for command in [
-        "wget https://api.github.com/repos/acme/widget/releases",
-        "wget -O out.json https://api.github.com/repos/acme/widget/releases",
+        "wget --no-config https://api.github.com/repos/acme/widget/releases",
+        "wget --no-config -O out.json https://api.github.com/repos/acme/widget/releases",
         "http GET https://api.github.com/repos/acme/widget/releases",
         "xh https://api.github.com/repos/acme/widget/actions/runs per_page==5",
         "http POST https://api.github.com/repos/acme/widget/dispatches event_type=docs",
@@ -679,23 +704,23 @@ fn review_a_api_host_spellings_are_read() {
         ("curl -X POST --connect-to ::api.github.com:443 https://example.invalid/repos/acme/widget/releases -d x", "other than its URL"),
         ("curl -X POST --request-target /repos/acme/widget/releases https://api.github.com/x -d x", "other than its URL"),
         ("curl -X POST -K request.cfg -d x", "from a file"),
-        ("wget --method=POST -i urls.txt --body-data x", "from a file"),
-        ("wget --method=POST --header='Host: api.github.com' https://203.0.113.1/repos/acme/widget/releases", "Host header"),
+        ("wget --no-config --method=POST -i urls.txt --body-data x", "from a file"),
+        ("wget --no-config --method=POST --header='Host: api.github.com' https://203.0.113.1/repos/acme/widget/releases", "Host header"),
         ("http POST https://203.0.113.1/repos/acme/widget/releases Host:api.github.com tag_name=v1", "Host header"),
     ] {
         assert_refused(dir, command, names);
     }
     for command in [
         "curl -s https://api.github.com:443/repos/acme/widget/releases",
-        "curl -X POST -u u:p https://example.invalid/x -d a",
-        "curl -X POST http://localhost:3000/api -d x",
-        "curl -g -X POST 'https://example.invalid/{x}' -d a",
-        "curl -X POST https://notapi.github.com.example/repos/acme/widget/releases -d x",
-        "http POST :3000/api a=b",
-        "http POST https://example.invalid/x host:=1",
+        "curl -q -X POST -u u:p https://example.invalid/x -d a",
+        "curl -q -X POST http://localhost:3000/api -d x",
+        "curl -q -g -X POST 'https://example.invalid/{x}' -d a",
+        "curl -q -X POST https://notapi.github.com.example/repos/acme/widget/releases -d x",
     ] {
         assert_passes(dir, command);
     }
+    // An HTTPie or xh write to a host other than GitHub's passes.
+    assert_passes(dir, "http POST https://example.invalid/x host:=1");
 }
 
 /// Review finding B: any GraphQL path on a GitHub API host is GraphQL, for
@@ -730,7 +755,7 @@ fn review_b_graphql_is_read_on_every_path_and_client() {
     }
     for command in [
         "gh api graphql -f query='query { viewer { login } }'",
-        "curl -X POST https://api.github.com/graphql -d '{\"query\":\"query { viewer { login } }\"}'",
+        "curl -q -X POST https://api.github.com/graphql -d '{\"query\":\"query { viewer { login } }\"}'",
     ] {
         assert_passes(dir, command);
     }
@@ -840,4 +865,367 @@ fn the_github_slug() {
     ] {
         assert_eq!(super::github_slug(text), None, "{text}");
     }
+}
+
+/// Second review, findings 1 to 3: a `curl` write is refused when it may
+/// reach a GitHub API host: a parsed GitHub destination, an option the
+/// guard does not know, or a destination that does not parse, in any
+/// `--next` request. A write to a parsed host other than GitHub's passes.
+#[test]
+fn review2_curl_writes_are_allow_listed() {
+    let temp = standard();
+    let dir = temp.path();
+    let body = "-d '{\"tag_name\":\"v1\"}'";
+    let release = "https://api.github.com/repos/acme/widget/releases";
+    for (command, names) in [
+        // The reviewer's spellings, with and without `-q`.
+        (
+            format!("curl -X POST {release} {body} --next -X GET https://example.invalid/"),
+            "release",
+        ),
+        (
+            format!("curl -X POST {release} {body} -: -X GET https://example.invalid/"),
+            "release",
+        ),
+        (
+            format!("curl {body} {release} --next -G https://example.invalid/"),
+            "release",
+        ),
+        (
+            format!("curl -q -X POST {release} {body} --next -X GET https://example.invalid/"),
+            "release",
+        ),
+        (
+            format!("curl -q {body} {release} -: -G https://example.invalid/"),
+            "release",
+        ),
+        (
+            format!("curl -X POST --expand-url={release} {body}"),
+            "release",
+        ),
+        (
+            format!("curl -X POST https://example.invalid/x --expand-url={release} {body}"),
+            "release",
+        ),
+        (
+            format!("curl -q -X POST https://example.invalid/x --expand-url={release} {body}"),
+            "release",
+        ),
+        // The rest of the class: a write in a later request, expansions,
+        // unknown options, prefixes, clusters, redirects and URL files.
+        (
+            format!("curl -q https://example.invalid/ --next -X POST {release} {body}"),
+            "release",
+        ),
+        (
+            format!("curl -q -sSd '{{\"tag_name\":\"v1\"}}' {release}"),
+            "release",
+        ),
+        (
+            "curl -q -X POST --expand-url 'https://api.github.com/{{path}}' -d x".to_owned(),
+            "expand",
+        ),
+        (
+            "curl -q --variable m=POST --expand-request '{{m}}' https://example.invalid/x"
+                .to_owned(),
+            "expands a variable",
+        ),
+        (
+            "curl -q --frobnicate -X POST https://example.invalid/x -d a".to_owned(),
+            "does not know",
+        ),
+        (
+            "curl --frobnicate -X POST https://localhost:8080/x -d a".to_owned(),
+            "does not know",
+        ),
+        (
+            "curl -q --requ POST https://example.invalid/x".to_owned(),
+            "does not know",
+        ),
+        (
+            "curl -q -L -X POST https://example.invalid/x -d a".to_owned(),
+            "redirects",
+        ),
+        (
+            "curl -q -x http://proxy.invalid:8080 -X POST https://example.invalid/x -d a"
+                .to_owned(),
+            "other than its URL",
+        ),
+        (
+            "curl -q -X POST --url @urls.txt -d a".to_owned(),
+            "from a file",
+        ),
+        (
+            "curl -K request.cfg https://example.invalid/x".to_owned(),
+            "from a file",
+        ),
+        (
+            "curl -q -X POST https://example.invalid/x -d a --next 'https://a@b@api.github.com/'"
+                .to_owned(),
+            "cannot read",
+        ),
+    ] {
+        assert_refused(dir, &command, names);
+    }
+}
+
+/// The second half of the curl allow-list: what passes.
+#[test]
+fn review2_curl_writes_to_other_hosts_pass() {
+    let temp = standard();
+    let dir = temp.path();
+    for command in [
+        // A write whose destinations all parse to hosts other than GitHub's.
+        "curl -X POST https://localhost:8080/x -d a",
+        "curl -sSXPOST https://example.invalid/x",
+        "curl -q -X POST https://example.invalid/x -d a",
+        "curl --disable -sS --fail -X POST https://example.invalid/x --json '{}' -o out.json",
+        "curl -q -X POST https://example.invalid/x -d a --next https://api.github.com/repos/acme/widget/releases",
+        // Calls with no write keep their reading, unknown options included.
+        "curl -sSL --frobnicate https://api.github.com/repos/acme/widget/releases",
+        "curl -s https://example.invalid/ --next -s https://example.invalid/2",
+        "curl -sS -X GET https://api.github.com/repos/acme/widget/releases",
+    ] {
+        assert_passes(dir, command);
+    }
+}
+
+/// A directory holding an empty client config file at `file`.
+fn config_dir(file: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(file);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, "").unwrap();
+    dir
+}
+
+/// The Director's scope for `curl`: without `-q` first, a default config
+/// file that exists, or one the guard cannot check, refuses every call,
+/// reads included; with none, the arguments decide.
+#[test]
+fn review2_a_curlrc_refuses_curl_without_q() {
+    let temp = standard();
+    let dir = temp.path();
+    let home = config_dir(".curlrc");
+    let at = home.path().display().to_string();
+    let post = "curl -X POST https://localhost:8080/x -d a";
+    // No config file: a known-option write to localhost passes.
+    assert_passes(dir, post);
+    // A config file in the account home: the same write and a read are
+    // refused, naming the file and `-q`; `-q` or `--disable` first passes.
+    with_session(&[], Some(home.path()));
+    for command in [
+        post,
+        "curl https://example.invalid/",
+        "curl -s -q https://example.invalid/",
+    ] {
+        assert_refused(dir, command, &format!("{at}/.curlrc"));
+        assert_refused(dir, command, "put `-q` first");
+    }
+    for command in [
+        "curl -q -X POST https://localhost:8080/x -d a",
+        "curl --disable https://example.invalid/",
+    ] {
+        assert_passes(dir, command);
+    }
+}
+
+/// The config lookup uses the environment the call runs with: inline
+/// assignments, `env`, `export` or an assignment earlier on the line, the
+/// guard's own environment and the account home. A value the guard cannot
+/// resolve counts as a config file.
+#[test]
+fn review2_curlrc_is_found_through_every_environment_route() {
+    let temp = standard();
+    let dir = temp.path();
+    let curl_home = config_dir(".curlrc");
+    let at = curl_home.path().display().to_string();
+    let xdg = config_dir("curlrc");
+    let xdg_at = xdg.path().display().to_string();
+    let empty = tempfile::tempdir().unwrap();
+    let none = empty.path().display().to_string();
+    let get = "curl https://example.invalid/";
+    for (command, names) in [
+        // Inline.
+        (format!("CURL_HOME={at} {get}"), format!("{at}/.curlrc")),
+        (
+            format!("XDG_CONFIG_HOME={xdg_at} {get}"),
+            format!("{xdg_at}/curlrc"),
+        ),
+        (format!("HOME={at} {get}"), format!("{at}/.curlrc")),
+        // An env prefix, its known options included.
+        (format!("env CURL_HOME={at} {get}"), format!("{at}/.curlrc")),
+        (
+            format!("env -i -u PATH CURL_HOME={at} {get}"),
+            format!("{at}/.curlrc"),
+        ),
+        // Export or assignment earlier in the compound.
+        (
+            format!("export CURL_HOME={at}; {get}"),
+            format!("{at}/.curlrc"),
+        ),
+        (format!("CURL_HOME={at}; {get}"), format!("{at}/.curlrc")),
+        (
+            format!("cd /; export CURL_HOME={at} && {get}"),
+            format!("{at}/.curlrc"),
+        ),
+        // Values the guard cannot resolve.
+        (format!("CURL_HOME=$X {get}"), "cannot resolve".to_owned()),
+        (format!("CURL_HOME=~/x {get}"), "cannot resolve".to_owned()),
+        (
+            format!("CURL_HOME=$(pwd) {get}"),
+            "cannot resolve".to_owned(),
+        ),
+        (format!("source ./env.sh; {get}"), "`source`".to_owned()),
+        (format!("eval \"$SET\"; {get}"), "`eval`".to_owned()),
+        (format!("read CURL_HOME < f; {get}"), "`read`".to_owned()),
+        (
+            format!("env -S 'CURL_HOME=/x' {get}"),
+            "`env -S`".to_owned(),
+        ),
+        (
+            format!(": ${{CURL_HOME:=/x}}; {get}"),
+            "expansion".to_owned(),
+        ),
+    ] {
+        assert_refused(dir, &command, &names);
+        assert_refused(dir, &command, "put `-q` first");
+        assert_passes(dir, &command.replacen("curl ", "curl -q ", 1));
+    }
+    // A directory with no config file passes.
+    assert_passes(
+        dir,
+        &format!("CURL_HOME={none} XDG_CONFIG_HOME={none} {get}"),
+    );
+    // The guard's own environment.
+    with_session(&[("CURL_HOME", &at)], Some(empty.path()));
+    assert_refused(dir, get, &format!("{at}/.curlrc"));
+    // The account home's default path.
+    with_session(&[], Some(curl_home.path()));
+    assert_refused(dir, get, &format!("{at}/.curlrc"));
+    // No account home to check.
+    with_session(&[], None);
+    assert_refused(dir, get, "home directory cannot be read");
+}
+
+/// Second review, the sibling sweep: wget, `HTTPie` and xh follow the same
+/// scope as curl, and gh aliases are read from every config gh may read.
+#[test]
+fn review2_other_clients_and_gh_aliases_are_read() {
+    let temp = standard();
+    let dir = temp.path();
+    let release = "https://api.github.com/repos/acme/widget/releases";
+    for (command, names) in [
+        // wget reads a system wgetrc the guard cannot check.
+        ("wget https://example.invalid/x".to_owned(), "--no-config"),
+        ("wget -qO- https://example.invalid/x".to_owned(), "--no-config"),
+        ("wget --method=POST --body-data=x https://example.invalid/x".to_owned(), "--no-config"),
+        ("wget --no-config --method=POST --body-data=x https://example.invalid/x".to_owned(), "redirects"),
+        ("wget --no-config --max-redirect=0 --frob --method=POST https://example.invalid/x".to_owned(), "does not know"),
+        (format!("wget --no-config --max-redirect=0 --meth=POST {release}"), "does not know"),
+        ("wget --no-config -e method=POST https://example.invalid/x".to_owned(), "file or command"),
+        (format!("wget --no-config --max-redirect=0 --method=POST --body-data=x https://example.invalid/x {release}"), "release"),
+        (format!("wget --method=POST --body-data=x {release}"), "release"),
+        // HTTPie and xh writes that may reach GitHub.
+        ("http --follow POST https://example.invalid/x a=b".to_owned(), "redirects"),
+        ("http --frob POST https://example.invalid/x a=b".to_owned(), "does not know"),
+        ("xh --session=s PUT https://example.invalid/x".to_owned(), "session file"),
+        ("http POST https://203.0.113.1/x Host:api.github.com".to_owned(), "Host header"),
+        ("gh api -X POST graphql -f owner=acme".to_owned(), "cannot read from its body"),
+        ("curl -q -X POST 'https://api.github.com/graphql?query=mutation' -d '{}'".to_owned(), "cannot read from its body"),
+        ("gh api -X POST repositories/1/releases -f tag_name=v1".to_owned(), "release"),
+        ("gh api -X POST repositories/1/dispatches -f event_type=docs".to_owned(), "cannot resolve"),
+    ] {
+        assert_refused(dir, &command, names);
+    }
+    for command in [
+        "wget --no-config --max-redirect=0 --method=POST --body-data=x https://example.invalid/x",
+        "wget --no-config -qO- https://api.github.com/repos/acme/widget/releases",
+        "http POST https://localhost:8080/x a=b",
+        "xh PUT https://example.invalid/x a=b",
+        "https GET https://api.github.com/repos/acme/widget/releases",
+        "gh api -X POST repositories/1/issues/1/comments -f body=hi",
+    ] {
+        assert_passes(dir, command);
+    }
+    // HTTPie and xh config files, through the variable and the home.
+    let httpie = config_dir("config.json");
+    let httpie_at = httpie.path().display().to_string();
+    let home = config_dir(".config/xh/config.json");
+    for (command, names) in [
+        (
+            format!("HTTPIE_CONFIG_DIR={httpie_at} http https://example.invalid/"),
+            "HTTPIE_CONFIG_DIR",
+        ),
+        (
+            format!("XH_CONFIG_DIR={httpie_at} xh POST https://localhost:8080/x a=b"),
+            "XH_CONFIG_DIR",
+        ),
+        (
+            format!("HOME={} xh https://example.invalid/", home.path().display()),
+            "xh/config.json",
+        ),
+        (
+            "HTTPIE_CONFIG_DIR=$X http https://example.invalid/".to_owned(),
+            "cannot resolve",
+        ),
+    ] {
+        assert_refused(dir, &command, names);
+        assert_refused(dir, &command, "config");
+    }
+    with_session(&[], Some(home.path()));
+    assert_refused(
+        dir,
+        "xh POST https://localhost:8080/x a=b",
+        "xh/config.json",
+    );
+    assert_passes(dir, "http POST https://localhost:8080/x a=b");
+}
+
+/// gh aliases are read from every config gh may read.
+#[test]
+fn review2_gh_aliases_are_read_from_gh_config() {
+    let temp = standard();
+    let dir = temp.path();
+    // gh aliases, read from the config the line points gh at.
+    let config = tempfile::tempdir().unwrap();
+    std::fs::write(
+        config.path().join("config.yml"),
+        "aliases:\n  rel: api -X POST repos/{owner}/{repo}/releases -f tag_name=$1\n  disp: workflow run $1\n  shell: '!gh pr list'\n  prs: pr list\n",
+    )
+    .unwrap();
+    let at = config.path().display().to_string();
+    for (command, names) in [
+        (format!("GH_CONFIG_DIR={at} gh rel v1"), "release"),
+        (format!("export GH_CONFIG_DIR={at}; gh rel v1"), "release"),
+        (
+            format!("env GH_CONFIG_DIR={at} gh disp release.yml"),
+            "release workflow",
+        ),
+        (format!("GH_CONFIG_DIR={at} gh shell"), "shell alias"),
+        ("GH_CONFIG_DIR=$X gh rel v1".to_owned(), "cannot resolve"),
+        ("source ./gh.sh; gh rel v1".to_owned(), "`source`"),
+    ] {
+        assert_refused(dir, &command, names);
+    }
+    for command in [
+        format!("GH_CONFIG_DIR={at} gh prs"),
+        format!("GH_CONFIG_DIR={at} gh disp codeflow-ci.yml"),
+        format!("GH_CONFIG_DIR={at} gh some-extension"),
+    ] {
+        assert_passes(dir, &command);
+    }
+    let broken = tempfile::tempdir().unwrap();
+    std::fs::create_dir(broken.path().join("config.yml")).unwrap();
+    assert_refused(
+        dir,
+        &format!(
+            "GH_CONFIG_DIR={} gh some-extension",
+            broken.path().display()
+        ),
+        "cannot be read",
+    );
+    // An alias in the guard's own config dir is read too.
+    with_session(&[("GH_CONFIG_DIR", &at)], None);
+    assert_refused(dir, "gh rel v1", "release");
 }

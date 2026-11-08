@@ -11,6 +11,15 @@
 //! `HTTPie` and xh are read. Each returns the form it names, and every doubt
 //! refuses.
 //!
+//! An HTTP client write to a parsed host other than GitHub's is allowed. A
+//! write the guard cannot rule out as reaching GitHub is refused: an option
+//! it does not know, a destination that does not parse, or a redirect. A
+//! client also reads more than its arguments: when a config file it reads
+//! exists in the environment the call runs with ([`ClientEnv`]), every call
+//! is refused unless it skips the file (`curl -q`; `wget --no-config`,
+//! always needed since wget's system `wgetrc` cannot be checked). A gh
+//! alias is judged as its expansion from every config gh may read.
+//!
 //! A re-run of a release run is not judged here: a run id names no
 //! workflow the guard can read without the network. The release workflow
 //! refuses its own re-runs instead (`docs/releasing.md`).
@@ -23,9 +32,10 @@
 //! or it deploys to an environment, calls a reusable workflow, or reads a
 //! secret other than `GITHUB_TOKEN`. A file the guard cannot read or parse
 //! counts as a release workflow.
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// Where a call runs and which repository `gh` defaults to.
+/// Where a call runs, which repository `gh` defaults to, and the
+/// environment it runs with.
 #[derive(Clone, Copy)]
 pub(crate) struct Ctx<'a> {
     cwd: Option<&'a Path>,
@@ -33,6 +43,8 @@ pub(crate) struct Ctx<'a> {
     gh_repo: Option<&'a str>,
     /// The repository a call acts on when its path names none.
     target: &'a Target,
+    /// The environment that places a client's config file.
+    env: Option<&'a ClientEnv>,
 }
 
 impl<'a> Ctx<'a> {
@@ -41,8 +53,328 @@ impl<'a> Ctx<'a> {
             cwd,
             gh_repo,
             target: &Target::Literal,
+            env: None,
         }
     }
+
+    /// The same context, finding config files through `env`.
+    pub(crate) fn with_env(self, env: &'a ClientEnv) -> Self {
+        Self {
+            env: Some(env),
+            ..self
+        }
+    }
+}
+
+/// The variables that place a client's config file.
+pub(crate) const CONFIG_VARIABLES: &[&str] = &[
+    "HOME",
+    "CURL_HOME",
+    "XDG_CONFIG_HOME",
+    "GH_CONFIG_DIR",
+    "HTTPIE_CONFIG_DIR",
+    "XH_CONFIG_DIR",
+    "AppData",
+    "APPDATA",
+];
+
+/// The environment a client call may run with, for finding its config
+/// file: every value the line gives a variable in [`CONFIG_VARIABLES`]
+/// (inline, through `env`, or by `export` or assignment earlier on the
+/// line), the guard's own environment, and the account's home directory.
+/// Any of them may be the one the call sees, so a lookup checks them all.
+pub(crate) struct ClientEnv {
+    values: Vec<(String, String)>,
+    /// Why the line may set a variable the guard cannot see, such as
+    /// `source`, `eval` or an `env` option it does not read.
+    unresolved: Option<String>,
+    account_home: Option<PathBuf>,
+}
+
+impl ClientEnv {
+    pub(crate) fn new(line: &[(String, String)], unresolved: Option<String>) -> Self {
+        let (session, account_home) = session_environment();
+        let mut values = line.to_vec();
+        values.extend(session);
+        Self {
+            values,
+            unresolved,
+            account_home,
+        }
+    }
+
+    /// Every directory `name` may hold; an error when a value cannot be
+    /// resolved.
+    fn dirs(&self, name: &str) -> Result<Vec<PathBuf>, String> {
+        if let Some(why) = &self.unresolved {
+            return Err(why.clone());
+        }
+        let mut dirs = Vec::new();
+        for (key, value) in &self.values {
+            if key != name || value.is_empty() {
+                continue;
+            }
+            // A command substitution reaches here as a control character.
+            if opaque(value) || value.starts_with('~') || value.chars().any(char::is_control) {
+                return Err(format!(
+                    "`{name}` holds an expansion the guard cannot resolve"
+                ));
+            }
+            dirs.push(PathBuf::from(value));
+        }
+        Ok(dirs)
+    }
+
+    /// Every home directory: each `HOME` and the account's own.
+    fn homes(&self) -> Result<Vec<PathBuf>, String> {
+        let mut homes = self.dirs("HOME")?;
+        let Some(home) = &self.account_home else {
+            return Err("the account's home directory cannot be read".into());
+        };
+        homes.push(home.clone());
+        Ok(homes)
+    }
+}
+
+/// The guard's own values for [`CONFIG_VARIABLES`], and the account's home.
+fn session_environment() -> (Vec<(String, String)>, Option<PathBuf>) {
+    #[cfg(test)]
+    if let Some(session) = TEST_SESSION.with(|s| s.borrow().clone()) {
+        return session;
+    }
+    let values = CONFIG_VARIABLES
+        .iter()
+        .filter_map(|name| {
+            std::env::var_os(name).map(|value| {
+                let value = value.into_string().unwrap_or_else(|_| format!("${name}"));
+                ((*name).to_owned(), value)
+            })
+        })
+        .collect();
+    (values, account_home())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The guard's environment and account home as a test sets them.
+    #[allow(clippy::type_complexity)]
+    pub(super) static TEST_SESSION: std::cell::RefCell<Option<(Vec<(String, String)>, Option<PathBuf>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The account's home directory from the password database, which a
+/// client reads when `HOME` is unset.
+#[cfg(unix)]
+fn account_home() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buffer = vec![0 as libc::c_char; 16 * 1024];
+    // SAFETY: `getpwuid_r` writes only into `entry` and `buffer`, which
+    // outlive the call, and sets `found` to `entry` or null.
+    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut found: *mut libc::passwd = std::ptr::null_mut();
+    let status = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            &raw mut entry,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &raw mut found,
+        )
+    };
+    if status != 0 || found.is_null() || entry.pw_dir.is_null() {
+        return None;
+    }
+    // SAFETY: `pw_dir` points into `buffer` as a NUL-terminated string.
+    let dir = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) };
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes())))
+}
+
+#[cfg(not(unix))]
+fn account_home() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE").map(PathBuf::from)
+}
+
+/// The files among `candidates` that exist, a relative one read from `cwd`;
+/// an error names a file whose presence cannot be checked.
+fn present(candidates: Vec<PathBuf>, cwd: Option<&Path>) -> Result<Vec<PathBuf>, String> {
+    let mut found = Vec::new();
+    for path in candidates {
+        let path = match cwd {
+            Some(cwd) if path.is_relative() => cwd.join(&path),
+            _ => path,
+        };
+        match path.try_exists() {
+            Ok(true) => found.push(path),
+            Ok(false) => {}
+            Err(e) => return Err(format!("{} cannot be checked ({e})", path.display())),
+        }
+    }
+    Ok(found)
+}
+
+/// gh's config files as gh finds them, every candidate the environment
+/// allows: `GH_CONFIG_DIR`, `XDG_CONFIG_HOME/gh`, `AppData/GitHub CLI` on
+/// Windows, and `~/.config/gh`.
+fn gh_config_files(ctx: Ctx<'_>) -> Result<Vec<PathBuf>, String> {
+    let env = ctx
+        .env
+        .ok_or_else(|| "the environment the call runs with is not known".to_owned())?;
+    let mut files: Vec<PathBuf> = env
+        .dirs("GH_CONFIG_DIR")?
+        .into_iter()
+        .map(|dir| dir.join("config.yml"))
+        .collect();
+    files.extend(
+        env.dirs("XDG_CONFIG_HOME")?
+            .into_iter()
+            .map(|dir| dir.join("gh").join("config.yml")),
+    );
+    if cfg!(windows) {
+        for name in ["AppData", "APPDATA"] {
+            files.extend(
+                env.dirs(name)?
+                    .into_iter()
+                    .map(|dir| dir.join("GitHub CLI").join("config.yml")),
+            );
+        }
+    }
+    files.extend(
+        env.homes()?
+            .into_iter()
+            .map(|dir| dir.join(".config").join("gh").join("config.yml")),
+    );
+    present(files, ctx.cwd)
+}
+
+/// gh's own commands and their short names; any other first word is an
+/// alias from gh's config or an extension.
+const GH_COMMANDS: &[&str] = &[
+    "accessibility",
+    "actions",
+    "agent-task",
+    "alias",
+    "api",
+    "attestation",
+    "auth",
+    "browse",
+    "cache",
+    "codespace",
+    "copilot",
+    "completion",
+    "config",
+    "cs",
+    "ext",
+    "extension",
+    "extensions",
+    "gist",
+    "gpg-key",
+    "help",
+    "issue",
+    "label",
+    "org",
+    "pr",
+    "preview",
+    "project",
+    "release",
+    "repo",
+    "ruleset",
+    "run",
+    "search",
+    "secret",
+    "ssh-key",
+    "status",
+    "variable",
+    "version",
+    "workflow",
+];
+
+/// A `gh` command that is not built in. An alias in any config file gh may
+/// read is judged as its expansion, the way gh expands it; a name no config
+/// holds is an extension, which runs as its own program. A shell alias,
+/// and config the guard cannot find or read, are refused.
+fn gh_alias(args: &[String], sub: &[String], ctx: Ctx<'_>, depth: usize) -> Option<String> {
+    let name = sub.first()?;
+    let shown = crate::git::display_text(name);
+    let unsure = |why: &str| {
+        Some(format!(
+            "gh {shown} may be an alias, and {why}, so the guard cannot tell whether it publishes a release"
+        ))
+    };
+    if depth > 0 {
+        return unsure("an alias that expands to another alias is not read");
+    }
+    let files = match gh_config_files(ctx) {
+        Ok(files) => files,
+        Err(why) => return unsure(&why),
+    };
+    for file in files {
+        let text = match std::fs::read_to_string(&file) {
+            Ok(text) => text,
+            Err(e) => {
+                return unsure(&format!(
+                    "gh's config {} cannot be read ({e})",
+                    file.display()
+                ))
+            }
+        };
+        let Ok(config) = serde_yaml::from_str::<serde_yaml::Value>(&text) else {
+            return unsure(&format!("gh's config {} cannot be parsed", file.display()));
+        };
+        let expansion = match config.get("aliases").and_then(|a| a.get(name.as_str())) {
+            None => continue,
+            Some(serde_yaml::Value::String(text)) => text.clone(),
+            Some(_) => return unsure("its alias is not text"),
+        };
+        if let Some(why) = gh_expansion(args, sub, &expansion, ctx, depth) {
+            return Some(why);
+        }
+    }
+    None
+}
+
+/// Judge the `gh` call `sub` names as the alias `expansion`.
+fn gh_expansion(
+    args: &[String],
+    sub: &[String],
+    expansion: &str,
+    ctx: Ctx<'_>,
+    depth: usize,
+) -> Option<String> {
+    let shown = crate::git::display_text(&sub[0]);
+    if expansion.starts_with('!') {
+        return Some(format!(
+            "gh {shown} runs the shell alias `{}`, which the guard cannot judge",
+            crate::git::display_text(expansion)
+        ));
+    }
+    // gh substitutes `$1`, `$2` and so on when the expansion holds a `$`,
+    // and otherwise appends the arguments; a placeholder left over is an
+    // error, so nothing runs.
+    let mut text = expansion.to_owned();
+    let mut extra = Vec::new();
+    for (index, arg) in sub[1..].iter().enumerate() {
+        if text.contains('$') {
+            text = text.replace(&format!("${}", index + 1), arg);
+        } else {
+            extra.push(arg.clone());
+        }
+    }
+    if text
+        .as_bytes()
+        .windows(2)
+        .any(|pair| pair[0] == b'$' && pair[1].is_ascii_digit())
+    {
+        return None;
+    }
+    let Some(mut words) = crate::hooks::git_guard::split_alias(&text) else {
+        return Some(format!(
+            "gh {shown} is an alias the guard cannot split into words, so it cannot tell whether it publishes a release"
+        ));
+    };
+    words.extend(extra);
+    let mut expanded = args[..args.len() - sub.len()].to_vec();
+    expanded.extend(words.iter().cloned());
+    gh_at(&expanded, &words, ctx, depth + 1)
 }
 
 /// The repository a call acts on when its path names none, or names it
@@ -90,6 +422,12 @@ fn gh_target(args: &[String], gh_repo: Option<&str>) -> Target {
 /// The refusal for `gh` arguments, or `None` when the call is not a release
 /// route. `args` are the words after `gh`; `sub` starts at its subcommand.
 pub(crate) fn gh(args: &[String], sub: &[String], ctx: Ctx<'_>) -> Option<String> {
+    gh_at(args, sub, ctx, 0)
+}
+
+/// [`gh`], `depth` aliases deep.
+fn gh_at(args: &[String], sub: &[String], ctx: Ctx<'_>, depth: usize) -> Option<String> {
+    let outer = ctx;
     let target = gh_target(args, ctx.gh_repo);
     let ctx = Ctx {
         target: &target,
@@ -103,149 +441,551 @@ pub(crate) fn gh(args: &[String], sub: &[String], ctx: Ctx<'_>) -> Option<String
             store_command(kind, verb, &sub[2..], ctx)
         }
         (Some("api"), _) => api(&sub[1..], ctx),
+        (Some(command), _) if !command.starts_with('-') && !GH_COMMANDS.contains(&command) => {
+            gh_alias(args, sub, outer, depth)
+        }
         _ => None,
     }
 }
 
-/// `curl` options that take the next word as their value, besides those
-/// [`curl`] reads.
-const CURL_VALUES: &[&str] = &[
-    "-o",
-    "--output",
-    "-u",
-    "--user",
-    "-A",
-    "--user-agent",
-    "-e",
-    "--referer",
-    "-b",
-    "--cookie",
-    "-c",
-    "--cookie-jar",
-    "-w",
-    "--write-out",
-    "-m",
-    "--max-time",
-    "--connect-timeout",
-    "-x",
-    "--proxy",
-    "-U",
-    "--proxy-user",
-    "-E",
-    "--cert",
-    "--key",
-    "--cacert",
-    "--capath",
-    "-r",
-    "--range",
-    "-C",
-    "--continue-at",
-    "-D",
-    "--dump-header",
-    "--trace",
-    "--trace-ascii",
-    "--stderr",
-    "--limit-rate",
-    "--max-filesize",
-    "--interface",
-    "--retry",
-    "--retry-delay",
-    "--retry-max-time",
-    "-z",
-    "--time-cond",
-    "--oauth2-bearer",
-    "--url-query",
-    "--variable",
-    "-Y",
-    "--speed-limit",
-    "-y",
-    "--speed-time",
+/// What an HTTP client option does, as far as the guard judges a write.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    /// Changes nothing the guard judges.
+    Inert,
+    /// Skips the client's default config file: `curl -q` when it comes
+    /// first, `wget --no-config`.
+    NoConfig,
+    /// Sets the method.
+    Method,
+    /// Sends its value as the body; the method becomes POST.
+    Data,
+    /// Sends a body the guard does not read, with this method.
+    Upload(&'static str),
+    /// Names a destination.
+    Url,
+    Get,
+    Head,
+    Header,
+    Globoff,
+    /// Reads settings from a file or a command, which may set the method,
+    /// body or destination.
+    Config(&'static str),
+    /// Sends the request somewhere other than its URL names.
+    Elsewhere(&'static str),
+    /// `wget --max-redirect`.
+    MaxRedirect,
+}
+
+impl Role {
+    /// Whether the role can make a call write.
+    fn may_write(self) -> bool {
+        matches!(
+            self,
+            Self::Method | Self::Data | Self::Upload(_) | Self::Config(_)
+        )
+    }
+}
+
+/// An option a client reads: its short letter, long name, whether it takes
+/// a value, and its role.
+type Spec = (Option<char>, &'static str, bool, Role);
+
+const FROM_FILE: &str = "reads its options from a file";
+const OTHER_HOST: &str = "sends the request to a host or path other than its URL names";
+const REDIRECTS: &str = "follows redirects to a destination the guard cannot read";
+const HOST_HEADER: &str = "sets the Host header or reads headers from a file";
+
+/// The `curl` options the guard knows. Beside a write, any other option is
+/// refused: it may change the method, body or destination.
+const CURL_OPTIONS: &[Spec] = &[
+    (Some('q'), "disable", false, Role::NoConfig),
+    (Some('X'), "request", true, Role::Method),
+    (Some('d'), "data", true, Role::Data),
+    (None, "data-raw", true, Role::Data),
+    (None, "data-binary", true, Role::Data),
+    (None, "data-ascii", true, Role::Data),
+    (None, "data-urlencode", true, Role::Data),
+    (None, "json", true, Role::Data),
+    (Some('F'), "form", true, Role::Upload("POST")),
+    (None, "form-string", true, Role::Upload("POST")),
+    (Some('T'), "upload-file", true, Role::Upload("PUT")),
+    (None, "url", true, Role::Url),
+    (Some('G'), "get", false, Role::Get),
+    (Some('I'), "head", false, Role::Head),
+    (Some('H'), "header", true, Role::Header),
+    (Some('g'), "globoff", false, Role::Globoff),
+    (Some('K'), "config", true, Role::Config(FROM_FILE)),
+    (None, "connect-to", true, Role::Elsewhere(OTHER_HOST)),
+    (None, "resolve", true, Role::Elsewhere(OTHER_HOST)),
+    (None, "request-target", true, Role::Elsewhere(OTHER_HOST)),
+    (Some('x'), "proxy", true, Role::Elsewhere(OTHER_HOST)),
+    (None, "preproxy", true, Role::Elsewhere(OTHER_HOST)),
+    (None, "doh-url", true, Role::Elsewhere(OTHER_HOST)),
+    (None, "socks4", true, Role::Elsewhere(OTHER_HOST)),
+    (None, "socks4a", true, Role::Elsewhere(OTHER_HOST)),
+    (None, "socks5", true, Role::Elsewhere(OTHER_HOST)),
+    (None, "socks5-hostname", true, Role::Elsewhere(OTHER_HOST)),
+    (None, "unix-socket", true, Role::Elsewhere(OTHER_HOST)),
+    (
+        None,
+        "abstract-unix-socket",
+        true,
+        Role::Elsewhere(OTHER_HOST),
+    ),
+    (None, "alt-svc", true, Role::Elsewhere(OTHER_HOST)),
+    (Some('L'), "location", false, Role::Elsewhere(REDIRECTS)),
+    (None, "location-trusted", false, Role::Elsewhere(REDIRECTS)),
+    (Some('s'), "silent", false, Role::Inert),
+    (Some('S'), "show-error", false, Role::Inert),
+    (Some('f'), "fail", false, Role::Inert),
+    (None, "fail-with-body", false, Role::Inert),
+    (None, "fail-early", false, Role::Inert),
+    (Some('v'), "verbose", false, Role::Inert),
+    (Some('i'), "include", false, Role::Inert),
+    (None, "show-headers", false, Role::Inert),
+    (Some('k'), "insecure", false, Role::Inert),
+    (None, "compressed", false, Role::Inert),
+    (Some('N'), "no-buffer", false, Role::Inert),
+    (Some('O'), "remote-name", false, Role::Inert),
+    (None, "remote-name-all", false, Role::Inert),
+    (Some('J'), "remote-header-name", false, Role::Inert),
+    (None, "create-dirs", false, Role::Inert),
+    (None, "no-progress-meter", false, Role::Inert),
+    (Some('#'), "progress-bar", false, Role::Inert),
+    (None, "retry-all-errors", false, Role::Inert),
+    (None, "retry-connrefused", false, Role::Inert),
+    (Some('4'), "ipv4", false, Role::Inert),
+    (Some('6'), "ipv6", false, Role::Inert),
+    (Some('0'), "http1.0", false, Role::Inert),
+    (None, "http1.1", false, Role::Inert),
+    (None, "http2", false, Role::Inert),
+    (None, "http2-prior-knowledge", false, Role::Inert),
+    (None, "http3", false, Role::Inert),
+    (None, "tlsv1.2", false, Role::Inert),
+    (None, "tlsv1.3", false, Role::Inert),
+    (None, "ssl-reqd", false, Role::Inert),
+    (None, "raw", false, Role::Inert),
+    (Some('n'), "netrc", false, Role::Inert),
+    (None, "netrc-optional", false, Role::Inert),
+    (None, "path-as-is", false, Role::Inert),
+    (None, "post301", false, Role::Inert),
+    (None, "post302", false, Role::Inert),
+    (None, "post303", false, Role::Inert),
+    (None, "no-keepalive", false, Role::Inert),
+    (None, "tcp-nodelay", false, Role::Inert),
+    (Some('R'), "remote-time", false, Role::Inert),
+    (Some('j'), "junk-session-cookies", false, Role::Inert),
+    (None, "digest", false, Role::Inert),
+    (None, "basic", false, Role::Inert),
+    (None, "anyauth", false, Role::Inert),
+    (Some('V'), "version", false, Role::Inert),
+    (Some('o'), "output", true, Role::Inert),
+    (None, "output-dir", true, Role::Inert),
+    (Some('u'), "user", true, Role::Inert),
+    (Some('A'), "user-agent", true, Role::Inert),
+    (Some('e'), "referer", true, Role::Inert),
+    (Some('b'), "cookie", true, Role::Inert),
+    (Some('c'), "cookie-jar", true, Role::Inert),
+    (Some('w'), "write-out", true, Role::Inert),
+    (Some('m'), "max-time", true, Role::Inert),
+    (None, "connect-timeout", true, Role::Inert),
+    (Some('U'), "proxy-user", true, Role::Inert),
+    (Some('E'), "cert", true, Role::Inert),
+    (None, "cert-type", true, Role::Inert),
+    (None, "key", true, Role::Inert),
+    (None, "key-type", true, Role::Inert),
+    (None, "cacert", true, Role::Inert),
+    (None, "capath", true, Role::Inert),
+    (None, "pinnedpubkey", true, Role::Inert),
+    (None, "ciphers", true, Role::Inert),
+    (None, "tls-max", true, Role::Inert),
+    (Some('r'), "range", true, Role::Inert),
+    (Some('C'), "continue-at", true, Role::Inert),
+    (Some('D'), "dump-header", true, Role::Inert),
+    (None, "trace", true, Role::Inert),
+    (None, "trace-ascii", true, Role::Inert),
+    (None, "stderr", true, Role::Inert),
+    (None, "limit-rate", true, Role::Inert),
+    (None, "max-filesize", true, Role::Inert),
+    (None, "max-redirs", true, Role::Inert),
+    (None, "interface", true, Role::Inert),
+    (None, "retry", true, Role::Inert),
+    (None, "retry-delay", true, Role::Inert),
+    (None, "retry-max-time", true, Role::Inert),
+    (Some('z'), "time-cond", true, Role::Inert),
+    (None, "oauth2-bearer", true, Role::Inert),
+    (None, "aws-sigv4", true, Role::Inert),
+    (None, "netrc-file", true, Role::Inert),
+    (None, "url-query", true, Role::Inert),
+    (None, "variable", true, Role::Inert),
+    (Some('Y'), "speed-limit", true, Role::Inert),
+    (Some('y'), "speed-time", true, Role::Inert),
+    (None, "keepalive-time", true, Role::Inert),
+    (None, "expect100-timeout", true, Role::Inert),
+    (None, "proto", true, Role::Inert),
+    (None, "proto-redir", true, Role::Inert),
 ];
 
-/// The refusal for a `curl` call that writes to a GitHub API release route.
-/// A write whose URL, host or path the guard cannot read is refused.
-pub(crate) fn curl(args: &[String], cwd: Option<&Path>) -> Option<String> {
-    let ctx = Ctx::new(cwd, None);
-    let mut method: Option<String> = None;
-    let mut implied: Option<&'static str> = None;
-    let mut get = false;
-    let mut glob = true;
-    let mut redirected: Option<&'static str> = None;
-    let mut body = Body::default();
-    let mut urls = Vec::new();
+/// One option a client was given: how it was written, its role, its value,
+/// and whether it was written `--expand-NAME`.
+struct Given {
+    shown: String,
+    role: Role,
+    value: Option<String>,
+    expanded: bool,
+}
+
+/// A word of a client's arguments, as `read_options` reads it.
+enum Word {
+    Option(Given),
+    Positional(String),
+    /// An option the guard does not know; `true` when it may be a write
+    /// option written short, as a client that takes a prefix reads it.
+    Unknown(String, bool),
+    /// `curl --next`: the words after it are another request.
+    Next,
+}
+
+/// Read `args` against `specs`. Short options cluster, and a short option
+/// that takes a value takes the rest of its word or the next word. `next`
+/// words start another request, `inert` words are known flags written
+/// whole, and `expand` reads `--expand-NAME` as `--NAME`.
+fn read_options(
+    args: &[String],
+    specs: &[Spec],
+    next: &[&str],
+    inert: &[&str],
+    expand: bool,
+) -> Vec<Word> {
+    let mut words = Vec::new();
     let mut at = 0;
     while let Some(word) = args.get(at) {
         at += 1;
-        let (name, attached) = split_option(word, &["-X", "-d", "-F", "-T", "-H", "-K"]);
-        if attached.is_none() && CURL_VALUES.contains(&name.as_str()) {
-            at += 1;
+        if next.contains(&word.as_str()) {
+            words.push(Word::Next);
             continue;
         }
-        let mut value = || {
-            attached.clone().or_else(|| {
-                at += 1;
-                args.get(at - 1).cloned()
-            })
-        };
-        match name.as_str() {
-            "-K" | "--config" => {
-                value();
-                redirected = Some("reads its options from a file");
-            }
-            "--connect-to" | "--resolve" | "--request-target" => {
-                value();
-                redirected = Some("sends the request to a host or path other than its URL names");
-            }
-            "-H" | "--header" => {
-                let header = value().unwrap_or_default();
-                if header.starts_with('@')
-                    || header
-                        .get(..5)
-                        .is_some_and(|h| h.eq_ignore_ascii_case("host:"))
+        if inert.contains(&word.as_str()) {
+            continue;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, attached) = match long.split_once('=') {
+                Some((name, value)) => (name, Some(value.to_owned())),
+                None => (long, None),
+            };
+            let (base, expanded) = match name.strip_prefix("expand-").filter(|_| expand) {
+                Some(base) => (base, true),
+                None => (name, false),
+            };
+            match specs.iter().find(|spec| spec.1 == base) {
+                Some(&(_, _, takes, role))
+                    if (takes || (!expanded && attached.is_none())) && !base.is_empty() =>
                 {
-                    redirected = Some("sets the Host header or reads headers from a file");
+                    let value = if takes {
+                        attached.or_else(|| {
+                            at += 1;
+                            args.get(at - 1).cloned()
+                        })
+                    } else {
+                        None
+                    };
+                    words.push(Word::Option(Given {
+                        shown: format!("--{name}"),
+                        role,
+                        value,
+                        expanded,
+                    }));
+                }
+                _ => {
+                    let negated = base.strip_prefix("no-").is_some_and(|flag| {
+                        specs
+                            .iter()
+                            .any(|spec| spec.1 == flag && !spec.2 && spec.3 == Role::Inert)
+                    });
+                    if negated && !expanded && attached.is_none() {
+                        continue;
+                    }
+                    let may_write = base.len() >= 2
+                        && specs
+                            .iter()
+                            .any(|spec| spec.3.may_write() && spec.1.starts_with(base));
+                    words.push(Word::Unknown(word.clone(), may_write));
                 }
             }
-            "-g" | "--globoff" => glob = false,
-            "-X" | "--request" => method = value(),
-            "-d" | "--data" | "--data-raw" | "--data-binary" | "--data-ascii"
-            | "--data-urlencode" | "--json" => {
-                implied = Some("POST");
-                body.text(value());
+            continue;
+        }
+        if word.len() > 1 && word.starts_with('-') {
+            let letters: Vec<char> = word.chars().skip(1).collect();
+            for (index, letter) in letters.iter().enumerate() {
+                let Some(&(_, _, takes, role)) = specs.iter().find(|spec| spec.0 == Some(*letter))
+                else {
+                    words.push(Word::Unknown(word.clone(), false));
+                    break;
+                };
+                let value = if takes {
+                    let rest: String = letters[index + 1..].iter().collect();
+                    if rest.is_empty() {
+                        at += 1;
+                        args.get(at - 1).cloned()
+                    } else {
+                        Some(rest)
+                    }
+                } else {
+                    None
+                };
+                words.push(Word::Option(Given {
+                    shown: format!("-{letter}"),
+                    role,
+                    value,
+                    expanded: false,
+                }));
+                if takes {
+                    break;
+                }
             }
-            "-F" | "--form" | "--form-string" => {
-                implied = Some("POST");
-                value();
-                body.unknown = true;
-            }
-            "-T" | "--upload-file" => {
-                implied = Some("PUT");
-                value();
-                body.unknown = true;
-            }
-            "--url" => urls.extend(value()),
-            "-G" | "--get" => get = true,
-            "-I" | "--head" => method = Some("HEAD".into()),
-            _ if word.starts_with('-') => {}
-            _ => urls.push(word.clone()),
+            continue;
+        }
+        words.push(Word::Positional(word.clone()));
+    }
+    words
+}
+
+/// Whether a header value sets the Host header or reads headers from a
+/// file.
+fn moves_host(header: Option<&str>) -> bool {
+    header.is_some_and(|h| {
+        h.starts_with('@') || h.get(..5).is_some_and(|h| h.eq_ignore_ascii_case("host:"))
+    })
+}
+
+/// One request of a `curl` command; `--next` starts another, with the
+/// options reset.
+struct CurlRequest {
+    method: Option<String>,
+    implied: Option<&'static str>,
+    get: bool,
+    glob: bool,
+    body: Body,
+    urls: Vec<String>,
+}
+
+impl Default for CurlRequest {
+    fn default() -> Self {
+        Self {
+            method: None,
+            implied: None,
+            get: false,
+            glob: true,
+            body: Body::default(),
+            urls: Vec::new(),
         }
     }
-    let method = match (method, get) {
-        (Some(m), _) => m.to_ascii_uppercase(),
-        (None, true) => "GET".into(),
-        (None, false) => implied.unwrap_or("GET").into(),
+}
+
+impl CurlRequest {
+    fn method(&self) -> String {
+        match (&self.method, self.get) {
+            (Some(method), _) => method.clone(),
+            (None, true) => "GET".into(),
+            (None, false) => self.implied.unwrap_or("GET").into(),
+        }
+    }
+}
+
+/// What a `curl` command does as far as the guard judges a write: its
+/// requests, and why the guard cannot read them all.
+#[derive(Default)]
+struct CurlCall {
+    requests: Vec<CurlRequest>,
+    /// Some option in some request writes, or may.
+    writes: bool,
+    unknown: Vec<String>,
+    elsewhere: Option<&'static str>,
+    unreadable: Option<String>,
+}
+
+fn read_curl(args: &[String]) -> CurlCall {
+    let mut call = CurlCall {
+        requests: vec![CurlRequest::default()],
+        ..CurlCall::default()
     };
-    if !writes(&method) {
+    for word in read_options(args, CURL_OPTIONS, &["--next", "-:"], &[], true) {
+        if let Word::Next = word {
+            call.requests.push(CurlRequest::default());
+            continue;
+        }
+        let Some(request) = call.requests.last_mut() else {
+            continue;
+        };
+        let given = match word {
+            Word::Next => continue,
+            Word::Positional(url) => {
+                request.urls.push(url);
+                continue;
+            }
+            Word::Unknown(word, may_write) => {
+                call.writes |= may_write;
+                call.unknown.push(word);
+                continue;
+            }
+            Word::Option(given) => given,
+        };
+        if given.expanded
+            && given.role != Role::Inert
+            && given.value.as_deref().is_some_and(|v| v.contains("{{"))
+        {
+            call.writes |= given.role == Role::Method;
+            call.unreadable.get_or_insert_with(|| {
+                format!(
+                    "expands a variable in `{}`, which the guard cannot read",
+                    given.shown
+                )
+            });
+        }
+        match given.role {
+            Role::Inert | Role::NoConfig | Role::MaxRedirect => {}
+            Role::Method => {
+                let method = given.value.unwrap_or_default().to_ascii_uppercase();
+                call.writes |= writes(&method);
+                request.method = Some(method);
+            }
+            Role::Data => {
+                call.writes = true;
+                request.implied = Some("POST");
+                request.body.text(given.value);
+            }
+            Role::Upload(method) => {
+                call.writes = true;
+                request.implied = Some(method);
+                request.body.unknown = true;
+            }
+            Role::Url => request.urls.extend(given.value),
+            Role::Get => request.get = true,
+            Role::Head => request.method = Some("HEAD".into()),
+            Role::Header => {
+                if moves_host(given.value.as_deref()) {
+                    call.elsewhere = Some(HOST_HEADER);
+                }
+            }
+            Role::Globoff => request.glob = false,
+            Role::Config(why) => {
+                call.writes = true;
+                call.elsewhere = Some(why);
+            }
+            Role::Elsewhere(why) => call.elsewhere = Some(why),
+        }
+    }
+    call
+}
+
+/// Why a `curl` call without `-q` or `--disable` first is refused. curl
+/// then reads a default config file, which can add a URL, a method or data,
+/// so the arguments alone cannot rule out a write to GitHub: it reads
+/// `$CURL_HOME/.curlrc`, `$XDG_CONFIG_HOME/curlrc`, `$HOME/.curlrc` and the
+/// account home's `.curlrc`. `None` when none of them exists. A file the
+/// guard cannot check counts as present. On Windows curl also reads a file
+/// beside `curl.exe`, which is not checked, so every such call is refused
+/// there. The decision is kept here alone so the scope can change.
+fn curlrc_refusal(ctx: Ctx<'_>) -> Option<String> {
+    let advice = "put `-q` first so curl skips it";
+    let found = (|| -> Result<Vec<PathBuf>, String> {
+        if cfg!(windows) {
+            return Err(
+                "curl on Windows also reads a config file beside `curl.exe`, which the guard does not check"
+                    .into(),
+            );
+        }
+        let env = ctx
+            .env
+            .ok_or_else(|| "the environment the call runs with is not known".to_owned())?;
+        let mut files: Vec<PathBuf> = env
+            .dirs("CURL_HOME")?
+            .into_iter()
+            .map(|dir| dir.join(".curlrc"))
+            .collect();
+        files.extend(
+            env.dirs("XDG_CONFIG_HOME")?
+                .into_iter()
+                .map(|dir| dir.join("curlrc")),
+        );
+        files.extend(env.homes()?.into_iter().map(|dir| dir.join(".curlrc")));
+        present(files, ctx.cwd)
+    })();
+    match found {
+        Ok(files) => files.first().map(|file| {
+            format!(
+                "curl may read the default config file {}, which can add a URL, a method or data; {advice}",
+                file.display()
+            )
+        }),
+        Err(why) => Some(format!(
+            "curl may read a default config file, and {why}; {advice}"
+        )),
+    }
+}
+
+/// The refusal for a `curl` call. A call without `-q` first is refused
+/// when a default config file may be read ([`curlrc_refusal`]). A call
+/// with a write option is refused when it writes to a release route, or
+/// when its destination cannot be ruled out as GitHub: an option the guard
+/// does not know, a destination that does not parse, a redirect, a proxy
+/// or a remapped host. Each `--next` request is judged with its own method.
+/// A write to a parsed host other than GitHub's is allowed.
+pub(crate) fn curl(args: &[String], ctx: Ctx<'_>) -> Option<String> {
+    let call = read_curl(args);
+    // A release route the guard can read names itself first.
+    if call.writes {
+        for request in &call.requests {
+            let method = request.method();
+            if writes(&method) {
+                let form = format!("curl -X {method}");
+                if let Some(why) = request
+                    .urls
+                    .iter()
+                    .find_map(|url| route_of(&form, url, request.glob, &method, &request.body, ctx))
+                {
+                    return Some(why);
+                }
+            }
+        }
+    }
+    if !matches!(args.first().map(String::as_str), Some("-q" | "--disable")) {
+        if let Some(why) = curlrc_refusal(ctx) {
+            return Some(why);
+        }
+    }
+    if !call.writes {
         return None;
     }
-    let form = format!("curl -X {method}");
-    if let Some(why) = redirected {
-        return Some(format!(
-            "{form} {why}, so the guard cannot tell whether it reaches a release route"
+    let refuse = |why: &str| {
+        Some(format!(
+            "curl writes and {why}, so the guard cannot rule out a write to a GitHub release route"
+        ))
+    };
+    if let Some(why) = call.elsewhere {
+        return refuse(why);
+    }
+    if let Some(word) = call.unknown.first() {
+        return refuse(&format!(
+            "uses `{}`, an option the guard does not know, which may change the method, body or destination",
+            crate::git::display_text(word)
         ));
     }
-    urls.iter()
-        .find_map(|url| route_of(&form, url, glob, &method, &body, ctx))
+    if let Some(why) = &call.unreadable {
+        return refuse(why);
+    }
+    for request in &call.requests {
+        for url in &request.urls {
+            if url.starts_with('@') {
+                return refuse("reads its URLs from a file");
+            }
+            if let Err(why) = destination(url, request.glob) {
+                return Some(format!("curl {why}"));
+            }
+        }
+    }
+    None
 }
 
 /// The refusal for a write by an HTTP client to `url`.
@@ -264,99 +1004,320 @@ fn route_of(
     }
 }
 
-/// `wget` options that take the next word as their value.
-const WGET_VALUES: &[&str] = &[
-    "-O",
-    "-o",
-    "-a",
-    "-e",
-    "-P",
-    "-t",
-    "-T",
-    "-w",
-    "-U",
-    "-Q",
-    "-l",
-    "-A",
-    "-R",
-    "-D",
-    "-I",
-    "-X",
-    "-i",
-    "-B",
-    "--header",
-    "--user",
-    "--password",
-    "--method",
-    "--post-data",
-    "--post-file",
-    "--body-data",
-    "--body-file",
-    "--output-document",
-    "--output-file",
-    "--append-output",
-    "--execute",
-    "--directory-prefix",
-    "--tries",
-    "--timeout",
-    "--wait",
-    "--user-agent",
-    "--quota",
-    "--level",
-    "--accept",
-    "--reject",
-    "--domains",
-    "--include-directories",
-    "--exclude-directories",
-    "--input-file",
-    "--base",
-    "--http-user",
-    "--http-password",
-    "--referer",
-    "--load-cookies",
-    "--save-cookies",
-    "--ca-certificate",
-    "--certificate",
-    "--private-key",
+const WGET_SETTINGS: &str = "reads its URLs or settings from a file or command";
+
+/// The `wget` options the guard knows. Beside a write, any other option is
+/// refused, and so is a prefix of a write option, which wget reads as it.
+const WGET_OPTIONS: &[Spec] = &[
+    (None, "no-config", false, Role::NoConfig),
+    (None, "max-redirect", true, Role::MaxRedirect),
+    (None, "method", true, Role::Method),
+    (None, "post-data", true, Role::Data),
+    (None, "body-data", true, Role::Data),
+    (None, "post-file", true, Role::Upload("POST")),
+    (None, "body-file", true, Role::Upload("POST")),
+    (None, "header", true, Role::Header),
+    (Some('e'), "execute", true, Role::Config(WGET_SETTINGS)),
+    (None, "config", true, Role::Config(WGET_SETTINGS)),
+    (Some('i'), "input-file", true, Role::Config(WGET_SETTINGS)),
+    (Some('B'), "base", true, Role::Elsewhere(OTHER_HOST)),
+    (None, "bind-address", true, Role::Inert),
+    (Some('q'), "quiet", false, Role::Inert),
+    (Some('v'), "verbose", false, Role::Inert),
+    (None, "no-verbose", false, Role::Inert),
+    (Some('S'), "server-response", false, Role::Inert),
+    (Some('c'), "continue", false, Role::Inert),
+    (Some('N'), "timestamping", false, Role::Inert),
+    (Some('d'), "debug", false, Role::Inert),
+    (Some('V'), "version", false, Role::Inert),
+    (Some('4'), "inet4-only", false, Role::Inert),
+    (Some('6'), "inet6-only", false, Role::Inert),
+    (None, "no-check-certificate", false, Role::Inert),
+    (None, "no-cookies", false, Role::Inert),
+    (None, "keep-session-cookies", false, Role::Inert),
+    (None, "ignore-length", false, Role::Inert),
+    (None, "no-cache", false, Role::Inert),
+    (None, "save-headers", false, Role::Inert),
+    (None, "content-disposition", false, Role::Inert),
+    (None, "content-on-error", false, Role::Inert),
+    (None, "auth-no-challenge", false, Role::Inert),
+    (None, "https-only", false, Role::Inert),
+    (None, "retry-connrefused", false, Role::Inert),
+    (None, "no-proxy", false, Role::Inert),
+    (None, "no-clobber", false, Role::Inert),
+    (None, "no-dns-cache", false, Role::Inert),
+    (None, "no-hsts", false, Role::Inert),
+    (None, "show-progress", false, Role::Inert),
+    (Some('O'), "output-document", true, Role::Inert),
+    (Some('o'), "output-file", true, Role::Inert),
+    (Some('a'), "append-output", true, Role::Inert),
+    (Some('P'), "directory-prefix", true, Role::Inert),
+    (Some('t'), "tries", true, Role::Inert),
+    (Some('T'), "timeout", true, Role::Inert),
+    (Some('w'), "wait", true, Role::Inert),
+    (Some('U'), "user-agent", true, Role::Inert),
+    (Some('Q'), "quota", true, Role::Inert),
+    (None, "user", true, Role::Inert),
+    (None, "password", true, Role::Inert),
+    (None, "http-user", true, Role::Inert),
+    (None, "http-password", true, Role::Inert),
+    (None, "referer", true, Role::Inert),
+    (None, "load-cookies", true, Role::Inert),
+    (None, "save-cookies", true, Role::Inert),
+    (None, "ca-certificate", true, Role::Inert),
+    (None, "ca-directory", true, Role::Inert),
+    (None, "certificate", true, Role::Inert),
+    (None, "private-key", true, Role::Inert),
+    (None, "secure-protocol", true, Role::Inert),
+    (None, "read-timeout", true, Role::Inert),
+    (None, "connect-timeout", true, Role::Inert),
+    (None, "dns-timeout", true, Role::Inert),
+    (None, "waitretry", true, Role::Inert),
+    (None, "limit-rate", true, Role::Inert),
+    (None, "compression", true, Role::Inert),
+    (None, "progress", true, Role::Inert),
 ];
 
-/// `HTTPie` and xh options that take the next word as their value.
-const HTTPIE_VALUES: &[&str] = &[
-    "-a",
-    "--auth",
-    "-A",
-    "--auth-type",
-    "--session",
-    "--session-read-only",
-    "-o",
-    "--output",
-    "--cert",
-    "--cert-key",
-    "--cert-key-pass",
-    "--verify",
-    "--proxy",
-    "--timeout",
-    "--pretty",
-    "-s",
-    "--style",
-    "-p",
-    "--print",
-    "-P",
-    "--history-print",
-    "--max-redirects",
-    "--default-scheme",
-    "--format-options",
-    "--response-charset",
-    "--response-mime",
-    "--ssl",
-    "--ciphers",
-    "--boundary",
-    "--raw",
-    "--bearer",
-    "--resolve",
-    "--interface",
-    "--http-version",
+/// `wget`'s flags that start with `-n` and are read as one word.
+const WGET_WORDS: &[&str] = &["-nv", "-nc", "-nd", "-nH", "-np"];
+
+/// The refusal for a `wget` call. A call without `--no-config` is refused:
+/// wget then reads a system `wgetrc` at a path built into it, which the
+/// guard cannot check, and `WGETRC` or `~/.wgetrc`, any of which can set a
+/// URL, a method or a body. A call with a write option is refused when it
+/// writes to a release route, or when its destination cannot be ruled out:
+/// an option the guard does not know, a URL that does not parse, or a
+/// redirect, which wget follows unless `--max-redirect=0` is given.
+fn wget(args: &[String], ctx: Ctx<'_>) -> Option<String> {
+    let mut method: Option<String> = None;
+    let mut implied: Option<&'static str> = None;
+    let mut body = Body::default();
+    let mut urls = Vec::new();
+    let mut signal = false;
+    let mut unknown = Vec::new();
+    let mut elsewhere: Option<&'static str> = None;
+    let mut no_config = false;
+    let mut no_redirect = false;
+    for word in read_options(args, WGET_OPTIONS, &[], WGET_WORDS, false) {
+        let given = match word {
+            Word::Next => continue,
+            Word::Positional(url) => {
+                urls.push(url);
+                continue;
+            }
+            Word::Unknown(word, may_write) => {
+                signal |= may_write;
+                unknown.push(word);
+                continue;
+            }
+            Word::Option(given) => given,
+        };
+        match given.role {
+            Role::NoConfig => no_config = true,
+            Role::MaxRedirect => no_redirect = given.value.as_deref().map(str::trim) == Some("0"),
+            Role::Method => {
+                let value = given.value.unwrap_or_default().to_ascii_uppercase();
+                signal |= writes(&value);
+                method = Some(value);
+            }
+            Role::Data => {
+                signal = true;
+                implied = Some("POST");
+                body.text(given.value);
+            }
+            Role::Upload(post) => {
+                signal = true;
+                implied = Some(post);
+                body.unknown = true;
+            }
+            Role::Header => {
+                if moves_host(given.value.as_deref()) {
+                    elsewhere = Some(HOST_HEADER);
+                }
+            }
+            Role::Config(why) => {
+                signal = true;
+                elsewhere = Some(why);
+            }
+            Role::Elsewhere(why) => elsewhere = Some(why),
+            Role::Inert | Role::Url | Role::Get | Role::Head | Role::Globoff => {}
+        }
+    }
+    let method = method.unwrap_or_else(|| implied.unwrap_or("GET").into());
+    if signal && writes(&method) {
+        let form = format!("wget --method {method}");
+        if let Some(why) = urls
+            .iter()
+            .find_map(|url| route_of(&form, url, false, &method, &body, ctx))
+        {
+            return Some(why);
+        }
+    }
+    if !no_config {
+        return Some(
+            "wget may read a system `wgetrc` at a path built into it, which the guard cannot check, or `WGETRC` or `~/.wgetrc`, any of which can set a URL, a method or a body; pass `--no-config` so wget skips them"
+                .into(),
+        );
+    }
+    if !signal {
+        return None;
+    }
+    let refuse = |why: &str| {
+        Some(format!(
+            "wget writes and {why}, so the guard cannot rule out a write to a GitHub release route"
+        ))
+    };
+    if let Some(why) = elsewhere {
+        return refuse(why);
+    }
+    if let Some(word) = unknown.first() {
+        return refuse(&format!(
+            "uses `{}`, an option the guard does not know, which may change the method, body or destination",
+            crate::git::display_text(word)
+        ));
+    }
+    if !no_redirect {
+        return refuse(
+            "follows redirects, as wget does unless `--max-redirect=0` is given, to a destination the guard cannot read",
+        );
+    }
+    for url in &urls {
+        if let Err(why) = destination(url, false) {
+            return Some(format!("wget {why}"));
+        }
+    }
+    None
+}
+
+const SESSION: &str = "reads headers from a session file";
+
+/// The `HTTPie` and xh options the guard knows. Beside a write, any other
+/// option is refused, and so is a prefix of `--raw`, which `HTTPie` reads
+/// as it.
+const HTTPIE_OPTIONS: &[Spec] = &[
+    (None, "raw", true, Role::Data),
+    (Some('F'), "follow", false, Role::Elsewhere(REDIRECTS)),
+    (None, "session", true, Role::Elsewhere(SESSION)),
+    (None, "session-read-only", true, Role::Elsewhere(SESSION)),
+    (None, "proxy", true, Role::Elsewhere(OTHER_HOST)),
+    (None, "resolve", true, Role::Elsewhere(OTHER_HOST)),
+    (None, "unix-socket", true, Role::Elsewhere(OTHER_HOST)),
+    (Some('v'), "verbose", false, Role::Inert),
+    (Some('h'), "headers", false, Role::Inert),
+    (Some('b'), "body", false, Role::Inert),
+    (Some('m'), "meta", false, Role::Inert),
+    (Some('j'), "json", false, Role::Inert),
+    (Some('f'), "form", false, Role::Inert),
+    (None, "multipart", false, Role::Inert),
+    (Some('d'), "download", false, Role::Inert),
+    (Some('c'), "continue", false, Role::Inert),
+    (Some('q'), "quiet", false, Role::Inert),
+    (Some('S'), "stream", false, Role::Inert),
+    (None, "check-status", false, Role::Inert),
+    (None, "ignore-stdin", false, Role::Inert),
+    (Some('I'), "ignore-stdin", false, Role::Inert),
+    (None, "offline", false, Role::Inert),
+    (None, "all", false, Role::Inert),
+    (Some('x'), "compress", false, Role::Inert),
+    (None, "chunked", false, Role::Inert),
+    (None, "sorted", false, Role::Inert),
+    (None, "unsorted", false, Role::Inert),
+    (None, "path-as-is", false, Role::Inert),
+    (None, "ignore-netrc", false, Role::Inert),
+    (None, "https", false, Role::Inert),
+    (Some('4'), "ipv4", false, Role::Inert),
+    (Some('6'), "ipv6", false, Role::Inert),
+    (Some('a'), "auth", true, Role::Inert),
+    (Some('A'), "auth-type", true, Role::Inert),
+    (None, "bearer", true, Role::Inert),
+    (Some('o'), "output", true, Role::Inert),
+    (None, "cert", true, Role::Inert),
+    (None, "cert-key", true, Role::Inert),
+    (None, "cert-key-pass", true, Role::Inert),
+    (None, "verify", true, Role::Inert),
+    (None, "timeout", true, Role::Inert),
+    (None, "pretty", true, Role::Inert),
+    (Some('s'), "style", true, Role::Inert),
+    (Some('p'), "print", true, Role::Inert),
+    (Some('P'), "history-print", true, Role::Inert),
+    (None, "max-redirects", true, Role::Inert),
+    (None, "default-scheme", true, Role::Inert),
+    (None, "format-options", true, Role::Inert),
+    (None, "response-charset", true, Role::Inert),
+    (None, "response-mime", true, Role::Inert),
+    (None, "ssl", true, Role::Inert),
+    (None, "ciphers", true, Role::Inert),
+    (None, "boundary", true, Role::Inert),
+    (None, "http-version", true, Role::Inert),
+    (None, "interface", true, Role::Inert),
 ];
+
+/// Why an `HTTPie` or xh call is refused for its config file. Both read
+/// `default_options` from a `config.json`, which can add a URL, a method
+/// or a body, and neither has a flag that skips it. `HTTPie` reads
+/// `$HTTPIE_CONFIG_DIR`, `$XDG_CONFIG_HOME/httpie`, `~/.config/httpie` and
+/// the older `~/.httpie`; xh reads `$XH_CONFIG_DIR`, `$XDG_CONFIG_HOME/xh`,
+/// `~/.config/xh`, and on macOS `~/Library/Application Support/xh`. `None`
+/// when none of them exists; a file the guard cannot check counts as
+/// present.
+fn client_config_refusal(name: &str, ctx: Ctx<'_>) -> Option<String> {
+    let httpie = matches!(name, "http" | "https");
+    let (variable, dir) = if httpie {
+        ("HTTPIE_CONFIG_DIR", "httpie")
+    } else {
+        ("XH_CONFIG_DIR", "xh")
+    };
+    let found = (|| -> Result<Vec<PathBuf>, String> {
+        let env = ctx
+            .env
+            .ok_or_else(|| "the environment the call runs with is not known".to_owned())?;
+        let mut files: Vec<PathBuf> = env
+            .dirs(variable)?
+            .into_iter()
+            .map(|d| d.join("config.json"))
+            .collect();
+        files.extend(
+            env.dirs("XDG_CONFIG_HOME")?
+                .into_iter()
+                .map(|d| d.join(dir).join("config.json")),
+        );
+        for name in ["AppData", "APPDATA"] {
+            files.extend(
+                env.dirs(name)?
+                    .into_iter()
+                    .map(|d| d.join(dir).join("config.json")),
+            );
+        }
+        for home in env.homes()? {
+            files.push(home.join(".config").join(dir).join("config.json"));
+            if httpie {
+                files.push(home.join(".httpie").join("config.json"));
+            } else {
+                files.push(
+                    home.join("Library")
+                        .join("Application Support")
+                        .join(dir)
+                        .join("config.json"),
+                );
+            }
+        }
+        present(files, ctx.cwd)
+    })();
+    let advice = format!(
+        "{name} has no flag that skips it, and `{variable}` only moves it; remove the file or send the request with `curl -q`"
+    );
+    match found {
+        Ok(files) => files.first().map(|file| {
+            format!(
+                "{name} may read the config file {}, whose default options can add a URL, a method or a body; {advice}",
+                file.display()
+            )
+        }),
+        Err(why) => Some(format!(
+            "{name} may read a config file whose default options can add a URL, a method or a body, and {why}; {advice}"
+        )),
+    }
+}
 
 /// A JSON string value without its quotes; other JSON stays as written.
 fn unquote(value: &str) -> &str {
@@ -367,102 +1328,89 @@ fn unquote(value: &str) -> &str {
 }
 
 /// The refusal for a `wget`, `HTTPie` (`http`, `https`) or xh (`xh`, `xhs`)
-/// call that writes to a GitHub API release route.
-pub(crate) fn http_client(name: &str, args: &[String], cwd: Option<&Path>) -> Option<String> {
-    let ctx = Ctx::new(cwd, None);
-    let wget = name == "wget";
-    let values = if wget { WGET_VALUES } else { HTTPIE_VALUES };
-    let mut method: Option<String> = None;
+/// call. An `HTTPie` or xh call is refused when a config file may add to
+/// it ([`client_config_refusal`]); a write is refused when it reaches a
+/// release route or its destination cannot be ruled out as GitHub.
+pub(crate) fn http_client(name: &str, args: &[String], ctx: Ctx<'_>) -> Option<String> {
+    if name == "wget" {
+        return wget(args, ctx);
+    }
     let mut implied = false;
     let mut redirected: Option<&'static str> = None;
+    let mut unknown = Vec::new();
     let mut body = Body::default();
     let mut positional = Vec::new();
-    let mut at = 0;
-    while let Some(word) = args.get(at) {
-        at += 1;
-        if !word.starts_with('-') || word == "-" {
-            positional.push(word.clone());
-            continue;
-        }
-        let (option, attached) = split_option(word, &[]);
-        let value = if attached.is_some() {
-            attached
-        } else if values.contains(&option.as_str()) {
-            at += 1;
-            args.get(at - 1).cloned()
-        } else {
-            None
-        };
-        match option.as_str() {
-            "--method" => method = value,
-            "--post-data" | "--body-data" => {
-                implied = true;
-                body.text(value);
+    for word in read_options(args, HTTPIE_OPTIONS, &[], &[], false) {
+        match word {
+            Word::Next => {}
+            Word::Positional(word) => positional.push(word),
+            Word::Unknown(word, may_write) => {
+                implied |= may_write;
+                unknown.push(word);
             }
-            "--post-file" | "--body-file" | "--raw" => {
-                implied = true;
-                if option == "--raw" {
-                    body.text(value);
-                } else {
-                    body.unknown = true;
+            Word::Option(given) => match given.role {
+                Role::Data => {
+                    implied = true;
+                    body.text(given.value);
                 }
-            }
-            "-f" | "--form" | "--multipart" if !wget => implied = true,
-            "-i" | "--input-file" | "-e" | "--execute" | "--config" if wget => {
-                redirected = Some("reads its URLs or settings from a file or command");
-            }
-            "--header"
-                if value
-                    .as_deref()
-                    .and_then(|h| h.get(..5))
-                    .is_some_and(|h| h.eq_ignore_ascii_case("host:")) =>
-            {
-                redirected = Some("sets the Host header");
-            }
-            _ => {}
+                Role::Elsewhere(why) => redirected = Some(why),
+                _ => {}
+            },
         }
     }
     let mut positional = positional.into_iter();
-    let url = if wget {
-        positional.next()
-    } else {
-        let first = positional.next();
-        // HTTPie and xh read a first word of letters as the method when a
-        // URL follows it.
-        match first {
-            Some(word) if word.bytes().all(|b| b.is_ascii_alphabetic()) => {
-                match positional.next() {
-                    Some(url) => {
-                        method = method.or(Some(word));
-                        Some(url)
-                    }
-                    None => Some(word),
-                }
+    // HTTPie and xh read a first word of letters as the method when a URL
+    // follows it.
+    let mut method: Option<String> = None;
+    let url = match positional.next() {
+        Some(word) if word.bytes().all(|b| b.is_ascii_alphabetic()) => match positional.next() {
+            Some(url) => {
+                method = Some(word);
+                Some(url)
             }
-            other => other,
-        }
+            None => Some(word),
+        },
+        other => other,
     };
-    if !wget {
-        implied |= httpie_items(positional, &mut body, &mut redirected);
-    }
+    implied |= httpie_items(positional, &mut body, &mut redirected);
     let method = method.map_or_else(
         || if implied { "POST".into() } else { "GET".into() },
         |m| m.to_ascii_uppercase(),
     );
-    if !writes(&method) {
+    let form = format!("{name} {method}");
+    let write = writes(&method);
+    if write {
+        if let Some(why) = url
+            .as_deref()
+            .and_then(|url| route_of(&form, url, false, &method, &body, ctx))
+        {
+            return Some(why);
+        }
+    }
+    if let Some(why) = client_config_refusal(name, ctx) {
+        return Some(why);
+    }
+    if !write {
         return None;
     }
-    let form = if wget {
-        format!("wget --method {method}")
-    } else {
-        format!("{name} {method}")
+    let refuse = |why: &str| {
+        Some(format!(
+            "{form} {why}, so the guard cannot rule out a write to a GitHub release route"
+        ))
     };
     if let Some(why) = redirected {
-        return Some(format!(
-            "{form} {why}, so the guard cannot tell whether it reaches a release route"
+        return refuse(why);
+    }
+    if let Some(word) = unknown.first() {
+        return refuse(&format!(
+            "uses `{}`, an option the guard does not know, which may change the method, body or destination",
+            crate::git::display_text(word)
         ));
     }
-    route_of(&form, &url?, false, &method, &body, ctx)
+    match url.as_deref().map(|url| destination(url, false)) {
+        Some(Err(why)) => Some(format!("{form} {why}")),
+        _ => None,
+    }
 }
 
 /// Read `HTTPie` and xh request items into `body`; whether any sends a body.
@@ -936,17 +1884,17 @@ const MUTATIONS: &[&str] = &[
 ];
 
 /// A GraphQL write: refused when its query runs a mutation in
-/// [`MUTATIONS`] or the guard cannot read it.
+/// [`MUTATIONS`], or when the guard cannot read the query from the body:
+/// one held elsewhere, such as in the URL, is not read.
 fn graphql(form: &str, body: &Body) -> Option<String> {
     match body.field("query") {
         Field::Known(query) => MUTATIONS
             .iter()
             .find(|name| query.contains(**name))
             .map(|name| format!("{form} graphql runs the {name} mutation")),
-        Field::Unknown => Some(format!(
-            "{form} graphql sends a query the guard cannot read, which may publish or approve a release"
+        Field::Unknown | Field::Absent => Some(format!(
+            "{form} graphql sends a query the guard cannot read from its body, which may publish or approve a release"
         )),
-        Field::Absent => None,
     }
 }
 
@@ -1155,6 +2103,23 @@ fn judge(form: &str, method: &str, path: &str, body: &Body, ctx: Ctx<'_>) -> Opt
         }
         Some("orgs") if segs.len() >= 2 => {
             judge_tail(form, method, &shown, None, &segs[2..], body, ctx)
+        }
+        // `repositories/{id}` names a repository by number, which the
+        // guard cannot match to the authority.
+        Some("repositories") if segs.len() >= 2 => {
+            let id = Seg {
+                text: segs[1].text,
+                wild: true,
+            };
+            judge_tail(
+                form,
+                method,
+                &shown,
+                Some((&id, &id)),
+                &segs[2..],
+                body,
+                ctx,
+            )
         }
         _ => None,
     }
