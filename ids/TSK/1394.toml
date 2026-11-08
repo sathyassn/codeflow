@@ -1,0 +1,11 @@
+id = "TSK-1394"
+uid = "b6696011-6bdc-4000-846f-28e9b66448c7"
+kind = "TSK"
+title = "Guard tests accept only the slow Git child refusal"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-08T16:13:33Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
