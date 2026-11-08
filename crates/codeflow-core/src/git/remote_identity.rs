@@ -399,17 +399,22 @@ const HERMETIC_SSH_OPTIONS: &[&str] = &["-F", "none", "-o", "BatchMode=yes"];
 /// `GIT_SSH_COMMAND`, `core.sshCommand` or `GIT_SSH` names, or `ssh` with
 /// the user's SSH configuration (`HostName`, `Port`, `User`,
 /// `ProxyCommand`, `ProxyJump` and the like). A configured program is
-/// refused, since what it reaches cannot be read; otherwise both views are
-/// resolved with `ssh -G`, which connects nowhere, and every setting in
-/// [`SSH_ENDPOINT_KEYS`] must agree. Any doubt refuses. Other transports
-/// pass. Owned by TSK-1184; the pre-push destination check (TSK-327) can
-/// call it for the URL it asks, from the push's view of the configuration.
+/// refused, since what it reaches cannot be read. The system and account
+/// SSH configuration files, with their includes, are then read as text: a
+/// `Match exec`, which `ssh` runs as a command while it reads them, or a
+/// file that cannot be proven free of one, refuses before `ssh` sees them.
+/// Otherwise both views are resolved with `ssh -G`, which connects nowhere,
+/// and every setting in [`SSH_ENDPOINT_KEYS`] must agree. Any doubt
+/// refuses. Other transports pass. Owned by TSK-1184; the pre-push
+/// destination check (TSK-327) can call it for the URL it asks, from the
+/// push's view of the configuration.
 ///
 /// # Errors
 ///
 /// The configuration cannot be read, a program is configured, the URL
-/// names no host this check can pass to `ssh`, `ssh -G` fails, or the two
-/// endpoints differ.
+/// names no host this check can pass to `ssh`, an SSH configuration file
+/// has or may have a `Match exec`, `ssh -G` fails, or the two endpoints
+/// differ.
 pub fn require_hermetic_ssh_endpoint(
     root: &Path,
     url: &str,
@@ -429,8 +434,183 @@ fn ssh_endpoint_agrees(entries: &[Entry], url: &str, limits: QueryLimits) -> Res
     }
     refuse_ssh_program_choice(entries, |name| std::env::var_os(name))?;
     let target = ssh_target(url)?;
-    let configured = ssh_endpoint(&[], &target, limits)?;
-    let hermetic = ssh_endpoint(HERMETIC_SSH_OPTIONS, &target, limits)?;
+    ssh_views_agree(&SshView::discover()?, &target, url, limits)
+}
+
+/// The `ssh` git would run and the configuration files it reads by itself:
+/// the system files the program names, then the account's `~/.ssh/config`.
+/// `options` go before `-G` for the user's view; production passes none,
+/// so `ssh` reads exactly `files`.
+struct SshView {
+    program: std::path::PathBuf,
+    options: Vec<std::ffi::OsString>,
+    /// Each file with the directory its relative `Include` paths resolve in.
+    files: Vec<(std::path::PathBuf, std::path::PathBuf)>,
+    home: std::path::PathBuf,
+}
+
+impl SshView {
+    fn discover() -> Result<Self, String> {
+        let program = ssh_on_path()?;
+        let home = account_home()?;
+        let mut files: Vec<(std::path::PathBuf, std::path::PathBuf)> =
+            system_ssh_configs(&program)?
+                .into_iter()
+                .map(|file| {
+                    let base = file
+                        .parent()
+                        .map_or_else(|| file.clone(), Path::to_path_buf);
+                    (file, base)
+                })
+                .collect();
+        files.push((home.join(".ssh/config"), home.join(".ssh")));
+        Ok(Self {
+            program,
+            options: Vec::new(),
+            files,
+            home,
+        })
+    }
+}
+
+/// The `ssh` a shell finds first on `PATH`, as git's `ssh` resolves. An
+/// empty or relative entry before it names a directory that depends on
+/// where git runs, so it refuses.
+fn ssh_on_path() -> Result<std::path::PathBuf, String> {
+    let path = std::env::var_os("PATH").ok_or("PATH is not set, so the ssh git runs is unknown")?;
+    for dir in std::env::split_paths(&path) {
+        if dir.as_os_str().is_empty() || dir.is_relative() {
+            return Err(format!(
+                "PATH names the directory {} relative to where git runs, so the ssh git runs is unknown",
+                dir.display()
+            ));
+        }
+        let candidate = dir.join(if cfg!(windows) { "ssh.exe" } else { "ssh" });
+        let found = crate::absence::metadata_optional(&candidate).map_err(|error| {
+            format!(
+                "{} cannot be inspected ({error}), so the ssh git runs is unknown",
+                candidate.display()
+            )
+        })?;
+        if let Some(metadata) = found {
+            #[cfg(unix)]
+            let runnable = {
+                use std::os::unix::fs::PermissionsExt as _;
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            };
+            #[cfg(not(unix))]
+            let runnable = metadata.is_file();
+            if runnable {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err("no ssh was found on PATH".into())
+}
+
+/// The system configuration files `program` reads: the absolute paths
+/// ending in `/ssh_config` that its file names (OpenSSH compiles its
+/// system file path in). None found refuses: what it reads is unknown.
+fn system_ssh_configs(program: &Path) -> Result<Vec<std::path::PathBuf>, String> {
+    const MOST: u64 = 64 << 20;
+    let cannot = |why: String| {
+        format!(
+            "the system SSH configuration {} reads cannot be found ({why})",
+            program.display()
+        )
+    };
+    let size = std::fs::metadata(program)
+        .map_err(|error| cannot(error.to_string()))?
+        .len();
+    if size > MOST {
+        return Err(cannot("the program is larger than 64 MiB".into()));
+    }
+    let bytes = std::fs::read(program).map_err(|error| cannot(error.to_string()))?;
+    let found = system_config_names(&bytes);
+    if found.is_empty() {
+        return Err(cannot("it names no ssh_config file".into()));
+    }
+    Ok(found)
+}
+
+/// The words in `bytes`, split on bytes that are not printable ASCII or
+/// are a space, that are absolute paths ending in `/ssh_config`.
+fn system_config_names(bytes: &[u8]) -> Vec<std::path::PathBuf> {
+    let mut found: Vec<std::path::PathBuf> = Vec::new();
+    for word in bytes.split(|byte| !byte.is_ascii_graphic()) {
+        if word.starts_with(b"/") && word.ends_with(b"/ssh_config") {
+            // Every byte is printable ASCII, so each is one character.
+            let text: String = word.iter().map(|byte| char::from(*byte)).collect();
+            let path = std::path::PathBuf::from(text);
+            if !found.contains(&path) {
+                found.push(path);
+            }
+        }
+    }
+    found
+}
+
+/// The account's home directory, where OpenSSH looks for `~/.ssh/config`
+/// whatever `HOME` says.
+#[cfg(unix)]
+fn account_home() -> Result<std::path::PathBuf, String> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let mut buffer = vec![0_u8; 1 << 16];
+    // SAFETY: an all-zero `passwd` is a valid value of a plain C struct;
+    // `getpwuid_r` fills it.
+    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    // SAFETY: every pointer is valid for the call and `buffer` outlives
+    // every use of the strings `entry` points into.
+    let code = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            &raw mut entry,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &raw mut result,
+        )
+    };
+    if code != 0 || result.is_null() || entry.pw_dir.is_null() {
+        return Err("the account's home directory cannot be read, so its SSH configuration cannot be checked".into());
+    }
+    // SAFETY: `pw_dir` is a NUL-terminated string inside `buffer`.
+    let dir = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) };
+    Ok(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(
+        dir.to_bytes(),
+    )))
+}
+
+#[cfg(not(unix))]
+fn account_home() -> Result<std::path::PathBuf, String> {
+    Err(
+        "the SSH configuration files cannot be located on this platform, so they are not read"
+            .into(),
+    )
+}
+
+/// Most nested `Include` levels, files and bytes per file read while
+/// proving a configuration runs no command; past them it refuses.
+const SSH_INCLUDE_DEPTH: usize = 16;
+const SSH_CONFIG_FILES: usize = 256;
+const SSH_CONFIG_BYTES: u64 = 1 << 20;
+
+/// Compare the endpoint `view` resolves for `target` with the hermetic one,
+/// after proving its configuration files hold no `Match exec`, which `ssh`
+/// would run as a command while it reads them.
+fn ssh_views_agree(
+    view: &SshView,
+    target: &SshTarget,
+    url: &str,
+    limits: QueryLimits,
+) -> Result<(), String> {
+    let mut read = 0;
+    for (file, base) in &view.files {
+        refuse_match_exec(file, base, &view.home, 0, &mut read)?;
+    }
+    let configured = ssh_endpoint(&view.program, &view.options, target, limits)?;
+    let hermetic: Vec<std::ffi::OsString> = HERMETIC_SSH_OPTIONS.iter().map(Into::into).collect();
+    let hermetic = ssh_endpoint(&view.program, &hermetic, target, limits)?;
     let differ: Vec<String> = SSH_ENDPOINT_KEYS
         .iter()
         .filter_map(|key| {
@@ -453,6 +633,231 @@ fn ssh_endpoint_agrees(entries: &[Entry], url: &str, limits: QueryLimits) -> Res
         shown(url),
         differ.join("; ")
     ))
+}
+
+/// Refuse unless `file`, and every file its `Include` lines name, is proven
+/// to hold no `Match exec`, read as text and never by `ssh`. A missing file
+/// holds nothing. A file that is not a readable UTF-8 regular file within
+/// [`SSH_CONFIG_BYTES`], an `Include` this reader cannot resolve as `ssh`
+/// does, or more than [`SSH_INCLUDE_DEPTH`] levels or [`SSH_CONFIG_FILES`]
+/// files refuses. Relative includes resolve in `base`, as `ssh` resolves
+/// them in `~/.ssh` or the system directory at every level.
+fn refuse_match_exec(
+    file: &Path,
+    base: &Path,
+    home: &Path,
+    depth: usize,
+    read: &mut usize,
+) -> Result<(), String> {
+    let cannot = |why: String| {
+        format!(
+            "the SSH configuration {} cannot be proven to run no command while ssh reads it ({why}), so ssh is not asked to read it",
+            file.display()
+        )
+    };
+    let Some(metadata) =
+        crate::absence::metadata_optional(file).map_err(|error| cannot(error.to_string()))?
+    else {
+        return Ok(());
+    };
+    *read += 1;
+    if depth > SSH_INCLUDE_DEPTH || *read > SSH_CONFIG_FILES {
+        return Err(cannot(format!(
+            "it is past {SSH_INCLUDE_DEPTH} include levels or {SSH_CONFIG_FILES} files"
+        )));
+    }
+    if !metadata.is_file() {
+        return Err(cannot("it is not a regular file".into()));
+    }
+    if metadata.len() > SSH_CONFIG_BYTES {
+        return Err(cannot("it is larger than 1 MiB".into()));
+    }
+    let bytes = std::fs::read(file).map_err(|error| cannot(error.to_string()))?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| cannot("it is not UTF-8 text".into()))?;
+    for (number, line) in text.split('\n').enumerate() {
+        // `ssh` separates words with space, tab and carriage return, as here.
+        let line = line.trim_matches([' ', '\t', '\r']);
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let split = line.find([' ', '\t', '\r', '=']).unwrap_or(line.len());
+        let keyword = line[..split].to_ascii_lowercase();
+        let rest = line[split..].trim_start_matches([' ', '\t', '\r', '=']);
+        match keyword.as_str() {
+            // Quotes and escapes are dropped first, so no spelling hides it.
+            "match"
+                if rest
+                    .replace(['"', '\'', '\\'], "")
+                    .to_ascii_lowercase()
+                    .contains("exec") =>
+            {
+                return Err(format!(
+                    "the SSH configuration {} line {} has a Match exec criterion, which ssh runs as a command while it reads the file, so ssh is not asked to read it",
+                    file.display(),
+                    number + 1
+                ));
+            }
+            "include" => {
+                let at = |why: &str| cannot(format!("line {} has an Include {why}", number + 1));
+                for pattern in ssh_words(rest).ok_or_else(|| at("with an unbalanced quote"))? {
+                    for child in included_ssh_files(&pattern, base, home).map_err(|why| at(&why))? {
+                        refuse_match_exec(&child, base, home, depth + 1, read)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// The arguments of an `ssh_config` line, split on whitespace with double
+/// or single quotes grouping; `None` for an unbalanced quote.
+fn ssh_words(text: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote: Option<char> = None;
+    let mut started = false;
+    for c in text.chars() {
+        match quote {
+            Some(open) if c == open => quote = None,
+            Some(_) => word.push(c),
+            None if c == '"' || c == '\'' => {
+                quote = Some(c);
+                started = true;
+            }
+            None if matches!(c, ' ' | '\t' | '\r') => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            None => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if started {
+        words.push(word);
+    }
+    Some(words)
+}
+
+/// The files an `Include` `pattern` names, sorted as `glob` sorts them. A
+/// leading `~/` is `home`, a relative path is in `base`, and `*` and `?`
+/// match within the last component, skipping dot files unless the pattern
+/// starts with a dot. Anything this reader cannot expand as `ssh` does (an
+/// environment or `%` token, `~user`, a bracket, a wildcard in a directory)
+/// is an error.
+fn included_ssh_files(
+    pattern: &str,
+    base: &Path,
+    home: &Path,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    if pattern.contains(['$', '%', '[', '\\']) {
+        return Err(format!(
+            "{} this reader cannot expand",
+            super::display_text(pattern)
+        ));
+    }
+    let path = if let Some(rest) = pattern.strip_prefix("~/") {
+        home.join(rest)
+    } else if pattern.starts_with('~') {
+        return Err(format!(
+            "{} naming another account's home",
+            super::display_text(pattern)
+        ));
+    } else if Path::new(pattern).is_absolute() {
+        std::path::PathBuf::from(pattern)
+    } else {
+        base.join(pattern)
+    };
+    let (Some(dir), Some(name)) = (
+        path.parent(),
+        path.file_name().and_then(|name| name.to_str()),
+    ) else {
+        return Err(format!(
+            "{} with no file name",
+            super::display_text(pattern)
+        ));
+    };
+    if dir.to_str().is_none_or(|dir| dir.contains(['*', '?'])) {
+        return Err(format!(
+            "{} with a wildcard outside its file name",
+            super::display_text(pattern)
+        ));
+    }
+    if !name.contains(['*', '?']) {
+        return Ok(vec![path]);
+    }
+    let Some(_) = crate::absence::metadata_optional(dir).map_err(|error| {
+        format!(
+            "{} whose folder cannot be read ({error})",
+            super::display_text(pattern)
+        )
+    })?
+    else {
+        return Ok(Vec::new());
+    };
+    let listing = std::fs::read_dir(dir).map_err(|error| {
+        format!(
+            "{} whose folder cannot be read ({error})",
+            super::display_text(pattern)
+        )
+    })?;
+    let mut found = Vec::new();
+    for entry in listing {
+        let entry = entry.map_err(|error| {
+            format!(
+                "{} whose folder cannot be read ({error})",
+                super::display_text(pattern)
+            )
+        })?;
+        let file_name = entry.file_name();
+        let Some(candidate) = file_name.to_str() else {
+            return Err(format!(
+                "{} whose folder holds a name that is not UTF-8",
+                super::display_text(pattern)
+            ));
+        };
+        if (candidate.starts_with('.') && !name.starts_with('.'))
+            || !wildcard_matches(name, candidate)
+        {
+            continue;
+        }
+        found.push(dir.join(candidate));
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// Whether `text` matches `pattern`, where `*` is any run and `?` any one
+/// character.
+fn wildcard_matches(pattern: &str, text: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let text: Vec<char> = text.chars().collect();
+    let (mut p, mut t) = (0, 0);
+    let mut resume: Option<(usize, usize)> = None;
+    while t < text.len() {
+        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == text[t]) {
+            p += 1;
+            t += 1;
+        } else if p < pattern.len() && pattern[p] == '*' {
+            resume = Some((p, t));
+            p += 1;
+        } else if let Some((star, at)) = resume {
+            p = star + 1;
+            t = at + 1;
+            resume = Some((star, at + 1));
+        } else {
+            return false;
+        }
+    }
+    pattern[p..].iter().all(|c| *c == '*')
 }
 
 fn shown_setting(value: Option<&String>) -> String {
@@ -556,20 +961,22 @@ fn ssh_target(url: &str) -> Result<SshTarget, String> {
 /// before the target. `ssh -G` prints the configuration and connects
 /// nowhere.
 fn ssh_endpoint(
-    options: &[&str],
+    program: &Path,
+    options: &[std::ffi::OsString],
     target: &SshTarget,
     limits: QueryLimits,
 ) -> Result<std::collections::BTreeMap<String, String>, String> {
-    let mut command = std::process::Command::new("ssh");
+    let mut command = std::process::Command::new(program);
     command.args(options).arg("-G");
     if let Some(port) = &target.port {
         command.arg("-p").arg(port);
     }
     command.arg(&target.destination).env("LC_ALL", "C");
-    let view = if options.is_empty() {
-        "the user's SSH configuration"
-    } else {
+    let hermetic: Vec<std::ffi::OsString> = HERMETIC_SSH_OPTIONS.iter().map(Into::into).collect();
+    let view = if options == hermetic.as_slice() {
         "no SSH configuration"
+    } else {
+        "the user's SSH configuration"
     };
     let answer = super::remote_query::bounded_text(command, limits.timeout())
         .map_err(|why| format!("ssh could not resolve its settings with {view} ({why})"))?;
@@ -922,33 +1329,184 @@ mod tests {
         std::fs::write(&same, "Host 127.0.0.1\n\tServerAliveInterval 30\n").unwrap();
         let target = ssh_target("ssh://127.0.0.1/r.git").unwrap();
         let limits = QueryLimits::guard();
-        let hermetic = match ssh_endpoint(HERMETIC_SSH_OPTIONS, &target, limits) {
-            Ok(view) => view,
-            Err(why)
-                if std::process::Command::new("ssh")
-                    .arg("-V")
-                    .output()
-                    .is_err() =>
-            {
-                eprintln!("skipped: no ssh on this host ({why})");
-                return;
-            }
-            Err(why) => panic!("{why}"),
+        let Some(program) = fixture_ssh() else {
+            return;
         };
-        let view =
-            |file: &Path| ssh_endpoint(&["-F", file.to_str().unwrap()], &target, limits).unwrap();
-        let moved = view(&moved);
-        assert_eq!(moved.get("hostname").map(String::as_str), Some("127.0.0.2"));
-        assert_ne!(moved.get("port"), hermetic.get("port"));
-        assert!(moved.contains_key("proxyjump"));
+        let hermetic: Vec<std::ffi::OsString> =
+            HERMETIC_SSH_OPTIONS.iter().map(Into::into).collect();
+        let hermetic = ssh_endpoint(&program, &hermetic, &target, limits).unwrap();
+        let view = |file: &Path| {
+            ssh_endpoint(
+                &program,
+                &fixture_view(&program, file).options,
+                &target,
+                limits,
+            )
+            .unwrap()
+        };
+        let moved_view = view(&moved);
+        assert_eq!(
+            moved_view.get("hostname").map(String::as_str),
+            Some("127.0.0.2")
+        );
+        assert_ne!(moved_view.get("port"), hermetic.get("port"));
+        assert!(moved_view.contains_key("proxyjump"));
         assert_eq!(
             hermetic.get("hostname").map(String::as_str),
             Some("127.0.0.1")
         );
-        let same = view(&same);
+        let same_view = view(&same);
         for key in SSH_ENDPOINT_KEYS {
-            assert_eq!(same.get(*key), hermetic.get(*key), "{key}");
+            assert_eq!(same_view.get(*key), hermetic.get(*key), "{key}");
         }
+        let url = "ssh://127.0.0.1/r.git";
+        let error =
+            ssh_views_agree(&fixture_view(&program, &moved), &target, url, limits).unwrap_err();
+        assert!(error.contains("different endpoint"), "{error}");
+        ssh_views_agree(&fixture_view(&program, &same), &target, url, limits).unwrap();
+    }
+
+    /// The `ssh` on `PATH`, or `None` (the test is skipped) on a host with
+    /// none.
+    fn fixture_ssh() -> Option<std::path::PathBuf> {
+        match ssh_on_path() {
+            Ok(program) => Some(program),
+            Err(why) => {
+                eprintln!("skipped: no ssh on this host ({why})");
+                None
+            }
+        }
+    }
+
+    /// A view that reads only the fixture `file`, as production reads the
+    /// system and account files.
+    fn fixture_view(program: &Path, file: &Path) -> SshView {
+        let dir = file.parent().unwrap().to_path_buf();
+        SshView {
+            program: program.to_path_buf(),
+            options: vec!["-F".into(), file.into()],
+            files: vec![(file.to_path_buf(), dir.clone())],
+            home: dir,
+        }
+    }
+
+    /// Delta finding 3: `ssh -G` runs a `Match exec` command while it reads
+    /// the configuration, so the check refuses such a file without asking
+    /// `ssh`, and the command never runs. The first half proves the hazard
+    /// with the real `ssh` on a fixture file.
+    #[test]
+    fn a_match_exec_configuration_refuses_and_its_command_never_runs() {
+        let Some(program) = fixture_ssh() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let hazard = dir.path().join("hazard-ran");
+        let shown = dir.path().join("shown");
+        std::fs::write(
+            &shown,
+            format!("Match exec \"touch {}\"\n\tPort 2222\n", hazard.display()),
+        )
+        .unwrap();
+        let target = ssh_target("ssh://127.0.0.1/r.git").unwrap();
+        // The earlier check asked ssh directly, as here.
+        ssh_endpoint(
+            &program,
+            &fixture_view(&program, &shown).options,
+            &target,
+            QueryLimits::guard(),
+        )
+        .unwrap();
+        assert!(
+            hazard.exists(),
+            "ssh ran the Match exec command while resolving"
+        );
+
+        let marker = dir.path().join("marker-ran");
+        let config = dir.path().join("config");
+        std::fs::write(
+            &config,
+            format!(
+                "Host *\n\tServerAliveInterval 30\nMATCH host 127.0.0.1 EXEC=\"touch {}\"\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let error = ssh_views_agree(
+            &fixture_view(&program, &config),
+            &target,
+            "ssh://127.0.0.1/r.git",
+            QueryLimits::guard(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Match exec") && error.contains("line 3"),
+            "{error}"
+        );
+        assert!(!marker.exists(), "the Match exec command ran");
+    }
+
+    /// Includes are followed as `ssh` follows them: relative to the base,
+    /// `~/` from the home, and wildcards in the file name; an include this
+    /// reader cannot resolve, or one too deep, refuses.
+    #[test]
+    fn included_ssh_configuration_is_read_or_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("base");
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(base.join("conf.d")).unwrap();
+        std::fs::create_dir_all(home.join("more")).unwrap();
+        let top = base.join("config");
+        let scan = |body: &str| {
+            std::fs::write(&top, body).unwrap();
+            refuse_match_exec(&top, &base, &home, 0, &mut 0)
+        };
+        std::fs::write(base.join("conf.d/a.conf"), "Host a\n\tPort 1\n").unwrap();
+        std::fs::write(base.join("conf.d/.hidden.conf"), "Match exec x\n").unwrap();
+        std::fs::write(home.join("more/b"), "Host b\n").unwrap();
+        scan("Include conf.d/*.conf \"~/more/b\" missing/none\n").unwrap();
+        std::fs::write(base.join("conf.d/z.conf"), "Host z\n  match !Exec \"x\"\n").unwrap();
+        let error = scan("Include conf.d/*.conf\n").unwrap_err();
+        assert!(
+            error.contains("z.conf") && error.contains("Match exec"),
+            "{error}"
+        );
+        std::fs::remove_file(base.join("conf.d/z.conf")).unwrap();
+        for refused in [
+            "Include ${HOME}/x\n",
+            "Include %d/x\n",
+            "Include ~other/x\n",
+            "Include */x\n",
+            "Include conf.d/[ab].conf\n",
+            "Include \"unbalanced\n",
+        ] {
+            let error = scan(refused).unwrap_err();
+            assert!(error.contains("cannot be proven"), "{refused}: {error}");
+        }
+        std::fs::write(base.join("loop"), "Include loop\n").unwrap();
+        let error = scan("Include loop\n").unwrap_err();
+        assert!(error.contains("include levels"), "{error}");
+        std::fs::write(&top, [0xff_u8, 0xfe]).unwrap();
+        let error = refuse_match_exec(&top, &base, &home, 0, &mut 0).unwrap_err();
+        assert!(error.contains("UTF-8"), "{error}");
+        refuse_match_exec(&base.join("absent"), &base, &home, 0, &mut 0).unwrap();
+    }
+
+    #[test]
+    fn system_configuration_names_come_from_the_program() {
+        let found = system_config_names(
+            b"\x00junk\x00/etc/ssh/ssh_config\x00/etc/ssh/ssh_config\x00relative/ssh_config /opt/x/ssh_config\x01/etc/ssh/sshd_config",
+        );
+        assert_eq!(
+            found,
+            [
+                std::path::PathBuf::from("/etc/ssh/ssh_config"),
+                std::path::PathBuf::from("/opt/x/ssh_config")
+            ]
+        );
+        assert!(system_config_names(b"no paths here").is_empty());
+        assert!(wildcard_matches("*.conf", "a.conf"));
+        assert!(wildcard_matches("a?c*", "abcde"));
+        assert!(!wildcard_matches("*.conf", "a.cfg"));
     }
 
     /// Delta finding 2: a path-conditional include that sets the SSH client

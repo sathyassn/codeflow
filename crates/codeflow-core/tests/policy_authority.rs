@@ -899,33 +899,30 @@ fn a_path_conditional_rewrite_refuses_by_every_path() {
     );
 }
 
-/// TSK-1184 delta finding 2: an SSH remote whose host the user's SSH
-/// configuration moves is not initialization, though the hermetic question
-/// (plain `ssh`, no configuration file) finds the literal host empty. The
-/// child runs with a stand-in `ssh` first on `PATH`: `ssh -G` prints a
-/// fixture view (never the user's `~/.ssh`), and as a transport it runs
-/// the upload command against a local empty repository. A view that
-/// matches the hermetic one keeps initialization.
+/// TSK-1184 delta findings 2 and 3: `ssh -G` runs a `Match exec` command
+/// while it reads the configuration, so the policy load reads the SSH
+/// configuration files as text first and refuses one with `Match exec`,
+/// without running `ssh` on it. The child runs with a stand-in `ssh` first
+/// on `PATH` whose file names a fixture system configuration (the program
+/// names its system file, and that file is read before the account's, so
+/// the user's `~/.ssh` is never read). The stand-in records any `-G` call
+/// and otherwise runs the upload command against a local empty repository,
+/// so without the refusal the load reaches initialization. The endpoint
+/// comparison itself is proven with the real `ssh` and fixture files in
+/// the unit tests.
 #[cfg(unix)]
 #[test]
-fn an_ssh_endpoint_moved_by_the_ssh_configuration_refuses() {
+fn an_ssh_configuration_with_match_exec_refuses_before_ssh_reads_it() {
     use std::os::unix::fs::PermissionsExt as _;
     const CHILD: &str = "CODEFLOW_TSK1184_SSH_ENDPOINT_CHILD";
     if let Some(root) = std::env::var_os(CHILD) {
         let root = std::path::Path::new(&root);
-        let moved = root.join(".git/ssh-moved");
-        let result = landed_policy::load(root);
-        if moved.exists() {
-            let error = match result {
-                Ok(authority) => panic!("read policy from {}", authority.source),
-                Err(error) => error,
-            };
-            assert!(error.contains("hostname 127.0.0.2"), "{error}");
-            assert!(error.contains("port 2222"), "{error}");
-            assert!(error.contains("never read from HEAD"), "{error}");
-        } else {
-            assert!(result.unwrap().source.contains("initialization"));
-        }
+        let error = match landed_policy::load(root) {
+            Ok(authority) => panic!("read policy from {}", authority.source),
+            Err(error) => error,
+        };
+        assert!(error.contains("Match exec"), "{error}");
+        assert!(error.contains("never read from HEAD"), "{error}");
         return;
     }
     let remote = tempfile::tempdir().unwrap();
@@ -935,15 +932,27 @@ fn an_ssh_endpoint_moved_by_the_ssh_configuration_refuses() {
     let tip = f.commit(&[(".codeflow/policy.json", MAIN_POLICY)], &[]);
     f.on_branch(tip);
     let bin = tempfile::tempdir().unwrap();
-    let view = bin.path().join("view");
+    std::fs::create_dir(bin.path().join("etc")).unwrap();
+    let system = bin.path().join("etc/ssh_config");
+    let ran = bin.path().join("match-exec-ran");
+    std::fs::write(
+        &system,
+        format!(
+            "Host *\n\tPort 22\nMatch exec \"touch {}\"\n",
+            ran.display()
+        ),
+    )
+    .unwrap();
+    let asked = bin.path().join("ssh-asked-to-read");
     let ssh = bin.path().join("ssh");
     std::fs::write(
         &ssh,
         format!(
-            "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = -G ] && g=1; [ \"$a\" = none ] && n=1; last=$a; done\n\
-             if [ -n \"$g\" ]; then\n  if [ -n \"$n\" ]; then printf 'hostname 127.0.0.1\\nport 22\\nuser me\\n'; else cat '{}'; fi\n  exit 0\nfi\n\
+            "#!/bin/sh\n# system file {}\nfor a in \"$@\"; do [ \"$a\" = -G ] && g=1; last=$a; done\n\
+             if [ -n \"$g\" ]; then\n  : > '{}'\n  printf 'hostname 127.0.0.1\\nport 22\\n'\n  exit 0\nfi\n\
              exec sh -c \"$last\"\n",
-            view.display()
+            system.display(),
+            asked.display()
         ),
     )
     .unwrap();
@@ -953,36 +962,28 @@ fn an_ssh_endpoint_moved_by_the_ssh_configuration_refuses() {
         bin.path().display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    for (user_view, moved) in [
-        ("hostname 127.0.0.1\nport 22\nuser me\n", false),
-        ("hostname 127.0.0.2\nport 2222\nuser me\n", true),
-    ] {
-        std::fs::write(&view, user_view).unwrap();
-        let marker = f.root().join(".git/ssh-moved");
-        if moved {
-            std::fs::write(&marker, "").unwrap();
-        }
-        let out = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "an_ssh_endpoint_moved_by_the_ssh_configuration_refuses",
-                "--nocapture",
-            ])
-            .env(CHILD, f.root())
-            .env("PATH", &path)
-            .env_remove("GIT_SSH_COMMAND")
-            .env_remove("GIT_SSH")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "moved {moved}: {}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "an_ssh_configuration_with_match_exec_refuses_before_ssh_reads_it",
+            "--nocapture",
+        ])
+        .env(CHILD, f.root())
+        .env("PATH", &path)
+        .env_remove("GIT_SSH_COMMAND")
+        .env_remove("GIT_SSH")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!ran.exists(), "the Match exec command ran");
+    assert!(!asked.exists(), "ssh was asked to read the configuration");
 }
 
 /// TSK-1184 review finding 2: a remote helper set for the remote, here
