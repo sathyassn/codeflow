@@ -1,0 +1,11 @@
+id = "TSK-1396"
+uid = "0f4b6cfe-2d12-4b76-b6c7-d1a7c0b706f9"
+kind = "TSK"
+title = "Projects choose whether branches must be up to date, or use a merge queue"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-08T17:36:03Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
