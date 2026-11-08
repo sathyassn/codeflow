@@ -126,7 +126,7 @@ pub fn target(root: &Path) -> Result<String, ScaffoldError> {
         .find(|tree| same_dir(tree, &top))
     else {
         return Err(ScaffoldError::Git(Shown::fixed(
-            "core.hooksPath not written: this working tree is not one git lists for the repository (`git worktree list`), so the managed hooks folder cannot be tied to the repository; run the command from a listed working tree",
+            "core.hooksPath not written: this working tree is not one git lists for the repository (`git worktree list`), so the managed hooks folder cannot be tied to the repository; run the command from a listed working tree. Where git keeps the git directory apart from the working tree (a separate git directory or a submodule), check that the working tree is this repository's and set the path by hand: `git config core.hooksPath \"<working tree>/.codeflow/git-hooks\"`, with the working tree's absolute path",
         )));
     };
     if let Some(main) = gitutil::main_working_tree(root)? {
@@ -400,7 +400,12 @@ mod tests {
             &tree,
             &["commit", "-q", "--allow-empty", "-m", "chore: init"],
         );
-        assert!(target(&tree).is_err());
+        let refusal = target(&tree).unwrap_err().to_string();
+        assert!(refusal.contains("set the path by hand"), "{refusal}");
+        assert!(
+            refusal.contains("git config core.hooksPath \"<working tree>/"),
+            "{refusal}"
+        );
         assert!(migrate(&tree, true).is_err());
         assert_eq!(
             super::super::detect::configured_hooks_path(&tree).unwrap(),
