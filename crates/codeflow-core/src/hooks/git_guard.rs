@@ -27,6 +27,7 @@ use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 use crate::root_checkout::RootCheckout;
 
 pub(crate) mod line_home;
+mod review;
 mod runners;
 
 /// Resolves a `gh pr merge <target>` argument (a PR number, URL, or branch;
@@ -1140,6 +1141,7 @@ fn evaluate_report_with_runners(
                 );
             }
             ProgramKind::Gh => check_gh(args, ctx, violations),
+            ProgramKind::Curl => review::check_curl(args, ctx.policy, violations),
             // A program named by a substitution could be git itself.
             ProgramKind::Other if has_substitution(program) => {
                 violations.extend(unclassifiable_violation(
@@ -1262,6 +1264,7 @@ pub(crate) fn strip_reserved_words(words: &mut Vec<String>) {
 enum ProgramKind {
     Git,
     Gh,
+    Curl,
     Other,
 }
 
@@ -1269,6 +1272,7 @@ fn program_kind(program: &str) -> ProgramKind {
     match basename(program) {
         "git" => ProgramKind::Git,
         "gh" => ProgramKind::Gh,
+        "curl" => ProgramKind::Curl,
         _ => ProgramKind::Other,
     }
 }
@@ -12148,6 +12152,10 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
 
 fn check_gh(args: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
     let plain: Vec<&str> = args.iter().map(String::as_str).collect();
+    if plain.first() == Some(&"api") {
+        review::check_gh_api(&plain[1..], ctx.policy, out);
+        return;
+    }
     if plain.first() != Some(&"pr") {
         return;
     }
@@ -12156,6 +12164,7 @@ fn check_gh(args: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
         // scanned like a new one (ADR-0067).
         Some(&"create" | &"edit") => check_gh_pr_body(&plain[2..], ctx.policy, out),
         Some(&"merge") => check_gh_pr_merge(&plain[2..], ctx, out),
+        Some(&"review") => review::check_gh_pr_review(&plain[2..], ctx.policy, out),
         _ => {}
     }
 }

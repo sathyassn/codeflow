@@ -460,6 +460,9 @@ catalog! {
     /// A `gh pr merge` into a protected base.
     PR_MERGE_PROTECTED = Step::Edit(".codeflow/policy.json"),
         "PR merges into protected branches are performed by a human (GitHub UI / their own terminal) or explicitly sanctioned by git.pr_merge_to_protected in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";
+    /// A pull request review approval or dismissal from an agent session.
+    PR_REVIEW_APPROVAL = Step::Edit(".codeflow/policy.json"),
+        "an agent session never approves a pull request or dismisses a review: a person does that on GitHub or in their own terminal; a project that lets agents do it turns off git.pr_review_approval in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";
     /// A branch name outside the prefixes.
     BRANCH_NAME = Step::Git("git branch"),
         "rename it with `git branch -m <prefix>/<kebab-name>`, with a sanctioned prefix: {prefixes}";
@@ -888,6 +891,7 @@ mod tests {
         for remedy in [
             &super::PROTECTED_DELETE,
             &super::PR_MERGE_PROTECTED,
+            &super::PR_REVIEW_APPROVAL,
             &super::OUTWARD_ACTION,
             &super::SECRET_SELECTION,
             &super::PRIVILEGE_ESCALATION,
