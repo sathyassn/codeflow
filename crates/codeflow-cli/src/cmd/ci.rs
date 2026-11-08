@@ -237,7 +237,8 @@ struct CommitRecord {
     sha: String,
     message: String,
     files: Vec<String>,
-    /// A merge commit gets only the policy-character rule (ADR-0067); the
+    /// A merge commit gets only the policy-character rule (ADR-0067) and,
+    /// when the project opts in, the merge ticket rule (TSK-1350); the
     /// conventional-format rules have always skipped merges in CI.
     is_merge: bool,
 }
@@ -2247,12 +2248,16 @@ fn evaluate_commits(git: &GitPolicy, commits: &[CommitRecord]) -> Vec<TaggedViol
     let mut out = Vec::new();
     for c in commits {
         let violations = if c.is_merge {
+            // A merge made outside the local hooks (a hosting service's merge
+            // button) is judged here for its ticket footer when the project
+            // opts in (TSK-1350).
             git_hook::policy_characters_in_message(
                 git,
                 &c.message,
                 &git_hook::MessageSource::Committed,
             )
             .into_iter()
+            .chain(git_hook::merge_ticket_violation(git, &c.message))
             .collect()
         } else {
             git_hook::commit_msg_with_files(
@@ -4081,6 +4086,76 @@ mod tests {
         assert!(!present
             .iter()
             .any(|t| t.violation.rule == "git.commit_ticket"));
+    }
+
+    #[test]
+    fn merge_ticket_rule_judges_two_parent_commits_in_ci() {
+        // TSK-1350 AC-3: with the key on, a merge commit in the range (one a
+        // hosting service made, outside the local hooks) is judged for its
+        // ticket footer; with it off, merges stay exempt.
+        let mut g = GitPolicy {
+            commit_ticket_keys: vec!["Refs".into()],
+            commit_ticket_required: PolicyLevel::Block,
+            commit_ticket_merges: PolicyLevel::Block,
+            ..GitPolicy::default()
+        };
+        let merge = |sha: &str, message: &str| CommitRecord {
+            is_merge: true,
+            ..commit(sha, message)
+        };
+        let missing = evaluate_commits(
+            &g,
+            &[merge(
+                "abab1111",
+                "Merge pull request #7 from o/task/x\n\nfeat: x",
+            )],
+        );
+        let hit = missing
+            .iter()
+            .find(|t| t.violation.rule == "git.commit_ticket_merges")
+            .expect("a merge ticket finding");
+        assert_eq!(hit.sha.as_deref(), Some("abab1111"));
+        assert!(hit.violation.message.contains("Merge pull request #7"));
+        let present = evaluate_commits(
+            &g,
+            &[merge(
+                "cdcd2222",
+                "Merge pull request #7 from o/task/x\n\nRefs: TSK-1",
+            )],
+        );
+        assert!(present.is_empty(), "{}", present.len());
+        // Review F1: the one-parent exempt prefixes and a blank message do
+        // not exempt a merge.
+        for subject in [
+            "fixup! land x",
+            "squash! land x",
+            "Revert \"feat: x\"",
+            "Reapply \"feat: x\"",
+            "",
+            "  ",
+        ] {
+            let missing = evaluate_commits(&g, &[merge("abab4444", subject)]);
+            assert!(
+                missing
+                    .iter()
+                    .any(|t| t.violation.rule == "git.commit_ticket_merges"),
+                "{subject:?}"
+            );
+            let present = evaluate_commits(
+                &g,
+                &[merge("abab5555", &format!("{subject}\n\nRefs: TSK-1"))],
+            );
+            assert!(present.is_empty(), "{subject:?}: {}", present.len());
+        }
+        g.commit_ticket_merges = PolicyLevel::Off;
+        let off = evaluate_commits(
+            &g,
+            &[merge(
+                "efef3333",
+                "Merge pull request #7 from o/task/x\n\nfeat: x",
+            )],
+        );
+        assert!(off.is_empty(), "{}", off.len());
     }
 
     #[test]
