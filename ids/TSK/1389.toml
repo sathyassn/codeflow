@@ -1,0 +1,11 @@
+id = "TSK-1389"
+uid = "31f5ee05-f193-49b8-9fd6-188964ed821c"
+kind = "TSK"
+title = "A project can protect its own files, such as AGENTS.md and CLAUDE.md, from agent writes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-08T05:09:22Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
