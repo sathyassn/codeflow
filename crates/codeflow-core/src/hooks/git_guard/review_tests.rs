@@ -185,6 +185,46 @@ fn dot_segments_are_resolved_and_an_unsettled_address_refuses() {
     }
 }
 
+/// AC-19, review of 14ebf326c finding 1: an owner or a repository named
+/// `pulls` does not hide the review endpoint after it.
+#[test]
+fn an_owner_or_repository_named_pulls_hides_no_review() {
+    for path in [
+        "repos/pulls/r/pulls/12",
+        "repos/o/pulls/pulls/12",
+        "repos/pulls/pulls/pulls/12",
+    ] {
+        for command in [
+            format!("gh api -X POST {path}/reviews -f event=APPROVE"),
+            format!("gh api -X POST {path}/reviews/9/events -f event=APPROVE"),
+            format!("gh api -X PUT {path}/reviews/9/dismissals -f message=m"),
+            format!("curl -X POST https://api.github.com/{path}/reviews -d '{{\"event\":\"APPROVE\"}}'"),
+            format!("curl -X PUT https://api.github.com/{path}/reviews/9/dismissals -d '{{\"message\":\"m\"}}'"),
+        ] {
+            assert!(refused(&command), "{command}");
+        }
+        let comment = format!("gh api -X POST {path}/reviews -f event=COMMENT");
+        assert!(!refused(&comment), "{comment}");
+    }
+    // The sweep of review.rs for first matches: curl splits a
+    // `--data-urlencode` value at its first `=` or `@` and a `-F` value at
+    // its first `=`, so text after a later `@` is literal, never a file.
+    let dir = tempfile::tempdir().unwrap();
+    let benign = dir.path().join("benign.txt");
+    std::fs::write(&benign, "nothing here").unwrap();
+    let benign = benign.display();
+    let reviews = "https://api.github.com/repos/o/r/pulls/12/reviews";
+    for command in [
+        format!("curl {reviews} --data-urlencode 'event=APPROVE@{benign}'"),
+        format!("curl {reviews} -F 'event=APPROVE=@{benign}'"),
+    ] {
+        assert!(refused(&command), "{command}");
+    }
+    assert!(!refused(&format!(
+        "curl {reviews} --data-urlencode 'body=fine@/no/such/file'"
+    )));
+}
+
 /// AC-19, review of 8acea4109 finding 1b: a GraphQL body the guard cannot
 /// read may approve, so it refuses as a REST review body does; a harmless
 /// query read from standard input refuses too.

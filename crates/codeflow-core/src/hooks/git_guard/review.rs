@@ -167,21 +167,18 @@ fn address(endpoint: &str, globs: bool) -> Address {
             .get(at)
             .is_some_and(|part| part.eq_ignore_ascii_case(name))
     };
-    let Some(at) = parts
-        .iter()
-        .position(|part| part.eq_ignore_ascii_case("pulls"))
-    else {
-        return Address::Other;
-    };
-    if !is(at + 2, "reviews") {
-        return Address::Other;
-    }
-    match parts.get(at + 4) {
-        Some(_) if is(at + 4, "dismissals") => Address::Review(Endpoint::Dismissal),
-        Some(_) if is(at + 4, "events") => Address::Review(Endpoint::Review),
-        None => Address::Review(Endpoint::Review),
-        Some(_) => Address::Other,
-    }
+    // Every `pulls` segment is a candidate, since an owner or a repository
+    // may itself be named `pulls`; any one that names a review endpoint
+    // decides.
+    (0..parts.len())
+        .filter(|&at| is(at, "pulls") && is(at + 2, "reviews"))
+        .find_map(|at| match parts.get(at + 4) {
+            Some(_) if is(at + 4, "dismissals") => Some(Endpoint::Dismissal),
+            Some(_) if is(at + 4, "events") => Some(Endpoint::Review),
+            None => Some(Endpoint::Review),
+            Some(_) => None,
+        })
+        .map_or(Address::Other, Address::Review)
 }
 
 /// One part of a request body: a named field (`gh api -f event=APPROVE`),
@@ -519,17 +516,23 @@ fn curl_short_option(letter: char, value: &str) -> CurlOption<'_> {
 
 /// A `curl` body value: `@file` is read from the file, except with
 /// `--data-raw` and `--form-string`; `name@file` with `--data-urlencode` and
-/// `name=@file` or `name=<file` with `-F` read a file too.
+/// `name=@file` or `name=<file` with `-F` read a file too. Each splits where
+/// curl does: `--data-urlencode` at the first `=` or `@`, whichever comes
+/// first, and `-F` at the first `=`.
 fn curl_body(flag: &str, value: &str) -> Body {
     if flag == "--data-raw" || flag == "--form-string" {
         return Body::Whole(Some(value.to_string()));
     }
     let named_file = || match flag {
-        "--data-urlencode" => value.split_once('@').map(|(_, path)| path),
-        "-F" => value
-            .split_once("=@")
-            .or_else(|| value.split_once("=<"))
-            .map(|(_, path)| path),
+        "--data-urlencode" => value
+            .find(['=', '@'])
+            .filter(|&at| value[at..].starts_with('@'))
+            .map(|at| &value[at + 1..]),
+        "-F" => value.split_once('=').and_then(|(_, content)| {
+            content
+                .strip_prefix('@')
+                .or_else(|| content.strip_prefix('<'))
+        }),
         _ => None,
     };
     match value.strip_prefix('@').or_else(named_file) {
