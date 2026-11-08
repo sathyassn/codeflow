@@ -1898,9 +1898,14 @@ operands.
   when it cannot establish the source: an option it does not read, a
   revision, stash or commit it cannot resolve, a patch on stdin or one it
   cannot read, an encoded mail, an unmerged index entry on an enforcement
-  path, replacement refs or grafts, or `-c`, `--git-dir`, `--work-tree`,
+  path, replacement refs or grafts, or `--git-dir`, `--work-tree`,
   `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY` and the other
-  settings that move the repository, index or objects Git reads. These
+  settings that move the repository, index or objects Git reads. A `-c`
+  counts as such a setting unless its key only changes a program run for
+  a person or how output looks (`core.editor`, `core.pager`, `color.*`,
+  `user.*` and a few more); an include or a filter always counts. A form
+  that writes no work-tree file, such as `git reset --soft`, is not
+  refused for these settings. These
   refusals hold whatever `git.discard_uncommitted` and
   `security.secret_reads` say. The stated limit: branch switches (`git
   switch`, `git checkout BRANCH`, `checkout -b`), `git merge` (with
