@@ -319,15 +319,13 @@ pub(super) fn root_branch_at(root: &Path, base: &str) -> Result<Option<String>, 
 }
 
 /// Whether durable work tracking is on at the head or at the target, so a
-/// pull request cannot switch it off for itself.
+/// pull request cannot switch it off for itself ([`super::tracking_judged`]).
+/// With no range there is no commit to read, so only the checkout counts.
 pub(super) fn tracking_on(root: &Path, range: Option<&Range<'_>>) -> Result<bool, String> {
-    let mut enabled = durable_work_tracking_enabled(root).map_err(|error| error.to_string())?;
-    if let Some(range) = range {
-        for revision in [range.base, range.head] {
-            enabled |= durable_work_tracking_enabled_at(root, revision)?;
-        }
+    match range {
+        Some(range) => super::tracking_judged(root, Some(range.base), range.head),
+        None => durable_work_tracking_enabled(root).map_err(|error| error.to_string()),
     }
-    Ok(enabled)
 }
 
 /// With durable tracking on, an `integration/*` head that is not a release
@@ -416,7 +414,7 @@ pub(super) fn branch_journey(
     };
     // The task as the judged head carries it, so a run from another checkout
     // (a push of a branch other than the one checked out) still finds it.
-    let task_id = match super::branch_task_at(root, branch, range.head) {
+    let task_id = match super::branch_task_at(root, git, branch, range.head) {
         Ok(Some(task)) => task,
         Ok(None) => return,
         Err(error) => {
@@ -522,19 +520,21 @@ fn push_unlisted(tagged: &mut Vec<super::TaggedViolation>, error: &str) {
 /// policy names, which carries no `Task:` line.
 fn names_its_unit(
     root: &Path,
+    git: &GitPolicy,
     body: &str,
     branch: &str,
     range: Option<&Range<'_>>,
 ) -> Result<bool, String> {
+    // The task the branch carries at the judged head, never the checkout's
+    // records (TSK-1257). With no range no commit is under judgment, and
+    // the run judges the checkout as it always has.
+    let carried = || match range {
+        Some(range) => super::branch_task_at(root, git, branch, range.head),
+        None => task_id_from_branch(root, branch).map_err(|error| error.to_string()),
+    };
     Ok(match task_lines(body).as_slice() {
-        [TaskLine::Tracked(id)] => task_id_from_branch(root, branch)
-            .map_err(|error| error.to_string())?
-            .is_none_or(|carried| carried == *id),
-        [TaskLine::Epic(_) | TaskLine::Epics(_) | TaskLine::Unit(_)] => {
-            task_id_from_branch(root, branch)
-                .map_err(|error| error.to_string())?
-                .is_none()
-        }
+        [TaskLine::Tracked(id)] => carried()?.is_none_or(|carried| carried == *id),
+        [TaskLine::Epic(_) | TaskLine::Epics(_) | TaskLine::Unit(_)] => carried()?.is_none(),
         [] => match range {
             Some(range) => root_branch_at(root, range.base)?.as_deref() == Some(branch),
             None => false,
@@ -547,6 +547,7 @@ fn names_its_unit(
 /// unreadable tracking state or invalid unit name before dispatch can return.
 fn classification_applies(
     root: &Path,
+    git: &GitPolicy,
     body: &str,
     branch: &str,
     range: Option<&Range<'_>>,
@@ -555,7 +556,7 @@ fn classification_applies(
     match tracking_on(root, range) {
         Ok(true) => true,
         Ok(false) => {
-            match names_its_unit(root, body, branch, range) {
+            match names_its_unit(root, git, body, branch, range) {
                 Ok(true) => {},
                 Ok(false) => push(tagged, RULE, "the PR must have exactly one non-empty, non-placeholder Task: unit name matching its branch".into(), HINT),
                 Err(error) => push(tagged, RULE, error, HINT),
@@ -589,7 +590,7 @@ pub(super) fn dispatch(
     ran: &mut Vec<&str>,
 ) -> Option<Class> {
     ran.push("classification");
-    if !classification_applies(root, body, branch, range, tagged) {
+    if !classification_applies(root, git, body, branch, range, tagged) {
         return None;
     }
     let Some(range) = range else {
@@ -1020,7 +1021,7 @@ fn tracked(
     }
     // The record at the head first: a standalone record is on its branch,
     // not in a base checkout.
-    let declared = match super::work_target_at(root, branch, head, task_id) {
+    let declared = match super::work_target_at(root, head, task_id) {
         Ok(target) => target,
         Err(error) => {
             push(tagged, RULE, error, HINT);

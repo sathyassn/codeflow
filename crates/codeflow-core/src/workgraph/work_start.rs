@@ -879,6 +879,9 @@ pub fn declared_work_target(
 /// Read a work branch's target from the pushed revision, not the checkout.
 /// Uses readiness's bounded reader and supported layouts for the matching
 /// task only. Returns a logical branch name for destination resolution.
+/// The work prefixes come from `prefixes`, the `git.branch_prefixes` of the
+/// policy the caller judges with, never from the checkout's policy
+/// (TSK-1257).
 ///
 /// # Errors
 ///
@@ -886,11 +889,12 @@ pub fn declared_work_target(
 /// caller can distinguish an unavailable target from an absent declaration.
 pub fn declared_work_target_at_revision(
     repo_root: &Path,
+    prefixes: &[String],
     branch: &str,
     revision: &str,
 ) -> Result<Option<String>, WorkStartError> {
     Ok(
-        declared_work_record_at_revision(repo_root, branch, revision)?
+        declared_work_record_at_revision(repo_root, prefixes, branch, revision)?
             .and_then(|record| record.integration_target)
             .filter(|target| !target.is_empty())
             .map(|target| logical_target(&target).to_owned()),
@@ -900,10 +904,11 @@ pub fn declared_work_target_at_revision(
 /// The task record a work branch claims, read at `revision`.
 fn declared_work_record_at_revision(
     repo_root: &Path,
+    prefixes: &[String],
     branch: &str,
     revision: &str,
 ) -> Result<Option<Record>, WorkStartError> {
-    let Some(suffix) = work_branch_suffix(repo_root, branch)? else {
+    let Some(suffix) = work_suffix(&judged_work_prefixes(prefixes), branch) else {
         return Ok(None);
     };
     let repo = Repository::discover(repo_root)
@@ -919,7 +924,8 @@ fn declared_work_record_at_revision(
                 .next()
                 .and_then(markdown_stem)
                 .is_some_and(|id| suffix.starts_with(&format!("{id}-")))
-    })?;
+    })
+    .map_err(|error| at_revision(error, revision))?;
     Ok(records
         .into_values()
         .filter(|record| suffix.starts_with(&format!("{}-", record.id)))
@@ -953,13 +959,16 @@ pub enum EpicLineBinding {
 /// only from the anchor, and a head whose copy of the declaring epic
 /// declares anything else is refused. The caller selects the protected tip
 /// or the remote line's tip as the anchor. Head-record membership never
-/// replaces this anchor check.
+/// replaces this anchor check. The branch's task is found under `prefixes`,
+/// the `git.branch_prefixes` of the policy the caller judges with
+/// (TSK-1257).
 ///
 /// # Errors
 ///
 /// Returns why the repository, a revision or a record could not be read.
 pub fn epic_line_binding(
     repo_root: &Path,
+    prefixes: &[String],
     branch: &str,
     head: &str,
     line: &str,
@@ -980,7 +989,9 @@ pub fn epic_line_binding(
         } else {
             return Ok(EpicLineBinding::Refused(not_own));
         }
-    } else if let Some(record) = declared_work_record_at_revision(repo_root, branch, head)? {
+    } else if let Some(record) =
+        declared_work_record_at_revision(repo_root, prefixes, branch, head)?
+    {
         if let Some(refusal) = task_parent_line_refusal(&record) {
             return Ok(EpicLineBinding::Refused(refusal));
         }
@@ -1507,11 +1518,23 @@ pub(crate) fn task_record_at_revision(
         .map_err(|error| WorkStartError::Repository(format!("{revision}: {error}")))?;
     let records = records_from_tree_matching(&repo, &tree, |path, kind| {
         kind == RecordKind::Task && path.rsplit('/').next().and_then(markdown_stem) == Some(task)
-    })?;
+    })
+    .map_err(|error| at_revision(error, revision))?;
     Ok(records
         .into_iter()
         .find(|(id, _)| id == task)
         .map(|(_, record)| record))
+}
+
+/// A record read failure at `revision`, naming the commit beside the path
+/// the reader names (TSK-1257).
+fn at_revision(error: WorkStartError, revision: &str) -> WorkStartError {
+    match error {
+        WorkStartError::InvalidGraph(message) => {
+            WorkStartError::InvalidGraph(format!("{message} (at commit {revision})"))
+        }
+        other => other,
+    }
 }
 
 /// The `integration_target` task `task`'s record declares at `revision`,
@@ -1966,12 +1989,7 @@ pub fn judged_task_id(
     branch: &str,
     head: &str,
 ) -> Result<Option<String>, WorkStartError> {
-    let prefixes: Vec<String> = prefixes
-        .iter()
-        .filter(|prefix| !NON_WORK_PREFIXES.contains(&prefix.as_str()))
-        .cloned()
-        .collect();
-    let Some(suffix) = work_suffix(&prefixes, branch) else {
+    let Some(suffix) = work_suffix(&judged_work_prefixes(prefixes), branch) else {
         return Ok(None);
     };
     task_id_in_head(repo_root, suffix, head)
@@ -2018,13 +2036,33 @@ fn task_id_in_head(
 ///
 /// Returns an error if work prefixes or the task inventory cannot be read.
 pub fn branch_claims_task_id(repo_root: &Path, branch: &str) -> Result<bool, WorkStartError> {
-    Ok(
-        work_branch_suffix(repo_root, branch)?.is_some_and(|suffix| {
-            suffix
-                .strip_prefix("TSK-")
-                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
-        }),
-    )
+    Ok(work_branch_suffix(repo_root, branch)?.is_some_and(claims_task_id))
+}
+
+/// [`branch_claims_task_id`] as `codeflow ci` judges a range (TSK-1257):
+/// the work prefixes come from `prefixes`, the `git.branch_prefixes` of the
+/// policy the run judges with, never from the checkout's policy.
+#[must_use]
+pub fn judged_branch_claims_task_id(prefixes: &[String], branch: &str) -> bool {
+    work_suffix(&judged_work_prefixes(prefixes), branch).is_some_and(claims_task_id)
+}
+
+/// The work prefixes among a judging policy's `git.branch_prefixes`: every
+/// entry except `plan/` and `integration/`, as [`work_prefixes`] reads them
+/// from the checkout.
+fn judged_work_prefixes(prefixes: &[String]) -> Vec<String> {
+    prefixes
+        .iter()
+        .filter(|prefix| !NON_WORK_PREFIXES.contains(&prefix.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Whether a work branch suffix starts with a task id by shape.
+fn claims_task_id(suffix: &str) -> bool {
+    suffix
+        .strip_prefix("TSK-")
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 /// A reviewed predecessor pin. The lookup names its exact branch and commit;
@@ -4470,6 +4508,7 @@ mod tests {
             git(root, &["commit", "-am", "declare target"]);
             let binding = epic_line_binding(
                 root,
+                &crate::hooks::policy::GitPolicy::default().branch_prefixes,
                 "task/TSK-002-work",
                 "HEAD",
                 line,
@@ -4486,8 +4525,16 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    epic_line_binding(root, branch, "HEAD", line, "main", "protected branch")
-                        .unwrap(),
+                    epic_line_binding(
+                        root,
+                        &crate::hooks::policy::GitPolicy::default().branch_prefixes,
+                        branch,
+                        "HEAD",
+                        line,
+                        "main",
+                        "protected branch"
+                    )
+                    .unwrap(),
                     EpicLineBinding::Refused(_)
                 ),
                 "{branch}"
@@ -4547,6 +4594,7 @@ mod tests {
     fn bind_declared(root: &Path) -> EpicLineBinding {
         epic_line_binding(
             root,
+            &crate::hooks::policy::GitPolicy::default().branch_prefixes,
             "task/TSK-002-work",
             "HEAD",
             DECLARED_LINE,
@@ -5211,6 +5259,7 @@ mod tests {
         git(root, &["switch", "-q", "task/TSK-002-work"]);
         let binding = epic_line_binding(
             root,
+            &crate::hooks::policy::GitPolicy::default().branch_prefixes,
             "task/TSK-002-work",
             "HEAD",
             DECLARED_LINE,

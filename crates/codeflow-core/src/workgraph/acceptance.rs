@@ -1711,7 +1711,13 @@ fn task_landing(
                 Ok(parent) => parent,
                 Err(error) => return Landed::Refused(error),
             };
-            match non_planning_change(repo, parent, at) {
+            // A merge of the target into the completion brings the target's
+            // files, which are not the completion's change (TSK-1257 AC-5).
+            let since = match merged_target(repo, at, default_target, receiving) {
+                Ok(merged) => merged.or(parent),
+                Err(error) => return Landed::Refused(error),
+            };
+            match non_planning_change(repo, since, at) {
                 Ok(outside) => (parent, outside),
                 Err(_) => return unreadable("the completing commit's change"),
             }
@@ -1805,6 +1811,39 @@ fn task_landing(
         )),
         Err(_) => unreadable("the landing merge"),
     }
+}
+
+/// The second parent of `at` when `at` is a two-parent merge of content a
+/// trusted target already holds: the run's default target, or a receiving
+/// line tip that does not itself hold `at`. The completion's own change is
+/// then what `at` changes against that parent, so the files the target
+/// brought in count as the target's (TSK-1257 AC-5), while a file the pull
+/// request's own commits change, or a hand-resolved hunk, still differs
+/// from it. A merge of anything else is measured from its first parent, so
+/// a side branch the target does not hold never hides a change.
+fn merged_target(
+    repo: &Repository,
+    at: Oid,
+    default_target: Option<Oid>,
+    receiving: &StackingTips,
+) -> Result<Option<Oid>, String> {
+    let commit = repo
+        .find_commit(at)
+        .map_err(|_| "the completing commit cannot be read".to_string())?;
+    let parents = history::parents(repo, &commit).map_err(|error| error.to_string())?;
+    let [_, second] = parents[..] else {
+        return Ok(None);
+    };
+    for tip in default_target.into_iter().chain(receiving.landing_tips()) {
+        // A tip that holds the merge itself vouches for nothing in it.
+        if is_ancestor_or_same(repo, at, tip)? {
+            continue;
+        }
+        if is_ancestor_or_same(repo, second, tip)? {
+            return Ok(Some(second));
+        }
+    }
+    Ok(None)
 }
 
 /// Why `merge` is no landing, if it is not: it lies on the first-parent
