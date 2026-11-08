@@ -244,7 +244,8 @@ fn curl_config_variables_and_other_spellings_are_judged() {
         format!("curl https://api.github.com/repos/o/r/pulls/12/reviews --data-urlencode body@{upload}"),
         "curl https://api.github.com/repos/o/r/pulls/12/reviews -F 'event=APPROVE'".to_string(),
         "curl https://api.github.com/repos/o/r/pulls/12/reviews --form-string 'event=APPROVE'".to_string(),
-        "curl -G https://api.github.com/repos/o/r/pulls/12/reviews -X POST --data event=APPROVE".to_string(),
+        // `--get`, the long spelling of `-G`, moves the data to the query.
+        "curl --get https://api.github.com/repos/o/r/pulls/12/reviews -X POST --data event=APPROVE".to_string(),
     ] {
         assert!(refused(&command), "{command}");
     }
