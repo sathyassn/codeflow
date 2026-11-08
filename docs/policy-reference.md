@@ -1925,7 +1925,9 @@ operands.
   work-tree file, such as `git reset --soft`, `git restore --staged` or
   `git checkout-index --temp`, is not refused for these settings. These
   refusals hold whatever `git.discard_uncommitted` and
-  `security.secret_reads` say. The stated limit: without such a setting,
+  `security.secret_reads` say. The guard also checks the command's other
+  Git rules, so a `warn` finding here does not hide another rule's block,
+  such as `git.policy_authority`. The stated limit: without such a setting,
   branch switches, `git merge` (with `--squash` and `--no-commit`), `git
   rebase`, `git pull` and committing `git cherry-pick` and `git revert`
   keep their verdict (TSK-325 AC-7): the tree they write is not compared
