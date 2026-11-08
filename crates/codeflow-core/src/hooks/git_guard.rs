@@ -1136,7 +1136,11 @@ fn evaluate_report_with_runners(
         // before any decision reads it; an operand of a git subcommand is
         // judged in `check_git` with that subcommand's rules (TSK-326).
         let no_vars = HashMap::new();
-        let marked = data_operands::mark_text(&words, &command_argv_live(segment));
+        let marked = data_operands::mark_text(
+            &words,
+            &command_argv_live(segment),
+            &command_argv_braces(segment),
+        );
         let data = {
             let moved = line.moves_for(&shell, top_level, &tokens);
             data_operands::command_data(
@@ -7765,6 +7769,11 @@ pub(crate) fn launcher_commands(name: &str, args: &[String]) -> Vec<String> {
             .map(quote_words)
             .into_iter()
             .collect(),
+        "fd" | "fdfind" => data_operands::fd_command(args)
+            .filter(|words| judged(words))
+            .map(quote_words)
+            .into_iter()
+            .collect(),
         "find" => args
             .iter()
             .enumerate()
@@ -10140,17 +10149,20 @@ fn unclassifiable_git(args: &[String]) -> Option<Unclassified> {
             "an unquoted position, where word splitting can add arguments",
         ));
     }
+    let messages = message_values(sub, rest);
     let mut i = 0;
     while i < rest.len() {
         let a = rest[i].as_str();
-        let takes_message = a == "-m"
-            || a == "--message"
-            || (a.starts_with('-') && !a.starts_with("--") && a.ends_with('m'));
+        let takes_message = messages
+            && (a == "-m"
+                || a == "--message"
+                || (a.starts_with('-') && !a.starts_with("--") && a.ends_with('m')));
         if takes_message {
             i += 2; // the message value may hold a quoted substitution
             continue;
         }
-        let message_inline = a.starts_with("--message=") || (a.starts_with("-m") && a.len() > 2);
+        let message_inline =
+            messages && (a.starts_with("--message=") || (a.starts_with("-m") && a.len() > 2));
         if has_substitution(a) && !message_inline {
             return Some(Unclassified::Arguments(
                 "an argument other than the message",
@@ -10159,6 +10171,36 @@ fn unclassifiable_git(args: &[String]) -> Option<Unclassified> {
         i += 1;
     }
     None
+}
+
+/// Whether `-m` and `--message` of `git <sub>` (with `rest` after it) take
+/// a message, which no decision reads: `commit`, `tag`, `merge`, `notes add`
+/// and `notes append`, and a `stash` that saves (`push`, `save`, or no
+/// action word). Elsewhere `-m` is an action whose names are operands (`git
+/// branch -fm main`) or a flag (`git checkout -m`), and the words after it
+/// are judged (TSK-326).
+pub(crate) fn message_values(sub: &str, rest: &[String]) -> bool {
+    match sub {
+        "commit" | "tag" | "merge" => true,
+        "notes" => rest
+            .iter()
+            .any(|word| matches!(word.as_str(), "add" | "append")),
+        "stash" => !rest.iter().any(|word| {
+            matches!(
+                word.as_str(),
+                "list"
+                    | "show"
+                    | "drop"
+                    | "pop"
+                    | "apply"
+                    | "branch"
+                    | "clear"
+                    | "create"
+                    | "store"
+            )
+        }),
+        _ => false,
+    }
 }
 
 /// The rules an unknown part of a git invocation could break: every branch
@@ -13530,6 +13572,10 @@ struct ShellWord {
     /// Whether such an expansion stands outside double quotes too, where
     /// the shell may split its value into several words or glob it.
     splits: bool,
+    /// Whether the word holds a brace list (`{a,b}`) or sequence (`{1..3}`)
+    /// outside quotes and escapes, which the shell expands into several
+    /// words. `${...}` is a parameter, not a brace group (TSK-326).
+    braces: bool,
 }
 
 impl ShellWord {
@@ -13653,6 +13699,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut expands = false;
     let mut unquoted_expansions: usize = 0;
     let mut pattern = false;
+    let mut braces = BraceScan::default();
     let mut chars = segment.chars();
 
     while let Some(c) = chars.next() {
@@ -13733,6 +13780,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                         pattern: std::mem::take(&mut pattern),
                         expands: std::mem::take(&mut expands),
                         splits: std::mem::take(&mut unquoted_expansions) > 0,
+                        braces: std::mem::take(&mut braces).found,
                     });
                     started = false;
                 }
@@ -13743,6 +13791,9 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                 cur.push(c);
                 started = true;
                 pattern |= !in_single && !in_double && pattern_character(c);
+                if !in_single && !in_double {
+                    braces.read(c, dollar);
+                }
                 if prefix_open && !in_single && !in_double {
                     unquoted_prefix += c.len_utf8();
                 }
@@ -13760,9 +13811,42 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
             pattern,
             expands,
             splits: unquoted_expansions > 0,
+            braces: braces.found,
         });
     }
     words
+}
+
+/// The brace syntax of one word read outside quotes and escapes: the groups
+/// open, whether one holds a `,` or `..`, and whether a list or sequence
+/// closed.
+#[derive(Default)]
+struct BraceScan {
+    open: usize,
+    separated: bool,
+    dot: bool,
+    found: bool,
+}
+
+impl BraceScan {
+    /// Reads `c`, a character outside quotes; `dollar` when an unquoted `$`
+    /// stands just before it.
+    fn read(&mut self, c: char, dollar: bool) {
+        let dot = std::mem::take(&mut self.dot);
+        match c {
+            '{' if !dollar => self.open += 1,
+            ',' if self.open > 0 => self.separated = true,
+            '.' if self.open > 0 => {
+                self.separated |= dot;
+                self.dot = true;
+            }
+            '}' if self.open > 0 => {
+                self.open -= 1;
+                self.found |= self.separated;
+            }
+            _ => {}
+        }
+    }
 }
 
 /// The shell words of `line` that hold any quoted part, as the shell joins
@@ -13851,6 +13935,15 @@ pub(crate) fn command_argv_live(segment: &str) -> Vec<bool> {
     argv_words(segment)
         .into_iter()
         .map(|word| word.expands || has_substitution(&word.text))
+        .collect()
+}
+
+/// For each word of [`command_argv`], whether it holds a brace list or
+/// sequence the shell expands into several words ([`ShellWord::braces`]).
+pub(crate) fn command_argv_braces(segment: &str) -> Vec<bool> {
+    argv_words(segment)
+        .into_iter()
+        .map(|word| word.braces)
         .collect()
 }
 
@@ -14274,7 +14367,7 @@ pub(crate) const PREFIX_LAUNCHERS: &[&str] = &[
 /// The programs [`launcher_commands`] reads a carried command from. The exec
 /// guard's lexer must know each as a wrapper too, which a test asserts.
 pub(crate) const COMMAND_CARRIERS: &[&str] = &[
-    "flock", "script", "watch", "parallel", "setsid", "unbuffer", "xargs", "find",
+    "flock", "script", "watch", "parallel", "setsid", "unbuffer", "xargs", "find", "fd", "fdfind",
 ];
 
 /// Skip the options of a prefix launcher starting at `idx` and return the
@@ -15919,6 +16012,133 @@ mod tests {
             "watch git push origin feat/x",
             "flock /tmp/l git push origin feat/x",
             "script -q -c \"git push origin feat/x\" /dev/null",
+        ] {
+            let found = evaluate(command, &ctx(&policy, "feat/x"));
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
+    /// TSK-326 review F1: a shell or `eval` that `find`, `fd`, `xargs` or
+    /// `parallel` runs reads the input through a replacement string or a
+    /// positional parameter, so a git command in the script that takes one
+    /// refuses as unresolved; input spliced into the script and a script the
+    /// guard cannot read refuse too. A literal script passes.
+    #[test]
+    fn shell_scripts_a_supplier_runs_read_its_input_as_data() {
+        for command in [
+            "find main -exec sh -c 'git push --no-verify origin {}' \\;",
+            "find . -name main -execdir bash -c 'git push origin \"$1\"' _ {} \\;",
+            "fd -x sh -c 'git push --no-verify origin {}'",
+            "fd main -X bash -c 'git push origin \"$@\"' _",
+            "xargs -I{} sh -c 'git push --no-verify origin {}' < refs",
+            "xargs -I % dash -c 'git push origin HEAD:%' < refs",
+            "xargs sh -c 'git push origin \"$1\"' _ < refs",
+            "xargs -n1 sh -c 'git push origin ${0}' < refs",
+            "parallel sh -c 'git push --no-verify origin {}' :::: refs",
+            "parallel zsh -c 'git push origin \"$1\"' _ :::: refs",
+            "find . -exec env sh -c 'git push origin \"$1\"' _ {} \\;",
+            "xargs -I{} sh -c 'echo {}' < refs",
+            "find . -exec sh {} \\;",
+            "xargs bash < scripts",
+            "find . -exec sh -c \"$SCRIPT\" \\;",
+        ] {
+            assert!(
+                data_refusal(command).is_some(),
+                "{command}: refused as unresolved"
+            );
+        }
+        // At the default policy, hook integrity at block, the find form
+        // still refuses.
+        let p = default_policy();
+        let found = evaluate(
+            "find main -exec sh -c 'git push --no-verify origin {}' \\;",
+            &ctx(&p, "feat/x"),
+        );
+        assert!(
+            found
+                .iter()
+                .any(|v| v.message.contains("is filled in at run time")),
+            "{found:?}"
+        );
+        let policy = data_policy();
+        for command in [
+            "find . -exec sh -c 'git log' \\;",
+            "xargs sh -c 'git log \"$1\"' _ < refs",
+            "fd -x sh -c 'git status'",
+            "find . -exec sh -c 'wc -l \"$1\"' _ {} \\;",
+            "sh -c 'git push origin feat/x'",
+        ] {
+            let found = evaluate(command, &ctx(&policy, "feat/x"));
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
+    /// TSK-326 review F2: on `git branch`, `-m` renames and its names are
+    /// operands, so a forced rename onto a protected name held in a variable
+    /// is judged; a message stays a message on `commit` and `stash`.
+    #[test]
+    fn branch_rename_names_are_judged_not_skipped_as_messages() {
+        let p = GitPolicy {
+            hook_integrity: PolicyLevel::Off,
+            ..default_policy()
+        };
+        for command in [
+            "V=main; git branch -fm \"$V\"",
+            "V=main; git branch -f -m \"$V\"",
+            "V=main; git branch -fm feat/x \"$V\"",
+        ] {
+            let v = evaluate(command, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.local_ref_protection"), "{command}: {v:?}");
+        }
+        // A name read from data is unresolved, under the branch rules.
+        let v = evaluate("V=$(cat refs); git branch -fm \"$V\"", &ctx(&p, "feat/x"));
+        assert!(
+            v.iter()
+                .any(|v| v.message.contains("is filled in at run time")),
+            "{v:?}"
+        );
+        for command in [
+            "V=feat/y; git branch -fm \"$V\"",
+            "V=$(cat msg); git commit -m \"$V\"",
+            "V=$(cat msg); git commit -am \"$V\"",
+        ] {
+            let v = evaluate(command, &ctx(&p, "feat/x"));
+            assert!(v.is_empty(), "{command}: {v:?}");
+        }
+    }
+
+    /// TSK-326 review F3: the shell expands an unquoted brace list or
+    /// sequence into several words, so a judged git word holding one refuses
+    /// as unresolved; a quoted or escaped brace is text and passes.
+    #[test]
+    fn brace_lists_in_judged_git_words_refuse() {
+        for command in [
+            "git push --no-verify origin {feat/x,main}",
+            "V=main; git push origin {feat/x,$V}",
+            "git push origin feat/{x..z}",
+            "git push origin HEAD:{feat/x,main}",
+            "git -C {.,..} push origin feat/x",
+        ] {
+            let found =
+                data_refusal(command).unwrap_or_else(|| panic!("{command}: refused as unresolved"));
+            assert!(
+                found.message.contains("brace expansion"),
+                "{command}: {found:?}"
+            );
+        }
+        let p = default_policy();
+        let v = evaluate(
+            "git push --no-verify origin {feat/x,main}",
+            &ctx(&p, "feat/x"),
+        );
+        assert!(has_rule(&v, "git.push_to_protected"), "{v:?}");
+        let policy = data_policy();
+        for command in [
+            "git push origin 'feat/{x,y}'",
+            "git push origin \"feat/{x,y}\"",
+            "git push origin feat/\\{x,y\\}",
+            "B=feat/y; git push origin ${B}",
+            "git log {a,b}",
         ] {
             let found = evaluate(command, &ctx(&policy, "feat/x"));
             assert!(found.is_empty(), "{command}: {found:?}");

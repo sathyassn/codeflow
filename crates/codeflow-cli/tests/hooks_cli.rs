@@ -2457,6 +2457,49 @@ fn each_guard_alone_refuses_parallel_fd_and_launcher_data() {
     }
 }
 
+/// TSK-326 review F1 and F3: a shell script a supplier runs with its input,
+/// and a brace list in a push refspec, are refused by each guard alone; a
+/// literal script and a quoted brace pass.
+#[test]
+fn each_guard_alone_refuses_supplied_scripts_and_brace_lists() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/data");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    std::fs::write(dir.path().join("refs"), "main\n").unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "find main -exec sh -c 'git push --no-verify origin {}' \\;",
+            "fd -x sh -c 'git push --no-verify origin {}'",
+            "xargs -I{} sh -c 'git push --no-verify origin {}' < refs",
+            "parallel sh -c 'git push --no-verify origin {}' :::: refs",
+            "git push --no-verify origin {feat/x,main}",
+            "V=main; git push origin {feat/x,$V}",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            assert!(
+                stderr.contains("command unresolved:") && stderr.contains("filled in at run time"),
+                "{hook}: {command}: {stderr}"
+            );
+        }
+        for command in [
+            "git push origin 'feat/{x,y}'",
+            "git push origin \"feat/{x,y}\"",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(0), "{hook}: {command}: {stderr}");
+        }
+    }
+}
+
 /// TSK-326 AC-5: the over-refusals PR 195 (TSK-283) accepted on a line with
 /// a configuration-dependent push stay refused by each guard: non-Git data
 /// naming a configuration variable, a parameter read with an operator, an

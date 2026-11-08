@@ -3889,6 +3889,86 @@ mod tests {
         }
     }
 
+    /// TSK-326 review F1: a shell or `eval` that `find`, `fd`, `xargs` or
+    /// `parallel` runs reads the input through a replacement string or a
+    /// positional parameter, so a git command in the script that takes one
+    /// refuses as unresolved; input spliced into the script and a script the
+    /// guard cannot read refuse too. A literal script passes.
+    #[test]
+    fn shell_scripts_a_supplier_runs_read_its_input_as_data() {
+        for command in [
+            "find main -exec sh -c 'git push --no-verify origin {}' \\;",
+            "find . -name main -execdir bash -c 'git push origin \"$1\"' _ {} \\;",
+            "fd -x sh -c 'git push --no-verify origin {}'",
+            "fd main -X bash -c 'git push origin \"$@\"' _",
+            "xargs -I{} sh -c 'git push --no-verify origin {}' < refs",
+            "xargs -I % dash -c 'git push origin HEAD:%' < refs",
+            "xargs sh -c 'git push origin \"$1\"' _ < refs",
+            "xargs -n1 sh -c 'git push origin ${0}' < refs",
+            "parallel sh -c 'git push --no-verify origin {}' :::: refs",
+            "parallel zsh -c 'git push origin \"$1\"' _ :::: refs",
+            "find . -exec env sh -c 'git push origin \"$1\"' _ {} \\;",
+            "xargs -I{} sh -c 'echo {}' < refs",
+            "find . -exec sh {} \\;",
+            "xargs bash < scripts",
+            "find . -exec sh -c \"$SCRIPT\" \\;",
+        ] {
+            let found =
+                data_refusal(command).unwrap_or_else(|| panic!("{command}: refused as unresolved"));
+            assert_eq!(found.rule, "security.outward_actions", "{command}");
+        }
+        for command in [
+            "find . -exec sh -c 'git log' \\;",
+            "xargs sh -c 'git log \"$1\"' _ < refs",
+            "fd -x sh -c 'git status'",
+            "find . -exec sh -c 'wc -l \"$1\"' _ {} \\;",
+        ] {
+            let found = evaluate(command, &SecuritySection::default());
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
+    /// TSK-326 review F3: an unquoted brace list or sequence in a git word
+    /// exec-guard judges refuses as unresolved; a quoted brace is text.
+    #[test]
+    fn brace_lists_in_judged_git_words_refuse() {
+        for command in [
+            "git push --no-verify origin {feat/x,main}",
+            "V=main; git push origin {feat/x,$V}",
+            "git push origin feat/{x..z}",
+            "git tag {v1,v2}",
+            "git -C {.,..} push origin feat/x",
+        ] {
+            let found =
+                data_refusal(command).unwrap_or_else(|| panic!("{command}: refused as unresolved"));
+            assert!(
+                found.message.contains("brace expansion"),
+                "{command}: {found:?}"
+            );
+        }
+        for command in [
+            "git push origin 'feat/{x,y}'",
+            "git push origin \"feat/{x,y}\"",
+            "git log {a,b}",
+        ] {
+            let found = evaluate(command, &SecuritySection::default());
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
+    /// TSK-326 review N3: a `$` with no name after it (`HEAD:v$[2]`, which
+    /// exec-guard does not rewrite) refuses as unresolved, without a panic.
+    #[test]
+    fn a_dollar_with_no_name_refuses_without_a_panic() {
+        for command in [
+            "git push origin HEAD:v$[2]",
+            "git push origin v$",
+            "git push origin $$",
+        ] {
+            assert!(data_refusal(command).is_some(), "{command}");
+        }
+    }
+
     /// TSK-326 AC-3: a literal the line assigns is judged as that literal by
     /// the release decision, so a tag ref in a variable is a tag push.
     #[test]

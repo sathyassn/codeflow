@@ -16,11 +16,11 @@ use std::collections::HashMap;
 
 use super::super::git_target::{expand_word, has_substitution, Cwd, ShellState, Val};
 use super::{
-    basename, cd_target, command_argv, command_argv_live, configuration_input,
+    basename, cd_target, command_argv, command_argv_braces, command_argv_live, configuration_input,
     configuration_launch, expand_shell_commands, expands, flat_top_level, git_program_environment,
-    is_identifier, launcher_name, map_top_level, parallel_template, plain_pushd, shell_tokens,
-    shown_word, strip_reserved_words, xargs_command, GIT_BUILTINS, GLOBAL_VALUE_OPTIONS,
-    JUDGED_SUBCOMMANDS, NESTING_UNREAD,
+    is_identifier, is_shell, launcher_name, map_top_level, message_values, parallel_template,
+    plain_pushd, shell_tokens, shown_word, strip_reserved_words, xargs_command, GIT_BUILTINS,
+    GLOBAL_VALUE_OPTIONS, JUDGED_SUBCOMMANDS, NESTING_UNREAD,
 };
 
 /// Stands in a word for text that `xargs` or `find` supplies from its
@@ -35,29 +35,45 @@ const SUBSTITUTION: &str = "a command substitution";
 const TEXT_DOLLAR: char = '\u{4}';
 const TEXT_BACKTICK: char = '\u{5}';
 
+/// Ends a word that holds a brace list or sequence outside quotes, which the
+/// shell expands into several words.
+const BRACES: char = '\u{6}';
+
+/// Why a word with a brace list or sequence cannot be read as one word.
+const BRACE_EXPANSION: &str = "brace expansion, which can make it several words";
+
 /// `words`, the argument vector after its leading reserved words, with each
-/// `$` and backtick of a word the shell does not expand marked as text.
-/// `live` holds, for the whole argument vector, whether each word expands;
-/// `words` is its tail. A word with no flag is read as expanding.
-pub(crate) fn mark_text(words: &[String], live: &[bool]) -> Vec<String> {
+/// `$` and backtick of a word the shell does not expand marked as text, and
+/// each word with a brace list or sequence outside quotes marked as one.
+/// `live` and `braces` hold, for the whole argument vector, whether each
+/// word expands and whether it holds brace syntax; `words` is their tail. A
+/// word with no flag is read as expanding.
+pub(crate) fn mark_text(words: &[String], live: &[bool], braces: &[bool]) -> Vec<String> {
     let offset = live.len().saturating_sub(words.len());
+    let brace_offset = braces.len().saturating_sub(words.len());
     words
         .iter()
         .enumerate()
         .map(|(at, word)| {
-            if live.get(offset + at).copied().unwrap_or(true) {
+            let mut word = if live.get(offset + at).copied().unwrap_or(true) {
                 word.clone()
             } else {
                 word.replace('$', &TEXT_DOLLAR.to_string())
                     .replace('`', &TEXT_BACKTICK.to_string())
+            };
+            if braces.get(brace_offset + at).copied().unwrap_or(false) {
+                word.push(BRACES);
             }
+            word
         })
         .collect()
 }
 
 /// `word` with the marks of [`mark_text`] turned back into the text written.
 pub(crate) fn unmark(word: &str) -> String {
-    word.replace(TEXT_DOLLAR, "$").replace(TEXT_BACKTICK, "`")
+    word.replace(TEXT_DOLLAR, "$")
+        .replace(TEXT_BACKTICK, "`")
+        .replace(BRACES, "")
 }
 
 /// Which guard reads the line, and so which git subcommands' operands its
@@ -115,6 +131,9 @@ fn fill(word: &str, vars: &HashMap<String, Val>, supplier: Option<&str>) -> Resu
             supplier.unwrap_or("a command")
         ));
     }
+    if word.contains(BRACES) {
+        return Err(BRACE_EXPANSION.to_string());
+    }
     if !expands(word) {
         return Ok(word.to_string());
     }
@@ -163,8 +182,12 @@ fn git_environment(name: &str) -> bool {
 }
 
 /// Whether `word` is a git option whose value is a message, which no
-/// decision reads; `Some(true)` when the value is the next word.
-fn message_option(word: &str) -> Option<bool> {
+/// decision reads; `Some(true)` when the value is the next word. Only a
+/// subcommand whose `-m` takes a message has one ([`message_values`]).
+fn message_option(word: &str, messages: bool) -> Option<bool> {
+    if !messages {
+        return None;
+    }
     if word == "-m" || word == "--message" {
         return Some(true);
     }
@@ -318,12 +341,19 @@ impl Data<'_> {
         let mut i = 0;
         while let Some(word) = globals.get(i) {
             let configures = self.judged && configuration_option(word);
+            // A brace list makes one option several words, which can change
+            // the subcommand git runs.
+            if word.contains(BRACES) {
+                return Err(refused(word, BRACE_EXPANSION));
+            }
             filled.keep(word, None);
             if GLOBAL_VALUE_OPTIONS.contains(&word.as_str()) {
                 if let Some(value) = globals.get(i + 1) {
                     match self.fill(value) {
                         Ok(v) => filled.keep(value, Some(v)),
-                        Err(why) if configures => return Err(refused(value, &why)),
+                        Err(why) if configures || value.contains(BRACES) => {
+                            return Err(refused(value, &why))
+                        }
                         Err(_) => filled.keep(value, None),
                     }
                 }
@@ -346,6 +376,7 @@ impl Data<'_> {
     /// variable after it.
     fn operands(&self, rest: &[String], sub: &str, filled: &mut Filled) -> Result<(), Form> {
         let mut deferred: Option<Form> = None;
+        let messages = message_values(sub, rest);
         let mut j = 0;
         while let Some(word) = rest.get(j) {
             j += 1;
@@ -353,9 +384,20 @@ impl Data<'_> {
                 filled.keep(word, None);
                 continue;
             }
-            if let Some(next) = message_option(word) {
+            if let Some(next) = message_option(word, messages) {
                 filled.keep(word, None);
                 if let Some(value) = rest.get(j).filter(|_| next) {
+                    // A brace list in a message makes more words after it,
+                    // which git reads as operands.
+                    if value.contains(BRACES) {
+                        return Err(unresolved(
+                            value,
+                            &format!("in a `git {sub}` message"),
+                            BRACE_EXPANSION,
+                            Some(sub),
+                            true,
+                        ));
+                    }
                     filled.keep(value, None);
                     j += 1;
                 }
@@ -417,26 +459,27 @@ fn command_data_supplied(
         return Ok(None);
     };
     let program_at = words.len() - args.len() - 1;
-    let filled_program = if expands(program) || program.contains(SUPPLIED) {
-        match fill(program, vars, supplier) {
-            Ok(value) => value,
-            // A program with no sign of git is left to exec-guard's own
-            // reader, which refuses a program it cannot read where it
-            // decides one; this refusal is for a program that may be git.
-            Err(_) if !git_evidence(args) => return Ok(None),
-            Err(why) => {
-                return Err(unresolved(
-                    program,
-                    "in the program position",
-                    &why,
-                    None,
-                    false,
-                ))
+    let filled_program =
+        if expands(program) || program.contains(SUPPLIED) || program.contains(BRACES) {
+            match fill(program, vars, supplier) {
+                Ok(value) => value,
+                // A program with no sign of git is left to exec-guard's own
+                // reader, which refuses a program it cannot read where it
+                // decides one; this refusal is for a program that may be git.
+                Err(_) if !git_evidence(args) => return Ok(None),
+                Err(why) => {
+                    return Err(unresolved(
+                        program,
+                        "in the program position",
+                        &why,
+                        None,
+                        false,
+                    ))
+                }
             }
-        }
-    } else {
-        program.to_string()
-    };
+        } else {
+            program.to_string()
+        };
     let program_filled = filled_program != program;
     match launcher_name(&filled_program) {
         "xargs" => {
@@ -481,6 +524,10 @@ fn command_data_supplied(
         _ => {}
     }
     let name = basename(&filled_program);
+    if let Some(supplier) = supplier.filter(|_| is_shell(name) || name == "eval") {
+        shell_script_data(name, args, vars, reader, supplier)?;
+        return Ok(None);
+    }
     if name.strip_suffix(".exe").unwrap_or(name) != "git" {
         return Ok(None);
     }
@@ -525,6 +572,146 @@ fn git_evidence(args: &[String]) -> bool {
                 || first.starts_with("--exec-path")
                 || first.starts_with("--config-env")
         })
+}
+
+/// A shell (`sh -c`, `bash -c` and the like) or `eval` that `supplier` runs
+/// with its input. The script is read as a command line in which the
+/// replacement strings and the positional parameters (`$1`, `"$@"`, `$0`)
+/// are supplied input, so a git command that takes one as an operand
+/// refuses as unresolved. Input spliced into the script text is code from
+/// data, and a script the guard cannot read (a file, standard input, a
+/// variable, or code it cannot parse) refuses as well (TSK-326).
+fn shell_script_data(
+    name: &str,
+    args: &[String],
+    vars: &HashMap<String, Val>,
+    reader: Reader,
+    supplier: &str,
+) -> Result<(), Form> {
+    let runs = if name == "eval" {
+        "`eval`".to_string()
+    } else {
+        format!("`{name}`")
+    };
+    let place = format!("as the script {runs} runs");
+    let script = shell_script(name, args).map_err(|why| Form {
+        what: format!(
+            "the code {runs} runs with the input {supplier} supplies is filled in at run time from {why}, which the guard does not read"
+        ),
+        sub: None,
+        operand: false,
+        substitution: false,
+    })?;
+    let text = fill(&script, vars, Some(supplier))
+        .map_err(|why| unresolved(&script, &place, &why, None, false))?;
+    let text = positional_supplied(&unmark(&text));
+    let empty = HashMap::new();
+    for segment in &expand_shell_commands(&text).segments {
+        if segment == NESTING_UNREAD || segment == "__unresolved_shell_code" {
+            return Err(unresolved(
+                &script,
+                &place,
+                "shell code the guard cannot read",
+                None,
+                false,
+            ));
+        }
+        let mut words = command_argv(segment);
+        strip_reserved_words(&mut words);
+        if words.is_empty() {
+            continue;
+        }
+        let marked = mark_text(
+            &words,
+            &command_argv_live(segment),
+            &command_argv_braces(segment),
+        );
+        command_data_supplied(&marked, &empty, reader, Some(supplier))?;
+    }
+    Ok(())
+}
+
+/// The script a shell runs from `args` with `-c` (fish's `--command` too),
+/// or for `eval` its words joined; otherwise what it runs instead, in words.
+fn shell_script(name: &str, args: &[String]) -> Result<String, &'static str> {
+    if name == "eval" {
+        return Ok(args.join(" "));
+    }
+    let plain = name.to_ascii_lowercase();
+    let plain = plain.trim_end_matches(".exe");
+    if matches!(plain, "pwsh" | "powershell" | "cmd") {
+        return Err("a PowerShell or cmd command");
+    }
+    let mut command = false;
+    let mut at = 0;
+    while let Some(word) = args.get(at) {
+        if word == "--" || word == "-" {
+            at += 1;
+            break;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            if let Some(script) = long.strip_prefix("command=") {
+                return Ok(script.to_string());
+            }
+            command |= long == "command";
+            at += 1;
+            continue;
+        }
+        let Some(flags) = word
+            .strip_prefix('-')
+            .or_else(|| word.strip_prefix('+'))
+            .filter(|flags| !flags.is_empty())
+        else {
+            break;
+        };
+        command |= flags.contains('c');
+        // `-o NAME` and `-O NAME` take the next word.
+        if flags.ends_with(['o', 'O']) {
+            at += 1;
+        }
+        at += 1;
+    }
+    match args.get(at) {
+        Some(script) if command => Ok(script.clone()),
+        _ if command => Err("`-c` with no script"),
+        _ => Err("a script file or standard input"),
+    }
+}
+
+/// `text` with each positional parameter (`$0` to `$9`, `${N}`, `$@`, `$*`,
+/// `${@}`, `${*}`) marked as supplied input.
+fn positional_supplied(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while let Some(&c) = chars.get(i) {
+        if c == '$' {
+            match chars.get(i + 1) {
+                Some(next) if next.is_ascii_digit() || matches!(next, '@' | '*') => {
+                    out.push(SUPPLIED);
+                    i += 2;
+                    continue;
+                }
+                Some('{') => {
+                    let inner: String =
+                        chars[i + 2..].iter().take_while(|&&ch| ch != '}').collect();
+                    let closed = chars.get(i + 2 + inner.chars().count()) == Some(&'}');
+                    if closed
+                        && (matches!(inner.as_str(), "@" | "*")
+                            || (!inner.is_empty() && inner.chars().all(|ch| ch.is_ascii_digit())))
+                    {
+                        out.push(SUPPLIED);
+                        i += 3 + inner.chars().count();
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
 }
 
 /// A form inside a command `xargs` or `find` runs: no git invocation on
@@ -611,7 +798,7 @@ fn parallel_data_command(args: &[String]) -> Option<&[String]> {
 
 /// The command `fd` runs for each result (`-x`, `--exec`) or for all of
 /// them (`-X`, `--exec-batch`): the words after the option, up to a `;`.
-fn fd_command(args: &[String]) -> Option<&[String]> {
+pub(super) fn fd_command(args: &[String]) -> Option<&[String]> {
     let at = args
         .iter()
         .position(|word| matches!(word.as_str(), "-x" | "--exec" | "-X" | "--exec-batch"))?;
@@ -724,7 +911,11 @@ pub(crate) fn line_data(command: &str, reader: Reader) -> LineData {
         }
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
-        let marked = mark_text(&words, &command_argv_live(segment));
+        let marked = mark_text(
+            &words,
+            &command_argv_live(segment),
+            &command_argv_braces(segment),
+        );
         let launched = configuration_launch(&words);
         if top_level {
             let redirected = words.len() != tokens.len();
@@ -1025,5 +1216,48 @@ mod tests {
             .unwrap();
         assert_eq!(call.args, ["push", "origin", "feat/x"]);
         assert!(call.changed && call.program_filled);
+    }
+    /// TSK-326 review N3: `expand_word` reads a `$` with no name after it
+    /// (`v$`, `$$`, `$@`, `$?`, `$[`) as unresolved; the empty name slice is
+    /// an empty range, not a panic.
+    #[test]
+    fn a_dollar_with_no_name_is_unresolved() {
+        let vars = HashMap::new();
+        for word in ["v$", "HEAD:v$[2]", "$$", "$@", "a$?b", "$*", "$!", "$#"] {
+            assert!(expand_word(word, &vars).is_err(), "{word}");
+        }
+    }
+
+    #[test]
+    fn positional_parameters_are_supplied_input() {
+        assert_eq!(
+            positional_supplied("git push origin \"$1\" $@ ${2} ${*} $0 ${10} ${1:-x} $V"),
+            "git push origin \"\u{3}\" \u{3} \u{3} \u{3} \u{3} \u{3} ${1:-x} $V"
+        );
+    }
+
+    #[test]
+    fn shell_scripts_are_read_from_their_command_option() {
+        let args = |line: &str| line.split(' ').map(String::from).collect::<Vec<_>>();
+        assert_eq!(
+            shell_script("sh", &args("-c git_log _")),
+            Ok("git_log".into())
+        );
+        assert_eq!(
+            shell_script("bash", &args("-ec git_log")),
+            Ok("git_log".into())
+        );
+        assert_eq!(
+            shell_script("bash", &args("-o pipefail -c git_log")),
+            Ok("git_log".into())
+        );
+        assert_eq!(
+            shell_script("fish", &args("--command=git_log")),
+            Ok("git_log".into())
+        );
+        assert_eq!(shell_script("eval", &args("git log")), Ok("git log".into()));
+        assert!(shell_script("sh", &args("script.sh x")).is_err());
+        assert!(shell_script("bash", &args("-c")).is_err());
+        assert!(shell_script("pwsh", &args("-c git_log")).is_err());
     }
 }
