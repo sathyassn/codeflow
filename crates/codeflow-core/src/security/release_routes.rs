@@ -4,9 +4,16 @@
 //! pushes. This reader adds the routes that publish without them: a
 //! workflow dispatch of a release workflow, a repository dispatch a release
 //! workflow listens for, a pending deployment approval, a release or tag
-//! creation through the API, and a write to the Actions policies,
-//! environments or rulesets that hold the remote floors. Each returns the
-//! form it names, and every doubt refuses.
+//! creation through the API, a deployment write, the re-enabling of a
+//! release workflow, a change to a variable or secret a release workflow
+//! reads, and a write to the Actions policies, environments, rulesets or
+//! branch protection that hold the remote floors. `gh`, `curl`, `wget`,
+//! `HTTPie` and xh are read. Each returns the form it names, and every doubt
+//! refuses.
+//!
+//! A re-run of a release run is not judged here: a run id names no
+//! workflow the guard can read without the network. The release workflow
+//! refuses its own re-runs instead (`docs/releasing.md`).
 //!
 //! A release workflow is a workflow file at the policy authority (the
 //! remote's default branch, [`crate::hooks::landed_policy`]) that runs on
@@ -18,14 +25,26 @@
 //! counts as a release workflow.
 use std::path::Path;
 
+/// Where a call runs and which repository `gh` defaults to.
+#[derive(Clone, Copy)]
+pub(crate) struct Ctx<'a> {
+    pub(crate) cwd: Option<&'a Path>,
+    /// `GH_REPO` as the line or the session sets it; `gh` uses it when no
+    /// `-R` is given.
+    pub(crate) gh_repo: Option<&'a str>,
+}
+
 /// The refusal for `gh` arguments, or `None` when the call is not a release
 /// route. `args` are the words after `gh`; `sub` starts at its subcommand.
-pub(crate) fn gh(args: &[String], sub: &[String], cwd: Option<&Path>) -> Option<String> {
-    match sub.first().map(String::as_str) {
-        Some("workflow") if sub.get(1).is_some_and(|s| s == "run") => {
-            workflow_run(args, &sub[2..], cwd)
+pub(crate) fn gh(args: &[String], sub: &[String], ctx: Ctx<'_>) -> Option<String> {
+    let action = sub.get(1).map(String::as_str);
+    match (sub.first().map(String::as_str), action) {
+        (Some("workflow"), Some("run")) => workflow_run(args, &sub[2..], ctx),
+        (Some("workflow"), Some("enable")) => workflow_enable(args, &sub[2..], ctx),
+        (Some(kind @ ("variable" | "secret")), Some(verb @ ("set" | "delete"))) => {
+            store_command(kind, verb, args, &sub[2..], ctx)
         }
-        Some("api") => api(&sub[1..], cwd),
+        (Some("api"), _) => api(&sub[1..], ctx),
         _ => None,
     }
 }
@@ -34,6 +53,7 @@ pub(crate) fn gh(args: &[String], sub: &[String], cwd: Option<&Path>) -> Option<
 /// A URL held in a variable is not read: that route's floor is remote
 /// (`docs/releasing.md`).
 pub(crate) fn curl(args: &[String], cwd: Option<&Path>) -> Option<String> {
+    let ctx = Ctx { cwd, gh_repo: None };
     let mut method: Option<String> = None;
     let mut implied: Option<&'static str> = None;
     let mut get = false;
@@ -83,8 +103,210 @@ pub(crate) fn curl(args: &[String], cwd: Option<&Path>) -> Option<String> {
     }
     urls.iter().find_map(|url| {
         let path = api_path(url)?;
-        judge(&format!("curl -X {method}"), &method, &path, &body, cwd)
+        judge(&format!("curl -X {method}"), &method, &path, &body, ctx)
     })
+}
+
+/// `wget` options that take the next word as their value.
+const WGET_VALUES: &[&str] = &[
+    "-O",
+    "-o",
+    "-a",
+    "-e",
+    "-P",
+    "-t",
+    "-T",
+    "-w",
+    "-U",
+    "-Q",
+    "-l",
+    "-A",
+    "-R",
+    "-D",
+    "-I",
+    "-X",
+    "-i",
+    "-B",
+    "--header",
+    "--user",
+    "--password",
+    "--method",
+    "--post-data",
+    "--post-file",
+    "--body-data",
+    "--body-file",
+    "--output-document",
+    "--output-file",
+    "--append-output",
+    "--execute",
+    "--directory-prefix",
+    "--tries",
+    "--timeout",
+    "--wait",
+    "--user-agent",
+    "--quota",
+    "--level",
+    "--accept",
+    "--reject",
+    "--domains",
+    "--include-directories",
+    "--exclude-directories",
+    "--input-file",
+    "--base",
+    "--http-user",
+    "--http-password",
+    "--referer",
+    "--load-cookies",
+    "--save-cookies",
+    "--ca-certificate",
+    "--certificate",
+    "--private-key",
+];
+
+/// `HTTPie` and xh options that take the next word as their value.
+const HTTPIE_VALUES: &[&str] = &[
+    "-a",
+    "--auth",
+    "-A",
+    "--auth-type",
+    "--session",
+    "--session-read-only",
+    "-o",
+    "--output",
+    "--cert",
+    "--cert-key",
+    "--cert-key-pass",
+    "--verify",
+    "--proxy",
+    "--timeout",
+    "--pretty",
+    "-s",
+    "--style",
+    "-p",
+    "--print",
+    "-P",
+    "--history-print",
+    "--max-redirects",
+    "--default-scheme",
+    "--format-options",
+    "--response-charset",
+    "--response-mime",
+    "--ssl",
+    "--ciphers",
+    "--boundary",
+    "--raw",
+    "--bearer",
+    "--resolve",
+    "--interface",
+    "--http-version",
+];
+
+/// A JSON string value without its quotes; other JSON stays as written.
+fn unquote(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .unwrap_or(value)
+}
+
+/// The refusal for a `wget`, `HTTPie` (`http`, `https`) or xh (`xh`, `xhs`)
+/// call that writes to a GitHub API release route.
+pub(crate) fn http_client(name: &str, args: &[String], cwd: Option<&Path>) -> Option<String> {
+    let ctx = Ctx { cwd, gh_repo: None };
+    let wget = name == "wget";
+    let values = if wget { WGET_VALUES } else { HTTPIE_VALUES };
+    let mut method: Option<String> = None;
+    let mut implied = false;
+    let mut body = Body::default();
+    let mut positional = Vec::new();
+    let mut at = 0;
+    while let Some(word) = args.get(at) {
+        at += 1;
+        if !word.starts_with('-') || word == "-" {
+            positional.push(word.clone());
+            continue;
+        }
+        let (option, attached) = split_option(word, &[]);
+        let value = if attached.is_some() {
+            attached
+        } else if values.contains(&option.as_str()) {
+            at += 1;
+            args.get(at - 1).cloned()
+        } else {
+            None
+        };
+        match option.as_str() {
+            "--method" => method = value,
+            "--post-data" | "--body-data" => {
+                implied = true;
+                body.text(value);
+            }
+            "--post-file" | "--body-file" | "--raw" => {
+                implied = true;
+                if option == "--raw" {
+                    body.text(value);
+                } else {
+                    body.unknown = true;
+                }
+            }
+            "-f" | "--form" | "--multipart" if !wget => implied = true,
+            _ => {}
+        }
+    }
+    let mut positional = positional.into_iter();
+    let url = if wget {
+        positional.next()
+    } else {
+        let first = positional.next();
+        // HTTPie and xh read a first word of letters as the method when a
+        // URL follows it.
+        match first {
+            Some(word) if word.bytes().all(|b| b.is_ascii_alphabetic()) => {
+                match positional.next() {
+                    Some(url) => {
+                        method = method.or(Some(word));
+                        Some(url)
+                    }
+                    None => Some(word),
+                }
+            }
+            other => other,
+        }
+    };
+    if !wget {
+        for item in positional {
+            if item.contains(":=@")
+                || item.contains("=@")
+                || item.contains('@') && !item.contains('=')
+            {
+                implied = true;
+                body.unknown = true;
+            } else if let Some((key, value)) = item.split_once(":=") {
+                implied = true;
+                body.fields
+                    .push((key.to_owned(), unquote(value).to_owned()));
+            } else if item.contains("==") {
+                // A query parameter, not a body field.
+            } else if let Some((key, value)) = item.split_once('=') {
+                implied = true;
+                body.fields.push((key.to_owned(), value.to_owned()));
+            }
+        }
+    }
+    let method = method.map_or_else(
+        || if implied { "POST".into() } else { "GET".into() },
+        |m| m.to_ascii_uppercase(),
+    );
+    if !writes(&method) {
+        return None;
+    }
+    let path = api_path(&url?)?;
+    let form = if wget {
+        format!("wget --method {method}")
+    } else {
+        format!("{name} {method}")
+    };
+    judge(&form, &method, &path, &body, ctx)
 }
 
 fn writes(method: &str) -> bool {
@@ -151,8 +373,9 @@ fn opaque(text: &str) -> bool {
     text.contains('$') || text.contains('`')
 }
 
-fn workflow_run(args: &[String], rest: &[String], cwd: Option<&Path>) -> Option<String> {
-    let mut repo = repo_flag(args);
+fn workflow_run(args: &[String], rest: &[String], ctx: Ctx<'_>) -> Option<String> {
+    let cwd = ctx.cwd;
+    let mut repo = repo_flag(args).or_else(|| ctx.gh_repo.map(str::to_owned));
     let mut reference = None;
     let mut selector = None;
     let mut at = 0;
@@ -201,6 +424,153 @@ fn workflow_run(args: &[String], rest: &[String], cwd: Option<&Path>) -> Option<
     dispatch(form, &authority, &selector, reference.as_deref(), false)
 }
 
+/// A `gh` subcommand's operands, its repository and its options.
+type Parts = (Vec<String>, Option<String>, Vec<(String, Option<String>)>);
+
+/// The selector and repository of a `gh` subcommand whose options are
+/// `-R`/`--repo` and the value options in `values`.
+fn selector_and_repo(args: &[String], rest: &[String], values: &[&str], ctx: Ctx<'_>) -> Parts {
+    let mut repo = repo_flag(args).or_else(|| ctx.gh_repo.map(str::to_owned));
+    let mut positional = Vec::new();
+    let mut options = Vec::new();
+    let mut at = 0;
+    let mut open = true;
+    while let Some(word) = rest.get(at) {
+        at += 1;
+        if open && word == "--" {
+            open = false;
+            continue;
+        }
+        if open && word.starts_with('-') && word != "-" {
+            let shorts: Vec<&str> = values.iter().copied().filter(|v| v.len() == 2).collect();
+            let (name, attached) = split_option(word, &shorts);
+            let value = if attached.is_some() {
+                attached
+            } else if values.contains(&name.as_str()) {
+                at += 1;
+                rest.get(at - 1).cloned()
+            } else {
+                None
+            };
+            if matches!(name.as_str(), "-R" | "--repo") {
+                repo.clone_from(&value);
+            }
+            options.push((name, value));
+            continue;
+        }
+        positional.push(word.clone());
+    }
+    (positional, repo, options)
+}
+
+/// `gh workflow enable`: re-enabling a release workflow lets its triggers
+/// start release runs again.
+fn workflow_enable(args: &[String], rest: &[String], ctx: Ctx<'_>) -> Option<String> {
+    let form = "gh workflow enable";
+    let (positional, repo, _) = selector_and_repo(args, rest, &["-R", "--repo"], ctx);
+    let Some(selector) = positional.first() else {
+        return Some(format!(
+            "{form} names no workflow, so gh would pick one interactively; name a workflow that is not a release workflow"
+        ));
+    };
+    let authority = match Authority::read(ctx.cwd) {
+        Ok(authority) => authority,
+        Err(why) => return Some(unreadable(form, &why)),
+    };
+    if let Some(why) = authority.foreign(repo.as_deref()) {
+        return Some(format!("{form} {why}"));
+    }
+    enable(form, &authority, selector, false)
+}
+
+fn enable(form: &str, authority: &Authority, selector: &str, api: bool) -> Option<String> {
+    match matching(form, authority, selector, api) {
+        Err(why) => Some(why),
+        Ok(flows) => flows.iter().find(|flow| flow.release.is_some()).map(|flow| {
+            format!(
+                "{form} enables release workflow {} ({}), whose triggers would start release runs again",
+                crate::git::display_text(&flow.path),
+                flow.release.as_deref().unwrap_or_default()
+            )
+        }),
+    }
+}
+
+/// `gh variable set|delete` and `gh secret set|delete`.
+fn store_command(
+    kind: &str,
+    verb: &str,
+    args: &[String],
+    rest: &[String],
+    ctx: Ctx<'_>,
+) -> Option<String> {
+    let form = format!("gh {kind} {verb}");
+    let values = [
+        "-R",
+        "--repo",
+        "-e",
+        "--env",
+        "-o",
+        "--org",
+        "-v",
+        "--visibility",
+        "-r",
+        "--repos",
+        "-b",
+        "--body",
+        "-f",
+        "--env-file",
+        "-a",
+        "--app",
+    ];
+    let (positional, repo, options) = selector_and_repo(args, rest, &values, ctx);
+    let option = |names: &[&str]| {
+        options
+            .iter()
+            .find(|(name, _)| names.contains(&name.as_str()))
+            .map(|(_, value)| value.clone().unwrap_or_default())
+    };
+    // Dependabot and Codespaces secrets and a user's Codespaces secrets
+    // never reach an Actions run.
+    if option(&["-a", "--app"]).is_some_and(|app| !app.eq_ignore_ascii_case("actions"))
+        || options
+            .iter()
+            .any(|(name, _)| name == "-u" || name == "--user")
+    {
+        return None;
+    }
+    let org = option(&["-o", "--org"]).is_some();
+    let mut names: Vec<Field> = positional
+        .iter()
+        .take(1)
+        .map(|name| {
+            if opaque(name) {
+                Field::Unknown
+            } else {
+                Field::Known(name.clone())
+            }
+        })
+        .collect();
+    if option(&["-f", "--env-file"]).is_some() || names.is_empty() {
+        names.push(Field::Unknown);
+    }
+    let authority = match Authority::read(ctx.cwd) {
+        Ok(authority) => authority,
+        Err(why) => return Some(unreadable(&form, &why)),
+    };
+    if !org {
+        if let Some(why) = authority.foreign(repo.as_deref()) {
+            return Some(format!("{form} {why}"));
+        }
+    }
+    let store = if kind == "secret" {
+        Store::Secrets
+    } else {
+        Store::Vars
+    };
+    store_write(store, &names, &authority).map(|why| format!("{form} {why}"))
+}
+
 /// The `-R`/`--repo` value given before the subcommand.
 fn repo_flag(args: &[String]) -> Option<String> {
     let mut found = None;
@@ -229,37 +599,10 @@ fn dispatch(
     reference: Option<&str>,
     api: bool,
 ) -> Option<String> {
-    let shown = crate::git::display_text(selector);
-    if opaque(selector) {
-        return Some(format!(
-            "{form} names workflow {shown}, which the guard cannot resolve"
-        ));
-    }
-    if selector.bytes().all(|b| b.is_ascii_digit()) {
-        return Some(format!(
-            "{form} names workflow id {shown}, which the guard cannot map to a workflow file"
-        ));
-    }
-    let wanted = selector.trim_start_matches("./");
-    let matches: Vec<&Flow> = authority
-        .flows
-        .iter()
-        .filter(|flow| {
-            flow.path == wanted
-                || flow.path.rsplit('/').next() == Some(wanted)
-                || (!api
-                    && flow
-                        .name
-                        .as_deref()
-                        .is_some_and(|name| name.eq_ignore_ascii_case(wanted)))
-        })
-        .collect();
-    if matches.is_empty() {
-        return Some(format!(
-            "{form} names workflow {shown}, which matches no workflow file at the policy authority {}",
-            authority.shown
-        ));
-    }
+    let matches = match matching(form, authority, selector, api) {
+        Ok(matches) => matches,
+        Err(why) => return Some(why),
+    };
     if let Some(flow) = matches.iter().find(|flow| flow.release.is_some()) {
         return Some(format!(
             "{form} dispatches release workflow {} ({}); a dry run is refused too, because the guard does not evaluate the workflow's expressions",
@@ -293,7 +636,49 @@ fn dispatch(
     None
 }
 
-fn api(rest: &[String], cwd: Option<&Path>) -> Option<String> {
+/// The workflows at the authority that `selector` names, or the refusal
+/// when it names none the guard can map.
+fn matching<'a>(
+    form: &str,
+    authority: &'a Authority,
+    selector: &str,
+    api: bool,
+) -> Result<Vec<&'a Flow>, String> {
+    let shown = crate::git::display_text(selector);
+    if opaque(selector) {
+        return Err(format!(
+            "{form} names workflow {shown}, which the guard cannot resolve"
+        ));
+    }
+    if selector.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(format!(
+            "{form} names workflow id {shown}, which the guard cannot map to a workflow file"
+        ));
+    }
+    let wanted = selector.trim_start_matches("./");
+    let matches: Vec<&Flow> = authority
+        .flows
+        .iter()
+        .filter(|flow| {
+            flow.path == wanted
+                || flow.path.rsplit('/').next() == Some(wanted)
+                || (!api
+                    && flow
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(wanted)))
+        })
+        .collect();
+    if matches.is_empty() {
+        return Err(format!(
+            "{form} names workflow {shown}, which matches no workflow file at the policy authority {}",
+            authority.shown
+        ));
+    }
+    Ok(matches)
+}
+
+fn api(rest: &[String], ctx: Ctx<'_>) -> Option<String> {
     let mut method = None;
     let mut body = Body::default();
     let mut implied = false;
@@ -349,11 +734,11 @@ fn api(rest: &[String], cwd: Option<&Path>) -> Option<String> {
         return graphql(&body);
     }
     let path = api_path(&endpoint).unwrap_or(endpoint);
-    judge(&format!("gh api -X {method}"), &method, &path, &body, cwd)
+    judge(&format!("gh api -X {method}"), &method, &path, &body, ctx)
 }
 
-/// GraphQL mutations that create or move a tag, approve a deployment, or
-/// change an environment or ruleset.
+/// GraphQL mutations that create or move a tag, approve or create a
+/// deployment, or change an environment, ruleset or branch protection rule.
 const MUTATIONS: &[&str] = &[
     "createRef",
     "updateRef",
@@ -365,6 +750,10 @@ const MUTATIONS: &[&str] = &[
     "createRepositoryRuleset",
     "updateRepositoryRuleset",
     "deleteRepositoryRuleset",
+    "createDeployment",
+    "createBranchProtectionRule",
+    "updateBranchProtectionRule",
+    "deleteBranchProtectionRule",
 ];
 
 fn graphql(body: &Body) -> Option<String> {
@@ -429,7 +818,7 @@ fn fits(tail: &[Seg<'_>], pattern: &[&str], open: bool) -> Option<bool> {
     (open || tail.len() == pattern.len()).then_some(certain)
 }
 
-fn judge(form: &str, method: &str, path: &str, body: &Body, cwd: Option<&Path>) -> Option<String> {
+fn judge(form: &str, method: &str, path: &str, body: &Body, ctx: Ctx<'_>) -> Option<String> {
     // An empty inner segment is a variable the line's environment left
     // empty; the command's own shell may not, so it stands for any segment.
     let segs: Vec<Seg<'_>> = path
@@ -455,7 +844,7 @@ fn judge(form: &str, method: &str, path: &str, body: &Body, cwd: Option<&Path>) 
                 Some((&segs[1], &segs[2])),
                 &segs[3..],
                 body,
-                cwd,
+                ctx,
             );
             // An unresolved owner may hold `owner/name` in one word, so the
             // path after it is read from one segment earlier too.
@@ -467,13 +856,13 @@ fn judge(form: &str, method: &str, path: &str, body: &Body, cwd: Option<&Path>) 
                     Some((&segs[1], &segs[1])),
                     &segs[2..],
                     body,
-                    cwd,
+                    ctx,
                 );
             }
             tail
         }
         Some("orgs") if segs.len() >= 2 => {
-            judge_tail(form, method, &shown, None, &segs[2..], body, cwd)
+            judge_tail(form, method, &shown, None, &segs[2..], body, ctx)
         }
         _ => None,
     }
@@ -486,7 +875,7 @@ fn judge_tail(
     repo: Option<(&Seg<'_>, &Seg<'_>)>,
     tail: &[Seg<'_>],
     body: &Body,
-    cwd: Option<&Path>,
+    ctx: Ctx<'_>,
 ) -> Option<String> {
     let org = repo.is_none();
     let unsure = |what: &str| {
@@ -525,25 +914,44 @@ fn judge_tail(
         }
     }
     let workflow = fits(tail, &["actions", "workflows", "*", "dispatches"], false);
+    let enabling = fits(tail, &["actions", "workflows", "*", "enable"], false);
     let repository = fits(tail, &["dispatches"], false);
-    if workflow.is_none() && repository.is_none() {
+    let store = store_route(tail, body);
+    if workflow.is_none() && enabling.is_none() && repository.is_none() && store.is_none() {
         return None;
     }
-    if workflow == Some(false) || repository == Some(false) {
-        return unsure("dispatch a release workflow");
+    if [workflow, enabling, repository].contains(&Some(false))
+        || matches!(store, Some((_, _, false)))
+    {
+        return unsure("dispatch, enable or configure a release workflow");
     }
-    let authority = match Authority::read(cwd) {
+    let authority = match Authority::read(ctx.cwd) {
         Ok(authority) => authority,
         Err(why) => return Some(unreadable(form, &why)),
     };
-    let (owner, name) = repo?;
-    if owner.wild || name.wild {
-        return refuse(
-            "names a repository the guard cannot resolve, whose workflows it cannot read",
-        );
+    if let Some((owner, name)) = repo {
+        if owner.wild || name.wild {
+            return refuse(
+                "names a repository the guard cannot resolve, whose workflows it cannot read",
+            );
+        }
+        let named = if owner.text == "{owner}" && name.text == "{repo}" {
+            ctx.gh_repo
+                .map_or_else(|| "{owner}/{repo}".to_owned(), str::to_owned)
+        } else {
+            format!("{}/{}", owner.text, name.text)
+        };
+        if let Some(why) = authority.foreign(Some(&named)) {
+            return Some(format!("{form} {shown} {why}"));
+        }
     }
-    if let Some(why) = authority.foreign(Some(&format!("{}/{}", owner.text, name.text))) {
-        return Some(format!("{form} {shown} {why}"));
+    if let Some((store, names, _)) = store {
+        return store_write(store, &names, &authority).map(|why| format!("{form} {shown} {why}"));
+    }
+    // Workflow and repository dispatches name one repository.
+    repo?;
+    if enabling.is_some() {
+        return enable(form, &authority, tail[2].text, true);
     }
     if workflow.is_some() {
         // The workflow is judged first, whatever the body holds.
@@ -558,6 +966,71 @@ fn judge_tail(
         };
     }
     repository_dispatch(&authority, body).map(|what| format!("{form} {shown} {what}"))
+}
+
+/// An Actions variable or secret write: what it writes, the names it
+/// changes, and whether the path is certain.
+fn store_route(tail: &[Seg<'_>], body: &Body) -> Option<(Store, Vec<Field>, bool)> {
+    let segment_name = |seg: &Seg<'_>| {
+        if seg.wild {
+            Field::Unknown
+        } else {
+            Field::Known(seg.text.to_owned())
+        }
+    };
+    if let Some(certain) = fits(tail, &["actions", "variables"], false) {
+        return Some((Store::Vars, vec![body.field("name")], certain));
+    }
+    if let Some(certain) = fits(tail, &["actions", "variables", "*"], false) {
+        // A PATCH can rename the variable, so the body's name counts too.
+        let mut names = vec![segment_name(&tail[2])];
+        if !matches!(body.field("name"), Field::Absent) {
+            names.push(body.field("name"));
+        }
+        return Some((Store::Vars, names, certain));
+    }
+    if let Some(certain) = fits(tail, &["actions", "secrets", "*"], false) {
+        return Some((Store::Secrets, vec![segment_name(&tail[2])], certain));
+    }
+    None
+}
+
+/// Whether a write to `names` changes what a release workflow reads.
+fn store_write(store: Store, names: &[Field], authority: &Authority) -> Option<String> {
+    let what = match store {
+        Store::Vars => "variable",
+        Store::Secrets => "secret",
+    };
+    for flow in authority.flows.iter().filter(|flow| flow.release.is_some()) {
+        let reads = match store {
+            Store::Vars => &flow.reads.vars,
+            Store::Secrets => &flow.reads.secrets,
+        };
+        let path = crate::git::display_text(&flow.path);
+        for name in names {
+            match name {
+                Field::Known(name) if reads.covers(name) => {
+                    return Some(format!(
+                        "changes {what} {}, which release workflow {path} reads",
+                        crate::git::display_text(name)
+                    ))
+                }
+                Field::Unknown if reads.any() => {
+                    return Some(format!(
+                        "changes a {what} the guard cannot name, and release workflow {path} reads {what}s"
+                    ))
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+#[derive(Clone, Copy)]
+enum Store {
+    Vars,
+    Secrets,
 }
 
 /// Remote floors and deployment approval, refused whatever the repository:
@@ -601,6 +1074,18 @@ const FLOORS: &[(&[&str], bool, &str, bool)] = &[
         false,
     ),
     (&["git", "tags"], false, "creates a tag object", false),
+    (
+        &["deployments"],
+        true,
+        "creates or changes a deployment, which starts the runs that listen for deployment events",
+        false,
+    ),
+    (
+        &["branches", "*", "protection"],
+        true,
+        "writes branch protection, which holds the push floor",
+        false,
+    ),
     (
         &["git", "refs", "tags"],
         true,
@@ -656,6 +1141,109 @@ struct Flow {
     release: Option<String>,
     /// The repository dispatch types it listens for, if it listens.
     repository_dispatch: Option<Listen>,
+    /// The variables and secrets it reads.
+    reads: Reads,
+}
+
+impl Flow {
+    /// A file the guard cannot read counts as a release workflow that
+    /// listens to every repository dispatch and reads every stored value.
+    fn unreadable(path: String, why: &str) -> Self {
+        Self {
+            path,
+            name: None,
+            release: Some(why.to_owned()),
+            repository_dispatch: Some(Listen::Any),
+            reads: Reads::ALL,
+        }
+    }
+}
+
+/// The variables and secrets a workflow reads.
+#[derive(Debug)]
+struct Reads {
+    vars: Names,
+    secrets: Names,
+}
+
+impl Reads {
+    const ALL: Self = Self {
+        vars: Names::All,
+        secrets: Names::All,
+    };
+
+    /// What `text` reads: `vars.NAME` and `secrets.NAME`, or every name
+    /// when it indexes or serializes the context or passes secrets on with
+    /// `secrets: inherit`.
+    fn of(text: &str) -> Self {
+        // YAML and expression blanks: space, tab and line ends.
+        let squeezed: String = text
+            .chars()
+            .filter(|c| !matches!(c, ' ' | '\t' | '\n' | '\r'))
+            .collect();
+        let whole = |context: &str| {
+            squeezed.contains(&format!("{context}["))
+                || squeezed.contains(&format!("toJSON({context})"))
+                || squeezed.contains(&format!("tojson({context})"))
+        };
+        let names = |context: &str, all: bool| {
+            if all {
+                return Names::All;
+            }
+            let prefix = format!("{context}.");
+            let mut found = Vec::new();
+            let mut at = 0;
+            while let Some(offset) = text[at..].find(&prefix) {
+                let start = at + offset;
+                at = start + prefix.len();
+                let before = text[..start].chars().next_back();
+                if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
+                    continue;
+                }
+                let name: String = text[at..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty() && !name.eq_ignore_ascii_case("GITHUB_TOKEN") {
+                    found.push(name.to_ascii_uppercase());
+                }
+            }
+            found.sort();
+            found.dedup();
+            Names::Some(found)
+        };
+        Self {
+            vars: names("vars", whole("vars")),
+            secrets: names(
+                "secrets",
+                whole("secrets") || squeezed.contains("secrets:inherit"),
+            ),
+        }
+    }
+}
+
+/// Names a workflow reads from one context.
+#[derive(Debug)]
+enum Names {
+    All,
+    Some(Vec<String>),
+}
+
+impl Names {
+    /// GitHub stores variable and secret names in upper case.
+    fn covers(&self, name: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Some(names) => names.iter().any(|n| n.eq_ignore_ascii_case(name)),
+        }
+    }
+
+    fn any(&self) -> bool {
+        match self {
+            Self::All => true,
+            Self::Some(names) => !names.is_empty(),
+        }
+    }
 }
 
 /// The workflows at the policy authority and what names that authority.
@@ -790,12 +1378,7 @@ fn flows_in(repo: &git2::Repository, tree: &git2::Tree<'_>) -> Result<Vec<Flow>,
             .and_then(|blob| String::from_utf8(blob.content().to_vec()).ok());
         flows.push(match text {
             Some(text) => classify(path, &text),
-            None => Flow {
-                path,
-                name: None,
-                release: Some("the guard cannot read the file".into()),
-                repository_dispatch: Some(Listen::Any),
-            },
+            None => Flow::unreadable(path, "the guard cannot read the file"),
         });
     }
     Ok(flows)
@@ -827,12 +1410,7 @@ fn permissions_publish(value: Option<&serde_yaml::Value>) -> Option<bool> {
 
 fn classify(path: String, text: &str) -> Flow {
     use serde_yaml::Value;
-    let unreadable = |path: String| Flow {
-        path,
-        name: None,
-        release: Some("the guard cannot parse the file".into()),
-        repository_dispatch: Some(Listen::Any),
-    };
+    let unreadable = |path| Flow::unreadable(path, "the guard cannot parse the file");
     let Ok(Value::Mapping(doc)) = serde_yaml::from_str::<Value>(text) else {
         return unreadable(path);
     };
@@ -874,6 +1452,7 @@ fn classify(path: String, text: &str) -> Flow {
             name,
             release: None,
             repository_dispatch: None,
+            reads: Reads::of(text),
         };
     }
     let mut reasons = Vec::new();
@@ -924,6 +1503,7 @@ fn classify(path: String, text: &str) -> Flow {
             reasons.join("; ")
         }),
         repository_dispatch,
+        reads: Reads::of(text),
     }
 }
 

@@ -143,6 +143,10 @@ struct Parsed {
     /// The release routes [`super::release_routes`] refuses, each naming
     /// its form (TSK-1346).
     release_reasons: Vec<(Option<PathBuf>, String)>,
+    /// `GH_REPO` as an assignment, `export` or `env` on the line sets it.
+    /// It stays set for the rest of the line, which can only make a `gh`
+    /// call name another repository and so refuse more (TSK-1346).
+    gh_repo: Option<String>,
     unreadable: Vec<String>,
     families: Vec<(&'static str, Option<PathBuf>)>,
     code: Vec<String>,
@@ -684,6 +688,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
         }
         persistent = crate::hooks::git_guard::configuration_shell_change(&segment).or(persistent);
         out.config_trigger = trigger.or_else(|| persistent.clone());
+        note_gh_repo(&words[..words.len() - skip_assignments(&words).len()], out);
         let mut assigned = skip_assignments(&words).to_vec();
         let mut assigned_patterns = patterns[words.len() - assigned.len()..].to_vec();
         if let Some(setting) = words
@@ -1624,6 +1629,7 @@ fn argv(
     if depth > 32 {
         return;
     }
+    note_gh_repo(&args[..args.len() - skip_assignments(args).len()], out);
     let args = skip_assignments(args);
     let patterns = pattern_tail(patterns, args.len());
     let possible_command = crate::hooks::git_guard::configuration_assignment_tail(args);
@@ -1642,6 +1648,12 @@ fn argv(
         return;
     };
     let name = crate::hooks::git_guard::launcher_name(program);
+    if matches!(
+        name,
+        "export" | "env" | "declare" | "typeset" | "readonly" | "local"
+    ) {
+        note_gh_repo(&args[1..], out);
+    }
     let command_at = out.commands.len();
     out.commands.push(Unwrapped {
         input: out.literal_input.clone(),
@@ -3204,14 +3216,33 @@ fn release_route(
     cwd: Option<&Path>,
     out: &mut Parsed,
 ) {
+    // The session's own GH_REPO reaches the command too; a value that is
+    // not text is held as an expansion, which the reader cannot resolve.
+    let session = std::env::var_os("GH_REPO")
+        .map(|value| value.into_string().unwrap_or_else(|_| "$GH_REPO".into()));
+    let gh_repo = out.gh_repo.clone().or(session);
+    let ctx = super::release_routes::Ctx {
+        cwd,
+        gh_repo: gh_repo.as_deref(),
+    };
     let reason = match name {
-        "gh" => super::release_routes::gh(rest, &canonical[1..], cwd),
+        "gh" => super::release_routes::gh(rest, &canonical[1..], ctx),
         "curl" => super::release_routes::curl(rest, cwd),
+        "wget" | "http" | "https" | "xh" | "xhs" => {
+            super::release_routes::http_client(name, rest, cwd)
+        }
         _ => None,
     };
     if let Some(reason) = reason {
         out.release_reasons.push((None, reason));
         out.families.push(("release_route", None));
+    }
+}
+
+/// Record a `GH_REPO=` among `words`, assignments or `export` operands.
+fn note_gh_repo(words: &[String], out: &mut Parsed) {
+    if let Some(value) = words.iter().rev().find_map(|w| w.strip_prefix("GH_REPO=")) {
+        out.gh_repo = Some(value.to_owned());
     }
 }
 

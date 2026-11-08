@@ -16,8 +16,11 @@ on:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    if: vars.PUBLISH == 'true'
     steps:
       - run: echo plan
+        env:
+          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
 ";
 
 const CI: &str = "name: codeflow-ci
@@ -395,4 +398,236 @@ fn the_release_tag_shape() {
     for name in ["HEAD", "main", "task/x", "refs/tags/v1", "tags-x"] {
         assert!(!super::release_tag_shaped(name), "{name}");
     }
+}
+
+#[test]
+fn sweep_deployment_and_branch_protection_writes_are_refused() {
+    let temp = standard();
+    let dir = temp.path();
+    for (command, names) in [
+        ("gh api -X POST repos/acme/widget/deployments -f ref=main -f environment=release", "deployment"),
+        ("gh api repos/acme/widget/deployments -f ref=v1", "deployment"),
+        ("curl -X POST https://api.github.com/repos/acme/widget/deployments/1/statuses -d '{\"state\":\"success\"}'", "deployment"),
+        ("gh api graphql -f query='mutation { createDeployment(input: {}) { clientMutationId } }'", "createDeployment"),
+        ("gh api -X PUT repos/acme/widget/branches/main/protection --input p.json", "branch protection"),
+        ("gh api -X DELETE repos/acme/widget/branches/main/protection/required_signatures", "branch protection"),
+        ("gh api graphql -f query='mutation { deleteBranchProtectionRule(input: {}) { clientMutationId } }'", "deleteBranchProtectionRule"),
+    ] {
+        assert_refused(dir, command, names);
+    }
+    for command in [
+        "gh api repos/acme/widget/deployments",
+        "gh api repos/acme/widget/branches/main/protection",
+    ] {
+        assert_passes(dir, command);
+    }
+}
+
+#[test]
+fn sweep_enabling_a_release_workflow_is_refused() {
+    let temp = standard();
+    let dir = temp.path();
+    for (command, names) in [
+        ("gh workflow enable release.yml", "enables release workflow"),
+        ("gh workflow enable Release", "enables release workflow"),
+        (
+            "gh -R acme/widget workflow enable release.yml",
+            "enables release workflow",
+        ),
+        (
+            "gh api -X PUT repos/acme/widget/actions/workflows/release.yml/enable",
+            "enables release workflow",
+        ),
+        ("gh workflow enable", "names no workflow"),
+        ("gh workflow enable 123", "workflow id 123"),
+        (
+            "gh workflow enable -R other/repo codeflow-ci.yml",
+            "names repository other/repo",
+        ),
+    ] {
+        assert_refused(dir, command, names);
+    }
+    for command in [
+        "gh workflow enable codeflow-ci.yml",
+        "gh api -X PUT repos/acme/widget/actions/workflows/codeflow-ci.yml/enable",
+        "gh workflow disable codeflow-ci.yml",
+    ] {
+        assert_passes(dir, command);
+    }
+}
+
+/// The stored values the fixture's release workflow reads. The commands
+/// are built here so that no line of this file is itself a store command.
+fn store(verb: &str, rest: &str) -> String {
+    format!("gh {verb} {rest}")
+}
+
+#[test]
+fn sweep_variables_and_secrets_a_release_workflow_reads_are_refused() {
+    let temp = standard();
+    let dir = temp.path();
+    for (command, names) in [
+        (
+            store("variable set", "PUBLISH --body true"),
+            "variable PUBLISH",
+        ),
+        (store("variable set", "publish -b true"), "variable publish"),
+        (store("variable delete", "PUBLISH"), "variable PUBLISH"),
+        (
+            store("variable set", "PUBLISH --org acme -b true"),
+            "variable PUBLISH",
+        ),
+        (
+            store("variable set", "PUBLISH --env release -b true"),
+            "variable PUBLISH",
+        ),
+        (
+            store("secret set", "REGISTRY_TOKEN < token.txt"),
+            "secret REGISTRY_TOKEN",
+        ),
+        (
+            store("secret delete", "REGISTRY_TOKEN"),
+            "secret REGISTRY_TOKEN",
+        ),
+        (store("variable set", "-f vars.env"), "cannot name"),
+        (store("variable set", "\"$NAME\" -b x"), "cannot name"),
+        (
+            store("variable set", "OTHER -R other/repo -b 1"),
+            "names repository other/repo",
+        ),
+        (
+            store(
+                "api",
+                "-X POST repos/acme/widget/actions/variables -f name=PUBLISH -f value=true",
+            ),
+            "variable PUBLISH",
+        ),
+        (
+            store(
+                "api",
+                "-X PATCH repos/acme/widget/actions/variables/OTHER -f name=PUBLISH",
+            ),
+            "variable PUBLISH",
+        ),
+        (
+            store(
+                "api",
+                "-X DELETE repos/acme/widget/actions/variables/PUBLISH",
+            ),
+            "variable PUBLISH",
+        ),
+        (
+            store(
+                "api",
+                "-X POST repos/acme/widget/actions/variables --input v.json",
+            ),
+            "cannot name",
+        ),
+        (
+            store(
+                "api",
+                "-X PUT repos/acme/widget/actions/secrets/REGISTRY_TOKEN --input s.json",
+            ),
+            "secret REGISTRY_TOKEN",
+        ),
+        (
+            store(
+                "api",
+                "-X PUT orgs/acme/actions/secrets/REGISTRY_TOKEN --input s.json",
+            ),
+            "secret REGISTRY_TOKEN",
+        ),
+    ] {
+        assert_refused(dir, &command, names);
+    }
+    for command in [
+        store("variable set", "OTHER --body 1"),
+        store("variable list", ""),
+        store("variable get", "PUBLISH"),
+        store(
+            "api",
+            "-X PUT repos/acme/widget/actions/secrets/OTHER --input s.json",
+        ),
+        store("api", "repos/acme/widget/actions/variables/PUBLISH"),
+    ] {
+        assert_passes(dir, &command);
+    }
+    let inherit = "on: workflow_dispatch\npermissions: {}\njobs:\n  a:\n    uses: ./.github/workflows/called.yml\n    secrets: inherit\n";
+    let temp = fixture(&[("inherit.yml", inherit), ("called.yml", CALLED)], &[]);
+    assert_refused(
+        temp.path(),
+        &store("secret set", "ANY_NAME < t"),
+        "secret ANY_NAME",
+    );
+    assert_passes(temp.path(), &store("variable set", "ANY_NAME -b 1"));
+}
+
+#[test]
+fn sweep_other_http_clients_are_read() {
+    let temp = standard();
+    let dir = temp.path();
+    for (command, names) in [
+        ("wget --method=POST https://api.github.com/repos/acme/widget/releases --body-data '{\"tag_name\":\"v1\"}'", "release"),
+        ("wget --post-data='{\"event_type\":\"ship\"}' https://api.github.com/repos/acme/widget/dispatches", "repository dispatch ship"),
+        ("wget --post-file=b.json https://api.github.com/repos/acme/widget/dispatches", "event type the guard cannot read"),
+        ("http POST https://api.github.com/repos/acme/widget/actions/workflows/release.yml/dispatches ref=main", "release workflow"),
+        ("http api.github.com/repos/acme/widget/dispatches event_type=ship", "repository dispatch ship"),
+        ("https PUT api.github.com/repos/acme/widget/environments/release", "environment"),
+        ("xh post https://api.github.com/repos/acme/widget/releases tag_name=v1", "release"),
+        ("xhs POST api.github.com/repos/acme/widget/actions/runs/1/pending_deployments state=approved", "pending deployment"),
+    ] {
+        assert_refused(dir, command, names);
+    }
+    for command in [
+        "wget https://api.github.com/repos/acme/widget/releases",
+        "wget -O out.json https://api.github.com/repos/acme/widget/releases",
+        "http GET https://api.github.com/repos/acme/widget/releases",
+        "xh https://api.github.com/repos/acme/widget/actions/runs per_page==5",
+        "http POST https://api.github.com/repos/acme/widget/dispatches event_type=docs",
+        "http POST https://example.invalid/releases a=b",
+    ] {
+        assert_passes(dir, command);
+    }
+}
+
+#[test]
+fn sweep_gh_repo_names_the_repository() {
+    let temp = standard();
+    let dir = temp.path();
+    for command in [
+        "GH_REPO=other/repo gh workflow run codeflow-ci.yml".to_owned(),
+        "env GH_REPO=other/repo gh workflow run codeflow-ci.yml".to_owned(),
+        "export GH_REPO=other/repo; gh workflow run codeflow-ci.yml".to_owned(),
+        "GH_REPO=other/repo gh api -X POST repos/{owner}/{repo}/actions/workflows/codeflow-ci.yml/dispatches -f ref=main".to_owned(),
+        format!("GH_REPO=other/repo {}", store("variable set", "OTHER -b 1")),
+    ] {
+        assert_refused(dir, &command, "names repository other/repo");
+    }
+    for command in [
+        "GH_REPO=acme/widget gh workflow run codeflow-ci.yml",
+        "GH_REPO=other/repo gh workflow run -R acme/widget codeflow-ci.yml",
+        "GH_REPO=other/repo gh run list",
+    ] {
+        assert_passes(dir, command);
+    }
+}
+
+#[test]
+fn the_reads_of_a_workflow() {
+    let reads = super::Reads::of(
+        "if: vars.PUBLISH == 'true'\nenv:\n  A: ${{ secrets.CARGO_TOKEN }}\n  B: ${{ secrets.GITHUB_TOKEN }}\n  C: ${{ myvars.NOT }}\n",
+    );
+    assert!(reads.vars.covers("publish") && !reads.vars.covers("NOT"));
+    assert!(reads.secrets.covers("CARGO_TOKEN") && !reads.secrets.covers("GITHUB_TOKEN"));
+    for text in [
+        "x: ${{ toJSON(secrets) }}",
+        "x: ${{ secrets[format('A')] }}",
+        "secrets: inherit",
+    ] {
+        assert!(super::Reads::of(text).secrets.covers("ANY"), "{text}");
+    }
+    assert!(super::Reads::of("x: ${{ toJSON(vars) }}")
+        .vars
+        .covers("ANY"));
+    assert!(!super::Reads::of("x: 1").secrets.any());
 }

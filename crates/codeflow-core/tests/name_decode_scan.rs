@@ -1537,6 +1537,16 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-1346: a session GH_REPO that is not UTF-8 is held as the
+    // unresolved expansion `$GH_REPO`, which the release reader refuses as
+    // a repository it cannot resolve; the decode never lets a call pass.
+    (
+        "crates/codeflow-core/src/security/outward.rs",
+        "release_route",
+        "obtain-absent:into_string",
+        1,
+        "unproven",
+    ),
     // TSK-1346: a workflow file that cannot be read or is not UTF-8 counts
     // as a release workflow that listens to every repository dispatch, and a
     // workflow name that is not a string matches no selector, which is
