@@ -3857,11 +3857,11 @@ mod tests {
     #[test]
     fn parallel_fd_and_launcher_children_supplied_as_data_refuse() {
         for command in [
-            "parallel git push origin :::: refs",
-            "parallel git push origin < refs",
-            "cat refs | parallel git push origin {}",
-            "parallel -q git push origin HEAD:{} :::: refs",
-            "parallel --arg-file refs git push origin",
+            "parallel --plain git push origin :::: refs",
+            "parallel --plain git push origin < refs",
+            "cat refs | parallel --plain git push origin {}",
+            "parallel --plain -q git push origin HEAD:{} :::: refs",
+            "parallel --plain --arg-file refs git push origin",
             "fd -x git push origin {}",
             "fd --exec git push origin {.}",
             "fd . refs -X git push origin",
@@ -3878,7 +3878,7 @@ mod tests {
             assert!(found.remedy.to_string().contains("pass it as a literal"));
         }
         for command in [
-            "parallel git push origin ::: feat/x",
+            "parallel --plain git push origin ::: feat/x",
             "fd -x git log {}",
             "watch git push origin feat/x",
             "flock /tmp/l git push origin feat/x",
@@ -3905,8 +3905,8 @@ mod tests {
             "xargs -I % dash -c 'git push origin HEAD:%' < refs",
             "xargs sh -c 'git push origin \"$1\"' _ < refs",
             "xargs -n1 sh -c 'git push origin ${0}' < refs",
-            "parallel sh -c 'git push --no-verify origin {}' :::: refs",
-            "parallel zsh -c 'git push origin \"$1\"' _ :::: refs",
+            "parallel --plain sh -c 'git push --no-verify origin {}' :::: refs",
+            "parallel --plain zsh -c 'git push origin \"$1\"' _ :::: refs",
             "find . -exec env sh -c 'git push origin \"$1\"' _ {} \\;",
             "xargs -I{} sh -c 'echo {}' < refs",
             "find . -exec sh {} \\;",
@@ -3936,20 +3936,20 @@ mod tests {
     #[test]
     fn parallel_shell_templates_with_literal_inputs_refuse() {
         for command in [
-            "parallel 'sh -c \"git push --no-verify origin {}\"' ::: main",
-            "parallel -q sh -c 'git push --no-verify origin {}' ::: main",
-            "parallel -q bash -c 'git push origin \"$1\"' _ {} ::: main",
-            "parallel 'eval git push origin {}' ::: main",
-            "parallel --quote -- sh -c 'git push origin HEAD:{1}' ::: main",
+            "parallel --plain 'sh -c \"git push --no-verify origin {}\"' ::: main",
+            "parallel --plain -q sh -c 'git push --no-verify origin {}' ::: main",
+            "parallel --plain -q bash -c 'git push origin \"$1\"' _ {} ::: main",
+            "parallel --plain 'eval git push origin {}' ::: main",
+            "parallel --plain --quote -- sh -c 'git push origin HEAD:{1}' ::: main",
         ] {
             let found =
                 data_refusal(command).unwrap_or_else(|| panic!("{command}: refused as unresolved"));
             assert_eq!(found.rule, "security.outward_actions", "{command}");
         }
         for command in [
-            "parallel git push origin {} ::: feat/x",
-            "parallel -q sh -c 'git log' ::: a",
-            "parallel 'echo {}' ::: a",
+            "parallel --plain git push origin {} ::: feat/x",
+            "parallel --plain -q sh -c 'git log' ::: a",
+            "parallel --plain 'echo {}' ::: a",
         ] {
             let found = evaluate(command, &SecuritySection::default());
             assert!(found.is_empty(), "{command}: {found:?}");
@@ -3962,14 +3962,14 @@ mod tests {
     #[test]
     fn parallel_custom_replacements_and_separators_refuse() {
         for command in [
-            "parallel -I % 'sh -c \"git push --no-verify origin %\"' ::: main",
-            "parallel -q -I % sh -c 'git push --no-verify origin %' ::: main",
-            "parallel --arg-sep %% 'sh -c \"git push --no-verify origin {}\"' %% main",
-            "parallel --arg-sep=%% 'sh -c \"git push --no-verify origin {}\"' %% main",
-            "parallel --arg-sep=%% sh -c 'git push --no-verify origin {}' %% main",
-            "parallel --replace=% 'sh -c \"git push origin %\"' ::: main",
-            "parallel -qI % sh -c 'git push origin %' ::: main",
-            "parallel --bnr % 'sh -c \"git push origin %\"' ::: x/main",
+            "parallel --plain -I % 'sh -c \"git push --no-verify origin %\"' ::: main",
+            "parallel --plain -q -I % sh -c 'git push --no-verify origin %' ::: main",
+            "parallel --plain --arg-sep %% 'sh -c \"git push --no-verify origin {}\"' %% main",
+            "parallel --plain --arg-sep=%% 'sh -c \"git push --no-verify origin {}\"' %% main",
+            "parallel --plain --arg-sep=%% sh -c 'git push --no-verify origin {}' %% main",
+            "parallel --plain --replace=% 'sh -c \"git push origin %\"' ::: main",
+            "parallel --plain -qI % sh -c 'git push origin %' ::: main",
+            "parallel --plain --bnr % 'sh -c \"git push origin %\"' ::: x/main",
         ] {
             let found = evaluate(command, &SecuritySection::default());
             assert!(
@@ -3979,8 +3979,42 @@ mod tests {
             );
         }
         for command in [
-            "parallel -I % git push origin % ::: feat/x",
-            "parallel -q -I % sh -c 'git log' ::: a",
+            "parallel --plain -I % git push origin % ::: feat/x",
+            "parallel --plain -q -I % sh -c 'git log' ::: a",
+        ] {
+            let found = evaluate(command, &SecuritySection::default());
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
+    /// TSK-326 delta review 3: a one-word shell template whose input comes
+    /// from data is read as the shell line `parallel` builds, and a shell
+    /// or git template refuses unless `--plain` keeps `parallel`'s hidden
+    /// option sources out.
+    #[test]
+    fn parallel_data_shell_words_and_hidden_option_sources_refuse() {
+        for command in [
+            "parallel --plain 'sh -c \"git push --no-verify origin {}\"' :::: refs",
+            "parallel --plain -a refs 'sh -c \"git push --no-verify origin {}\"'",
+            "parallel --plain --arg-file-sep @@ 'sh -c \"git push --no-verify origin {}\"' @@ refs",
+            "cat refs | parallel --plain 'sh -c \"git push --no-verify origin {}\"'",
+            "parallel 'sh -c \"git push --no-verify origin %\"' ::: main",
+            "PARALLEL='-I %' parallel --plain 'sh -c \"git push origin %\"' ::: main",
+            "parallel --plain -J prof 'sh -c \"git push origin %\"' ::: main",
+            "parallel flock lockfile git push origin {}:% ::: main",
+        ] {
+            let found = evaluate(command, &SecuritySection::default());
+            assert!(
+                found.iter().any(|v| v.rule == "security.outward_actions"
+                    && v.message.contains("filled in at run time")),
+                "{command}: refused as unresolved: {found:?}"
+            );
+        }
+        for command in [
+            "parallel --plain git push origin {} ::: feat/x",
+            "parallel --plain -q sh -c 'git log' ::: a",
+            "parallel 'echo {}' ::: a",
+            "parallel --plain xargs git log ::: a",
         ] {
             let found = evaluate(command, &SecuritySection::default());
             assert!(found.is_empty(), "{command}: {found:?}");

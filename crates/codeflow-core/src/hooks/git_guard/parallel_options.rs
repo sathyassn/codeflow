@@ -150,6 +150,24 @@ pub(crate) enum Separator {
     Files,
 }
 
+/// The option sources off the command line that `parallel` reads: its
+/// environment, a profile and its configuration files.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OptionSources {
+    /// Whether `--plain` turns off the environment, profiles and
+    /// configuration files.
+    pub(crate) plain: bool,
+    /// Whether `--profile` (`-J`) names a profile to read options from.
+    pub(crate) named_profile: bool,
+}
+
+impl OptionSources {
+    /// Whether `parallel` may take options the line does not show.
+    pub(crate) fn hidden(self) -> bool {
+        !self.plain || self.named_profile
+    }
+}
+
 /// A GNU `parallel` call as `parallel` reads its options.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ParallelCall {
@@ -169,6 +187,8 @@ pub(crate) struct ParallelCall {
     pub(crate) derived: Vec<String>,
     /// Whether `--plus` or `--rpl` adds replacement strings of any shape.
     pub(crate) wide: bool,
+    /// Where else `parallel` may read options from.
+    pub(crate) sources: OptionSources,
     arg_sep: String,
     file_sep: String,
 }
@@ -183,6 +203,7 @@ impl ParallelCall {
             whole: None,
             derived: Vec::new(),
             wide: false,
+            sources: OptionSources::default(),
             arg_sep: ":::".into(),
             file_sep: "::::".into(),
         };
@@ -266,6 +287,8 @@ impl ParallelCall {
                 }
             }
             "plus" => self.wide = true,
+            "plain" => self.sources.plain = true,
+            "profile" => self.sources.named_profile = true,
             _ => {}
         }
     }
@@ -348,6 +371,10 @@ mod tests {
         assert_eq!(read("--bnr % sh").derived, ["%"]);
         assert_eq!(read("--parens ,,.. sh").derived, [",,"]);
         assert!(read("--plus sh").wide);
+        assert!(read("--pla -J p sh").sources.plain);
+        assert!(read("-qJ p sh").sources.named_profile);
+        assert!(!read("--plain sh").sources.hidden());
+        assert!(read("sh").sources.hidden());
         // `--re` names several options, which `parallel` refuses.
         assert_eq!(read("--re x sh").template, 1);
     }

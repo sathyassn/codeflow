@@ -15933,11 +15933,11 @@ mod tests {
     #[test]
     fn parallel_fd_and_launcher_children_supplied_as_data_refuse() {
         for command in [
-            "parallel git push origin :::: refs",
-            "parallel git push origin < refs",
-            "cat refs | parallel git push origin {}",
-            "parallel -q git push origin HEAD:{} :::: refs",
-            "parallel --arg-file refs git push origin",
+            "parallel --plain git push origin :::: refs",
+            "parallel --plain git push origin < refs",
+            "cat refs | parallel --plain git push origin {}",
+            "parallel --plain -q git push origin HEAD:{} :::: refs",
+            "parallel --plain --arg-file refs git push origin",
             "fd -x git push origin {}",
             "fd --exec git push origin {.}",
             "fd . refs -X git push origin",
@@ -15959,7 +15959,7 @@ mod tests {
         }
         let policy = data_policy();
         for command in [
-            "parallel git push origin ::: feat/x",
+            "parallel --plain git push origin ::: feat/x",
             "fd -x git log {}",
             "watch git push origin feat/x",
             "flock /tmp/l git push origin feat/x",
@@ -15986,8 +15986,8 @@ mod tests {
             "xargs -I % dash -c 'git push origin HEAD:%' < refs",
             "xargs sh -c 'git push origin \"$1\"' _ < refs",
             "xargs -n1 sh -c 'git push origin ${0}' < refs",
-            "parallel sh -c 'git push --no-verify origin {}' :::: refs",
-            "parallel zsh -c 'git push origin \"$1\"' _ :::: refs",
+            "parallel --plain sh -c 'git push --no-verify origin {}' :::: refs",
+            "parallel --plain zsh -c 'git push origin \"$1\"' _ :::: refs",
             "find . -exec env sh -c 'git push origin \"$1\"' _ {} \\;",
             "xargs -I{} sh -c 'echo {}' < refs",
             "find . -exec sh {} \\;",
@@ -16033,11 +16033,11 @@ mod tests {
     #[test]
     fn parallel_shell_templates_with_literal_inputs_refuse() {
         let refused = [
-            "parallel 'sh -c \"git push --no-verify origin {}\"' ::: main",
-            "parallel -q sh -c 'git push --no-verify origin {}' ::: main",
-            "parallel -q bash -c 'git push origin \"$1\"' _ {} ::: main",
-            "parallel 'eval git push origin {}' ::: main",
-            "parallel --quote -- sh -c 'git push origin HEAD:{1}' ::: main",
+            "parallel --plain 'sh -c \"git push --no-verify origin {}\"' ::: main",
+            "parallel --plain -q sh -c 'git push --no-verify origin {}' ::: main",
+            "parallel --plain -q bash -c 'git push origin \"$1\"' _ {} ::: main",
+            "parallel --plain 'eval git push origin {}' ::: main",
+            "parallel --plain --quote -- sh -c 'git push origin HEAD:{1}' ::: main",
         ];
         for command in refused {
             assert!(
@@ -16056,17 +16056,20 @@ mod tests {
                 "{command}: {found:?}"
             );
         }
-        let found = evaluate("parallel git push origin {} ::: main", &ctx(&p, "feat/x"));
+        let found = evaluate(
+            "parallel --plain git push origin {} ::: main",
+            &ctx(&p, "feat/x"),
+        );
         assert!(
             found.iter().any(|v| v.rule == "git.push_to_protected"),
             "{found:?}"
         );
         let policy = data_policy();
         for command in [
-            "parallel git push origin {} ::: feat/x",
-            "parallel git push origin ::: feat/x",
-            "parallel -q sh -c 'git log' ::: a",
-            "parallel 'echo {}' ::: a",
+            "parallel --plain git push origin {} ::: feat/x",
+            "parallel --plain git push origin ::: feat/x",
+            "parallel --plain -q sh -c 'git log' ::: a",
+            "parallel --plain 'echo {}' ::: a",
         ] {
             let found = evaluate(command, &ctx(&policy, "feat/x"));
             assert!(found.is_empty(), "{command}: {found:?}");
@@ -16079,23 +16082,23 @@ mod tests {
     #[test]
     fn parallel_custom_replacements_and_separators_refuse() {
         let refused = [
-            "parallel -I % 'sh -c \"git push --no-verify origin %\"' ::: main",
-            "parallel -q -I % sh -c 'git push --no-verify origin %' ::: main",
-            "parallel --arg-sep %% 'sh -c \"git push --no-verify origin {}\"' %% main",
-            "parallel --arg-sep=%% 'sh -c \"git push --no-verify origin {}\"' %% main",
-            "parallel --arg-sep=%% sh -c 'git push --no-verify origin {}' %% main",
-            "parallel -I% 'sh -c \"git push origin %\"' ::: main",
-            "parallel -qI % sh -c 'git push origin %' ::: main",
-            "parallel --replace % 'sh -c \"git push origin %\"' ::: main",
-            "parallel --replace=% 'sh -c \"git push origin %\"' ::: main",
-            "parallel -i% 'sh -c \"git push origin %\"' ::: main",
-            "parallel --er % 'sh -c \"git push origin %\"' ::: main.x",
-            "parallel --rpl '%% s/x//' 'sh -c \"git push origin %%\"' ::: mainx",
-            "parallel --argsep %% 'sh -c \"git push origin {}\"' %% main",
-            "parallel --arg-s %% 'sh -c \"git push origin {}\"' %% main",
-            "parallel 'sh -c \"git push origin {-1}\"' ::: main",
-            "parallel git push --no-verify origin {.} ::: main.x",
-            "parallel -q --bnr % git push origin HEAD:% ::: x/main",
+            "parallel --plain -I % 'sh -c \"git push --no-verify origin %\"' ::: main",
+            "parallel --plain -q -I % sh -c 'git push --no-verify origin %' ::: main",
+            "parallel --plain --arg-sep %% 'sh -c \"git push --no-verify origin {}\"' %% main",
+            "parallel --plain --arg-sep=%% 'sh -c \"git push --no-verify origin {}\"' %% main",
+            "parallel --plain --arg-sep=%% sh -c 'git push --no-verify origin {}' %% main",
+            "parallel --plain -I% 'sh -c \"git push origin %\"' ::: main",
+            "parallel --plain -qI % sh -c 'git push origin %' ::: main",
+            "parallel --plain --replace % 'sh -c \"git push origin %\"' ::: main",
+            "parallel --plain --replace=% 'sh -c \"git push origin %\"' ::: main",
+            "parallel --plain -i% 'sh -c \"git push origin %\"' ::: main",
+            "parallel --plain --er % 'sh -c \"git push origin %\"' ::: main.x",
+            "parallel --plain --rpl '%% s/x//' 'sh -c \"git push origin %%\"' ::: mainx",
+            "parallel --plain --argsep %% 'sh -c \"git push origin {}\"' %% main",
+            "parallel --plain --arg-s %% 'sh -c \"git push origin {}\"' %% main",
+            "parallel --plain 'sh -c \"git push origin {-1}\"' ::: main",
+            "parallel --plain git push --no-verify origin {.} ::: main.x",
+            "parallel --plain -q --bnr % git push origin HEAD:% ::: x/main",
         ];
         let policy = data_policy();
         for command in refused {
@@ -16109,9 +16112,9 @@ mod tests {
         }
         let p = default_policy();
         for command in refused.iter().chain(&[
-            "parallel --arg-sep %% git push --no-verify origin {} %% main",
-            "parallel --delim , git push --no-verify origin {} ::: main",
-            "parallel -I % git push --no-verify origin % ::: main",
+            "parallel --plain --arg-sep %% git push --no-verify origin {} %% main",
+            "parallel --plain --delim , git push --no-verify origin {} ::: main",
+            "parallel --plain -I % git push --no-verify origin % ::: main",
         ]) {
             let found = evaluate(command, &ctx(&p, "feat/x"));
             assert!(
@@ -16121,9 +16124,57 @@ mod tests {
             );
         }
         for command in [
-            "parallel -I % git push origin % ::: feat/x",
-            "parallel --arg-sep %% git push origin {} %% feat/x",
-            "parallel -q -I % sh -c 'git log' ::: a",
+            "parallel --plain -I % git push origin % ::: feat/x",
+            "parallel --plain --arg-sep %% git push origin {} %% feat/x",
+            "parallel --plain -q -I % sh -c 'git log' ::: a",
+        ] {
+            let found = evaluate(command, &ctx(&policy, "feat/x"));
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
+    /// TSK-326 delta review 3: a one-word shell template whose input comes
+    /// from data is read as the shell line `parallel` builds (F1), and a
+    /// shell or git template refuses unless `--plain` keeps `parallel`'s
+    /// hidden option sources (its environment, profiles and configuration
+    /// files) out (F2).
+    #[test]
+    fn parallel_data_shell_words_and_hidden_option_sources_refuse() {
+        let refused = [
+            "parallel --plain 'sh -c \"git push --no-verify origin {}\"' :::: refs",
+            "parallel --plain -a refs 'sh -c \"git push --no-verify origin {}\"'",
+            "parallel --plain --arg-file-sep @@ 'sh -c \"git push --no-verify origin {}\"' @@ refs",
+            "cat refs | parallel --plain 'sh -c \"git push --no-verify origin {}\"'",
+            "parallel 'sh -c \"git push --no-verify origin %\"' ::: main",
+            "parallel -q sh -c 'git push --no-verify origin %' ::: main",
+            "PARALLEL='-I %' parallel --plain 'sh -c \"git push origin %\"' ::: main",
+            "env PARALLEL='-I %' parallel --plain -q sh -c 'git push origin %' ::: main",
+            "parallel --plain -J prof 'sh -c \"git push origin %\"' ::: main",
+            "parallel --plain --profile=prof git push origin %% main",
+            "parallel flock lockfile git push origin {}:% ::: main",
+            "parallel git push --no-verify origin %% main",
+        ];
+        let policy = data_policy();
+        let p = default_policy();
+        for command in refused {
+            for found in [
+                evaluate(command, &ctx(&policy, "feat/x")),
+                evaluate(command, &ctx(&p, "feat/x")),
+            ] {
+                assert!(
+                    found
+                        .iter()
+                        .any(|v| v.message.contains("filled in at run time")),
+                    "{command}: refused as unresolved: {found:?}"
+                );
+            }
+        }
+        for command in [
+            "parallel --plain git push origin {} ::: feat/x",
+            "parallel --plain -q sh -c 'git log' ::: a",
+            "parallel 'echo {}' ::: a",
+            "parallel --plain xargs git log ::: a",
+            "parallel --plain git log :::: refs",
         ] {
             let found = evaluate(command, &ctx(&policy, "feat/x"));
             assert!(found.is_empty(), "{command}: {found:?}");

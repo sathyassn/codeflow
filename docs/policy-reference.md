@@ -1726,15 +1726,23 @@ checked, so a symlink does not remove the target owner's protection.
   supplied input; input spliced into the script text, and a script the
   guard cannot read (a file, standard input, a variable), refuse as well,
   so pass the input as `sh -c '... "$1"' _ {}` with a literal script.
-  This holds when `parallel` takes its input from `:::` words on the line:
-  its options are read as `parallel` reads them (abbreviated, bundled or
-  with an attached value), the template is read as the shell line it
-  builds, and a shell or `eval` there takes the input as supplied through
-  every replacement string, one an option sets (`-I`, `--replace`,
-  `--extensionreplace` and its siblings, `--rpl`) included, with the input
-  separator an option sets (`--arg-sep`, `--arg-file-sep`). A template with
-  no shell is judged with the whole input as written; a replacement string
-  for part of the input (`{.}`, `{/}`, `{1}`) counts as supplied. An
+  This holds when `parallel` takes its input from `:::` words on the line.
+  The options written on the line are read as `parallel` reads them
+  (abbreviated, bundled or with an attached value), and the template, one
+  word or several, is read as the shell line it builds. A shell or `eval`
+  there takes the input as supplied through the default replacement
+  strings and those the line's options set (`-I`, `--replace`,
+  `--extensionreplace` and its siblings, `--rpl`), with the input
+  separators the line's options set (`--arg-sep`, `--arg-file-sep`).
+  `parallel` can also take options from sources the guard does not read:
+  its environment, a profile and its configuration files. When the
+  template runs a shell, `eval` or git, those hidden option sources refuse
+  unless the plain mode is set: pass `--plain`, name no profile, and assign
+  no `PARALLEL` variable on the line. Exec-guard's recursive-deletion check
+  holds a template that runs a remover to the same rule: without the plain
+  mode its targets are unproven. A template with no shell is judged
+  with the whole input as written; a replacement string for part of the
+  input (`{.}`, `{/}`, `{1}`) counts as supplied. An
   unquoted brace list or sequence (`{feat/x,main}`, `{1..3}`) in a judged
   git word refuses too, since the shell makes it several words; a quoted
   or escaped brace is text. Such a word in the program position (`$V push

@@ -4539,6 +4539,17 @@ impl Reader<'_> {
             };
             self.exec(&line, st, None, item.tree, ambiguous);
         }
+        if !self.done() && hidden_options_run_remover(args, command) {
+            self.report(
+                Judged::Unproven(Unproven {
+                    reason: "`parallel` options from its environment, a profile or its \
+                             configuration files; pass `--plain`"
+                        .into(),
+                    cwd: false,
+                }),
+                ambiguous,
+            );
+        }
     }
 
     /// `rsync --delete…` deletes in its destination, and
@@ -6782,6 +6793,7 @@ fn input_options(args: &[String], parallel: bool) -> InputOptions<'_> {
                     explicit_delimiter = true;
                 }
                 "verbose" | "no-run-if-empty" if attached.is_none() => {}
+                "plain" if parallel && attached.is_none() => {}
                 "replace" => options.replace = Some(attached.unwrap_or("{}").into()),
                 "delimiter" | "max-procs" | "jobs" | "max-lines" | "max-args" | "max-chars"
                 | "eof" | "arg-file" | "sshlogin" | "joblog" | "colsep" | "results" | "tmpdir"
@@ -6888,6 +6900,23 @@ fn exec_bodies(expression: &[String]) -> Vec<Vec<String>> {
 
 /// Whether a command removes files: a remover, possibly behind launchers,
 /// `xargs`, or a shell whose script runs one.
+/// Whether `parallel` may take options the line does not show (no
+/// `--plain`, or a named profile) while its template runs a remover:
+/// those options can move the replacement string, so the targets read
+/// here are not proven (TSK-326).
+fn hidden_options_run_remover(args: &[String], command: &[String]) -> bool {
+    use crate::hooks::git_guard::parallel_options::ParallelCall;
+    if !ParallelCall::read(args).sources.hidden() {
+        return false;
+    }
+    let mut simples = Vec::new();
+    collect_simples(&Parser::parse(&command.join(" ")), &mut simples);
+    simples.iter().any(|(words, _)| {
+        let simple: Vec<String> = words.iter().map(word_text).collect();
+        runs_remover(&simple, 0)
+    })
+}
+
 fn runs_remover(argv: &[String], depth: usize) -> bool {
     if depth > MAX_DEPTH {
         return false;
@@ -8202,6 +8231,32 @@ mod tests {
         );
         assert_eq!(found.target, "system directory", "{command}: {found:?}");
     }
+    /// TSK-326: `parallel` options from its environment, a profile or its
+    /// configuration files can move the replacement string, so a remover
+    /// template is unproven unless the plain mode is set.
+    #[test]
+    fn parallel_remover_with_hidden_option_sources_is_unproven() {
+        for command in [
+            "parallel rm -rf ./% ::: build",
+            "parallel 'rm -rf ./%' ::: build",
+            "parallel --plain -J prof rm -rf ./% ::: build",
+            "parallel sh -c 'rm -rf ./\"$1\"' _ ::: build",
+        ] {
+            let found = super::composed_deletion_in(command, None);
+            assert!(
+                found.as_ref().is_some_and(|f| f.unproven.is_some()),
+                "{command}: {found:?}"
+            );
+        }
+        for command in [
+            "parallel --plain rm -rf {} ::: ./build",
+            "parallel echo {} ::: a",
+        ] {
+            let found = super::composed_deletion_in(command, None);
+            assert!(found.is_none(), "{command}: {found:?}");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn r18_xargs_nul_preserves_spaced_path() {

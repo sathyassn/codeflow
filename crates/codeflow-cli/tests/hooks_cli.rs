@@ -2426,7 +2426,7 @@ fn each_guard_alone_refuses_parallel_fd_and_launcher_data() {
     std::fs::write(dir.path().join("refs"), "main\n").unwrap();
     for hook in ["git-guard", "exec-guard"] {
         for command in [
-            "parallel git push origin :::: refs",
+            "parallel --plain git push origin :::: refs",
             "fd -x git push origin {}",
             "V=$(cat refs); watch git push origin \"$V\"",
             "V=$(cat refs); flock /tmp/l -c \"git push origin $V\"",
@@ -2444,7 +2444,7 @@ fn each_guard_alone_refuses_parallel_fd_and_launcher_data() {
             );
         }
         for command in [
-            "parallel git push origin ::: feat/x",
+            "parallel --plain git push origin ::: feat/x",
             "watch git push origin feat/x",
         ] {
             let out = run_with_stdin(
@@ -2471,13 +2471,18 @@ fn each_guard_alone_refuses_supplied_scripts_and_brace_lists() {
             "find main -exec sh -c 'git push --no-verify origin {}' \\;",
             "fd -x sh -c 'git push --no-verify origin {}'",
             "xargs -I{} sh -c 'git push --no-verify origin {}' < refs",
-            "parallel sh -c 'git push --no-verify origin {}' :::: refs",
-            "parallel 'sh -c \"git push --no-verify origin {}\"' ::: main",
-            "parallel -q sh -c 'git push --no-verify origin {}' ::: main",
-            "parallel -I % 'sh -c \"git push --no-verify origin %\"' ::: main",
-            "parallel -q -I % sh -c 'git push --no-verify origin %' ::: main",
-            "parallel --arg-sep %% 'sh -c \"git push --no-verify origin {}\"' %% main",
-            "parallel --arg-sep=%% 'sh -c \"git push --no-verify origin {}\"' %% main",
+            "parallel --plain sh -c 'git push --no-verify origin {}' :::: refs",
+            "parallel --plain 'sh -c \"git push --no-verify origin {}\"' ::: main",
+            "parallel --plain -q sh -c 'git push --no-verify origin {}' ::: main",
+            "parallel --plain -I % 'sh -c \"git push --no-verify origin %\"' ::: main",
+            "parallel --plain -q -I % sh -c 'git push --no-verify origin %' ::: main",
+            "parallel --plain --arg-sep %% 'sh -c \"git push --no-verify origin {}\"' %% main",
+            "parallel --plain --arg-sep=%% 'sh -c \"git push --no-verify origin {}\"' %% main",
+            "parallel --plain 'sh -c \"git push --no-verify origin {}\"' :::: refs",
+            "parallel --plain -a refs 'sh -c \"git push --no-verify origin {}\"'",
+            "cat refs | parallel --plain 'sh -c \"git push --no-verify origin {}\"'",
+            "parallel 'sh -c \"git push --no-verify origin %\"' ::: main",
+            "PARALLEL='-I %' parallel --plain 'sh -c \"git push origin %\"' ::: main",
             "git push --no-verify origin {feat/x,main}",
             "V=main; git push origin {feat/x,$V}",
         ] {
