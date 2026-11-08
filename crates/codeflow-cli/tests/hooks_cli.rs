@@ -2271,16 +2271,16 @@ fn agents_cannot_write_the_ssh_configuration_allow() {
     let home = tmp.path().join("home");
     std::fs::create_dir_all(home.join(".codeflow")).unwrap();
     let mut wrong = Vec::new();
-    let mut cases = vec![
+    let cases = vec![
         (home.join(".codeflow/authority/config.toml"), 2),
         (home.join(".codeflow/Authority/config.toml"), 2),
         (home.join(".codeflow/config.toml"), 0),
+        #[cfg(unix)]
+        (
+            password_database_home().join(".codeflow/authority/config.toml"),
+            2,
+        ),
     ];
-    #[cfg(unix)]
-    cases.push((
-        password_database_home().join(".codeflow/authority/config.toml"),
-        2,
-    ));
     for (file, code) in cases {
         for tool in ["Write", "Edit"] {
             let payload = serde_json::json!({"tool_name": tool, "tool_input":{
