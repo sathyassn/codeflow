@@ -2,7 +2,6 @@
 //! is fixture setup in a newly created temporary repository; the commands
 //! under test are judged only, never run.
 use super::*;
-use std::process::Command;
 
 /// What the guard decides for one command.
 #[derive(Debug, PartialEq, Eq)]
@@ -22,7 +21,7 @@ fn writes(path: &str) -> Outcome {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = crate::git::command()
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -472,12 +471,49 @@ fn settings_that_move_the_repository_index_or_objects_refuse() {
             ("git --work-tree=. checkout -- src", Unknown),
             ("git --attr-source=old checkout -- src", Unknown),
             ("GIT_INDEX_FILE=x git checkout-index -a -f", Unknown),
+            ("GIT_DIR=elsewhere git apply policy.patch", Unknown),
+            ("git -c filter.x.smudge=cat checkout -- src", Unknown),
+            ("git -c include.path=other checkout -- src", Unknown),
+            ("git -c core.editor=\"$EDITOR\" checkout -- src", Unknown),
             ("git --no-pager checkout -- src", Passes),
             ("git --literal-pathspecs checkout -- src", Passes),
+            // Settings that change no written path or content.
+            ("git -c core.editor=true checkout -- src", Passes),
+            (
+                "git -c Color.UI=false -c user.name=t checkout -- src",
+                Passes,
+            ),
+            // A form that writes no work-tree file is not refused for them.
+            ("git -c core.editor=true reset --soft HEAD", Passes),
+            ("git -c core.editor=true am --show-current-patch", Passes),
+            ("git -c core.editor=true cherry-pick old", Passes),
+            ("GIT_INDEX_FILE=x git restore --staged src", Passes),
         ],
     );
     git(&f.root, &["replace", "-f", "HEAD", "old"]);
-    expect(&f.root, &[("git checkout -- src", Unknown)]);
+    expect(
+        &f.root,
+        &[
+            ("git checkout -- src", Unknown),
+            ("git reset --soft old", Passes),
+        ],
+    );
+}
+
+/// With a moving setting, a repository the guard cannot find is still
+/// judged: a command that writes the work tree refuses.
+#[test]
+fn a_moved_repository_outside_any_checkout_still_refuses() {
+    let outside = tempfile::tempdir().unwrap();
+    expect(
+        outside.path(),
+        &[
+            ("GIT_DIR=/x/.git git checkout old -- .", Unknown),
+            ("git --git-dir=/x/.git reset --hard old", Unknown),
+            ("git checkout old -- .", Passes),
+            ("GIT_DIR=/x/.git git reset --soft old", Passes),
+        ],
+    );
 }
 
 #[test]
@@ -498,7 +534,7 @@ fn a_case_or_unicode_variant_of_an_enforcement_path_lands_on_it() {
     ] {
         let index = f.root.join(".git/fixture-index");
         let env_git = |args: &[&str]| {
-            let out = Command::new("git")
+            let out = crate::git::command()
                 .args(args)
                 .current_dir(&f.root)
                 .env("GIT_INDEX_FILE", &index)

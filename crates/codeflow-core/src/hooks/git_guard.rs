@@ -6335,6 +6335,42 @@ fn integrity_write_violation(
             ))
         })
         .or_else(|| wrapper_write_violation(cmd, args, level, cwd, payload_cwd, line))
+        .or_else(|| git_path_writer_violation(cmd, args, level, cwd, payload_cwd, line))
+}
+
+/// `args` of a `git` command with the literal values the line assigned
+/// before it filled in.
+fn filled_git_args(cmd: &str, args: &[String], line: &str) -> Vec<String> {
+    let mut literals = Literals::default();
+    for words in &*line_argvs(line) {
+        if strip_launchers(words)
+            .is_some_and(|(program, rest)| basename(program) == cmd && rest == args)
+        {
+            break;
+        }
+        literals.note(words);
+    }
+    args.iter().map(|word| literals.fill(word)).collect()
+}
+
+/// A Git command that writes work-tree files without moving HEAD, judged by
+/// the content it would put on an enforcement path, read from the object
+/// store (issue 633). It runs after the other writer checks, so a command
+/// they refuse keeps their reading.
+fn git_path_writer_violation(
+    cmd: &str,
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+    line: &str,
+) -> Option<Violation> {
+    if cmd != "git" || !level.is_active() {
+        return None;
+    }
+    let filled = filled_git_args(cmd, args, line);
+    let (verb, rest) = git_subcommand(&filled)?;
+    path_writers::violation(verb, &filled, rest, level, (cwd, payload_cwd), line)
 }
 
 pub(crate) fn git_command_write_violation(
@@ -6352,16 +6388,7 @@ pub(crate) fn git_command_write_violation(
         return None;
     }
     if cmd == "git" {
-        let mut literals = Literals::default();
-        for words in &*line_argvs(line) {
-            if strip_launchers(words)
-                .is_some_and(|(program, rest)| basename(program) == cmd && rest == args)
-            {
-                break;
-            }
-            literals.note(words);
-        }
-        let filled: Vec<_> = args.iter().map(|word| literals.fill(word)).collect();
+        let filled = filled_git_args(cmd, args, line);
         if let Some((verb, rest)) = git_subcommand(&filled) {
             if verb == "config" {
                 if let Some(finding) = checkout_config_write(rest, level) {
@@ -6374,13 +6401,6 @@ pub(crate) fn git_command_write_violation(
             }
             if let Some(finding) =
                 git_output_violation(verb, &filled, rest, level, cwd, payload_cwd)
-            {
-                return Some(finding);
-            }
-            // A path writer is judged by the content it would put on an
-            // enforcement path, read from the object store (issue 633).
-            if let Some(finding) =
-                path_writers::violation(verb, &filled, rest, level, (cwd, payload_cwd), line)
             {
                 return Some(finding);
             }
@@ -16245,17 +16265,21 @@ mod tests {
 
     // -- hard reset / rebase --
 
+    // These judge in an owned repository with an unborn branch, where only
+    // HEAD resolves. A reset to a revision is also judged by the enforcement
+    // content it writes (TSK-1390), and one the guard cannot read refuses.
     #[test]
     fn test_hard_reset_on_protected_blocked() {
         let p = default_policy();
-        let v = evaluate("git reset --hard HEAD~3", &ctx(&p, "main"));
+        let v = evaluate("git reset --hard HEAD", &ctx(&p, "main"));
         assert_eq!(v[0].rule, "git.hard_reset_protected");
     }
 
     #[test]
     fn test_hard_reset_on_feature_allowed() {
         let p = default_policy();
-        assert!(evaluate("git reset --hard HEAD~3", &ctx(&p, "feat/x")).is_empty());
+        let v = evaluate("git reset --hard HEAD", &ctx(&p, "feat/x"));
+        assert!(v.is_empty(), "{v:?}");
     }
 
     #[test]

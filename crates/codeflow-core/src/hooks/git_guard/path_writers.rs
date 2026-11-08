@@ -148,58 +148,48 @@ fn judge_line(
     (cwd, session): (&Path, &Path),
     line: &str,
 ) -> Result<Option<Verdict>, String> {
-    let globals = &filled[..filled.len() - rest.len() - 1];
-    let mut directory = cwd.to_path_buf();
-    let mut words = globals.iter();
-    while let Some(word) = words.next() {
-        let name = word.split('=').next().unwrap_or(word);
-        if word == "-C" {
-            let value = words.next().ok_or("`-C` has no directory")?;
-            if expands(value) {
-                return Err(format!(
-                    "the `-C` directory `{value}` is not a literal path"
-                ));
-            }
-            directory = integrity_shell_path(value, &directory);
-        } else if MOVING_GLOBALS.contains(&name) || name.starts_with("-c") {
-            return Err(format!(
-                "the global option `{name}` changes which repository, index or configuration Git reads"
-            ));
-        } else if word == "--icase-pathspecs" {
-            // Pathspecs are always matched without ASCII case here.
-        } else if !PLAIN_GLOBALS.contains(&word.as_str()) {
-            return Err(format!(
-                "the global option `{name}` is not one the guard reads"
+    let (directory, mut unreadable) = globals_read(filled, rest, cwd);
+    if unreadable.is_none() {
+        unreadable = MOVING_ENVIRONMENT
+            .iter()
+            .find(|name| line.contains(*name))
+            .map(|name| {
+                format!(
+                    "the line sets or names `{name}`, which changes which repository, index or objects Git reads"
+                )
+            });
+    }
+    let opened = match crate::hooks::repo::open(&directory) {
+        Ok(opened) => opened,
+        Err(why) if unreadable.is_none() => return Err(why),
+        Err(_) => None,
+    };
+    let workdir = opened
+        .as_ref()
+        .and_then(|repo| repo.workdir().map(Path::to_path_buf));
+    let Some(workdir) = workdir.or_else(|| unreadable.is_some().then(|| directory.clone())) else {
+        // Outside a work tree, and with nothing moving where Git looks,
+        // Git writes no work-tree file.
+        return Ok(None);
+    };
+    if let (None, Some(repo)) = (&unreadable, &opened) {
+        // Replacement refs and grafts change what a stored revision names.
+        if let Err(e) = crate::workgraph::history::check(repo) {
+            unreadable = Some(format!(
+                "stored objects may not be what Git writes: {}",
+                e.message()
             ));
         }
     }
-    if let Some(name) = MOVING_ENVIRONMENT.iter().find(|name| line.contains(*name)) {
-        return Err(format!(
-            "the line sets or names `{name}`, which changes which repository, index or objects Git reads"
-        ));
-    }
-    let Some(repo) = crate::hooks::repo::open(&directory)? else {
-        // Outside a repository, Git writes nothing.
-        return Ok(None);
+    let prefix = if unreadable.is_none() {
+        prefix_in(&directory, &workdir)?
+    } else {
+        Vec::new()
     };
-    let Some(workdir) = repo.workdir().map(Path::to_path_buf) else {
-        return Ok(None);
-    };
-    if repo
-        .references_glob("refs/replace/*")
-        .map_err(|e| format!("cannot read replacement refs: {}", e.message()))?
-        .next()
-        .is_some()
-        || repo.commondir().join("info/grafts").exists()
-    {
-        return Err(
-            "the repository has replacement refs or grafts, so stored objects may not be what Git writes"
-                .into(),
-        );
-    }
     let place = Place {
-        repo: &repo,
-        prefix: prefix_in(&directory, &workdir)?,
+        opened: opened.as_ref(),
+        unreadable,
+        prefix,
         workdir,
         directory,
         session: session.to_path_buf(),
@@ -207,9 +197,93 @@ fn judge_line(
     judge(&place, verb, rest)
 }
 
+/// The directory the global options move the command to, and why the guard
+/// cannot trust what it would read there, when a global option changes the
+/// repository, index or configuration Git reads, or is one it does not read.
+fn globals_read(filled: &[String], rest: &[String], cwd: &Path) -> (PathBuf, Option<String>) {
+    let globals = &filled[..filled.len() - rest.len() - 1];
+    let mut directory = cwd.to_path_buf();
+    let mut words = globals.iter();
+    while let Some(word) = words.next() {
+        let name = word.split('=').next().unwrap_or(word);
+        let why = if word == "-c" {
+            match words.next() {
+                None => Some("`-c` has no setting".to_string()),
+                Some(setting) if inert_setting(setting) => None,
+                Some(setting) => Some(format!(
+                    "the setting `-c {}` can change which work tree, files or content Git writes",
+                    setting.split('=').next().unwrap_or(setting)
+                )),
+            }
+        } else if word == "-C" {
+            match words.next() {
+                None => Some("`-C` has no directory".to_string()),
+                Some(value) if expands(value) => Some(format!(
+                    "the `-C` directory `{value}` is not a literal path"
+                )),
+                Some(value) => {
+                    directory = integrity_shell_path(value, &directory);
+                    None
+                }
+            }
+        } else if MOVING_GLOBALS.contains(&name) || name.starts_with("-c") {
+            Some(format!(
+                "the global option `{name}` changes which repository, index or configuration Git reads"
+            ))
+        } else if word == "--icase-pathspecs" || PLAIN_GLOBALS.contains(&word.as_str()) {
+            // Pathspecs are always matched without ASCII case here.
+            None
+        } else {
+            Some(format!(
+                "the global option `{name}` is not one the guard reads"
+            ))
+        };
+        if why.is_some() {
+            return (directory, why);
+        }
+    }
+    (directory, None)
+}
+
+/// Configuration keys a `-c` may set without changing which work tree,
+/// files or content Git writes: programs run for a person and how output
+/// looks. Any other key, an include or a filter among them, is read as
+/// moving what Git writes. Programs Git runs are judged by the runner rules.
+const INERT_SETTINGS: &[&str] = &[
+    "core.editor",
+    "core.pager",
+    "core.quotepath",
+    "sequence.editor",
+];
+
+/// Sections whose every key is inert in the same way.
+const INERT_SECTIONS: &[&str] = &["advice.", "color.", "pager.", "user."];
+
+/// Whether a `-c` setting is literal and sets an inert key.
+fn inert_setting(setting: &str) -> bool {
+    if expands(setting) {
+        return false;
+    }
+    let key = setting
+        .split('=')
+        .next()
+        .unwrap_or(setting)
+        .to_ascii_lowercase();
+    INERT_SETTINGS.contains(&key.as_str())
+        || INERT_SECTIONS
+            .iter()
+            .any(|section| key.starts_with(section))
+}
+
 /// The repository and the directory a command runs in.
 struct Place<'r> {
-    repo: &'r git2::Repository,
+    /// The repository found where the command runs, if any.
+    opened: Option<&'r git2::Repository>,
+    /// Why the guard cannot trust what it would read, when it cannot: a
+    /// global option, an environment name or a history overlay. A command
+    /// that writes no work-tree file is still judged; one that does refuses
+    /// when it reads the repository ([`Place::repo`]) or a patch.
+    unreadable: Option<String>,
     workdir: PathBuf,
     /// The directory the command runs in.
     directory: PathBuf,
@@ -219,21 +293,40 @@ struct Place<'r> {
     prefix: Vec<String>,
 }
 
+impl<'r> Place<'r> {
+    /// The repository whose content the command writes, or why the guard
+    /// cannot read it.
+    fn repo(&self) -> Result<&'r git2::Repository, String> {
+        if let Some(why) = &self.unreadable {
+            return Err(why.clone());
+        }
+        self.opened
+            .ok_or_else(|| "cannot find the repository the command writes".to_string())
+    }
+}
+
 fn prefix_in(directory: &Path, workdir: &Path) -> Result<Vec<String>, String> {
     let real = |path: &Path| {
         crate::portable_path::canonicalize(path)
             .map_err(|e| format!("cannot resolve `{}`: {e}", path.display()))
     };
     let (directory, workdir) = (real(directory)?, real(workdir)?);
-    Ok(directory
-        .strip_prefix(&workdir)
-        .map(|inside| {
-            inside
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect()
-        })
-        .unwrap_or_default())
+    let Ok(inside) = directory.strip_prefix(&workdir) else {
+        return Ok(Vec::new());
+    };
+    let mut prefix = Vec::new();
+    for component in inside.components() {
+        match component.as_os_str().to_str() {
+            Some(text) => prefix.push(text.to_string()),
+            None => {
+                return Err(format!(
+                    "the directory `{}` is not UTF-8, so the guard cannot read the pathspecs given there",
+                    directory.display()
+                ))
+            }
+        }
+    }
+    Ok(prefix)
 }
 
 /// The judgment for one verb.
@@ -299,6 +392,33 @@ fn relevant(parts: &[&str], targets: &[Target]) -> bool {
     })
 }
 
+/// Stands in for a stored name component that is not UTF-8 when deciding
+/// where it can land. It is not ASCII, so it lands on every target
+/// component, as such a name may.
+const NOT_UTF8: &str = "\u{fffd}";
+
+/// Why a stored name refuses: a lossy spelling could make two stored names
+/// one and hide a change between them.
+const NOT_UTF8_NAME: &str = "a stored name that can land on an enforcement path is not UTF-8";
+
+/// The components of a stored path, each read strictly as UTF-8; one that is
+/// not reads as [`NOT_UTF8`], and the flag says whether any did.
+fn stored_components(bytes: &[u8]) -> (Vec<&str>, bool) {
+    let mut strict = true;
+    let parts = bytes
+        .split(|b| *b == b'/')
+        .map(|part| {
+            if let Ok(text) = std::str::from_utf8(part) {
+                text
+            } else {
+                strict = false;
+                NOT_UTF8
+            }
+        })
+        .collect();
+    (parts, !strict)
+}
+
 struct Reader<'r> {
     repo: &'r git2::Repository,
     targets: Vec<Target>,
@@ -338,10 +458,16 @@ impl<'r> Reader<'r> {
     ) -> Result<(), String> {
         for entry in tree {
             self.spend()?;
-            let name = String::from_utf8_lossy(entry.name_bytes()).into_owned();
-            prefix.push(name);
+            let (name, not_utf8) = match std::str::from_utf8(entry.name_bytes()) {
+                Ok(name) => (name, false),
+                Err(_) => (NOT_UTF8, true),
+            };
+            prefix.push(name.to_string());
             let parts: Vec<&str> = prefix.iter().map(String::as_str).collect();
             if relevant(&parts, &self.targets) {
+                if not_utf8 {
+                    return Err(NOT_UTF8_NAME.into());
+                }
                 if entry.kind() == Some(git2::ObjectType::Tree) {
                     let child = self
                         .repo
@@ -358,8 +484,13 @@ impl<'r> Reader<'r> {
         Ok(())
     }
 
-    /// The tree a revision names, read from the object store.
+    /// The tree a revision names, read from the object store. `HEAD` itself
+    /// reads as [`Self::head`] does, so on an unborn branch it names the
+    /// same empty content HEAD is compared as.
     fn revision(&self, rev: &str) -> Result<Entries, String> {
+        if matches!(rev, "HEAD" | "@") {
+            return self.head();
+        }
         let tree = self.revision_tree(rev)?;
         self.tree(&tree)
     }
@@ -382,6 +513,21 @@ impl<'r> Reader<'r> {
             .revparse_single(rev)
             .and_then(|object| object.peel_to_commit())
             .map_err(|e| format!("cannot read the commit `{rev}`: {}", e.message()))
+    }
+
+    /// A commit's parents, read through the guarded history reader, which
+    /// refuses grafts, replacement refs and a shallow cut at the commit.
+    fn parent_commits(&self, commit: &git2::Commit<'r>) -> Result<Vec<git2::Commit<'r>>, String> {
+        let id = commit.id();
+        crate::workgraph::history::parents(self.repo, commit)
+            .map_err(|e| format!("cannot read the parents of {id}: {}", e.message()))?
+            .into_iter()
+            .map(|parent| {
+                self.repo
+                    .find_commit(parent)
+                    .map_err(|e| format!("cannot read a parent of {id}: {}", e.message()))
+            })
+            .collect()
     }
 
     /// HEAD's entries; none on an unborn branch.
@@ -408,11 +554,14 @@ impl<'r> Reader<'r> {
         let mut out = Entries::new();
         for entry in index.iter() {
             self.spend()?;
-            let path = String::from_utf8_lossy(&entry.path).into_owned();
-            let parts: Vec<&str> = path.split('/').collect();
+            let (parts, not_utf8) = stored_components(&entry.path);
             if !relevant(&parts, &self.targets) {
                 continue;
             }
+            if not_utf8 {
+                return Err(NOT_UTF8_NAME.into());
+            }
+            let path = parts.join("/");
             if entry.flags & 0x3000 != 0 {
                 return Err(format!("the index holds an unmerged entry for `{path}`"));
             }
@@ -487,7 +636,11 @@ impl Spec {
         };
         for component in relative.components() {
             match component {
-                Component::Normal(name) => parts.push(name.to_str()?.to_string()),
+                Component::Normal(name) => match name.to_str() {
+                    Some(name) => parts.push(name.to_string()),
+                    // A name that is not UTF-8 is read as the whole tree.
+                    None => return None,
+                },
                 Component::CurDir => {}
                 Component::ParentDir => {
                     parts.pop()?;
@@ -730,7 +883,7 @@ fn checkout(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, Strin
     let patch = parsed.has_short(&['p']) || parsed.has_long("--patch");
     let from_file = parsed.has_long("--pathspec-from-file");
     let overlay = overlay(&parsed, true);
-    let reader = Reader::new(place.repo);
+    let reader = Reader::new(place.repo()?);
     let head = reader.head()?;
     let whole = patch || from_file;
     let (before, after) = split(&parsed);
@@ -853,7 +1006,7 @@ fn restore(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, String
     let from_file = parsed.has_long("--pathspec-from-file");
     let source = parsed.values_of('s', "--source").last().copied();
     let source = source.or(staged.then_some("HEAD"));
-    let reader = Reader::new(place.repo);
+    let reader = Reader::new(place.repo()?);
     let head = reader.head()?;
     let words: Vec<&str> = parsed.operands.clone();
     judge_readings(
@@ -899,7 +1052,7 @@ fn checkout_index(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>,
     if parsed.has_long("--temp") || parsed.has_short(&['n']) || parsed.has_long("--no-create") {
         return Ok(None);
     }
-    let reader = Reader::new(place.repo);
+    let reader = Reader::new(place.repo()?);
     let index = reader.index()?;
     let all = parsed.has_short(&['a']) || parsed.has_long("--all") || parsed.has_long("--stdin");
     let prefix = parsed
@@ -934,7 +1087,7 @@ fn prefixed_index(
         return Err(format!("the prefix `{prefix}` is not literal"));
     }
     let index = place
-        .repo
+        .repo()?
         .index()
         .map_err(|e| format!("cannot read the index: {}", e.message()))?;
     let selection = if all {
@@ -949,8 +1102,13 @@ fn prefixed_index(
         .collect();
     for entry in index.iter() {
         reader.spend()?;
-        let path = String::from_utf8_lossy(&entry.path).into_owned();
-        if !selection.selects(&path) {
+        let Ok(path) = std::str::from_utf8(&entry.path) else {
+            return Err(
+                "an index path is not UTF-8, so the guard cannot tell where `--prefix` writes it"
+                    .into(),
+            );
+        };
+        if !selection.selects(path) {
             continue;
         }
         let joined = format!("{prefix}{path}");
@@ -1011,7 +1169,7 @@ fn read_tree(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, Stri
     if parsed.has_long("--prefix") || parsed.has_long("--index-output") {
         return Err("`git read-tree -u` with `--prefix` or `--index-output` writes paths the guard does not model".into());
     }
-    let reader = Reader::new(place.repo);
+    let reader = Reader::new(place.repo()?);
     let head = reader.head()?;
     let mut sources: Vec<(Entries, String)> = Vec::new();
     if parsed.has_long("--empty") {
@@ -1057,7 +1215,7 @@ fn stash(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, String> 
     }
     let name = match operands.as_slice() {
         [] => {
-            match place.repo.find_reference("refs/stash") {
+            match place.repo()?.find_reference("refs/stash") {
                 Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
                 Err(e) => return Err(format!("cannot read the stash: {}", e.message())),
                 Ok(_) => {}
@@ -1068,9 +1226,9 @@ fn stash(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, String> 
         [one] => (*one).to_string(),
         _ => return Ok(None),
     };
-    let reader = Reader::new(place.repo);
+    let reader = Reader::new(place.repo()?);
     let stash = reader.commit(&name)?;
-    let parents: Vec<git2::Commit<'_>> = stash.parents().collect();
+    let parents = reader.parent_commits(&stash)?;
     let tree = |commit: &git2::Commit<'_>| -> Result<Entries, String> {
         commit
             .tree()
@@ -1227,6 +1385,8 @@ fn judge_patches(
     strip: usize,
     directory: Option<&str>,
 ) -> Result<Option<Verdict>, String> {
+    // Patch paths are read from the work tree, which must be the one found.
+    place.repo()?;
     let targets = targets();
     for (text, name) in texts {
         for path in patch_paths(text, strip)? {
@@ -1274,7 +1434,12 @@ fn judge_patches(
 fn patch_paths(text: &str, strip: usize) -> Result<Vec<String>, String> {
     let mut paths = Vec::new();
     let stripped = |path: &str| -> Result<Option<String>, String> {
-        let path = path.split('\t').next().unwrap_or(path).trim_end();
+        // Git ends the name at a tab; trailing spaces are not part of it.
+        let path = path
+            .split('\t')
+            .next()
+            .unwrap_or(path)
+            .trim_end_matches(' ');
         if path == "/dev/null" {
             return Ok(None);
         }
@@ -1286,7 +1451,9 @@ fn patch_paths(text: &str, strip: usize) -> Result<Vec<String>, String> {
                 .map_or_else(String::new, |rest| rest.join("/")),
         ))
     };
-    for line in text.lines() {
+    // Patch lines end at a newline; a mail may also carry a carriage return.
+    for line in text.split('\n') {
+        let line = line.strip_suffix('\r').unwrap_or(line);
         let lower = line.to_ascii_lowercase();
         if lower.starts_with("content-transfer-encoding:")
             && (lower.contains("base64") || lower.contains("quoted-printable"))
@@ -1318,16 +1485,16 @@ fn diff_git_names(both: &str) -> Result<Vec<String>, String> {
     if both.starts_with('"') || both.contains(" \"") {
         // Quoted names: read each quoted or bare word.
         let mut names = Vec::new();
-        let mut rest = both.trim();
+        let mut rest = both.trim_matches(' ');
         while !rest.is_empty() {
             if let Some(after) = rest.strip_prefix('"') {
                 let end = closing_quote(after).ok_or("cannot read a quoted diff path")?;
                 names.push(format!("\"{}\"", &after[..end]));
-                rest = after[end + 1..].trim_start();
+                rest = after[end + 1..].trim_start_matches(' ');
             } else {
                 let end = rest.find(' ').unwrap_or(rest.len());
                 names.push(rest[..end].to_string());
-                rest = rest[end..].trim_start();
+                rest = rest[end..].trim_start_matches(' ');
             }
         }
         return Ok(names);
@@ -1474,16 +1641,26 @@ fn am(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, String> {
             .iter()
             .any(|name| parsed.has_long(name));
     if resumes {
-        let session = place.repo.path().join("rebase-apply");
-        let Ok(entries) = std::fs::read_dir(&session) else {
+        let session = place.repo()?.path().join("rebase-apply");
+        let unread = |e: std::io::Error| format!("cannot read the am session: {e}");
+        // Only a proven absent session means there is nothing to resume.
+        if crate::absence::symlink_metadata_optional(&session)
+            .map_err(unread)?
+            .is_none()
+        {
             return Ok(None);
-        };
+        }
         let mut texts = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("cannot read the am session: {e}"))?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.chars().all(|c| c.is_ascii_digit()) || name == "patch" {
-                texts.push((read_patch(&entry.path())?, name));
+        for entry in std::fs::read_dir(&session).map_err(unread)? {
+            let entry = entry.map_err(unread)?;
+            let file_name = entry.file_name();
+            // Git names its patch files `0001` and so on, and `patch`; a
+            // name that is not UTF-8 is none of them.
+            let Some(name) = file_name.to_str() else {
+                continue;
+            };
+            if name.bytes().all(|b| b.is_ascii_digit()) || name == "patch" {
+                texts.push((read_patch(&entry.path())?, name.to_string()));
             }
         }
         return judge_patches(place, "am", &texts, strip, directory);
@@ -1540,14 +1717,21 @@ fn pick(place: &Place<'_>, verb: &str, rest: &[String]) -> Result<Option<Verdict
         // A sequence started with `-n` continues without committing; its
         // remaining commits sit in the sequencer, which the guard does not
         // replay.
-        let opts = place.repo.path().join("sequencer/opts");
-        return match std::fs::read_to_string(&opts) {
-            Ok(text) if text.contains("no-commit") => Err(format!(
+        let opts = place.repo()?.path().join("sequencer/opts");
+        let unread = |e: std::io::Error| format!("cannot read the sequencer state: {e}");
+        if crate::absence::symlink_metadata_optional(&opts)
+            .map_err(unread)?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let text = std::fs::read_to_string(&opts).map_err(unread)?;
+        return if text.contains("no-commit") {
+            Err(format!(
                 "`git {verb}` would continue a no-commit sequence the guard cannot replay; use `git {verb} --abort`"
-            )),
-            Ok(_) => Ok(None),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(format!("cannot read the sequencer state: {e}")),
+            ))
+        } else {
+            Ok(None)
         };
     }
     if !no_commit {
@@ -1558,16 +1742,16 @@ fn pick(place: &Place<'_>, verb: &str, rest: &[String]) -> Result<Option<Verdict
             "`git {verb}` has the option `{word}`, which the guard does not read"
         ));
     }
-    let reader = Reader::new(place.repo);
+    let reader = Reader::new(place.repo()?);
     let head = reader.head()?;
-    for commit in picked(place.repo, &parsed.operands)? {
+    for commit in picked(place.repo()?, &parsed.operands)? {
         let id = commit.id().to_string();
         let changed = commit
             .tree()
             .map_err(|e| format!("cannot read the commit {id}: {}", e.message()))
             .and_then(|tree| reader.tree(&tree))?;
         let mut parents = Vec::new();
-        for parent in commit.parents() {
+        for parent in reader.parent_commits(&commit)? {
             let tree = parent
                 .tree()
                 .map_err(|e| format!("cannot read a parent of {id}: {}", e.message()))?;
@@ -1615,14 +1799,16 @@ fn picked<'r>(
     if !ranged {
         return operands.iter().map(|word| read(word)).collect();
     }
-    let mut walk = repo
-        .revwalk()
+    // The guarded walk refuses grafts, replacement refs and a shallow cut.
+    let mut walk = crate::workgraph::history::revwalk(repo)
         .map_err(|e| format!("cannot walk commits: {}", e.message()))?;
+    let side = |rev: &str| read(if rev.is_empty() { "HEAD" } else { rev });
     for word in operands {
         let result = if let Some(hidden) = word.strip_prefix('^') {
             walk.hide(read(hidden)?.id())
-        } else if word.contains("..") {
-            walk.push_range(word)
+        } else if let Some((from, to)) = word.split_once("..") {
+            let (from, to) = (side(from)?.id(), side(to)?.id());
+            walk.hide(from).and_then(|()| walk.push(to))
         } else {
             walk.push(read(word)?.id())
         };
@@ -1685,7 +1871,7 @@ fn reset(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, String> 
     let Some(rev) = before.first() else {
         return Ok(None);
     };
-    let reader = Reader::new(place.repo);
+    let reader = Reader::new(place.repo()?);
     let head = reader.head()?;
     let target = reader.revision(rev)?;
     Ok(differs(&target, &head, &Selection::Whole, false)
