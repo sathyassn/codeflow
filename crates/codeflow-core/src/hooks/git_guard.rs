@@ -27,6 +27,7 @@ use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 use crate::root_checkout::RootCheckout;
 
 pub(crate) mod line_home;
+mod path_writers;
 mod runners;
 
 /// Resolves a `gh pr merge <target>` argument (a PR number, URL, or branch;
@@ -6373,6 +6374,13 @@ pub(crate) fn git_command_write_violation(
             }
             if let Some(finding) =
                 git_output_violation(verb, &filled, rest, level, cwd, payload_cwd)
+            {
+                return Some(finding);
+            }
+            // A path writer is judged by the content it would put on an
+            // enforcement path, read from the object store (issue 633).
+            if let Some(finding) =
+                path_writers::violation(verb, &filled, rest, level, (cwd, payload_cwd), line)
             {
                 return Some(finding);
             }
@@ -13187,6 +13195,11 @@ struct ParsedOptions<'a> {
     /// Known options whose required value is absent.
     missing: Vec<&'a str>,
     ended: bool,
+    /// How many operands came before the `--` that ended the options, when
+    /// one did. `--end-of-options` ends them too but leaves a later `--` as
+    /// an operand, which Git commands such as `checkout` still read as the
+    /// pathspec separator.
+    separated: Option<usize>,
     short: Vec<char>,
     long: Vec<(&'a str, Option<&'a str>)>,
     sequence: Vec<Seen<'a>>,
@@ -13238,6 +13251,7 @@ fn parse_options_mode<'a, S: AsRef<str>>(
         unread: Vec::new(),
         missing: Vec::new(),
         ended: false,
+        separated: None,
         short: Vec::new(),
         long: Vec::new(),
         sequence: Vec::new(),
@@ -13251,6 +13265,7 @@ fn parse_options_mode<'a, S: AsRef<str>>(
         if let Some(body) = token.strip_prefix("--") {
             if body.is_empty() {
                 parsed.ended = true;
+                parsed.separated = Some(parsed.operands.len());
                 parsed
                     .operands
                     .extend(args[index..].iter().map(AsRef::as_ref));
