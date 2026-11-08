@@ -203,9 +203,10 @@ fn present(candidates: Vec<PathBuf>, cwd: Option<&Path>) -> Result<Vec<PathBuf>,
             Some(cwd) if path.is_relative() => cwd.join(&path),
             _ => path,
         };
-        match path.try_exists() {
-            Ok(true) => found.push(path),
-            Ok(false) => {}
+        match crate::absence::proven_absent(&path) {
+            Ok(true) => {}
+            // An entry, a dangling link included, counts as a config file.
+            Ok(false) => found.push(path),
             Err(e) => return Err(format!("{} cannot be checked ({e})", path.display())),
         }
     }
@@ -1114,7 +1115,7 @@ fn wget(args: &[String], ctx: Ctx<'_>) -> Option<String> {
         };
         match given.role {
             Role::NoConfig => no_config = true,
-            Role::MaxRedirect => no_redirect = given.value.as_deref().map(str::trim) == Some("0"),
+            Role::MaxRedirect => no_redirect = given.value.as_deref() == Some("0"),
             Role::Method => {
                 let value = given.value.unwrap_or_default().to_ascii_uppercase();
                 signal |= writes(&value);

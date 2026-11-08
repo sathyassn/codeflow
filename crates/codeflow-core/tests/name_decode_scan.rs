@@ -1547,6 +1547,17 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // TSK-1346: a session config variable (`CURL_HOME`, `HOME` and the
+    // like) that is not UTF-8 is held as the expansion `$NAME`, which the
+    // config lookup cannot resolve, so it counts as a config file present
+    // and the call is refused; the decode never lets a call pass.
+    (
+        "crates/codeflow-core/src/security/release_routes.rs",
+        "session_environment",
+        "obtain-absent:into_string",
+        1,
+        "unproven",
+    ),
     // TSK-1346: a workflow file that cannot be read or is not UTF-8 counts
     // as a release workflow that listens to every repository dispatch, and a
     // workflow name that is not a string matches no selector, which is
