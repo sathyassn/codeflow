@@ -135,6 +135,12 @@ fn number(word: &str) -> bool {
             .all(|c| c.is_ascii_digit() || matches!(c, '.' | '_' | 'e' | 'E' | '-' | '+'))
 }
 
+/// Whether `c` is a space to Perl's `\s` on the bytes `parallel` reads:
+/// space, tab, line feed, vertical tab, form feed and carriage return.
+pub(crate) fn perl_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')
+}
+
 /// Which input a separator word starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Separator {
@@ -248,7 +254,7 @@ impl ParallelCall {
             }
             "rpl" => {
                 self.wide = true;
-                let shorthand = value.split(char::is_whitespace).next().unwrap_or_default();
+                let shorthand = value.split(perl_space).next().unwrap_or_default();
                 if !shorthand.is_empty() {
                     self.derived.push(shorthand.to_string());
                 }

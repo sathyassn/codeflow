@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use super::parallel_options::{ParallelCall, Separator};
+use super::parallel_options::{perl_space, ParallelCall, Separator};
 
 use super::super::git_target::{expand_word, has_substitution, Cwd, ShellState, Val};
 use super::{
@@ -973,10 +973,7 @@ fn parallel_group(inner: &str, wide: bool, after_dollar: bool, part: bool) -> bo
     let positional = inner
         .trim_start_matches('-')
         .starts_with(|c: char| c.is_ascii_digit());
-    wide || variant
-        || positional
-        || inner.starts_with('=')
-        || !inner.chars().any(char::is_whitespace)
+    wide || variant || positional || inner.starts_with('=') || !inner.chars().any(perl_space)
 }
 
 /// The commands `find` runs with `-exec`, `-execdir`, `-ok` and `-okdir`.
