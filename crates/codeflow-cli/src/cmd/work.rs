@@ -623,9 +623,23 @@ fn provider_failure(stderr: &str) -> String {
     } else {
         "the provider gave another error"
     };
-    let shown = codeflow_core::coord::text::terminal(&codeflow_core::coord::text::redact(
-        &codeflow_core::git::remote_query::display_urls(first),
-    ));
+    // A secret-shaped line becomes a marker, then the text is one terminal
+    // line. Built from the scanner and git's display escaping, so this gate
+    // command does not name the coordination module (ledger_free_cli).
+    let urls = codeflow_core::git::remote_query::display_urls(first);
+    let flat = urls
+        .lines()
+        .map(|line| {
+            if codeflow_core::hooks::scan::scan_line(line).is_some() {
+                "[redacted]"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('\t', " ");
+    let shown = codeflow_core::git::display_message(&flat);
     let shown: String = shown.chars().take(300).collect();
     if shown.is_empty() {
         format!("cannot verify review for this pin: provider failed: {cause} (it wrote no error message)")
