@@ -103,7 +103,8 @@ Which checks enforce what:
     them.
 
   The guard does not judge other clients, such as `wget`, Python or HTTPie,
-  curl's default config file (`.curlrc`), a redirect from another server, or
+  curl's default config file (`.curlrc`, including one a `CURL_HOME`
+  setting points to), a redirect from another server, or
   any command it cannot parse, and it covers only a guarded session. GitHub
   still accepts these calls from outside the guard, from any token with Pull
   requests write: the PR App's user token, the agent App's installation token
