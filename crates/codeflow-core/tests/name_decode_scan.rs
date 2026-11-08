@@ -122,6 +122,16 @@ const GIT2_TEXT: &[&str] = &["shorthand", "symbolic_target"];
 /// only reaches a person or is not a git or OS name: (file, enclosing item,
 /// call, how many, closed reason tag); the comment states the precise contract.
 const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-1346: a workflow file name that is not UTF-8 makes the whole
+    // workflow directory unreadable, so every dispatch is refused; the
+    // decode never lets a dispatch pass.
+    (
+        "codeflow-core/src/security/release_routes.rs",
+        "flows_in",
+        "name",
+        1,
+        "unproven",
+    ),
     // Both startup_glob_paths callers construct pattern from Pattern.rest, a UTF-8
     // shell-word String. Only those pattern components are decoded to recognize
     // recursive stars; base and filesystem entry names are never decoded here.
@@ -1527,6 +1537,31 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-1346: a workflow file that cannot be read or is not UTF-8 counts
+    // as a release workflow that listens to every repository dispatch, and a
+    // workflow name that is not a string matches no selector, which is
+    // refused; neither absence lets a dispatch pass.
+    (
+        "crates/codeflow-core/src/security/release_routes.rs",
+        "classify",
+        "obtain-absent:as_str",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/security/release_routes.rs",
+        "flows_in",
+        "obtain-absent:find_blob",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/security/release_routes.rs",
+        "flows_in",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
     // TSK-397: doctor's Claude settings reader. A layer that is not UTF-8
     // or not a JSON object is reported, never read as an absent layer. A
     // `.git` file's `gitdir:` value is trimmed as Git trims it, and the main
