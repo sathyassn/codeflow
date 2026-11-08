@@ -15,7 +15,7 @@
 use std::path::Path;
 
 use super::assets::read_text;
-use super::detect::{self, CODEFLOW_HOOKS_PATH};
+use super::detect;
 use super::manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest, Tier};
 use super::region::{self, BlockOutcome};
 use super::report::{Action, Report};
@@ -350,10 +350,13 @@ fn init_writes(
                     shown!("core.hooksPath={}", Shown::path(path))
                 }
             };
+            // The shims by their absolute path, which does not depend on the
+            // directory a hook runs in (TSK-1395).
+            let shims = super::hooks_path::target(root)?;
             report.notes.push(shown!(
-                "existing hook manager detected ({}) — not clobbered. To enable codeflow's git gates, call the shims from your hook manager, e.g. add `\"$(git rev-parse --show-toplevel)\"/{}/pre-commit` to its pre-commit step (same for commit-msg and pre-push). Recorded git_hooks = \"unwired\"; `codeflow doctor` will surface this.",
+                "existing hook manager detected ({}) — not clobbered. To enable codeflow's git gates, call the shims from your hook manager, e.g. add `\"{}/pre-commit\" \"$@\"` to its pre-commit step (same for commit-msg and pre-push). Recorded git_hooks = \"unwired\"; `codeflow doctor` will surface this.",
                 manager,
-                Shown::fixed(CODEFLOW_HOOKS_PATH)
+                Shown::path(&shims)
             ));
         }
     }

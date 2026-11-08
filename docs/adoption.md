@@ -189,7 +189,7 @@ the project accepts.
 |---|---|---|
 | Commit | `init` makes the `chore: scaffold codeflow standard tier` commit for you | Nothing is committed; the files wait for you to review and commit them on a branch |
 | Existing files | None to protect | Never overwritten; an existing `CLAUDE.md`, `.claude/settings.json` or `.gitignore` is merged by region |
-| Git hooks | Wired through `core.hooksPath`, set to the absolute path of the main working tree's `.codeflow/git-hooks`, which every worktree shares (ADR-0099); branch policy is armed. After the repository moves, `codeflow update` writes the new path | If `.husky/` or a custom `core.hooksPath` exists, codeflow leaves hooks alone, records `git_hooks = "unwired"`, and the report shows how to add the `pre-commit`, `commit-msg`, `pre-merge-commit`, `reference-transaction` and `pre-push` shims to your manager |
+| Git hooks | Wired through `core.hooksPath`, set to the absolute path of the main working tree's `.codeflow/git-hooks`, which every worktree shares (ADR-0099); branch policy is armed. After the repository moves, `codeflow update` writes the new path | If `.husky/` or a custom `core.hooksPath` exists, codeflow leaves hooks alone, records `git_hooks = "unwired"`, and the report shows how to add the `pre-commit`, `commit-msg`, `pre-merge-commit`, `reference-transaction` and `pre-push` shims to your manager, calling each by its absolute path. A manager's relative `core.hooksPath` is read from the directory each command runs in, so `codeflow doctor` notes the invocation classes it misses and the absolute path to set; the manager's install step may set the relative path again |
 
 | Fixed home | Installed at |
 |---|---|

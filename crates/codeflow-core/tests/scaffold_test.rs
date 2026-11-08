@@ -761,6 +761,15 @@ fn init_into_existing_repo_is_nondestructive() {
     assert_eq!(git_config(&root, "core.hooksPath"), "");
     assert!(read(&root, ".codeflow/project.toml").contains("git_hooks = \"unwired\""));
     assert!(report.notes.iter().any(|n| n.contains("husky")));
+    // TSK-1395: the suggested call names the shims by their absolute path,
+    // which does not depend on the directory a hook runs in.
+    let top = git(&root, &["rev-parse", "--show-toplevel"]);
+    let call = format!("\"{top}/.codeflow/git-hooks/pre-commit\" \"$@\"");
+    assert!(
+        report.notes.iter().any(|n| n.contains(&call)),
+        "{:?}",
+        report.notes
+    );
     assert_eq!(read(&root, ".husky/pre-commit"), "npx lint-staged\n");
 
     // Existing history: no scaffold commit on top of the user's branch.

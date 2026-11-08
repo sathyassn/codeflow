@@ -687,7 +687,11 @@ catalog! {
     /// Git hooks another hook manager owns, whose stages do not call the
     /// codeflow shims.
     DOCTOR_HOOK_MANAGER = Step::Edit("{path}"),
-        "make each hook named in {path} executable, calling its codeflow shim on a live line (its pre-commit hook runs `.codeflow/git-hooks/pre-commit \"$@\"`, and so on for {hooks}); `codeflow doctor --check hooks` then stops warning, and a commit with a bad subject being refused confirms the calls run";
+        "make each hook named in {path} executable, calling its codeflow shim by its absolute path on a live line (its pre-commit hook runs `\"{shims}/pre-commit\" \"$@\"`, and so on for {hooks}); `codeflow doctor --check hooks` then stops warning, and a commit with a bad subject being refused confirms the calls run";
+    /// Another manager's relative `core.hooksPath`, which git reads from the
+    /// directory each command runs in (TSK-1395).
+    DOCTOR_MANAGER_HOOKS_PATH_RELATIVE = Step::Git("git config core.hooksPath"),
+        "set core.hooksPath to the folder's absolute path: `git config core.hooksPath \"{absolute}\"`; the manager's install step may set the relative path again, so check after it runs; `codeflow doctor --check hooks` then reads the absolute path";
     /// Manager hooks that name every shim: reading cannot show they run it.
     DOCTOR_HOOK_WIRING_UNSEEN = Step::Git("git commit"),
         "confirm the hooks in {path} run the codeflow shims with a real git event: on a scratch branch, `git commit --allow-empty -m \"Bad subject.\"` must be refused under git.commit_format; `codeflow doctor` reads the hook files and cannot verify that they run";

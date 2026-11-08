@@ -204,6 +204,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_TOOL_MISSING", Runs),
     ("DOCTOR_HOOK_MANAGER", Runs),
     ("DOCTOR_HOOK_WIRING_UNSEEN", Confirms),
+    ("DOCTOR_MANAGER_HOOKS_PATH_RELATIVE", Runs),
     ("DOCTOR_GIT_DIR_HOOKS", Runs),
     ("DOCTOR_HARNESS_APPROVAL", Excluded(HarnessApproval)),
     ("DOCTOR_GATE_DIRS", Excluded(HumanAuthority)),
@@ -594,6 +595,17 @@ fn scaffolded(tier: &str) -> tempfile::TempDir {
         .status()
         .unwrap();
     assert!(status.success());
+    // init wrote the template's absolute hooks path (ADR-0099); the copy is
+    // a repository of its own, so it names its own managed hooks, as
+    // `codeflow update` would set them.
+    let root = copy.path().join("p");
+    let hooks = root.join(".codeflow").join("git-hooks");
+    if hooks.join("pre-commit").is_file() {
+        git(
+            &root,
+            &["config", "core.hooksPath", hooks.to_str().unwrap()],
+        );
+    }
     copy
 }
 
@@ -3580,7 +3592,12 @@ fn confirms_doctor_hook_wiring_unseen() {
     std::fs::create_dir(&root).unwrap();
     git(&root, &["init", "-q", "-b", "main"]);
     write(&root, ".husky/pre-commit", "#!/bin/sh\ntrue\n");
-    git(&root, &["config", "core.hooksPath", ".husky"]);
+    // The absolute form; the relative form is its own note (TSK-1395).
+    let husky = root.join(".husky");
+    git(
+        &root,
+        &["config", "core.hooksPath", husky.to_str().unwrap()],
+    );
     codeflow(&root, &["init", "--yes", "--standard"]);
     let shims: Vec<String> = std::fs::read_dir(root.join(".codeflow/git-hooks"))
         .unwrap()
@@ -3665,6 +3682,42 @@ fn confirms_doctor_hook_wiring_unseen() {
     }
 }
 
+/// TSK-1395: another manager's relative hooks path is a note; its printed
+/// `git config` step sets the absolute path and clears it.
+#[cfg(unix)]
+#[test]
+fn clears_doctor_manager_hooks_path_relative() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("p");
+    std::fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q", "-b", "main"]);
+    write(&root, ".husky/pre-commit", "#!/bin/sh\ntrue\n");
+    git(&root, &["config", "core.hooksPath", ".husky"]);
+    codeflow(&root, &["init", "--yes", "--standard"]);
+    for entry in std::fs::read_dir(root.join(".codeflow/git-hooks")).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+        let path = root.join(".husky").join(&name);
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\n.codeflow/git-hooks/{name} \"$@\"\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    prove(
+        "DOCTOR_MANAGER_HOOKS_PATH_RELATIVE",
+        "is relative, so git reads it",
+        || doctor(&root, "hooks"),
+        |printed| {
+            let step = printed_command(printed, "DOCTOR_MANAGER_HOOKS_PATH_RELATIVE", None);
+            run_printed(&root, &step, &[], &[]);
+        },
+    );
+    let after = doctor(&root, "hooks");
+    assert!(after.contains("wiring not verified"), "{after}");
+}
+
 #[test]
 fn clears_doctor_hook_manager() {
     // A project whose git hooks another manager owned before `codeflow init`,
@@ -3674,7 +3727,12 @@ fn clears_doctor_hook_manager() {
     std::fs::create_dir(&root).unwrap();
     git(&root, &["init", "-q", "-b", "main"]);
     write(&root, ".husky/pre-commit", "#!/bin/sh\ntrue\n");
-    git(&root, &["config", "core.hooksPath", ".husky"]);
+    // The absolute form; the relative form is its own note (TSK-1395).
+    let husky = root.join(".husky");
+    git(
+        &root,
+        &["config", "core.hooksPath", husky.to_str().unwrap()],
+    );
     let out = codeflow(&root, &["init", "--yes", "--standard"]);
     assert!(
         read(&root, ".codeflow/project.toml").contains("git_hooks = \"unwired\""),
@@ -3709,7 +3767,12 @@ fn clears_doctor_hook_manager() {
         "another hook manager owns",
         || doctor(&root, "hooks"),
         |printed| {
-            assert!(printed.contains("in .husky executable"), "{printed}");
+            assert!(printed.contains("/.husky executable"), "{printed}");
+            // TSK-1395: the shim call does not depend on the hook's directory.
+            assert!(
+                printed.contains("/.codeflow/git-hooks/pre-commit\" \"$@\""),
+                "{printed}"
+            );
             // Each manager hook calls its codeflow shim on a live line. The
             // call alone is not enough: TSK-147 round 3 F6 found a hook git
             // skips (not executable) passing on its text, so doctor must

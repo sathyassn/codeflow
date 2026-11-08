@@ -113,8 +113,8 @@ const RUNTIME_TEXT: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/scaffold/init.rs",
         "init_writes",
         "path",
-        3,
-        "the kept PR template file, the configured git hooks folder and the core.hooksPath value written (TSK-1395)",
+        4,
+        "the kept PR template file, the configured git hooks folder, the core.hooksPath value written and the shims folder a manager's hook calls (TSK-1395)",
     ),
     (
         "crates/codeflow-core/src/scaffold/init.rs",
