@@ -439,10 +439,11 @@ fn update_writes(
     if let Some(note) = size_rule_note(root, &state) {
         report.notes.push(note);
     }
+    if let Some(note) = migrate_hooks_path(root, &state)? {
+        report.notes.push(note);
+    }
     // The brownfield hook choice stays visible until the adopter makes it.
-    if super::detect::configured_hooks_path(root)?.as_deref()
-        == Some(super::detect::CODEFLOW_HOOKS_PATH)
-    {
+    if super::hooks_path::form(root)?.is_codeflow() {
         if let Some(found) = super::detect::git_dir_hooks(root) {
             report.notes.push(found.report_note());
         }
@@ -461,6 +462,29 @@ fn update_writes(
     }
 
     Ok(report)
+}
+
+/// Move `core.hooksPath` to the absolute managed form (ADR-0099): the
+/// relative form earlier releases wrote and a path a move or a removed
+/// worktree left behind are rewritten, and an unset one is wired where the
+/// project records its hooks as wired and no other hook manager owns them.
+/// Another manager's path is left as it is.
+fn migrate_hooks_path(
+    root: &Path,
+    state: &super::state::ProjectState,
+) -> Result<Option<Shown>, ScaffoldError> {
+    let wire_unset = state.git_hooks == super::state::GIT_HOOKS_WIRED
+        && super::detect::detect_hook_manager(root)?.is_none();
+    Ok(
+        super::hooks_path::migrate(root, wire_unset)?.map(|(previous, value)| match previous {
+            Some(previous) => shown!(
+                "git hooks: core.hooksPath moved from {} to {}",
+                Shown::path(&previous),
+                Shown::path(&value)
+            ),
+            None => shown!("git hooks wired: core.hooksPath = {}", Shown::path(&value)),
+        }),
+    )
 }
 
 /// The shipped CI workflow whose secret-scan job must run nothing but the

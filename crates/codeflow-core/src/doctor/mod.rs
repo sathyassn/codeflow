@@ -523,18 +523,13 @@ fn git_dir_hooks_finding(root: &Path) -> Option<Finding> {
     use crate::scaffold::detect::{self, CODEFLOW_HOOKS_PATH};
     // This optional note only names hooks displaced by a known setting.
     // The authoritative wiring check below reports configuration read errors.
-    if detect::configured_hooks_path(root)
-        .ok()
-        .flatten()
-        .as_deref()
-        != Some(CODEFLOW_HOOKS_PATH)
-    {
+    if !crate::scaffold::hooks_path::form(root).ok()?.is_codeflow() {
         return None;
     }
     let found = detect::git_dir_hooks(root)?;
     Some(Finding::new(
         format!(
-            "git does not run the hooks in {} while core.hooksPath = {CODEFLOW_HOOKS_PATH}: {}",
+            "git does not run the hooks in {} while core.hooksPath names CodeFlow's {CODEFLOW_HOOKS_PATH}: {}",
             found.dir,
             found.names.join(", ")
         ),
@@ -565,6 +560,7 @@ enum Wiring {
 /// its own remedy text.
 fn hooks_wiring(root: &Path) -> Wiring {
     use crate::scaffold::detect::CODEFLOW_HOOKS_PATH;
+    use crate::scaffold::hooks_path::HooksPathForm;
     use crate::scaffold::state::{ProjectState, GIT_HOOKS_UNWIRED};
 
     let shims = root.join(CODEFLOW_HOOKS_PATH);
@@ -583,28 +579,36 @@ fn hooks_wiring(root: &Path) -> Wiring {
             ))
         }
     }
-    // Prefer the configured string: relative `.codeflow/git-hooks` is the
-    // contract so each worktree uses its own shims. An absolute path (often
-    // the main checkout) is a Warn even if the files happen to exist.
-    let configured = match crate::scaffold::detect::configured_hooks_path(root) {
-        Ok(configured) => configured,
+    // CodeFlow writes one absolute path to a working tree's managed hooks
+    // (ADR-0099). Its earlier relative form, and a path that no working tree
+    // of this repository holds (a moved repository, a removed worktree), are
+    // reported for `codeflow update` to rewrite.
+    let form = match crate::scaffold::hooks_path::form(root) {
+        Ok(form) => form,
         Err(error) => {
             return Wiring::Unreadable(format!("cannot read Git hook configuration: {error}"))
         }
     };
-    if let Some(configured) = configured {
-        if configured == CODEFLOW_HOOKS_PATH {
-            return Wiring::Read;
-        }
-        if std::path::Path::new(&configured).is_absolute() {
-            let configured = crate::git::display_key(&configured);
+    match form {
+        HooksPathForm::Managed => return Wiring::Read,
+        HooksPathForm::Relative => {
             return Wiring::Broken(Finding::new(
                 format!(
-                    "core.hooksPath is absolute ({configured}); the project-relative `{CODEFLOW_HOOKS_PATH}` lets each worktree use its own shims"
+                    "core.hooksPath is the relative `{CODEFLOW_HOOKS_PATH}`, which git reads from the directory each command runs in; CodeFlow writes the absolute path of the managed hooks"
                 ),
-                remedy::DOCTOR_HOOKS_PATH.with(&[("hooks", CODEFLOW_HOOKS_PATH)]),
+                remedy::DOCTOR_HOOKS_PATH.remedy(),
             ));
         }
+        HooksPathForm::Stale(value) => {
+            let value = crate::git::display_key(&value);
+            return Wiring::Broken(Finding::new(
+                format!(
+                    "core.hooksPath ({value}) does not reach the managed hooks of a working tree of this repository (moved or renamed repository, or removed worktree?)"
+                ),
+                remedy::DOCTOR_HOOKS_PATH.remedy(),
+            ));
+        }
+        HooksPathForm::Unset | HooksPathForm::Foreign(_) => {}
     }
     let active = match crate::hooks::orient::git_hooks_dir(root) {
         Ok(Some(active)) => active,
@@ -651,7 +655,7 @@ fn hooks_wiring(root: &Path) -> Wiring {
                 "hook subcommands respond, but the codeflow shims are not git's active hooks (fresh clone?), and the hooks git runs do not call: {}",
                 uncalled.join(", ")
             ),
-            remedy::DOCTOR_HOOKS_PATH.with(&[("hooks", CODEFLOW_HOOKS_PATH)]),
+            remedy::DOCTOR_HOOKS_PATH.remedy(),
         )
     })
 }
@@ -6393,8 +6397,58 @@ mod tests {
         assert_eq!(check_customization(&opts).status, Status::Fail);
     }
 
+    /// ADR-0099: the absolute path of a working tree's managed hooks is the
+    /// wired form, from the main working tree and from a linked one.
     #[test]
-    fn test_check_hooks_passes_when_hookspath_wired() {
+    fn check_hooks_passes_for_the_absolute_managed_form() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("a project");
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "-b", "main"]);
+        write_shims(&root);
+        git(&root, &["add", "-A"]);
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-q",
+                "-m",
+                "chore: init",
+            ],
+        );
+        let value = crate::scaffold::hooks_path::target(&root).unwrap();
+        git(&root, &["config", "core.hooksPath", &value]);
+        let r = check_hooks(&hooks_opts(&root));
+        assert_eq!(r.status, Status::Pass, "got: {}", r.message);
+        let linked = dir.path().join("linked tree");
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feat/x",
+                linked.to_str().unwrap(),
+            ],
+        );
+        let r = check_hooks(&hooks_opts(&linked));
+        assert_eq!(
+            r.status,
+            Status::Pass,
+            "linked worktree, got: {}",
+            r.message
+        );
+    }
+
+    /// ADR-0099: the relative form earlier releases wrote is reported, with
+    /// `codeflow update` as the fix.
+    #[test]
+    fn check_hooks_warns_for_the_relative_form() {
         let dir = tempfile::tempdir().unwrap();
         git(dir.path(), &["init", "-b", "main"]);
         write_shims(dir.path());
@@ -6403,35 +6457,46 @@ mod tests {
             &["config", "core.hooksPath", ".codeflow/git-hooks"],
         );
         let r = check_hooks(&hooks_opts(dir.path()));
-        assert_eq!(r.status, Status::Pass, "got: {}", r.message);
+        assert!(r.status.is_warn(), "got: {}", r.message);
+        assert!(r.message.contains("relative"), "got: {}", r.message);
+        assert!(
+            warn_remedy(&r).contains("codeflow update"),
+            "{}",
+            warn_remedy(&r)
+        );
     }
 
+    /// ADR-0099: an absolute path that no working tree of this repository
+    /// holds (the repository moved, or another repository's hooks) is
+    /// reported, with `codeflow update` as the fix.
     #[test]
-    fn test_check_hooks_warns_when_hookspath_is_absolute() {
+    fn check_hooks_warns_for_a_stale_absolute_path() {
         let dir = tempfile::tempdir().unwrap();
-        git(dir.path(), &["init", "-b", "main"]);
-        write_shims(dir.path());
-        let absolute = dir.path().join(".codeflow/git-hooks");
-        git(
-            dir.path(),
-            &[
-                "config",
-                "core.hooksPath",
-                absolute.to_str().expect("utf-8 path"),
-            ],
-        );
-        let r = check_hooks(&hooks_opts(dir.path()));
+        let before = dir.path().join("before");
+        std::fs::create_dir_all(&before).unwrap();
+        git(&before, &["init", "-b", "main"]);
+        write_shims(&before);
+        let value = crate::scaffold::hooks_path::target(&before).unwrap();
+        git(&before, &["config", "core.hooksPath", &value]);
+        assert_eq!(check_hooks(&hooks_opts(&before)).status, Status::Pass);
+        let after = dir.path().join("after move");
+        std::fs::rename(&before, &after).unwrap();
+        let r = check_hooks(&hooks_opts(&after));
         assert!(r.status.is_warn(), "got: {}", r.message);
+        assert!(r.message.contains("does not reach"), "got: {}", r.message);
         assert!(
-            r.message.contains("absolute"),
-            "expected absolute-path warning, got: {}",
-            r.message
+            warn_remedy(&r).contains("codeflow update"),
+            "{}",
+            warn_remedy(&r)
         );
-        assert!(
-            warn_remedy(&r).contains("git config core.hooksPath .codeflow/git-hooks"),
-            "remedy: {}",
-            r.message
-        );
+        // Another repository's managed hooks are stale here too.
+        let other = tempfile::tempdir().unwrap();
+        git(other.path(), &["init", "-b", "main"]);
+        write_shims(other.path());
+        let foreign = crate::scaffold::hooks_path::target(other.path()).unwrap();
+        git(&after, &["config", "core.hooksPath", &foreign]);
+        let r = check_hooks(&hooks_opts(&after));
+        assert!(r.message.contains("does not reach"), "got: {}", r.message);
     }
 
     #[test]

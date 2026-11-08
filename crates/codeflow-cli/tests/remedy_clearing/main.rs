@@ -2248,14 +2248,11 @@ fn doctor(root: &Path, check: &str) -> String {
 fn clears_doctor_hooks_path() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let absolute = root.join(".codeflow/git-hooks");
-    git(
-        &root,
-        &["config", "core.hooksPath", absolute.to_str().unwrap()],
-    );
+    // The relative form earlier releases wrote (ADR-0099).
+    git(&root, &["config", "core.hooksPath", ".codeflow/git-hooks"]);
     prove(
         "DOCTOR_HOOKS_PATH",
-        "core.hooksPath is absolute",
+        "core.hooksPath is the relative",
         || doctor(&root, "hooks"),
         |printed| {
             let step = printed_command(printed, "DOCTOR_HOOKS_PATH", None);

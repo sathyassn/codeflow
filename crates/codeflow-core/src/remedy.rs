@@ -670,9 +670,11 @@ catalog! {
 
     // Doctor.
 
-    /// Git hooks that do not run the codeflow shims.
-    DOCTOR_HOOKS_PATH = Step::Git("git config"),
-        "run `git config core.hooksPath {hooks}` so git runs the codeflow shims in each worktree";
+    /// Git hooks that do not run the codeflow shims, or a `core.hooksPath`
+    /// CodeFlow wrote in its earlier relative form or that a move left
+    /// stale (ADR-0099).
+    DOCTOR_HOOKS_PATH = Step::Codeflow("codeflow update"),
+        "run `codeflow update` in the project: it sets core.hooksPath to the absolute path of the managed hooks folder, which every worktree of the repository shares";
     /// A project without its codeflow configuration.
     DOCTOR_INIT = Step::Codeflow("codeflow init"),
         "run `codeflow init` in the project root";
@@ -692,7 +694,7 @@ catalog! {
     /// Hooks in the common git dir that git stops running once the codeflow
     /// shims are wired: the adopter's choice; codeflow moves nothing.
     DOCTOR_GIT_DIR_HOOKS = Step::Edit("{path}"),
-        "for each hook named in {path}, choose one: (1) move its check into the project's CI or a supported hook manager (husky, lefthook), then delete the file from {path}; (2) keep it: set core.hooksPath to a project-relative hooks folder the project owns, whose hooks call both the check and the CodeFlow shim (the files in {path} may stay if those hooks call them). This warning then stops. After (2), `codeflow doctor --check hooks` reads that folder instead: it warns until its executable hooks name all five CodeFlow shims, then asks for one refused commit to confirm they run";
+        "for each hook named in {path}, choose one: (1) move its check into the project's CI or a supported hook manager (husky, lefthook), then delete the file from {path}; (2) keep it: set core.hooksPath to the absolute path of a hooks folder the project owns, whose hooks call both the check and the CodeFlow shim (the files in {path} may stay if those hooks call them). This warning then stops. After (2), `codeflow doctor --check hooks` reads that folder instead: it warns until its executable hooks name all five CodeFlow shims, then asks for one refused commit to confirm they run";
     /// Hooks that another harness runs only once approved there.
     DOCTOR_HARNESS_APPROVAL = Step::Codeflow("codeflow doctor"),
         "{step} (an approval inside that harness), then `codeflow doctor --check {check}` confirms it";

@@ -387,10 +387,14 @@ fn fresh_init_empty_dir_bootstrap_grace() {
         .exists());
     assert!(read(&root, ".codeflow/manifest.json").contains("ADR-0001-stack-choice.md"));
 
-    // Hook wiring + exec bit.
+    // Hook wiring + exec bit. ADR-0099: one absolute path to the main
+    // working tree's managed hooks.
     assert_eq!(
         git(&root, &["config", "core.hooksPath"]),
-        ".codeflow/git-hooks"
+        format!(
+            "{}/.codeflow/git-hooks",
+            git(&root, &["rev-parse", "--show-toplevel"])
+        )
     );
     assert!(project_toml.contains("git_hooks = \"wired\""));
     #[cfg(unix)]

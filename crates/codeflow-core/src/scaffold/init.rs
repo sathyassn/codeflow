@@ -329,10 +329,13 @@ fn init_writes(
     // above so the scaffold commit ran with hooks unwired (AC #2).
     match hook_manager {
         None => {
-            gitutil::config_set(root, "core.hooksPath", CODEFLOW_HOOKS_PATH)?;
+            // One absolute path, so git finds the hooks however a command
+            // names the repository (ADR-0099).
+            let hooks = super::hooks_path::target(root)?;
+            gitutil::config_set(root, "core.hooksPath", &hooks)?;
             report.notes.push(shown!(
                 "git hooks wired: core.hooksPath = {}",
-                Shown::fixed(CODEFLOW_HOOKS_PATH)
+                Shown::path(&hooks)
             ));
             // Brownfield choice: hooks git ran from its own folder until now.
             if let Some(found) = detect::git_dir_hooks(root) {

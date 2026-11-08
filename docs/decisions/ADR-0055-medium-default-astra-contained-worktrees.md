@@ -96,3 +96,11 @@ by ADR-0077: that lane is the interactive Codex CLI in a Herdr tab, on the
 app-server when it runs, the plugin an optional fallback and tmux the last
 fallback. Item 3's production modes stand and are stated once in
 `cf-model-orchestrator/resources/routing/transport.md`.
+
+## Note (2026-11-08)
+
+Item 5's two sentences on `core.hooksPath` (the relative path, so each
+worktree uses its own shims, and no machine-absolute hook paths) are
+superseded by ADR-0099: CodeFlow writes one absolute path to the main
+working tree's managed hooks, which every worktree shares. The rest of
+item 5 stands.
