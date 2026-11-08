@@ -254,10 +254,15 @@ pub const SCHEMA: [KeySpec; 83] = [
         valid: LEVEL_VALID,
         purpose: "A pull request review approval or dismissal an agent session makes (git-guard only).",
         notes: "Covers `gh pr review --approve`, and a `gh api` or `curl` request \
-                that posts an `APPROVE` review or event or puts a review \
-                dismissal, whatever token it carries. On when absent. GitHub \
-                still accepts these calls from outside the guard \
-                (docs/github-apps.md).",
+                that approves or dismisses through a REST review endpoint or \
+                GraphQL, with `.` and `..` resolved, whatever token it carries; \
+                also a review or GraphQL request whose body the guard cannot \
+                read, a writing request to an address it cannot settle, and a \
+                `curl` command with `-K`, `--config`, `--variable` or \
+                `--expand-*`. Other clients, such as wget or Python, are not \
+                judged, and GitHub still accepts these calls from outside the \
+                guard (docs/github-apps.md). On when absent. The shipped policy \
+                file does not list it, so an older binary never meets the key.",
     },
     KeySpec {
         path: "git.local_ref_protection",

@@ -85,16 +85,29 @@ Which checks enforce what:
   ([approving a pull request with required reviews](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/approving-a-pull-request-with-required-reviews)).
   With the developer as author, someone else approves where a ruleset needs an
   approval.
-- **Agent sessions never approve or dismiss reviews.** The git guard refuses
-  `gh pr review --approve`, and a `gh api` or `curl` request that posts an
-  `APPROVE` review or event or puts a review dismissal, whatever token the
-  command uses. A REST review request whose body the guard cannot read, such
-  as one from standard input, refuses too. The rule is the policy key
-  `git.pr_review_approval`, on when the key is absent; a project may turn it
-  off. The guard covers only the commands it can parse in a guarded session.
-  GitHub still accepts these calls from outside the guard, from any token with
-  Pull requests write: the PR App's user token, the agent App's installation
-  token and the developer's own login included.
+- **Agent sessions never approve or dismiss reviews.** The rule is the policy
+  key `git.pr_review_approval`, on when the key is absent; a project may turn
+  it off. Whatever token the command uses, the git guard refuses:
+  - `gh pr review --approve`, `-a` included;
+  - a `gh api` or `curl` request that posts an `APPROVE` review or event or
+    puts a review dismissal, through the REST review endpoints or GraphQL.
+    The path is judged after `.` and `..` are resolved, as GitHub resolves
+    them, and a JSON body is judged after its escapes are decoded;
+  - a REST review or GraphQL request whose body the guard cannot read, such
+    as one from standard input or a file it cannot open. A harmless GraphQL
+    query read from standard input refuses too;
+  - a writing request whose address the guard cannot settle: a `..` above the
+    root, a percent escape in the path, or a curl glob (`{}` or `[]`);
+  - every `curl` command that reads a config file or a variable (`-K`,
+    `--config`, `--variable`, `--expand-*`), since the guard does not read
+    them.
+
+  The guard does not judge other clients, such as `wget`, Python or HTTPie,
+  curl's default config file (`.curlrc`), a redirect from another server, or
+  any command it cannot parse, and it covers only a guarded session. GitHub
+  still accepts these calls from outside the guard, from any token with Pull
+  requests write: the PR App's user token, the agent App's installation token
+  and the developer's own login included.
 
 ### Limits where identity checks are off and the agent is not sandboxed
 
