@@ -113,8 +113,8 @@ const RUNTIME_TEXT: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/scaffold/init.rs",
         "init_writes",
         "path",
-        2,
-        "the kept PR template file and the configured git hooks folder",
+        3,
+        "the kept PR template file, the configured git hooks folder and the core.hooksPath value written (TSK-1395)",
     ),
     (
         "crates/codeflow-core/src/scaffold/init.rs",
@@ -276,6 +276,13 @@ const RUNTIME_TEXT: &[(&str, &str, &str, usize, &str)] = &[
         "path",
         1,
         "a manifest destination",
+    ),
+    (
+        "crates/codeflow-core/src/scaffold/update.rs",
+        "migrate_hooks_path",
+        "path",
+        3,
+        "the previous and the new core.hooksPath value (TSK-1395)",
     ),
     (
         "crates/codeflow-core/src/scaffold/update.rs",
