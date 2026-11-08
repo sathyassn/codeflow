@@ -615,54 +615,7 @@ pub fn commit_msg_from(
         push_format_violations(policy, subject, &cleaned, &mut report);
     }
 
-    if policy.commit_description.is_active() {
-        if let Some(reason) =
-            standards::check_subject_length(subject, policy.commit_desc_max_len, u32::MAX)
-        {
-            report.violations.push(Violation::new(
-                "git.commit_description",
-                policy.commit_description,
-                reason,
-                crate::remedy::COMMIT_LENGTH.with(&[
-                    ("description", &policy.commit_desc_max_len.to_string()),
-                    ("subject", &policy.commit_subject_max_len.to_string()),
-                ]),
-            ));
-        }
-    }
-
-    if policy.commit_body.is_active() {
-        if let Some(reason) = standards::check_commit_body(
-            subject,
-            &cleaned,
-            policy.commit_body_max_bullets,
-            policy.commit_body_bullet_max_len,
-            &policy.allowed_footer_tokens(),
-        ) {
-            report.violations.push(Violation::new(
-                "git.commit_body",
-                policy.commit_body,
-                reason,
-                crate::remedy::COMMIT_BODY.with(&[
-                    ("bullets", &policy.commit_body_max_bullets.to_string()),
-                    ("length", &policy.commit_body_bullet_max_len.to_string()),
-                ]),
-            ));
-        }
-    }
-    if policy.commit_footer_required.is_active() {
-        if let Some(reason) =
-            standards::check_required_footers(subject, &cleaned, &policy.commit_required_footers)
-        {
-            report.violations.push(Violation::new(
-                "git.commit_footer_required",
-                policy.commit_footer_required,
-                reason,
-                crate::remedy::COMMIT_REQUIRED_FOOTERS
-                    .with(&[("footers", &policy.commit_required_footers.join(", "))]),
-            ));
-        }
-    }
+    push_style_violations(policy, subject, &cleaned, &mut report);
 
     // Ticket allow-and-require (ADR-0020). Active only when the project has
     // configured ticket keys; the returned level distinguishes a required-but-
@@ -713,6 +666,64 @@ pub fn commit_msg_from(
     }
 
     report
+}
+
+/// The style rules over one commit message: the description limit, the body
+/// shape and the required footers, each at its own policy level (TSK-450).
+fn push_style_violations(
+    policy: &GitPolicy,
+    subject: &str,
+    cleaned: &str,
+    report: &mut StageReport,
+) {
+    if policy.commit_description.is_active() {
+        if let Some(reason) =
+            standards::check_subject_length(subject, policy.commit_desc_max_len, u32::MAX)
+        {
+            report.violations.push(Violation::new(
+                "git.commit_description",
+                policy.commit_description,
+                reason,
+                crate::remedy::COMMIT_LENGTH.with(&[
+                    ("description", &policy.commit_desc_max_len.to_string()),
+                    ("subject", &policy.commit_subject_max_len.to_string()),
+                ]),
+            ));
+        }
+    }
+
+    if policy.commit_body.is_active() {
+        if let Some(reason) = standards::check_commit_body(
+            subject,
+            cleaned,
+            policy.commit_body_max_bullets,
+            policy.commit_body_bullet_max_len,
+            &policy.allowed_footer_tokens(),
+        ) {
+            report.violations.push(Violation::new(
+                "git.commit_body",
+                policy.commit_body,
+                reason,
+                crate::remedy::COMMIT_BODY.with(&[
+                    ("bullets", &policy.commit_body_max_bullets.to_string()),
+                    ("length", &policy.commit_body_bullet_max_len.to_string()),
+                ]),
+            ));
+        }
+    }
+    if policy.commit_footer_required.is_active() {
+        if let Some(reason) =
+            standards::check_required_footers(subject, cleaned, &policy.commit_required_footers)
+        {
+            report.violations.push(Violation::new(
+                "git.commit_footer_required",
+                policy.commit_footer_required,
+                reason,
+                crate::remedy::COMMIT_REQUIRED_FOOTERS
+                    .with(&[("footers", &policy.commit_required_footers.join(", "))]),
+            ));
+        }
+    }
 }
 
 /// The merge ticket rule (`git.commit_ticket_merges`, TSK-1350) over one
