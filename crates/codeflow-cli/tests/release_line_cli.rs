@@ -5176,10 +5176,12 @@ fn a_destination_other_than_the_run_repository_gets_no_token() {
 /// The policy workflow `codeflow init` writes and `codeflow update`
 /// manages; the managed baseline equals this asset byte for byte
 /// (`manifest_consistency`).
+#[cfg(unix)]
 const POLICY_WORKFLOW: &str = include_str!("../../../assets/base/ci/codeflow-policy.yml");
 
 /// The pull request the job judges: number 1, the task branch into line A,
 /// with `main` as the authority.
+#[cfg(unix)]
 struct Pull {
     authority: String,
     base: String,
@@ -5187,6 +5189,7 @@ struct Pull {
 }
 
 /// One run of the managed policy job.
+#[cfg(unix)]
 struct JobRun {
     /// Every step's output, with the values the job masked shown as `***`.
     log: String,
@@ -5204,6 +5207,7 @@ struct JobRun {
 /// The task branch on line A published as pull request 1 on a private-style
 /// origin that serves only a request carrying `FAKE_TOKEN`. Returns the
 /// pull request, the origin's server URL and what the origin receives.
+#[cfg(unix)]
 fn private_pull(fx: &Fx) -> (Pull, String, Requests) {
     // The shared id registry a maintainer seeds once, on the origin.
     let seed = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
@@ -5246,6 +5250,7 @@ fn private_pull(fx: &Fx) -> (Pull, String, Requests) {
 /// rulesets reads get empty lists; the head's check runs and commit
 /// statuses are empty, so no other producer of a trusted name is on it.
 /// Every request's header block is kept in `requests`. Returns its base URL.
+#[cfg(unix)]
 fn api_origin(json: String, requests: Requests) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -5298,6 +5303,7 @@ fn api_origin(json: String, requests: Requests) -> String {
 /// The value of one `${{ expression }}` the job uses, as GitHub fills it
 /// in for this pull request. An expression the model does not know fails
 /// the test, so a template change cannot pass unseen.
+#[cfg(unix)]
 fn expression(
     expr: &str,
     pull: &Pull,
@@ -5326,6 +5332,7 @@ fn expression(
 }
 
 /// `text` with every `${{ ... }}` replaced by `value(expression)`.
+#[cfg(unix)]
 fn substitute(text: &str, value: impl Fn(&str) -> String) -> String {
     let mut out = String::new();
     let mut rest = text;
@@ -5340,6 +5347,7 @@ fn substitute(text: &str, value: impl Fn(&str) -> String) -> String {
 }
 
 /// The variables the runner sets for every step of this job.
+#[cfg(unix)]
 fn runner_env(runner: &Path, server: &str, api: &str, pull: &Pull) -> Vec<(String, String)> {
     let bin = Path::new(env!("CARGO_BIN_EXE_codeflow")).parent().unwrap();
     let event = runner.join("event.json");
@@ -5387,6 +5395,7 @@ fn runner_env(runner: &Path, server: &str, api: &str, pull: &Pull) -> Vec<(Strin
 }
 
 /// A command with only `env` set, as a runner step starts.
+#[cfg(unix)]
 fn step_command(program: &str, env: &[(String, String)], dir: &Path) -> Command {
     let mut command = Command::new(program);
     command
@@ -5400,6 +5409,7 @@ fn step_command(program: &str, env: &[(String, String)], dir: &Path) -> Command 
 /// fetched over HTTP with the run's token for that one fetch, then
 /// `with.ref` detached. A checkout that persists credentials leaves the
 /// header in the checkout's git config, as the action does.
+#[cfg(unix)]
 fn checkout(
     step: &serde_yaml::Value,
     dir: &Path,
@@ -5451,6 +5461,7 @@ fn checkout(
 /// Run one `run:` step as the runner's default bash shell runs it
 /// (`bash --noprofile --norc -eo pipefail`). Returns whether it passed,
 /// its output and the `key=value` lines it wrote to `GITHUB_OUTPUT`.
+#[cfg(unix)]
 fn run_step(
     script: &str,
     env: &[(String, String)],
@@ -5478,6 +5489,7 @@ fn run_step(
 
 /// The step's output as the runner logs it: `::add-mask::` lines add a
 /// mask and are not shown, and every masked value reads `***`.
+#[cfg(unix)]
 fn masked(text: &str, masks: &mut Vec<String>) -> String {
     for line in text.lines() {
         if let Some(value) = line.trim().strip_prefix("::add-mask::") {
@@ -5505,6 +5517,7 @@ fn masked(text: &str, masks: &mut Vec<String>) -> String {
 /// except that `codeflow ci` gets `ci_token` (empty when `None`, as a run
 /// without the token gives it). The install step is not run: it downloads
 /// a release, so the test's own binary is on PATH instead.
+#[cfg(unix)]
 fn run_policy_job(
     fx: &Fx,
     server: &str,
@@ -5613,6 +5626,7 @@ fn run_policy_job(
 }
 
 /// The run's token, raw and as the `Authorization` value carries it.
+#[cfg(unix)]
 fn token_forms() -> [String; 2] {
     let encoded = basic_for(FAKE_TOKEN);
     [
@@ -5621,6 +5635,7 @@ fn token_forms() -> [String; 2] {
     ]
 }
 
+#[cfg(unix)]
 fn carries_token(head: &str) -> bool {
     head.lines()
         .skip(1)
