@@ -2474,6 +2474,10 @@ fn each_guard_alone_refuses_supplied_scripts_and_brace_lists() {
             "parallel sh -c 'git push --no-verify origin {}' :::: refs",
             "parallel 'sh -c \"git push --no-verify origin {}\"' ::: main",
             "parallel -q sh -c 'git push --no-verify origin {}' ::: main",
+            "parallel -I % 'sh -c \"git push --no-verify origin %\"' ::: main",
+            "parallel -q -I % sh -c 'git push --no-verify origin %' ::: main",
+            "parallel --arg-sep %% 'sh -c \"git push --no-verify origin {}\"' %% main",
+            "parallel --arg-sep=%% 'sh -c \"git push --no-verify origin {}\"' %% main",
             "git push --no-verify origin {feat/x,main}",
             "V=main; git push origin {feat/x,$V}",
         ] {

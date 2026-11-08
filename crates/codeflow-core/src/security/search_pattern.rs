@@ -54,9 +54,8 @@
 //! matches the pattern, which a later command on the line may run.
 
 use super::startup::git_subcommand;
-use crate::hooks::git_guard::{
-    basename, command_argv, expand_commands, parallel_template, xargs_command,
-};
+use crate::hooks::git_guard::parallel_options::ParallelCall;
+use crate::hooks::git_guard::{basename, command_argv, expand_commands, xargs_command};
 
 /// One search tool's option grammar.
 struct Grammar {
@@ -734,16 +733,12 @@ fn own_roots(args: &[String], literal: &[bool], configured: bool) -> Option<Vec<
 }
 
 /// GNU `parallel`'s command, as the range of `args` it spans up to its
-/// first input separator, and whether `-q` or `--quote` is given.
+/// first input separator (`:::` or the one an option sets), and whether
+/// `-q` or `--quote` is given.
 fn parallel_command(args: &[String]) -> Option<(usize, usize, bool)> {
-    let (mut start, quoted) = parallel_template(args);
-    if args.get(start).is_some_and(|a| a == "--") {
-        start += 1;
-    }
-    let end = (start..args.len())
-        .find(|at| matches!(args[*at].as_str(), ":::" | ":::+" | "::::" | "::::+"))
-        .unwrap_or(args.len());
-    (start < end).then_some((start, end, quoted))
+    let call = ParallelCall::read(args);
+    let (start, end) = call.command(args);
+    (start < end).then_some((start, end, call.quoted))
 }
 
 /// The commands a `find` runs for its matches, each as the range of

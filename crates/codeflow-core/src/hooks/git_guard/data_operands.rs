@@ -14,13 +14,15 @@
 
 use std::collections::HashMap;
 
+use super::parallel_options::{ParallelCall, Separator};
+
 use super::super::git_target::{expand_word, has_substitution, Cwd, ShellState, Val};
 use super::{
     basename, cd_target, command_argv, command_argv_braces, command_argv_live, configuration_input,
     configuration_launch, expand_shell_commands, expands, flat_top_level, git_program_environment,
-    is_identifier, is_shell, launcher_name, map_top_level, message_values, parallel_template,
-    plain_pushd, quote_words, shell_tokens, shown_word, strip_reserved_words, xargs_command,
-    GIT_BUILTINS, GLOBAL_VALUE_OPTIONS, JUDGED_SUBCOMMANDS, NESTING_UNREAD,
+    is_identifier, is_shell, launcher_name, map_top_level, message_values, plain_pushd,
+    quote_words, shell_tokens, shown_word, strip_reserved_words, xargs_command, GIT_BUILTINS,
+    GLOBAL_VALUE_OPTIONS, JUDGED_SUBCOMMANDS, NESTING_UNREAD,
 };
 
 /// Stands in a word for text that `xargs` or `find` supplies from its
@@ -507,16 +509,7 @@ fn command_data_supplied(
         // `parallel` and `fd -x` put their input in place of a replacement
         // string, or append it, as `xargs` does.
         "parallel" => {
-            if let Some(child) = parallel_data_command(args) {
-                let child = supply(child);
-                command_data_supplied(&child, vars, reader, Some("`parallel`"))
-                    .map_err(supplied)?;
-            }
-            for child in parallel_shell_children(args) {
-                let child = supply(&child);
-                command_data_supplied(&child, vars, reader, Some("`parallel`"))
-                    .map_err(supplied)?;
-            }
+            parallel_data(args, vars, reader)?;
             return Ok(None);
         }
         "fd" | "fdfind" => {
@@ -558,6 +551,25 @@ fn command_data_supplied(
         changed,
         program_filled,
     }))
+}
+
+/// The commands GNU `parallel` runs, read with the input it supplies:
+/// from data, every replacement string; from `:::` words on the line, every
+/// one in a shell script, and in a command run as written one for part of
+/// the input, as the launcher reader puts in only the whole input.
+fn parallel_data(args: &[String], vars: &HashMap<String, Val>, reader: Reader) -> Result<(), Form> {
+    let call = ParallelCall::read(args);
+    if let Some(child) = parallel_data_command(args, &call) {
+        let (child, _) = supply_parallel(child, &call, false);
+        command_data_supplied(&child, vars, reader, Some("`parallel`")).map_err(supplied)?;
+    }
+    for (child, shell) in parallel_line_children(args, &call) {
+        let (child, found) = supply_parallel(&child, &call, !shell);
+        if shell || found {
+            command_data_supplied(&child, vars, reader, Some("`parallel`")).map_err(supplied)?;
+        }
+    }
+    Ok(())
 }
 
 /// Whether the arguments of a program the guard cannot read show that it
@@ -773,77 +785,57 @@ fn xargs_replacement(options: &[String]) -> Option<String> {
     None
 }
 
-/// The commands `find` runs with `-exec`, `-execdir`, `-ok` and `-okdir`.
 /// The command GNU `parallel` runs with words from data: its input, an
 /// `--arg-file` or a `::::` file. `None` when it has no command or its
 /// only inputs are `:::` words on the line, which the launcher reader
 /// judges as written.
-fn parallel_data_command(args: &[String]) -> Option<&[String]> {
-    let (mut start, _) = parallel_template(args);
-    let from_file = args[..start].iter().any(|word| {
-        word == "--arg-file"
-            || word.starts_with("--arg-file=")
-            || (word.starts_with("-a") && !word.starts_with("--"))
-    });
-    if args.get(start).is_some_and(|word| word == "--") {
-        start += 1;
-    }
-    let rest = &args[start..];
-    let end = rest
-        .iter()
-        .position(|word| matches!(word.as_str(), ":::" | ":::+" | "::::" | "::::+"))
-        .unwrap_or(rest.len());
-    let inputs = &rest[end..];
+fn parallel_data_command<'a>(args: &'a [String], call: &ParallelCall) -> Option<&'a [String]> {
+    let (start, end) = call.command(args);
+    let inputs = &args[end..];
     let literal_inputs = !inputs.is_empty()
         && !inputs
             .iter()
-            .any(|word| matches!(word.as_str(), "::::" | "::::+"));
-    (end > 0 && (from_file || !literal_inputs)).then(|| &rest[..end])
+            .any(|word| call.separator(word) == Some(Separator::Files));
+    (end > start && (call.from_file || !literal_inputs)).then(|| &args[start..end])
 }
 
-/// The shells and `eval`s GNU `parallel` runs when its only inputs are
-/// `:::` words on the line, as words: its template as the shell line it
-/// builds (joined, or each word quoted under `-q`). Parallel's own quoting
-/// of an input spliced into a script is not modelled, so the input counts
-/// as supplied there and a replacement string inside the script refuses,
-/// as it does under `find` and `xargs` (TSK-326). Empty when the inputs
-/// come from data, which [`parallel_data_command`] reads.
-fn parallel_shell_children(args: &[String]) -> Vec<Vec<String>> {
-    if parallel_data_command(args).is_some() {
+/// The commands GNU `parallel` runs when its only inputs are `:::` words
+/// on the line, as words, each with whether it is a shell or `eval`: its
+/// template as the shell line it builds (joined, or each word quoted under
+/// `-q`). Parallel's own quoting of an input spliced into a script is not
+/// modelled, so the input counts as supplied there and a replacement string
+/// inside the script refuses, as it does under `find` and `xargs`
+/// (TSK-326). Empty when the inputs come from data, which
+/// [`parallel_data_command`] reads.
+fn parallel_line_children(args: &[String], call: &ParallelCall) -> Vec<(Vec<String>, bool)> {
+    if parallel_data_command(args, call).is_some() {
         return Vec::new();
     }
-    let (mut start, quoted) = parallel_template(args);
-    if args.get(start).is_some_and(|word| word == "--") {
-        start += 1;
-    }
-    let rest = args.get(start..).unwrap_or_default();
-    let end = rest
-        .iter()
-        .position(|word| matches!(word.as_str(), ":::" | ":::+" | "::::" | "::::+"))
-        .unwrap_or(rest.len());
-    if end == 0 {
+    let (start, end) = call.command(args);
+    if end == start {
         return Vec::new();
     }
-    let line = if quoted {
-        quote_words(&rest[..end])
+    let line = if call.quoted {
+        quote_words(&args[start..end])
     } else {
-        rest[..end].join(" ")
+        args[start..end].join(" ")
     };
     let mut children = Vec::new();
     for segment in &expand_shell_commands(&line).segments {
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
-        let runs_shell = configuration_launch(&words).is_some_and(|(program, _)| {
+        let shell = configuration_launch(&words).is_some_and(|(program, _)| {
             let name = basename(program);
             is_shell(name) || name == "eval"
         });
-        if runs_shell {
-            children.push(mark_text(
+        children.push((
+            mark_text(
                 &words,
                 &command_argv_live(segment),
                 &command_argv_braces(segment),
-            ));
-        }
+            ),
+            shell,
+        ));
     }
     children
 }
@@ -901,6 +893,93 @@ fn supply(child: &[String]) -> Vec<String> {
     out
 }
 
+/// `child` with each replacement string GNU `parallel` fills in marked as
+/// supplied input, and whether one was found; with none, the input is
+/// appended, as `parallel` does. A replacement string is the one an option
+/// sets ([`ParallelCall`]), or a brace group: `{}` and its variants such as
+/// `{.}`, `{1}`, `{-1}` and `{1 /}`, a `{= ... =}` expression, and with
+/// `--plus` or `--rpl` any group. A group after `$` is shell syntax unless
+/// it holds only a variant's characters. With `part`, only the strings for
+/// part of the input are marked, not the whole input (`{}` or the one `-I`
+/// sets), and nothing is appended.
+fn supply_parallel(child: &[String], call: &ParallelCall, part: bool) -> (Vec<String>, bool) {
+    let mut tokens: Vec<&str> = call.derived.iter().map(String::as_str).collect();
+    if !part {
+        tokens.extend(call.whole.as_deref());
+    }
+    tokens.sort_by_key(|token| std::cmp::Reverse(token.len()));
+    let mut found = false;
+    let mut out: Vec<String> = child
+        .iter()
+        .map(|word| {
+            let mut word = word.clone();
+            for token in &tokens {
+                // A `$` or backtick in the token may stand marked as text.
+                let marked = token
+                    .replace('$', &TEXT_DOLLAR.to_string())
+                    .replace('`', &TEXT_BACKTICK.to_string());
+                for token in [token.to_string(), marked] {
+                    if word.contains(&token) {
+                        word = word.replace(&token, &SUPPLIED.to_string());
+                        found = true;
+                    }
+                }
+            }
+            let mut text = String::new();
+            let mut rest = word.as_str();
+            while let Some(open) = rest.find('{') {
+                let before = &rest[..open];
+                text.push_str(before);
+                let after = &rest[open + 1..];
+                let group = after
+                    .find('}')
+                    .map(|close| &after[..close])
+                    .filter(|inner| !inner.contains('{'));
+                let shell = before.ends_with('$') || before.ends_with(TEXT_DOLLAR);
+                match group {
+                    Some(inner) if parallel_group(inner, call.wide, shell, part) => {
+                        text.push(SUPPLIED);
+                        found = true;
+                        rest = &after[inner.len() + 1..];
+                    }
+                    _ => {
+                        text.push('{');
+                        rest = after;
+                    }
+                }
+            }
+            text.push_str(rest);
+            text
+        })
+        .collect();
+    if !found && !part {
+        out.push(SUPPLIED.to_string());
+    }
+    (out, found)
+}
+
+/// Whether `{inner}` is a replacement string GNU `parallel` fills in; see
+/// [`supply_parallel`].
+fn parallel_group(inner: &str, wide: bool, after_dollar: bool, part: bool) -> bool {
+    if part && inner.is_empty() {
+        return false;
+    }
+    let variant = inner
+        .chars()
+        .all(|c| matches!(c, '.' | '/' | '#' | '%' | '+' | '-' | '0'..='9'));
+    if after_dollar {
+        return variant;
+    }
+    let positional = inner
+        .trim_start_matches('-')
+        .starts_with(|c: char| c.is_ascii_digit());
+    wide || variant
+        || positional
+        || inner.starts_with('=')
+        || !inner.chars().any(char::is_whitespace)
+}
+
+/// The commands `find` runs with `-exec`, `-execdir`, `-ok` and `-okdir`.
 fn find_commands(args: &[String]) -> Vec<&[String]> {
     args.iter()
         .enumerate()

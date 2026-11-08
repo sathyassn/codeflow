@@ -3956,6 +3956,37 @@ mod tests {
         }
     }
 
+    /// TSK-326 delta review 2 F1: a replacement string or an input
+    /// separator `parallel` takes from an option is read in every spelling,
+    /// so a shell template that uses it refuses.
+    #[test]
+    fn parallel_custom_replacements_and_separators_refuse() {
+        for command in [
+            "parallel -I % 'sh -c \"git push --no-verify origin %\"' ::: main",
+            "parallel -q -I % sh -c 'git push --no-verify origin %' ::: main",
+            "parallel --arg-sep %% 'sh -c \"git push --no-verify origin {}\"' %% main",
+            "parallel --arg-sep=%% 'sh -c \"git push --no-verify origin {}\"' %% main",
+            "parallel --arg-sep=%% sh -c 'git push --no-verify origin {}' %% main",
+            "parallel --replace=% 'sh -c \"git push origin %\"' ::: main",
+            "parallel -qI % sh -c 'git push origin %' ::: main",
+            "parallel --bnr % 'sh -c \"git push origin %\"' ::: x/main",
+        ] {
+            let found = evaluate(command, &SecuritySection::default());
+            assert!(
+                found.iter().any(|v| v.rule == "security.outward_actions"
+                    && v.message.contains("filled in at run time")),
+                "{command}: refused as unresolved: {found:?}"
+            );
+        }
+        for command in [
+            "parallel -I % git push origin % ::: feat/x",
+            "parallel -q -I % sh -c 'git log' ::: a",
+        ] {
+            let found = evaluate(command, &SecuritySection::default());
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
     /// TSK-326 review F3: an unquoted brace list or sequence in a git word
     /// exec-guard judges refuses as unresolved; a quoted brace is text.
     #[test]

@@ -28,6 +28,7 @@ use crate::root_checkout::RootCheckout;
 
 pub(crate) mod data_operands;
 pub(crate) mod line_home;
+pub(crate) mod parallel_options;
 mod runners;
 
 /// Resolves a `gh pr merge <target>` argument (a PR number, URL, or branch;
@@ -7937,82 +7938,31 @@ fn watch_command(args: &[String]) -> Option<String> {
     (!words.is_empty()).then(|| words.join(" "))
 }
 
-/// The commands `parallel` runs: its command template, and the template
-/// with each `:::` input, quoted as one word, put in for `{}` or after it;
-/// with no template,
-/// each input is a command. moreutils' `parallel CMD -- ARGS` reads the
-/// same way. `::::` names input files, which the guard cannot read.
-/// The options GNU `parallel` reads a value for, as a separate word.
-const PARALLEL_VALUED: &[&str] = &[
-    "-j",
-    "-P",
-    "-S",
-    "-a",
-    "-d",
-    "-E",
-    "-I",
-    "-N",
-    "-n",
-    "-L",
-    "-l",
-    "-s",
-    "-C",
-    "--jobs",
-    "--sshlogin",
-    "--arg-file",
-    "--delimiter",
-    "--colsep",
-    "--max-args",
-    "--max-lines",
-    "--max-chars",
-    "--tmpdir",
-    "--results",
-    "--joblog",
-    "--timeout",
-    "--delay",
-    "--retries",
-    "--tagstring",
-    "--workdir",
-    "--wd",
-    "--basefile",
-    "--return",
-    "--halt",
-    "--memfree",
-    "--load",
-    "--block",
-    "--sshloginfile",
-    "--env",
-];
-
-/// A GNU `parallel` input separator, or the `--` that ends its options.
-fn parallel_separator(word: &str) -> bool {
-    matches!(word, ":::" | ":::+" | "::::" | "::::+" | "--")
-}
-
 /// Where GNU `parallel`'s command template starts in `args`, after its
-/// options, and whether `-q` or `--quote` is given, so the template's
-/// words reach the command as written rather than through a shell.
-pub(crate) fn parallel_template(args: &[String]) -> (usize, bool) {
-    let mut at = 0;
-    let mut quoted = false;
-    while let Some(a) = args.get(at).map(String::as_str) {
-        if parallel_separator(a) || !a.starts_with('-') || a.len() < 2 {
-            break;
-        }
-        quoted |= matches!(a, "-q" | "--quote");
-        at += 1 + usize::from(PARALLEL_VALUED.contains(&a));
-    }
-    (at.min(args.len()), quoted)
+/// options and a `--`, and whether `-q` or `--quote` is given, so the
+/// template's words reach the command as written rather than through a
+/// shell. The options are read as `parallel` reads them
+/// ([`parallel_options::ParallelCall`]).
+fn parallel_template(args: &[String]) -> (usize, bool) {
+    let call = parallel_options::ParallelCall::read(args);
+    (call.template, call.quoted)
 }
 
+/// The commands `parallel` runs: its command template, and the template
+/// with each `:::` input (or the separator an option sets), quoted as one
+/// word, put in for the replacement string or after it; with no template,
+/// each input is a command. moreutils' `parallel CMD -- ARGS` reads the
+/// same way. `::::` names input files, which the guard cannot read. A
+/// replacement string for part of the input is judged by the data reader.
 fn parallel_commands(args: &[String]) -> Vec<String> {
-    let separator = parallel_separator;
-    let (at, quoted) = parallel_template(args);
-    let rest = args.get(at..).unwrap_or_default();
+    use parallel_options::{ParallelCall, Separator};
+    let call = ParallelCall::read(args);
+    let separator = |word: &str| call.separator(word).is_some() || word == "--";
+    let rest = args.get(call.template..).unwrap_or_default();
     let end = rest.iter().position(|w| separator(w)).unwrap_or(rest.len());
     // With `-q` each word of the command reaches it as written; without,
     // parallel joins them into a shell line.
-    let template = if quoted {
+    let template = if call.quoted {
         quote_words(&rest[..end])
     } else {
         rest[..end].join(" ")
@@ -8021,7 +7971,7 @@ fn parallel_commands(args: &[String]) -> Vec<String> {
     let mut files = false;
     for word in &rest[end..] {
         if separator(word) {
-            files = word.starts_with("::::");
+            files = call.separator(word) == Some(Separator::Files);
         } else if !files {
             inputs.push(word.as_str());
         }
@@ -8029,12 +7979,13 @@ fn parallel_commands(args: &[String]) -> Vec<String> {
     if template.is_empty() {
         return inputs.into_iter().map(str::to_string).collect();
     }
+    let token = call.whole.as_deref().unwrap_or("{}");
     let mut commands = vec![template.clone()];
     for input in inputs {
         // parallel quotes an input it puts into the template.
         let input = quote_words(&[input.to_string()]);
-        commands.push(if template.contains("{}") {
-            template.replace("{}", &input)
+        commands.push(if template.contains(token) {
+            template.replace(token, &input)
         } else {
             format!("{template} {input}")
         });
@@ -16116,6 +16067,63 @@ mod tests {
             "parallel git push origin ::: feat/x",
             "parallel -q sh -c 'git log' ::: a",
             "parallel 'echo {}' ::: a",
+        ] {
+            let found = evaluate(command, &ctx(&policy, "feat/x"));
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
+    /// TSK-326 delta review 2 F1: `parallel`'s options are read as GNU
+    /// `parallel` reads them, so a replacement string or an input separator
+    /// set by an option is the one judged, in every spelling.
+    #[test]
+    fn parallel_custom_replacements_and_separators_refuse() {
+        let refused = [
+            "parallel -I % 'sh -c \"git push --no-verify origin %\"' ::: main",
+            "parallel -q -I % sh -c 'git push --no-verify origin %' ::: main",
+            "parallel --arg-sep %% 'sh -c \"git push --no-verify origin {}\"' %% main",
+            "parallel --arg-sep=%% 'sh -c \"git push --no-verify origin {}\"' %% main",
+            "parallel --arg-sep=%% sh -c 'git push --no-verify origin {}' %% main",
+            "parallel -I% 'sh -c \"git push origin %\"' ::: main",
+            "parallel -qI % sh -c 'git push origin %' ::: main",
+            "parallel --replace % 'sh -c \"git push origin %\"' ::: main",
+            "parallel --replace=% 'sh -c \"git push origin %\"' ::: main",
+            "parallel -i% 'sh -c \"git push origin %\"' ::: main",
+            "parallel --er % 'sh -c \"git push origin %\"' ::: main.x",
+            "parallel --rpl '%% s/x//' 'sh -c \"git push origin %%\"' ::: mainx",
+            "parallel --argsep %% 'sh -c \"git push origin {}\"' %% main",
+            "parallel --arg-s %% 'sh -c \"git push origin {}\"' %% main",
+            "parallel 'sh -c \"git push origin {-1}\"' ::: main",
+            "parallel git push --no-verify origin {.} ::: main.x",
+            "parallel -q --bnr % git push origin HEAD:% ::: x/main",
+        ];
+        let policy = data_policy();
+        for command in refused {
+            let found = evaluate(command, &ctx(&policy, "feat/x"));
+            assert!(
+                found
+                    .iter()
+                    .any(|v| v.message.contains("filled in at run time")),
+                "{command}: refused as unresolved: {found:?}"
+            );
+        }
+        let p = default_policy();
+        for command in refused.iter().chain(&[
+            "parallel --arg-sep %% git push --no-verify origin {} %% main",
+            "parallel --delim , git push --no-verify origin {} ::: main",
+            "parallel -I % git push --no-verify origin % ::: main",
+        ]) {
+            let found = evaluate(command, &ctx(&p, "feat/x"));
+            assert!(
+                found.iter().any(|v| v.rule == "git.push_to_protected"
+                    || v.message.contains("filled in at run time")),
+                "{command}: {found:?}"
+            );
+        }
+        for command in [
+            "parallel -I % git push origin % ::: feat/x",
+            "parallel --arg-sep %% git push origin {} %% feat/x",
+            "parallel -q -I % sh -c 'git log' ::: a",
         ] {
             let found = evaluate(command, &ctx(&policy, "feat/x"));
             assert!(found.is_empty(), "{command}: {found:?}");

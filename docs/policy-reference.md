@@ -1727,9 +1727,14 @@ checked, so a symlink does not remove the target owner's protection.
   guard cannot read (a file, standard input, a variable), refuse as well,
   so pass the input as `sh -c '... "$1"' _ {}` with a literal script.
   This holds when `parallel` takes its input from `:::` words on the line:
-  the template is read as the shell line it builds, and a shell or `eval`
-  there takes the input as supplied. A template with no shell is judged
-  with the input as written. An
+  its options are read as `parallel` reads them (abbreviated, bundled or
+  with an attached value), the template is read as the shell line it
+  builds, and a shell or `eval` there takes the input as supplied through
+  every replacement string, one an option sets (`-I`, `--replace`,
+  `--extensionreplace` and its siblings, `--rpl`) included, with the input
+  separator an option sets (`--arg-sep`, `--arg-file-sep`). A template with
+  no shell is judged with the whole input as written; a replacement string
+  for part of the input (`{.}`, `{/}`, `{1}`) counts as supplied. An
   unquoted brace list or sequence (`{feat/x,main}`, `{1..3}`) in a judged
   git word refuses too, since the shell makes it several words; a quoted
   or escaped brace is text. Such a word in the program position (`$V push
