@@ -621,8 +621,9 @@ fn the_grant_check_passes_the_exact_grant() {
     assert_eq!(check(&github), Ok(()));
 }
 
-/// AC-18: any other permission, a missing one, a higher level, or another
-/// App's ids refuses, naming what differs and the installation's page.
+/// AC-18: any other permission, a missing one, a higher level, a second
+/// installation with Contents write, or another App's ids refuses, naming
+/// what differs and the installation's page.
 #[test]
 fn the_grant_check_refuses_any_other_grant() {
     for (permissions, said) in [
@@ -676,6 +677,41 @@ fn the_grant_check_refuses_any_other_grant() {
         "{error}"
     );
     assert!(!error.contains("installation 11"), "{error}");
+    // A second installation of the same App with Contents write refuses,
+    // though the first is exact and holds the repository.
+    let github = FakeGitHub::empty()
+        .installations(&[
+            installation(11, &perms()),
+            installation(
+                12,
+                &json!({"contents": "write", "metadata": "read", "pull_requests": "write"}),
+            ),
+        ])
+        .repositories(11, &[repo(42, "o/r")]);
+    let error = check(&github).unwrap_err();
+    assert!(
+        error.contains("installation 12 (https://github.com/settings/installations/12): contents write, not read"),
+        "{error}"
+    );
+    assert!(!error.contains("installation 11"), "{error}");
+    // The App id alone, and the client id alone, differing each refuse.
+    for (field, value, said) in [
+        ("app_id", json!(8), "App id 8, not 7"),
+        (
+            "client_id",
+            json!("Iv23other"),
+            "client id Iv23other, not Iv23client",
+        ),
+    ] {
+        let mut differs = installation(11, &perms());
+        differs[field] = value;
+        let github = FakeGitHub::empty()
+            .installations(&[differs])
+            .repositories(11, &[repo(42, "o/r")]);
+        let error = check(&github).unwrap_err();
+        assert!(error.contains(said), "{field}: {error}");
+        assert!(error.contains("no token was printed"), "{field}: {error}");
+    }
     // No installation at all.
     let error = check(&FakeGitHub::empty().installations(&[])).unwrap_err();
     assert!(error.contains("installed nowhere"), "{error}");
