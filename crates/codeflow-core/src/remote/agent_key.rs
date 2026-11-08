@@ -1721,14 +1721,14 @@ pub(crate) mod tests {
         assert!(line.ends_with('\n') && line.matches('\n').count() == 1);
     }
 
-    /// AC-13: a renewed grant replaces the entry in place (`-U`), under the
+    /// AC-17: a renewed grant replaces the entry in place (`-U`), under the
     /// service it is given; a first store does not.
     #[test]
     fn keychain_line_replaces_only_when_asked() {
-        let line = keychain_add_line("codeflow-agent-user", "o/r", "{}", None, true);
+        let line = keychain_add_line("codeflow-pr-user", "o/r", "{}", None, true);
         assert!(
             line.starts_with(
-                "add-generic-password -s codeflow-agent-user -a o/r -l codeflow-agent-user -U -X "
+                "add-generic-password -s codeflow-pr-user -a o/r -l codeflow-pr-user -U -X "
             ),
             "{line}"
         );
@@ -1750,7 +1750,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// AC-13: the OAuth form holds a device code or a refresh token, so it
+    /// AC-17: the OAuth form holds a device code or a refresh token, so it
     /// goes on standard input and never into the argument list `ps` shows.
     #[test]
     fn oauth_command_carries_no_form_value() {
@@ -1773,7 +1773,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// AC-13: the real curl posts the form from standard input and reads
+    /// AC-17: the real curl posts the form from standard input and reads
     /// GitHub's status and body, a 4xx included, from a local listener.
     #[cfg(unix)]
     #[test]

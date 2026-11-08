@@ -99,7 +99,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     (
         "codeflow-core/src/remote/user_token.rs",
         "github.com",
-        "production constants naming GitHub's OAuth device code and token endpoints for agent-login, not test remotes; its tests use a fake OAuth client that never opens a connection",
+        "production constants naming GitHub's OAuth device code and token endpoints for pr-login and pr-token, not test remotes; its tests use a fake OAuth client that never opens a connection",
     ),
     (
         "codeflow-core/src/scaffold/release_pin.rs",

@@ -1,8 +1,9 @@
-//! `codeflow remote setup-apps`: create the authority and agent GitHub Apps
-//! from their manifests, the `codeflow-authority` environment restricted to
-//! the default branch with the authority App's key secret and id variable,
-//! and keep the agent App's key in this computer's credential store
-//! (TSK-1348, ADR-0091 Mode A).
+//! `codeflow remote setup-apps`: create the authority, agent and PR GitHub
+//! Apps from their manifests, the `codeflow-authority` environment restricted
+//! to the default branch with the authority App's key secret and id variable,
+//! keep the agent App's key in this computer's credential store, and record
+//! the PR App's ids, none secret, in a repository variable (TSK-1348,
+//! ADR-0091 Mode A). The agent and PR Apps are each optional.
 //!
 //! Every host write runs under the administrator's own `gh` login. The run
 //! refuses a GitHub App installation token and a token without
@@ -13,7 +14,9 @@
 //!
 //! Private keys never reach a file: the authority key goes to `gh secret
 //! set` on standard input, and the agent key to the credential store on
-//! standard input ([`super::agent_key`]).
+//! standard input ([`super::agent_key`]). The PR App's key, client secret and
+//! webhook secret are dropped once its webhook is checked: the PR App is used
+//! only through the device flow ([`super::user_token`]).
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write as _};
@@ -36,32 +39,50 @@ pub const AUTHORITY_ENVIRONMENT: &str = "codeflow-authority";
 pub const AUTHORITY_KEY_SECRET: &str = "CODEFLOW_AUTHORITY_APP_KEY";
 /// The environment variable holding the authority App's id.
 pub const AUTHORITY_ID_VARIABLE: &str = "CODEFLOW_AUTHORITY_APP_ID";
+/// The repository variable holding the PR App's slug, id and client id, none
+/// of them secret, so a rerun finds the App and never creates a second.
+pub const PR_APP_VARIABLE: &str = "CODEFLOW_PR_APP";
 /// GitHub's limit on an App name's length.
 pub const APP_NAME_LIMIT: usize = 34;
 
 const AUTHORITY_MANIFEST: &str = include_str!("../../../../assets/base/ci/apps/authority-app.json");
 const AGENT_MANIFEST: &str = include_str!("../../../../assets/base/ci/apps/agent-app.json");
+const PR_MANIFEST: &str = include_str!("../../../../assets/base/ci/apps/pr-app.json");
 
 /// A `gh` call: arguments and optional standard input, answering standard
 /// output or the text of a failure.
 pub type Gh<'a> = &'a dyn Fn(&[&str], Option<&str>) -> Result<String, String>;
 
-/// Which of the two Apps.
+/// Which of the three Apps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AppKind {
     /// Checks write only; creates the `authority:` check runs.
     Authority,
     /// Contents and Pull requests write only; the agent sessions' identity.
     Agent,
+    /// Pull requests write and Contents read only; used through the device
+    /// flow so a pull request shows the developer as author.
+    Pr,
 }
 
 impl AppKind {
-    /// "authority" or "agent".
+    /// "authority", "agent" or "PR", for messages.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Authority => "authority",
             Self::Agent => "agent",
+            Self::Pr => "PR",
+        }
+    }
+
+    /// "authority", "agent" or "pr", for names, flags and files.
+    #[must_use]
+    pub fn name_part(self) -> &'static str {
+        match self {
+            Self::Authority => "authority",
+            Self::Agent => "agent",
+            Self::Pr => "pr",
         }
     }
 
@@ -69,6 +90,7 @@ impl AppKind {
         match self {
             Self::Authority => AUTHORITY_MANIFEST,
             Self::Agent => AGENT_MANIFEST,
+            Self::Pr => PR_MANIFEST,
         }
     }
 }
@@ -147,6 +169,8 @@ pub struct Target {
     pub private: bool,
     /// The login `gh` acts as.
     pub login: String,
+    /// The repository's id, as GitHub returned it, when it did.
+    pub repository_id: Option<u64>,
 }
 
 impl Target {
@@ -234,6 +258,10 @@ pub struct SetupOptions {
     pub agent_name: Option<String>,
     /// Whether to set up the agent App.
     pub agent: bool,
+    /// The PR App's name; default `codeflow-pr-<repo>`.
+    pub pr_name: Option<String>,
+    /// Whether to set up the PR App.
+    pub pr: bool,
 }
 
 /// One write made on the host or in the credential store, with what undoes
@@ -335,6 +363,17 @@ fn run_setup(
     } else {
         None
     };
+    let pr_name = if options.pr {
+        if target.repository_id.is_none() {
+            return Err(format!(
+                "cannot set up the PR App: GitHub's answer for {} gave no repository id",
+                target.repository
+            ));
+        }
+        Some(app_name(AppKind::Pr, options.pr_name.as_deref(), &target)?)
+    } else {
+        None
+    };
     environment(gh, &target, report)?;
     authority(gh, browser, auth, &target, &authority_name, report)?;
     match agent_name {
@@ -343,7 +382,39 @@ fn run_setup(
             .lines
             .push("agent App: not set up (--no-agent)".to_string()),
     }
+    match pr_name {
+        Some(name) => pr_app(gh, browser, auth, &target, &name, report)?,
+        None => report
+            .lines
+            .push("PR App: not set up (--no-pr-app)".to_string()),
+    }
+    report
+        .lines
+        .extend(token_lines(&target, options.agent, options.pr));
     Ok(())
+}
+
+/// Which token an agent session uses for each act in this set-up (AC-3).
+/// Pull request authorship follows the token that opens the pull request.
+fn token_lines(target: &Target, agent: bool, pr: bool) -> [String; 3] {
+    let repository = &target.repository;
+    let pull_requests = if pr {
+        format!("the PR App's user access token, `GH_TOKEN=$(codeflow remote pr-token --repo {repository})`, so the developer is the author")
+    } else if agent {
+        "the agent App's installation token, `GH_TOKEN=$(codeflow remote agent-token)`, so the App's bot is the author".to_string()
+    } else {
+        "the developer's own `gh` login, so the developer is the author".to_string()
+    };
+    let pushes = if agent {
+        "the agent App's installation token, `codeflow remote agent-token` (`--git-credential` as git's credential helper)"
+    } else {
+        "the developer's own git credentials"
+    };
+    [
+        "tokens agent sessions use:".to_string(),
+        format!("  open and edit pull requests: {pull_requests}"),
+        format!("  push, read and act as git's credential helper: {pushes}"),
+    ]
 }
 
 /// The App's name: the one given, or `codeflow-<kind>-<repo>`, checked
@@ -351,10 +422,10 @@ fn run_setup(
 fn app_name(kind: AppKind, given: Option<&str>, target: &Target) -> Result<String, String> {
     let repo = target.repository.split('/').nth(1).unwrap_or_default();
     let name = given.map_or_else(
-        || format!("codeflow-{}-{}", kind.label(), repo.to_lowercase()),
+        || format!("codeflow-{}-{}", kind.name_part(), repo.to_lowercase()),
         str::to_string,
     );
-    let flag = format!("--{}-name", kind.label());
+    let flag = format!("--{}-name", kind.name_part());
     if name.is_empty() || name.chars().count() > APP_NAME_LIMIT {
         return Err(format!(
             "refused: the {} App's name '{name}' is not 1 to {APP_NAME_LIMIT} characters, GitHub's limit; choose one with {flag}",
@@ -462,6 +533,7 @@ fn preflight(gh: Gh<'_>) -> Result<Target, String> {
     Ok(Target {
         organization: repo.pointer("/owner/type").and_then(Value::as_str) == Some("Organization"),
         private: repo.get("private").and_then(Value::as_bool).unwrap_or(true),
+        repository_id: repo.get("id").and_then(Value::as_u64),
         repository,
         owner,
         default_branch,
@@ -1246,9 +1318,6 @@ fn existing_agent(
             store.describe(),
             app.slug
         ));
-        report
-            .lines
-            .extend(person_authorship_lines(target, &app.slug));
         report_committer(auth, &app.slug, report);
         Ok(())
     } else {
@@ -1305,28 +1374,207 @@ fn agent(
         app.id,
         install_url(&app.slug)
     ));
-    report
-        .lines
-        .extend(person_authorship_lines(target, &app.slug));
     report_committer(auth, &app.slug, report);
     Ok(())
 }
 
-/// How agent pull requests get the developer as author: the device flow
-/// click a manifest cannot make, then each developer's one login (TSK-1348
-/// AC-15). GitHub's manifest parameters include no device flow setting, so
-/// the click is named with its page rather than made.
-fn person_authorship_lines(target: &Target, slug: &str) -> [String; 2] {
-    [
+/// The PR App as [`PR_APP_VARIABLE`] records it.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PrRecord {
+    slug: String,
+    app_id: u64,
+    client_id: String,
+}
+
+/// The PR App: created once, its key, client secret and webhook secret
+/// dropped, its ids recorded in [`PR_APP_VARIABLE`] (TSK-1348 AC-16). A run
+/// that finds the variable creates nothing.
+fn pr_app(
+    gh: Gh<'_>,
+    browser: &mut dyn ManifestBrowser,
+    auth: &AppAuth<'_>,
+    target: &Target,
+    name: &str,
+    report: &mut SetupReport,
+) -> Result<(), String> {
+    let repository = &target.repository;
+    let variables = format!("repos/{repository}/actions/variables");
+    let variable = format!("{variables}/{PR_APP_VARIABLE}");
+    match gh(&["api", &variable], None) {
+        Ok(text) => return existing_pr(gh, target, &text, &variable, report),
+        Err(error) if status_is_404(&error) => {}
+        Err(error) => {
+            return Err(format!(
+                "cannot read the repository variable {PR_APP_VARIABLE}: {}",
+                first_line(&error)
+            ))
+        }
+    }
+    let Converted {
+        id,
+        slug,
+        client_id,
+        pem,
+    } = create_app(gh, browser, auth, target, AppKind::Pr, name, report)?;
+    // Used only for the webhook check inside `create_app`; never kept.
+    drop(pem);
+    let record = serde_json::to_string(&PrRecord {
+        slug: slug.clone(),
+        app_id: id,
+        client_id: client_id.clone(),
+    })
+    .map_err(|error| format!("cannot encode the PR App's ids: {error}"))?;
+    let body = json!({"name": PR_APP_VARIABLE, "value": record});
+    gh(
+        &["api", "-X", "POST", &variables, "--input", "-"],
+        Some(&body.to_string()),
+    )
+    .map_err(|error| {
         format!(
-            "one more click for the agent App: on its settings page ({}), under \"Identifying and authorizing users\", select \"Enable Device Flow\" and save; a GitHub App manifest cannot turn it on",
+            "the PR App {slug} was created, but the repository variable {PR_APP_VARIABLE} could not be stored ({}), so a rerun cannot find it; set it with `gh variable set {PR_APP_VARIABLE} --repo {repository} --body '{record}'`",
+            first_line(&error)
+        )
+    })?;
+    report.writes.push(HostWrite {
+        what: format!(
+            "recorded the PR App's slug, id and client id as the repository variable {PR_APP_VARIABLE}"
+        ),
+        undo: format!("gh api -X DELETE {variable}"),
+    });
+    report.lines.push(format!(
+        "PR App {slug} (id {id}) created; install it on {repository} only (\"Only select repositories\"): {}",
+        install_url(&slug)
+    ));
+    report.lines.push(
+        "GitHub keeps a private key on the PR App that CodeFlow never stored; the key, client secret and webhook secret GitHub returned were dropped, because the PR App is used only through the device flow"
+            .to_string(),
+    );
+    report
+        .lines
+        .extend(pr_login_lines(target, &slug, id, &client_id)?);
+    Ok(())
+}
+
+/// The device flow click a manifest cannot make, then each developer's one
+/// `pr-login` with the ids GitHub returned (AC-16). GitHub's manifest
+/// parameters include no device flow setting, so the click is named with its
+/// page rather than made.
+fn pr_login_lines(
+    target: &Target,
+    slug: &str,
+    app_id: u64,
+    client_id: &str,
+) -> Result<[String; 2], String> {
+    let repository_id = target.repository_id.ok_or_else(|| {
+        format!(
+            "GitHub's answer for {} gave no repository id",
+            target.repository
+        )
+    })?;
+    let app = super::user_token::PrApp {
+        slug: slug.to_string(),
+        app_id,
+        client_id: client_id.to_string(),
+        repository_id,
+    };
+    Ok([
+        format!(
+            "one more click for the PR App: on its settings page ({}), under \"Identifying and authorizing users\", select \"Enable Device Flow\" and save; a GitHub App manifest cannot turn it on",
             target.app_page_url(slug, "")
         ),
         format!(
-            "then each developer runs `codeflow remote agent-login --repo {}` once; agent sessions open pull requests with `GH_TOKEN=$(codeflow remote agent-token --user)`, so the developer is the author, and push with the installation token from `codeflow remote agent-token`",
-            target.repository
+            "then each developer runs `{}` once",
+            app.login_line(&target.repository)
         ),
-    ]
+    ])
+}
+
+/// A PR App already recorded in [`PR_APP_VARIABLE`]: it counts as set up when
+/// GitHub shows it with the recorded id and client id, the manifest's
+/// permissions and no events. A 404, which a private App and a deleted one
+/// both give, is reported as present but not verified; nothing is created.
+fn existing_pr(
+    gh: Gh<'_>,
+    target: &Target,
+    text: &str,
+    variable: &str,
+    report: &mut SetupReport,
+) -> Result<(), String> {
+    let replace = format!(
+        "to set it up again, delete that App, then `gh api -X DELETE {variable}`, and run again"
+    );
+    let record = serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("value")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .and_then(|value| serde_json::from_str::<PrRecord>(&value).ok())
+        .filter(|record| !record.slug.is_empty() && !record.client_id.is_empty());
+    let Some(PrRecord {
+        slug,
+        app_id,
+        client_id,
+    }) = record
+    else {
+        return Err(format!(
+            "the PR App is not fully set up; present: the repository variable {PR_APP_VARIABLE}; missing: a slug, id and client id it can be read as; {replace}"
+        ));
+    };
+    match lookup_app(gh, AppKind::Pr, &slug) {
+        AppLookup::Shown(app) => {
+            let mut problems = app_problems(AppKind::Pr, &slug, Some(app_id), &app);
+            if let Some(shown) = app.get("client_id").and_then(Value::as_str) {
+                if shown != client_id {
+                    problems.push(format!(
+                        "the PR App {slug} with the client id kept here ({client_id}; GitHub shows {shown})"
+                    ));
+                }
+            }
+            if !problems.is_empty() {
+                return Err(format!(
+                    "the PR App is not fully set up; present: {PR_APP_VARIABLE} naming {slug}; missing: {}; {replace}",
+                    problems.join(", ")
+                ));
+            }
+            report.lines.push(format!(
+                "PR App: already set up ({PR_APP_VARIABLE} and the PR App {slug} as the manifest asks), nothing created; {replace}"
+            ));
+        }
+        AppLookup::NotShown => {
+            let permissions = expected_permissions(AppKind::Pr)?
+                .iter()
+                .map(|(name, level)| format!("{name} {level}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            report.lines.extend([
+                "PR App: present but not verified, nothing created".to_string(),
+                format!(
+                    "  checked: the repository variable {PR_APP_VARIABLE} ({slug}, id {app_id})"
+                ),
+                format!(
+                    "  not checked: the App {slug} itself. GitHub's API answered 404, and it answers 404 both for a private App this login cannot read and for a deleted App, so this run cannot tell them apart"
+                ),
+                format!(
+                    "  check it yourself: {} should show App ID {app_id}, and {} should show only {permissions}, with no events",
+                    target.app_page_url(&slug, ""),
+                    target.app_page_url(&slug, "/permissions")
+                ),
+                format!("  {replace}"),
+            ]);
+        }
+        AppLookup::Failed(why) => {
+            return Err(format!(
+                "the PR App is not fully set up; present: {PR_APP_VARIABLE} naming {slug}; missing: {why}; {replace}"
+            ));
+        }
+    }
+    report
+        .lines
+        .extend(pr_login_lines(target, &slug, app_id, &client_id)?);
+    Ok(())
 }
 
 /// Escape text for an HTML attribute or element.
@@ -1540,7 +1788,9 @@ impl PasteBrowser {
     /// Where the page for `kind` is written.
     #[must_use]
     pub fn page_path(&self, kind: AppKind) -> PathBuf {
-        self.dir.path().join(format!("{}-app.html", kind.label()))
+        self.dir
+            .path()
+            .join(format!("{}-app.html", kind.name_part()))
     }
 }
 
@@ -1589,6 +1839,15 @@ mod tests {
         " KEY-----\nAGENTsecretKEYmaterial\n-----END RSA PRIVATE",
         " KEY-----\n"
     );
+    // A made-up key: the header is split so no source line holds a key block.
+    const PR_PEM: &str = concat!(
+        "-----BEGIN RSA PRIVATE",
+        " KEY-----\nPRkeyMARKERmaterial\n-----END RSA PRIVATE",
+        " KEY-----\n"
+    );
+    /// Marker values for the PR App's client and webhook secrets.
+    const PR_CLIENT_SECRET: &str = "PRclientSECRETmarker";
+    const PR_WEBHOOK_SECRET: &str = "PRwebhookSECRETmarker";
 
     /// A recorded host: each call is matched by the start of its joined
     /// arguments; every call and its input is kept.
@@ -1667,7 +1926,10 @@ mod tests {
     struct OkSigner;
     impl Signer for OkSigner {
         fn sign_rs256(&self, pem: &str, _: &[u8]) -> Result<Vec<u8>, String> {
-            assert!(pem == AUTHORITY_PEM || pem == AGENT_PEM, "an unknown key");
+            assert!(
+                pem == AUTHORITY_PEM || pem == AGENT_PEM || pem == PR_PEM,
+                "an unknown key"
+            );
             Ok(vec![7; 8])
         }
     }
@@ -1838,7 +2100,7 @@ mod tests {
             .answer("repo view", Ok(r#"{"nameWithOwner":"o/r"}"#))
             .answer(
                 "api repos/o/r",
-                Ok(r#"{"default_branch":"main","private":false,"owner":{"login":"o","type":"User"},"permissions":{"admin":true}}"#),
+                Ok(r#"{"id":42,"default_branch":"main","private":false,"owner":{"login":"o","type":"User"},"permissions":{"admin":true}}"#),
             )
             .answer("api repos/o/r/environments/codeflow-authority", Err("gh: Not Found (HTTP 404)"))
             .answer("api -X PUT repos/o/r/environments/codeflow-authority", Ok("{}"))
@@ -1874,12 +2136,78 @@ mod tests {
                     AGENT_PEM,
                 )),
             )
+            .answer(
+                "api -X POST app-manifests/PRcode/conversions",
+                Ok(&pr_conversion(&json!({}))),
+            )
             .answer("secret set CODEFLOW_AUTHORITY_APP_KEY", Ok(""))
             .answer(
                 "api -X POST repos/o/r/environments/codeflow-authority/variables",
                 Ok("{}"),
             )
+            .answer(
+                "api repos/o/r/actions/variables/CODEFLOW_PR_APP",
+                Err("gh: Not Found (HTTP 404)"),
+            )
+            .answer("api -X POST repos/o/r/actions/variables", Ok("{}"))
     }
+
+    /// GitHub's conversion answer for the PR App, carrying marker values for
+    /// the key and both secrets, with `changes` over its fields.
+    fn pr_conversion(changes: &Value) -> String {
+        let mut app = json!({
+            "id": 303,
+            "slug": "codeflow-pr-r",
+            "name": "codeflow-pr-r",
+            "client_id": "Iv1.codeflow-pr-r",
+            "client_secret": PR_CLIENT_SECRET,
+            "webhook_secret": PR_WEBHOOK_SECRET,
+            "pem": PR_PEM,
+            "owner": {"login": "o", "type": "User"},
+            "permissions": {"contents": "read", "pull_requests": "write", "metadata": "read"},
+            "events": [],
+        });
+        for (key, value) in changes.as_object().unwrap() {
+            app[key] = value.clone();
+        }
+        app.to_string()
+    }
+
+    /// A host where the PR App was recorded by an earlier run.
+    fn recorded_pr_host(host: Host) -> Host {
+        host.answer(
+            "api repos/o/r/actions/variables/CODEFLOW_PR_APP",
+            Ok(r#"{"name":"CODEFLOW_PR_APP","value":"{\"slug\":\"codeflow-pr-r\",\"app_id\":303,\"client_id\":\"Iv1.codeflow-pr-r\"}"}"#),
+        )
+    }
+
+    /// Every set-up: the agent App and the PR App each on or off.
+    fn options(agent: bool, pr: bool) -> SetupOptions {
+        SetupOptions {
+            agent,
+            pr,
+            ..SetupOptions::default()
+        }
+    }
+
+    fn run_options(
+        host: &Host,
+        browser: &mut dyn ManifestBrowser,
+        store: &dyn KeyStore,
+        hook: &HookHttp,
+        options: &SetupOptions,
+    ) -> SetupReport {
+        setup(
+            &|args, input| host.gh(args, input),
+            browser,
+            store,
+            &auth(&OkSigner, hook),
+            options,
+        )
+    }
+
+    const PR_LOGIN_LINE: &str = "then each developer runs `codeflow remote pr-login --repo o/r --app codeflow-pr-r --app-id 303 --client-id Iv1.codeflow-pr-r --repository-id 42` once";
+    const DEVICE_FLOW_CLICK: &str = "one more click for the PR App: on its settings page (https://github.com/settings/apps/codeflow-pr-r), under \"Identifying and authorizing users\", select \"Enable Device Flow\" and save";
 
     /// A browser that returns a code per App and keeps the manifests.
     #[derive(Default)]
@@ -1963,7 +2291,7 @@ mod tests {
 
     #[test]
     fn manifest_names_the_repository_and_never_takes_events() {
-        for kind in [AppKind::Authority, AppKind::Agent] {
+        for kind in [AppKind::Authority, AppKind::Agent, AppKind::Pr] {
             let manifest = manifest(kind, "n", "o/r", "http://127.0.0.1:5/callback").unwrap();
             assert_eq!(manifest["name"], "n");
             assert_eq!(manifest["url"], "https://github.com/o/r");
@@ -2062,46 +2390,279 @@ mod tests {
         assert!(shown.contains("forget o/r"), "{shown}");
     }
 
-    /// AC-15: a manifest cannot turn on the device flow, so both a new agent
-    /// App and an existing one name the click and its settings page, then
-    /// the developer's one login and the token pull requests are opened with.
+    /// AC-16: the PR App's manifest holds exactly Pull requests write and
+    /// Contents read (plus the Metadata read GitHub adds), its webhook
+    /// inactive and the App not public.
     #[test]
-    fn setup_names_the_device_flow_click_and_the_developer_login() {
-        let click =
-            "under \"Identifying and authorizing users\", select \"Enable Device Flow\" and save";
-        let login = "each developer runs `codeflow remote agent-login --repo o/r` once";
-        let user =
-            "`GH_TOKEN=$(codeflow remote agent-token --user)`, so the developer is the author";
-        // A new agent App, on a personal account.
-        let mut clicks = Clicks::default();
-        let report = run(&fresh_host(), &mut clicks, &MemoryStore::default());
-        let shown = report.render().into_string();
-        assert_eq!(report.failure, None, "{shown}");
-        assert!(
-            shown.contains(&format!(
-                "on its settings page (https://github.com/settings/apps/codeflow-agent-r), {click}"
-            )),
-            "{shown}"
+    fn pr_manifest_holds_exactly_pull_requests_write_and_contents_read() {
+        let expected: BTreeMap<String, String> = [
+            ("contents", "read"),
+            ("metadata", "read"),
+            ("pull_requests", "write"),
+        ]
+        .into_iter()
+        .map(|(name, level)| (name.to_string(), level.to_string()))
+        .collect();
+        assert_eq!(expected_permissions(AppKind::Pr).unwrap(), expected);
+        let manifest = manifest(AppKind::Pr, "n", "o/r", "http://127.0.0.1:5/callback").unwrap();
+        assert_eq!(
+            manifest["default_permissions"],
+            json!({"contents": "read", "pull_requests": "write"})
         );
-        assert!(shown.contains(login) && shown.contains(user), "{shown}");
-        assert!(!shown.contains("agent sessions act as"), "{shown}");
-        // The manifest posted holds no device flow setting to rely on.
-        let manifest = clicks.manifests[1].1.as_object().unwrap();
+        assert_eq!(manifest["hook_attributes"]["active"], false);
+        assert_eq!(manifest["public"], false);
         assert!(
-            manifest.keys().all(|key| !key.contains("device")),
-            "{manifest:?}"
+            manifest
+                .as_object()
+                .unwrap()
+                .keys()
+                .all(|key| !key.contains("device")),
+            "{manifest}"
         );
-        // An agent App already set up.
+    }
+
+    /// AC-16: the PR App is one more click in the same run. Its key, client
+    /// secret and webhook secret reach no output, store write, `gh` argument
+    /// or input; its ids, none secret, go to the repository variable; the
+    /// device flow click and the `pr-login` line with GitHub's ids are
+    /// printed, and so is the token each act uses.
+    #[test]
+    fn setup_creates_the_pr_app_and_keeps_none_of_its_secrets() {
+        let host = fresh_host();
         let store = MemoryStore::default();
-        store.store("o/r", &agent_entry()).unwrap();
-        let report = run(&set_up_host(), &mut Clicks::default(), &store);
+        let mut clicks = Clicks::default();
+        let report = run_options(
+            &host,
+            &mut clicks,
+            &store,
+            &HookHttp::repository_page(),
+            &options(true, true),
+        );
+        let shown = format!("{}\n{report:?}", report.render().into_string());
+        assert_eq!(report.failure, None, "{shown}");
+        assert_eq!(clicks.manifests.len(), 3);
+        assert_eq!(
+            clicks.manifests[2].1["default_permissions"],
+            json!({"contents": "read", "pull_requests": "write"})
+        );
+        let writes = host.writes();
+        assert_eq!(
+            writes[writes.len() - 2..],
+            [
+                "api -X POST app-manifests/PRcode/conversions",
+                "api -X POST repos/o/r/actions/variables --input -",
+            ]
+        );
+        let calls = host.calls.borrow();
+        let variable = calls
+            .iter()
+            .find(|(call, _)| call == "api -X POST repos/o/r/actions/variables --input -")
+            .and_then(|(_, input)| input.clone())
+            .unwrap();
+        let variable: Value = serde_json::from_str(&variable).unwrap();
+        assert_eq!(variable["name"], "CODEFLOW_PR_APP");
+        assert_eq!(
+            serde_json::from_str::<Value>(variable["value"].as_str().unwrap()).unwrap(),
+            json!({"slug": "codeflow-pr-r", "app_id": 303, "client_id": "Iv1.codeflow-pr-r"})
+        );
+        for marker in ["PRkeyMARKERmaterial", PR_CLIENT_SECRET, PR_WEBHOOK_SECRET] {
+            assert!(!shown.contains(marker), "{marker}: {shown}");
+            for (call, input) in calls.iter() {
+                assert!(!call.contains(marker), "{marker}: {call}");
+                assert!(
+                    !input.as_deref().unwrap_or_default().contains(marker),
+                    "{marker}: {call}"
+                );
+            }
+            for entry in store.entries.borrow().values() {
+                assert!(!entry.contains(marker), "{marker}");
+            }
+        }
+        // Only the agent App's key is kept.
+        assert_eq!(store.entries.borrow().len(), 1);
+        assert!(
+            shown.contains("PR App codeflow-pr-r (id 303) created; install it on o/r only"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("https://github.com/apps/codeflow-pr-r/installations/new"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("GitHub keeps a private key on the PR App that CodeFlow never stored"),
+            "{shown}"
+        );
+        assert!(shown.contains(DEVICE_FLOW_CLICK), "{shown}");
+        assert!(shown.contains(PR_LOGIN_LINE), "{shown}");
+        assert!(
+            shown.contains("open and edit pull requests: the PR App's user access token, `GH_TOKEN=$(codeflow remote pr-token --repo o/r)`, so the developer is the author"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains(
+                "push, read and act as git's credential helper: the agent App's installation token"
+            ),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("gh api -X DELETE repos/o/r/actions/variables/CODEFLOW_PR_APP"),
+            "{shown}"
+        );
+    }
+
+    /// AC-16: with the agent App skipped and the PR App kept, the run creates
+    /// only the authority and PR Apps, stores no agent key, prints no
+    /// committer lines, and names the developer's own git credentials for
+    /// pushes.
+    #[test]
+    fn a_pr_app_only_run_stores_no_agent_key_and_prints_no_committer_lines() {
+        let host = fresh_host();
+        let store = MemoryStore::default();
+        let mut clicks = Clicks::default();
+        let hook = HookHttp::repository_page();
+        let report = run_options(&host, &mut clicks, &store, &hook, &options(false, true));
+        let shown = report.render().into_string();
+        assert_eq!(report.failure, None, "{shown}");
+        assert_eq!(clicks.manifests.len(), 2);
+        assert!(!host.writes().iter().any(|call| call.contains("agentcode")));
+        assert!(store.entries.borrow().is_empty());
+        assert!(!shown.contains("committer"), "{shown}");
+        assert!(
+            !hook
+                .calls
+                .borrow()
+                .iter()
+                .any(|(path, _)| path.starts_with("/users/")),
+            "{:?}",
+            hook.calls.borrow()
+        );
+        assert!(
+            shown.contains("agent App: not set up (--no-agent)"),
+            "{shown}"
+        );
+        assert!(shown.contains(PR_LOGIN_LINE), "{shown}");
+        assert!(
+            shown.contains("push, read and act as git's credential helper: the developer's own git credentials"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("open and edit pull requests: the PR App's user access token"),
+            "{shown}"
+        );
+    }
+
+    /// AC-16: skipping the PR App opens pull requests with the agent App's
+    /// installation token where the agent App exists, else with the
+    /// developer's own login.
+    #[test]
+    fn skipping_the_pr_app_names_the_token_pull_requests_open_with() {
+        for (agent, pull_requests, pushes) in [
+            (
+                true,
+                "open and edit pull requests: the agent App's installation token, `GH_TOKEN=$(codeflow remote agent-token)`, so the App's bot is the author",
+                "push, read and act as git's credential helper: the agent App's installation token",
+            ),
+            (
+                false,
+                "open and edit pull requests: the developer's own `gh` login, so the developer is the author",
+                "push, read and act as git's credential helper: the developer's own git credentials",
+            ),
+        ] {
+            let host = fresh_host();
+            let mut clicks = Clicks::default();
+            let report = run_options(
+                &host,
+                &mut clicks,
+                &MemoryStore::default(),
+                &HookHttp::repository_page(),
+                &options(agent, false),
+            );
+            let shown = report.render().into_string();
+            assert_eq!(report.failure, None, "{shown}");
+            assert!(shown.contains("PR App: not set up (--no-pr-app)"), "{shown}");
+            assert!(shown.contains(pull_requests), "{shown}");
+            assert!(shown.contains(pushes), "{shown}");
+            assert!(!shown.contains("pr-login"), "{shown}");
+            assert!(!host
+                .calls
+                .borrow()
+                .iter()
+                .any(|(call, _)| call.contains("PRcode") || call.contains("actions/variables")));
+        }
+    }
+
+    /// AC-16: a rerun finds the recorded PR App and creates no second one: a
+    /// private App GitHub answers 404 for is present but not verified, a
+    /// shown one is checked, and a record that cannot be read or an App that
+    /// differs stops the run.
+    #[test]
+    fn a_rerun_reports_the_pr_app_and_never_creates_a_second() {
+        let run_pr = |host: &Host| {
+            run_options(
+                host,
+                &mut Clicks::default(),
+                &MemoryStore::default(),
+                &HookHttp::repository_page(),
+                &options(false, true),
+            )
+        };
+        // Private: 404.
+        let host = recorded_pr_host(fresh_host()).answer("api apps/codeflow-pr-r", Err(LIVE_404));
+        let report = run_pr(&host);
         let shown = report.render().into_string();
         assert_eq!(report.failure, None, "{shown}");
         assert!(
-            shown.contains("agent App: already set up") && shown.contains(click),
+            shown.contains("PR App: present but not verified, nothing created"),
             "{shown}"
         );
-        assert!(shown.contains(login) && shown.contains(user), "{shown}");
+        assert!(
+            shown.contains("https://github.com/settings/apps/codeflow-pr-r/permissions should show only contents read, metadata read, pull_requests write"),
+            "{shown}"
+        );
+        assert!(shown.contains(DEVICE_FLOW_CLICK), "{shown}");
+        assert!(shown.contains(PR_LOGIN_LINE), "{shown}");
+        let creates = |host: &Host| {
+            host.calls.borrow().iter().any(|(call, _)| {
+                call.contains("PRcode") || call.starts_with("api -X POST repos/o/r/actions")
+            })
+        };
+        assert!(!creates(&host));
+        // Shown with the manifest's permissions.
+        let shown_pr = json!({
+            "id": 303,
+            "client_id": "Iv1.codeflow-pr-r",
+            "permissions": {"contents": "read", "pull_requests": "write", "metadata": "read"},
+            "events": [],
+        })
+        .to_string();
+        let host = recorded_pr_host(fresh_host()).answer("api apps/codeflow-pr-r", Ok(&shown_pr));
+        let report = run_pr(&host);
+        let shown = report.render().into_string();
+        assert_eq!(report.failure, None, "{shown}");
+        assert!(shown.contains("PR App: already set up"), "{shown}");
+        assert!(shown.contains(PR_LOGIN_LINE), "{shown}");
+        assert!(!creates(&host));
+        // Shown, but widened.
+        let widened = shown_pr.replace("\"contents\":\"read\"", "\"contents\":\"write\"");
+        let host = recorded_pr_host(fresh_host()).answer("api apps/codeflow-pr-r", Ok(&widened));
+        let report = run_pr(&host);
+        let failure = report.failure.unwrap();
+        assert!(
+            failure.contains("the PR App is not fully set up"),
+            "{failure}"
+        );
+        assert!(!creates(&host));
+        // A record that cannot be read.
+        let host = fresh_host().answer(
+            "api repos/o/r/actions/variables/CODEFLOW_PR_APP",
+            Ok(r#"{"name":"CODEFLOW_PR_APP","value":"not json"}"#),
+        );
+        let failure = run_pr(&host).failure.unwrap();
+        assert!(
+            failure.contains("missing: a slug, id and client id it can be read as"),
+            "{failure}"
+        );
+        assert!(!creates(&host));
     }
 
     #[test]
@@ -3032,19 +3593,35 @@ mod tests {
     #[test]
     fn app_names_are_checked_before_anything_is_written() {
         let host = fresh_host();
-        let options = SetupOptions {
+        let named = SetupOptions {
             agent: true,
             authority_name: Some("x".repeat(35)),
             agent_name: None,
+            pr: true,
+            pr_name: None,
         };
         let report = setup(
             &|args, input| host.gh(args, input),
             &mut Clicks::default(),
             &MemoryStore::default(),
             &auth(&OkSigner, &HookHttp::repository_page()),
-            &options,
+            &named,
         );
         assert!(report.failure.unwrap().contains("--authority-name"));
+        assert!(host.writes().is_empty());
+        // The PR App's name is checked before any write too.
+        let host = fresh_host();
+        let report = run_options(
+            &host,
+            &mut Clicks::default(),
+            &MemoryStore::default(),
+            &HookHttp::repository_page(),
+            &SetupOptions {
+                pr_name: Some("bad name".to_string()),
+                ..options(true, true)
+            },
+        );
+        assert!(report.failure.unwrap().contains("--pr-name"));
         assert!(host.writes().is_empty());
     }
 

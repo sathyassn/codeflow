@@ -719,7 +719,6 @@ fn agent_token_committer_takes_only_name_or_email_and_never_a_credential_request
             "--git-credential",
             "get",
         ],
-        vec!["remote", "agent-token", "--committer", "name", "--user"],
     ] {
         let out = run_in(dir.path(), home.path(), &args);
         assert_eq!(out.status.code(), Some(2), "{args:?}");
@@ -727,38 +726,33 @@ fn agent_token_committer_takes_only_name_or_email_and_never_a_credential_request
     }
 }
 
-/// TSK-1348 AC-14: `--user` as a git credential helper answers only `get`
-/// for `https://github.com`; any other request prints nothing and reaches no
-/// store, on every platform.
+/// TSK-1348 design change (issue 696): the agent App issues no user access
+/// token, so `agent-token --user` and `agent-login` are gone, and the PR
+/// App's token never acts as a git credential helper. Each is refused by the
+/// argument parser before any store or lock is reached, on every platform.
 #[test]
-fn agent_token_user_credential_answers_only_github_get() {
+fn the_agent_app_user_token_route_is_gone_and_pr_token_never_pushes() {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "demo");
-    for operation in ["get", "store", "erase"] {
-        let out = run_in(
-            dir.path(),
-            home.path(),
-            &[
-                "remote",
-                "agent-token",
-                "--user",
-                "--git-credential",
-                operation,
-                "--repo",
-                "codeflow-test-none/never-an-entry",
-            ],
-        );
-        assert!(out.status.success(), "{operation}");
-        assert_eq!(stdout(&out), "", "{operation}");
+    for args in [
+        vec!["remote", "agent-token", "--user"],
+        vec!["remote", "agent-login"],
+        vec!["remote", "pr-token", "--git-credential", "get"],
+        // pr-login needs every id setup-apps printed.
+        vec!["remote", "pr-login", "--app", "codeflow-pr-r"],
+    ] {
+        let out = run_in(dir.path(), home.path(), &args);
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        assert_eq!(stdout(&out), "", "{args:?}");
     }
     assert!(!home.path().join("locks").exists());
 }
 
-/// TSK-1348 AC-13: with no saved authorization, `--user` prints no token and
-/// names the command that authorizes.
+/// TSK-1348 AC-17: with no saved authorization, `pr-token` prints no token
+/// and names the command that authorizes.
 #[test]
-fn agent_token_user_without_a_login_names_agent_login() {
+fn pr_token_without_a_login_names_pr_login() {
     if real_store_is_the_keychain() {
         return;
     }
@@ -770,8 +764,7 @@ fn agent_token_user_without_a_login_names_agent_login() {
         home.path(),
         &[
             "remote",
-            "agent-token",
-            "--user",
+            "pr-token",
             "--repo",
             "codeflow-test-none/never-an-entry",
         ],
@@ -781,7 +774,8 @@ fn agent_token_user_without_a_login_names_agent_login() {
     assert_eq!(stdout(&out), "", "{error}");
     // A Linux runner without `secret-tool` or curl stops earlier, naming it.
     assert!(
-        error.contains("codeflow remote agent-login --repo codeflow-test-none/never-an-entry")
+        error.contains("no PR App authorization for codeflow-test-none/never-an-entry")
+            && error.contains("codeflow remote pr-login")
             || error.contains("secret-tool")
             || error.contains("curl")
             || error.contains("no credential store"),

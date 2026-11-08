@@ -1,12 +1,12 @@
 //! `codeflow remote protect [--provider github] [--dry-run] [--profile
 //! <name>] [--check-app <id>] [--lines <pattern>]` — write the rulesets this
 //! command owns to the remote (charter §6.1 plane 3, TSK-1080).
-//! `codeflow remote setup-apps` creates the authority and agent GitHub Apps,
-//! `codeflow remote agent-token` mints the agent App's token or prints its
-//! committer values, `codeflow remote import-agent-key` stores another
-//! computer's key for that App, and `codeflow remote agent-login` authorizes
-//! that App to act for the developer, whose user access token
-//! `agent-token --user` prints (TSK-1348).
+//! `codeflow remote setup-apps` creates the authority, agent and PR GitHub
+//! Apps, `codeflow remote agent-token` mints the agent App's token or prints
+//! its committer values, `codeflow remote import-agent-key` stores another
+//! computer's key for that App, and `codeflow remote pr-login` authorizes the
+//! PR App to open pull requests for the developer, whose user access token
+//! `pr-token` prints (TSK-1348).
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -79,13 +79,15 @@ pub enum RemoteCommand {
         lines: String,
     },
 
-    /// Create the two GitHub Apps of `CodeFlow` for this repository: the
+    /// Create the GitHub Apps of `CodeFlow` for this repository: the
     /// authority App (Checks write only), with the environment
     /// `codeflow-authority` restricted to the default branch holding its key
     /// secret `CODEFLOW_AUTHORITY_APP_KEY` and id variable
-    /// `CODEFLOW_AUTHORITY_APP_ID`,
-    /// and the agent App (Contents and Pull requests write only), whose key
-    /// is kept in this computer's credential store.
+    /// `CODEFLOW_AUTHORITY_APP_ID`; the optional agent App (Contents and Pull
+    /// requests write only), whose key is kept in this computer's credential
+    /// store; and the optional PR App (Pull requests write and Contents read
+    /// only), whose key is dropped and whose ids go to the repository
+    /// variable `CODEFLOW_PR_APP`.
     ///
     /// Run it as a repository administrator under your own `gh auth login`.
     /// It refuses a GitHub App token and a token without Administration
@@ -94,8 +96,9 @@ pub enum RemoteCommand {
     /// "Create GitHub App" on GitHub, then "Install" on the printed link.
     /// Every write is listed with what undoes it. A second run creates
     /// nothing it finds: it reads the agent App with its own key, and
-    /// reports a private authority App as present but not verified. The run
-    /// prints the committer lines for each harness's project settings and
+    /// reports a private authority or PR App as present but not verified.
+    /// The run prints the committer lines for each harness's project
+    /// settings, the `pr-login` line, and which token each act uses, and
     /// edits no settings file.
     SetupApps {
         /// The authority App's name (default `codeflow-authority-<repo>`);
@@ -107,9 +110,19 @@ pub enum RemoteCommand {
         #[arg(long, value_name = "NAME")]
         agent_name: Option<String>,
 
-        /// Set up the authority App only.
+        /// Skip the agent App: no key is stored and no committer lines are
+        /// printed; agents push with your own git credentials.
         #[arg(long)]
         no_agent: bool,
+
+        /// The PR App's name (default `codeflow-pr-<repo>`).
+        #[arg(long, value_name = "NAME")]
+        pr_name: Option<String>,
+
+        /// Skip the PR App: agents open pull requests with the agent App's
+        /// installation token where it exists, else with your own login.
+        #[arg(long)]
+        no_pr_app: bool,
 
         /// Write each App's page to a file and read back the address GitHub
         /// opens, instead of serving the page on a local port.
@@ -118,10 +131,9 @@ pub enum RemoteCommand {
     },
 
     /// Print a GitHub installation token of this repository's agent App,
-    /// valid for one hour, for `git push`. The App's key is read from this
-    /// computer's credential store and never printed. With `--user`, print
-    /// your own user access token for the agent App instead, for `GH_TOKEN`:
-    /// pull requests opened with it show you as author.
+    /// valid for one hour, for `git push`, reads and `gh`. The App's key is
+    /// read from this computer's credential store and never printed. Pull
+    /// requests opened with it show the App's bot as author.
     AgentToken {
         /// The repository, `owner/name` (default: the `origin` remote).
         #[arg(long, value_name = "OWNER/NAME")]
@@ -136,23 +148,48 @@ pub enum RemoteCommand {
         /// Print the App's committer name or email instead of a token,
         /// confirmed with GitHub; nothing reaches standard output when it
         /// cannot be confirmed. No token is minted.
-        #[arg(long, value_name = "FIELD", value_parser = ["name", "email"], conflicts_with_all = ["git_credential", "user"])]
+        #[arg(long, value_name = "FIELD", value_parser = ["name", "email"], conflicts_with = "git_credential")]
         committer: Option<String>,
-
-        /// Print the user access token `codeflow remote agent-login` saved,
-        /// renewed first when it is near its end. Only an authorization
-        /// GitHub refuses or that has expired asks you to log in again.
-        #[arg(long)]
-        user: bool,
     },
 
-    /// Authorize the repository's agent App to act for you, once per
-    /// computer, through GitHub's device flow: open the printed address and
-    /// enter the code. The grant is kept in this computer's credential
-    /// store, apart from the App's key, and renewed by `agent-token --user`.
-    /// Uses no personal access token and no `gh` login. The agent App needs
-    /// "Enable Device Flow" turned on in its settings.
-    AgentLogin {
+    /// Authorize the repository's PR App to open and edit pull requests for
+    /// you, once per computer, through GitHub's device flow: open the
+    /// printed address and enter the code. `codeflow remote setup-apps`
+    /// prints this command with the App's ids. The grant is checked, then
+    /// kept in this computer's credential store under its own service and
+    /// renewed by `pr-token`. Uses no client secret, no personal access token
+    /// and no `gh` login. The PR App needs "Enable Device Flow" turned on in
+    /// its settings.
+    PrLogin {
+        /// The repository, `owner/name` (default: the `origin` remote).
+        #[arg(long, value_name = "OWNER/NAME")]
+        repo: Option<String>,
+
+        /// The PR App's slug.
+        #[arg(long, value_name = "SLUG")]
+        app: String,
+
+        /// The PR App's id.
+        #[arg(long, value_name = "ID")]
+        app_id: u64,
+
+        /// The PR App's Client ID.
+        #[arg(long, value_name = "ID")]
+        client_id: String,
+
+        /// The repository's id, as `setup-apps` printed it.
+        #[arg(long, value_name = "ID")]
+        repository_id: u64,
+    },
+
+    /// Print your user access token for the repository's PR App, for
+    /// `GH_TOKEN`: pull requests opened or edited with it show you as author,
+    /// and it cannot merge or push. It is renewed first when near its end,
+    /// and printed only after every installation it reaches is found to grant
+    /// exactly Pull requests write, Contents read and Metadata read on the
+    /// recorded repository. Only an authorization GitHub refuses or that has
+    /// expired asks you to run `pr-login` again.
+    PrToken {
         /// The repository, `owner/name` (default: the `origin` remote).
         #[arg(long, value_name = "OWNER/NAME")]
         repo: Option<String>,
@@ -205,12 +242,16 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
             authority_name,
             agent_name,
             no_agent,
+            pr_name,
+            no_pr_app,
             paste,
         } => run_setup_apps(
             &SetupOptions {
                 authority_name: authority_name.clone(),
                 agent_name: agent_name.clone(),
                 agent: !no_agent,
+                pr_name: pr_name.clone(),
+                pr: !no_pr_app,
             },
             *paste,
         ),
@@ -218,14 +259,27 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
             repo,
             git_credential,
             committer,
-            user,
         } => run_agent_token(
             repo.as_deref(),
             git_credential.as_deref(),
             committer.as_deref(),
-            *user,
         ),
-        RemoteCommand::AgentLogin { repo } => run_agent_login(repo.as_deref()),
+        RemoteCommand::PrLogin {
+            repo,
+            app,
+            app_id,
+            client_id,
+            repository_id,
+        } => run_pr_login(
+            repo.as_deref(),
+            &user_token::PrApp {
+                slug: app.clone(),
+                app_id: *app_id,
+                client_id: client_id.clone(),
+                repository_id: *repository_id,
+            },
+        ),
+        RemoteCommand::PrToken { repo } => run_pr_token(repo.as_deref()),
         RemoteCommand::ImportAgentKey {
             key_file,
             client_id,
@@ -334,7 +388,6 @@ fn run_agent_token(
     repo: Option<&str>,
     git_credential: Option<&str>,
     committer: Option<&str>,
-    user: bool,
 ) -> anyhow::Result<()> {
     if let Some(operation) = git_credential {
         // Git sends the request on standard input; only `get` for
@@ -346,9 +399,6 @@ fn run_agent_token(
         }
     }
     let repository = resolve_repository(repo)?;
-    if user {
-        return run_user_token(&repository, git_credential.is_some());
-    }
     let signer = OpensslSigner::discover(&std::env::temp_dir()).map_err(anyhow::Error::msg)?;
     let http = CurlHttp::discover().map_err(anyhow::Error::msg)?;
     let store = os_store();
@@ -380,44 +430,39 @@ fn run_agent_token(
     Ok(())
 }
 
-/// `codeflow remote agent-token --user`: the developer's user access token,
-/// renewed under this computer's lock so one renewal runs at a time.
-fn run_user_token(repository: &str, git_credential: bool) -> anyhow::Result<()> {
+/// `codeflow remote pr-token`: the developer's PR App user access token,
+/// renewed under this computer's lock so one renewal runs at a time, and
+/// printed only after its grant is checked.
+fn run_pr_token(repo: Option<&str>) -> anyhow::Result<()> {
+    let repository = resolve_repository(repo)?;
     let home =
         registry::codeflow_home().context("no home directory, so the renewal lock has no place")?;
-    let _lock = user_token::refresh_lock(&home, repository).map_err(anyhow::Error::msg)?;
+    let _lock = user_token::refresh_lock(&home, &repository).map_err(anyhow::Error::msg)?;
     let http = CurlHttp::discover().map_err(anyhow::Error::msg)?;
-    let store = os_store_for(user_token::USER_TOKEN_SERVICE);
-    let token = user_token::user_token(store.as_ref(), &http, &http, repository, unix_now()?)
-        .map_err(|error| anyhow::anyhow!("remote agent-token --user: {error}"))?;
-    let mut out = std::io::stdout().lock();
-    if git_credential {
-        out.write_all(agent_key::git_credential_answer(&token.token).as_bytes())?;
-    } else {
-        writeln!(out, "{}", token.token)?;
-        eprintln!(
-            "user access token for {} on {repository}",
-            codeflow_core::git::display_print(&token.login)
-        );
-    }
+    let store = os_store_for(user_token::PR_USER_SERVICE);
+    let token = user_token::pr_token(store.as_ref(), &http, &http, &repository, unix_now()?)
+        .map_err(|error| anyhow::anyhow!("remote pr-token: {error}"))?;
+    writeln!(std::io::stdout().lock(), "{}", token.token)?;
+    eprintln!(
+        "PR App user access token for {} on {repository}",
+        codeflow_core::git::display_print(&token.login)
+    );
     Ok(())
 }
 
-/// `codeflow remote agent-login`.
-fn run_agent_login(repo: Option<&str>) -> anyhow::Result<()> {
+/// `codeflow remote pr-login`.
+fn run_pr_login(repo: Option<&str>, app: &user_token::PrApp) -> anyhow::Result<()> {
     let repository = resolve_repository(repo)?;
     let home =
         registry::codeflow_home().context("no home directory, so the renewal lock has no place")?;
     // Held while the grant is written, so no renewal reads a half-made one.
     let _lock = user_token::refresh_lock(&home, &repository).map_err(anyhow::Error::msg)?;
     let http = CurlHttp::discover().map_err(anyhow::Error::msg)?;
-    let app_store = os_store();
-    let user_store = os_store_for(user_token::USER_TOKEN_SERVICE);
+    let user_store = os_store_for(user_token::PR_USER_SERVICE);
     let now = || unix_now().unwrap_or_default();
     let wait = |seconds: u64| std::thread::sleep(Duration::from_secs(seconds));
     let show = |line: &str| eprintln!("{}", codeflow_core::git::display_print(line));
-    let lines = user_token::agent_login(
-        app_store.as_ref(),
+    let lines = user_token::pr_login(
         user_store.as_ref(),
         &http,
         &http,
@@ -427,8 +472,9 @@ fn run_agent_login(repo: Option<&str>) -> anyhow::Result<()> {
             wait: &wait,
             show: &show,
         },
+        app,
     )
-    .map_err(|error| anyhow::anyhow!("remote agent-login: {error}"))?;
+    .map_err(|error| anyhow::anyhow!("remote pr-login: {error}"))?;
     for line in lines {
         println!("{}", codeflow_core::git::display_print(&line));
     }
