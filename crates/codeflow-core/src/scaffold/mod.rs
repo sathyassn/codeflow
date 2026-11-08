@@ -37,6 +37,7 @@ pub mod settings_merge;
 pub mod shown;
 pub mod state;
 pub mod template;
+pub mod too_old;
 pub mod update;
 
 mod gitutil;

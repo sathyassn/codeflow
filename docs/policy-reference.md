@@ -51,8 +51,9 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.commit_required_footers` | string list | `[]` | an array of exact, case-sensitive trailer tokens (e.g. Signed-off-by) | Footer trailers that MUST appear on every non-exempt commit (e.g. DCO). | A required token is implicitly allowed; a commit missing one is judged under commit_footer_required. |
 | `git.commit_footer_required` | Level | `block` | off \| warn \| allow \| block | Missing required footer trailers, independently of body style. | Default block. An empty commit_required_footers list imposes no requirement. |
 | `git.commit_ticket_keys` | string list | `[]` | an array of exact, case-sensitive trailer tokens (e.g. Refs, Closes) | Ticket-reference trailer tokens the project recognizes. | EMPTY = the ticket feature is off and a `Refs:` line BLOCKS unless listed in commit_footer_tokens; non-empty allows these tokens and arms commit_ticket_required. |
-| `git.commit_ticket_required` | Level | `off` | off \| warn \| allow \| block | Whether a matching ticket-reference trailer is REQUIRED on every commit. | Only meaningful when commit_ticket_keys is non-empty; `allow` behaves like `off` here (inactive); use warn or block to require. Merge/revert/fixup/squash commits are exempt. |
+| `git.commit_ticket_required` | Level | `off` | off \| warn \| allow \| block | Whether a matching ticket-reference trailer is REQUIRED on every commit. | Only meaningful when commit_ticket_keys is non-empty; `allow` behaves like `off` here (inactive); use warn or block to require. Merge/revert/fixup/squash commits are exempt; commit_ticket_merges opts merges in. |
 | `git.commit_ticket_pattern` | string | `""` | a regular expression, e.g. ^PROJ-\d+$ (empty = no format check) | Regex a present ticket trailer's value must match. | Strictly validated: an unparseable pattern is a loud error at the commit-msg hook, `codeflow ci`, and `codeflow validate` (at enforcement time it would silently fail open). |
+| `git.commit_ticket_merges` | Level | `off` | off \| warn \| allow \| block | Whether a merge commit must carry a ticket-reference trailer too. | Default off keeps merges exempt. warn or block judges every real merge, git's default `Merge ...` subject included, for a commit_ticket_keys trailer matching commit_ticket_pattern, in the commit-msg hook and `codeflow ci`; only meaningful when commit_ticket_keys is non-empty. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.breaking_watch_paths` | string list | `[]` | an array of path globs (the `glob` crate's syntax) | Declared contract surfaces: an unmarked commit touching one draws a WARN. | Warn-only, never blocks, whatever the levels say; empty = no tripwire. The nudge asks for a `type!:` marker or a BREAKING CHANGE: footer. |
 | `git.ai_attribution` | Level | `block` | off \| warn \| allow \| block | AI attribution (Co-Authored-By AI trailers, "Generated with", robot emoji) in commits and PR bodies. |  |
 | `git.commit_emoji` | Level | `block` | off \| warn \| allow \| block | Emoji in commit subjects and PR bodies. |  |
@@ -1182,12 +1183,43 @@ Findings). A bypass actor merges into the default branch with `gh pr merge
   `codeflow protect <pattern>`, with the checks in `git.required_checks`.
   The registry's data profile is `codeflow protect codeflow/registry`.
   Classic branch protection is never written.
-- **Never weaker.** A ruleset with any other name is never written. Every
+- **Absent branches and `--branch`.** A pattern in `git.protected_branches`
+  that names one branch the host does not have (a 404 from
+  `repos/<repo>/branches/<name>`) is reported and gets no ruleset; a glob,
+  the default branch and the registry are planned without that read.
+  `--branch <name>` limits a run to the owned rulesets that target that
+  branch.
+- **Adopting a ruleset.** `--adopt <id or name>` hands one existing ruleset
+  to `remote protect`: it is matched to the owned ruleset whose include
+  patterns are exactly its own, with no exclude, renamed to the owned name
+  and updated as an owned ruleset is, so it keeps its bypass list unless it
+  becomes B or C. Where two owned rulesets target the same branches, as A and
+  B do, `--adopt <ruleset>=<owned name>` says which. Any other target is
+  refused and the ruleset is left as it is. The dry run and the report name
+  the adopted ruleset, its id and its new name.
+- **One repository.** `remote protect` and `doctor` act on the repository
+  `origin` fetches from. A push URL that names another repository is
+  refused, `gh repo view` is asked about that repository and an answer for
+  another one is refused, and an inherited `GH_HOST` or `GH_REPO` never
+  reaches `gh`, so neither can point a read or a write elsewhere. `remote
+  protect` sets `GH_HOST` to the host `origin`'s URL names, a GitHub
+  Enterprise host included, and refuses a host `gh` has no working login
+  for. `doctor` reads the rules of a github.com `origin` only; for any other
+  host it notes that they were not read.
+- **The dry run is exact.** `--dry-run` reads the host with GET calls only
+  and prints each request a run would send (method, path and body); a run
+  sends exactly those. Without a readable host it prints the intended rules
+  and says they are not the exact requests.
+- **Never weaker.** A ruleset with any other name, unless `--adopt` names
+  it, is never written. Every
   write sends `name`, `target`, `enforcement`, `conditions`,
   `bypass_actors` and `rules`, because GitHub does not document what an
-  update does with omitted fields, and the bypass list the host answers is
-  checked against the one sent. An update makes the ruleset active, joins
-  its include patterns and drops its excludes, adds a missing rule, raises
+  update does with omitted fields, and the answer must carry every field
+  as sent: the bypass list exactly, conditions and rules with only the
+  host's own defaults added. An update makes the ruleset active, joins its
+  include patterns and keeps its excludes, naming them in the report; an
+  exclude that leaves out a branch the ruleset must cover is refused, and
+  the ruleset is left unwritten. It adds a missing rule, raises
   an approval count and turns review flags on, makes checks strict and adds
   missing names. It never lowers an approval count, removes a rule, changes
   which app produces a check (that ruleset is left unwritten and reported)

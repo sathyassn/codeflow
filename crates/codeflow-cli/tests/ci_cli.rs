@@ -1142,6 +1142,64 @@ fn ci_committed_hash_line_and_merge_message_are_scanned() {
     assert!(all.contains("1 merge(s)"), "{all}");
 }
 
+// TSK-1350 AC-3 and AC-4: a project that opts in with
+// `git.commit_ticket_merges` has every merge in the range judged for its
+// ticket footer, so a merge made by a hosting service's button, outside the
+// local hooks, is refused on the line push.
+#[test]
+fn ci_judges_a_landing_merge_for_its_ticket_footer() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    git(d, &["init", "-b", "main"]);
+    git(d, &["config", "user.email", "t@example.com"]);
+    git(d, &["config", "user.name", "t"]);
+    std::fs::create_dir_all(d.join(".codeflow")).unwrap();
+    std::fs::write(
+        d.join(".codeflow/policy.json"),
+        r#"{"schema_version":1,"git":{"commit_ticket_keys":["Refs"],"commit_ticket_required":"block","commit_ticket_merges":"block"}}"#,
+    )
+    .unwrap();
+    git(d, &["add", "."]);
+    git(d, &["commit", "-m", "chore: init", "-m", "Refs: TSK-1"]);
+    git(d, &["checkout", "-b", "feat/y"]);
+    std::fs::write(d.join("thing.md"), "# Thing\n").unwrap();
+    git(d, &["add", "."]);
+    git(d, &["commit", "-m", "docs: add thing", "-m", "Refs: TSK-2"]);
+    git(d, &["checkout", "main"]);
+    git(d, &["checkout", "-b", "feat/x"]);
+    let subject = "Merge pull request #7 from o/feat/y";
+    git(d, &["merge", "--no-ff", "feat/y", "-m", subject]);
+    let (code, all) = ci_range_output(d);
+    assert_eq!(code, Some(1), "{all}");
+    assert!(all.contains("git.commit_ticket_merges (block)"), "{all}");
+    assert!(all.contains(&format!("merge commit '{subject}'")), "{all}");
+    assert!(all.contains("keys: Refs"), "{all}");
+
+    // Review F1: a `fixup!` subject does not exempt the merge.
+    git(d, &["reset", "--hard", "main"]);
+    git(d, &["merge", "--no-ff", "feat/y", "-m", "fixup! land y"]);
+    let (code, all) = ci_range_output(d);
+    assert_eq!(code, Some(1), "{all}");
+    assert!(all.contains("merge commit 'fixup! land y'"), "{all}");
+
+    // The same landing with its footer passes.
+    git(d, &["reset", "--hard", "main"]);
+    git(
+        d,
+        &[
+            "merge",
+            "--no-ff",
+            "feat/y",
+            "-m",
+            subject,
+            "-m",
+            "Refs: TSK-2",
+        ],
+    );
+    let (code, all) = ci_range_output(d);
+    assert_eq!(code, Some(0), "{all}");
+}
+
 // Operator direction 2026-09-25 (ADR-0067 note): the dash rule is a writing
 // guideline. Without a policy file the built-in default warns and passes.
 #[test]

@@ -99,7 +99,10 @@ fn isolated_codeflow(mut cmd: Command) -> Command {
     isolate_git(&mut cmd);
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
-        .env_remove("CODEFLOW_HUMAN_OVERRIDE");
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        // A gate the command runs keeps its evidence under the fixture's own
+        // `target`, never the test process's build folder (TSK-1369).
+        .env_remove("CARGO_TARGET_DIR");
     cmd
 }
 
@@ -6451,7 +6454,10 @@ fn push_set_never_prompts_and_bounds_the_destination_query() {
         .unwrap()
         .lines()
         .any(|line| line == "get"));
-    assert!(took < std::time::Duration::from_secs(10), "{took:?}: {err}");
+    // The destination answered, so no attempt waited out its timeout: the
+    // refusal is the authentication answer, never a "no answer" (TSK-1253:
+    // this was a 10 s wall-clock bound, which a loaded runner can pass).
+    assert!(!err.contains("no answer within"), "{took:?}: {err}");
     assert!(
         err.contains("cannot prove push inputs") && err.contains("remote authentication failed"),
         "{err}"
@@ -11612,6 +11618,118 @@ fn an_automatic_merge_is_scanned_in_commit_msg() {
     // Control: the same merge whose result holds no key lands.
     std::fs::write(dir.path().join("merge-result.txt"), "merged\n").unwrap();
     let out = run_wired_git(dir.path(), &["merge", "--no-edit", "feat/side"], None);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// TSK-1350 AC-2 and AC-4: with `git.commit_ticket_merges` on, the wired
+// commit-msg hook refuses a `--no-ff` landing merge without its ticket
+// footer, for git's default subject and for an author's own, and the
+// refusal names the merge, the rule and the keys.
+#[cfg(unix)]
+#[test]
+fn a_landing_merge_without_its_ticket_footer_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    init_repo(d, "integration/line");
+    write_policy(
+        d,
+        r#"{"schema_version":1,"git":{"commit_ticket_keys":["Refs"],"commit_ticket_required":"warn","commit_ticket_merges":"block"}}"#,
+    );
+    git(d, &["checkout", "-q", "-b", "task/x"]);
+    std::fs::write(d.join("thing.txt"), "thing\n").unwrap();
+    git(d, &["add", "thing.txt"]);
+    git(
+        d,
+        &["commit", "-q", "-m", "feat: add thing", "-m", "Refs: TSK-1"],
+    );
+    git(d, &["checkout", "-q", "integration/line"]);
+    wire_scan_hooks(d);
+
+    // Review F1: the one-parent exempt prefixes do not exempt a merge.
+    for subject in [
+        None,
+        Some("feat: land the thing"),
+        Some("fixup! land the thing"),
+        Some("squash! land the thing"),
+        Some("Revert \"feat: add thing\""),
+        Some("Reapply \"feat: add thing\""),
+    ] {
+        let mut args = vec!["merge", "--no-ff", "--no-edit", "task/x"];
+        if let Some(s) = subject {
+            args.extend(["-m", s]);
+        }
+        let out = run_wired_git(d, &args, None);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{subject:?}: {stderr}");
+        assert!(
+            stderr.contains("policy rule git.commit_ticket_merges (block)"),
+            "{subject:?}: {stderr}"
+        );
+        let named = subject.unwrap_or("Merge branch 'task/x' into integration/line");
+        assert!(
+            stderr.contains(&format!("merge commit '{named}'")),
+            "{stderr}"
+        );
+        assert!(stderr.contains("keys: Refs"), "{stderr}");
+        let _ = run_wired_git(d, &["merge", "--abort"], None);
+    }
+
+    // With the footer, both subject forms land.
+    let out = run_wired_git(
+        d,
+        &[
+            "merge",
+            "--no-ff",
+            "task/x",
+            "-m",
+            "Merge branch 'task/x' into integration/line",
+            "-m",
+            "Refs: TSK-1",
+        ],
+        None,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(d, &["reset", "-q", "--hard", "HEAD~1"]);
+    let out = run_wired_git(
+        d,
+        &[
+            "merge",
+            "--no-ff",
+            "task/x",
+            "-m",
+            "feat: land the thing",
+            "-m",
+            "Refs: TSK-1",
+        ],
+        None,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(d, &["reset", "-q", "--hard", "HEAD~1"]);
+    let out = run_wired_git(
+        d,
+        &[
+            "merge",
+            "--no-ff",
+            "task/x",
+            "-m",
+            "fixup! land the thing",
+            "-m",
+            "Refs: TSK-1",
+        ],
+        None,
+    );
     assert!(
         out.status.success(),
         "{}",

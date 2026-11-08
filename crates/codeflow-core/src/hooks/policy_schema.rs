@@ -154,7 +154,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 79] = [
+pub const SCHEMA: [KeySpec; 80] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -582,7 +582,8 @@ pub const SCHEMA: [KeySpec; 79] = [
         purpose: "Whether a matching ticket-reference trailer is REQUIRED on every commit.",
         notes: "Only meaningful when commit_ticket_keys is non-empty; `allow` \
                 behaves like `off` here (inactive); use warn or block to \
-                require. Merge/revert/fixup/squash commits are exempt.",
+                require. Merge/revert/fixup/squash commits are exempt; \
+                commit_ticket_merges opts merges in.",
     },
     KeySpec {
         path: "git.commit_ticket_pattern",
@@ -592,6 +593,18 @@ pub const SCHEMA: [KeySpec; 79] = [
         notes: "Strictly validated: an unparseable pattern is a loud error at \
                 the commit-msg hook, `codeflow ci`, and `codeflow validate` \
                 (at enforcement time it would silently fail open).",
+    },
+    KeySpec {
+        path: "git.commit_ticket_merges",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Whether a merge commit must carry a ticket-reference trailer too.",
+        notes: "Default off keeps merges exempt. warn or block judges every \
+                real merge, git's default `Merge ...` subject included, for a \
+                commit_ticket_keys trailer matching commit_ticket_pattern, in \
+                the commit-msg hook and `codeflow ci`; only meaningful when \
+                commit_ticket_keys is non-empty. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
     },
     // ---- git: breaking-change tripwire ------------------------------------
     KeySpec {

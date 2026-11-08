@@ -509,6 +509,30 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "display",
     ),
+    // RemoteProvider::name returns the provider's fixed label for the dry-run report; no git name is decoded.
+    (
+        "codeflow-core/src/remote.rs",
+        "RemoteProvider::preview",
+        "name",
+        1,
+        "format-contract",
+    ),
+    // RemoteProvider::name returns the provider's fixed label for the fallback report; no git name is decoded.
+    (
+        "codeflow-core/src/remote.rs",
+        "GithubProvider::preview",
+        "name",
+        1,
+        "format-contract",
+    ),
+    // Only the stderr of a failed `git remote get-url --push` is shown in the refusal; the exit status decides, and the push URLs on stdout are decoded strictly.
+    (
+        "codeflow-core/src/remote.rs",
+        "origin_on",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // BranchStep::name returns its existing &str unchanged for display; this is not a git2 name decoder.
     (
         "codeflow-core/src/root_checkout.rs",
@@ -1828,6 +1852,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // A ruleset answer that does not parse reads as Null, which has no bypass list, so ruleset_bound returns Bypass::Unknown and the registry rules read as unread, never as bound.
+    (
+        "crates/codeflow-core/src/doctor/remote_perimeter.rs",
+        "ruleset_bound",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // Trims the stderr of a failed `git remote get-url --push` only to show it in the refusal; the exit status decides.
+    (
+        "crates/codeflow-core/src/remote.rs",
+        "origin_on",
+        "trim",
+        1,
+        "display",
+    ),
     // A gh answer that does not parse reads as Null, so the check returns a note that names no default branch or no readable rules, never a pass.
     (
         "crates/codeflow-core/src/doctor/remote_perimeter.rs",
@@ -2881,6 +2921,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "framing:git-commit-message-lines",
     ),
+    // TSK-1350: the merge ticket rule finds a merge commit's subject as commit_msg_from does; no ref/path identity is derived from this text.
+    (
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "merge_ticket_violation",
+        "lines",
+        1,
+        "framing:git-commit-message-lines",
+    ),
     // TSK-412: `gitleaks version` output trimmed, then compared whole with the pinned ASCII version; any other output refuses.
     (
         "crates/codeflow-core/src/hooks/gitleaks.rs",
@@ -2908,6 +2956,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/hooks/git_hook.rs",
         "commit_msg_from",
+        "trim",
+        1,
+        "grammar:git-commit-message",
+    ),
+    // TSK-1350: the merge commit's subject is found as in commit_msg_from; no ref/path identity is derived from this text.
+    (
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "merge_ticket_violation",
         "trim",
         1,
         "grammar:git-commit-message",
@@ -3314,7 +3370,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Owns physical text-line framing for this complete message/document reader. Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
-        "check_commit_ticket",
+        "check_ticket_trailers",
         "lines",
         1,
         "framing:conventional-commits-lines",
@@ -3322,7 +3378,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
-        "check_commit_ticket",
+        "check_ticket_trailers",
         "trim_end",
         1,
         "grammar:conventional-commits",
@@ -3861,10 +3917,26 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // A write answer that does not parse reads as Null, whose bypass list differs from the one sent, so the ruleset is reported unconfirmed, never applied.
     (
         "crates/codeflow-core/src/remote.rs",
-        "GithubProvider::apply_owned",
+        "GithubProvider::send",
         "obtain-absent:from_str",
         1,
         "unproven",
+    ),
+    // An --adopt ruleset or owned name that is blank after trimming is refused; the untrimmed text is what is matched, exactly.
+    (
+        "crates/codeflow-core/src/remote.rs",
+        "Adopt::parse",
+        "trim",
+        2,
+        "schema-reject-only",
+    ),
+    // A blank --branch is refused; the untrimmed name is what limits the run and is looked up on the host.
+    (
+        "crates/codeflow-cli/src/cmd/remote.rs",
+        "run",
+        "trim",
+        1,
+        "schema-reject-only",
     ),
     // A bypass actor's missing type or mode is shown as a placeholder in a report or failure line; the non-empty list alone decides.
     (
@@ -4322,18 +4394,10 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // var_os returns OS bytes or genuine unset; an unset CARGO_TARGET_DIR is `target`; a build-output folder whose last name is not UTF-8 is refused, and the other components stay native path bytes, never decoded lossily (TSK-1044).
+    // var_os returns OS bytes or genuine unset; an unset CARGO_TARGET_DIR is `target`; present bytes become the native path without decoding or normalization; target_anchor_for refuses a build-output folder whose last name is not UTF-8 and keeps the other components as native path bytes, never decoded lossily (TSK-1044). The one read serves target_dir and target_anchor (TSK-1369).
     (
         "crates/codeflow-core/src/testing/delivery.rs",
-        "target_anchor",
-        "obtain-absent:var_os",
-        1,
-        "format-contract",
-    ),
-    // var_os returns OS bytes or genuine unset; present CARGO_TARGET_DIR bytes become the native PathBuf without decoding or normalization.
-    (
-        "crates/codeflow-core/src/testing/delivery.rs",
-        "target_dir",
+        "build_output_setting",
         "obtain-absent:var_os",
         1,
         "format-contract",
@@ -4917,10 +4981,10 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // A tree that cannot be read returns Some(the trees cannot be read), which reviewed_span_problem and stacked turn into a refusal finding (through later_change and later_change_finding).
+    // An unreadable reviewed or landed-span tree produces a refusal finding.
     (
         "crates/codeflow-core/src/workgraph/acceptance.rs",
-        "later_change_judged",
+        "later_path_change",
         "obtain-absent:find_commit",
         1,
         "unproven",
@@ -6498,7 +6562,7 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
     (
         "conventional-commits-lines",
         "crates/codeflow-core/src/hooks/standards.rs",
-        "check_commit_ticket",
+        "check_ticket_trailers",
     ),
     (
         "conventional-commits-lines",
@@ -6539,6 +6603,11 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "git-commit-message-lines",
         "crates/codeflow-core/src/hooks/git_hook.rs",
         "commit_msg_with_files",
+    ),
+    (
+        "git-commit-message-lines",
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "merge_ticket_violation",
     ),
     (
         "git-commit-message-lines",
