@@ -340,7 +340,7 @@ fn authority_directories(home: &Path) -> Vec<PathBuf> {
 
 /// `path` with ASCII letters lowercased, compared by component.
 fn folded_path(path: &Path) -> PathBuf {
-    PathBuf::from(path.to_string_lossy().to_ascii_lowercase())
+    PathBuf::from(path.as_os_str().to_ascii_lowercase())
 }
 
 /// Whether `candidate` is one of `dirs` or inside one, ignoring ASCII case,
