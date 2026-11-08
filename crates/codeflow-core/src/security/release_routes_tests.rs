@@ -1229,3 +1229,339 @@ fn review2_gh_aliases_are_read_from_gh_config() {
     with_session(&[("GH_CONFIG_DIR", &at)], None);
     assert_refused(dir, "gh rel v1", "release");
 }
+
+/// Every config-file refusal names its fix: wget `--no-config`; curl the
+/// `.curlrc` and `-q`; `HTTPie` and xh the file and the variable to set; gh
+/// the alias and its config file.
+#[test]
+fn review3_each_config_refusal_names_its_fix() {
+    let temp = standard();
+    let dir = temp.path();
+    let post = "POST https://localhost:8080/x a=b";
+    assert_refused(
+        dir,
+        "wget https://example.invalid/x",
+        "pass `--no-config` so wget skips them",
+    );
+    let curl_home = config_dir(".curlrc");
+    let curl_at = curl_home.path().display().to_string();
+    let command = format!("CURL_HOME={curl_at} curl https://example.invalid/");
+    assert_refused(dir, &command, &format!("{curl_at}/.curlrc"));
+    assert_refused(dir, &command, "put `-q` first so curl skips it");
+    // HTTPie and xh, triggered by the variable and by the home directory.
+    let empty = tempfile::tempdir().unwrap();
+    let none = empty.path().display().to_string();
+    for (tool, variable, home_file) in [
+        ("http", "HTTPIE_CONFIG_DIR", ".config/httpie/config.json"),
+        ("xh", "XH_CONFIG_DIR", ".config/xh/config.json"),
+    ] {
+        let config = config_dir("config.json");
+        let at = config.path().display().to_string();
+        let command = format!("{variable}={at} {tool} {post}");
+        assert_refused(dir, &command, &format!("{at}/config.json"));
+        assert_refused(
+            dir,
+            &command,
+            &format!("set `{variable}` on the call to a directory without a `config.json`"),
+        );
+        let home = config_dir(home_file);
+        with_session(&[], Some(home.path()));
+        let command = format!("{tool} {post}");
+        assert_refused(
+            dir,
+            &command,
+            &format!("{}/{home_file}", home.path().display()),
+        );
+        assert_refused(dir, &command, &format!("set `{variable}`"));
+        // The fix it names passes: the variable set on the call to a
+        // directory without a config file is the only one read.
+        assert_passes(dir, &format!("{variable}={none} {tool} {post}"));
+        // Set any other way, it may not reach the call, so the home file
+        // still counts; a value the guard cannot resolve refuses too.
+        for command in [
+            format!("export {variable}={none}; {tool} {post}"),
+            format!("env {variable}={none} {tool} {post}"),
+        ] {
+            assert_refused(dir, &command, home_file);
+        }
+        let command = format!("{variable}=$X {tool} {post}");
+        assert_refused(dir, &command, "cannot resolve");
+        assert_refused(dir, &command, &format!("set `{variable}` on the call"));
+        with_session(&[], Some(Path::new("/nonexistent/account-home")));
+    }
+    // gh: the alias and the config file it came from.
+    let config = tempfile::tempdir().unwrap();
+    std::fs::write(
+        config.path().join("config.yml"),
+        "aliases:\n  rel: api -X POST repos/{owner}/{repo}/releases -f tag_name=$1\n  shell: '!gh pr list'\n",
+    )
+    .unwrap();
+    let file = format!("{}/config.yml", config.path().display());
+    for alias in ["rel v1", "shell"] {
+        let name = alias.split(' ').next().unwrap();
+        let command = format!("GH_CONFIG_DIR={} gh {alias}", config.path().display());
+        assert_refused(dir, &command, &format!("gh alias `{name}` in {file}"));
+        assert_refused(dir, &command, "call the gh command it stands for");
+    }
+}
+
+/// Whether `command` is refused when the committed policy trusts the config
+/// files of `trusted`.
+fn refused_trusting(dir: &Path, command: &str, trusted: &[&str]) -> Option<String> {
+    hermetic();
+    let levels = SecuritySection {
+        trusted_client_configs: trusted.iter().map(|tool| (*tool).to_owned()).collect(),
+        ..SecuritySection::default()
+    };
+    let found = evaluate_at(command, &levels, Some(dir));
+    let messages: Vec<_> = found
+        .iter()
+        .filter(|v| v.rule == "security.outward_actions")
+        .map(|v| v.message.as_str())
+        .collect();
+    (!messages.is_empty()).then(|| messages.join(" | "))
+}
+
+/// `security.trusted_client_configs`: the default refuses every client a
+/// config file may change; a listed tool loses only its own config-file
+/// refusal, and its GitHub destination checks stay.
+#[test]
+fn review3_trusted_client_configs_lift_one_tool_each() {
+    let temp = standard();
+    let dir = temp.path();
+    // Every tool's config file is present.
+    let home = tempfile::tempdir().unwrap();
+    for file in [
+        ".curlrc",
+        ".config/httpie/config.json",
+        ".config/xh/config.json",
+    ] {
+        let path = home.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "").unwrap();
+    }
+    let gh_dir = home.path().join(".config/gh");
+    std::fs::create_dir_all(&gh_dir).unwrap();
+    std::fs::create_dir(gh_dir.join("config.yml")).unwrap();
+    let release = "https://api.github.com/repos/acme/widget/releases";
+    let calls = [
+        (
+            "curl",
+            "curl -X POST https://localhost:8080/x -d a".to_owned(),
+        ),
+        ("wget", "wget https://example.invalid/x".to_owned()),
+        (
+            "httpie",
+            "http POST https://localhost:8080/x a=b".to_owned(),
+        ),
+        ("xh", "xh POST https://localhost:8080/x a=b".to_owned()),
+        ("gh_aliases", "gh some-extension".to_owned()),
+    ];
+    let github = [
+        format!("curl -X POST {release} -d '{{\"tag_name\":\"v1\"}}'"),
+        format!("wget --method=POST --body-data=x {release}"),
+        format!("http POST {release} tag_name=v1"),
+        format!("xh POST {release} tag_name=v1"),
+        "curl --frobnicate -X POST https://localhost:8080/x -d a".to_owned(),
+        "wget --max-redirect=0 --frob --method=POST https://example.invalid/x".to_owned(),
+    ];
+    with_session(&[], Some(home.path()));
+    // The default refuses each.
+    for (_, command) in &calls {
+        assert!(
+            refused_trusting(dir, command, &[]).is_some(),
+            "passed: {command}"
+        );
+    }
+    // Each tool trusted alone passes only its own call.
+    for (tool, _) in &calls {
+        for (other, command) in &calls {
+            let verdict = refused_trusting(dir, command, &[tool]);
+            assert_eq!(
+                verdict.is_none(),
+                tool == other,
+                "trusting {tool}: {command}: {verdict:?}"
+            );
+        }
+        // The GitHub destination checks stay.
+        for command in &github {
+            assert!(
+                refused_trusting(dir, command, &[tool]).is_some(),
+                "trusting {tool} passed: {command}"
+            );
+        }
+    }
+    // A trusted gh still reads an alias it can read.
+    let config = tempfile::tempdir().unwrap();
+    std::fs::write(
+        config.path().join("config.yml"),
+        "aliases:\n  rel: api -X POST repos/{owner}/{repo}/releases -f tag_name=$1\n",
+    )
+    .unwrap();
+    let command = format!("GH_CONFIG_DIR={} gh rel v1", config.path().display());
+    let verdict = refused_trusting(dir, &command, &["gh_aliases"]);
+    assert!(
+        verdict.is_some_and(|why| why.contains("release")),
+        "{command}"
+    );
+    // A name that is not a tool trusts nothing.
+    assert!(refused_trusting(dir, &calls[0].1, &["CURL", "curlrc"]).is_some());
+}
+
+/// The trust is read only from the committed policy on the remote's default
+/// branch: a list in the working copy, or in a local commit the remote does
+/// not hold, trusts nothing.
+#[test]
+fn review3_trusted_client_configs_come_only_from_the_default_branch() {
+    let base = tempfile::tempdir().unwrap();
+    let base = base.path().canonicalize().unwrap();
+    let trusting = r#"{"security":{"trusted_client_configs":["curl"]}}"#;
+    let commit = |repo: &git2::Repository, files: &[(&str, &str)]| {
+        let root = repo.workdir().unwrap().to_path_buf();
+        let mut index = repo.index().unwrap();
+        for (path, text) in files {
+            let file = root.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, text).unwrap();
+            index.add_path(Path::new(path)).unwrap();
+        }
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+        let parents: Vec<&git2::Commit> = parent.iter().collect();
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "test: x",
+            &tree,
+            &parents,
+        )
+        .unwrap();
+    };
+    let clone = |origin_policy: Option<&str>, name: &str| {
+        let mut options = git2::RepositoryInitOptions::new();
+        options.initial_head("main");
+        let origin_dir = base.join(format!("{name}-origin"));
+        let origin = git2::Repository::init_opts(&origin_dir, &options).unwrap();
+        let mut files = vec![("README.md", "x\n")];
+        files.extend(origin_policy.map(|policy| (".codeflow/policy.json", policy)));
+        commit(&origin, &files);
+        let work = base.join(format!("{name}-work"));
+        git2::Repository::clone(origin_dir.to_str().unwrap(), &work).unwrap();
+        work
+    };
+    let trusted = |work: &Path| {
+        crate::hooks::landed_policy::load(work)
+            .unwrap()
+            .policy
+            .security
+            .trusted_client_configs
+    };
+    // On the default branch: honoured.
+    let landed = clone(Some(trusting), "landed");
+    assert_eq!(trusted(&landed), ["curl"]);
+    // Only in the working copy, then only in a local commit: ignored.
+    let local = clone(None, "local");
+    std::fs::create_dir_all(local.join(".codeflow")).unwrap();
+    std::fs::write(local.join(".codeflow/policy.json"), trusting).unwrap();
+    assert!(trusted(&local).is_empty());
+    let repo = git2::Repository::open(&local).unwrap();
+    commit(&repo, &[(".codeflow/policy.json", trusting)]);
+    assert!(trusted(&local).is_empty());
+    // Every source must list it: the session project's policy that lacks
+    // it, or cannot be read, leaves nothing trusted.
+    let keep = |other: Result<&crate::hooks::landed_policy::LandedPolicy, &String>| {
+        let mut list = trusted(&landed);
+        crate::hooks::landed_policy::keep_trusted_by(&mut list, other);
+        list
+    };
+    let both = crate::hooks::landed_policy::load(&landed).unwrap();
+    assert_eq!(keep(Ok(&both)), ["curl"]);
+    let lacking = crate::hooks::landed_policy::load(&local).unwrap();
+    assert!(keep(Ok(&lacking)).is_empty());
+    assert!(keep(Err(&"unreadable".to_owned())).is_empty());
+    // The guard then refuses a curl call beside a `.curlrc`.
+    let home = config_dir(".curlrc");
+    with_session(&[], Some(home.path()));
+    let levels = crate::hooks::landed_policy::load(&local)
+        .unwrap()
+        .policy
+        .security;
+    let found = evaluate_at("curl https://example.invalid/", &levels, Some(&local));
+    assert!(
+        found.iter().any(|v| v.rule == "security.outward_actions"),
+        "{found:?}"
+    );
+    let levels = crate::hooks::landed_policy::load(&landed)
+        .unwrap()
+        .policy
+        .security;
+    let found = evaluate_at("curl https://example.invalid/", &levels, Some(&landed));
+    assert!(
+        !found.iter().any(|v| v.rule == "security.outward_actions"),
+        "{found:?}"
+    );
+}
+
+/// curl's search (`src/tool_findfile.c`) also reads `$HOME/.config/curlrc`
+/// and `$CURL_HOME/.config/curlrc` when `XDG_CONFIG_HOME` is unset or
+/// empty; each is checked, in the guard's environment, on the line and in
+/// the account home.
+#[test]
+fn review3_curl_dot_config_curlrc_is_checked() {
+    let temp = standard();
+    let dir = temp.path();
+    let write = "curl -X POST https://example.invalid/x -d a";
+    let home = config_dir(".config/curlrc");
+    let at = home.path().display().to_string();
+    let file = format!("{at}/.config/curlrc");
+    let none = Some(Path::new("/nonexistent/account-home"));
+    // `$HOME/.config/curlrc`, with both variables unset.
+    with_session(&[("HOME", &at)], none);
+    assert_refused(dir, write, &file);
+    // The account home's.
+    with_session(&[], Some(home.path()));
+    assert_refused(dir, write, &file);
+    // `$CURL_HOME/.config/curlrc`, from the guard's environment and the line.
+    with_session(&[("CURL_HOME", &at)], none);
+    assert_refused(dir, write, &file);
+    with_session(&[], none);
+    assert_refused(dir, &format!("CURL_HOME={at} {write}"), &file);
+    // `-q` first skips it.
+    with_session(&[("HOME", &at)], none);
+    assert_passes(dir, &format!("curl -q {}", &write[5..]));
+    with_session(&[], Some(Path::new("/nonexistent/account-home")));
+}
+
+/// An empty config variable is read as the current directory where a
+/// client joins it there: `HTTPie`'s `XDG_CONFIG_HOME`, xh's
+/// `XH_CONFIG_DIR`, and gh's home when `HOME` is empty.
+#[test]
+fn review3_an_empty_config_variable_is_the_current_directory() {
+    let temp = standard();
+    let dir = temp.path();
+    let post = "POST https://localhost:8080/x a=b";
+    for (file, command) in [
+        (
+            "httpie/config.json",
+            format!("XDG_CONFIG_HOME= http {post}"),
+        ),
+        ("config.json", format!("XH_CONFIG_DIR= xh {post}")),
+    ] {
+        let path = dir.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "").unwrap();
+        assert_refused(dir, &command, file);
+        std::fs::remove_file(&path).unwrap();
+        assert_passes(dir, &command);
+    }
+    let gh = dir.join(".config/gh");
+    std::fs::create_dir_all(&gh).unwrap();
+    std::fs::write(
+        gh.join("config.yml"),
+        "aliases:\n  rel: api -X POST repos/{owner}/{repo}/releases -f tag_name=$1\n",
+    )
+    .unwrap();
+    assert_refused(dir, "HOME= gh rel v1", "gh alias `rel`");
+}

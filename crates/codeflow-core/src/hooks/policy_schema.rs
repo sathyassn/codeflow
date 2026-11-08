@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 85] = [
+pub const SCHEMA: [KeySpec; 86] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -994,6 +994,13 @@ pub const SCHEMA: [KeySpec; 85] = [
         notes: "Default strict, also when the key is absent. `relaxed` is honoured only from the remote-tracking refs as last fetched (the remote's default branch, the one policy authority since TSK-1077): plain refs under `refs/remotes/<remote>/`, a remote `HEAD` that stays there, and no ref file that is a symbolic link. It is never honoured from a working copy, a local branch or tag, or a repository without a remote; a Claude Code call also needs it in the session project's policy. Those refs are local state that a process able to write `.git` can set; the guard does not authenticate them. The strict rule's refusals block whatever `git.hook_integrity` says. Under `relaxed`, a recognized marked retry (`dangerouslyDisableSandbox`) and every call on native Windows still take the strict rule. `codeflow doctor --check sandbox` shows the rule and the ref it was read from. The shipped policy file does not list it, so an older binary never meets the key.",
     },
     KeySpec {
+        path: "security.trusted_client_configs",
+        kind: KeyKind::StringList,
+        valid: "any of curl, wget, httpie, xh, gh_aliases",
+        purpose: "The HTTP clients whose config files the project trusts (TSK-1346). For a listed tool, exec-guard no longer refuses a call because a config file it reads may exist: `curl` without `-q`, `wget` without `--no-config`, `HTTPie` or xh beside a `config.json`, and a gh alias whose config cannot be read or that runs a shell command (`gh_aliases`); a gh alias the guard can read is still judged as its expansion.",
+        notes: "Default empty: every config-file refusal stays on. Accepting a tool accepts this threat: a config file the requester can write can turn that tool's call into a GitHub write the guard does not see. The GitHub-destination checks stay for every tool: a write to a GitHub release route, an unknown option, an unparsed destination or a redirect is still refused. Read only from the committed policy authority (`landed_policy`, the remote-tracking refs as last fetched), never from the working tree or the environment. A tool is trusted only when every policy source the guard reads lists it: the call's repository and, for a Claude Code call made outside it, the session project; a source that cannot be read trusts none. An unknown name is a validation error and trusts nothing.",
+    },
+    KeySpec {
         path: "security.outward_actions",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
@@ -1492,6 +1499,21 @@ fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<Policy
             validate_candidate_key(path, value, errors);
         }
         "git.branch_name_omit_words" => validate_branch_name_omit_words(path, value, errors),
+        "security.trusted_client_configs" => {
+            for entry in value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if !crate::hooks::policy::TRUSTED_CLIENT_CONFIG_TOOLS.contains(&entry) {
+                    errors.push(PolicyError {
+                        key: path.to_string(),
+                        message: format!("unknown tool '{entry}' in {path}; use curl, wget, httpie, xh or gh_aliases"),
+                    });
+                }
+            }
+        }
         "git.required_checks" => {
             let entries = value.as_array().map_or(&[][..], Vec::as_slice);
             if value.is_array() && entries.is_empty() {
@@ -1920,8 +1942,9 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 12] = [
+        const OPTIONAL: [&str; 13] = [
             "security.text_guard",
+            "security.trusted_client_configs",
             "git.pr_section_mapping",
             "git.ignored_files",
             "git.max_file_bytes",

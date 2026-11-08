@@ -21,9 +21,15 @@ pub(crate) fn evaluate_at(
     levels: &SecuritySection,
     cwd: Option<&Path>,
 ) -> Vec<Violation> {
-    let mut parsed = Parsed::default();
+    let mut parsed = Parsed {
+        trusted_client_configs: levels.trusted_client_configs.clone(),
+        ..Parsed::default()
+    };
     visit(command, cwd, 0, &mut parsed);
-    let mut embedded = Parsed::default();
+    let mut embedded = Parsed {
+        trusted_client_configs: levels.trusted_client_configs.clone(),
+        ..Parsed::default()
+    };
     for code in &parsed.code {
         let words = literal_words(code);
         for at in 0..words.len() {
@@ -155,6 +161,12 @@ struct Parsed {
     /// cannot read, such as `source`, `eval` or an `env` option it does not
     /// know (TSK-1346).
     client_env_unresolved: Option<String>,
+    /// The config variables a segment assigns before its program, with the
+    /// program and its arguments: they reach that one call for certain
+    /// (TSK-1346).
+    inline_env: Option<(Vec<(String, String)>, Vec<String>)>,
+    /// The committed policy's `security.trusted_client_configs`.
+    trusted_client_configs: Vec<String>,
     unreadable: Vec<String>,
     families: Vec<(&'static str, Option<PathBuf>)>,
     code: Vec<String>,
@@ -698,6 +710,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
         out.config_trigger = trigger.or_else(|| persistent.clone());
         note_gh_repo(&words[..words.len() - skip_assignments(&words).len()], out);
         note_client_env_expansion(&segment, out);
+        out.inline_env = Some(inline_assignments(&words));
         let mut assigned = skip_assignments(&words).to_vec();
         let mut assigned_patterns = patterns[words.len() - assigned.len()..].to_vec();
         if let Some(setting) = words
@@ -3231,9 +3244,27 @@ fn release_route(
     let session = std::env::var_os("GH_REPO")
         .map(|value| value.into_string().unwrap_or_else(|_| "$GH_REPO".into()));
     let gh_repo = out.gh_repo.clone().or(session);
-    let env =
-        super::release_routes::ClientEnv::new(&out.client_env, out.client_env_unresolved.clone());
-    let ctx = super::release_routes::Ctx::new(cwd, gh_repo.as_deref()).with_env(&env);
+    // Assignments before the program count as certain only for the call
+    // the segment itself runs, not one a wrapper starts.
+    let inline = match &out.inline_env {
+        Some((assigned, call))
+            if call
+                .first()
+                .is_some_and(|program| crate::hooks::git_guard::launcher_name(program) == name)
+                && call[1..] == *rest =>
+        {
+            assigned.clone()
+        }
+        _ => Vec::new(),
+    };
+    let env = super::release_routes::ClientEnv::new(
+        &out.client_env,
+        &inline,
+        out.client_env_unresolved.clone(),
+    );
+    let ctx = super::release_routes::Ctx::new(cwd, gh_repo.as_deref())
+        .with_env(&env)
+        .with_trusted(&out.trusted_client_configs);
     let reason = match name {
         "gh" => super::release_routes::gh(rest, &canonical[1..], ctx),
         "curl" => super::release_routes::curl(rest, ctx),
@@ -3329,6 +3360,19 @@ fn env_unknown_option(rest: &[String]) -> Option<&String> {
         }
     }
     None
+}
+
+/// The config variables `words` assigns before its program, and the program
+/// with its arguments.
+fn inline_assignments(words: &[String]) -> (Vec<(String, String)>, Vec<String>) {
+    let call = skip_assignments(words);
+    let assigned = words[..words.len() - call.len()]
+        .iter()
+        .filter_map(|word| word.split_once('='))
+        .filter(|(key, _)| super::release_routes::CONFIG_VARIABLES.contains(key))
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect();
+    (assigned, call.to_vec())
 }
 
 /// Note a `${NAME=value}` or `${NAME:=value}` expansion in `segment` that

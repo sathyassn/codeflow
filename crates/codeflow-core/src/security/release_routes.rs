@@ -45,6 +45,9 @@ pub(crate) struct Ctx<'a> {
     target: &'a Target,
     /// The environment that places a client's config file.
     env: Option<&'a ClientEnv>,
+    /// The tools whose config files the project trusts, from the committed
+    /// policy's `security.trusted_client_configs`.
+    trusted: &'a [String],
 }
 
 impl<'a> Ctx<'a> {
@@ -54,7 +57,19 @@ impl<'a> Ctx<'a> {
             gh_repo,
             target: &Target::Literal,
             env: None,
+            trusted: &[],
         }
+    }
+
+    /// The same context, trusting the config files of the tools `trusted`
+    /// names.
+    pub(crate) fn with_trusted(self, trusted: &'a [String]) -> Self {
+        Self { trusted, ..self }
+    }
+
+    /// Whether the project trusts `tool`'s config files.
+    fn trusts(&self, tool: &str) -> bool {
+        self.trusted.iter().any(|name| name == tool)
     }
 
     /// The same context, finding config files through `env`.
@@ -85,6 +100,9 @@ pub(crate) const CONFIG_VARIABLES: &[&str] = &[
 /// Any of them may be the one the call sees, so a lookup checks them all.
 pub(crate) struct ClientEnv {
     values: Vec<(String, String)>,
+    /// The assignments written before the call's own program, which reach
+    /// it for certain.
+    inline: Vec<(String, String)>,
     /// Why the line may set a variable the guard cannot see, such as
     /// `source`, `eval` or an `env` option it does not read.
     unresolved: Option<String>,
@@ -92,26 +110,53 @@ pub(crate) struct ClientEnv {
 }
 
 impl ClientEnv {
-    pub(crate) fn new(line: &[(String, String)], unresolved: Option<String>) -> Self {
+    pub(crate) fn new(
+        line: &[(String, String)],
+        inline: &[(String, String)],
+        unresolved: Option<String>,
+    ) -> Self {
         let (session, account_home) = session_environment();
         let mut values = line.to_vec();
         values.extend(session);
         Self {
             values,
+            inline: inline.to_vec(),
             unresolved,
             account_home,
         }
     }
 
+    /// The directory `name` holds for certain: the last value an assignment
+    /// before the call's program gives it, when that value is a plain path.
+    /// A client that reads only that directory when the variable is set
+    /// (`HTTPIE_CONFIG_DIR`, `XH_CONFIG_DIR`, `GH_CONFIG_DIR`) then reads
+    /// only there.
+    fn only(&self, name: &str) -> Option<PathBuf> {
+        let value = self
+            .inline
+            .iter()
+            .rev()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value)?;
+        let plain = !value.is_empty()
+            && !opaque(value)
+            && !value.starts_with('~')
+            && !value.chars().any(char::is_control);
+        plain.then(|| PathBuf::from(value))
+    }
+
     /// Every directory `name` may hold; an error when a value cannot be
-    /// resolved.
+    /// resolved. An empty value is kept as the current directory: curl and
+    /// gh skip it, but `HTTPie` joins an empty `XDG_CONFIG_HOME`, and xh an
+    /// empty `XH_CONFIG_DIR`, onto the current directory, so checking it
+    /// there for every tool fails closed.
     fn dirs(&self, name: &str) -> Result<Vec<PathBuf>, String> {
         if let Some(why) = &self.unresolved {
             return Err(why.clone());
         }
         let mut dirs = Vec::new();
         for (key, value) in &self.values {
-            if key != name || value.is_empty() {
+            if key != name {
                 continue;
             }
             // A command substitution reaches here as a control character.
@@ -220,6 +265,9 @@ fn gh_config_files(ctx: Ctx<'_>) -> Result<Vec<PathBuf>, String> {
     let env = ctx
         .env
         .ok_or_else(|| "the environment the call runs with is not known".to_owned())?;
+    if let Some(dir) = env.only("GH_CONFIG_DIR") {
+        return present(vec![dir.join("config.yml")], ctx.cwd);
+    }
     let mut files: Vec<PathBuf> = env
         .dirs("GH_CONFIG_DIR")?
         .into_iter()
@@ -296,10 +344,16 @@ const GH_COMMANDS: &[&str] = &[
 fn gh_alias(args: &[String], sub: &[String], ctx: Ctx<'_>, depth: usize) -> Option<String> {
     let name = sub.first()?;
     let shown = crate::git::display_text(name);
+    // A project that trusts gh's aliases (`security.trusted_client_configs`)
+    // lifts the refusals for config the guard cannot read; an alias it can
+    // read is still judged as its expansion.
+    let trusted = ctx.trusts("gh_aliases");
     let unsure = |why: &str| {
-        Some(format!(
-            "gh {shown} may be an alias, and {why}, so the guard cannot tell whether it publishes a release"
-        ))
+        (!trusted).then(|| {
+            format!(
+                "gh {shown} may be an alias, and {why}, so the guard cannot tell whether it publishes a release; call the gh command the alias stands for"
+            )
+        })
     };
     if depth > 0 {
         return unsure("an alias that expands to another alias is not read");
@@ -324,10 +378,13 @@ fn gh_alias(args: &[String], sub: &[String], ctx: Ctx<'_>, depth: usize) -> Opti
         let expansion = match config.get("aliases").and_then(|a| a.get(name.as_str())) {
             None => continue,
             Some(serde_yaml::Value::String(text)) => text.clone(),
-            Some(_) => return unsure("its alias is not text"),
+            Some(_) => return unsure(&format!("its alias in {} is not text", file.display())),
         };
         if let Some(why) = gh_expansion(args, sub, &expansion, ctx, depth) {
-            return Some(why);
+            return Some(format!(
+                "{why} (gh alias `{shown}` in {}; call the gh command it stands for)",
+                file.display()
+            ));
         }
     }
     None
@@ -882,9 +939,14 @@ fn read_curl(args: &[String]) -> CurlCall {
 
 /// Why a `curl` call without `-q` or `--disable` first is refused. curl
 /// then reads a default config file, which can add a URL, a method or data,
-/// so the arguments alone cannot rule out a write to GitHub: it reads
-/// `$CURL_HOME/.curlrc`, `$XDG_CONFIG_HOME/curlrc`, `$HOME/.curlrc` and the
-/// account home's `.curlrc`. `None` when none of them exists. A file the
+/// so the arguments alone cannot rule out a write to GitHub. curl's
+/// `src/tool_findfile.c` searches `$CURL_HOME/.curlrc`,
+/// `$XDG_CONFIG_HOME/curlrc`, `$HOME/.curlrc`, then, when
+/// `XDG_CONFIG_HOME` is unset or empty, `$CURL_HOME/.config/curlrc` and
+/// `$HOME/.config/curlrc`, and last the account home's `.curlrc`. The guard
+/// checks every one of them whatever `XDG_CONFIG_HOME` holds, the
+/// `.config` names in the account home too. `None` when none of them
+/// exists. A file the
 /// guard cannot check counts as present. On Windows curl also reads a file
 /// beside `curl.exe`, which is not checked, so every such call is refused
 /// there. The decision is kept here alone so the scope can change.
@@ -900,17 +962,20 @@ fn curlrc_refusal(ctx: Ctx<'_>) -> Option<String> {
         let env = ctx
             .env
             .ok_or_else(|| "the environment the call runs with is not known".to_owned())?;
-        let mut files: Vec<PathBuf> = env
-            .dirs("CURL_HOME")?
-            .into_iter()
-            .map(|dir| dir.join(".curlrc"))
-            .collect();
+        let mut files = Vec::new();
+        for dir in env.dirs("CURL_HOME")? {
+            files.push(dir.join(".curlrc"));
+            files.push(dir.join(".config").join("curlrc"));
+        }
         files.extend(
             env.dirs("XDG_CONFIG_HOME")?
                 .into_iter()
                 .map(|dir| dir.join("curlrc")),
         );
-        files.extend(env.homes()?.into_iter().map(|dir| dir.join(".curlrc")));
+        for home in env.homes()? {
+            files.push(home.join(".curlrc"));
+            files.push(home.join(".config").join("curlrc"));
+        }
         present(files, ctx.cwd)
     })();
     match found {
@@ -952,7 +1017,7 @@ pub(crate) fn curl(args: &[String], ctx: Ctx<'_>) -> Option<String> {
         }
     }
     if !matches!(args.first().map(String::as_str), Some("-q" | "--disable")) {
-        if let Some(why) = curlrc_refusal(ctx) {
+        if let Some(why) = curlrc_refusal(ctx).filter(|_| !ctx.trusts("curl")) {
             return Some(why);
         }
     }
@@ -1154,7 +1219,7 @@ fn wget(args: &[String], ctx: Ctx<'_>) -> Option<String> {
             return Some(why);
         }
     }
-    if !no_config {
+    if !no_config && !ctx.trusts("wget") {
         return Some(
             "wget may read a system `wgetrc` at a path built into it, which the guard cannot check, or `WGETRC` or `~/.wgetrc`, any of which can set a URL, a method or a body; pass `--no-config` so wget skips them"
                 .into(),
@@ -1258,9 +1323,10 @@ const HTTPIE_OPTIONS: &[Spec] = &[
 /// or a body, and neither has a flag that skips it. `HTTPie` reads
 /// `$HTTPIE_CONFIG_DIR`, `$XDG_CONFIG_HOME/httpie`, `~/.config/httpie` and
 /// the older `~/.httpie`; xh reads `$XH_CONFIG_DIR`, `$XDG_CONFIG_HOME/xh`,
-/// `~/.config/xh`, and on macOS `~/Library/Application Support/xh`. `None`
-/// when none of them exists; a file the guard cannot check counts as
-/// present.
+/// `~/.config/xh`, and on macOS `~/Library/Application Support/xh`. When the
+/// variable is set, each reads only that directory, so a plain path set on
+/// the call itself is the only place checked. `None` when none of them
+/// exists; a file the guard cannot check counts as present.
 fn client_config_refusal(name: &str, ctx: Ctx<'_>) -> Option<String> {
     let httpie = matches!(name, "http" | "https");
     let (variable, dir) = if httpie {
@@ -1272,6 +1338,9 @@ fn client_config_refusal(name: &str, ctx: Ctx<'_>) -> Option<String> {
         let env = ctx
             .env
             .ok_or_else(|| "the environment the call runs with is not known".to_owned())?;
+        if let Some(only) = env.only(variable) {
+            return present(vec![only.join("config.json")], ctx.cwd);
+        }
         let mut files: Vec<PathBuf> = env
             .dirs(variable)?
             .into_iter()
@@ -1289,8 +1358,21 @@ fn client_config_refusal(name: &str, ctx: Ctx<'_>) -> Option<String> {
                     .map(|d| d.join(dir).join("config.json")),
             );
         }
+        if cfg!(windows) && httpie {
+            // `HTTPie` expands `%APPDATA%` itself; unset, the text stays and
+            // names a directory under the current one.
+            files.push(PathBuf::from("%APPDATA%").join(dir).join("config.json"));
+        }
         for home in env.homes()? {
             files.push(home.join(".config").join(dir).join("config.json"));
+            if cfg!(windows) {
+                files.push(
+                    home.join("AppData")
+                        .join("Roaming")
+                        .join(dir)
+                        .join("config.json"),
+                );
+            }
             if httpie {
                 files.push(home.join(".httpie").join("config.json"));
             } else {
@@ -1305,7 +1387,7 @@ fn client_config_refusal(name: &str, ctx: Ctx<'_>) -> Option<String> {
         present(files, ctx.cwd)
     })();
     let advice = format!(
-        "{name} has no flag that skips it, and `{variable}` only moves it; remove the file or send the request with `curl -q`"
+        "{name} has no flag that skips it, so set `{variable}` on the call to a directory without a `config.json` (`{variable}=/path/to/empty-dir {name} ...`)"
     );
     match found {
         Ok(files) => files.first().map(|file| {
@@ -1388,7 +1470,12 @@ pub(crate) fn http_client(name: &str, args: &[String], ctx: Ctx<'_>) -> Option<S
             return Some(why);
         }
     }
-    if let Some(why) = client_config_refusal(name, ctx) {
+    let tool = if matches!(name, "http" | "https") {
+        "httpie"
+    } else {
+        "xh"
+    };
+    if let Some(why) = client_config_refusal(name, ctx).filter(|_| !ctx.trusts(tool)) {
         return Some(why);
     }
     if !write {
