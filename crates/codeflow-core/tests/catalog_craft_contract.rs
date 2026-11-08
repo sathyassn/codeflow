@@ -194,15 +194,37 @@ fn repository_policy_requires_the_always_present_pr_sections() {
 }
 
 /// The dash rule (ADR-0067, note of 2026-09-25) is a writing guideline that
-/// ships at warn, while this repository keeps blocking its own new text.
+/// ships at warn (TSK-450 AC-1), while a repository policy that sets it to
+/// `block` still blocks an en or em dash in a commit message.
 #[test]
-fn repository_policy_blocks_policy_characters_while_the_shipped_default_warns() {
-    let policy: serde_json::Value =
-        serde_json::from_str(&read(".codeflow/policy.json")).expect("policy JSON");
-    assert_eq!(policy["git"]["policy_characters"], "block");
+fn a_policy_that_blocks_policy_characters_still_blocks_while_the_shipped_default_warns() {
+    use codeflow_core::hooks::{git_hook, Policy, PolicyLevel};
+
     let shipped: serde_json::Value =
         serde_json::from_str(&read("assets/base/policy.json")).expect("shipped policy JSON");
     assert_eq!(shipped["git"]["policy_characters"], "warn");
+
+    let message = "docs: note the rule\n\n- a dash \u{2014} here\n";
+    let level_of = |policy: serde_json::Value| {
+        let git = serde_json::from_value::<Policy>(policy)
+            .expect("policy JSON")
+            .git;
+        git_hook::commit_msg(&git, message, false)
+            .violations
+            .iter()
+            .find(|v| v.rule == "git.policy_characters")
+            .map(|v| v.level)
+    };
+    assert_eq!(
+        level_of(serde_json::json!({"git": {"policy_characters": "block"}})),
+        Some(PolicyLevel::Block),
+        "a repository policy that sets policy_characters to block must block a dash"
+    );
+    assert_eq!(
+        level_of(serde_json::json!({"git": {}})),
+        Some(PolicyLevel::Warn),
+        "the shipped default must warn on a dash"
+    );
 }
 
 #[test]
