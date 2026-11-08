@@ -1,0 +1,11 @@
+id = "TSK-1398"
+uid = "355eed6b-cf7b-4cdc-b2eb-902f8d47a509"
+kind = "TSK"
+title = "Agent sessions refuse the git and merge actions ADR-0075 records"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-08T23:17:22Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
