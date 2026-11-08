@@ -34,6 +34,9 @@ pub(crate) fn evaluate_at(
     families.extend(embedded.families);
     let mut config_reasons = parsed.config_reasons;
     config_reasons.extend(embedded.config_reasons);
+    let mut release_reasons = parsed.release_reasons;
+    release_reasons.extend(embedded.release_reasons);
+    release_reasons.dedup();
     families.sort_unstable();
     families.dedup();
     let release_roots: Vec<_> = families
@@ -77,6 +80,10 @@ pub(crate) fn evaluate_at(
                         format!("release action: effective push.followTags config enables tag publication{source}"),
                         crate::remedy::PUSH_WITHOUT_FOLLOW_TAGS.remedy(),
                     );
+                }
+                if id == "release_route" {
+                    let reasons: Vec<_> = release_reasons.iter().filter(|(at, _)| at == &root).map(|(_, reason)| reason.as_str()).collect();
+                    return Violation::new("security.outward_actions", level, format!("release action: {}{source}", reasons.join("; ")), crate::remedy::OUTWARD_ACTION.remedy());
                 }
                 if id == "unverified_git_config" {
                     return Violation::new(
@@ -133,6 +140,9 @@ struct Parsed {
     shell_home: Option<PathBuf>,
     config_trigger: Option<String>,
     config_reasons: Vec<(Option<PathBuf>, String)>,
+    /// The release routes [`super::release_routes`] refuses, each naming
+    /// its form (TSK-1346).
+    release_reasons: Vec<(Option<PathBuf>, String)>,
     unreadable: Vec<String>,
     families: Vec<(&'static str, Option<PathBuf>)>,
     code: Vec<String>,
@@ -3143,6 +3153,7 @@ fn direct_family(
             out.families.push(("configured_tag_push", source()?));
         }
     }
+    release_route(name, rest, &canonical, cwd, out);
     if name == "gh" {
         if sub == "repo"
             && body.first().is_some_and(|s| s == "edit")
@@ -3182,6 +3193,26 @@ fn direct_family(
         out.families.push(("persistence", source()?));
     }
     Ok(())
+}
+
+/// Record a release route a `gh` or `curl` call takes (TSK-1346). Neither
+/// names a git directory, so the cwd's policy judges it.
+fn release_route(
+    name: &str,
+    rest: &[String],
+    canonical: &[String],
+    cwd: Option<&Path>,
+    out: &mut Parsed,
+) {
+    let reason = match name {
+        "gh" => super::release_routes::gh(rest, &canonical[1..], cwd),
+        "curl" => super::release_routes::curl(rest, cwd),
+        _ => None,
+    };
+    if let Some(reason) = reason {
+        out.release_reasons.push((None, reason));
+        out.families.push(("release_route", None));
+    }
 }
 
 fn has_explicit_git_directory(args: &[String]) -> bool {
@@ -3348,11 +3379,15 @@ fn tag_push(
         return Ok(false);
     };
     let repo = crate::hooks::repo::open(&dir)?.ok_or("command repository disappeared")?;
-    for arg in args.iter().filter(|arg| !arg.starts_with('-')) {
+    for (position, arg) in args.iter().filter(|arg| !arg.starts_with('-')).enumerate() {
         for part in arg.trim_start_matches('+').split(':') {
             let shorthand = part
                 .strip_prefix("tags/")
                 .or_else(|| part.strip_prefix("refs/tags/"));
+            // The first operand names the remote, never a ref.
+            if position > 0 && bare_release_name(&repo, part)? {
+                return Ok(true);
+            }
             for tag_name in [Some(part), shorthand]
                 .into_iter()
                 .flatten()
@@ -3378,6 +3413,28 @@ fn tag_push(
         }
     }
     Ok(false)
+}
+
+/// Whether a bare refspec part names a release tag the local tag store may
+/// not hold yet (TSK-1346 AC-3): it has the release tag shape and names no
+/// local branch, remote-tracking branch or commit. A tag created by a step
+/// the guard does not model is pushed by name, so the shape alone refuses.
+fn bare_release_name(repo: &git2::Repository, part: &str) -> Result<bool, String> {
+    if !super::release_routes::release_tag_shaped(part) {
+        return Ok(false);
+    }
+    for reference in [format!("refs/heads/{part}"), format!("refs/remotes/{part}")] {
+        if !git2::Reference::is_valid_name(&reference) {
+            return Ok(false);
+        }
+        match repo.find_reference(&reference) {
+            Ok(_) => return Ok(false),
+            Err(e) if e.code() == git2::ErrorCode::NotFound => {}
+            Err(e) => return Err(format!("cannot read ref {part}: {e}")),
+        }
+    }
+    let hex = part.len() >= 4 && part.bytes().all(|b| b.is_ascii_hexdigit());
+    Ok(!(hex && repo.revparse_single(part).is_ok()))
 }
 
 fn truthy(value: &str) -> bool {
@@ -4375,12 +4432,69 @@ mod tests {
                 "{command}"
             );
         }
-        assert!(evaluate_at(
+        // TSK-1346 AC-3: a release-shaped name is refused even where this
+        // repository holds no such tag.
+        assert!(!evaluate_at(
             "git -C other tag v9 && git push origin v9",
             &SecuritySection::default(),
             Some(temp.path())
         )
         .is_empty());
+        assert!(evaluate_at(
+            "git -C other tag x9 && git push origin x9",
+            &SecuritySection::default(),
+            Some(temp.path())
+        )
+        .is_empty());
+    }
+
+    /// TSK-1346 AC-3: a push that creates or moves a release-shaped tag is
+    /// refused whether or not the tag exists locally.
+    #[test]
+    fn ac3_release_tag_pushes_are_refused_without_a_local_tag() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        let tree = repo
+            .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+            .unwrap();
+        let who = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let commit = repo
+            .commit(Some("refs/heads/main"), &who, &who, "chore: c", &tree, &[])
+            .unwrap();
+        repo.reference("refs/heads/v2-work", commit, true, "fixture")
+            .unwrap();
+        repo.reference("refs/remotes/origin/v3-line", commit, true, "fixture")
+            .unwrap();
+        let inspect =
+            |command: &str| evaluate_at(command, &SecuritySection::default(), Some(temp.path()));
+        for command in [
+            "git push origin v9.9.9",
+            "git push origin +v9.9.9",
+            "git push origin 1.2.3",
+            "git push origin main v9.9.9",
+            "git push origin HEAD:v9.9.9",
+            "git push origin :v9.9.9",
+            "git push --delete origin v9.9.9",
+            "git push origin refs/tags/v9.9.9",
+            "git push origin HEAD:refs/tags/v1",
+            "git push origin tag v9.9.9",
+            "git push origin --tags",
+            "git push --follow-tags origin main",
+            "git tag v1 && git push origin v1",
+        ] {
+            assert!(!inspect(command).is_empty(), "{command}");
+        }
+        let short = commit.to_string();
+        for command in [
+            "git push origin main".to_string(),
+            "git push origin HEAD".to_string(),
+            "git push origin v2-work".to_string(),
+            "git push origin origin/v3-line:refs/heads/x".to_string(),
+            format!("git push origin {}:refs/heads/x", &short[..12]),
+            "git push vps main".to_string(),
+        ] {
+            assert!(inspect(&command).is_empty(), "{command}");
+        }
     }
 
     #[test]
@@ -4765,23 +4879,35 @@ mod r22_tests {
     fn r22_outward_refuses_unreadable_tag_and_follow_tags() {
         let dir = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
-        for command in [
-            "git push origin v2.0",
+        assert!(evaluate_at(
             "git push https://example.invalid/repo.git HEAD~1:refs/heads/main",
-        ] {
-            assert!(
-                evaluate_at(command, &SecuritySection::default(), Some(dir.path())).is_empty(),
-                "{command}"
-            );
-        }
-        std::fs::write(repo.path().join("refs/tags/v2.0"), "invalid\n").unwrap();
+            &SecuritySection::default(),
+            Some(dir.path())
+        )
+        .is_empty());
+        // TSK-1346 AC-3: a release-shaped name is refused with no local tag.
         assert!(!evaluate_at(
             "git push origin v2.0",
             &SecuritySection::default(),
             Some(dir.path())
         )
         .is_empty());
-        std::fs::remove_file(repo.path().join("refs/tags/v2.0")).unwrap();
+        // An unreadable tag ref refuses; this name lacks the release shape,
+        // so the read itself is what refuses.
+        assert!(evaluate_at(
+            "git push origin rel-2.0",
+            &SecuritySection::default(),
+            Some(dir.path())
+        )
+        .is_empty());
+        std::fs::write(repo.path().join("refs/tags/rel-2.0"), "invalid\n").unwrap();
+        assert!(!evaluate_at(
+            "git push origin rel-2.0",
+            &SecuritySection::default(),
+            Some(dir.path())
+        )
+        .is_empty());
+        std::fs::remove_file(repo.path().join("refs/tags/rel-2.0")).unwrap();
         repo.config()
             .unwrap()
             .set_str("push.followTags", "invalid-bool")
