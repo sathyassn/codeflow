@@ -18,9 +18,9 @@ use super::super::git_target::{expand_word, has_substitution, Cwd, ShellState, V
 use super::{
     basename, cd_target, command_argv, command_argv_live, configuration_input,
     configuration_launch, expand_shell_commands, expands, flat_top_level, git_program_environment,
-    is_identifier, launcher_name, map_top_level, plain_pushd, shell_tokens, shown_word,
-    strip_reserved_words, xargs_command, GIT_BUILTINS, GLOBAL_VALUE_OPTIONS, JUDGED_SUBCOMMANDS,
-    NESTING_UNREAD,
+    is_identifier, launcher_name, map_top_level, parallel_template, plain_pushd, shell_tokens,
+    shown_word, strip_reserved_words, xargs_command, GIT_BUILTINS, GLOBAL_VALUE_OPTIONS,
+    JUDGED_SUBCOMMANDS, NESTING_UNREAD,
 };
 
 /// Stands in a word for text that `xargs` or `find` supplies from its
@@ -461,6 +461,23 @@ fn command_data_supplied(
             }
             return Ok(None);
         }
+        // `parallel` and `fd -x` put their input in place of a replacement
+        // string, or append it, as `xargs` does.
+        "parallel" => {
+            if let Some(child) = parallel_data_command(args) {
+                let child = supply(child);
+                command_data_supplied(&child, vars, reader, Some("`parallel`"))
+                    .map_err(supplied)?;
+            }
+            return Ok(None);
+        }
+        "fd" | "fdfind" => {
+            if let Some(child) = fd_command(args) {
+                let child = supply(child);
+                command_data_supplied(&child, vars, reader, Some("`fd`")).map_err(supplied)?;
+            }
+            return Ok(None);
+        }
         _ => {}
     }
     let name = basename(&filled_program);
@@ -565,6 +582,86 @@ fn xargs_replacement(options: &[String]) -> Option<String> {
 }
 
 /// The commands `find` runs with `-exec`, `-execdir`, `-ok` and `-okdir`.
+/// The command GNU `parallel` runs with words from data: its input, an
+/// `--arg-file` or a `::::` file. `None` when it has no command or its
+/// only inputs are `:::` words on the line, which the launcher reader
+/// judges as written.
+fn parallel_data_command(args: &[String]) -> Option<&[String]> {
+    let (mut start, _) = parallel_template(args);
+    let from_file = args[..start].iter().any(|word| {
+        word == "--arg-file"
+            || word.starts_with("--arg-file=")
+            || (word.starts_with("-a") && !word.starts_with("--"))
+    });
+    if args.get(start).is_some_and(|word| word == "--") {
+        start += 1;
+    }
+    let rest = &args[start..];
+    let end = rest
+        .iter()
+        .position(|word| matches!(word.as_str(), ":::" | ":::+" | "::::" | "::::+"))
+        .unwrap_or(rest.len());
+    let inputs = &rest[end..];
+    let literal_inputs = !inputs.is_empty()
+        && !inputs
+            .iter()
+            .any(|word| matches!(word.as_str(), "::::" | "::::+"));
+    (end > 0 && (from_file || !literal_inputs)).then(|| &rest[..end])
+}
+
+/// The command `fd` runs for each result (`-x`, `--exec`) or for all of
+/// them (`-X`, `--exec-batch`): the words after the option, up to a `;`.
+fn fd_command(args: &[String]) -> Option<&[String]> {
+    let at = args
+        .iter()
+        .position(|word| matches!(word.as_str(), "-x" | "--exec" | "-X" | "--exec-batch"))?;
+    let tail = &args[at + 1..];
+    let end = tail
+        .iter()
+        .position(|word| word == ";")
+        .unwrap_or(tail.len());
+    (end > 0).then(|| &tail[..end])
+}
+
+/// `child` with each replacement string `parallel` and `fd` fill in (`{}`,
+/// `{.}`, `{/}`, `{//}`, `{/.}`, `{#}`, `{%}`, `{1}` and the like) marked as
+/// supplied input; with none, the input is appended, as both do.
+fn supply(child: &[String]) -> Vec<String> {
+    let mut found = false;
+    let mut out: Vec<String> = child
+        .iter()
+        .map(|word| {
+            let mut text = String::new();
+            let mut rest = word.as_str();
+            while let Some(open) = rest.find('{') {
+                text.push_str(&rest[..open]);
+                let after = &rest[open + 1..];
+                match after.find('}') {
+                    Some(close)
+                        if after[..close]
+                            .chars()
+                            .all(|c| matches!(c, '.' | '/' | '#' | '%' | '0'..='9')) =>
+                    {
+                        text.push(SUPPLIED);
+                        found = true;
+                        rest = &after[close + 1..];
+                    }
+                    _ => {
+                        text.push('{');
+                        rest = after;
+                    }
+                }
+            }
+            text.push_str(rest);
+            text
+        })
+        .collect();
+    if !found {
+        out.push(SUPPLIED.to_string());
+    }
+    out
+}
+
 fn find_commands(args: &[String]) -> Vec<&[String]> {
     args.iter()
         .enumerate()

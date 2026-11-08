@@ -9644,6 +9644,17 @@ fn check_authority(
 }
 
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // Ordered checks share the parsed command and its exact cwd.
+/// The words the segment loop marked for this op ([`Moves::marked`]) that
+/// stand for `words`, its last words, when they are the same words.
+fn marked_tail<'m>(moved: &'m Moves<'_>, words: &[String]) -> Option<&'m [String]> {
+    let marked = moved.marked.as_deref()?;
+    let tail = marked.get(marked.len().checked_sub(words.len())?..)?;
+    tail.iter()
+        .zip(words)
+        .all(|(mark, word)| data_operands::unmark(mark) == *word)
+        .then_some(tail)
+}
+
 fn check_git(
     args: &[String],
     branches: &mut BranchTracker,
@@ -9682,17 +9693,8 @@ fn check_git(
     let filled_args;
     // The words as the segment loop marked them, when they are these
     // words: a `$` the shell passes as text is never read as a variable.
-    let marked = moved
-        .marked
-        .as_deref()
-        .and_then(|marked| marked.get(marked.len().checked_sub(args.len())?..))
-        .filter(|marked| {
-            depth == 0
-                && marked
-                    .iter()
-                    .zip(args)
-                    .all(|(mark, word)| data_operands::unmark(mark) == *word)
-        })
+    let marked = marked_tail(moved, args)
+        .filter(|_| depth == 0)
         .unwrap_or(args);
     let args = match data_operands::git_args(
         marked,
@@ -15880,6 +15882,49 @@ mod tests {
         assert!(found.message.contains("`$V` in a `git push` operand"));
     }
 
+    /// TSK-326 AC-2 siblings: `parallel` and `fd -x` supply input as
+    /// `xargs` does, and a launcher's git child (`watch`, `flock`, `script
+    /// -c`) is judged as AC-1 and AC-2 judge git; literal forms still pass.
+    #[test]
+    fn parallel_fd_and_launcher_children_supplied_as_data_refuse() {
+        for command in [
+            "parallel git push origin :::: refs",
+            "parallel git push origin < refs",
+            "cat refs | parallel git push origin {}",
+            "parallel -q git push origin HEAD:{} :::: refs",
+            "parallel --arg-file refs git push origin",
+            "fd -x git push origin {}",
+            "fd --exec git push origin {.}",
+            "fd . refs -X git push origin",
+            "fd --exec-batch git push origin",
+            "V=$(cat refs); watch git push origin \"$V\"",
+            "V=$(cat refs); flock /tmp/l git push origin \"$V\"",
+            "V=$(cat refs); flock /tmp/l -c \"git push origin $V\"",
+            "V=$(cat refs); script -q -c \"git push origin $V\" /dev/null",
+            "V=$(cat cmdfile); watch \"$V\" push origin HEAD:main",
+        ] {
+            let found =
+                data_refusal(command).unwrap_or_else(|| panic!("{command}: refused as unresolved"));
+            assert!(
+                found.message.starts_with("command unresolved: `"),
+                "{command}: {}",
+                found.message
+            );
+            assert!(found.remedy.to_string().contains("pass it as a literal"));
+        }
+        let policy = data_policy();
+        for command in [
+            "parallel git push origin ::: feat/x",
+            "fd -x git log {}",
+            "watch git push origin feat/x",
+            "flock /tmp/l git push origin feat/x",
+            "script -q -c \"git push origin feat/x\" /dev/null",
+        ] {
+            let found = evaluate(command, &ctx(&policy, "feat/x"));
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
     /// TSK-326 AC-4: bracket arithmetic in a ref resolves as the shell
     /// computes it and the resolved ref is judged; `$((2))` stays refused.
     #[test]
@@ -21787,14 +21832,33 @@ fn discard_intent(
     }
     let no_vars = HashMap::new();
     let vars = moved.vars.unwrap_or(&no_vars);
+    // A word the shell passes as text (a quoted or escaped `$`) is read as
+    // written, never expanded (TSK-326).
+    let marked = marked_tail(moved, rest);
+    let text_at = |at: usize| marked.is_some_and(|marked| !expands(&marked[at]));
+    // The words that hold a `$` only as text, unless the same word is also
+    // written where the shell expands it.
+    let text_words: Vec<&str> = rest
+        .iter()
+        .enumerate()
+        .filter(|(at, word)| {
+            text_at(*at)
+                && !rest
+                    .iter()
+                    .enumerate()
+                    .any(|(i, w)| w == *word && !text_at(i))
+        })
+        .map(|(_, word)| word.as_str())
+        .collect();
     let mut operands_only = false;
     let rest: Vec<String> = rest
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(at, s)| {
             if s == "--" || s == END_OF_OPTIONS {
                 operands_only = true;
             }
-            if operands_only && matches!(sub, "branch" | "switch") {
+            if text_at(at) || (operands_only && matches!(sub, "branch" | "switch")) {
                 Ok(s.clone())
             } else if has_substitution(s) {
                 Err("a generated argument can change what would be discarded".into())
@@ -21898,7 +21962,7 @@ fn discard_intent(
                 && parsed
                     .operands
                     .iter()
-                    .any(|s| has_substitution(s) || s.contains('$'))
+                    .any(|s| (has_substitution(s) || s.contains('$')) && !text_words.contains(s))
             {
                 return Err(
                     "cannot resolve the branch whose unique work would be discarded".into(),
@@ -22182,6 +22246,31 @@ mod discard_integration_tests {
             .into_iter()
             .filter(|v| v.rule == "git.discard_uncommitted")
             .collect()
+    }
+    /// TSK-326: a `$` in single quotes or escaped is part of the branch name
+    /// the discard check asks about; an unquoted `$b` stays data.
+    #[test]
+    fn quoted_dollar_in_a_deleted_branch_is_its_name() {
+        let policy = GitPolicy::default();
+        // Clean only for the literal name, so a wrong reading shows.
+        let probe = |query: &DiscardQuery<'_>| match query.intent {
+            super::super::git_discard::Intent::ForceDeleteBranches(names)
+                if names.as_slice() == ["feat/a$b"] =>
+            {
+                Ok(None)
+            }
+            other => Ok(Some(format!("unexpected intent {other:?}"))),
+        };
+        let ctx = context(&policy, Some(&probe));
+        for command in ["git branch -D 'feat/a$b'", "git branch -D feat/a\\$b"] {
+            let found = discard_only(command, &ctx);
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+        let found = discard_only("git branch -D feat/a$b", &ctx);
+        assert!(
+            found.iter().any(|v| v.message.contains("`$b`")),
+            "{found:?}"
+        );
     }
     #[test]
     fn parser_recognizes_the_destructive_forms_and_preserves_controls() {

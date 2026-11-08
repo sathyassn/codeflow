@@ -3851,6 +3851,44 @@ mod tests {
         }
     }
 
+    /// TSK-326 AC-2 siblings: `parallel` and `fd -x` supply input as
+    /// `xargs` does, and a launcher's git child (`watch`, `flock`, `script
+    /// -c`) is judged as AC-1 and AC-2 judge git; literal forms still pass.
+    #[test]
+    fn parallel_fd_and_launcher_children_supplied_as_data_refuse() {
+        for command in [
+            "parallel git push origin :::: refs",
+            "parallel git push origin < refs",
+            "cat refs | parallel git push origin {}",
+            "parallel -q git push origin HEAD:{} :::: refs",
+            "parallel --arg-file refs git push origin",
+            "fd -x git push origin {}",
+            "fd --exec git push origin {.}",
+            "fd . refs -X git push origin",
+            "fd --exec-batch git push origin",
+            "V=$(cat refs); watch git push origin \"$V\"",
+            "V=$(cat refs); flock /tmp/l git push origin \"$V\"",
+            "V=$(cat refs); flock /tmp/l -c \"git push origin $V\"",
+            "V=$(cat refs); script -q -c \"git push origin $V\" /dev/null",
+            "V=$(cat cmdfile); watch \"$V\" push origin HEAD:main",
+        ] {
+            let found =
+                data_refusal(command).unwrap_or_else(|| panic!("{command}: refused as unresolved"));
+            assert_eq!(found.rule, "security.outward_actions", "{command}");
+            assert!(found.remedy.to_string().contains("pass it as a literal"));
+        }
+        for command in [
+            "parallel git push origin ::: feat/x",
+            "fd -x git log {}",
+            "watch git push origin feat/x",
+            "flock /tmp/l git push origin feat/x",
+            "script -q -c \"git push origin feat/x\" /dev/null",
+        ] {
+            let found = evaluate(command, &SecuritySection::default());
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
     /// TSK-326 AC-3: a literal the line assigns is judged as that literal by
     /// the release decision, so a tag ref in a variable is a tag push.
     #[test]

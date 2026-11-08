@@ -2415,6 +2415,79 @@ fn each_guard_alone_refuses_git_operands_supplied_as_data() {
     }
 }
 
+/// TSK-326 siblings: `parallel`, `fd -x` and a launcher's git child are
+/// refused by each guard alone when their input or a variable supplies a git
+/// operand; their literal forms pass.
+#[test]
+fn each_guard_alone_refuses_parallel_fd_and_launcher_data() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/data");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    std::fs::write(dir.path().join("refs"), "main\n").unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "parallel git push origin :::: refs",
+            "fd -x git push origin {}",
+            "V=$(cat refs); watch git push origin \"$V\"",
+            "V=$(cat refs); flock /tmp/l -c \"git push origin $V\"",
+            "V=$(cat refs); script -q -c \"git push origin $V\" /dev/null",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            assert!(
+                stderr.contains("command unresolved:") && stderr.contains("filled in at run time"),
+                "{hook}: {command}: {stderr}"
+            );
+        }
+        for command in [
+            "parallel git push origin ::: feat/x",
+            "watch git push origin feat/x",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(0), "{hook}: {command}: {stderr}");
+        }
+    }
+}
+
+/// TSK-326 AC-5: the over-refusals PR 195 (TSK-283) accepted on a line with
+/// a configuration-dependent push stay refused by each guard: non-Git data
+/// naming a configuration variable, a parameter read with an operator, an
+/// unresolved assignment destination and a command-local prefix on a
+/// non-Git command.
+#[test]
+fn tsk283_accepted_over_refusals_still_refuse() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "echo \"set GIT_CONFIG_GLOBAL in CI\" > notes.txt; git push origin feat/x",
+            "echo \"${HOME:-/tmp}\"; git push origin feat/x",
+            "export \"$NAME=/tmp/x\"; git push origin feat/x",
+            "HOME=/tmp/x cargo test; git push origin feat/x",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            assert!(
+                stderr.contains("cannot verify Git configuration after"),
+                "{hook}: {command}: {stderr}"
+            );
+        }
+    }
+}
+
 #[test]
 fn assignment_prefixes_do_not_hide_git_paths_containing_equals() {
     let dir = tempfile::tempdir().unwrap();
