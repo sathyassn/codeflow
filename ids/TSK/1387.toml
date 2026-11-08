@@ -1,0 +1,11 @@
+id = "TSK-1387"
+uid = "483b5f95-872f-4c0c-b85c-4b6f1e1ee9a2"
+kind = "TSK"
+title = "Main's coverage shard plan matches measured test time"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-08T03:49:13Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
