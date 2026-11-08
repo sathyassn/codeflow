@@ -404,9 +404,9 @@ const HERMETIC_SSH_OPTIONS: &[&str] = &["-F", "none", "-o", "BatchMode=yes"];
 /// configuration file `ssh` could read (the system files, `~/.ssh/config`
 /// under `HOME` and under the account's home, and every file their
 /// includes can name) is read as text first, fail-closed
-/// (`refuse_ssh_commands`); the user config's `[policy_authority]
-/// accept_ssh_configuration`, off by default and outside every repository,
-/// skips that read. Only then both views are resolved with `ssh -G`, which
+/// (`refuse_ssh_commands`); `[policy_authority] accept_ssh_configuration`
+/// in `~/.codeflow/authority/config.toml` under the account's home from the
+/// password database, off by default, skips that read. Only then both views are resolved with `ssh -G`, which
 /// connects nowhere, and every setting in [`SSH_ENDPOINT_KEYS`] must agree.
 /// Any doubt refuses. Other transports pass. Owned by TSK-1184; the
 /// pre-push destination check (TSK-327) can call it for the URL it asks,
@@ -452,8 +452,8 @@ enum IncludeBase {
 /// The `ssh` git would run and every configuration file it may read by
 /// itself: the system files the program names, then `~/.ssh/config` under
 /// each home in `homes`. `options` go before `-G` for the user's view;
-/// production passes none. `accept` is the user config's
-/// `[policy_authority] accept_ssh_configuration`.
+/// production passes none. `accept` is the allow
+/// [`accepts_ssh_configuration`] reads.
 struct SshView {
     program: std::path::PathBuf,
     options: Vec<std::ffi::OsString>,
@@ -465,7 +465,9 @@ struct SshView {
 impl SshView {
     fn discover() -> Result<Self, String> {
         let program = ssh_on_path()?;
-        let homes = ssh_homes(account_home()?, std::env::var_os("HOME"))?;
+        let account = account_home()?;
+        let accept = accepts_ssh_configuration(&account)?;
+        let homes = ssh_homes(account, std::env::var_os("HOME"))?;
         let mut files: Vec<(std::path::PathBuf, IncludeBase)> = system_ssh_configs(&program)?
             .into_iter()
             .map(|file| {
@@ -483,7 +485,7 @@ impl SshView {
             options: Vec::new(),
             files,
             homes,
-            accept: accepts_ssh_configuration()?,
+            accept,
         })
     }
 }
@@ -513,19 +515,78 @@ fn ssh_homes(
     Ok(vec![home, account])
 }
 
-/// The user config's `[policy_authority] accept_ssh_configuration`, read
-/// from the codeflow home (`CODEFLOW_HOME`, else `~/.codeflow`), which is
-/// outside every repository. Off when there is no home or no file; a file
-/// that cannot be read or parsed refuses.
-fn accepts_ssh_configuration() -> Result<bool, String> {
-    let Some(home) = crate::registry::codeflow_home() else {
-        return Ok(false);
+/// Where the SSH configuration allow lives under the account's home: the
+/// operator-authority directory, which the shipped agent presets and the
+/// guards refuse to write.
+const SSH_ALLOW_FILE: &str = ".codeflow/authority/config.toml";
+
+/// The allow file's `[policy_authority]` table.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct SshAllowFile {
+    policy_authority: SshAllowSection,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct SshAllowSection {
+    accept_ssh_configuration: bool,
+}
+
+/// `[policy_authority] accept_ssh_configuration` in
+/// `<account>/.codeflow/authority/config.toml`. `account` is the home from
+/// the password database: neither `HOME` nor `CODEFLOW_HOME` is read, so
+/// the command whose remote is judged cannot point this read at a file it
+/// wrote. Off when the file does not exist. A file that is a link, not a
+/// regular file, not owned by this account, writable by others, over the
+/// size limit, or that cannot be read or parsed refuses.
+fn accepts_ssh_configuration(account: &Path) -> Result<bool, String> {
+    use std::io::Read as _;
+    let path = account.join(SSH_ALLOW_FILE);
+    let refuse = |why: String| {
+        format!(
+            "the SSH configuration allow {} {why}, so whether it accepts the SSH configuration is unknown",
+            path.display()
+        )
     };
-    crate::registry::UserConfig::load(&home)
-        .map(|config| config.policy_authority.accept_ssh_configuration)
-        .map_err(|why| {
-            format!("the CodeFlow user config cannot be read ({why}), so whether it accepts the SSH configuration is unknown")
-        })
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = match options.open(&path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(refuse(format!("cannot be opened ({e})"))),
+    };
+    let meta = file
+        .metadata()
+        .map_err(|e| refuse(format!("cannot be read ({e})")))?;
+    if !meta.file_type().is_file() {
+        return Err(refuse("is not a regular file".into()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        // SAFETY: `geteuid` has no preconditions and cannot fail.
+        let owner = unsafe { libc::geteuid() };
+        if meta.uid() != owner || meta.mode() & 0o022 != 0 {
+            return Err(refuse(
+                "is not owned by this account or can be written by others".into(),
+            ));
+        }
+    }
+    if meta.len() > SSH_CONFIG_BYTES {
+        return Err(refuse("is over 1 MiB".into()));
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .map_err(|e| refuse(format!("cannot be read ({e})")))?;
+    toml::from_str::<SshAllowFile>(&text)
+        .map(|allow| allow.policy_authority.accept_ssh_configuration)
+        .map_err(|e| refuse(format!("cannot be parsed ({e})")))
 }
 
 /// The `ssh` a shell finds first on `PATH`, as git's `ssh` resolves. An
@@ -639,7 +700,7 @@ fn account_home() -> Result<std::path::PathBuf, String> {
 #[cfg(not(unix))]
 fn account_home() -> Result<std::path::PathBuf, String> {
     Err(
-        "the SSH configuration files cannot be located on this platform, so they are not read"
+        "the SSH configuration files cannot be located on this platform, so the check refuses an SSH remote"
             .into(),
     )
 }
@@ -656,7 +717,7 @@ const SSH_CONFIG_BYTES: u64 = 1 << 20;
 const SSH_COMMAND_KEYWORDS: &[&str] = &["proxycommand", "knownhostscommand", "localcommand"];
 
 /// What an adopter does about a refusal of their SSH configuration.
-const SSH_CONFIGURATION_REMEDY: &str = "remove that line or move it out of the files ssh reads by default; or fetch the remote once it holds its default branch; or, to let ssh read this account's SSH configuration as it is, set accept_ssh_configuration = true under [policy_authority] in ~/.codeflow/config.toml";
+const SSH_CONFIGURATION_REMEDY: &str = "remove that line or move it out of the files ssh reads by default; or fetch the remote once it holds its default branch; or, to let ssh read this account's SSH configuration as it is, set accept_ssh_configuration = true under [policy_authority] in ~/.codeflow/authority/config.toml, which the operator edits and the agent guards refuse to write";
 
 /// Compare the endpoint `view` resolves for `target` with the hermetic one.
 /// Unless `view.accept`, every configuration file is first proven by
@@ -1748,6 +1809,49 @@ mod tests {
         )
         .unwrap();
         assert!(asked.exists());
+    }
+
+    /// The allow is read only from the account home's authority file. The
+    /// user config a `CODEFLOW_HOME` or `HOME` prefix selects is never read,
+    /// and a file that is a link, writable by others or unparsable refuses.
+    #[test]
+    fn the_allow_is_read_only_from_the_account_authority_file() {
+        let account = tempfile::tempdir().unwrap();
+        let account = account.path();
+        let allow = "[policy_authority]\naccept_ssh_configuration = true\n";
+        assert!(!accepts_ssh_configuration(account).unwrap());
+        // The old place: the user config under the codeflow home.
+        std::fs::create_dir_all(account.join(".codeflow")).unwrap();
+        std::fs::write(account.join(".codeflow/config.toml"), allow).unwrap();
+        assert!(!accepts_ssh_configuration(account).unwrap());
+        let authority = account.join(".codeflow/authority");
+        std::fs::create_dir_all(&authority).unwrap();
+        let file = authority.join("config.toml");
+        std::fs::write(&file, "[policy_authority]\n").unwrap();
+        assert!(!accepts_ssh_configuration(account).unwrap());
+        std::fs::write(&file, allow).unwrap();
+        assert!(accepts_ssh_configuration(account).unwrap());
+        std::fs::write(&file, "[policy_authority\n").unwrap();
+        let error = accepts_ssh_configuration(account).unwrap_err();
+        assert!(error.contains("cannot be parsed"), "{error}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::write(&file, allow).unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o666)).unwrap();
+            let error = accepts_ssh_configuration(account).unwrap_err();
+            assert!(error.contains("written by others"), "{error}");
+            std::fs::remove_file(&file).unwrap();
+            let elsewhere = account.join("elsewhere.toml");
+            std::fs::write(&elsewhere, allow).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, &file).unwrap();
+            let error = accepts_ssh_configuration(account).unwrap_err();
+            assert!(error.contains("cannot be opened"), "{error}");
+            std::fs::remove_file(&file).unwrap();
+            std::fs::create_dir(&file).unwrap();
+            let error = accepts_ssh_configuration(account).unwrap_err();
+            assert!(error.contains("not a regular file"), "{error}");
+        }
     }
 
     #[test]

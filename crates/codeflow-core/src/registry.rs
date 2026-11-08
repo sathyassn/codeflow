@@ -408,18 +408,6 @@ pub fn list_repos(home: &Path) -> Result<Vec<RegistryEntry>, String> {
 #[serde(default)]
 pub struct UserConfig {
     pub recall: RecallDefaults,
-    pub policy_authority: PolicyAuthorityDefaults,
-}
-
-/// `[policy_authority]` section of the user config. It lives outside every
-/// repository, so no branch or pull request head can set it.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct PolicyAuthorityDefaults {
-    /// Accept this account's own SSH configuration when an empty SSH remote
-    /// is checked: `ssh -G` reads it without the fail-closed text check
-    /// first, so any command it names may run. Off by default.
-    pub accept_ssh_configuration: bool,
 }
 
 /// `[recall]` section of the user config.
@@ -905,28 +893,6 @@ mod tests {
         fs::write(user_config_path(home.path()), "[recall]\nlimit = 5\n").unwrap();
         let cfg = UserConfig::load(home.path()).unwrap();
         assert_eq!(cfg.recall.limit, Some(5));
-    }
-
-    #[test]
-    fn test_user_config_reads_the_ssh_configuration_allow() {
-        let home = tempfile::tempdir().unwrap();
-        assert!(
-            !UserConfig::load(home.path())
-                .unwrap()
-                .policy_authority
-                .accept_ssh_configuration
-        );
-        fs::write(
-            user_config_path(home.path()),
-            "[policy_authority]\naccept_ssh_configuration = true\n",
-        )
-        .unwrap();
-        assert!(
-            UserConfig::load(home.path())
-                .unwrap()
-                .policy_authority
-                .accept_ssh_configuration
-        );
     }
 
     #[test]
