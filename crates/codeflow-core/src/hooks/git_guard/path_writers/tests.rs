@@ -306,6 +306,35 @@ fn a_two_step_plant_is_refused_at_its_work_tree_step() {
         &[("git checkout-index -a -f", writes(".codex/hooks.json"))],
     );
     f.reset_index();
+    // A staged removal. The keep-index checkout is `--no-overlay`, so it
+    // deletes the path the index lacks (review PW-6); `--patch`, `--staged`
+    // and the overlay writers leave it.
+    git(&f.root, &["rm", "-q", "--cached", POLICY]);
+    expect(
+        &f.root,
+        &[
+            ("git stash -k", writes(POLICY)),
+            ("git stash push -k", writes(POLICY)),
+            ("git stash save -k", writes(POLICY)),
+            ("git stash --keep-index", writes(POLICY)),
+            ("git stash --keep", writes(POLICY)),
+            ("git stash push -ku", writes(POLICY)),
+            ("git stash --no-keep-index -k", writes(POLICY)),
+            ("git stash push -k -- .codeflow", writes(POLICY)),
+            (
+                "git stash push -k --pathspec-from-file=list",
+                writes(POLICY),
+            ),
+            ("git stash -k push", writes(POLICY)),
+            ("git stash push -p", Passes),
+            ("git stash push -p -k", Passes),
+            ("git stash push -S -k", Passes),
+            ("git stash -k --no-keep-index", Passes),
+            ("git stash", Passes),
+            ("git checkout-index -a -f", Passes),
+        ],
+    );
+    f.reset_index();
     // A clean index writes HEAD's content.
     expect(
         &f.root,

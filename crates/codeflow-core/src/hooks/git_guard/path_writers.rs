@@ -1282,11 +1282,15 @@ const STASH_PUSH: OptionSpec = OptionSpec {
 };
 
 /// `git stash`, `git stash push` and `git stash save` reset the work tree
-/// to HEAD. With `--keep-index` (`-k`), or with `--patch` while keep-index
-/// is left unset, Git then checks the index tree out over the work tree, so
-/// an index-only plant lands there; those forms are judged like
-/// `checkout-index -a` (review PW-5). The last of `-k`, `--keep-index` and
-/// `--no-keep-index` wins, as in Git.
+/// to HEAD. With `--keep-index` (`-k`), and neither `--patch` nor
+/// `--staged`, Git then runs `checkout --no-overlay` of the saved index
+/// tree, so an index-only plant lands on the work tree (review PW-5) and an
+/// enforcement path the index lacks is deleted from it (review PW-6); the
+/// index is compared with HEAD, presence included. `--patch` sets
+/// keep-index when it is left unset but reverses the selected work-tree
+/// changes instead of running that checkout; the guard still compares the
+/// index's content there, failing closed. The last of `-k`, `--keep-index`
+/// and `--no-keep-index` wins, as in Git.
 fn stash_push(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, String> {
     switch(place)?;
     let args = match rest.first().map(String::as_str) {
@@ -1294,22 +1298,27 @@ fn stash_push(place: &Place<'_>, rest: &[String]) -> Result<Option<Verdict>, Str
         _ => rest,
     };
     let parsed = options("stash", args, &STASH_PUSH)?;
-    let (mut keep, mut patch) = (None, false);
+    let (mut keep, mut patch, mut staged) = (None, false, false);
     for seen in &parsed.sequence {
         match seen {
             Seen::Short('k') | Seen::Long("--keep-index", _) => keep = Some(true),
             Seen::Long("--no-keep-index", _) => keep = Some(false),
             Seen::Short('p') | Seen::Long("--patch", _) => patch = true,
             Seen::Long("--no-patch", _) => patch = false,
+            Seen::Short('S') | Seen::Long("--staged", _) => staged = true,
+            Seen::Long("--no-staged", _) => staged = false,
             _ => {}
         }
     }
     if !keep.unwrap_or(patch) {
         return Ok(None);
     }
+    // Only the keep-index checkout is `--no-overlay`: it removes a path the
+    // saved index lacks.
+    let checkout = keep == Some(true) && !patch && !staged;
     let reader = Reader::new(place.repo()?);
     let (index, head) = (reader.index()?, reader.head()?);
-    Ok(differs(&index, &head, &Selection::Whole, true).map(|path| writes(path, "the index")))
+    Ok(differs(&index, &head, &Selection::Whole, !checkout).map(|path| writes(path, "the index")))
 }
 
 const STASH_APPLY: OptionSpec = OptionSpec {
