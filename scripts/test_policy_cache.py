@@ -19,6 +19,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -249,21 +250,88 @@ def workflow_files():
     return files
 
 
-RUN_BASH_SECONDS = 60
+# Longer than the step's own limits (60 s for the attestation, 30 s for the version), so the step's
+# `timeout` fires first and this bound only catches a step that ignores its own limits.
+RUN_BASH_SECONDS = 120
+DRAIN_SECONDS = 5
+
+
+def session_pids(session):
+    # Every live process in the given session. GNU timeout moves its command into a new process
+    # group, so a process group kill of bash misses it; the session id still matches.
+    # A zombie is already dead and only waits to be reaped, so it is skipped.
+    candidates = []
+    if Path('/proc/self/stat').is_file():
+        for entry in Path('/proc').iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                state = (entry / 'stat').read_text().rsplit(')', 1)[1].split()[0]
+            except (OSError, IndexError):
+                continue
+            if state != 'Z':
+                candidates.append(int(entry.name))
+    else:
+        listing = subprocess.run(['ps', '-A', '-o', 'pid=,stat='], stdin=subprocess.DEVNULL, capture_output=True,
+                                 text=True, timeout=DRAIN_SECONDS, check=True)
+        for line in listing.stdout.splitlines():
+            fields = line.split()
+            if len(fields) == 2 and not fields[1].startswith('Z'):
+                candidates.append(int(fields[0]))
+    found = []
+    for pid in candidates:
+        try:
+            if os.getsid(pid) == session:
+                found.append(pid)
+        except (ProcessLookupError, PermissionError):
+            continue
+    return found
+
+
+def kill_session(process):
+    # Kill every process in the step's session; repeat in case one forked while the list was read.
+    # Bash is reaped here and orphans are reaped by init, so a dead process leaves the list.
+    session = process.pid
+    for _ in range(20):
+        pids = session_pids(session)
+        if not pids:
+            return
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        time.sleep(0.1)
+        process.poll()
+    raise AssertionError(f'processes in session {session} survived SIGKILL: {session_pids(session)}')
 
 
 def run_bash(run, cwd, env):
     # stdin is closed so nothing in the step can wait on input, and the run is bounded: a hang
     # fails the test instead of the whole gate. The step runs in its own session so a timeout
-    # kills every process it started, not only bash, and the output pipes close.
-    with subprocess.Popen(['bash', '-euo', 'pipefail', '-c', run], cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True) as process:
+    # kills every process it started, including those `timeout` moved into another process group,
+    # and the wait after the kill has its own deadline.
+    process = subprocess.Popen(['bash', '-euo', 'pipefail', '-c', run], cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=RUN_BASH_SECONDS)
+    except subprocess.TimeoutExpired:
+        failure = f'the step did not finish in {RUN_BASH_SECONDS} s'
         try:
-            stdout, stderr = process.communicate(timeout=RUN_BASH_SECONDS)
+            # Bash's own group first, which needs no process listing; then the rest of the session.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            kill_session(process)
+        except (AssertionError, OSError, subprocess.SubprocessError) as error:
+            failure += f'; cleaning up its processes failed: {error}'
+        try:
+            stdout, stderr = process.communicate(timeout=DRAIN_SECONDS)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            stdout, stderr = process.communicate()
-            raise AssertionError(f'the step did not finish in {RUN_BASH_SECONDS} s\n{stdout}{stderr}') from None
+            stdout, stderr = '', ''
+            failure += f'; its output pipes were still open {DRAIN_SECONDS} s after the kill'
+        raise AssertionError(f'{failure}\n{stdout}{stderr}') from None
     return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
 
