@@ -1,0 +1,11 @@
+id = "TSK-1395"
+uid = "a5a4df4f-7035-4650-982d-8609354f5b8c"
+kind = "TSK"
+title = "CodeFlow's git hooks run for every git command, whatever its working directory"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-08T17:05:24Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
