@@ -1,0 +1,11 @@
+id = "TSK-1397"
+uid = "da496535-4abe-43c4-bb32-cc1290d53f2f"
+kind = "TSK"
+title = "Tests pass the same inside an agent session and with a custom build folder"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-08T20:32:48Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
