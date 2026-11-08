@@ -29,6 +29,7 @@ mod id_registry;
 mod judging;
 mod line_tip;
 pub(crate) mod pr_body;
+mod timing;
 mod work_records;
 mod workflow_change;
 
@@ -43,9 +44,8 @@ use codeflow_core::scaffold::ScaffoldManifest;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::work_start::ReviewedPin;
 use codeflow_core::workgraph::{
-    branch_claims_task_id, declared_work_target, declared_work_target_at_revision,
-    durable_work_tracking_enabled, resolve_work_target_checked, task_id_from_branch,
-    task_id_from_branch_at,
+    durable_work_tracking_enabled, durable_work_tracking_enabled_at, judged_branch_claims_task_id,
+    resolve_work_target_checked,
 };
 use judging::{judging_policy, Authority};
 use pr_body::find_section;
@@ -53,6 +53,7 @@ use pr_body::find_section;
 use crate::embedded::EmbeddedAssets;
 
 #[derive(Debug, Args)]
+#[allow(clippy::struct_excessive_bools)] // independent command-line switches
 pub struct CiArgs {
     /// Base ref of the range (exclusive). When omitted: CI base metadata,
     /// `CODEFLOW_DEFAULT_BRANCH`, then --into or the branch's declared target, then policy
@@ -192,6 +193,18 @@ pub struct CiArgs {
     /// a landing candidate, and the hook itself judges a push to a line.
     #[arg(long, value_name = "REF", hide = true)]
     pub pushed_ref: Option<String>,
+
+    /// Print how long each check took, on stderr after the verdict, one
+    /// line per check and then the total. The times only report; they
+    /// change no verdict.
+    #[arg(long)]
+    pub timings: bool,
+
+    /// Write each check's time to this file, one `<check>\t<microseconds>`
+    /// line each: the pre-push hook names the slowest checks when a push
+    /// goes over its budget (TSK-1306).
+    #[arg(long, value_name = "FILE", hide = true)]
+    pub timings_out: Option<PathBuf>,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -355,8 +368,20 @@ fn ci_environment(
     Ok(values)
 }
 
-#[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
 pub fn run(args: &CiArgs) -> i32 {
+    let mut timings = timing::Timings::start();
+    let code = run_timed(args, &mut timings);
+    if args.timings {
+        timings.print();
+    }
+    if let Some(out) = &args.timings_out {
+        timings.write(out);
+    }
+    code
+}
+
+#[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
+fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     let _judgment = codeflow_core::workgraph::history::judgment();
     if args.read_release_impact {
         return read_release_impact();
@@ -408,8 +433,18 @@ pub fn run(args: &CiArgs) -> i32 {
     };
 
     // Resolve names and pin revisions once before any range rule runs.
-    let context = match context::resolve(&root, args, &environment, &working.git.protected_branches)
-    {
+    // The working copy's policy finds the range, its work prefixes as its
+    // protected branches (see `judging_policy`): the judging policy is read at
+    // the base, which the declared target picks. The pre-push hook picks the
+    // base and target under the judging policy's prefixes and passes them as
+    // `--base` and `--into` (TSK-1257).
+    let context = match context::resolve(
+        &root,
+        args,
+        &environment,
+        &working.git.protected_branches,
+        &working.git.branch_prefixes,
+    ) {
         Ok(context) => context,
         Err(error) => {
             eprintln!(
@@ -548,6 +583,7 @@ pub fn run(args: &CiArgs) -> i32 {
         || (base_candidates.clone(), range_source.clone()),
         |from| (vec![from], "--commits-from".to_string()),
     );
+    timings.lap("setup");
     let range = evaluate_commit_range(&root, &commit_bases, &head, &commit_source, git);
     tagged.extend(range.violations);
     if range.ran {
@@ -560,6 +596,7 @@ pub fn run(args: &CiArgs) -> i32 {
         Some(false) => skipped.push("added-lines"),
         None => {}
     }
+    timings.lap("commit");
     conflict_markers::dispatch(
         &root,
         git,
@@ -571,7 +608,9 @@ pub fn run(args: &CiArgs) -> i32 {
     // What this change does to the workflows is base..head; the wider
     // commit range `--commits-from` selects (pre-push) also holds commits
     // the target already carries, whose workflow edits are not this one's.
+    timings.lap("conflict-markers");
     workflow_change::dispatch(&root, base_sha.as_deref(), &head, &mut tagged, &mut ran);
+    timings.lap("workflow-change");
 
     match codeflow_core::hooks::path_policy::PathPolicy::from_git(configured).and_then(|paths| {
         let size_and_ignore = judging::content_rules(&root, authority.as_ref())?;
@@ -610,6 +649,7 @@ pub fn run(args: &CiArgs) -> i32 {
             ),
         }),
     }
+    timings.lap("path-policy");
 
     let destination = match args.destination.clone() {
         Some(destination) => Some(destination),
@@ -675,6 +715,7 @@ pub fn run(args: &CiArgs) -> i32 {
             false
         }
     };
+    timings.lap("release-scope");
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
     let target_tip = target_tip(
@@ -685,6 +726,7 @@ pub fn run(args: &CiArgs) -> i32 {
         &environment,
     );
     target_containment_warning(&root, &line_target, &head, &target_tip, &names, &mut tagged);
+    timings.lap("target-tip");
     if scope_ready {
         record_checks(
             &root,
@@ -706,6 +748,7 @@ pub fn run(args: &CiArgs) -> i32 {
             &target_tip,
             &mut tagged,
             &mut ran,
+            timings,
         );
     }
 
@@ -727,6 +770,7 @@ pub fn run(args: &CiArgs) -> i32 {
         }
         ran.push("branch-naming");
     }
+    timings.lap("branch-naming");
 
     // --- pull request classification (TSK-104) -----------------------------
     // Every product pull request has one class; tracked work runs the
@@ -749,6 +793,7 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut tagged,
         &mut ran,
     );
+    timings.lap("line-tip");
     // A push of a task branch stacked on reviewed predecessor heads (SPC-013
     // R-42, issue #69); a pull request check keeps the landing rule.
     let stacked = if pr_body.is_none() && !pr_context {
@@ -790,6 +835,7 @@ pub fn run(args: &CiArgs) -> i32 {
             Some(change_class::classify(Some(&inventory), &project))
         }
     };
+    timings.lap("change-class");
     let work_class = if scope_ready {
         work_checks(
             &root,
@@ -803,6 +849,7 @@ pub fn run(args: &CiArgs) -> i32 {
             &stacked,
             &mut tagged,
             &mut ran,
+            timings,
         )
     } else {
         None
@@ -811,8 +858,9 @@ pub fn run(args: &CiArgs) -> i32 {
     let level = git.work_planning_level();
     let own_task = own_branch_preflight(
         &root,
+        git,
+        (base_sha.as_deref(), &head),
         &branch,
-        &head,
         &stacked,
         level,
         work_class
@@ -821,6 +869,7 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut tagged,
         &mut ran,
     );
+    timings.lap("own-branch-preflight");
     // The visible workgraph is checked once for tracked work, whether the
     // task comes from the branch or from the `Task:` line (TSK-133).
     if own_task
@@ -831,6 +880,7 @@ pub fn run(args: &CiArgs) -> i32 {
     {
         visible_graph_check(&root, level, &mut tagged, &mut ran);
     }
+    timings.lap("visible-graph");
 
     // --- PR-body check ----------------------------------------------------
     // A Bitbucket PR without a body channel was warned about when resolving
@@ -889,6 +939,7 @@ pub fn run(args: &CiArgs) -> i32 {
         );
         ran.push("PR-body");
     }
+    timings.lap("PR-body");
 
     settle_watched_paths(&mut tagged, pr_body.as_deref());
     if let Some(running) = args.run_level {
@@ -1075,6 +1126,7 @@ fn work_checks<'a>(
     stacked: &[ReviewedPin],
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&'a str>,
+    timings: &mut timing::Timings,
 ) -> Option<classification::Class> {
     let base = match resolve_base(root, base_candidates) {
         Ok(value) => value,
@@ -1155,6 +1207,7 @@ fn work_checks<'a>(
         );
         None
     };
+    timings.lap("classification");
     acceptance::dispatch(
         root,
         git,
@@ -1168,6 +1221,7 @@ fn work_checks<'a>(
         tagged,
         ran,
     );
+    timings.lap("acceptance");
     tagged.extend(tracked_review(
         root,
         git,
@@ -1176,6 +1230,7 @@ fn work_checks<'a>(
         range_parts.as_ref(),
         head,
     ));
+    timings.lap("review-row");
     class
 }
 
@@ -1305,6 +1360,7 @@ fn record_checks(
     target_tip: &Result<String, NoTarget>,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
+    timings: &mut timing::Timings,
 ) {
     // On a release range, the records it brings are judged where each was
     // introduced on its line (SPC-013 R-120).
@@ -1353,6 +1409,7 @@ fn record_checks(
     } else {
         None
     };
+    timings.lap("record-range");
     work_records::dispatch(
         root,
         base_candidates,
@@ -1364,7 +1421,9 @@ fn record_checks(
         tagged,
         ran,
     );
+    timings.lap("work-records");
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
+    timings.lap("id-registry");
 }
 
 /// The tip of `target`, the branch the range lands on, which the Outcome
@@ -1845,28 +1904,22 @@ fn work_start_reader_error(error: &codeflow_core::workgraph::work_start::WorkSta
 #[allow(clippy::too_many_arguments)] // The run context and its validated exemption class.
 fn own_branch_preflight(
     root: &Path,
+    git: &GitPolicy,
+    (base, head): (Option<&str>, &str),
     branch: &str,
-    head: &str,
     stacked: &[ReviewedPin],
     level: PolicyLevel,
     exemption: bool,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
 ) -> bool {
-    let claims = match branch_claims_task_id(root, branch) {
-        Ok(claims) => claims,
-        Err(error) => {
-            tagged.push(TaggedViolation {
-                sha: None,
-                violation: tracking_state_violation(error),
-            });
-            return false;
-        }
-    };
+    // The work prefixes of the policy the run judges with, never the
+    // checkout's (TSK-1257).
+    let claims = judged_branch_claims_task_id(&git.branch_prefixes, branch);
     if branch.starts_with("task/") || claims {
-        match durable_work_tracking_enabled(root) {
+        match tracking_judged(root, base, head) {
             Ok(true) => {
-                evaluate_work_start(root, branch, head, stacked, level, exemption, tagged);
+                evaluate_work_start(root, git, branch, head, stacked, level, exemption, tagged);
                 ran.push("work-start");
                 return true;
             }
@@ -1881,6 +1934,17 @@ fn own_branch_preflight(
         }
     }
     false
+}
+
+/// Whether durable work tracking is on in the checkout, at the judged
+/// `head` or at `base` (TSK-1257): a checkout without tracking state never
+/// switches a check off for a range whose commits carry it.
+pub(super) fn tracking_judged(root: &Path, base: Option<&str>, head: &str) -> Result<bool, String> {
+    let mut enabled = durable_work_tracking_enabled(root).map_err(|error| error.to_string())?;
+    for revision in base.into_iter().chain([head]) {
+        enabled |= durable_work_tracking_enabled_at(root, revision)?;
+    }
+    Ok(enabled)
 }
 
 /// The visible workgraph, checked once per run for tracked work at the
@@ -1968,33 +2032,36 @@ fn stacked_pins(root: &Path, git: &GitPolicy, branch: &str, head: &str) -> Vec<R
     }
 }
 
-/// The task checks for the task the branch carries, at the
-/// `git.work_planning` level (TSK-133).
+/// The task the branch carries, read from the task records at the judged
+/// `head` under the work prefixes of the policy the run judges with
+/// (TSK-1257, TSK-350 AC-1). The checkout's records and policy take no
+/// part: a record only the checkout holds names no task, and one the
+/// checkout lacks hides none.
 pub(super) fn branch_task_at(
     root: &Path,
+    git: &GitPolicy,
     branch: &str,
     head: &str,
 ) -> Result<Option<String>, String> {
-    match task_id_from_branch_at(root, branch, head).map_err(|error| error.to_string())? {
-        Some(task) => Ok(Some(task)),
-        None => task_id_from_branch(root, branch).map_err(|error| error.to_string()),
-    }
+    codeflow_core::workgraph::judged_task_id(root, &git.branch_prefixes, branch, head)
+        .map_err(|error| error.to_string())
 }
 
+/// The integration target `task` declares in its record at the judged
+/// `head` (TSK-1257), never in the checkout's copy of the record.
 pub(super) fn work_target_at(
     root: &Path,
-    branch: &str,
     head: &str,
     task: &str,
 ) -> Result<Option<String>, String> {
-    match declared_work_target_at_revision(root, branch, head).map_err(|error| error.to_string())? {
-        Some(target) => Ok(Some(target)),
-        None => declared_work_target(root, task).map_err(|error| error.to_string()),
-    }
+    codeflow_core::workgraph::task_target_at_revision(root, task, head)
+        .map_err(|error| format!("{task}'s record at {head} cannot be read: {error}"))
 }
 
+#[allow(clippy::too_many_arguments)] // The run context and its validated exemption class.
 fn evaluate_work_start(
     root: &Path,
+    git: &GitPolicy,
     branch: &str,
     head: &str,
     stacked: &[ReviewedPin],
@@ -2004,7 +2071,7 @@ fn evaluate_work_start(
 ) {
     // The head's records first: from a base checkout (the hosted policy
     // workflow) the branch's own standalone record is not on disk.
-    let task_at_head = match branch_task_at(root, branch, head) {
+    let task_at_head = match branch_task_at(root, git, branch, head) {
         Ok(task) => task,
         Err(error) => {
             tagged.push(TaggedViolation {
@@ -2015,7 +2082,7 @@ fn evaluate_work_start(
         }
     };
     if let Some(task_id) = task_at_head {
-        let declared = match work_target_at(root, branch, head, &task_id) {
+        let declared = match work_target_at(root, head, &task_id) {
             Ok(target) => target,
             Err(error) => {
                 tagged.push(TaggedViolation {
@@ -2074,7 +2141,9 @@ fn evaluate_work_start(
             violation: Violation::new(
                 "work.task_record",
                 level,
-                format!("task branch '{branch}' does not identify a visible task record"),
+                format!(
+                    "task branch '{branch}' names no task record in the judged head {head}: no record under project-management/ at that commit carries the branch's task id, and a record only the checkout holds is not read"
+                ),
                 codeflow_core::remedy::TASK_RECORD_MISSING.remedy(),
             ),
         });
@@ -3707,6 +3776,7 @@ mod tests {
             let mut tagged = Vec::new();
             evaluate_work_start(
                 dir.path(),
+                &GitPolicy::default(),
                 "task/TSK-001-fix",
                 &head,
                 &[],

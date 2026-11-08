@@ -154,7 +154,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 80] = [
+pub const SCHEMA: [KeySpec; 81] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -395,6 +395,16 @@ pub const SCHEMA: [KeySpec; 80] = [
                 The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; \
                 `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. \
                 A very large value means effectively no limit: a silent destination is then waited on until something stops the run. \
+                Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.push_budget_seconds",
+        kind: KeyKind::UInt,
+        valid: "a whole number of seconds, at least 1; no ceiling beyond what the number can hold",
+        purpose: "How long the pre-push set may take before the hook reports the overrun, naming the slowest step and the slowest checks inside a `codeflow ci` step.",
+        notes: "Default 60. It only reports: a push over the budget still lands when its checks pass, and no check is skipped or shortened to meet it. \
+                The pre-push hook reads it from the default branch's committed policy as last fetched, never from a pushed head; with no such branch it uses the default. \
                 Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
                 The shipped policy file does not list it, so an older binary never meets the key.",
     },
@@ -2012,10 +2022,13 @@ mod tests {
         assert_eq!(defaults["git"]["remote_query_timeout_seconds"], 30);
         assert_eq!(defaults["git"]["remote_query_attempts"], 3);
         assert_eq!(defaults["git"]["remote_fetch_timeout_seconds"], 120);
+        // TSK-1306: the push set budget takes the same values.
+        assert_eq!(defaults["git"]["push_budget_seconds"], 60);
         for key in [
             "remote_query_timeout_seconds",
             "remote_query_attempts",
             "remote_fetch_timeout_seconds",
+            "push_budget_seconds",
         ] {
             for value in ["1", "2", "600", "4294967296", "18446744073709551615"] {
                 let text = format!(r#"{{"git":{{"{key}":{value}}}}}"#);
