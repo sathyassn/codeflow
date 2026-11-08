@@ -3,7 +3,7 @@
 # scratch adopter repository, a push to
 # an open pull request followed within seconds by two body edits ends with
 # every codeflow-policy run for that pull request completed, none cancelled,
-# and the required "trusted: commit standards" check passing on the final head
+# and the required "commit standards" check passing on the final head
 # for the final body.
 #
 # Usage:
@@ -14,7 +14,7 @@
 # Needs (nothing here creates a repository or a record):
 #   - a scratch repository that already runs codeflow with the 4.0.0 managed
 #     .github/workflows/codeflow-policy.yml (cancel-in-progress: false,
-#     queue: max) on its default branch, with "trusted: commit standards"
+#     queue: max) on its default branch, with "commit standards"
 #     required;
 #   - TSK-NNN: a task record on that default branch, status todo, whose
 #     integration_target is the default branch, so the journey's pull
@@ -41,7 +41,7 @@
 # annotation and nothing else; AC-3 requires that failure when the head,
 # base branch or body changed while the run judged it. Any other failure
 # fails the journey. The newest run must succeed on the final head, and the
-# newest "trusted: commit standards" check on that head must pass.
+# newest "commit standards" check on that head must pass.
 set -euo pipefail
 
 workflow=codeflow-policy.yml
@@ -54,7 +54,7 @@ extra_events=3 # the push and the two body edits
 # the journey.
 fetch_step="Fetch the pull request's base and head as data"
 recheck_step='the pull request is unchanged since it was judged'
-check_name='trusted: commit standards'
+check_name='commit standards'
 # shellcheck disable=SC2016 # jq source, expanded by jq, not the shell
 stale_jq='
   def sha: "[0-9a-f]{40}";
