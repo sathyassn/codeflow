@@ -168,11 +168,9 @@ fn pre_commit_engine(
             report.violations.extend(paths.violations);
             report.status.extend(paths.notes);
         }
-        Err(error) => report.violations.push(Violation::always_blocking(
-            "git.path_policy",
-            format!("cannot verify staged paths: {error}"),
-            "repair the named policy source or Git object, then retry",
-        )),
+        Err(error) => report
+            .violations
+            .push(unverified_staged_paths(root, &error)),
     }
 
     if policy.secret_scan.is_active() {
@@ -187,6 +185,30 @@ fn pre_commit_engine(
     }
 
     Ok(report)
+}
+
+/// The refusal when the staged paths cannot be judged. A landed policy this
+/// binary cannot read, in a repository that declares a newer `CodeFlow`, is
+/// the too-old refusal (TSK-1285); it blocks the same way.
+fn unverified_staged_paths(root: &Path, error: &str) -> Violation {
+    let unread_policy = super::landed_policy::is_invalid_policy(error);
+    let age = crate::scaffold::too_old::BinaryAge::at_root(root, env!("CARGO_PKG_VERSION"));
+    if let Some(refusal) = age.too_old("its policy").filter(|_| unread_policy) {
+        return Violation::always_blocking(
+            crate::scaffold::too_old::RULE,
+            refusal.message,
+            &refusal.remedy,
+        );
+    }
+    let doubt = age
+        .may_be_older()
+        .filter(|_| unread_policy)
+        .map_or_else(String::new, |line| format!("; {line}"));
+    Violation::always_blocking(
+        "git.path_policy",
+        format!("cannot verify staged paths: {error}{doubt}"),
+        "repair the named policy source or Git object, then retry",
+    )
 }
 
 /// The staged secret scan: the built-in patterns, then, when the policy

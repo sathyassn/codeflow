@@ -199,10 +199,12 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow policy show` | | Print the effective policy: each key's current value, its source (project file or built-in default), and any invalid values |
 | `codeflow remote protect` | | Write the rulesets codeflow owns: "codeflow authority updates" and "codeflow authority checks" on the default branch, "codeflow line checks" on the integration lines, and `codeflow protect <pattern>` for each other protected branch in policy.json |
 | | `--provider <PROVIDER>` | Remote provider (only `github` has an adapter; others print the manual checklist). Default `github`. |
-| | `--dry-run` | Print the intended rules without applying anything. |
+| | `--dry-run` | Read the host and print the exact requests a run would send, writing nothing. |
 | | `--profile <PROFILE>` | Who reviews and who moves the default branch: solo-administrator (no approval; only the administrator role updates the default branch) or independent-review (one approval, stale approvals dismissed, the last push approved by someone else; only the maintain role updates it). One of `solo-administrator`, `independent-review`. Default `solo-administrator`. |
 | | `--check-app <APP_ID>` | The id of the GitHub App that creates the authority: checks (Mode A). Without it, the trusted: checks are pinned to GitHub Actions (Mode B). |
 | | `--lines <PATTERN>` | The integration-line branch pattern "codeflow line checks" targets. Default `integration/**`. |
+| | `--branch <NAME>` | Limit the run to the owned rulesets that target this branch. A literal policy branch the host does not have is reported and never planned, with or without this flag. |
+| | `--adopt <RULESET>...` | Bring an existing ruleset, by id or exact name, under the owned name of the ruleset that targets exactly the same branches; add `=<owned name>` where two owned rulesets target them. It is renamed and only gains rules. Repeat for more than one. |
 
 ### Verify
 
@@ -527,11 +529,11 @@ checkout; how it judges a task's own criteria on its integration line is
 in the [policy reference](policy-reference.md#own-task-criteria-on-an-integration-line).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
 another provider prints the manual checklist. It writes only rulesets it owns
-by name, never another ruleset or classic branch protection, and never weakens
-a rule; the rulesets, profiles and recovery window are in the
+or `--adopt` names, and never weakens a rule; the rulesets, profiles, dry run
+and recovery window are in the
 [policy reference](policy-reference.md#remote-protection). A live read that
-fails or does not parse writes nothing. `codeflow doctor --check
-remote-perimeter` reads the default branch's live rules back.
+fails or does not parse writes nothing. `codeflow doctor` reads the live rules
+back.
 
 ### Verify notes
 
