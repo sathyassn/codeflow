@@ -1712,6 +1712,39 @@ checked, so a symlink does not remove the target owner's protection.
   otherwise remains unread. Exec-guard refuses such a line when a command
   that uses the reassigned home writes an enforcement path, as git-guard
   judges the write; a read-only use such as a Git pathspec passes.
+- Refs, remotes, programs and environment supplied as data are refused as
+  unresolved by both shell hooks (TSK-326). A word the shell fills in from
+  data the guard cannot read has no text to judge: a variable assigned
+  from a command substitution or `read`, an inherited variable, or the
+  input that `xargs` appends or puts in place of its replacement string
+  and `find -exec` puts in place of `{}`. Such a word in the program
+  position (`$V push origin HEAD:main`, `env "$V" git push`), in a `GIT_*`
+  or other git configuration, location or program variable assigned for
+  git, in a git subcommand or `-c` value, or in an operand of a subcommand
+  a decision reads refuses before the push, alias, transport and release
+  decisions read it. Git-guard reads the operands of every subcommand it
+  judges for protected refs and of any alias; exec-guard reads `push`,
+  `tag`, `config`, `update-ref`, `remote`, `credential` and any alias.
+  Git-guard names the protected-ref rule the subcommand could break, and
+  exec-guard names `security.outward_actions`; the sanctioned path is to
+  write the value in the command, or to compute it first and pass it as a
+  literal. A variable the line assigned a literal before the word is
+  filled in and judged as that literal, so a tag name held in a variable
+  is judged as a tag push and `main` held in one as a push to `main`.
+  Commit messages stay data, and a `$` in single quotes or escaped is
+  text. A program position refuses under this rule only when the words
+  after it show git (a git subcommand or global option first, or a word
+  naming `git`); exec-guard's own reader judges any other program it
+  cannot read. A command substitution written on the git command itself
+  stays with git-guard's substitution reader and its alias and message
+  rules. Git-guard reads bracket arithmetic that holds only decimal
+  integer arithmetic (`HEAD:v$[2]`) as its value, on a line whose quoting
+  it reads exactly; any other `$[...]` and every `$((...))` stays
+  unresolved and refuses. Configuration or refs supplied as data through
+  variables or `xargs` are not judged except by this refusal, and the
+  content of a data file is never read; the pre-push hook and remote
+  branch protection remain the floors for a push that reaches a protected
+  ref.
 - An honestly deleted checkout remains prunable. When registration and a
   live checkout disagree, the operator runs `git worktree repair` in their
   own terminal outside the harness.
