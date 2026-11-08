@@ -566,12 +566,11 @@ pub(super) fn check_curl(args: &[String], policy: &GitPolicy, out: &mut Vec<Viol
                 None => (long, None),
             };
             if curl_long_takes_value(name) {
-                let value = match inline {
-                    Some(value) => value,
-                    None => {
-                        at += 1;
-                        args.get(at).map_or("", String::as_str)
-                    }
+                let value = if let Some(value) = inline {
+                    value
+                } else {
+                    at += 1;
+                    args.get(at).map_or("", String::as_str)
                 };
                 take(curl_long_option(name, value));
             }
