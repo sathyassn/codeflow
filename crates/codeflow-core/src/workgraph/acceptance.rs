@@ -3954,11 +3954,18 @@ pub fn reopened_criteria(
     head: &str,
     after: &Graph,
 ) -> Result<Vec<Finding>, String> {
-    let (reopened, unknown) = reopened_judged(repo, base, head, after)?;
-    Ok(reopened
-        .into_iter()
-        .map(|id| finding(FROZEN_RULE, reopened_message(&id)))
-        .chain(unknown.into_iter().map(|(id, reason)| {
+    Ok(reopened_findings(&reopened_judged(
+        repo, base, head, after,
+    )?))
+}
+
+/// The frozen findings for a judged range's reopened tasks
+/// ([`reopened_judged`]).
+fn reopened_findings((reopened, unknown): &Reopened) -> Vec<Finding> {
+    reopened
+        .iter()
+        .map(|id| finding(FROZEN_RULE, reopened_message(id)))
+        .chain(unknown.iter().map(|(id, reason)| {
             finding(
                 FROZEN_RULE,
                 format!(
@@ -3966,8 +3973,21 @@ pub fn reopened_criteria(
                 ),
             )
         }))
-        .collect())
+        .collect()
 }
+
+/// The ids of a judged range's reopened tasks, those whose history cannot
+/// tell included ([`reopened_ids`]).
+fn reopened_set((reopened, unknown): &Reopened) -> std::collections::BTreeSet<String> {
+    reopened.iter().chain(unknown.keys()).cloned().collect()
+}
+
+/// The tasks a range reopened with changed criteria, and the tasks the
+/// target no longer holds whose history cannot tell, with the reason.
+type Reopened = (
+    std::collections::BTreeSet<String>,
+    std::collections::BTreeMap<String, String>,
+);
 
 /// Why a reopened task's changed criteria are refused: one statement for
 /// the reopen transition (R-119) and the range freeze (R-52).
@@ -3997,8 +4017,7 @@ pub(super) fn reopened_ids(
     head: &str,
     after: &Graph,
 ) -> Result<std::collections::BTreeSet<String>, String> {
-    let (reopened, unknown) = reopened_judged(repo, base, head, after)?;
-    Ok(reopened.into_iter().chain(unknown.into_keys()).collect())
+    Ok(reopened_set(&reopened_judged(repo, base, head, after)?))
 }
 
 /// The tasks the range reopened with changed criteria, and the tasks
@@ -4010,13 +4029,7 @@ fn reopened_judged(
     base: &str,
     head: &str,
     after: &Graph,
-) -> Result<
-    (
-        std::collections::BTreeSet<String>,
-        std::collections::BTreeMap<String, String>,
-    ),
-    String,
-> {
+) -> Result<Reopened, String> {
     let _judgment = history::judgment();
     let target = Graph::from_revision(repo, base)?;
     let oid = |rev: &str| {
@@ -4916,7 +4929,10 @@ pub fn pull_request_findings_into(
     }
     // Resolution 43: a reopened task keeps its criteria, whatever the
     // range's class allows.
-    let mut found = reopened_criteria(&repo, base, head, &local_head)?;
+    // One judgment serves the frozen findings and, below, the correction
+    // exemption: the range's history is walked once (TSK-1306 AC-10).
+    let judged_reopen = reopened_judged(&repo, base, head, &local_head)?;
+    let mut found = reopened_findings(&judged_reopen);
     if *criteria == Criteria::Amendable {
         found.extend(line_landing_copies(&repo, target_tip, head_tip, anchor)?);
     } else {
@@ -4930,7 +4946,7 @@ pub fn pull_request_findings_into(
         let mut judging = Judging::new(&repo, range, run.criteria()).scoped(scope);
         // ADR-0080: the named task, or the task it follows up, may have the
         // text of its completed standalone criteria corrected.
-        let reopened = reopened_ids(&repo, base, head, &local_head)?;
+        let reopened = reopened_set(&judged_reopen);
         let correcting = |named: &str| {
             correctable(
                 &repo,
