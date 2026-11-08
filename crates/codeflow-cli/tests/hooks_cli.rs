@@ -2261,6 +2261,140 @@ fn edit_guard_refuses_a_case_different_remote_tracking_path() {
     );
 }
 
+/// This account's home from the password database, whatever `HOME` says.
+#[cfg(unix)]
+fn password_database_home() -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStrExt as _;
+    let mut buffer = vec![0_u8; 1 << 16];
+    // SAFETY: an all-zero `passwd` is a valid plain C struct; `getpwuid_r`
+    // fills it, and `buffer` outlives every use of its strings.
+    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    let code = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            &raw mut entry,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &raw mut result,
+        )
+    };
+    assert!(code == 0 && !result.is_null() && !entry.pw_dir.is_null());
+    // SAFETY: `pw_dir` is a NUL-terminated string inside `buffer`.
+    let dir = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) };
+    std::path::PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes()))
+}
+
+/// TSK-1184 delta 4: the SSH configuration allow lives in
+/// `~/.codeflow/authority/config.toml`: the edit guard refuses a Write or
+/// Edit of it, and every shipped preset denies the directory to the harness
+/// sandbox (Claude `denyWrite` and an `Edit` deny, Grok `deny`; the Codex
+/// profile is checked in `codex_config.rs`). A Bash write that spells the
+/// path in full rests on that sandbox (TSK-1386 covers it in the shell
+/// guards). The user config the allow used to live in,
+/// `~/.codeflow/config.toml`, is a file the edit guard lets an agent write,
+/// so it could not hold the allow.
+///
+/// Delta 5: while the directory does not exist, a Write under another case
+/// of it (`Authority`) is refused, since a volume that folds case opens it
+/// for the allow; and with `HOME` elsewhere, a Write of the allow under the
+/// account's home from the password database, where the reader opens it, is
+/// refused. The guard only judges these paths; nothing is written.
+#[test]
+fn agents_cannot_write_the_ssh_configuration_allow() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(home.join(".codeflow")).unwrap();
+    let mut wrong = Vec::new();
+    let cases = vec![
+        (home.join(".codeflow/authority/config.toml"), 2),
+        (home.join(".codeflow/Authority/config.toml"), 2),
+        (home.join(".codeflow/config.toml"), 0),
+        #[cfg(unix)]
+        (
+            password_database_home().join(".codeflow/authority/config.toml"),
+            2,
+        ),
+    ];
+    for (file, code) in cases {
+        for tool in ["Write", "Edit"] {
+            let payload = serde_json::json!({"tool_name": tool, "tool_input":{
+                "file_path": file, "content": "[policy_authority]\n",
+                "old_string": "a", "new_string": "b"}, "cwd": root})
+            .to_string();
+            let out = run_with_stdin(
+                codeflow()
+                    .env("HOME", &home)
+                    .env("USERPROFILE", &home)
+                    .args(["hook", "edit-guard"])
+                    .current_dir(&root),
+                &payload,
+            );
+            let err = String::from_utf8_lossy(&out.stderr);
+            if out.status.code() != Some(code) || (code == 2 && !err.contains("enforcement path")) {
+                wrong.push(format!(
+                    "edit-guard {tool} {}: exit {:?}, wanted {code}: {err}",
+                    file.display(),
+                    out.status.code(),
+                ));
+            }
+        }
+    }
+    for (name, preset) in [
+        (
+            "default",
+            include_str!("../../../assets/base/settings/default.json"),
+        ),
+        (
+            "acceptEdits",
+            include_str!("../../../assets/base/settings/acceptEdits.json"),
+        ),
+        (
+            "bypass-sandboxed",
+            include_str!("../../../assets/base/settings/bypass-sandboxed.json"),
+        ),
+    ] {
+        let preset: serde_json::Value = serde_json::from_str(preset).unwrap();
+        let listed = |list: &serde_json::Value, entry: &str| {
+            list.as_array()
+                .is_some_and(|list| list.iter().any(|item| item == entry))
+        };
+        if !listed(
+            &preset["sandbox"]["filesystem"]["denyWrite"],
+            "~/.codeflow/authority",
+        ) || !listed(
+            &preset["permissions"]["deny"],
+            "Edit(~/.codeflow/authority/**)",
+        ) {
+            wrong.push(format!(
+                "the {name} Claude preset lets agents write the authority directory"
+            ));
+        }
+    }
+    let grok = include_str!("../../../assets/base/grok/sandbox.toml");
+    let grok: toml::Value = toml::from_str(grok).unwrap();
+    for profile in ["cf-guard", "cf-guard-worktree"] {
+        let denied = grok["profiles"][profile]["deny"]
+            .as_array()
+            .is_some_and(|deny| {
+                [
+                    "/Users/*/.codeflow/authority",
+                    "/home/*/.codeflow/authority",
+                ]
+                .iter()
+                .all(|entry| deny.iter().any(|item| item.as_str() == Some(entry)))
+            });
+        if !denied {
+            wrong.push(format!(
+                "the Grok {profile} profile lets agents write the authority directory"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 #[test]
 fn exec_guard_blocks_dangerous_command_with_exit_2() {
     // Task 6: a PreToolUse block must map to exit 2, not 0.

@@ -463,12 +463,13 @@ fn scan(
         ours.push(identity(&head_sha, &record.id, record.uid.as_ref())?);
     }
     let mut cache: HashMap<String, Vec<inventory::Copy>> = HashMap::new();
+    let mut uids = inventory::Uids::default();
     for (refname, sha) in inventory::code_refs(git)? {
         if sha == head_sha {
             continue;
         }
         if !cache.contains_key(&sha) {
-            cache.insert(sha.clone(), inventory::copies_at(git, &sha)?);
+            cache.insert(sha.clone(), inventory::copies_with(git, &sha, &mut uids)?);
         }
         let copies = cache[&sha].clone();
         for (record, our) in added.iter().zip(&ours) {
