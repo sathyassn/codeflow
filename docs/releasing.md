@@ -241,8 +241,13 @@ and the remote settings, which GitHub enforces for every request.
 
 The guard (`exec-guard`, rule `security.outward_actions`) refuses these
 routes and names the form it refused. It reads `gh`, `curl`, `wget`,
-HTTPie and xh, and takes the `gh` repository from `-R` or, without it,
-from a `GH_REPO` the line or the session sets:
+HTTPie and xh. It reads a URL's scheme, userinfo, host and port, and
+compares the host in lower case without a trailing dot, so
+`https://user@api.github.com:443/` is the API host. The `gh` repository is
+the one every `-R`, `--repo` and `GH_REPO` names. When they name none, it
+is gh's current repository, and every GitHub remote here must name the
+policy authority's repository. gh's `{owner}` and `{repo}` placeholders
+resolve to that same repository:
 
 | Route | Refused forms |
 |---|---|
@@ -251,29 +256,35 @@ from a `GH_REPO` the line or the session sets:
 | Deployment approval | `pending_deployments` and `deployment_protection_rule` writes |
 | Starting a run another way | Deployment and deployment status writes, `createDeployment`; `gh workflow enable` or the enable API for a release workflow |
 | Changing what a release run reads | A variable a release workflow reads (`vars.NAME`, or any name when it indexes or serializes `vars`), set or deleted through `gh variable` or the API; secrets the same way, which the account rule also refuses |
-| Release or tag creation | `gh release create`, `edit`, `upload` and `delete`; API writes under `releases`, `git/tags` and `git/refs/tags`; a `git/refs` POST whose ref is not a branch; the matching GraphQL mutations |
+| Release or tag creation | `gh release create`, `edit`, `upload` and `delete`; API writes under `releases`, `git/tags` and `git/refs/tags`; a `git/refs` POST whose ref is not a branch; the matching GraphQL mutations sent by any client to a GraphQL path of an API host, and a GraphQL body the guard cannot read |
 | Release tag push | `refs/tags/` refspecs, `--tags`, `--follow-tags`, and a bare `v*` or digit-led name with or without a local tag |
 | Removing a floor | Writes to Actions policies, environments, rulesets and branch protection, for a repository or an organization where one exists |
 
 A release workflow is a workflow file at the policy authority (the remote's
 default branch as last fetched) that runs on `workflow_dispatch` or
 `repository_dispatch` and can publish: its token can write contents,
-packages, deployments, pages, attestations or an OIDC token, or its
+packages, deployments, pages, attestations, Actions or administration,
+or an OIDC token, or its
 permissions are left to the repository default, or it deploys to an
 environment, calls a reusable workflow, or reads a secret other than
 `GITHUB_TOKEN`. A file the guard cannot read or parse counts as a release
 workflow. The guard also refuses what it cannot map: a numeric workflow id,
 a name that matches no workflow file, a repository other than the
-authority's, an unresolved variable in the path, and a `--ref` whose copy
-of the workflow file is not in a fetched tracking ref or is a release
-workflow there.
+authority's, repositories in `-R`, `GH_REPO` and the path that disagree,
+an unresolved variable in the path, and a `--ref` whose copy of the
+workflow file is not in a fetched tracking ref or is a release workflow
+there. A write is refused when the guard cannot read where it goes: a
+host held in a variable, userinfo with a second `@`, a port that is not a
+number, a `.` or `..` path segment, braces or brackets `curl` would
+expand, a Host header, a `curl --connect-to`, `--resolve` or
+`--request-target`, or options or URLs read from a file.
 
 The guard cannot judge these routes, so a remote setting is their floor:
 
 | Route the guard cannot judge | Floor |
 |---|---|
 | A script or program that calls the API itself | The remote settings below |
-| `curl` or another client with the URL in a variable | The remote settings below |
+| A client that reaches the API at an IP address, or through a name the guard does not know as an API host | The remote settings below |
 | A workflow file changed on a branch, pushed, then dispatched from that branch | An Actions policy actor rule on the release workflow, once agents have their own identity |
 | A tag created by a step the guard does not model and pushed under a name without the release tag shape | A `creation` rule on the `release tags` ruleset |
 | A re-run of a release run (`gh run rerun`, the re-run API routes, the web page) | The re-run check in each publishing job, below |
@@ -298,7 +309,10 @@ Any change to these settings is the operator's decision.
 
 A re-run carries only a run id, and the guard makes no network read to
 learn which workflow the run belongs to. So each job that publishes
-refuses its own re-run as its first step. GitHub sets
+refuses its own re-run as its first step. CodeFlow's own workflows get
+that step, and the test below, in a commit the operator applies, because
+the guard refuses an agent's write to `.github/workflows`; until then a
+re-run of CodeFlow's release run has no floor. GitHub sets
 `GITHUB_RUN_ATTEMPT`, which a requester cannot change; it is 1 on the first
 attempt and grows with each re-run
 ([contexts](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts)).
@@ -321,8 +335,12 @@ sits in every publishing job, before any step that publishes:
 A pull request run of `release.yml` publishes nothing, so its re-run
 passes. After a failed release run, dispatch a fresh run; it resumes the
 draft release. The `release_rerun_contract` test requires the check first
-in every job that has an `environment`, a publishing action or a publishing
-command. CodeFlow installs no release workflow, so an adopter adds the same
+in every job that has an `environment`, a publishing action, a publishing
+command, a `gh api` call that writes (an implied POST included) or an HTTP
+write to the API host. A job that calls a reusable workflow must call one
+the test also reads. The test reads the step for what it does: the first
+command compares `GITHUB_RUN_ATTEMPT` to 1, that branch exits non-zero,
+and no `if`, `continue-on-error` or `env` undoes it. CodeFlow installs no release workflow, so an adopter adds the same
 step to each publishing job of their own.
 
 For an adopter, the token an agent holds decides what the remote refuses:
