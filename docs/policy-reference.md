@@ -1876,9 +1876,11 @@ operands.
   read-tree -u`, `git stash apply`, `pop` and `branch`, `git apply`
   without `--cached`, `git cherry-pick -n` and `git revert -n`, `git
   sparse-checkout` `set`, `add`, `init`, `reapply` and `disable`, `git
-  stash` push with `--keep-index` (`-k`) or `--patch`, which checks the
-  index out after its reset; and also `git am`, and `git reset --hard`,
-  `--keep` and `--merge` to a revision.
+  stash` push with `--keep-index` (`-k`), which checks the index out
+  after its reset and removes an enforcement path the index lacks, and
+  with `--patch`, whose index content is compared too although it
+  reverses work-tree changes instead; and also `git am`, and `git reset
+  --hard`, `--keep` and `--merge` to a revision.
   The same holds for each of these reached through a Git alias, a one-shot
   `-c alias.NAME=...` included: the expansion is judged as written. Such a
   write leaves the file as an uncommitted change that rides into the next
