@@ -781,6 +781,9 @@ catalog! {
     /// An id registry without host rules.
     DOCTOR_REGISTRY_UNPROTECTED = Step::Codeflow("codeflow remote protect"),
         "run `codeflow remote protect` to apply the host rules for codeflow/registry";
+    /// Host rules on the id registry that doctor could not read (TSK-383).
+    DOCTOR_REGISTRY_UNREAD = Step::Codeflow("codeflow doctor --check id-registry"),
+        "restore the read of the host rules for codeflow/registry: `origin` names one github.com repository for fetch and push, `gh auth status` shows a login whose token can read that repository's rules, and the host is reachable; then `codeflow doctor --check id-registry` reads them, and `codeflow remote protect --branch codeflow/registry` applies any rule they lack";
     /// A default branch whose live rules let a pull request merge on checks
     /// that did not run on its current tip (TSK-261).
     DOCTOR_REMOTE_PERIMETER = Step::Codeflow("codeflow remote protect"),

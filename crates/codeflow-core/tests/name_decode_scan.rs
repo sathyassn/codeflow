@@ -509,6 +509,30 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "display",
     ),
+    // RemoteProvider::name returns the provider's fixed label for the dry-run report; no git name is decoded.
+    (
+        "codeflow-core/src/remote.rs",
+        "RemoteProvider::preview",
+        "name",
+        1,
+        "format-contract",
+    ),
+    // RemoteProvider::name returns the provider's fixed label for the fallback report; no git name is decoded.
+    (
+        "codeflow-core/src/remote.rs",
+        "GithubProvider::preview",
+        "name",
+        1,
+        "format-contract",
+    ),
+    // Only the stderr of a failed `git remote get-url --push` is shown in the refusal; the exit status decides, and the push URLs on stdout are decoded strictly.
+    (
+        "codeflow-core/src/remote.rs",
+        "origin_on",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // BranchStep::name returns its existing &str unchanged for display; this is not a git2 name decoder.
     (
         "codeflow-core/src/root_checkout.rs",
@@ -1827,6 +1851,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "obtain-absent:from_str",
         1,
         "unproven",
+    ),
+    // A ruleset answer that does not parse reads as Null, which has no bypass list, so ruleset_bound returns Bypass::Unknown and the registry rules read as unread, never as bound.
+    (
+        "crates/codeflow-core/src/doctor/remote_perimeter.rs",
+        "ruleset_bound",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // Trims the stderr of a failed `git remote get-url --push` only to show it in the refusal; the exit status decides.
+    (
+        "crates/codeflow-core/src/remote.rs",
+        "origin_on",
+        "trim",
+        1,
+        "display",
     ),
     // A gh answer that does not parse reads as Null, so the check returns a note that names no default branch or no readable rules, never a pass.
     (
@@ -3877,10 +3917,26 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // A write answer that does not parse reads as Null, whose bypass list differs from the one sent, so the ruleset is reported unconfirmed, never applied.
     (
         "crates/codeflow-core/src/remote.rs",
-        "GithubProvider::apply_owned",
+        "GithubProvider::send",
         "obtain-absent:from_str",
         1,
         "unproven",
+    ),
+    // An --adopt ruleset or owned name that is blank after trimming is refused; the untrimmed text is what is matched, exactly.
+    (
+        "crates/codeflow-core/src/remote.rs",
+        "Adopt::parse",
+        "trim",
+        2,
+        "schema-reject-only",
+    ),
+    // A blank --branch is refused; the untrimmed name is what limits the run and is looked up on the host.
+    (
+        "crates/codeflow-cli/src/cmd/remote.rs",
+        "run",
+        "trim",
+        1,
+        "schema-reject-only",
     ),
     // A bypass actor's missing type or mode is shown as a placeholder in a report or failure line; the non-empty list alone decides.
     (
