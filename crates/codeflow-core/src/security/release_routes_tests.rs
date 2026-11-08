@@ -603,9 +603,15 @@ fn sweep_gh_repo_names_the_repository() {
     ] {
         assert_refused(dir, &command, "names repository other/repo");
     }
+    // gh lets `-R` win over GH_REPO; the guard refuses when they disagree.
+    assert_refused(
+        dir,
+        "GH_REPO=other/repo gh workflow run -R acme/widget codeflow-ci.yml",
+        "disagree",
+    );
     for command in [
         "GH_REPO=acme/widget gh workflow run codeflow-ci.yml",
-        "GH_REPO=other/repo gh workflow run -R acme/widget codeflow-ci.yml",
+        "GH_REPO=acme/widget gh workflow run -R Acme/Widget codeflow-ci.yml",
         "GH_REPO=other/repo gh run list",
     ] {
         assert_passes(dir, command);
@@ -630,4 +636,208 @@ fn the_reads_of_a_workflow() {
         .vars
         .covers("ANY"));
     assert!(!super::Reads::of("x: 1").secrets.any());
+}
+
+/// Review finding A: a GitHub API host is read whatever its spelling.
+#[test]
+fn review_a_api_host_spellings_are_read() {
+    let temp = standard();
+    let dir = temp.path();
+    for command in [
+        // The reviewer's spellings.
+        "curl -X POST https://api.github.com:443/repos/acme/widget/releases -d '{\"tag_name\":\"v1\"}'",
+        "curl -X POST https://user@api.github.com/repos/acme/widget/releases -d '{\"tag_name\":\"v1\"}'",
+        "gh api -X POST https://api.github.com:443/repos/acme/widget/releases -f tag_name=v1",
+        "gh api -X POST https://x@api.github.com/repos/acme/widget/releases -f tag_name=v1",
+        "wget --method=POST https://api.github.com:443/repos/acme/widget/releases --body-data '{\"tag_name\":\"v1\"}'",
+        "wget --method=POST https://user@api.github.com/repos/acme/widget/releases --body-data '{}'",
+        "http POST https://api.github.com:443/repos/acme/widget/releases tag_name=v1",
+        "http POST https://user@api.github.com/repos/acme/widget/releases tag_name=v1",
+        "xh POST https://api.github.com:443/repos/acme/widget/releases tag_name=v1",
+        "xh POST https://user:pw@api.github.com/repos/acme/widget/releases tag_name=v1",
+        // The rest of the class: case, a trailing dot, no scheme, a port
+        // without a scheme, http, and the uploads host.
+        "curl -X POST HTTPS://API.GitHub.COM/repos/acme/widget/releases -d '{}'",
+        "curl -X POST https://api.github.com./repos/acme/widget/releases -d '{}'",
+        "curl -X POST api.github.com:443/repos/acme/widget/releases -d '{}'",
+        "curl -X POST http://api.github.com:80/repos/acme/widget/releases -d '{}'",
+        "curl -X POST https://u@uploads.github.com:443/repos/acme/widget/releases/1/assets -T x",
+        "curl -X POST -u u:p https://api.github.com/repos/acme/widget/releases -d '{}'",
+    ] {
+        assert_refused(dir, command, "release");
+    }
+    for (command, names) in [
+        ("curl -X POST 'https://a@b@api.github.com/repos/acme/widget/releases' -d x", "cannot read"),
+        ("curl -X POST https://api.github.com/x/../repos/acme/widget/releases -d x", "`..`"),
+        ("curl -X POST https://api.github.com/x/%2e%2E/repos/acme/widget/releases -d x", "`..`"),
+        ("gh api -X POST repos/acme/x/../widget/releases -f tag_name=v1", "`..`"),
+        ("curl -X POST 'https://api.github.com/repos/acme/widget/{releases,x}' -d x", "expands"),
+        ("curl -X POST \"https://$HOST/repos/acme/widget/releases\" -d x", "cannot read"),
+        ("curl -X POST https:api.github.com/repos/acme/widget/releases -d x", "without `//`"),
+        ("curl -X POST https://api.github.com:x/repos/acme/widget/releases -d x", "cannot read"),
+        ("curl -X POST -H 'Host: api.github.com' https://203.0.113.1/repos/acme/widget/releases -d x", "Host header"),
+        ("curl -X POST --connect-to ::api.github.com:443 https://example.invalid/repos/acme/widget/releases -d x", "other than its URL"),
+        ("curl -X POST --request-target /repos/acme/widget/releases https://api.github.com/x -d x", "other than its URL"),
+        ("curl -X POST -K request.cfg -d x", "from a file"),
+        ("wget --method=POST -i urls.txt --body-data x", "from a file"),
+        ("wget --method=POST --header='Host: api.github.com' https://203.0.113.1/repos/acme/widget/releases", "Host header"),
+        ("http POST https://203.0.113.1/repos/acme/widget/releases Host:api.github.com tag_name=v1", "Host header"),
+    ] {
+        assert_refused(dir, command, names);
+    }
+    for command in [
+        "curl -s https://api.github.com:443/repos/acme/widget/releases",
+        "curl -X POST -u u:p https://example.invalid/x -d a",
+        "curl -X POST http://localhost:3000/api -d x",
+        "curl -g -X POST 'https://example.invalid/{x}' -d a",
+        "curl -X POST https://notapi.github.com.example/repos/acme/widget/releases -d x",
+        "http POST :3000/api a=b",
+        "http POST https://example.invalid/x host:=1",
+    ] {
+        assert_passes(dir, command);
+    }
+}
+
+/// Review finding B: any GraphQL path on a GitHub API host is GraphQL, for
+/// every client.
+#[test]
+fn review_b_graphql_is_read_on_every_path_and_client() {
+    let temp = standard();
+    let dir = temp.path();
+    for command in [
+        // The reviewer's spellings.
+        "gh api -X POST /graphql -f query='mutation { createRef(input:{}) { clientMutationId } }'",
+        "curl -X POST https://api.github.com/graphql -d '{\"query\":\"mutation { createRef(input:{}) { clientMutationId } }\"}'",
+        "wget --method=POST https://api.github.com/graphql --body-data '{\"query\":\"mutation { createRef(input:{}) { clientMutationId } }\"}'",
+        "http POST https://api.github.com/graphql query='mutation { createRef(input:{}) { clientMutationId } }'",
+        "xh POST https://api.github.com/graphql query='mutation { createRef(input:{}) { clientMutationId } }'",
+        // The rest of the class.
+        "gh api https://api.github.com/graphql -f query='mutation { a: createRef(input:{}) { clientMutationId } }'",
+        "curl https://api.github.com:443/graphql --json '{\"query\":\"mutation { createRef(input:{}) { clientMutationId } }\"}'",
+        "curl -X POST https://ghe.example/api/graphql -d '{\"query\":\"mutation { createRef(input:{}) { clientMutationId } }\"}'",
+        "wget --post-data='{\"query\":\"mutation { createRef(input:{}) { clientMutationId } }\"}' https://api.github.com/graphql",
+    ] {
+        assert_refused(dir, command, "createRef");
+    }
+    for command in [
+        "curl -X POST https://api.github.com/graphql -d @query.json",
+        "gh api /graphql --input query.json",
+        "gh api -X POST graphql -F query=@query.graphql",
+        "http POST https://api.github.com/graphql @query.json",
+        "wget --post-file=query.json https://api.github.com/graphql",
+    ] {
+        assert_refused(dir, command, "cannot read");
+    }
+    for command in [
+        "gh api graphql -f query='query { viewer { login } }'",
+        "curl -X POST https://api.github.com/graphql -d '{\"query\":\"query { viewer { login } }\"}'",
+    ] {
+        assert_passes(dir, command);
+    }
+}
+
+/// Review finding C: gh's `{owner}/{repo}` is the repository `-R` or
+/// `GH_REPO` names, and sources that disagree are refused.
+#[test]
+fn review_c_placeholders_resolve_through_the_repo_flag() {
+    let temp = standard();
+    let dir = temp.path();
+    for (command, names) in [
+        // The reviewer's spellings.
+        ("gh -R other/repo api -X POST repos/{owner}/{repo}/dispatches -f event_type=release", "other/repo"),
+        ("gh -R other/repo api -X POST repos/{owner}/{repo}/actions/workflows/codeflow-ci.yml/dispatches -f ref=main", "other/repo"),
+        // The rest of the class.
+        ("gh api -R other/repo -X POST repos/{owner}/{repo}/actions/workflows/codeflow-ci.yml/dispatches -f ref=main", "other/repo"),
+        ("gh --repo=other/repo api -X PUT repos/{owner}/{repo}/actions/workflows/codeflow-ci.yml/enable", "other/repo"),
+        ("gh -R other/repo api -X POST repos/acme/{repo}/dispatches -f event_type=docs", "other/repo"),
+        ("gh -R other/repo api -X POST repos/{owner}/widget/dispatches -f event_type=docs", "other/repo"),
+        ("gh -R acme/widget api -X POST repos/other/repo/dispatches -f event_type=docs", "contradicts"),
+        ("GH_REPO=other/repo gh api -X POST repos/acme/widget/dispatches -f event_type=docs", "contradicts"),
+        ("GH_REPO=acme/widget gh -R other/repo workflow run codeflow-ci.yml", "disagree"),
+        ("gh -R acme/widget workflow run -R other/repo codeflow-ci.yml", "disagree"),
+        ("gh -R '{owner}/{repo}' workflow run codeflow-ci.yml", "names repository {owner}/{repo}"),
+        ("gh -R evilgithub.com/acme/widget workflow run codeflow-ci.yml", "names repository evilgithub.com/acme/widget"),
+        ("gh -R https://github.com.evil/acme/widget workflow run codeflow-ci.yml", "names repository"),
+        ("curl -g -X POST 'https://api.github.com/repos/{owner}/{repo}/dispatches' -d '{\"event_type\":\"docs\"}'", "names repository {owner}/{repo}"),
+    ] {
+        assert_refused(dir, command, names);
+    }
+    for command in [
+        "gh -R acme/widget api -X POST repos/{owner}/{repo}/actions/workflows/codeflow-ci.yml/dispatches -f ref=main",
+        "gh api -X POST repos/{owner}/{repo}/dispatches -f event_type=docs",
+        "gh -R github.com/acme/widget workflow run codeflow-ci.yml",
+        "gh -R https://github.com/Acme/widget workflow run codeflow-ci.yml",
+        "gh -R git@github.com:Acme/widget.git workflow run codeflow-ci.yml",
+    ] {
+        assert_passes(dir, command);
+    }
+    // gh picks its current repository among the remotes; one that names
+    // another repository leaves the guard unsure which.
+    let temp = standard();
+    git2::Repository::open(temp.path())
+        .unwrap()
+        .remote("upstream", "https://github.com/other/repo.git")
+        .unwrap();
+    for command in [
+        "gh workflow run codeflow-ci.yml",
+        "gh api -X POST repos/{owner}/{repo}/actions/workflows/codeflow-ci.yml/dispatches -f ref=main",
+    ] {
+        assert_refused(temp.path(), command, "current repository");
+    }
+    assert_passes(
+        temp.path(),
+        "gh workflow run -R acme/widget codeflow-ci.yml",
+    );
+}
+
+/// Review finding D: a token that can write Actions or administration can
+/// start or unblock a release run.
+#[test]
+fn review_d_actions_and_administration_writes_are_publishing() {
+    for scope in ["actions", "administration"] {
+        let helper = format!(
+            "on: workflow_dispatch\npermissions:\n  contents: read\n  {scope}: write\njobs:\n  a:\n    runs-on: x\n    steps:\n      - run: gh workflow run release.yml\n"
+        );
+        let temp = fixture(&[("helper.yml", &helper)], &[]);
+        assert_refused(
+            temp.path(),
+            "gh workflow run helper.yml",
+            "publishing scope",
+        );
+    }
+    let temp = fixture(
+        &[(
+            "helper.yml",
+            "on: workflow_dispatch\npermissions:\n  contents: read\n  actions: read\njobs:\n  a:\n    runs-on: x\n    steps:\n      - run: echo\n",
+        )],
+        &[],
+    );
+    assert_passes(temp.path(), "gh workflow run helper.yml");
+}
+
+#[test]
+fn the_github_slug() {
+    for (text, slug) in [
+        ("Acme/widget", "acme/widget"),
+        ("github.com/Acme/widget", "acme/widget"),
+        ("https://github.com/Acme/widget.git", "acme/widget"),
+        ("https://u@GitHub.com:443/Acme/widget/", "acme/widget"),
+        ("ssh://git@github.com/acme/widget.git", "acme/widget"),
+        ("git@github.com:acme/widget.git", "acme/widget"),
+        ("https://www.github.com/acme/widget", "acme/widget"),
+    ] {
+        assert_eq!(super::github_slug(text).as_deref(), Some(slug), "{text}");
+    }
+    for text in [
+        "https://evilgithub.com/acme/widget",
+        "https://github.com.evil/acme/widget",
+        "evilgithub.com/acme/widget",
+        "git@gitlab.com:acme/widget.git",
+        "https://a@b@github.com/acme/widget",
+        "{owner}/{repo}",
+        "acme/widget/extra/part",
+        "../widget",
+    ] {
+        assert_eq!(super::github_slug(text), None, "{text}");
+    }
 }

@@ -3221,10 +3221,7 @@ fn release_route(
     let session = std::env::var_os("GH_REPO")
         .map(|value| value.into_string().unwrap_or_else(|_| "$GH_REPO".into()));
     let gh_repo = out.gh_repo.clone().or(session);
-    let ctx = super::release_routes::Ctx {
-        cwd,
-        gh_repo: gh_repo.as_deref(),
-    };
+    let ctx = super::release_routes::Ctx::new(cwd, gh_repo.as_deref());
     let reason = match name {
         "gh" => super::release_routes::gh(rest, &canonical[1..], ctx),
         "curl" => super::release_routes::curl(rest, cwd),

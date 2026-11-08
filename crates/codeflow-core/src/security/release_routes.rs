@@ -28,41 +28,159 @@ use std::path::Path;
 /// Where a call runs and which repository `gh` defaults to.
 #[derive(Clone, Copy)]
 pub(crate) struct Ctx<'a> {
-    pub(crate) cwd: Option<&'a Path>,
-    /// `GH_REPO` as the line or the session sets it; `gh` uses it when no
-    /// `-R` is given.
-    pub(crate) gh_repo: Option<&'a str>,
+    cwd: Option<&'a Path>,
+    /// `GH_REPO` as the line or the session sets it.
+    gh_repo: Option<&'a str>,
+    /// The repository a call acts on when its path names none.
+    target: &'a Target,
+}
+
+impl<'a> Ctx<'a> {
+    pub(crate) fn new(cwd: Option<&'a Path>, gh_repo: Option<&'a str>) -> Self {
+        Self {
+            cwd,
+            gh_repo,
+            target: &Target::Literal,
+        }
+    }
+}
+
+/// The repository a call acts on when its path names none, or names it
+/// with gh's `{owner}` and `{repo}` placeholders.
+enum Target {
+    /// gh's current repository: no `-R` and no `GH_REPO`.
+    Current,
+    /// The repository every `-R`, `--repo` and `GH_REPO` names.
+    Named(String),
+    /// Why the guard cannot tell which repository gh acts on.
+    Unresolved(String),
+    /// A client that does not expand placeholders.
+    Literal,
+}
+
+/// The repository a `gh` call acts on: every `-R`, `--repo` and `GH_REPO`
+/// must name the same one.
+fn gh_target(args: &[String], gh_repo: Option<&str>) -> Target {
+    let mut named = Vec::new();
+    for (at, word) in args.iter().enumerate() {
+        let (name, attached) = split_option(word, &["-R"]);
+        if matches!(name.as_str(), "-R" | "--repo") {
+            match attached.or_else(|| args.get(at + 1).cloned()) {
+                Some(repo) => named.push(repo),
+                None => return Target::Unresolved("gives `-R` with no repository".into()),
+            }
+        }
+    }
+    named.extend(gh_repo.map(str::to_owned));
+    let key = |repo: &str| github_slug(repo).unwrap_or_else(|| repo.to_ascii_lowercase());
+    let Some(first) = named.first() else {
+        return Target::Current;
+    };
+    if named.iter().all(|repo| key(repo) == key(first)) {
+        Target::Named(first.clone())
+    } else {
+        let shown: Vec<String> = named.iter().map(|r| crate::git::display_text(r)).collect();
+        Target::Unresolved(format!(
+            "names repositories {} through `-R` and `GH_REPO`, which disagree",
+            shown.join(", ")
+        ))
+    }
 }
 
 /// The refusal for `gh` arguments, or `None` when the call is not a release
 /// route. `args` are the words after `gh`; `sub` starts at its subcommand.
 pub(crate) fn gh(args: &[String], sub: &[String], ctx: Ctx<'_>) -> Option<String> {
+    let target = gh_target(args, ctx.gh_repo);
+    let ctx = Ctx {
+        target: &target,
+        ..ctx
+    };
     let action = sub.get(1).map(String::as_str);
     match (sub.first().map(String::as_str), action) {
-        (Some("workflow"), Some("run")) => workflow_run(args, &sub[2..], ctx),
-        (Some("workflow"), Some("enable")) => workflow_enable(args, &sub[2..], ctx),
+        (Some("workflow"), Some("run")) => workflow_run(&sub[2..], ctx),
+        (Some("workflow"), Some("enable")) => workflow_enable(&sub[2..], ctx),
         (Some(kind @ ("variable" | "secret")), Some(verb @ ("set" | "delete"))) => {
-            store_command(kind, verb, args, &sub[2..], ctx)
+            store_command(kind, verb, &sub[2..], ctx)
         }
         (Some("api"), _) => api(&sub[1..], ctx),
         _ => None,
     }
 }
 
+/// `curl` options that take the next word as their value, besides those
+/// [`curl`] reads.
+const CURL_VALUES: &[&str] = &[
+    "-o",
+    "--output",
+    "-u",
+    "--user",
+    "-A",
+    "--user-agent",
+    "-e",
+    "--referer",
+    "-b",
+    "--cookie",
+    "-c",
+    "--cookie-jar",
+    "-w",
+    "--write-out",
+    "-m",
+    "--max-time",
+    "--connect-timeout",
+    "-x",
+    "--proxy",
+    "-U",
+    "--proxy-user",
+    "-E",
+    "--cert",
+    "--key",
+    "--cacert",
+    "--capath",
+    "-r",
+    "--range",
+    "-C",
+    "--continue-at",
+    "-D",
+    "--dump-header",
+    "--trace",
+    "--trace-ascii",
+    "--stderr",
+    "--limit-rate",
+    "--max-filesize",
+    "--interface",
+    "--retry",
+    "--retry-delay",
+    "--retry-max-time",
+    "-z",
+    "--time-cond",
+    "--oauth2-bearer",
+    "--url-query",
+    "--variable",
+    "-Y",
+    "--speed-limit",
+    "-y",
+    "--speed-time",
+];
+
 /// The refusal for a `curl` call that writes to a GitHub API release route.
-/// A URL held in a variable is not read: that route's floor is remote
-/// (`docs/releasing.md`).
+/// A write whose URL, host or path the guard cannot read is refused.
 pub(crate) fn curl(args: &[String], cwd: Option<&Path>) -> Option<String> {
-    let ctx = Ctx { cwd, gh_repo: None };
+    let ctx = Ctx::new(cwd, None);
     let mut method: Option<String> = None;
     let mut implied: Option<&'static str> = None;
     let mut get = false;
+    let mut glob = true;
+    let mut redirected: Option<&'static str> = None;
     let mut body = Body::default();
     let mut urls = Vec::new();
     let mut at = 0;
     while let Some(word) = args.get(at) {
         at += 1;
-        let (name, attached) = split_option(word, &["-X", "-d", "-F", "-T"]);
+        let (name, attached) = split_option(word, &["-X", "-d", "-F", "-T", "-H", "-K"]);
+        if attached.is_none() && CURL_VALUES.contains(&name.as_str()) {
+            at += 1;
+            continue;
+        }
         let mut value = || {
             attached.clone().or_else(|| {
                 at += 1;
@@ -70,6 +188,25 @@ pub(crate) fn curl(args: &[String], cwd: Option<&Path>) -> Option<String> {
             })
         };
         match name.as_str() {
+            "-K" | "--config" => {
+                value();
+                redirected = Some("reads its options from a file");
+            }
+            "--connect-to" | "--resolve" | "--request-target" => {
+                value();
+                redirected = Some("sends the request to a host or path other than its URL names");
+            }
+            "-H" | "--header" => {
+                let header = value().unwrap_or_default();
+                if header.starts_with('@')
+                    || header
+                        .get(..5)
+                        .is_some_and(|h| h.eq_ignore_ascii_case("host:"))
+                {
+                    redirected = Some("sets the Host header or reads headers from a file");
+                }
+            }
+            "-g" | "--globoff" => glob = false,
             "-X" | "--request" => method = value(),
             "-d" | "--data" | "--data-raw" | "--data-binary" | "--data-ascii"
             | "--data-urlencode" | "--json" => {
@@ -101,10 +238,30 @@ pub(crate) fn curl(args: &[String], cwd: Option<&Path>) -> Option<String> {
     if !writes(&method) {
         return None;
     }
-    urls.iter().find_map(|url| {
-        let path = api_path(url)?;
-        judge(&format!("curl -X {method}"), &method, &path, &body, ctx)
-    })
+    let form = format!("curl -X {method}");
+    if let Some(why) = redirected {
+        return Some(format!(
+            "{form} {why}, so the guard cannot tell whether it reaches a release route"
+        ));
+    }
+    urls.iter()
+        .find_map(|url| route_of(&form, url, glob, &method, &body, ctx))
+}
+
+/// The refusal for a write by an HTTP client to `url`.
+fn route_of(
+    form: &str,
+    url: &str,
+    glob: bool,
+    method: &str,
+    body: &Body,
+    ctx: Ctx<'_>,
+) -> Option<String> {
+    match destination(url, glob) {
+        Err(why) => Some(format!("{form} {why}")),
+        Ok(Dest::Other) => None,
+        Ok(Dest::Api(path)) => api_route(form, method, &path, body, ctx),
+    }
 }
 
 /// `wget` options that take the next word as their value.
@@ -212,11 +369,12 @@ fn unquote(value: &str) -> &str {
 /// The refusal for a `wget`, `HTTPie` (`http`, `https`) or xh (`xh`, `xhs`)
 /// call that writes to a GitHub API release route.
 pub(crate) fn http_client(name: &str, args: &[String], cwd: Option<&Path>) -> Option<String> {
-    let ctx = Ctx { cwd, gh_repo: None };
+    let ctx = Ctx::new(cwd, None);
     let wget = name == "wget";
     let values = if wget { WGET_VALUES } else { HTTPIE_VALUES };
     let mut method: Option<String> = None;
     let mut implied = false;
+    let mut redirected: Option<&'static str> = None;
     let mut body = Body::default();
     let mut positional = Vec::new();
     let mut at = 0;
@@ -250,6 +408,17 @@ pub(crate) fn http_client(name: &str, args: &[String], cwd: Option<&Path>) -> Op
                 }
             }
             "-f" | "--form" | "--multipart" if !wget => implied = true,
+            "-i" | "--input-file" | "-e" | "--execute" | "--config" if wget => {
+                redirected = Some("reads its URLs or settings from a file or command");
+            }
+            "--header"
+                if value
+                    .as_deref()
+                    .and_then(|h| h.get(..5))
+                    .is_some_and(|h| h.eq_ignore_ascii_case("host:")) =>
+            {
+                redirected = Some("sets the Host header");
+            }
             _ => {}
         }
     }
@@ -274,24 +443,7 @@ pub(crate) fn http_client(name: &str, args: &[String], cwd: Option<&Path>) -> Op
         }
     };
     if !wget {
-        for item in positional {
-            if item.contains(":=@")
-                || item.contains("=@")
-                || item.contains('@') && !item.contains('=')
-            {
-                implied = true;
-                body.unknown = true;
-            } else if let Some((key, value)) = item.split_once(":=") {
-                implied = true;
-                body.fields
-                    .push((key.to_owned(), unquote(value).to_owned()));
-            } else if item.contains("==") {
-                // A query parameter, not a body field.
-            } else if let Some((key, value)) = item.split_once('=') {
-                implied = true;
-                body.fields.push((key.to_owned(), value.to_owned()));
-            }
-        }
+        implied |= httpie_items(positional, &mut body, &mut redirected);
     }
     let method = method.map_or_else(
         || if implied { "POST".into() } else { "GET".into() },
@@ -300,13 +452,51 @@ pub(crate) fn http_client(name: &str, args: &[String], cwd: Option<&Path>) -> Op
     if !writes(&method) {
         return None;
     }
-    let path = api_path(&url?)?;
     let form = if wget {
         format!("wget --method {method}")
     } else {
         format!("{name} {method}")
     };
-    judge(&form, &method, &path, &body, ctx)
+    if let Some(why) = redirected {
+        return Some(format!(
+            "{form} {why}, so the guard cannot tell whether it reaches a release route"
+        ));
+    }
+    route_of(&form, &url?, false, &method, &body, ctx)
+}
+
+/// Read `HTTPie` and xh request items into `body`; whether any sends a body.
+/// A `Host` header item sets `redirected`.
+fn httpie_items(
+    items: impl Iterator<Item = String>,
+    body: &mut Body,
+    redirected: &mut Option<&'static str>,
+) -> bool {
+    let mut implied = false;
+    for item in items {
+        if item
+            .split_once(':')
+            .is_some_and(|(key, rest)| key.eq_ignore_ascii_case("host") && !rest.starts_with('='))
+        {
+            *redirected = Some("sets the Host header");
+        } else if item.contains(":=@")
+            || item.contains("=@")
+            || item.contains('@') && !item.contains('=')
+        {
+            implied = true;
+            body.unknown = true;
+        } else if let Some((key, value)) = item.split_once(":=") {
+            implied = true;
+            body.fields
+                .push((key.to_owned(), unquote(value).to_owned()));
+        } else if item.contains("==") {
+            // A query parameter, not a body field.
+        } else if let Some((key, value)) = item.split_once('=') {
+            implied = true;
+            body.fields.push((key.to_owned(), value.to_owned()));
+        }
+    }
+    implied
 }
 
 fn writes(method: &str) -> bool {
@@ -373,9 +563,8 @@ fn opaque(text: &str) -> bool {
     text.contains('$') || text.contains('`')
 }
 
-fn workflow_run(args: &[String], rest: &[String], ctx: Ctx<'_>) -> Option<String> {
+fn workflow_run(rest: &[String], ctx: Ctx<'_>) -> Option<String> {
     let cwd = ctx.cwd;
-    let mut repo = repo_flag(args).or_else(|| ctx.gh_repo.map(str::to_owned));
     let mut reference = None;
     let mut selector = None;
     let mut at = 0;
@@ -395,9 +584,8 @@ fn workflow_run(args: &[String], rest: &[String], ctx: Ctx<'_>) -> Option<String
                 })
             };
             match name.as_str() {
-                "-R" | "--repo" => repo = value(),
                 "-r" | "--ref" => reference = value(),
-                "-f" | "-F" | "--field" | "--raw-field" => {
+                "-R" | "--repo" | "-f" | "-F" | "--field" | "--raw-field" => {
                     value();
                 }
                 _ => {}
@@ -418,19 +606,18 @@ fn workflow_run(args: &[String], rest: &[String], ctx: Ctx<'_>) -> Option<String
         Ok(authority) => authority,
         Err(why) => return Some(unreadable(form, &why)),
     };
-    if let Some(why) = authority.foreign(repo.as_deref()) {
+    if let Some(why) = authority.target(ctx.target) {
         return Some(format!("{form} {why}"));
     }
     dispatch(form, &authority, &selector, reference.as_deref(), false)
 }
 
-/// A `gh` subcommand's operands, its repository and its options.
-type Parts = (Vec<String>, Option<String>, Vec<(String, Option<String>)>);
+/// A `gh` subcommand's operands and its options.
+type Parts = (Vec<String>, Vec<(String, Option<String>)>);
 
-/// The selector and repository of a `gh` subcommand whose options are
-/// `-R`/`--repo` and the value options in `values`.
-fn selector_and_repo(args: &[String], rest: &[String], values: &[&str], ctx: Ctx<'_>) -> Parts {
-    let mut repo = repo_flag(args).or_else(|| ctx.gh_repo.map(str::to_owned));
+/// The operands and options of a `gh` subcommand whose value options are
+/// `values`.
+fn operands(rest: &[String], values: &[&str]) -> Parts {
     let mut positional = Vec::new();
     let mut options = Vec::new();
     let mut at = 0;
@@ -452,22 +639,19 @@ fn selector_and_repo(args: &[String], rest: &[String], values: &[&str], ctx: Ctx
             } else {
                 None
             };
-            if matches!(name.as_str(), "-R" | "--repo") {
-                repo.clone_from(&value);
-            }
             options.push((name, value));
             continue;
         }
         positional.push(word.clone());
     }
-    (positional, repo, options)
+    (positional, options)
 }
 
 /// `gh workflow enable`: re-enabling a release workflow lets its triggers
 /// start release runs again.
-fn workflow_enable(args: &[String], rest: &[String], ctx: Ctx<'_>) -> Option<String> {
+fn workflow_enable(rest: &[String], ctx: Ctx<'_>) -> Option<String> {
     let form = "gh workflow enable";
-    let (positional, repo, _) = selector_and_repo(args, rest, &["-R", "--repo"], ctx);
+    let (positional, _) = operands(rest, &["-R", "--repo"]);
     let Some(selector) = positional.first() else {
         return Some(format!(
             "{form} names no workflow, so gh would pick one interactively; name a workflow that is not a release workflow"
@@ -477,7 +661,7 @@ fn workflow_enable(args: &[String], rest: &[String], ctx: Ctx<'_>) -> Option<Str
         Ok(authority) => authority,
         Err(why) => return Some(unreadable(form, &why)),
     };
-    if let Some(why) = authority.foreign(repo.as_deref()) {
+    if let Some(why) = authority.target(ctx.target) {
         return Some(format!("{form} {why}"));
     }
     enable(form, &authority, selector, false)
@@ -497,13 +681,7 @@ fn enable(form: &str, authority: &Authority, selector: &str, api: bool) -> Optio
 }
 
 /// `gh variable set|delete` and `gh secret set|delete`.
-fn store_command(
-    kind: &str,
-    verb: &str,
-    args: &[String],
-    rest: &[String],
-    ctx: Ctx<'_>,
-) -> Option<String> {
+fn store_command(kind: &str, verb: &str, rest: &[String], ctx: Ctx<'_>) -> Option<String> {
     let form = format!("gh {kind} {verb}");
     let values = [
         "-R",
@@ -523,7 +701,7 @@ fn store_command(
         "-a",
         "--app",
     ];
-    let (positional, repo, options) = selector_and_repo(args, rest, &values, ctx);
+    let (positional, options) = operands(rest, &values);
     let option = |names: &[&str]| {
         options
             .iter()
@@ -559,7 +737,7 @@ fn store_command(
         Err(why) => return Some(unreadable(&form, &why)),
     };
     if !org {
-        if let Some(why) = authority.foreign(repo.as_deref()) {
+        if let Some(why) = authority.target(ctx.target) {
             return Some(format!("{form} {why}"));
         }
     }
@@ -569,18 +747,6 @@ fn store_command(
         Store::Vars
     };
     store_write(store, &names, &authority).map(|why| format!("{form} {why}"))
-}
-
-/// The `-R`/`--repo` value given before the subcommand.
-fn repo_flag(args: &[String]) -> Option<String> {
-    let mut found = None;
-    for (at, word) in args.iter().enumerate() {
-        let (name, attached) = split_option(word, &["-R"]);
-        if matches!(name.as_str(), "-R" | "--repo") {
-            found = attached.or_else(|| args.get(at + 1).cloned());
-        }
-    }
-    found
 }
 
 fn unreadable(form: &str, why: &str) -> String {
@@ -692,7 +858,8 @@ fn api(rest: &[String], ctx: Ctx<'_>) -> Option<String> {
             }
             continue;
         }
-        let (name, attached) = split_option(word, &["-X", "-f", "-F", "-H", "-q", "-t", "-p"]);
+        let (name, attached) =
+            split_option(word, &["-X", "-f", "-F", "-H", "-q", "-t", "-p", "-R"]);
         let mut value = || {
             attached.clone().or_else(|| {
                 at += 1;
@@ -716,7 +883,7 @@ fn api(rest: &[String], ctx: Ctx<'_>) -> Option<String> {
                 body.unknown = true;
             }
             "-H" | "--header" | "-q" | "--jq" | "-t" | "--template" | "--hostname" | "-p"
-            | "--preview" | "--cache" => {
+            | "--preview" | "--cache" | "-R" | "--repo" => {
                 value();
             }
             _ => {}
@@ -730,11 +897,23 @@ fn api(rest: &[String], ctx: Ctx<'_>) -> Option<String> {
         return None;
     }
     let endpoint = endpoint?;
-    if endpoint == "graphql" {
-        return graphql(&body);
-    }
-    let path = api_path(&endpoint).unwrap_or(endpoint);
-    judge(&format!("gh api -X {method}"), &method, &path, &body, ctx)
+    let form = format!("gh api -X {method}");
+    // gh sends a URL as written and joins any other endpoint to its host.
+    let path = if endpoint.contains("://") {
+        match destination(&endpoint, false) {
+            Err(why) => return Some(format!("{form} {why}")),
+            Ok(Dest::Other) => return None,
+            Ok(Dest::Api(path)) => path,
+        }
+    } else {
+        let path = endpoint.split(['?', '#']).next().unwrap_or_default();
+        if let Some(why) = dot_segment(path) {
+            let shown = crate::git::display_text(&endpoint);
+            return Some(format!("{form} {shown}: {why}"));
+        }
+        path.trim_start_matches('/').to_owned()
+    };
+    api_route(&form, &method, &path, &body, ctx)
 }
 
 /// GraphQL mutations that create or move a tag, approve or create a
@@ -756,36 +935,149 @@ const MUTATIONS: &[&str] = &[
     "deleteBranchProtectionRule",
 ];
 
-fn graphql(body: &Body) -> Option<String> {
+/// A GraphQL write: refused when its query runs a mutation in
+/// [`MUTATIONS`] or the guard cannot read it.
+fn graphql(form: &str, body: &Body) -> Option<String> {
     match body.field("query") {
         Field::Known(query) => MUTATIONS
             .iter()
             .find(|name| query.contains(**name))
-            .map(|name| format!("gh api graphql runs the {name} mutation")),
-        Field::Unknown => Some(
-            "gh api graphql sends a query the guard cannot read, which may publish or approve a release"
-                .into(),
-        ),
+            .map(|name| format!("{form} graphql runs the {name} mutation")),
+        Field::Unknown => Some(format!(
+            "{form} graphql sends a query the guard cannot read, which may publish or approve a release"
+        )),
         Field::Absent => None,
     }
 }
 
-/// The API path of a URL or endpoint on a GitHub API host, without host,
-/// leading slash or query; `None` for another host.
-fn api_path(url: &str) -> Option<String> {
-    let rest = match url.split_once("://") {
-        Some((_, rest)) => rest,
-        None if url.starts_with("api.github.com") || url.starts_with("uploads.github.com") => url,
-        None => return Some(url.trim_start_matches('/').to_owned()),
+/// Where a request goes, as the guard reads its URL.
+enum Dest {
+    /// A GitHub API host, with the API path: no host, leading slash or
+    /// query.
+    Api(String),
+    /// Another host.
+    Other,
+}
+
+/// Read `url` as an HTTP client does: a scheme (`http` when none is
+/// given), userinfo, host, port and path. The host is compared lower case
+/// and without a trailing dot, whatever userinfo and port it carries. A URL
+/// that clients could read differently is an error, which a write refuses:
+/// a shell expansion or a byte outside printable ASCII in the scheme or
+/// host, more than one `@`, a port that is not a number, a dot segment in
+/// the path, or, when `glob` (curl without `--globoff`), braces or
+/// brackets, which curl expands.
+fn destination(url: &str, glob: bool) -> Result<Dest, String> {
+    let shown = crate::git::display_text(url);
+    let bad = |why: &str| {
+        Err(format!(
+            "sends to {shown}, which the guard cannot read: {why}"
+        ))
     };
-    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
-    let path = if matches!(host, "api.github.com" | "uploads.github.com") {
-        path
+    if url.bytes().any(|b| !b.is_ascii_graphic()) || url.contains('\\') {
+        return bad("it holds a space, a backslash or a byte outside printable ASCII");
+    }
+    if glob && url.contains(['{', '}', '[', ']']) {
+        return bad("curl expands the braces or brackets in it");
+    }
+    let (scheme, rest) = if let Some(at) = url.find("://") {
+        let scheme = &url[..at];
+        if !scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            || !scheme
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
+        {
+            return bad("its scheme is not one the guard reads");
+        }
+        (scheme.to_ascii_lowercase(), &url[at + 3..])
+    } else if url.starts_with(':') {
+        // HTTPie and xh read `:port/path` as localhost.
+        return Ok(Dest::Other);
+    } else {
+        let head = &url[..url.find(['/', '?', '#']).unwrap_or(url.len())];
+        if head
+            .split_once(':')
+            .is_some_and(|(_, port)| !port.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return bad("it names a scheme without `//`, which clients read differently");
+        }
+        ("http".to_owned(), url)
+    };
+    if !matches!(scheme.as_str(), "http" | "https") {
+        return Ok(Dest::Other);
+    }
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    if authority.matches('@').count() > 1 {
+        return bad("its userinfo holds an `@`, which clients split differently");
+    }
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if host_port.starts_with('[') {
+        // An IPv6 address names no GitHub host.
+        return Ok(Dest::Other);
+    }
+    let Some(host) = host_name(host_port) else {
+        return bad("its host or port is not one the guard reads");
+    };
+    let path = tail.split(['?', '#']).next().unwrap_or_default();
+    if let Some(why) = dot_segment(path) {
+        return bad(why);
+    }
+    let path = path.trim_start_matches('/');
+    let api = if matches!(host.as_str(), "api.github.com" | "uploads.github.com") {
+        Some(path)
+    } else if path == "api/graphql" {
+        Some("graphql")
     } else {
         path.strip_prefix("api/v3/")
-            .or_else(|| path.strip_prefix("api/uploads/"))?
+            .or_else(|| path.strip_prefix("api/uploads/"))
     };
-    Some(path.split(['?', '#']).next().unwrap_or_default().to_owned())
+    Ok(api.map_or(Dest::Other, |path| Dest::Api(path.to_owned())))
+}
+
+/// A host as clients compare it: without its port, lower case and without a
+/// trailing dot. `None` for an empty host, a port that is not a number, or
+/// a character a host name does not hold, a `%` or shell expansion
+/// included.
+fn host_name(host_port: &str) -> Option<String> {
+    let (host, port) = host_port.rsplit_once(':').unwrap_or((host_port, ""));
+    let host = host.strip_suffix('.').unwrap_or(host);
+    (!host.is_empty()
+        && port.bytes().all(|b| b.is_ascii_digit())
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b)))
+    .then(|| host.to_ascii_lowercase())
+}
+
+/// Why `path` cannot be read: a `.` or `..` segment, raw or percent-encoded,
+/// which one client resolves and another sends as written.
+fn dot_segment(path: &str) -> Option<&'static str> {
+    path.split('/')
+        .any(|seg| {
+            matches!(
+                seg.to_ascii_lowercase().replace("%2e", ".").as_str(),
+                "." | ".."
+            )
+        })
+        .then_some("its path has a `.` or `..` segment, which clients resolve differently")
+}
+
+/// The refusal for a write to the API `path`: a GraphQL path is judged by
+/// its query, and every path by its route.
+fn api_route(form: &str, method: &str, path: &str, body: &Body, ctx: Ctx<'_>) -> Option<String> {
+    let last = path.split(['?', '#']).next().unwrap_or_default();
+    let last = last
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+    if last.eq_ignore_ascii_case("graphql") {
+        if let Some(why) = graphql(form, body) {
+            return Some(why);
+        }
+    }
+    judge(form, method, path, body, ctx)
 }
 
 /// One path segment; `wild` when it holds a shell expansion the guard did
@@ -935,13 +1227,7 @@ fn judge_tail(
                 "names a repository the guard cannot resolve, whose workflows it cannot read",
             );
         }
-        let named = if owner.text == "{owner}" && name.text == "{repo}" {
-            ctx.gh_repo
-                .map_or_else(|| "{owner}/{repo}".to_owned(), str::to_owned)
-        } else {
-            format!("{}/{}", owner.text, name.text)
-        };
-        if let Some(why) = authority.foreign(Some(&named)) {
+        if let Some(why) = authority.path_repo(owner.text, name.text, ctx.target) {
             return Some(format!("{form} {shown} {why}"));
         }
     }
@@ -1289,17 +1575,105 @@ impl Authority {
         })
     }
 
+    /// Why the repository `target` names is not the authority's, or
+    /// `None`.
+    fn target(&self, target: &Target) -> Option<String> {
+        match target {
+            Target::Named(named) => self.foreign(named),
+            Target::Unresolved(why) => Some(why.clone()),
+            Target::Current => self.current(),
+            Target::Literal => None,
+        }
+    }
+
+    /// Why the repository an API path names, `owner/name` or gh's
+    /// `{owner}` and `{repo}` placeholders, is not the authority's or
+    /// disagrees with `-R` and `GH_REPO`, or `None`.
+    fn path_repo(&self, owner: &str, name: &str, target: &Target) -> Option<String> {
+        let placeholder = owner == "{owner}" || name == "{repo}";
+        if placeholder && !matches!(target, Target::Literal) {
+            // gh fills both from the repository it acts on, which must be
+            // the authority's; a literal part must then match it too.
+            if let Some(why) = self.target(target) {
+                return Some(why);
+            }
+            let slug = self.slug.as_deref().unwrap_or_default();
+            let (slug_owner, slug_name) = slug.split_once('/').unwrap_or_default();
+            let owner = if owner == "{owner}" {
+                slug_owner
+            } else {
+                owner
+            };
+            let name = if name == "{repo}" { slug_name } else { name };
+            return self.foreign(&format!("{owner}/{name}"));
+        }
+        let named = format!("{owner}/{name}");
+        if let Target::Named(flag) | Target::Unresolved(flag) = target {
+            let key = |repo: &str| github_slug(repo).unwrap_or_else(|| repo.to_ascii_lowercase());
+            if matches!(target, Target::Unresolved(_)) || key(flag) != key(&named) {
+                return Some(format!(
+                    "names repository {} in its path, which `-R` or `GH_REPO` contradicts ({})",
+                    crate::git::display_text(&named),
+                    crate::git::display_text(flag)
+                ));
+            }
+        }
+        self.foreign(&named)
+    }
+
+    /// Why gh's current repository may not be the authority's: every
+    /// GitHub remote of this repository must name the authority's
+    /// repository, since gh picks among them by rules the guard does not
+    /// repeat.
+    fn current(&self) -> Option<String> {
+        let unsure = |why: String| {
+            Some(format!(
+                "acts on gh's current repository, which the guard cannot tell is the policy authority's: {why}"
+            ))
+        };
+        let names = match self.repo.remotes() {
+            Ok(names) => names,
+            Err(e) => return unsure(format!("the remotes cannot be read ({})", e.message())),
+        };
+        let mut github = 0;
+        for name in &names {
+            let Ok(Some(name)) = name else {
+                return unsure("a remote name is not UTF-8".into());
+            };
+            let url = self
+                .repo
+                .find_remote(name)
+                .ok()
+                .and_then(|r| r.url().ok().map(str::to_owned));
+            let Some(url) = url else {
+                return unsure(format!(
+                    "remote {} has no readable URL",
+                    crate::git::display_text(name)
+                ));
+            };
+            if !url.to_ascii_lowercase().contains("github") {
+                continue;
+            }
+            github += 1;
+            if self.slug.is_none() || github_slug(&url) != self.slug {
+                return unsure(format!(
+                    "remote {} names another repository",
+                    crate::git::display_text(name)
+                ));
+            }
+        }
+        (github == 0).then(|| {
+            "acts on gh's current repository, and no remote here names a GitHub repository".into()
+        })
+    }
+
     /// Why `named` is not the authority's repository, or `None`.
-    fn foreign(&self, named: Option<&str>) -> Option<String> {
-        let named = named?;
+    fn foreign(&self, named: &str) -> Option<String> {
         let shown = crate::git::display_text(named);
         if opaque(named) {
             return Some(format!(
                 "names repository {shown}, which the guard cannot resolve, so it cannot read its workflows"
             ));
-        }
-        if named == "{owner}/{repo}" {
-            return None;
         }
         let wanted = github_slug(named).unwrap_or_else(|| named.to_ascii_lowercase());
         (self.slug.as_deref() != Some(wanted.as_str())).then(|| {
@@ -1332,18 +1706,43 @@ impl Authority {
     }
 }
 
-/// `owner/name`, lower case, from a GitHub URL or a bare `owner/name`.
-fn github_slug(url: &str) -> Option<String> {
-    let rest = url
-        .strip_prefix("git@github.com:")
-        .or_else(|| url.split_once("github.com/").map(|(_, rest)| rest))
-        .unwrap_or(url);
-    let rest = rest.trim_end_matches('/');
-    let rest = rest.strip_suffix(".git").unwrap_or(rest);
-    let mut parts = rest.split('/');
-    let (owner, name) = (parts.next()?, parts.next()?);
-    (parts.next().is_none() && !owner.is_empty() && !name.is_empty() && !owner.contains(':'))
-        .then(|| format!("{owner}/{name}").to_ascii_lowercase())
+/// `owner/name`, lower case, from a github.com URL (`https://`,
+/// `ssh://` or scp-style `git@github.com:`), gh's `HOST/OWNER/REPO` or a
+/// bare `owner/name`. The host is compared as [`host_name`] reads it, so
+/// a look-alike such as `evilgithub.com` names no GitHub repository.
+fn github_slug(text: &str) -> Option<String> {
+    let github = |host: &str| {
+        host_name(host).is_some_and(|h| matches!(h.as_str(), "github.com" | "www.github.com"))
+    };
+    let path = if let Some((_, after)) = text.split_once("://") {
+        let (authority, path) = after.split_once('/')?;
+        let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+        if authority.matches('@').count() > 1 || !github(host) {
+            return None;
+        }
+        path
+    } else if let Some((user_host, path)) = text.split_once(':') {
+        let host = user_host.rsplit_once('@').map_or(user_host, |(_, h)| h);
+        if user_host.contains('/') || !github(host) {
+            return None;
+        }
+        path
+    } else {
+        match text.split('/').collect::<Vec<_>>().as_slice() {
+            [_, _] => text,
+            [host, _, _] if github(host) => text.split_once('/')?.1,
+            _ => return None,
+        }
+    };
+    let path = path.trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let (owner, name) = path.split_once('/')?;
+    let part = |p: &str| {
+        !matches!(p, "" | "." | "..")
+            && p.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
+    };
+    (part(owner) && part(name)).then(|| format!("{owner}/{name}").to_ascii_lowercase())
 }
 
 const WORKFLOWS: &str = ".github/workflows";
@@ -1384,8 +1783,12 @@ fn flows_in(repo: &git2::Repository, tree: &git2::Tree<'_>) -> Result<Vec<Flow>,
     Ok(flows)
 }
 
-/// Token scopes whose write lets a run publish.
+/// Token scopes whose write lets a run publish, or start or unblock a run
+/// that publishes: `actions` dispatches and re-runs workflows, and
+/// `administration` changes rulesets, environments and branch protection.
 const PUBLISHING: &[&str] = &[
+    "actions",
+    "administration",
     "contents",
     "packages",
     "deployments",
