@@ -1875,8 +1875,10 @@ operands.
   (`-n` included; `--temp` writes temporary names and passes), `git
   read-tree -u`, `git stash apply`, `pop` and `branch`, `git apply`
   without `--cached`, `git cherry-pick -n` and `git revert -n`, `git
-  sparse-checkout` `set`, `add`, `init`, `reapply` and `disable`; and also
-  `git am`, and `git reset --hard`, `--keep` and `--merge` to a revision.
+  sparse-checkout` `set`, `add`, `init`, `reapply` and `disable`, `git
+  stash` push with `--keep-index` (`-k`) or `--patch`, which checks the
+  index out after its reset; and also `git am`, and `git reset --hard`,
+  `--keep` and `--merge` to a revision.
   The same holds for each of these reached through a Git alias, a one-shot
   `-c alias.NAME=...` included: the expansion is judged as written. Such a
   write leaves the file as an uncommitted change that rides into the next
@@ -1919,7 +1921,8 @@ operands.
   work-tree files whose content the guard does not compare: branch
   switches (`git switch`, `git checkout BRANCH`, `-b`, `-B`, `--orphan`,
   `--detach`), `git merge`, `git rebase`, `git pull`, `git bisect`, `git
-  worktree add`, `git stash` push, `git reset --hard` without a revision,
+  worktree add`, `git stash` push without `--keep-index` or `--patch`,
+  `git reset --hard` without a revision,
   `git am --abort`, and committing `git cherry-pick` and `git revert`. A
   filter there would rewrite the files Git writes. A form that writes no
   work-tree file, such as `git reset --soft`, `git restore --staged` or
