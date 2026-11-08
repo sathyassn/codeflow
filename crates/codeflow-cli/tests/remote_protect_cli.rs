@@ -17,6 +17,15 @@ use std::process::{Command, Output};
 mod process_folders;
 use process_folders::isolated_home;
 
+/// The fixed git identity every child process gets, so a commit never
+/// falls back to the host's user name, hostname or `EMAIL` (PR 700).
+const IDENTITY: [(&str, &str); 4] = [
+    ("GIT_AUTHOR_NAME", "Journey"),
+    ("GIT_AUTHOR_EMAIL", "journey@example.test"),
+    ("GIT_COMMITTER_NAME", "Journey"),
+    ("GIT_COMMITTER_EMAIL", "journey@example.test"),
+];
+
 fn codeflow(root: &Path, path_first: Option<&Path>, args: &[&str]) -> Output {
     let path = std::env::join_paths(path_first.map(Path::to_path_buf).into_iter().chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
@@ -33,6 +42,8 @@ fn codeflow(root: &Path, path_first: Option<&Path>, args: &[&str]) -> Output {
         // never sees these (review of PR 700).
         .env("GH_HOST", "decoy.invalid")
         .env("GH_REPO", "decoy/other")
+        .envs(IDENTITY)
+        .env_remove("EMAIL")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .output()
@@ -336,10 +347,8 @@ fn git(root: &Path, args: &[&str]) -> String {
         .env("PATH", path)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_AUTHOR_NAME", "Journey")
-        .env("GIT_AUTHOR_EMAIL", "journey@example.test")
-        .env("GIT_COMMITTER_NAME", "Journey")
-        .env("GIT_COMMITTER_EMAIL", "journey@example.test")
+        .envs(IDENTITY)
+        .env_remove("EMAIL")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .output()
