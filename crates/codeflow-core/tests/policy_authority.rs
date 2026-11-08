@@ -899,29 +899,44 @@ fn a_path_conditional_rewrite_refuses_by_every_path() {
     );
 }
 
-/// TSK-1184 delta findings 2 and 3: `ssh -G` runs a `Match exec` command
-/// while it reads the configuration, so the policy load reads the SSH
-/// configuration files as text first and refuses one with `Match exec`,
-/// without running `ssh` on it. The child runs with a stand-in `ssh` first
-/// on `PATH` whose file names a fixture system configuration (the program
-/// names its system file, and that file is read before the account's, so
-/// the user's `~/.ssh` is never read). The stand-in records any `-G` call
-/// and otherwise runs the upload command against a local empty repository,
-/// so without the refusal the load reaches initialization. The endpoint
-/// comparison itself is proven with the real `ssh` and fixture files in
-/// the unit tests.
+/// TSK-1184 delta findings 2 to 4: `ssh -G` can run a command while it
+/// reads its configuration, so the policy load reads every SSH
+/// configuration file `ssh` could read as text first and refuses,
+/// fail-closed, without running `ssh` on it: `exec` in any spelling
+/// (`"Match" exec`, `Ma"tch" exec`, `In"clude"` of a file with it), a
+/// command keyword, any `Match` block, a quote that does not close, an
+/// include that cannot be read, and a `~` include under a `HOME` that
+/// differs from the account's home. The user config's
+/// `accept_ssh_configuration`, off by default, lets the same configuration
+/// through to initialization.
+///
+/// The child runs with a stand-in `ssh` first on `PATH` whose file names a
+/// fixture system configuration (the program names its system file, and
+/// that file is read before the account's, so the user's `~/.ssh` is never
+/// read) and with `CODEFLOW_HOME` at a fixture. The stand-in records any
+/// `-G` call and otherwise runs the upload command against a local empty
+/// repository, so without a refusal the load reaches initialization.
 #[cfg(unix)]
 #[test]
+#[allow(clippy::too_many_lines)] // one table of SSH configuration cases on one fixture
 fn an_ssh_configuration_with_match_exec_refuses_before_ssh_reads_it() {
     use std::os::unix::fs::PermissionsExt as _;
     const CHILD: &str = "CODEFLOW_TSK1184_SSH_ENDPOINT_CHILD";
     if let Some(root) = std::env::var_os(CHILD) {
         let root = std::path::Path::new(&root);
-        let error = match landed_policy::load(root) {
+        let expect = std::fs::read_to_string(root.join(".git/expect")).unwrap();
+        let result = landed_policy::load(root);
+        if expect == "INIT" {
+            assert!(result.unwrap().source.contains("initialization"));
+            return;
+        }
+        let error = match result {
             Ok(authority) => panic!("read policy from {}", authority.source),
             Err(error) => error,
         };
-        assert!(error.contains("Match exec"), "{error}");
+        for part in expect.split('|') {
+            assert!(error.contains(part), "{part}: {error}");
+        }
         assert!(error.contains("never read from HEAD"), "{error}");
         return;
     }
@@ -935,12 +950,22 @@ fn an_ssh_configuration_with_match_exec_refuses_before_ssh_reads_it() {
     std::fs::create_dir(bin.path().join("etc")).unwrap();
     let system = bin.path().join("etc/ssh_config");
     let ran = bin.path().join("match-exec-ran");
+    let run = format!("exec \"touch {}\"", ran.display());
+    let inner = bin.path().join("etc/inner.conf");
+    std::fs::write(&inner, format!("Match {run}\n")).unwrap();
+    let locked = bin.path().join("etc/locked.conf");
+    std::fs::write(&locked, "Host b\n").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let home = bin.path().join("home");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::write(home.join(".ssh/evil.conf"), format!("Match {run}\n")).unwrap();
+    let off = bin.path().join("codeflow-off");
+    let on = bin.path().join("codeflow-on");
+    std::fs::create_dir_all(&off).unwrap();
+    std::fs::create_dir_all(&on).unwrap();
     std::fs::write(
-        &system,
-        format!(
-            "Host *\n\tPort 22\nMatch exec \"touch {}\"\n",
-            ran.display()
-        ),
+        on.join("config.toml"),
+        "[policy_authority]\naccept_ssh_configuration = true\n",
     )
     .unwrap();
     let asked = bin.path().join("ssh-asked-to-read");
@@ -962,28 +987,97 @@ fn an_ssh_configuration_with_match_exec_refuses_before_ssh_reads_it() {
         bin.path().display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let out = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "an_ssh_configuration_with_match_exec_refuses_before_ssh_reads_it",
-            "--nocapture",
-        ])
-        .env(CHILD, f.root())
-        .env("PATH", &path)
-        .env_remove("GIT_SSH_COMMAND")
-        .env_remove("GIT_SSH")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(!ran.exists(), "the Match exec command ran");
-    assert!(!asked.exists(), "ssh was asked to read the configuration");
+    let real_home = std::env::var_os("HOME").unwrap_or_default();
+    let plain_match = "Match host 127.0.0.1\n\tServerAliveInterval 30\n".to_string();
+    // (system file, expected refusal parts or INIT, HOME, CodeFlow home)
+    let cases = [
+        (
+            format!("Host *\n\tPort 22\nMatch {run}\n"),
+            "exec|line 3",
+            &real_home,
+            &off,
+        ),
+        (
+            format!("\"Match\" {run}\n"),
+            "exec|line 1",
+            &real_home,
+            &off,
+        ),
+        (
+            format!("Ma\"tch\" {run}\n"),
+            "exec|line 1",
+            &real_home,
+            &off,
+        ),
+        (
+            format!("In\"clude\" {}\n", inner.display()),
+            "inner.conf|exec",
+            &real_home,
+            &off,
+        ),
+        (
+            "Host *\n\tProxyCommand nc %h %p\n".to_string(),
+            "proxycommand",
+            &real_home,
+            &off,
+        ),
+        (
+            plain_match.clone(),
+            "Match block|accept_ssh_configuration",
+            &real_home,
+            &off,
+        ),
+        ("Host \"a\n".to_string(), "does not close", &real_home, &off),
+        (
+            format!("Include {}\n", locked.display()),
+            "locked.conf|cannot be read in full",
+            &real_home,
+            &off,
+        ),
+        // The second line stops a check that misses the HOME file before it
+        // reads the account's own files.
+        (
+            format!("Include ~/.ssh/evil.conf\nMatch {run}\n"),
+            "evil.conf|exec",
+            &home.clone().into_os_string(),
+            &off,
+        ),
+        (plain_match, "INIT", &real_home, &on),
+    ];
+    for (body, expect, child_home, codeflow_home) in &cases {
+        std::fs::write(&system, body).unwrap();
+        std::fs::write(f.root().join(".git/expect"), expect).unwrap();
+        let _ = std::fs::remove_file(&asked);
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "an_ssh_configuration_with_match_exec_refuses_before_ssh_reads_it",
+                "--nocapture",
+            ])
+            .env(CHILD, f.root())
+            .env("PATH", &path)
+            .env("HOME", child_home)
+            .env("CODEFLOW_HOME", codeflow_home)
+            .env_remove("GIT_SSH_COMMAND")
+            .env_remove("GIT_SSH")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{body}: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(!ran.exists(), "{body}: the Match exec command ran");
+        assert_eq!(
+            asked.exists(),
+            *expect == "INIT",
+            "{body}: whether ssh was asked to read the configuration"
+        );
+    }
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
 
 /// TSK-1184 review finding 2: a remote helper set for the remote, here
