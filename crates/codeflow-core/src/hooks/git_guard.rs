@@ -16074,6 +16074,54 @@ mod tests {
         }
     }
 
+    /// TSK-326 delta review F1: a shell or `eval` that `parallel` runs from
+    /// its template with `:::` inputs on the line takes the input as
+    /// supplied, so a replacement string inside the script refuses in any
+    /// quoting, with `-q` or without; a template with no shell is judged as
+    /// written.
+    #[test]
+    fn parallel_shell_templates_with_literal_inputs_refuse() {
+        let refused = [
+            "parallel 'sh -c \"git push --no-verify origin {}\"' ::: main",
+            "parallel -q sh -c 'git push --no-verify origin {}' ::: main",
+            "parallel -q bash -c 'git push origin \"$1\"' _ {} ::: main",
+            "parallel 'eval git push origin {}' ::: main",
+            "parallel --quote -- sh -c 'git push origin HEAD:{1}' ::: main",
+        ];
+        for command in refused {
+            assert!(
+                data_refusal(command).is_some(),
+                "{command}: refused as unresolved"
+            );
+        }
+        // At the default policy, hook integrity at block and `main`
+        // protected, from a non-protected branch.
+        let p = default_policy();
+        for command in refused {
+            let found = evaluate(command, &ctx(&p, "feat/x"));
+            assert!(
+                found.iter().any(|v| v.rule == "git.push_to_protected"
+                    || v.message.contains("is filled in at run time")),
+                "{command}: {found:?}"
+            );
+        }
+        let found = evaluate("parallel git push origin {} ::: main", &ctx(&p, "feat/x"));
+        assert!(
+            found.iter().any(|v| v.rule == "git.push_to_protected"),
+            "{found:?}"
+        );
+        let policy = data_policy();
+        for command in [
+            "parallel git push origin {} ::: feat/x",
+            "parallel git push origin ::: feat/x",
+            "parallel -q sh -c 'git log' ::: a",
+            "parallel 'echo {}' ::: a",
+        ] {
+            let found = evaluate(command, &ctx(&policy, "feat/x"));
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
     /// TSK-326 review F2: on `git branch`, `-m` renames and its names are
     /// operands, so a forced rename onto a protected name held in a variable
     /// is judged; a message stays a message on `commit` and `stash`.

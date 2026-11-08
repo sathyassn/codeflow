@@ -1725,7 +1725,11 @@ checked, so a symlink does not remove the target owner's protection.
   strings and the positional parameters (`$1`, `"$@"`, `$0`) are the
   supplied input; input spliced into the script text, and a script the
   guard cannot read (a file, standard input, a variable), refuse as well,
-  so pass the input as `sh -c '... "$1"' _ {}` with a literal script. An
+  so pass the input as `sh -c '... "$1"' _ {}` with a literal script.
+  This holds when `parallel` takes its input from `:::` words on the line:
+  the template is read as the shell line it builds, and a shell or `eval`
+  there takes the input as supplied. A template with no shell is judged
+  with the input as written. An
   unquoted brace list or sequence (`{feat/x,main}`, `{1..3}`) in a judged
   git word refuses too, since the shell makes it several words; a quoted
   or escaped brace is text. Such a word in the program position (`$V push

@@ -19,8 +19,8 @@ use super::{
     basename, cd_target, command_argv, command_argv_braces, command_argv_live, configuration_input,
     configuration_launch, expand_shell_commands, expands, flat_top_level, git_program_environment,
     is_identifier, is_shell, launcher_name, map_top_level, message_values, parallel_template,
-    plain_pushd, shell_tokens, shown_word, strip_reserved_words, xargs_command, GIT_BUILTINS,
-    GLOBAL_VALUE_OPTIONS, JUDGED_SUBCOMMANDS, NESTING_UNREAD,
+    plain_pushd, quote_words, shell_tokens, shown_word, strip_reserved_words, xargs_command,
+    GIT_BUILTINS, GLOBAL_VALUE_OPTIONS, JUDGED_SUBCOMMANDS, NESTING_UNREAD,
 };
 
 /// Stands in a word for text that `xargs` or `find` supplies from its
@@ -512,6 +512,11 @@ fn command_data_supplied(
                 command_data_supplied(&child, vars, reader, Some("`parallel`"))
                     .map_err(supplied)?;
             }
+            for child in parallel_shell_children(args) {
+                let child = supply(&child);
+                command_data_supplied(&child, vars, reader, Some("`parallel`"))
+                    .map_err(supplied)?;
+            }
             return Ok(None);
         }
         "fd" | "fdfind" => {
@@ -794,6 +799,53 @@ fn parallel_data_command(args: &[String]) -> Option<&[String]> {
             .iter()
             .any(|word| matches!(word.as_str(), "::::" | "::::+"));
     (end > 0 && (from_file || !literal_inputs)).then(|| &rest[..end])
+}
+
+/// The shells and `eval`s GNU `parallel` runs when its only inputs are
+/// `:::` words on the line, as words: its template as the shell line it
+/// builds (joined, or each word quoted under `-q`). Parallel's own quoting
+/// of an input spliced into a script is not modelled, so the input counts
+/// as supplied there and a replacement string inside the script refuses,
+/// as it does under `find` and `xargs` (TSK-326). Empty when the inputs
+/// come from data, which [`parallel_data_command`] reads.
+fn parallel_shell_children(args: &[String]) -> Vec<Vec<String>> {
+    if parallel_data_command(args).is_some() {
+        return Vec::new();
+    }
+    let (mut start, quoted) = parallel_template(args);
+    if args.get(start).is_some_and(|word| word == "--") {
+        start += 1;
+    }
+    let rest = args.get(start..).unwrap_or_default();
+    let end = rest
+        .iter()
+        .position(|word| matches!(word.as_str(), ":::" | ":::+" | "::::" | "::::+"))
+        .unwrap_or(rest.len());
+    if end == 0 {
+        return Vec::new();
+    }
+    let line = if quoted {
+        quote_words(&rest[..end])
+    } else {
+        rest[..end].join(" ")
+    };
+    let mut children = Vec::new();
+    for segment in &expand_shell_commands(&line).segments {
+        let mut words = command_argv(segment);
+        strip_reserved_words(&mut words);
+        let runs_shell = configuration_launch(&words).is_some_and(|(program, _)| {
+            let name = basename(program);
+            is_shell(name) || name == "eval"
+        });
+        if runs_shell {
+            children.push(mark_text(
+                &words,
+                &command_argv_live(segment),
+                &command_argv_braces(segment),
+            ));
+        }
+    }
+    children
 }
 
 /// The command `fd` runs for each result (`-x`, `--exec`) or for all of

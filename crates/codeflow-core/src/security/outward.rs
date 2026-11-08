@@ -3928,6 +3928,34 @@ mod tests {
         }
     }
 
+    /// TSK-326 delta review F1: a shell or `eval` that `parallel` runs from
+    /// its template with `:::` inputs on the line takes the input as
+    /// supplied, so a replacement string inside the script refuses in any
+    /// quoting, with `-q` or without; a template with no shell is judged as
+    /// written.
+    #[test]
+    fn parallel_shell_templates_with_literal_inputs_refuse() {
+        for command in [
+            "parallel 'sh -c \"git push --no-verify origin {}\"' ::: main",
+            "parallel -q sh -c 'git push --no-verify origin {}' ::: main",
+            "parallel -q bash -c 'git push origin \"$1\"' _ {} ::: main",
+            "parallel 'eval git push origin {}' ::: main",
+            "parallel --quote -- sh -c 'git push origin HEAD:{1}' ::: main",
+        ] {
+            let found =
+                data_refusal(command).unwrap_or_else(|| panic!("{command}: refused as unresolved"));
+            assert_eq!(found.rule, "security.outward_actions", "{command}");
+        }
+        for command in [
+            "parallel git push origin {} ::: feat/x",
+            "parallel -q sh -c 'git log' ::: a",
+            "parallel 'echo {}' ::: a",
+        ] {
+            let found = evaluate(command, &SecuritySection::default());
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
     /// TSK-326 review F3: an unquoted brace list or sequence in a git word
     /// exec-guard judges refuses as unresolved; a quoted brace is text.
     #[test]
