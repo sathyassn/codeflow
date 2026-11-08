@@ -228,15 +228,15 @@ fn worktree_list(root: &Path) -> Result<Vec<WorkingTree>, ScaffoldError> {
     Ok(trees)
 }
 
-/// The paths of the repository's working trees that exist, the main one
-/// first when there is one.
+/// The paths of the repository's working trees as git lists them, the main
+/// one first when there is one. A listed tree may no longer exist on disk.
 ///
 /// # Errors
 /// Git cannot list the working trees.
 pub fn working_trees(root: &Path) -> Result<Vec<std::path::PathBuf>, ScaffoldError> {
     Ok(worktree_list(root)?
         .into_iter()
-        .filter(|tree| !tree.bare && tree.path.is_dir())
+        .filter(|tree| !tree.bare)
         .map(|tree| tree.path)
         .collect())
 }

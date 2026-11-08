@@ -12,7 +12,7 @@
 use std::path::Path;
 
 use super::detect::CODEFLOW_HOOKS_PATH;
-use super::{gitutil, ScaffoldError};
+use super::{gitutil, ScaffoldError, Shown};
 
 /// What `core.hooksPath` holds, as `CodeFlow` reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,24 +106,33 @@ fn holds_hooks(dir: &Path) -> bool {
 /// git's forward slashes.
 ///
 /// # Errors
-/// Git cannot list the working trees or name `root`'s top level.
+/// Git cannot list the working trees or name `root`'s top level, or the
+/// working tree's path is not UTF-8 text.
 pub fn target(root: &Path) -> Result<String, ScaffoldError> {
     if let Some(main) = gitutil::main_working_tree(root)? {
         let managed = main.join(CODEFLOW_HOOKS_PATH);
         if holds_hooks(&managed) {
-            return Ok(spelled(&main));
+            return spelled(&main);
         }
     }
     let top = gitutil::top_level(root)?;
-    Ok(spelled(&top))
+    spelled(&top)
 }
 
 /// `<top>/.codeflow/git-hooks` with `/` between the parts git gave and the
-/// managed folder.
-fn spelled(top: &Path) -> String {
-    let top = top.to_string_lossy();
-    let top = top.trim_end_matches(['/', '\\']);
-    format!("{top}/{CODEFLOW_HOOKS_PATH}")
+/// managed folder. A path that is not UTF-8 text is refused, so the value
+/// written is never a lossy spelling that names some other folder.
+fn spelled(top: &Path) -> Result<String, ScaffoldError> {
+    let top = top.to_str().ok_or_else(|| {
+        ScaffoldError::Git(Shown::fixed(
+            "the working tree path is not UTF-8 text, so core.hooksPath cannot name it",
+        ))
+    })?;
+    let top = top
+        .strip_suffix('/')
+        .or_else(|| top.strip_suffix('\\'))
+        .unwrap_or(top);
+    Ok(format!("{top}/{CODEFLOW_HOOKS_PATH}"))
 }
 
 /// Write the managed form when `core.hooksPath` holds a `CodeFlow` form that
@@ -208,7 +217,7 @@ mod tests {
                 linked.to_str().unwrap(),
             ],
         );
-        let expected = spelled(&top(&main));
+        let expected = spelled(&top(&main)).unwrap();
         assert!(expected.contains("main project"), "{expected}");
         assert_eq!(target(&main).unwrap(), expected);
         assert_eq!(target(&linked).unwrap(), expected);
@@ -234,7 +243,7 @@ mod tests {
         );
         assert_eq!(gitutil::main_working_tree(&tree).unwrap(), None);
         let value = target(&tree).unwrap();
-        assert_eq!(value, spelled(&top(&tree)));
+        assert_eq!(value, spelled(&top(&tree)).unwrap());
         gitutil::config_set(&tree, "core.hooksPath", &value).unwrap();
         assert_eq!(form(&tree).unwrap(), HooksPathForm::Managed);
     }
@@ -255,7 +264,7 @@ mod tests {
         assert_eq!(form(root).unwrap(), HooksPathForm::Stale(gone));
         let elsewhere = tempfile::tempdir().unwrap();
         project(elsewhere.path());
-        let other = spelled(&top(elsewhere.path()));
+        let other = spelled(&top(elsewhere.path())).unwrap();
         gitutil::config_set(root, "core.hooksPath", &other).unwrap();
         assert_eq!(form(root).unwrap(), HooksPathForm::Stale(other));
     }
@@ -305,11 +314,11 @@ mod tests {
     #[test]
     fn the_spelling_keeps_gits_separators() {
         assert_eq!(
-            spelled(Path::new("C:/Users/a b/proj/")),
+            spelled(Path::new("C:/Users/a b/proj/")).unwrap(),
             "C:/Users/a b/proj/.codeflow/git-hooks"
         );
         assert_eq!(
-            spelled(Path::new("/home/a b/proj")),
+            spelled(Path::new("/home/a b/proj")).unwrap(),
             "/home/a b/proj/.codeflow/git-hooks"
         );
     }
