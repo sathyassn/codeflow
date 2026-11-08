@@ -1,0 +1,11 @@
+id = "TSK-1390"
+uid = "74f9b3a6-02ec-471d-9119-f04833c2ed12"
+kind = "TSK"
+title = "Git commands that write working-tree files cannot put other content on an enforcement path"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-08T05:11:51Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
