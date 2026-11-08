@@ -3081,6 +3081,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // TSK-1348 AC-19: a GraphQL body that is not JSON is still searched as raw text; parsing only adds its decoded strings, so a parse failure never lets an approval pass.
+    (
+        "crates/codeflow-core/src/hooks/git_guard/review.rs",
+        "graphql_text",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
     // TSK-1348 AC-19: a review body that is not JSON is searched for APPROVE as text, so a parse failure never lets an approval pass.
     (
         "crates/codeflow-core/src/hooks/git_guard/review.rs",

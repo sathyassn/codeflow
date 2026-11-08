@@ -154,6 +154,118 @@ fn an_unreadable_review_body_refuses() {
     )));
 }
 
+/// AC-19, review of 8acea4109 finding 1a: `.` and `..` are resolved before
+/// the endpoint is judged, as GitHub resolves them, and a writing request
+/// whose address the guard cannot settle refuses.
+#[test]
+fn dot_segments_are_resolved_and_an_unsettled_address_refuses() {
+    for command in [
+        "gh api -X POST repos/o/r/pulls/12/x/../reviews -f event=APPROVE",
+        "gh api repos/o/r/pulls/12/./reviews -f event=APPROVE",
+        "gh api -X PUT repos/o/r/pulls/12/reviews/9/x/../dismissals -f message=m",
+        "curl -X POST https://api.github.com/repos/o/r/pulls/12/x/../reviews -d '{\"event\":\"APPROVE\"}'",
+        "curl -X PUT https://api.github.com/repos/o/r/pulls/12/reviews/9/x/../dismissals -d '{\"message\":\"m\"}'",
+        "gh api graphql/x/.. -f query='mutation { dismissPullRequestReview(input: {}) { clientMutationId } }'",
+        // Not settled: a percent escape, a `..` above the root, a curl glob.
+        "gh api repos/o/r/pulls/12/re%76iews -f event=APPROVE",
+        "gh api ../../repos/o/r/pulls/12/reviews -f event=APPROVE",
+        "curl https://api.github.com/repos/o/r/pulls/12/{reviews} -d '{\"event\":\"APPROVE\"}'",
+        "curl https://api.github.com/repos/o/r/pulls/12/revie[w-w]s -d '{\"event\":\"APPROVE\"}'",
+    ] {
+        assert!(refused(command), "{command}");
+    }
+    // Reads stay allowed, and so does a settled path that is not a review.
+    for command in [
+        "gh api repos/o/r/pulls/12/x/../reviews",
+        "gh api repos/o/r/pulls/12/re%76iews",
+        "curl https://api.github.com/repos/o/r/pulls/12/{reviews}",
+        "gh api -X POST repos/o/r/pulls/12/reviews/../comments -f body=APPROVE",
+    ] {
+        assert!(!refused(command), "{command}");
+    }
+}
+
+/// AC-19, review of 8acea4109 finding 1b: a GraphQL body the guard cannot
+/// read may approve, so it refuses as a REST review body does; a harmless
+/// query read from standard input refuses too.
+#[test]
+fn an_unreadable_graphql_body_refuses() {
+    for command in [
+        "gh api graphql --input -",
+        "gh api graphql --input /no/such/query.json",
+        "gh api graphql -F query=@/no/such/query.graphql",
+        "gh api graphql -F query=@-",
+        "curl -d @- https://api.github.com/graphql",
+        "curl https://api.github.com/graphql --data-binary @/no/such/query.json",
+        "curl -T - https://api.github.com/graphql",
+    ] {
+        assert!(refused(command), "{command}");
+    }
+    // A JSON body is read as JSON, so an escaped name or event still shows.
+    let escaped = r#"curl -X POST https://api.github.com/graphql -d '{"query":"mutation { addPullRequestReview(input: {pullRequestId: \"x\", event: APPROVE}) { clientMutationId } }"}'"#;
+    assert!(refused(escaped), "{escaped}");
+}
+
+/// AC-19, review of 8acea4109 finding 1c and its sibling sweep: a curl
+/// command that reads a config file or a variable refuses, since the guard
+/// does not read them, and every other curl spelling that carries a URL or a
+/// body is judged.
+#[test]
+fn curl_config_variables_and_other_spellings_are_judged() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("review.curlrc");
+    std::fs::write(
+        &config,
+        "url = \"https://api.github.com/repos/o/r/pulls/12/reviews\"\ndata = \"{\\\"event\\\":\\\"APPROVE\\\"}\"\n",
+    )
+    .unwrap();
+    let config = config.display();
+    let approve = dir.path().join("reviews");
+    std::fs::write(&approve, r#"{"event":"APPROVE"}"#).unwrap();
+    let upload = approve.display();
+    for command in [
+        format!("curl -K {config}"),
+        format!("curl --config {config}"),
+        format!("curl -sK {config}"),
+        format!("curl --config={config}"),
+        "curl -K - https://example.com".to_string(),
+        "curl --variable 'e@/no/such/file' --expand-data '{{e}}' https://api.github.com/repos/o/r/pulls/12/reviews".to_string(),
+        "curl --expand-url 'https://api.github.com/{{p}}' -d x".to_string(),
+        // Attached and clustered short options.
+        "curl -sSd '{\"event\":\"APPROVE\"}' https://api.github.com/repos/o/r/pulls/12/reviews".to_string(),
+        "curl -XPOST -d'{\"event\":\"APPROVE\"}' https://api.github.com/repos/o/r/pulls/12/reviews".to_string(),
+        "curl -sXPUT https://api.github.com/repos/o/r/pulls/12/reviews/9/dismissals -d '{\"message\":\"m\"}'".to_string(),
+        // An upload is a body, and names the URL's last segment when it ends in `/`.
+        format!("curl -X POST -T {upload} https://api.github.com/repos/o/r/pulls/12/reviews"),
+        format!("curl -X POST --upload-file {upload} https://api.github.com/repos/o/r/pulls/12/"),
+        // The request target replaces the URL's path.
+        "curl --request-target /repos/o/r/pulls/12/reviews https://api.github.com/ -d '{\"event\":\"APPROVE\"}'".to_string(),
+        "curl --url https://api.github.com/repos/o/r/pulls/12/reviews --json '{\"event\":\"APPROVE\"}'".to_string(),
+        format!("curl https://api.github.com/repos/o/r/pulls/12/reviews --data-urlencode body@{upload}"),
+        "curl https://api.github.com/repos/o/r/pulls/12/reviews -F 'event=APPROVE'".to_string(),
+        "curl https://api.github.com/repos/o/r/pulls/12/reviews --form-string 'event=APPROVE'".to_string(),
+        "curl -G https://api.github.com/repos/o/r/pulls/12/reviews -X POST --data event=APPROVE".to_string(),
+    ] {
+        assert!(refused(&command), "{command}");
+    }
+    // `gh api -f` never reads a file: `@` is literal text, judged as it is.
+    assert!(refused(
+        "gh api repos/o/r/pulls/12/reviews -f event=APPROVE -f body=@notes.md"
+    ));
+    assert!(!refused(
+        "gh api repos/o/r/pulls/12/reviews -f event=COMMENT -f body=@/no/such/file"
+    ));
+    // Harmless curl spellings pass.
+    for command in [
+        "curl -sSLo out.html https://example.com/",
+        "curl -H 'Accept: application/json' https://api.github.com/repos/o/r/pulls/12/reviews",
+        "curl -T notes.txt https://uploads.example.com/",
+        "curl -X POST https://api.github.com/repos/o/r/pulls/12/reviews -d '{\"event\":\"COMMENT\"}'",
+    ] {
+        assert!(!refused(command), "{command}");
+    }
+}
+
 /// AC-19: the rule is on when the key is absent, and a project may turn it
 /// off.
 #[test]
