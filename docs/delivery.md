@@ -286,44 +286,32 @@ moving such a record is a change too. A records-only sync that already
 passes as a planning amendment keeps that class.
 
 **Main's bytes.** The hosted policy check of a pull request into a line
-takes `main`'s records as `main` holds them. A record whose tree entry at
-the head, blob and mode, equals its entry at `main`'s verified commit is
-not proved again and not frozen, on a sync and on any other route into the
-line. The check turns this on only when the commit `--policy-from` names
-is the tip its own query of `origin` reports for the default branch, and
-the run is not the pre-push hook's hand-off; a run that cannot verify both
-keeps the full checks. Home and edits are read from the line's tip, `main`'s commit and
-their merge base, never from the head. Each record this takes, or matches
-but keeps on the full checks, is reported with its reason.
+takes `main`'s records as `main` holds them, on a sync and on any other
+route into the line. A record whose tree entry at the head, blob and mode,
+equals its entry at `main`'s verified commit is not proved again and not
+frozen.
 
-These are behaviour changes:
+| Aspect | Rule |
+|---|---|
+| When it is on | The commit `--policy-from` names is the tip the check's own query of `origin` reports for the default branch, and the run is not the pre-push hook's hand-off; a run that cannot verify both keeps the full checks |
+| The pre-push hook | Keeps the full checks, because a pusher can redirect the destination it asks through `pushurl` or `insteadOf` |
+| Where home and edits are read | The line's tip, `main`'s commit and their merge base, never the head |
+| What is reported | Each record this takes, or matches but keeps on the full checks, with its reason |
+| Which pull requests | A sync, and a task's pull request that resolved a merge of `main` by hand; records the line never held are covered too |
 
-- A line no longer proves again a completion `main` admitted, including one
-  admitted through an administrator's bypass.
-- A line takes `main`'s text and criteria for a record whose home is not the
-  line, even when the line edited it.
-- A sync takes `main`'s version of a record whose home is the line when the
-  line has not edited it since its merge base with `main`.
-- A home move counts when a planning landing on `main`'s first-parent chain
-  made it, with the task `todo` or `blocked` and no acceptance block at the
-  landing and its first parent (an exception to TSK-1004 AC-8).
-- All of this applies on a task's pull request that resolved a merge of
-  `main` by hand, as well as on a sync, and it covers records the line never
-  held.
+The hand-resolved task pull request above and the first four cases below
+change earlier behaviour; the rest are still refused.
 
-Still refused:
-
-- A record whose home is the line and that the line edited since the merge
-  base, a criteria-only edit included.
-- A record whose home differs between the line's tip and `main`'s commit,
-  unless a planning landing on `main`'s chain moved it.
-- Another path in the same range. The range is a sync only when its merges
-  are clean merges of `main`.
-- The same blob with another mode, a record that cannot be read, and any run
-  without the verified commit.
-
-The pre-push hook keeps the full checks, because a pusher can redirect the
-destination it asks through `pushurl` or `insteadOf`.
+| Case | Result |
+|---|---|
+| A completion `main` admitted, including one admitted through an administrator's bypass | The line no longer proves it again |
+| A record whose home is not the line, even when the line edited it | The line takes `main`'s text and criteria |
+| A record whose home is the line and that the line has not edited since its merge base with `main` | A sync takes `main`'s version |
+| A home move made by a planning landing on `main`'s first-parent chain, with the task `todo` or `blocked` and no acceptance block at the landing and its first parent | The move counts (an exception to TSK-1004 AC-8) |
+| A record whose home is the line and that the line edited since the merge base, a criteria-only edit included | Refused |
+| A record whose home differs between the line's tip and `main`'s commit, unless a planning landing on `main`'s chain moved it | Refused |
+| Another path in the same range | Refused; the range is a sync only when its merges are clean merges of `main` |
+| The same blob with another mode, a record that cannot be read, or any run without the verified commit | Refused |
 
 Refused, naming the cause:
 
