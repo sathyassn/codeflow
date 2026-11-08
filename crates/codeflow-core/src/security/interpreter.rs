@@ -6599,6 +6599,57 @@ mod tests {
         }
     }
 
+    /// TSK-1374: remote-tracking refs past the bounded listing still refuse
+    /// as authority metadata at every level. The walk lists one remote's
+    /// refs to its bound and never reaches the other, whichever comes first.
+    #[test]
+    fn authority_past_the_listing_bound_refuses_at_every_level() {
+        // A bare checkout with remote-tracking refs and no enforcement files.
+        let temp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(temp.path()).unwrap();
+        let root = base.join("repo");
+        let home = base.join("home");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        git2::Repository::init(&root).unwrap();
+        let repo = Repo {
+            _temp: temp,
+            linked: root.clone(),
+            root,
+            home,
+        };
+        for remote in ["aaa", "bbb"] {
+            let dir = repo.root.join(".git/refs/remotes").join(remote);
+            std::fs::create_dir_all(&dir).unwrap();
+            for i in 0..4200 {
+                std::fs::write(dir.join(format!("{remote}{i}")), "0\n").unwrap();
+            }
+        }
+        for level in [
+            PolicyLevel::Block,
+            PolicyLevel::Warn,
+            PolicyLevel::Allow,
+            PolicyLevel::Off,
+        ] {
+            assert_authority(
+                &repo,
+                &[
+                    "find . -name 'aaa*' -exec python3 tool.py {} \\;",
+                    "find . -name 'bbb*' -exec python3 tool.py {} \\;",
+                ],
+                level,
+            );
+            let findings = judge_in(
+                &repo,
+                &repo.root,
+                &repo.root,
+                "find src -exec python3 tool.py {} \\;",
+                level,
+            );
+            assert!(findings.is_empty(), "{level:?}: {findings:?}");
+        }
+    }
+
     /// TSK-406 AC-3 supersedes the old allowances for unresolved shell input.
     #[test]
     fn unresolved_shell_expansions_refuse_near_a_checkout() {

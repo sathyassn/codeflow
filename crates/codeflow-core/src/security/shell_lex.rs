@@ -116,8 +116,17 @@ pub(crate) struct Lexed {
     pub(crate) current_shell: bool,
 }
 
+/// How deep expansions nest before the lexer stops reading: past it the
+/// rest of the line is left unread and the line is opaque (TSK-1374).
+const MAX_EXPANSION_DEPTH: usize = 64;
+
 /// Lex `line` with the shell's lexical states.
 pub(crate) fn lex(line: &str) -> Lexed {
+    lex_at(line, 0)
+}
+
+/// [`lex`] for code met `depth` expansions deep.
+fn lex_at(line: &str, depth: usize) -> Lexed {
     let mut lexer = Lexer {
         chars: line.chars().collect(),
         at: 0,
@@ -125,6 +134,7 @@ pub(crate) fn lex(line: &str) -> Lexed {
         opaque: false,
         current_shell: false,
         heredocs: Vec::new(),
+        depth,
     };
     let commands = lexer.list(None);
     let text = lexer
@@ -154,6 +164,8 @@ struct Lexer {
     /// delimiter word held an expansion or ANSI-C quoting, which the
     /// lexer does not model (SR5-3).
     heredocs: Vec<(String, bool, bool, bool)>,
+    /// Expansions open around the current position.
+    depth: usize,
 }
 
 impl Lexer {
@@ -443,9 +455,14 @@ impl Lexer {
     }
 
     /// Lex code the shell runs elsewhere (a backquote body) for the flags
-    /// it can raise here.
+    /// it can raise here. The body is one expansion deeper, so past
+    /// [`MAX_EXPANSION_DEPTH`] it is left unread and the line is opaque.
     fn nested(&mut self, code: &str) {
-        let inner = lex(code);
+        if self.depth >= MAX_EXPANSION_DEPTH {
+            self.opaque = true;
+            return;
+        }
+        let inner = lex_at(code, self.depth + 1);
         self.opaque |= inner.opaque;
         self.current_shell |= inner.current_shell;
     }
@@ -458,7 +475,21 @@ impl Lexer {
         }
     }
 
+    /// An expansion after its `$`. Past [`MAX_EXPANSION_DEPTH`] the rest of
+    /// the line is left unread and the line is opaque.
     fn dollar(&mut self, token: &mut Token, in_double: bool) {
+        if self.depth >= MAX_EXPANSION_DEPTH {
+            token.complex = true;
+            self.opaque = true;
+            self.at = self.chars.len();
+            return;
+        }
+        self.depth += 1;
+        self.dollar_here(token, in_double);
+        self.depth -= 1;
+    }
+
+    fn dollar_here(&mut self, token: &mut Token, in_double: bool) {
         self.at += 1;
         self.skip_continuations();
         match self.peek(0) {
@@ -741,6 +772,7 @@ impl Lexer {
                     opaque: false,
                     current_shell: false,
                     heredocs: Vec::new(),
+                    depth: self.depth,
                 };
                 inner.double(&mut Token::default(), None);
                 self.opaque |= inner.opaque;
