@@ -245,6 +245,7 @@ pub const LEVEL_KEYS: &[&str] = &[
     "commit_format",
     "commit_body",
     "commit_ticket_required",
+    "commit_ticket_merges",
     "ai_attribution",
     "commit_emoji",
     "policy_characters",
