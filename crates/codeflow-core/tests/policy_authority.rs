@@ -408,6 +408,7 @@ fn asking_the_remote_runs_no_configured_command() {
 }
 
 /// A remote URL, the settings added to it, and the refusal it gives.
+#[cfg(unix)]
 type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a str);
 
 /// Each repository setting that git would run as a command on the way to
