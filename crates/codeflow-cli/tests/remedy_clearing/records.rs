@@ -768,6 +768,36 @@ fn clears_id_registry() {
     );
 }
 
+/// A record check that refuses fails the run and the work and pull request
+/// checks still run after it, so the run the pre-push hook makes reports
+/// what CI reports for the same range (SPC-013 R-120; TSK-1306 AC-8).
+#[test]
+fn a_refused_record_still_runs_the_work_checks() {
+    let hosted = registered();
+    let root = &hosted.root;
+    hosted.branch("plan/more");
+    let hand = "project-management/tasks/TSK-002.md";
+    let copied: String = read(root, TASK)
+        .lines()
+        .map(|line| {
+            if line.starts_with("uid:") {
+                "uid: 3f0c5a52-2d7e-4b8e-9d57-5d0b8f0f1a11".to_string()
+            } else {
+                line.replace("TSK-001", "TSK-002")
+                    .replace("the work", "more work")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    write(root, hand, &format!("{copied}\n"));
+    commit_all(root, "docs: plan more work");
+    let finding = "TSK-002: not reserved in the registry";
+    let full = hosted.ci("plan/more", &[]);
+    assert!(full.contains(finding), "{full}");
+    assert!(full.contains("codeflow ci: FAILED"), "{full}");
+    assert!(!full.contains("stopped early"), "{full}");
+}
+
 #[test]
 fn clears_acceptance_binding() {
     let hosted = Hosted::new();

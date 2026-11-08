@@ -259,7 +259,7 @@ pub(crate) struct Record {
 }
 
 /// The three durable record kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RecordKind {
     Epic,
     Spec,
@@ -3719,6 +3719,26 @@ thread_local! {
     pub(crate) static TREE_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+thread_local! {
+    /// Each record blob's parse, kept while a read-only judgment is open
+    /// (TSK-1306). A blob id names its bytes, so a blob read as one kind
+    /// always parses to the same record; only successful parses are kept.
+    static PARSED: std::cell::RefCell<std::collections::HashMap<(Oid, RecordKind), Record>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Drop the kept record parses; the judgment scope calls this when it
+/// closes or refreshes.
+pub(crate) fn clear_parse_memo() {
+    PARSED.with(|memo| memo.borrow_mut().clear());
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many record blobs `records_from_tree_matching` has parsed on this thread.
+    pub(crate) static BLOB_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn records_from_tree(
     repo: &Repository,
     tree: &git2::Tree<'_>,
@@ -3766,42 +3786,35 @@ pub(crate) fn records_from_tree_matching(
         if !include(path, kind) {
             return crate::git::Walk::Continue;
         }
-        // A record's size is read from its object header before its bytes,
-        // so a hostile tip cannot make every reader load it.
-        let size = match odb.read_header(entry.id()) {
-            Ok((size, _)) => size,
-            Err(error) => {
-                failure = Some(format!("{path}: cannot read record size: {error}"));
-                return crate::git::Walk::Stop;
-            }
-        };
-        if u64::try_from(size).map_or(true, |size| size > MAX_RECORD_BYTES) {
-            failure = Some(format!(
-                "{path}: record exceeds the 4 MiB bound for a work record"
-            ));
-            return crate::git::Walk::Stop;
-        }
-        let Ok(blob) = repo.find_blob(entry.id()) else {
-            failure = Some(format!("{path}: cannot read blob"));
-            return crate::git::Walk::Stop;
-        };
-        let Ok(content) = std::str::from_utf8(blob.content()) else {
-            failure = Some(format!("{path}: record is not UTF-8"));
-            return crate::git::Walk::Stop;
-        };
-        match parse_record(content, kind) {
-            Ok(record) => {
-                if records.insert(record.id.clone(), record).is_some() {
-                    failure = Some(format!("{path}: duplicate work id"));
-                    crate::git::Walk::Stop
-                } else {
-                    crate::git::Walk::Continue
+        let memo = history::in_judgment();
+        let kept = memo
+            .then(|| PARSED.with(|parsed| parsed.borrow().get(&(entry.id(), kind)).cloned()))
+            .flatten();
+        let record = if let Some(record) = kept {
+            record
+        } else {
+            match read_record(repo, &odb, entry.id(), path, kind) {
+                Ok(record) => {
+                    if memo {
+                        PARSED.with(|parsed| {
+                            parsed
+                                .borrow_mut()
+                                .insert((entry.id(), kind), record.clone());
+                        });
+                    }
+                    record
+                }
+                Err(error) => {
+                    failure = Some(error);
+                    return crate::git::Walk::Stop;
                 }
             }
-            Err(error) => {
-                failure = Some(format!("{path}: {error}"));
-                crate::git::Walk::Stop
-            }
+        };
+        if records.insert(record.id.clone(), record).is_some() {
+            failure = Some(format!("{path}: duplicate work id"));
+            crate::git::Walk::Stop
+        } else {
+            crate::git::Walk::Continue
         }
     });
     if let Some(error) = failure {
@@ -3809,6 +3822,39 @@ pub(crate) fn records_from_tree_matching(
     }
     walk_result.map_err(|error| WorkStartError::Repository(error.to_string()))?;
     Ok(records)
+}
+
+/// The record blob `id` at `path`, read as `kind`: its size checked from
+/// the object header before its bytes, then parsed. An error carries the
+/// path.
+fn read_record(
+    repo: &Repository,
+    odb: &git2::Odb<'_>,
+    id: Oid,
+    path: &str,
+    kind: RecordKind,
+) -> Result<Record, String> {
+    #[cfg(test)]
+    BLOB_PARSES.with(|parses| parses.set(parses.get() + 1));
+    {
+        // A record's size is read from its object header before its bytes,
+        // so a hostile tip cannot make every reader load it.
+        let size = odb
+            .read_header(id)
+            .map_err(|error| format!("{path}: cannot read record size: {error}"))?
+            .0;
+        if u64::try_from(size).map_or(true, |size| size > MAX_RECORD_BYTES) {
+            return Err(format!(
+                "{path}: record exceeds the 4 MiB bound for a work record"
+            ));
+        }
+    }
+    let blob = repo
+        .find_blob(id)
+        .map_err(|_| format!("{path}: cannot read blob"))?;
+    let content =
+        std::str::from_utf8(blob.content()).map_err(|_| format!("{path}: record is not UTF-8"))?;
+    parse_record(content, kind).map_err(|error| format!("{path}: {error}"))
 }
 
 pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, String> {
@@ -4158,6 +4204,51 @@ fn hosted_remote(repo: &Repository, remote_name: &str) -> Result<String, String>
 
 #[cfg(test)]
 mod tests {
+    /// A tree holding `project-management/tasks/<id>.md` for each record.
+    fn records_tree(repo: &git2::Repository, records: &[(&str, &str)]) -> git2::Oid {
+        let mut tasks = repo.treebuilder(None).unwrap();
+        for (id, text) in records {
+            let blob = repo.blob(text.as_bytes()).unwrap();
+            tasks.insert(format!("{id}.md"), blob, 0o100_644).unwrap();
+        }
+        let tasks = tasks.write().unwrap();
+        let mut management = repo.treebuilder(None).unwrap();
+        management.insert("tasks", tasks, 0o040_000).unwrap();
+        let management = management.write().unwrap();
+        let mut root = repo.treebuilder(None).unwrap();
+        root.insert("project-management", management, 0o040_000)
+            .unwrap();
+        root.write().unwrap()
+    }
+
+    /// Inside one judgment a record blob two anchors share is parsed once,
+    /// and each anchor still reads the records it reads alone (TSK-1306).
+    #[test]
+    fn a_judgment_parses_each_record_blob_once_and_reads_the_same_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let first = "---\nid: TSK-001\nstatus: todo\n---\n# One\n";
+        let second = |status: &str| format!("---\nid: TSK-002\nstatus: {status}\n---\n# Two\n");
+        let older = records_tree(&repo, &[("TSK-001", first), ("TSK-002", &second("todo"))]);
+        let newer = records_tree(&repo, &[("TSK-001", first), ("TSK-002", &second("doing"))]);
+        let read = |tree: git2::Oid| {
+            let tree = repo.find_tree(tree).unwrap();
+            format!("{:?}", super::records_from_tree(&repo, &tree).unwrap())
+        };
+        super::BLOB_PARSES.with(|parses| parses.set(0));
+        let alone = [read(older), read(newer)];
+        assert_eq!(super::BLOB_PARSES.with(std::cell::Cell::get), 4);
+        super::BLOB_PARSES.with(|parses| parses.set(0));
+        {
+            let _judgment = super::history::judgment();
+            assert_eq!([read(older), read(newer)], alone);
+            assert_eq!(super::BLOB_PARSES.with(std::cell::Cell::get), 3);
+            assert_eq!([read(older), read(newer)], alone);
+            assert_eq!(super::BLOB_PARSES.with(std::cell::Cell::get), 3);
+        }
+        assert!(super::PARSED.with(|parsed| parsed.borrow().is_empty()));
+    }
+
     /// Issue 79: an object id that names no commit is told apart from a
     /// commit object that cannot be read, which the lookup used to report
     /// alike as "not a commit in this repository".
