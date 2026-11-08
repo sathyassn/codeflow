@@ -14,6 +14,9 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import shlex
+import shutil
+import signal
 import subprocess
 import tempfile
 import unittest
@@ -246,8 +249,31 @@ def workflow_files():
     return files
 
 
+RUN_BASH_SECONDS = 60
+
+
 def run_bash(run, cwd, env):
-    return subprocess.run(['bash', '-euo', 'pipefail', '-c', run], cwd=cwd, env=env, capture_output=True, text=True)
+    # stdin is closed so nothing in the step can wait on input, and the run is bounded: a hang
+    # fails the test instead of the whole gate. The step runs in its own session so a timeout
+    # kills every process it started, not only bash, and the output pipes close.
+    with subprocess.Popen(['bash', '-euo', 'pipefail', '-c', run], cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=RUN_BASH_SECONDS)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+            raise AssertionError(f'the step did not finish in {RUN_BASH_SECONDS} s\n{stdout}{stderr}') from None
+    return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+
+
+def real_timeout():
+    # Resolve the real `timeout` on the caller's PATH, before the fake folder is put in front of it.
+    # A bare `timeout` inside the fake would find the fake again and exec itself forever.
+    found = shutil.which('timeout', path=os.environ.get('PATH', os.defpath))
+    if found is None:
+        raise AssertionError('the cache step tests need a `timeout` command on PATH (GNU coreutils)')
+    return found
 
 
 def fake_version(source, dirty='false'):
@@ -440,7 +466,7 @@ class PolicyCache(unittest.TestCase):
         gh.write_text(f'#!/bin/sh\necho "$@" >> "{root}/gh-args"\nexit {gh_exit}\n')
         gh.chmod(0o755)
         timeout = root / 'timeout'
-        timeout.write_text(f'#!/bin/sh\necho "$1" >> "{root}/timeouts"\nlimit=$1\nshift\nif [ "$limit" = 30 ] && [ -n "$FAST_TIMEOUT" ]; then limit=1; fi\nexec {Path("/opt/homebrew/bin/timeout") if Path("/opt/homebrew/bin/timeout").exists() else "timeout"} "$limit" "$@"\n')
+        timeout.write_text(f'#!/bin/sh\necho "$1" >> "{root}/timeouts"\nlimit=$1\nshift\nif [ "$limit" = 30 ] && [ -n "$FAST_TIMEOUT" ]; then limit=1; fi\nexec {shlex.quote(real_timeout())} "$limit" "$@"\n')
         timeout.chmod(0o755)
         path_file = root / 'path'
         output = root / 'output'
