@@ -4832,6 +4832,12 @@ mod tests {
     /// held checkouts retain the integrity entry-budget refusal.
     #[test]
     fn interpreter_large_glob_requires_a_safe_prefix() {
+        // Its own glob cache: the walk shares no cache entries with the other
+        // tests in this process (TSK-1258's cause, TSK-1253 AC-5).
+        super::super::pattern::with_private_glob_cache(large_glob_requires_a_safe_prefix);
+    }
+
+    fn large_glob_requires_a_safe_prefix() {
         let repo = repo();
         let many = repo.root.join("many");
         std::fs::create_dir(&many).unwrap();

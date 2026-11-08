@@ -151,7 +151,10 @@ fn the_spawn_helper_drains_both_streams_past_a_pipe_buffer() {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
         }
-        if started.elapsed() > Duration::from_secs(10) {
+        // A child blocked on an undrained pipe never exits, so a generous
+        // bound still catches it, and a loaded runner writing 2 MiB does
+        // not fail the test for time alone (TSK-1253).
+        if started.elapsed() > Duration::from_secs(60) {
             child.kill().unwrap();
             child.wait().unwrap();
             panic!("the child blocked on a pipe: a stream is not drained while the test waits");

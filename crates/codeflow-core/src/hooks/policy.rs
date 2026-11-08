@@ -407,7 +407,8 @@ pub struct GitPolicy {
     /// absent one is fine). `warn`/`block` require at least one matching trailer;
     /// a commit without one warns or blocks. Only meaningful when
     /// [`commit_ticket_keys`](GitPolicy::commit_ticket_keys) is non-empty.
-    /// Merge/revert/fixup/squash exempt.
+    /// Merge/revert/fixup/squash exempt; merges opt in through
+    /// [`commit_ticket_merges`](GitPolicy::commit_ticket_merges).
     pub commit_ticket_required: PolicyLevel,
     /// Regex a ticket trailer's value must match. String; default empty = no
     /// format check. When set, a present ticket trailer whose value does not match
@@ -417,6 +418,17 @@ pub struct GitPolicy {
     /// strict validator ([`policy_schema`](super::policy_schema)) rejects it
     /// loudly first.
     pub commit_ticket_pattern: String,
+    /// Whether a merge commit must carry a ticket-reference trailer too
+    /// (TSK-1350). Default `off`: merges stay exempt from the ticket rule, as
+    /// before. `warn`/`block` judge every real merge, git's default
+    /// `Merge ...` subject included, for a trailer with one of
+    /// [`commit_ticket_keys`](GitPolicy::commit_ticket_keys) (and matching
+    /// [`commit_ticket_pattern`](GitPolicy::commit_ticket_pattern) when set),
+    /// in the commit-msg hook and in `codeflow ci`, reported as
+    /// `git.commit_ticket_merges` at this level. Only meaningful when
+    /// `commit_ticket_keys` is non-empty; the other message rules still skip
+    /// a git-authored merge.
+    pub commit_ticket_merges: PolicyLevel,
     /// Path globs (the `glob` crate's syntax) naming the repo's declared
     /// contract surfaces (ADR-0020). When non-empty, a commit-msg WARN fires if a
     /// staged file matches one of these globs and the message carries no breaking
@@ -689,6 +701,7 @@ impl Default for GitPolicy {
             commit_ticket_keys: Vec::new(),
             commit_ticket_required: PolicyLevel::Off,
             commit_ticket_pattern: String::new(),
+            commit_ticket_merges: PolicyLevel::Off,
             // Empty by default: consumers declare their own contract surfaces.
             breaking_watch_paths: Vec::new(),
             ai_attribution: PolicyLevel::Block,
@@ -1203,6 +1216,7 @@ impl GitPolicy {
         // Neutralize the footer/ticket opt-ins so the scaffold commit is never
         // walled by a required trailer during the pre-first-commit grace window.
         self.commit_ticket_required = PolicyLevel::Off;
+        self.commit_ticket_merges = PolicyLevel::Off;
         self.commit_ticket_keys = Vec::new();
         self.commit_required_footers = Vec::new();
         self.ai_attribution = PolicyLevel::Off;
@@ -1338,6 +1352,7 @@ mod tests {
         assert!(g.commit_ticket_keys.is_empty());
         assert_eq!(g.commit_ticket_required, PolicyLevel::Off);
         assert!(g.commit_ticket_pattern.is_empty());
+        assert_eq!(g.commit_ticket_merges, PolicyLevel::Off);
         assert!(g.allowed_footer_tokens().is_empty());
         // The contract-surface tripwire ships empty — consumers declare their own.
         assert!(g.breaking_watch_paths.is_empty());
@@ -1426,6 +1441,10 @@ mod tests {
         assert_eq!(
             from_asset.git.commit_ticket_pattern,
             defaults.commit_ticket_pattern
+        );
+        assert_eq!(
+            from_asset.git.commit_ticket_merges,
+            defaults.commit_ticket_merges
         );
         assert_eq!(
             from_asset.git.breaking_watch_paths,
