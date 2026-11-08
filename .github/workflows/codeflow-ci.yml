@@ -1706,7 +1706,8 @@ jobs:
           plain=$(sed $'s/\033\\[[0-9;]*m//g' "$log")
           printf '%s\n' "$plain" | grep -E '^[^ ]+ (INF|WRN|ERR|FTL) ' >&2 || true
           scanned=$(printf '%s\n' "$plain" | sed -n 's/^[^ ]* INF \([0-9][0-9]*\) commits scanned\..*/\1/p' | tail -n 1)
-          if [ "$rc" -ne 0 ] || printf '%s\n' "$plain" | grep -qE '^[^ ]+ (ERR|FTL) |^[^ ]+ DBG command aborted' \
+          # Match captured text without a pipe: grep -q can close a pipe early.
+          if [ "$rc" -ne 0 ] || grep -qE '^[^ ]+ (ERR|FTL) |^[^ ]+ DBG command aborted' <<<"$plain" \
             || [ "${scanned:-0}" -eq 0 ] || ! jq -e 'type == "array"' "$report" >/dev/null 2>&1; then
             echo "::error::gitleaks did not complete a scan (exit ${rc}, ${scanned:-no} commits read)"
             exit 1
@@ -1795,38 +1796,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Dependency / supply-chain audit — the deterministic floor the
-      # cf-security-reviewer red-team layers on (CodeFlow ADR-0016; OWASP
-      # A03:2025). Pinned
-      # osv-scanner reads every lockfile ecosystem (here Cargo.lock), so it is the
-      # stack-agnostic floor. Enforcement reads two .codeflow/policy.json keys:
-      # `git.security_review` (umbrella gate for the whole security-review job) and
-      # `git.dep_audit` (SCA-specific sub-gate). The advisory blocks when EITHER is
-      # `block`, reports when either is `warn` (the default), and is skipped only
-      # when BOTH are `off`. Record justified suppressions in an osv-scanner.toml
-      # beside the lockfile they cover (with no --config, as here, osv-scanner
-      # reads no other name and no parent directory) so a transitive advisory
-      # in unchanged code cannot block a PR.
-      # Both keys are read from the trusted commit: the pull request's base,
-      # or the pushed commit on a push, so a pull request cannot lower the
-      # level that judges it. A missing policy file, a missing or unreadable
-      # key, or a value other than block, warn or off fails the job;
-      # add a missing key by hand: `codeflow update` keeps a deletion.
-      # Suppressions also come from the trusted commit: the step replaces every
-      # osv-scanner.toml in the checkout with the trusted commit's copies, so a
-      # new suppression takes effect once its own pull request lands.
-      # osv-scanner runs with --no-ignore, so a .gitignore the change edits
-      # cannot hide a lockfile from the audit.
-      #
-      # A project that records audit exceptions in its own reviewed register
-      # commits .codeflow/audit-exceptions.sh. When the trusted commit holds
-      # it, the scan reports JSON and, if it finds advisories, the step lists
-      # them in a file, exports the trusted commit's files to a folder outside
-      # the checkout and runs the hook there with bash. The hook prints the
-      # findings it accepts, one per line, unchanged; the step passes only when
-      # every finding is accepted, and a hook that fails or prints nothing
-      # accepts nothing. The hook and the files it reads are the trusted
-      # commit's, so a pull request cannot accept its own findings.
+      # Dependency audit: scan errors fail at block and warn. Suppressions and
+      # triage come only from the base commit. New advisories always fail;
+      # existing advisories follow the shared severity and reachability table.
       - name: dependency audit (osv-scanner)
         env:
           TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
@@ -1850,152 +1822,384 @@ jobs:
             esac
           done
           echo "Security policy from trusted commit ${TRUSTED_SHA}: security_review=${sr}, dep_audit=${da}."
-          python3 -I -c '
-          import os, subprocess, sys
-          sha = sys.argv[1]
-          name = b"osv-scanner.toml"
-          def refuse(message):
-              print(f"::error::{message}; failing closed")
-              sys.exit(1)
-          # Remove every suppression file the checkout holds, links included.
-          for top, dirs, files in os.walk(b".", followlinks=False):
-              dirs[:] = [d for d in dirs if d != b".git"]
-              for entry in files:
-                  if entry == name:
-                      os.unlink(os.path.join(top, entry))
-          listing = subprocess.run(["git", "ls-tree", "-r", "-z", "--full-tree", sha],
-                                   check=True, capture_output=True).stdout
-          for record in filter(None, listing.split(b"\0")):
-              meta, path = record.split(b"\t", 1)
-              mode, _, blob = meta.split()
-              if os.path.basename(path) != name:
-                  continue
-              shown = path.decode("utf-8", "replace")
-              if mode not in (b"100644", b"100755"):
-                  refuse(f"{shown} on trusted commit {sha} is not a regular file")
-              where = b"."
-              for part in path.split(b"/")[:-1]:
-                  where = os.path.join(where, part)
-                  if os.path.islink(where) or (os.path.lexists(where) and not os.path.isdir(where)):
-                      refuse(f"the change replaces a folder holding {shown} with a link or a file")
-                  os.makedirs(where, exist_ok=True)
-              data = subprocess.run(["git", "cat-file", "blob", blob.decode()],
-                                    check=True, capture_output=True).stdout
-              fd = os.open(os.path.join(b".", path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-              with os.fdopen(fd, "wb") as out:
-                  out.write(data)
-              print(f"osv-scanner suppressions from trusted commit: {shown}")
-          ' "$TRUSTED_SHA"
-          # The project exception hook counts only when the trusted commit
-          # holds it as a regular file.
-          hook=.codeflow/audit-exceptions.sh
-          if ! entry=$(git ls-tree "$TRUSTED_SHA" -- "$hook"); then
-            echo "::error::cannot read the tree of the trusted commit ${TRUSTED_SHA}; failing closed"
-            exit 1
-          fi
-          hook_mode=${entry%% *}
-          case $hook_mode in
-            '') ;;
-            100644|100755) ;;
-            *) echo "::error::${hook} on trusted commit ${TRUSTED_SHA} is not a regular file; failing closed"
-               exit 1 ;;
-          esac
-          if [ -z "$hook_mode" ] && { [ -e "$hook" ] || [ -L "$hook" ]; }; then
-            echo "::notice::this change holds ${hook}, but the trusted commit does not; it takes effect once the change lands."
-          fi
-          if [ "$sr" = "block" ] || [ "$da" = "block" ]; then
+          if [ "$sr" = block ] || [ "$da" = block ]; then
             level=block
-          elif [ "$sr" = "off" ] && [ "$da" = "off" ]; then
-            echo "security_review=off and dep_audit=off — skipping."; exit 0
+          elif [ "$sr" = off ] && [ "$da" = off ]; then
+            echo "security_review=off and dep_audit=off; skipping."; exit 0
           else
             level=warn
           fi
-
           OSV_VERSION=2.4.0
           OSV_SHA256=15314940c10d26af9c6649f150b8a47c1262e8fc7e17b1d1029b0e479e8ed8a0
-          # Download outside the checkout, so a link the change commits at the
-          # download path cannot redirect the write.
           tool=$(mktemp -d "${RUNNER_TEMP:?}/osv-tool.XXXXXX")
           trap 'rm -rf "$tool" || true' EXIT
+          git show "${TRUSTED_SHA}:.github/workflows/codeflow-ci.yml" >"$tool/base-workflow.yml" || exit 1
+          trusted_pin() {
+            python3 -I -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(); values=re.findall(r"(?m)^ +"+sys.argv[2]+r"=("+sys.argv[3]+r")$",text); sys.exit("missing or ambiguous trusted scanner pin") if len(values)!=1 else print(values[0])' "$tool/base-workflow.yml" "$1" "$2"
+          }
+          OSV_VERSION=$(trusted_pin OSV_VERSION '[0-9]+\.[0-9]+\.[0-9]+') || exit 1
+          OSV_SHA256=$(trusted_pin OSV_SHA256 '[0-9a-f]{64}') || exit 1
           curl -sSfL "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64" -o "$tool/osv-scanner"
           printf '%s  %s\n' "$OSV_SHA256" "$tool/osv-scanner" | sha256sum -c -
           chmod +x "$tool/osv-scanner"
+          # Embedded from scripts/dependency_audit.py; never load the PR's judge.
+          cat >"$tool/audit.py" <<'CODEFLOW_AUDIT_PY'
+          #!/usr/bin/env python3
+          """Judge OSV base/head scans and trusted exceptions with one precedence table.
 
-          # With the project exception hook the scan reports JSON on stdout and
-          # its log on stderr; without it the run is unchanged. osv-scanner
-          # exits 1 for advisories even when it logged an error, such as a
-          # lockfile it could not read, and it sends every log level to stderr
-          # when the format is JSON. --verbosity error keeps only the errors,
-          # so any text on stderr means the scan may be incomplete and the hook
-          # is not run.
-          set +e
-          if [ -n "$hook_mode" ]; then
-            out=$("$tool/osv-scanner" scan -r --no-ignore --verbosity error --format json . 2>"$tool/scan.err"); rc=$?
-            diag=$(cat "$tool/scan.err")
-          else
-            out=$("$tool/osv-scanner" scan -r --no-ignore . 2>&1); rc=$?
-            diag=$out
-          fi
-          set -e
-          printf '%s\n' "$diag"
+          The CI workflow embeds this file so code from the pull request cannot replace
+          its judge. Python 3.11+ is provided by the hosted Ubuntu runner.
+          """
+          import datetime
+          import json
+          import math
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          import tomllib
 
-          # The project exception hook judges the findings of a scan that
-          # found advisories (exit 1) and nothing else. It runs from the
-          # trusted commit's files, outside the checkout.
-          accepted_all=
-          if [ "$rc" -eq 1 ] && [ -n "$hook_mode" ]; then
-            findings="$tool/findings.tsv"
-            accepted="$tool/accepted.tsv"
-            valid="$tool/valid.tsv"
-            tree="$tool/trusted-tree"
-            : >"$findings"; : >"$accepted"; : >"$valid"
-            # One line per finding: id, package, version, ecosystem, lockfile
-            # and the advisory's aliases, tab separated. @tsv escapes tabs and
-            # line breaks, so a name the change chooses stays on its line.
-            if printf '%s' "$out" | jq -r --arg here "$PWD/" '.results[]? | .source.path as $s | .packages[]? | .package as $p | .vulnerabilities[]? | [.id, $p.name, $p.version, $p.ecosystem, ($s | ltrimstr($here)), ((.aliases // []) | join(","))] | @tsv' >"$tool/findings.raw"; then
-              LC_ALL=C sort -u "$tool/findings.raw" >"$findings"
-            fi
-            if [ -s "$tool/scan.err" ]; then
-              echo "::error::osv-scanner logged errors, so its scan may be incomplete; no project exception applies"
-            elif [ ! -s "$findings" ]; then
-              echo "::error::osv-scanner reported advisories but none could be listed from its JSON report; no project exception applies"
-            elif ! { mkdir "$tree" && git archive -o "$tool/trusted.tar" "$TRUSTED_SHA" && tar -xf "$tool/trusted.tar" -C "$tree" && [ -f "$tree/$hook" ]; }; then
-              echo "::error::cannot export ${hook} and the project files from the trusted commit ${TRUSTED_SHA}; no project exception applies"
-            else
-              hook_rc=0
-              (cd "$tree" && CODEFLOW_AUDIT_FINDINGS="$findings" CODEFLOW_TRUSTED_SHA="$TRUSTED_SHA" CODEFLOW_TRUSTED_ROOT="$tree" bash "$hook" </dev/null) >"$accepted" || hook_rc=$?
-              if [ "$hook_rc" -ne 0 ]; then
-                echo "::error::the project exception hook ${hook} failed (exit ${hook_rc}); it accepts nothing"
-                : >"$accepted"
-              fi
-              grep -Fxf "$findings" "$accepted" >"$valid" || true
-              sed 's/^/accepted by the project exception hook: /' "$valid"
-              grep -vFxf "$valid" "$findings" >"$tool/remaining.tsv" || true
-              sed 's/^/not accepted: /' "$tool/remaining.tsv"
-              if [ ! -s "$tool/remaining.tsv" ]; then
-                accepted_all=1
-              fi
-            fi
-          fi
 
-          # The verdict comes from osv-scanner's exit status (0 no advisories,
-          # 1 advisories, 127 error, 128 no package sources), never from its
-          # output, which repeats file paths the change chooses. A 128 that
-          # also reports a file it could not extract is a scan error.
-          if [ "$rc" -eq 0 ]; then
-            echo "No known advisories."
-          elif [ "$rc" -eq 128 ] && ! printf '%s\n%s' "$diag" "$out" | grep -qi 'error during extraction'; then
-            echo "No scannable manifests found — nothing to audit."
-          elif [ -n "$accepted_all" ]; then
-            echo "Every dependency advisory is accepted by the project exception hook ${hook}."
-          elif [ "$level" = "block" ]; then
-            if [ -n "$hook_mode" ]; then
-              advice="accept a justified finding through the project exception hook ${hook}"
-            else
-              advice="record a justified suppression in an osv-scanner.toml beside the lockfile"
-            fi
-            echo "::error::dependency advisories found (or scan error, exit ${rc}) and policy git.security_review=${sr} / git.dep_audit=${da} (either is block) — failing. Triage, or ${advice}."
-            exit 1
-          else
-            echo "::warning::dependency advisories found (or scan error, exit ${rc}); policy git.security_review=${sr} / git.dep_audit=${da} → reporting only. Harden either to block once triaged."
-          fi
+          class AuditError(ValueError):
+              """Missing evidence or an invalid exception; fatal even at warn."""
+
+
+          MIGRATION = ('Replace bare TSV finding lines with one JSON object per line: '
+                       '{"id":"GHSA-...","package":"demo","ecosystem":"crates.io",'
+                       '"owner":"team","rationale":"reason","expiry":"YYYY-MM-DD"}. '
+                       'High/critical findings also require "reachability":"not-reachable" '
+                       'and nonempty "evidence". New advisories still fail the table.')
+          SEVERITIES = {"informational": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+          def nonempty(value, field):
+              if not isinstance(value, str) or not value.strip():
+                  raise AuditError(f"{field} must be a nonempty string")
+              return value
+
+
+          def identity(entry):
+              if not isinstance(entry, dict):
+                  raise AuditError("a finding or triage entry must be an object")
+              return tuple(nonempty(entry.get(key), key) for key in ("id", "package", "ecosystem"))
+
+
+          def expiry(value):
+              if isinstance(value, datetime.datetime):
+                  return value.date()
+              if isinstance(value, datetime.date):
+                  return value
+              if not isinstance(value, str):
+                  raise AuditError("expiry must be an ISO date (YYYY-MM-DD)")
+              try:
+                  return datetime.date.fromisoformat(value)
+              except ValueError as error:
+                  raise AuditError("expiry must be an ISO date (YYYY-MM-DD)") from error
+
+
+          def validate_entries(entries, today, findings=()):
+              """Both file entries and every hook output line use this validator."""
+              if not isinstance(entries, list):
+                  raise AuditError("triage must be a JSON array of entries")
+              present = {identity(row) for row in findings}
+              high = {identity(row) for row in findings if row["severity"] >= 3}
+              result = {}
+              allowed = {"id", "package", "ecosystem", "owner", "rationale", "expiry", "reachability", "evidence"}
+              for entry in entries:
+                  key = identity(entry)
+                  if set(entry) - allowed:
+                      raise AuditError("unknown triage fields; " + MIGRATION)
+                  nonempty(entry.get("owner"), "owner")
+                  nonempty(entry.get("rationale"), "rationale")
+                  until = expiry(entry.get("expiry"))
+                  reachability = entry.get("reachability", "unknown")
+                  if reachability not in ("unknown", "reachable", "not-reachable"):
+                      raise AuditError("reachability must be unknown, reachable or not-reachable")
+                  if reachability == "not-reachable":
+                      nonempty(entry.get("evidence"), "not-reachable evidence")
+                  if key in high and (reachability != "not-reachable" or not entry.get("evidence")):
+                      raise AuditError(f"high/critical triage needs not-reachable evidence for {key}")
+                  if key in result:
+                      raise AuditError(f"duplicate triage entry for {key}")
+                  if until < today and key in present:
+                      raise AuditError(f"expired triage entry for {key}, expiry {until}; "
+                                       "renewal while the advisory remains live requires an operator merge")
+                  result[key] = entry
+              return result
+
+
+          def parse_hook(text):
+              entries = []
+              for number, line in enumerate(text.splitlines(), 1):
+                  try:
+                      entry = json.loads(line)
+                      if not isinstance(entry, dict):
+                          raise ValueError("not an object")
+                  except ValueError as error:
+                      raise AuditError(f"audit-exceptions.sh line {number} is not a triage object. {MIGRATION}") from error
+                  entries.append(entry)
+              return entries
+
+
+          def severity(vulnerability, groups):
+              values = []
+              stated = vulnerability.get("database_specific", {}).get("severity", "").lower()
+              if stated in SEVERITIES:
+                  values.append(SEVERITIES[stated])
+              if vulnerability.get("database_specific", {}).get("informational"):
+                  values.append(0)
+              for group in groups:
+                  if vulnerability["id"] not in group.get("ids", []):
+                      continue
+                  score = group.get("max_severity")
+                  if score in (None, "", "UNKNOWN"):
+                      continue
+                  try:
+                      score = float(score)
+                  except (TypeError, ValueError) as error:
+                      raise AuditError("invalid OSV severity score") from error
+                  if not math.isfinite(score) or not 0 <= score <= 10:
+                      raise AuditError("OSV severity score outside 0..10")
+                  values.append(4 if score >= 9 else 3 if score >= 7 else 2 if score >= 4 else 1 if score > 0 else 0)
+              if not values:
+                  # No severity is not proof of low risk. Treat it conservatively as high;
+                  # it needs the same trusted reachability evidence as a high advisory.
+                  return 3
+              return max(values)
+
+
+          def findings(report, root):
+              if not isinstance(report, dict) or not isinstance(report.get("results"), list):
+                  raise AuditError("OSV report lacks a results array")
+              rows = []
+              for source in report["results"]:
+                  if not isinstance(source, dict) or not isinstance(source.get("packages"), list):
+                      raise AuditError("OSV result lacks packages")
+                  path = nonempty(source.get("source", {}).get("path"), "source.path")
+                  path = Path(path)
+                  if path.is_absolute():
+                      try:
+                          # A runner temp path may be a platform alias (/var on macOS),
+                          # while the scanner reports its physical path. Compare physical
+                          # paths, retaining the boundary check for links outside the tree.
+                          path = path.resolve().relative_to(root.resolve())
+                      except ValueError as error:
+                          raise AuditError("OSV source is outside the scanned tree") from error
+                  if ".." in path.parts:
+                      raise AuditError("OSV source escapes the scanned tree")
+                  for package in source["packages"]:
+                      if not isinstance(package, dict):
+                          raise AuditError("invalid OSV package")
+                      vulnerabilities = package.get("vulnerabilities", [])
+                      if not isinstance(vulnerabilities, list):
+                          raise AuditError("invalid OSV vulnerabilities")
+                      for vulnerability in vulnerabilities:
+                          row = {"id": vulnerability.get("id"),
+                                 "package": package.get("package", {}).get("name"),
+                                 "ecosystem": package.get("package", {}).get("ecosystem"),
+                                 "path": path.as_posix(),
+                                 "version": package.get("package", {}).get("version", ""),
+                                 "aliases": vulnerability.get("aliases", [])}
+                          identity(row)
+                          row["severity"] = severity(vulnerability, package.get("groups", []))
+                          rows.append(row)
+              return rows
+
+
+          def judge(base, head, triage, suppressions, level, today):
+              if level == "off":
+                  return 0, ["Dependency audit is off; not run."]
+              if level not in ("warn", "block"):
+                  raise AuditError("invalid effective audit level")
+              entries = validate_entries(triage, today, head)
+              previous = {identity(row) for row in base}
+              failed = False
+              messages = [f"::notice::expired triage entry {json.dumps(key)}, expiry {expiry(entry['expiry'])}; "
+                          "advisory absent from completed head scan"
+                          for key, entry in entries.items() if expiry(entry["expiry"]) < today]
+              for row in head:
+                  key = identity(row)
+                  entry = entries.get(key)
+                  accepted = any(s["id"] in [row["id"], *row["aliases"]]
+                                 and s["directory"] == str(Path(row["path"]).parent)
+                                 and s["expiry"] >= today for s in suppressions)
+                  reason = ""
+                  if accepted:
+                      reason = "trusted unexpired suppression"
+                  elif key not in previous:
+                      reason = "new advisory"
+                  elif row["severity"] >= 3:
+                      if entry and entry.get("reachability") == "not-reachable" and entry.get("evidence"):
+                          reason = "trusted not-reachable triage"
+                      else:
+                          reason = "high/critical advisory without not-reachable evidence"
+                  elif row["severity"] == 2:
+                      reason = "trusted triage" if entry else "medium advisory without triage"
+                  else:
+                      reason = "existing low/informational advisory"
+                  passes = accepted or reason in ("trusted not-reachable triage", "trusted triage", "existing low/informational advisory")
+                  failed |= not passes
+                  prefix = "notice" if passes else "error" if level == "block" else "warning"
+                  # JSON escaping prevents newline and terminal-control injection in logs.
+                  messages.append(f"::{prefix}::{json.dumps(key)}: {reason}")
+              return int(failed and level == "block"), messages
+
+
+          def regular(root, path):
+              """Reject links in exception paths, including linked parent directories."""
+              candidate = root
+              for part in Path(path).parts:
+                  candidate = candidate / part
+                  if candidate.is_symlink():
+                      raise AuditError(f"trusted exception path is a symlink: {path}")
+              if candidate.exists() and not candidate.is_file():
+                  raise AuditError(f"trusted exception path is not a regular file: {path}")
+              return candidate
+
+
+          def scan(scanner, root, config):
+              run = subprocess.run([str(scanner), "scan", "-r", "--no-ignore", "--verbosity", "error",
+                                    "--format", "json", "--config", str(config), "."],
+                                   cwd=root, capture_output=True, text=True, check=False)
+              # Capture first, then match. There is no producer pipe whose SIGPIPE can
+              # change an extraction-error match into a successful empty scan.
+              text = run.stderr + "\n" + run.stdout
+              if run.returncode == 128 and text.strip() == "No package sources found, --help for usage information.":
+                  return []
+              if run.returncode not in (0, 1) or run.stderr.strip():
+                  raise AuditError(f"OSV scan failed or was incomplete (exit {run.returncode})")
+              try:
+                  rows = findings(json.loads(run.stdout), root)
+              except (ValueError, TypeError, AttributeError, KeyError) as error:
+                  raise AuditError("invalid or incomplete OSV JSON report") from error
+              if bool(rows) != (run.returncode == 1):
+                  raise AuditError("OSV exit status disagrees with its findings")
+              return rows
+
+
+          def trusted_exceptions(tree, head, trusted_sha, work, today):
+              file = regular(tree, ".codeflow/audit-triage.json")
+              entries = json.loads(file.read_text()) if file.exists() else []
+              if not isinstance(entries, list):
+                  raise AuditError("audit-triage.json must contain an array")
+              suppressions = []
+              for file in tree.rglob("osv-scanner.toml"):
+                  file = regular(tree, file.relative_to(tree))
+                  for item in tomllib.loads(file.read_text()).get("IgnoredVulns", []):
+                      nonempty(item.get("id"), f"{file.relative_to(tree)} suppression id")
+                      nonempty(item.get("reason"), f"{file.relative_to(tree)} suppression reason")
+                      try:
+                          until = expiry(item.get("ignoreUntil"))
+                      except AuditError as error:
+                          raise AuditError(f"{file.relative_to(tree)} suppression ignoreUntil: {error}") from error
+                      suppressions.append({"id": item["id"], "expiry": until,
+                                           "directory": str(file.parent.relative_to(tree))})
+              hook = regular(tree, ".codeflow/audit-exceptions.sh")
+              if hook.exists():
+                  listing = work / "findings.tsv"
+                  # Retain the hook input format; only its acceptance output changes.
+                  def tsv(value):
+                      return str(value).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+                  listing.write_text("".join("\t".join(tsv(row[k]) for k in ("id", "package", "version", "ecosystem", "path"))
+                                             + "\t" + tsv(",".join(row["aliases"])) + "\n" for row in head))
+                  env = {**os.environ, "CODEFLOW_AUDIT_FINDINGS": str(listing),
+                         "CODEFLOW_TRUSTED_ROOT": str(tree), "CODEFLOW_TRUSTED_SHA": trusted_sha}
+                  result = subprocess.run(["bash", str(hook)], cwd=tree, env=env, stdin=subprocess.DEVNULL,
+                                          capture_output=True, text=True, check=False)
+                  if result.returncode:
+                      if result.stderr.strip():
+                          print("audit-exceptions.sh stderr: " + json.dumps(result.stderr), file=sys.stderr)
+                      raise AuditError(f"trusted audit-exceptions.sh failed (exit {result.returncode}); {MIGRATION}")
+                  entries.extend(parse_hook(result.stdout))
+              try:
+                  validate_entries(entries, today, head)
+              except AuditError as error:
+                  raise AuditError(f"invalid trusted triage: {error}. {MIGRATION}") from error
+              return entries, suppressions
+
+
+          # Dependency inputs only: no checkout scripts, scanner configuration, ignore
+          # rules, executables or custom scanner-result JSON enter the scan directory.
+          # Names follow OSV's supported lockfiles/manifests documentation:
+          # https://google.github.io/osv-scanner/supported-languages-and-lockfiles/
+          DEPENDENCY_INPUTS = frozenset({
+              "Cargo.lock", "Gemfile.lock", "gems.locked", "Pipfile.lock", "poetry.lock",
+              "requirements.txt", "pdm.lock", "pylock.toml", "uv.lock", "conan.lock",
+              "pubspec.lock", "package_config.json", "mix.lock", "go.mod", "go.sum",
+              "cabal.project.freeze", "stack.yaml.lock", "buildscript-gradle.lockfile",
+              "gradle.lockfile", "verification-metadata.xml", "pom.xml", "bun.lock",
+              "bun.lockb", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml",
+              "yarn.lock", "deps.json", "packages.config", "packages.lock.json",
+              "composer.lock", "renv.lock",
+          })
+
+
+          def dependency_tree(revision, destination):
+              """Export committed dependency blobs only, refusing links and submodules."""
+              destination.mkdir()
+              listing = subprocess.run(["git", "ls-tree", "-rz", "--full-tree", revision],
+                                       capture_output=True, check=True).stdout
+              for record in listing.split(b"\0"):
+                  if not record:
+                      continue
+                  meta, name = record.split(b"\t", 1)
+                  mode, kind, oid = meta.decode("ascii").split()
+                  path = Path(os.fsdecode(name))
+                  if kind == "commit":
+                      raise AuditError(f"dependency scan cannot inspect submodule {path}")
+                  if path.name not in DEPENDENCY_INPUTS and not path.name.endswith(".deps.json"):
+                      continue
+                  if mode not in ("100644", "100755") or kind != "blob":
+                      raise AuditError(f"dependency input is not a regular file: {path}")
+                  if path.is_absolute() or ".." in path.parts:
+                      raise AuditError("dependency input escapes scan directory")
+                  target = destination / path
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  content = subprocess.run(["git", "cat-file", "blob", oid],
+                                           capture_output=True, check=True).stdout
+                  target.write_bytes(content)
+              return destination
+
+
+          def run(scanner, trusted_sha, level, work):
+              if level == "off":
+                  print("Dependency audit is off; not run.")
+                  return 0
+              tree = work / "trusted-tree"
+              tree.mkdir()
+              archive = work / "trusted.tar"
+              subprocess.run(["git", "archive", "-o", str(archive), trusted_sha], check=True)
+              subprocess.run(["tar", "-xf", str(archive), "-C", str(tree)], check=True)
+              config = work / "empty.toml"
+              config.write_text("")
+              # Explicit empty config overrides all checkout configs. Suppressions are
+              # judged and printed by our table, never silently removed by the scanner.
+              # Both scans use the same trusted scanner/config and the same input set.
+              # Only committed dependency blobs vary; the checkout cannot supply config.
+              base_inputs = dependency_tree(trusted_sha, work / "base-inputs")
+              head_inputs = dependency_tree("HEAD", work / "head-inputs")
+              base_paths = {path.relative_to(base_inputs).as_posix()
+                            for path in base_inputs.rglob("*") if path.is_file()}
+              head_paths = {path.relative_to(head_inputs).as_posix()
+                            for path in head_inputs.rglob("*") if path.is_file()}
+              for path in sorted(base_paths - head_paths):
+                  print(f"::warning::base dependency input missing at head: {json.dumps(path)}; "
+                        "deletion or rename can make its advisories absent from the head scan")
+              base = scan(scanner, base_inputs, config)
+              head = scan(scanner, head_inputs, config)
+              today = datetime.datetime.now(datetime.timezone.utc).date()
+              entries, suppressions = trusted_exceptions(tree, head, trusted_sha, work, today)
+              code, messages = judge(base, head, entries, suppressions, level, today)
+              for message in messages:
+                  print(message)
+              return code
+
+
+          if __name__ == "__main__":
+              try:
+                  sys.exit(run(Path(sys.argv[1]), sys.argv[2], sys.argv[3], Path(sys.argv[4])))
+              except (AuditError, OSError, ValueError, subprocess.SubprocessError) as error:
+                  print(f"::error::dependency audit failed closed: {json.dumps(str(error))}", file=sys.stderr)
+                  sys.exit(1)
+          CODEFLOW_AUDIT_PY
+          python3 -I "$tool/audit.py" "$tool/osv-scanner" "$TRUSTED_SHA" "$level" "$tool"
