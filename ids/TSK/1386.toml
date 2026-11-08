@@ -1,0 +1,11 @@
+id = "TSK-1386"
+uid = "2499481d-9ce0-4c89-990d-205388a6692a"
+kind = "TSK"
+title = "The shell guards protect home enforcement paths for every writer and spelling"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-08T02:48:28Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
