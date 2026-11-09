@@ -100,7 +100,7 @@ fn codeflow(dir: &Path, args: &[&str]) -> Output {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
-    Command::new(&exe)
+    without_agent_markers(&mut Command::new(&exe))
         .args(args)
         .current_dir(dir)
         .env("CODEFLOW_HOME", isolated_home())
@@ -122,8 +122,18 @@ fn codeflow(dir: &Path, args: &[&str]) -> Output {
         .expect("codeflow binary runs")
 }
 
+/// The fixtures play a human: a marker inherited from an agent session
+/// would apply the agent-only rules to their commits, so a direct
+/// test-binary run would fail where `cargo test` passes.
+fn without_agent_markers(command: &mut Command) -> &mut Command {
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        command.env_remove(name);
+    }
+    command
+}
+
 fn git_stdout(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = without_agent_markers(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -867,7 +877,7 @@ fn git_output_with_binary(dir: &Path, args: &[&str]) -> Output {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
-    Command::new("git")
+    without_agent_markers(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("PATH", path)
@@ -3280,7 +3290,7 @@ fn init_standard_completes_in_a_repository_with_many_folders() {
 
     let stdout = std::fs::File::create(tmp.path().join("init.out")).unwrap();
     let stderr = std::fs::File::create(tmp.path().join("init.err")).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+    let mut child = without_agent_markers(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
         .args(["init", "--standard", "--yes"])
         .current_dir(&root)
         .env("CODEFLOW_HOME", isolated_home())
