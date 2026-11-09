@@ -1,0 +1,11 @@
+id = "TSK-1404"
+uid = "b49742e7-e9d0-45e1-b3e6-69ba182df48d"
+kind = "TSK"
+title = "Both guards refuse a program word they cannot fill"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-09T09:02:39Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
