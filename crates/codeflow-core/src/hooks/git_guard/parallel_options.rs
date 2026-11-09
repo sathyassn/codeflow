@@ -410,7 +410,7 @@ pub(crate) const OUTSIDE_THE_CLOSED_RULE: &[&str] = &[
     "parallel --plain ./git push origin {} ::: main",
     "parallel --plain 'git' push origin {} ::: main",
     "parallel --plain \"g\"it push origin {} ::: main",
-    "parallel --plain GIT push origin {} ::: main",
+    "parallel --plain Git push origin {} ::: main",
     "parallel --plain git.exe push origin {} ::: main",
     "parallel --plain -q sh -c 'git push origin $1' _ ::: main",
     "parallel --plain 'bash -c \"rm -rf {}\"' ::: ./build",
@@ -427,7 +427,7 @@ pub(crate) const OUTSIDE_THE_CLOSED_RULE: &[&str] = &[
     // A program the input or the line fills in, or a second command.
     "parallel --plain {} push origin main ::: git",
     "parallel --plain -I prog prog push origin main ::: git",
-    "parallel --plain $G push origin {} ::: main",
+    "parallel --plain $P push origin {} ::: main",
     "parallel --plain 'echo {}; git push origin main' ::: a",
     "parallel --plain 'echo {} && git push origin main' ::: a",
     "parallel --plain echo '$(git push origin main)' ::: a",
