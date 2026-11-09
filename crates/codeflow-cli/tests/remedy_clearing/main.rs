@@ -361,6 +361,11 @@ fn command(program: &str, dir: &Path) -> Command {
         // A push gate keeps its evidence under the fixture's own `target`,
         // never the test process's build folder (TSK-1369).
         .env_remove("CARGO_TARGET_DIR");
+    // The fixtures play a human: a marker inherited from an agent session
+    // would apply the agent-only rules to their commits.
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        cmd.env_remove(name);
+    }
     cmd
 }
 
