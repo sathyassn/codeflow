@@ -260,7 +260,7 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
         Vec::new()
     };
     let authority_dirs = if ctx.level.is_active() {
-        authority_directories(ctx.home)
+        authority_directories(ctx.home)?
     } else {
         Vec::new()
     };
@@ -319,23 +319,29 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
 
 /// The operator-authority directory, `.codeflow/authority`, under the
 /// guard's home and under the account's home from the password database,
-/// each as given and resolved, with ASCII case folded. The SSH
-/// configuration allow (TSK-1184) is read under the account's home, which
-/// can differ from `HOME`, and a volume that folds case opens
-/// `.codeflow/Authority` for `.codeflow/authority`, so the exact-spelling
-/// pattern under `HOME` alone does not cover it.
-fn authority_directories(home: &Path) -> Vec<PathBuf> {
+/// with ASCII case folded. The SSH configuration allow (TSK-1184) is read
+/// under the account's home, which can differ from `HOME`, and a volume
+/// that folds case opens `.codeflow/Authority` for `.codeflow/authority`,
+/// so the exact-spelling pattern under `HOME` alone does not cover it.
+///
+/// Each directory is spelled as [`evaluate`] spells a target: as given,
+/// and through [`normalized`], lexically and resolved, so both sides of the
+/// comparison use one spelling (TSK-1400). As in [`enforcement_patterns`],
+/// a lexical spelling that cannot be made refuses every edit, and a resolve
+/// failure keeps the other spellings.
+fn authority_directories(home: &Path) -> Result<Vec<PathBuf>, EditError> {
     let mut homes = vec![home.to_path_buf()];
     homes.extend(crate::git::remote_identity::account_home().ok());
-    let resolved: Vec<PathBuf> = homes
-        .iter()
-        .filter_map(|home| std::fs::canonicalize(home).ok())
-        .collect();
-    homes.extend(resolved);
-    homes
-        .iter()
-        .map(|home| folded_path(&home.join(".codeflow/authority")))
-        .collect()
+    let mut dirs = BTreeSet::new();
+    for home in &homes {
+        let dir = home.join(".codeflow").join("authority");
+        dirs.insert(folded_path(&normalized(&dir, false)?));
+        if let Ok(resolved) = normalized(&dir, true) {
+            dirs.insert(folded_path(&resolved));
+        }
+        dirs.insert(folded_path(&dir));
+    }
+    Ok(dirs.into_iter().collect())
 }
 
 /// `path` with ASCII letters lowercased, compared by component.
@@ -1846,6 +1852,105 @@ mod tests {
                     path.display()
                 );
             }
+        }
+    }
+
+    /// Whether `target` is refused with `home` as the guard's home. An error
+    /// refuses at the hook adapter, but it is not the precise refusal these
+    /// tests want, so it fails the test with its message.
+    fn refused_under(f: &Fixture, home: &Path, target: &Path) -> bool {
+        let ctx = EditContext {
+            cwd: &f.root,
+            root: &f.root,
+            home,
+            git_common_dir: None,
+            level: PolicyLevel::Block,
+        };
+        let request = synthetic("write", json!({ "path": target }));
+        match evaluate(&request, &ctx) {
+            Ok(violations) => !violations.is_empty(),
+            Err(error) => panic!("home {}: {}: {error}", home.display(), target.display()),
+        }
+    }
+
+    /// TSK-1400: the authority directory is covered under any spelling of
+    /// the home, in any case, and an ordinary file beside it stays writable.
+    #[test]
+    fn the_authority_directory_is_covered_whatever_the_homes_spelling() {
+        let f = Fixture::new();
+        let spelled = f.temp.path().join("absent").join("..").join("home");
+        for name in [
+            ".codeflow/authority/config.toml",
+            ".codeflow/Authority/config.toml",
+            ".CODEFLOW/AUTHORITY/new",
+        ] {
+            for target in [f.home.join(name), spelled.join(name)] {
+                assert!(refused_under(&f, &spelled, &target), "{}", target.display());
+            }
+        }
+        assert!(!refused_under(
+            &f,
+            &spelled,
+            &f.home.join(".codeflow/config.toml")
+        ));
+    }
+
+    /// TSK-1400: the same coverage under the path spellings Windows accepts
+    /// for one directory. Volumes with short names disabled give the long
+    /// spelling back, which still runs every other form.
+    #[cfg(windows)]
+    #[test]
+    fn the_authority_directory_is_covered_under_windows_spellings_of_the_home() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        let f = Fixture::new();
+        let home = f.temp.path().join("Long home directory name");
+        std::fs::create_dir_all(home.join(".codeflow")).unwrap();
+        let long = crate::portable_path::canonicalize(&home).unwrap();
+        let wide: Vec<u16> = long.as_os_str().encode_wide().chain([0]).collect();
+        // SAFETY: the input is terminated; a null output queries the size.
+        let size = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
+        assert!(size > 0, "{}", std::io::Error::last_os_error());
+        let mut short = vec![0; size as usize];
+        // SAFETY: the output has the exact size returned by the first call.
+        let written = unsafe { GetShortPathNameW(wide.as_ptr(), short.as_mut_ptr(), size) };
+        assert!(written > 0 && written < size);
+        short.truncate(written as usize);
+        let short = PathBuf::from(std::ffi::OsString::from_wide(&short));
+        let text = |path: &Path| path.to_str().unwrap().to_string();
+        let homes = [
+            home.clone(),
+            long.clone(),
+            short.clone(),
+            PathBuf::from(text(&short).replace('\\', "/")),
+            PathBuf::from(text(&long).replace('\\', "/")),
+            PathBuf::from(text(&long).to_lowercase()),
+            PathBuf::from(text(&long).to_uppercase()),
+            PathBuf::from(format!(r"\\?\{}", text(&long))),
+            PathBuf::from(format!("{}.", text(&long))),
+        ];
+        for spelling in &homes {
+            for target in [
+                spelling.join(r".codeflow\Authority\config.toml"),
+                spelling.join(".codeflow/AUTHORITY/config.toml"),
+                spelling.join(r".codeflow\authority.\config.toml"),
+                long.join(r".codeflow\Authority\config.toml"),
+                short.join(".codeflow/Authority/config.toml"),
+                home.join(".codeflow/Authority/new"),
+            ] {
+                assert!(
+                    refused_under(&f, spelling, &target),
+                    "home {}: {}",
+                    spelling.display(),
+                    target.display()
+                );
+            }
+            assert!(
+                !refused_under(&f, spelling, &spelling.join(".codeflow/config.toml")),
+                "home {}",
+                spelling.display()
+            );
         }
     }
 

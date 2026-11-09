@@ -2273,18 +2273,24 @@ fn agents_cannot_write_the_ssh_configuration_allow() {
     enforced_repo(&root);
     let home = tmp.path().join("home");
     std::fs::create_dir_all(home.join(".codeflow")).unwrap();
+    // TSK-1400: the same home named by another spelling, one every host
+    // reads as `home`.
+    let spelled = tmp.path().join("absent").join("..").join("home");
     let mut wrong = Vec::new();
     let cases = vec![
-        (home.join(".codeflow/authority/config.toml"), 2),
-        (home.join(".codeflow/Authority/config.toml"), 2),
-        (home.join(".codeflow/config.toml"), 0),
+        (&home, home.join(".codeflow/authority/config.toml"), 2),
+        (&home, home.join(".codeflow/Authority/config.toml"), 2),
+        (&home, home.join(".codeflow/config.toml"), 0),
+        (&spelled, home.join(".codeflow/Authority/config.toml"), 2),
+        (&spelled, home.join(".codeflow/config.toml"), 0),
         #[cfg(unix)]
         (
+            &home,
             password_database_home().join(".codeflow/authority/config.toml"),
             2,
         ),
     ];
-    for (file, code) in cases {
+    for (home, file, code) in cases {
         for tool in ["Write", "Edit"] {
             let payload = serde_json::json!({"tool_name": tool, "tool_input":{
                 "file_path": file, "content": "[policy_authority]\n",
@@ -2292,8 +2298,8 @@ fn agents_cannot_write_the_ssh_configuration_allow() {
             .to_string();
             let out = run_with_stdin(
                 codeflow()
-                    .env("HOME", &home)
-                    .env("USERPROFILE", &home)
+                    .env("HOME", home)
+                    .env("USERPROFILE", home)
                     .args(["hook", "edit-guard"])
                     .current_dir(&root),
                 &payload,
@@ -2301,8 +2307,9 @@ fn agents_cannot_write_the_ssh_configuration_allow() {
             let err = String::from_utf8_lossy(&out.stderr);
             if out.status.code() != Some(code) || (code == 2 && !err.contains("enforcement path")) {
                 wrong.push(format!(
-                    "edit-guard {tool} {}: exit {:?}, wanted {code}: {err}",
+                    "edit-guard {tool} {} with HOME {}: exit {:?}, wanted {code}: {err}",
                     file.display(),
+                    home.display(),
                     out.status.code(),
                 ));
             }
