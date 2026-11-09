@@ -364,30 +364,51 @@ fn fresh_full_project_exemption_keeps_security_jobs_and_review_requirements() {
         "{}",
         said(&no_review)
     );
-    let workflow: serde_yaml::Value = serde_yaml::from_slice(
-        &std::fs::read(root.join(".github/workflows/codeflow-ci.yml")).unwrap(),
-    )
-    .unwrap();
-    for job in ["secret-scan", "security-review"] {
-        let job = &workflow["jobs"][job];
-        assert!(
-            job["if"].is_null(),
-            "security job must not filter exemption PRs"
-        );
+    let read = |name: &str| -> serde_yaml::Value {
+        serde_yaml::from_slice(&std::fs::read(root.join(".github/workflows").join(name)).unwrap())
+            .unwrap()
+    };
+    let workflow = read("codeflow-ci.yml");
+    let policy = read("codeflow-policy.yml");
+    let unfiltered = |job: &serde_yaml::Value, what: &str| {
+        assert!(job["if"].is_null(), "{what} must not filter exemption PRs");
         assert!(
             job["needs"].is_null(),
-            "classification must not gate security jobs"
+            "classification must not gate {what}"
         );
-        assert!(!job["steps"].as_sequence().unwrap().is_empty());
+        assert!(!job["steps"].as_sequence().unwrap().is_empty(), "{what}");
+    };
+    let gitleaks = |job: &serde_yaml::Value| -> serde_yaml::Value {
+        job["steps"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|step| step["name"] == "gitleaks")
+            .unwrap()
+            .clone()
+    };
+
+    // TSK-1176: every pull request, an exemption included, is scanned by the
+    // trusted `secret scan` job that the default branch's policy workflow
+    // runs, with exemptions read from the authority commit, never the head.
+    let trigger = &policy["on"]["pull_request_target"];
+    assert!(
+        !trigger.is_null(),
+        "the policy workflow runs on pull_request_target"
+    );
+    for filter in ["branches", "branches-ignore", "paths", "paths-ignore"] {
+        assert!(trigger[filter].is_null(), "no {filter} filter skips a PR");
     }
-    let scan = &workflow["jobs"]["secret-scan"]["steps"];
-    let scan = scan
-        .as_sequence()
-        .unwrap()
-        .iter()
-        .find(|step| step["name"] == "gitleaks")
-        .unwrap();
-    assert!(scan["env"]["TRUSTED_SHA"]
+    let trusted = &policy["jobs"]["secret-scan"];
+    assert_eq!(trusted["name"], "secret scan");
+    unfiltered(trusted, "the trusted secret scan");
+    let scan = gitleaks(trusted);
+    assert!(
+        scan["if"].is_null(),
+        "the gitleaks step must not be skipped"
+    );
+    assert_eq!(scan["env"]["TRUSTED_SHA"], "${{ github.sha }}");
+    assert!(scan["env"]["PR_BASE"]
         .as_str()
         .unwrap()
         .contains("pull_request.base.sha"));
@@ -395,7 +416,25 @@ fn fresh_full_project_exemption_keeps_security_jobs_and_review_requirements() {
         .as_str()
         .unwrap()
         .contains("ignore = blob(\".gitleaksignore\")"));
-    let security = serde_yaml::to_string(&workflow["jobs"]["security-review"]).unwrap();
+
+    // No head-run job produces `secret scan`; the head-run history scan
+    // covers every other event and skips only pull requests.
+    for (id, job) in workflow["jobs"].as_mapping().unwrap() {
+        assert_ne!(job["name"], "secret scan", "head-run producer {id:?}");
+    }
+    let history = &workflow["jobs"]["secret-scan"];
+    assert_eq!(history["name"], "history scan");
+    assert_eq!(history["if"], "github.event_name != 'pull_request'");
+    assert!(history["needs"].is_null());
+    assert!(gitleaks(history)["run"]
+        .as_str()
+        .unwrap()
+        .contains("ignore = blob(\".gitleaksignore\")"));
+
+    // The dependency audit still runs on every pull request.
+    let review = &workflow["jobs"]["security-review"];
+    unfiltered(review, "the security review");
+    let security = serde_yaml::to_string(review).unwrap();
     assert!(security.contains("git.security_review"));
     assert!(security.contains("TRUSTED_SHA"));
 }
