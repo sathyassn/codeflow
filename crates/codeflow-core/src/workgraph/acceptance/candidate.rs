@@ -266,6 +266,47 @@ pub fn completed_task(root: &std::path::Path, member: Member) -> Result<Option<S
     })
 }
 
+/// The filing members of a batch into the default target `default` from
+/// its fetched tip `tip` (TSK-1154 AC-16), each as its own change: the
+/// merge, the merge base of its two parents as `onto`, and its head. The
+/// caller runs on each the checks a one-pull-request filing into that
+/// target gets, over that three-dot range. A member [`main_binding`]
+/// refuses is not listed; its refusal is the acceptance check's.
+///
+/// # Errors
+///
+/// Returns a message when the history or a commit cannot be read.
+pub fn filings(
+    root: &std::path::Path,
+    tip: &str,
+    head: &str,
+    default: &str,
+) -> Result<Vec<Member>, String> {
+    let _judgment = history::judgment();
+    let repo = Repository::discover(root).map_err(|error| error.message().to_string())?;
+    let oid = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|error| format!("{revision}: {}", error.message()))
+    };
+    let mut found = Vec::new();
+    for (merge, parents) in first_parent_chain(&repo, oid(tip)?, oid(head)?)? {
+        let [onto, member] = parents.as_slice() else {
+            continue;
+        };
+        let member = Member {
+            merge,
+            onto: *onto,
+            head: *member,
+        };
+        if matches!(main_binding(root, tip, member, default), Ok(None)) {
+            found.push(own_change(&repo, member)?);
+        }
+    }
+    Ok(found)
+}
+
 /// The member's own change, read from its two parents: `member` with
 /// `onto` replaced by the merge base of the tip it merged onto and its
 /// head. A later member merges onto a tip holding the members before it,
@@ -305,7 +346,7 @@ fn planning_member(repo: &Repository, member: Member) -> Result<bool, String> {
 /// What a member of a batch into the default target `default` binds
 /// (TSK-1154 AC-16), read only from the trees at the member's two parents
 /// and the batch's `anchor`: `Ok(None)` for a filing, a member that adds
-/// no completion and only adds new record files ([`filing_problem`]),
+/// no completion and only adds new record files (`filing_problem`),
 /// admitted on the terms of a filing pull request into that target;
 /// `Ok(Some(task))` for a task member, whose one changed task record
 /// satisfies the binding to `default` ([`task_main_binding`]) and is the

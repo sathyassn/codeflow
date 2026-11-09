@@ -28,6 +28,7 @@ pub(super) use context::{judged_declared_target, Declared};
 mod id_registry;
 mod judging;
 mod line_tip;
+mod main_batch;
 pub(crate) mod pr_body;
 mod timing;
 mod work_records;
@@ -867,6 +868,23 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     } else {
         None
     };
+    // Each filing member of a batch into the default target, over its own
+    // three-dot range, by the checks a filing pull request gets (AC-16).
+    if let (true, Some(landing)) = (scope_ready, names.main_batch()) {
+        main_batch::filings(
+            &root,
+            landing,
+            &head,
+            &main_batch::Judged {
+                configured,
+                authority: authority.as_ref(),
+                baseline: args.baseline_from.as_deref(),
+            },
+            &target_tip,
+            &mut tagged,
+            &mut ran,
+        );
+    }
 
     let level = git.work_planning_level();
     let own_task = own_branch_preflight(

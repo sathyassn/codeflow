@@ -113,7 +113,8 @@ each batch.
     would: its one changed task record declares `main`, and its acceptance
     block names a reviewed commit the member head is, or holds with only
     clean merges of `main` after it. A member with no task completion may
-    only add new record files. No existing criterion may change in the
+    only add new record files, and its own range gets the checks a filing
+    pull request into `main` gets. No existing criterion may change in the
     batch, so a task's own criteria change goes to `main` in its own pull
     request.
   - It runs the full gate once on that exact candidate.

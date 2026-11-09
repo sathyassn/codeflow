@@ -182,14 +182,45 @@ fn criterion(f: &Line, task: &str, from: &str, to: &str) {
 fn a_clean_main_batch_passes_the_hosted_form() {
     let (f, tip) = batch();
     let standalone = member(&f, "TSK-010", &tip, untouched);
-    let epic = member(&f, "TSK-011", &tip, untouched);
+    // The epic member also adds a record, which targets the line and so
+    // binds nothing, and changes no existing criterion.
+    let epic = member(&f, "TSK-011", &tip, |f| {
+        f.write(
+            &record_path("TSK-013"),
+            &main_task("TSK-013", Some("EPC-001")).replace(
+                "integration_target: main",
+                &format!("integration_target: {LINE}"),
+            ),
+        );
+    });
     let filed = filing(&f, "TSK-012", &tip);
     land(&f, "TSK-010", &standalone);
     land(&f, "TSK-011", &epic);
     land(&f, "TSK-012", &filed);
     seed(&f);
-    let result = batch_ci(&f, &tip);
+    // No forge lookup takes part, so no token is needed.
+    let result = f
+        .command(env!("CARGO_BIN_EXE_codeflow"))
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .args([
+            "ci",
+            "--base",
+            &tip,
+            "--head",
+            "HEAD",
+            "--into",
+            "main",
+            "--branch",
+            BATCH,
+            "--pr-body",
+            BODY,
+        ])
+        .output()
+        .unwrap();
     passes(&result);
+    has(&result, "main-batch-filings");
+    has(&result, &format!("filing member {filed:.9}"));
     lacks(&result, "work.criteria_frozen (block)");
     lacks(&result, "work.acceptance_binding (block)");
     lacks(&result, "work.classification");
@@ -753,4 +784,262 @@ fn a_filing_of_a_record_with_an_acceptance_block_is_refused() {
     let result = batch_ci(&f, &tip);
     blocks(&result, "work.acceptance_binding");
     has(&result, "which shows a completion");
+}
+
+/// `task`'s head on `task/<task>-work` from `from`: its code, then a
+/// completion that also writes `blocker` before the Closeout.
+fn member_with_blocker(f: &Line, task: &str, from: &str, blocker: &str) -> String {
+    f.git(&["switch", "-qc", &format!("task/{task}-work"), from]);
+    f.write("src/tsk_010.rs", "pub fn member() {}\n");
+    f.commit(&format!("feat: implement {task}"));
+    let path = record_path(task);
+    let record = read(f, &path);
+    f.write(&path, &format!("{record}\n{blocker}"));
+    complete(f, task, "approved", None);
+    let head = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "-q", BATCH]);
+    head
+}
+
+/// Binding: a completion after the reviewed commit that changes only the
+/// record's status, its Closeout and a Blocker of the generated shape
+/// binds, as the one-task binding leaves those out of reviewed scope.
+#[test]
+fn a_completion_with_a_generated_blocker_passes() {
+    let (f, tip) = batch();
+    let head = member_with_blocker(
+        &f,
+        "TSK-010",
+        &tip,
+        "## Blocker\n\n- reason: waited on review\n- owner: coord\n- revisit: 2026-11-10\n",
+    );
+    land(&f, "TSK-010", &head);
+    let result = batch_ci(&f, &tip);
+    passes(&result);
+    has(&result, &format!("member {head:.9} (TSK-010)"));
+}
+
+/// Binding: any other text in the Blocker section keeps it reviewed, so a
+/// completion that writes it refuses the member.
+#[test]
+fn a_completion_with_other_blocker_text_is_refused() {
+    let (f, tip) = batch();
+    let head = member_with_blocker(
+        &f,
+        "TSK-010",
+        &tip,
+        "## Blocker\n\n- reason: waited on review\n- owner: coord\n- revisit: 2026-11-10\n\nAlso widened the scope.\n",
+    );
+    land(&f, "TSK-010", &head);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "work.acceptance_binding");
+    has(&result, &format!("member {head:.9} (TSK-010)"));
+}
+
+/// A task member whose task is not complete at its head, though its record
+/// carries an acceptance block, is no reviewed head and refuses.
+#[test]
+fn a_member_whose_task_is_not_complete_is_refused() {
+    let (f, tip) = batch();
+    f.git(&["switch", "-qc", "task/TSK-010-work", &tip]);
+    f.write("src/tsk_010.rs", "pub fn member() {}\n");
+    f.commit("feat: implement TSK-010");
+    complete(&f, "TSK-010", "approved", None);
+    let path = record_path("TSK-010");
+    f.write(
+        &path,
+        &read(&f, &path).replace("status: complete", "status: todo"),
+    );
+    let head = f.commit("docs: leave TSK-010 open");
+    f.git(&["switch", "-q", BATCH]);
+    land(&f, "TSK-010", &head);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "work.acceptance_binding");
+    has(&result, &format!("member {head:.9}"));
+}
+
+/// Binding: a merge after the reviewed commit whose other parent is not on
+/// the anchor `main`'s first-parent line refuses the member.
+#[test]
+fn a_merge_of_a_side_branch_after_the_review_is_refused() {
+    let (f, tip) = batch();
+    member(&f, "TSK-010", &tip, untouched);
+    let side = records_only(&f, "side/extra", &tip, |f| {
+        f.write("src/side.rs", "pub fn side() {}\n");
+    });
+    f.git(&["switch", "-q", "task/TSK-010-work"]);
+    f.git(&[
+        "merge",
+        "--no-ff",
+        "-qm",
+        "chore: merge a side branch",
+        &side,
+    ]);
+    let head = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "-q", BATCH]);
+    land(&f, "TSK-010", &head);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "work.acceptance_binding");
+    has(&result, &format!("member {head:.9} (TSK-010)"));
+    has(&result, "not on the first-parent line");
+}
+
+/// A batch that carries a changed policy is judged with the base's: a
+/// member that lowers `work_records` to warn does not lower the refusal of
+/// a forged member beside it.
+#[test]
+fn a_batch_carrying_a_changed_policy_is_judged_with_the_bases() {
+    let (f, tip) = batch();
+    let lowering = member(&f, "TSK-010", &tip, |f| {
+        f.write(
+            ".codeflow/policy.json",
+            "{\"schema_version\":1,\"git\":{\"product_paths\":[\"src/**\"],\"test_gate_on_push\":\"off\",\"work_records\":\"warn\"}}\n",
+        );
+    });
+    let forged = records_only(&f, "task/TSK-011-work", &tip, |f| {
+        f.write("src/forged.rs", "pub fn forged() {}\n");
+    });
+    land(&f, "TSK-010", &lowering);
+    land(&f, "TSK-011", &forged);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "work.acceptance_binding (block)");
+    has(&result, &format!("member {forged:.9}"));
+}
+
+/// A records-only member that changes an existing task's status is no
+/// filing, and refuses.
+#[test]
+fn a_records_only_member_changing_a_status_is_refused() {
+    let (f, tip) = batch();
+    let head = records_only(&f, "plan/start", &tip, |f| {
+        criterion(f, "TSK-011", "status: todo", "status: in_progress");
+    });
+    land(&f, "plan", &head);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "work.acceptance_binding");
+    has(
+        &result,
+        "it changes or removes project-management/tasks/TSK-011.md",
+    );
+}
+
+/// A records-only member that changes any other existing file is no
+/// filing, and refuses.
+#[test]
+fn a_records_only_member_changing_another_file_is_refused() {
+    let (f, tip) = batch();
+    let epic = super::line_adoption::fixture::EPIC_PATH;
+    let head = records_only(&f, "plan/summary", &tip, |f| {
+        f.write(
+            epic,
+            &read(f, epic).replace("Deliver work.", "Deliver more work."),
+        );
+    });
+    land(&f, "plan", &head);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "work.acceptance_binding");
+    has(&result, &format!("it changes or removes {epic}"));
+}
+
+/// A filing whose new record breaks a record rule a one-pull-request filing
+/// must pass refuses, naming the member: new records list criteria without
+/// a checkbox.
+#[test]
+fn a_filing_whose_record_breaks_a_record_rule_is_refused() {
+    let (f, tip) = batch();
+    let head = records_only(&f, "plan/file-boxed", &tip, |f| {
+        f.write(
+            &record_path("TSK-012"),
+            &main_task("TSK-012", None).replace("- AC-1 Work runs.", "- [ ] AC-1 Work runs."),
+        );
+    });
+    land(&f, "plan", &head);
+    seed(&f);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "new records list criteria");
+    has(
+        &result,
+        &format!("member {head:.9} (a filing of new records), merged by"),
+    );
+}
+
+/// A filing that adds a workflow path is no filing, and refuses.
+#[test]
+fn a_filing_that_adds_a_workflow_path_is_refused() {
+    let (f, tip) = batch();
+    let head = records_only(&f, "plan/file-workflow", &tip, |f| {
+        f.write(&record_path("TSK-012"), &main_task("TSK-012", None));
+        f.write(
+            ".github/workflows/extra.yml",
+            "name: extra\non: push\njobs: {}\n",
+        );
+    });
+    land(&f, "plan", &head);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "work.acceptance_binding");
+    has(
+        &result,
+        "it adds .github/workflows/extra.yml, which is not a record file",
+    );
+}
+
+/// A filing whose new complete record carries an acceptance block binds
+/// as a task member, so a reviewed commit that is not an ancestor of its
+/// head refuses it.
+#[test]
+fn a_filing_of_a_complete_record_reviewed_elsewhere_is_refused() {
+    let (f, tip) = batch();
+    let elsewhere = records_only(&f, "side/elsewhere", &tip, |f| {
+        f.write("src/elsewhere.rs", "pub fn elsewhere() {}\n");
+    });
+    let head = records_only(&f, "plan/file-complete", &tip, |f| {
+        f.write(
+            &record_path("TSK-012"),
+            &format!("{}\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {elsewhere}\n  review: https://example.test/review/TSK-012\n  criteria:\n    AC-1: verified | focused test\n    AC-2: verified | journey\n    AC-3: verified | focused test\n    AC-4: verified | focused test\n  journey: verified | exercised command\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n```\n", main_task("TSK-012", None).replace("status: todo", "status: complete")),
+        );
+    });
+    land(&f, "plan", &head);
+    seed(&f);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "work.acceptance_binding");
+    has(&result, &format!("member {head:.9} (TSK-012)"));
+}
+
+/// A filing whose new record carries a uid the id registry does not hold
+/// refuses, naming the member.
+#[test]
+fn a_filing_with_an_unregistered_uid_is_refused() {
+    let (f, tip) = batch();
+    seed(&f);
+    let head = records_only(&f, "plan/file-uid", &tip, |f| {
+        f.write(
+            &record_path("TSK-012"),
+            &with_uid(&main_task("TSK-012", None), "u-not-registered"),
+        );
+    });
+    land(&f, "plan", &head);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "work.id_registry");
+    has(
+        &result,
+        &format!("member {head:.9} (a filing of new records), merged by"),
+    );
+}
+
+/// An unreadable task record on the tip a member merged onto refuses the
+/// member: its records cannot be judged.
+#[test]
+fn an_unreadable_record_on_the_tip_refuses_the_member() {
+    let (f, tip) = planned(&[
+        ("TSK-010", main_task("TSK-010", None)),
+        (
+            "TSK-014",
+            "---\nid: TSK-014\nstatus: [unclosed\n---\n".to_string(),
+        ),
+    ]);
+    let head = member(&f, "TSK-010", &tip, untouched);
+    land(&f, "TSK-010", &head);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "work.acceptance_binding");
+    has(&result, &format!("member {head:.9}"));
 }
