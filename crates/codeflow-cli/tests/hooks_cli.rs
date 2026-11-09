@@ -9851,10 +9851,6 @@ fn guards_read_a_search_pattern_as_text() {
         "rg --files | xargs rg --pre tee ~/.{a,zsh}rc",
         "find . -maxdepth 0 -exec rg --pre tee ~/.*rc {} +",
         "find . -maxdepth 0 -exec rg --pre tee ~/.?shrc {} +",
-        "parallel --plain rg --pre tee ~/.*rc ::: x",
-        // GNU parallel runs its command through a shell unless `-q`.
-        "parallel --plain rg --pre tee '~/.*rc' ::: x",
-        "parallel --plain rg '~/.*rc' ::: x",
         // A ripgrep configuration the line sets may supply the pattern.
         "read -r RIPGREP_CONFIG_PATH <<< cfg; export RIPGREP_CONFIG_PATH; rg \"$HOME/.$(printf zshrc)\"",
         "printf -v RIPGREP_CONFIG_PATH cfg; export RIPGREP_CONFIG_PATH; rg \"$HOME/.$(printf zshrc)\"",
@@ -9870,6 +9866,23 @@ fn guards_read_a_search_pattern_as_text() {
         let out = run("exec-guard", command);
         let err = String::from_utf8_lossy(&out.stderr);
         if out.status.code() != Some(2) || !err.contains("security.shell_startup") {
+            wrong.push(format!("exec-guard should refuse: {command}: {err}"));
+        }
+    }
+    // `parallel` is refused in agent sessions (TSK-326), and the deletion
+    // floor reports it unproven, so the startup check after the floor does
+    // not run on these lines.
+    for command in [
+        "parallel --plain rg --pre tee ~/.*rc ::: x",
+        "parallel --plain rg --pre tee '~/.*rc' ::: x",
+        "parallel --plain rg '~/.*rc' ::: x",
+    ] {
+        let out = run("exec-guard", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2)
+            || !err.contains("security.dangerous_commands")
+            || !err.contains("refused in agent sessions")
+        {
             wrong.push(format!("exec-guard should refuse: {command}: {err}"));
         }
     }
