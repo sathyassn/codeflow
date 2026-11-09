@@ -58,7 +58,11 @@ stands. Integration lines keep `codeflow integrate` and the batch candidate.
   invalidates it. A pull request that reopened its task inside its own range
   never takes that allowance, so after the update it needs a new review and a
   new acceptance binding (SPC-013 R-60, R-119).
-- The rule binds the operator too, since the ruleset has no bypass actors.
+- The rule binds everyone except the repository admin role, which the
+  ruleset lets bypass it through a pull request only (as read on
+  2026-11-08); a direct push still cannot skip it. The same ruleset also
+  requires CodeQL code scanning results: no security alert at high or
+  above, and no alert at error level.
 - Merge queue stays out of reach unless the repository moves to an
   organization, which is the operator's call.
 
