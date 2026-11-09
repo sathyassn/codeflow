@@ -2368,6 +2368,51 @@ fn agents_cannot_write_the_ssh_configuration_allow() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// TSK-1400: with `HOME` given through a linked ancestor and the authority
+/// directory's parent not listable, an edit that reaches the directory
+/// through another link is still refused by the built binary.
+#[cfg(unix)]
+#[test]
+fn the_authority_directory_stays_covered_when_its_parent_cannot_be_listed() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    let real = tmp.path().join("real");
+    std::fs::create_dir_all(real.join("home/.codeflow/authority")).unwrap();
+    std::os::unix::fs::symlink(&real, tmp.path().join("link")).unwrap();
+    let home = tmp.path().join("link/home");
+    let canonical = std::fs::canonicalize(real.join("home/.codeflow/authority")).unwrap();
+    let door = tmp.path().join("door");
+    std::os::unix::fs::symlink(&canonical, &door).unwrap();
+    let parent = real.join("home/.codeflow");
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o100)).unwrap();
+    let mut wrong = Vec::new();
+    for tool in ["Write", "Edit"] {
+        let payload = serde_json::json!({"tool_name": tool, "tool_input":{
+            "file_path": door.join("config.toml"), "content": "[policy_authority]\n",
+            "old_string": "a", "new_string": "b"}, "cwd": root})
+        .to_string();
+        let out = run_with_stdin(
+            codeflow()
+                .env("HOME", &home)
+                .env("USERPROFILE", &home)
+                .args(["hook", "edit-guard"])
+                .current_dir(&root),
+            &payload,
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("enforcement path") {
+            wrong.push(format!(
+                "edit-guard {tool}: exit {:?}, wanted 2: {err}",
+                out.status.code()
+            ));
+        }
+    }
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 #[test]
 fn exec_guard_blocks_dangerous_command_with_exit_2() {
     // Task 6: a PreToolUse block must map to exit 2, not 0.
