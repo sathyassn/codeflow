@@ -461,6 +461,7 @@ mod authority {
 }
 pub use authority::{CriteriaBases, RunBases, StackingTips};
 
+pub mod candidate;
 mod imports;
 mod planning_move;
 mod receiving_merges;
@@ -2601,6 +2602,11 @@ pub struct Scope<'a> {
     /// library caller that judges with the checkout; `codeflow ci` always
     /// passes the policy it judges with.
     pub branch_prefixes: Option<&'a [String]>,
+    /// The task whose reviewed head this range is, when a landing
+    /// candidate's member judgment read it from the records at the exact
+    /// member head ([`candidate::candidate_findings`]): the range is then
+    /// that task's own, as a branch carrying it would make it.
+    pub member: Option<&'a str>,
 }
 
 /// Whether a record of a task shows a completion of it: it is complete,
@@ -3759,6 +3765,7 @@ impl<'r> Judging<'r> {
             own_line: self.own_line.as_ref(),
             replaced: self.replaced.as_ref(),
             branch_prefixes: None,
+            member: None,
         };
         judge_in_range(
             &mut self.store,
@@ -4292,7 +4299,7 @@ pub fn completions_in_range(
         run,
         (line, receiving_line(line, None), None),
         stacked,
-        None,
+        (None, None),
     )
 }
 
@@ -4325,7 +4332,7 @@ fn completions_received(
     run: &RunBases,
     (line, receiving, sync_tip): (Option<&str>, Option<&str>, Option<LineSyncTip>),
     stacked: &[StackedHead],
-    prefixes: Option<&[String]>,
+    (prefixes, member): (Option<&[String]>, Option<&str>),
 ) -> Result<Vec<Finding>, String> {
     let _judgment = history::judgment();
     let amendable = criteria.amends();
@@ -4366,7 +4373,11 @@ fn completions_received(
         &local,
         *criteria == Criteria::Amendable,
     );
-    let branch_task = if receiving.is_some() && receiving_line(line, None).is_none() {
+    let branch_task = if let Some(member) = member {
+        // A landing candidate's member: its task was read from the records
+        // at the exact member head, never from a name.
+        Some(member.to_string())
+    } else if receiving.is_some() && receiving_line(line, None).is_none() {
         let root = repo.workdir().unwrap_or_else(|| repo.path());
         // The judged policy's prefixes, as `codeflow ci` reads its own
         // task (TSK-1309 AC-6): the checkout's policy may name others.
@@ -5119,7 +5130,7 @@ pub fn pull_request_findings_into(
         &run,
         (branch, receiving_line(branch, into), sync_tip),
         &stacked,
-        scope.branch_prefixes,
+        (scope.branch_prefixes, scope.member),
     )?);
     Ok(found)
 }

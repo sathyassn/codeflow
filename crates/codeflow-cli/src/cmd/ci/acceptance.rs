@@ -71,6 +71,14 @@ pub(super) fn dispatch(
                 codeflow_core::git::display_text(branch),
                 codeflow_core::git::display_text(range.target)
             );
+            // A landing candidate, whose line and fetched tip the line-tip
+            // check established, is judged member by member (TSK-1154):
+            // only where it would otherwise be judged as one frozen range.
+            if let (Criteria::Frozen, None, Some(landing)) =
+                (&criteria, class, names.landing.as_ref())
+            {
+                return candidate(root, git, names, range.head, landing);
+            }
             let sync_tip = if push {
                 line_sync_tip(root, git, range, names)
             } else {
@@ -90,6 +98,7 @@ pub(super) fn dispatch(
                     own_line: own_line.as_ref(),
                     replaced: replaced.as_ref(),
                     branch_prefixes: Some(&git.branch_prefixes),
+                    member: None,
                 },
             )
         }),
@@ -290,6 +299,67 @@ fn own_line_tip(
             Err(format!("the line {reason}, so it is not a bound epic line"))
         }
     }
+}
+
+/// A landing candidate judged member by member (TSK-1154): each merge on
+/// the head's first-parent chain from the line's fetched tip is judged at
+/// its member head against the tip it merged onto, as that member's own
+/// pull request into the line is judged. The whole tip-to-head chain is
+/// judged whatever base the run was given, so a base after the tip hides
+/// no member. A member's own criteria change is judged as its pull
+/// request's only when its record declares the line at the line's tip and
+/// at the member head, and the trusted records at that tip (and at the
+/// candidate authority, when the run names one) bind the line for it.
+fn candidate(
+    root: &Path,
+    git: &GitPolicy,
+    names: &super::Names<'_>,
+    head: &str,
+    landing: &super::line_tip::Landing,
+) -> Result<Vec<Finding>, String> {
+    use codeflow_core::workgraph::acceptance::candidate::{candidate_findings, Candidate};
+    use codeflow_core::workgraph::EpicLineBinding;
+    println!(
+        "codeflow ci: acceptance: landing candidate of '{}' from its fetched tip {:.9}: each member merge is judged at its own reviewed head against the tip it merged onto",
+        codeflow_core::git::display_text(&landing.line),
+        landing.tip
+    );
+    let line = landing.line.as_str();
+    let tip = landing.tip.as_str();
+    let mut bind = |task: &str, member: &str| -> Result<(), String> {
+        for (revision, place) in [(tip, "the line's tip"), (member, "the member head")] {
+            let declared = codeflow_core::workgraph::task_target_at_revision(root, task, revision)
+                .map_err(|error| error.to_string())?;
+            if declared.as_deref() != Some(line) {
+                return Err(format!(
+                    "its record at {place} does not declare this line as its integration_target"
+                ));
+            }
+        }
+        let mut anchors = vec![(tip, "the line's tip")];
+        if let Some(authority) = names.candidate {
+            anchors.push((authority, "the candidate authority"));
+        }
+        match codeflow_core::workgraph::task_line_binding(root, task, member, line, &anchors)
+            .map_err(|error| error.to_string())?
+        {
+            EpicLineBinding::Bound => Ok(()),
+            EpicLineBinding::Refused(reason) | EpicLineBinding::Unbound(reason) => {
+                Err(format!("the line {reason}, so it is not a bound epic line"))
+            }
+        }
+    };
+    candidate_findings(
+        root,
+        &Candidate {
+            tip,
+            target: line,
+            authority: names.candidate,
+            branch_prefixes: Some(&git.branch_prefixes),
+        },
+        head,
+        &mut bind,
+    )
 }
 
 /// The remote-tracking ref of the judged branch that this run replaces
@@ -638,7 +708,7 @@ fn violation(git: &GitPolicy, found: Finding) -> super::TaggedViolation {
         Violation::always_blocking(
             found.rule,
             found.message,
-            "another task's criteria change by its own PR or by a planning amendment that names its epic; a reopened task keeps its criteria; a completed standalone task's criteria text is corrected by a pull request of planning records only whose `Task:` line names it or its follow-up, keeping every criterion and tag (ADR-0080)",
+            &codeflow_core::remedy::CRITERIA_FROZEN.remedy(),
         )
     } else if found.rule == IMPORT_RULE {
         Violation::always_blocking(

@@ -22,6 +22,8 @@ mod change_class_probes;
 mod destination;
 #[path = "ci_cli/document_indexes.rs"]
 mod document_indexes;
+#[path = "ci_cli/landing_candidate.rs"]
+mod landing_candidate;
 #[path = "ci_cli/line_tip.rs"]
 mod line_tip;
 #[path = "ci_cli/outcome_marker.rs"]

@@ -44,6 +44,21 @@ pub(super) struct Run<'a> {
     pub merge_landing: bool,
     /// A push hand-off from the pre-push hook.
     pub pushed: bool,
+    /// The push of a branch named by the judging policy's
+    /// `git.candidate_prefix` (TSK-1154 AC-15). The name only selects this
+    /// judgment, which grants a member nothing its own pull request would
+    /// not get; the line and its tip still come from the fetched line ref.
+    pub candidate_push: bool,
+}
+
+/// A landing candidate's line, once its authority is established: the bound
+/// epic line and its fetched tip, resolved once. The acceptance check judges
+/// the candidate's members against this tip (TSK-1154), never against a
+/// supplied base, a local branch or anything the head names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Landing {
+    pub line: String,
+    pub tip: String,
 }
 
 /// Where the judged line came from, for the output and the remedy. A line
@@ -52,29 +67,41 @@ pub(super) struct Run<'a> {
 #[derive(Clone, PartialEq, Eq)]
 enum Source {
     Flag,
-    Base { target: Option<String> },
+    Base {
+        target: Option<String>,
+    },
+    /// A pushed landing candidate whose first-parent history reaches the
+    /// line's fetched tip.
+    Pushed,
 }
 
 /// Judge the head as a line's next tip when the run's context says it is
 /// one, or cannot say it is not; push a blocking `work.epic_line` finding
-/// for each refusal.
+/// for each refusal. Returns the line and its fetched tip when the line's
+/// authority was established, so the acceptance check can judge the
+/// candidate member by member; `None` otherwise.
 pub(super) fn check(
     root: &Path,
     run: &Run<'_>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
-) {
+) -> Option<Landing> {
     let (line, source) = match destination(root, run) {
         Ok(Some(found)) => found,
-        Ok(None) => return,
+        Ok(None) => return None,
         Err((error, source)) => {
             ran.push("line-tip");
-            return refuse(tagged, &error, None, &source);
+            refuse(tagged, &error, None, &source);
+            return None;
         }
     };
     ran.push("line-tip");
     let how = match &source {
         Source::Flag => "--line-tip".to_string(),
+        Source::Pushed => {
+            "a pushed landing candidate whose first-parent history reaches its fetched tip"
+                .to_string()
+        }
         Source::Base { target: None } => "the base is its fetched tip".to_string(),
         Source::Base {
             target: Some(target),
@@ -87,8 +114,12 @@ pub(super) fn check(
         "codeflow ci: line tip: the head is judged as the next tip of '{}' ({how})",
         codeflow_core::git::display_text(&line)
     );
-    if let Err(error) = judge(root, &line, &source, run.head, tagged) {
-        refuse(tagged, &error, Some(&line), &source);
+    match judge(root, &line, &source, run.head, tagged) {
+        Ok(tip) => tip.map(|tip| Landing { line, tip }),
+        Err(error) => {
+            refuse(tagged, &error, Some(&line), &source);
+            None
+        }
     }
 }
 
@@ -104,6 +135,9 @@ fn destination(root: &Path, run: &Run<'_>) -> Result<Option<(String, Source)>, (
         line_adoption::epic_id(line)
             .map_err(|reason| (format!("--line-tip {reason}"), Source::Flag))?;
         return Ok(Some((line.to_string(), Source::Flag)));
+    }
+    if run.pushed && run.candidate_push && !run.merge_landing {
+        return pushed_line(root, run.head).map_err(|error| (error, Source::Pushed));
     }
     if run.pushed || run.merge_landing {
         return Ok(None);
@@ -138,6 +172,36 @@ fn destination(root: &Path, run: &Run<'_>) -> Result<Option<(String, Source)>, (
     }
 }
 
+/// How many first-parent commits of a pushed candidate are searched for an
+/// epic line's fetched tip. A candidate is that tip plus one merge per
+/// member; a tip not found within this depth leaves the push judged as one
+/// range, as before (the strict side).
+const PUSHED_DEPTH: usize = 500;
+
+/// The epic line whose fetched tip is on the pushed head's first-parent
+/// history, nearest the head first; `None` when none is, and a refusal when
+/// several lines share that tip.
+fn pushed_line(root: &Path, head: &str) -> Result<Option<(String, Source)>, String> {
+    let walked = line_adoption::first_parent_history(root, head, PUSHED_DEPTH)
+        .map_err(|error| format!("cannot read the pushed candidate's history: {error}"))?;
+    for commit in &walked {
+        let mut lines = line_adoption::fetched_lines_at(root, commit)?;
+        match lines.len() {
+            0 => {}
+            1 => return Ok(lines.pop().map(|line| (line, Source::Pushed))),
+            _ => {
+                return Err(format!(
+                    "the pushed candidate's first-parent history reaches {}, the fetched tip of several epic lines ({}), so its line is ambiguous",
+                    &commit[..commit.len().min(9)],
+                    lines.join(", ")
+                ))
+            }
+        }
+    }
+    println!("codeflow ci: line tip: none (the pushed candidate's first-parent history reaches no epic line's fetched tip)");
+    Ok(None)
+}
+
 /// The default target's branch name when its fetched tip is `base`. Only
 /// the fetched ref counts, never a local branch.
 fn default_target_at(root: &Path, base: &str) -> Result<Option<String>, String> {
@@ -153,14 +217,16 @@ fn default_target_at(root: &Path, base: &str) -> Result<Option<String>, String> 
     Ok((tip.as_deref() == Some(base)).then(|| name.to_string()))
 }
 
-/// Judge `head` as `line`'s next tip against the line's fetched tip.
+/// Judge `head` as `line`'s next tip against the line's fetched tip, and
+/// return that tip once the line is bound and the head is cut from it
+/// (`None` when durable work tracking is off).
 fn judge(
     root: &Path,
     line: &str,
     source: &Source,
     head: &str,
     tagged: &mut Vec<super::TaggedViolation>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let remote = format!("refs/remotes/origin/{line}");
     // The one trusted tip, resolved once: never a local branch, a supplied
     // base or anything the head names.
@@ -189,7 +255,7 @@ fn judge(
     }
     if !tracked {
         println!("codeflow ci: line tip: durable work tracking is off, so no epic line is judged");
-        return Ok(());
+        return Ok(None);
     }
     let place = format!("'origin/{line}'");
     match epic_line_bound_at(root, line, &tip_text, &place).map_err(|error| error.to_string())? {
@@ -221,7 +287,7 @@ fn judge(
             "codeflow ci: line tip: no unadopted direct commit from {}",
             &tip_text[..9]
         );
-        return Ok(());
+        return Ok(Some(tip_text));
     }
     let (message, mut remedy) =
         line_adoption::direct_commit_refusal(line, &report.unadopted, &remote);
@@ -232,7 +298,7 @@ fn judge(
         sha: None,
         violation: Violation::always_blocking(RULE, message, &remedy),
     });
-    Ok(())
+    Ok(Some(tip_text))
 }
 
 /// The remedy for a run that found the line from its base: it names the
@@ -265,6 +331,9 @@ fn refuse(
     let remedy = match source {
         Source::Flag => format!(
             "fetch the line (`git fetch origin`) and pass --line-tip {shown} for a landing candidate cut from its fetched tip, or --into {shown} for a pull request head that lands by merge"
+        ),
+        Source::Pushed => format!(
+            "fetch the line (`git fetch origin`) and rebuild the candidate from the fetched tip of {shown}, with only no-ff merges of reviewed heads"
         ),
         Source::Base { target } => format!(
             "fetch the lines (`git fetch origin`); {}",

@@ -677,7 +677,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     } else {
         None
     };
-    let names = Names {
+    let mut names = Names {
         branch: &branch,
         into: into.as_deref(),
         into_flag: args.into.as_deref(),
@@ -688,6 +688,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
             _ => None,
         },
         release: std::cell::OnceCell::new(),
+        landing: None,
         // The destination lookup's limits come from the policy that judges
         // the range, read at its authority; with no authority, from the
         // local policy authority or the shipped defaults, never the working
@@ -781,7 +782,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
         || is_pr_event(|key| environment.get(key).cloned());
     // A landing candidate's head judged as its line's next tip (TSK-1155):
     // the rule the pre-push hook applies to a push to the line.
-    line_tip::check(
+    names.landing = line_tip::check(
         &root,
         &line_tip::Run {
             line_tip: args.line_tip.as_deref(),
@@ -789,6 +790,10 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
             head: &head,
             merge_landing: pr_body.is_some() || pr_context,
             pushed: args.pushed_ref.is_some() || args.advertisement_stdin,
+            candidate_push: (args.pushed_ref.is_some() || args.advertisement_stdin)
+                && git.candidate_prefix_problem().is_none()
+                && branch.len() > git.candidate_prefix.len()
+                && branch.starts_with(&git.candidate_prefix),
         },
         &mut tagged,
         &mut ran,
@@ -2891,6 +2896,9 @@ pub(super) struct Names<'a> {
     pub candidate: Option<&'a str>,
     /// The timeout and attempts for asking the destination (TSK-1301).
     pub limits: codeflow_core::git::remote_query::QueryLimits,
+    /// A landing candidate's bound line and its fetched tip, when the
+    /// line-tip check established them (TSK-1154).
+    pub landing: Option<line_tip::Landing>,
     /// The release scope, asked once per run and shared by the checks.
     release: std::cell::OnceCell<
         Result<
