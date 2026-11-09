@@ -721,3 +721,103 @@ fn a_planning_member_is_judged_as_a_planning_amendment() {
     has(&result, "TSK-002 criteria delta: AC-3 changed");
     has(&result, &format!("member {task:.9} (TSK-003)"));
 }
+
+/// AC-11 (journey): the shape of the real c2 and c3d1 candidates, built
+/// the way the primary builds one. Three reviewed member heads (two of
+/// them changing their own criteria) are published on the destination;
+/// a separate clone fetches the line by name and each member by its
+/// pinned SHA only, cuts the candidate from the fetched line tip and
+/// merges the members no-ff. The built binary passes that candidate and
+/// refuses a doctored one whose last merge was resolved by hand. Both
+/// runs print with the binary's path, version and source revision.
+#[test]
+fn a_candidate_of_pinned_member_heads_passes_and_a_doctored_one_is_refused() {
+    let (f, tip) = published(&["TSK-002", "TSK-003", "TSK-004"]);
+    let heads = [
+        (
+            "TSK-002",
+            member_head(&f, "TSK-002", &tip, Change::OwnCriterion),
+        ),
+        ("TSK-003", member_head(&f, "TSK-003", &tip, Change::Code)),
+        (
+            "TSK-004",
+            member_head(&f, "TSK-004", &tip, Change::OwnCriterion),
+        ),
+    ];
+    for (task, _) in &heads {
+        f.git(&["push", "-q", "origin", &format!("task/{task}-work")]);
+    }
+    let clone = tempfile::tempdir().unwrap();
+    let at = |args: &[&str]| -> String {
+        let o = f
+            .command("git")
+            .current_dir(clone.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "git {args:?}: {}", output(&o));
+        String::from_utf8(o.stdout).unwrap().trim().into()
+    };
+    at(&["init", "-qb", "main"]);
+    at(&["config", "user.name", "Primary"]);
+    at(&["config", "user.email", "primary@example.test"]);
+    let destination = f.root().join(".git/destination.git");
+    at(&["remote", "add", "origin", destination.to_str().unwrap()]);
+    at(&["fetch", "-q", "origin", "main", LINE]);
+    at(&["remote", "set-head", "origin", "main"]);
+    for (_, head) in &heads {
+        at(&["fetch", "-q", "origin", head]);
+    }
+    assert_eq!(at(&["rev-parse", &format!("origin/{LINE}")]), tip);
+    let tracked = at(&["for-each-ref", "--format=%(refname)", "refs/remotes/origin"]);
+    assert!(
+        !tracked.contains("task/"),
+        "members fetched by name: {tracked}"
+    );
+    at(&["switch", "-qc", CANDIDATE, &tip]);
+    for (task, head) in &heads {
+        at(&[
+            "merge",
+            "--no-ff",
+            "-qm",
+            &format!("chore: land {task}"),
+            head,
+        ]);
+    }
+    let codeflow = |args: &[&str]| {
+        f.command(env!("CARGO_BIN_EXE_codeflow"))
+            .current_dir(clone.path())
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let version = codeflow(&["--version"]);
+    has(&version, "source=");
+    let binary = format!("{} {}", env!("CARGO_BIN_EXE_codeflow"), output(&version));
+    let judge = || codeflow(&["ci", "--base", &tip, "--head", "HEAD", "--line-tip", LINE]);
+
+    let real = judge();
+    eprintln!("AC-11 candidate run, binary {binary}{}", output(&real));
+    passes(&real);
+    lacks(&real, "work.criteria_frozen (block)");
+    lacks(&real, "work.acceptance_binding (block)");
+    for (task, head) in &heads {
+        has(&real, &format!("member {head:.9} ({task})"));
+    }
+
+    let (task, head) = &heads[2];
+    at(&["reset", "-q", "--hard", "HEAD^"]);
+    at(&["merge", "--no-ff", "--no-commit", "-q", head]);
+    std::fs::write(
+        clone.path().join("src/tsk_004.rs"),
+        "pub fn doctored() {}\n",
+    )
+    .unwrap();
+    at(&["add", "-A"]);
+    at(&["commit", "-qm", &format!("chore: land {task}")]);
+    let doctored = judge();
+    eprintln!("AC-11 doctored run, binary {binary}{}", output(&doctored));
+    blocks(&doctored, "differs from the clean remerge");
+    has(&doctored, &format!("member {head:.9}"));
+    has(&doctored, "src/tsk_004.rs");
+}
