@@ -1,0 +1,11 @@
+id = "TSK-1410"
+uid = "b0675bd0-804b-41c8-b921-0500dde65191"
+kind = "TSK"
+title = "A gate inside a coverage collector does not wrap its own collector"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-09T12:19:23Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
