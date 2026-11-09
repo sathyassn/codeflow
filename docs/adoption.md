@@ -299,16 +299,11 @@ the version of each release unit.
 
 Tell `codeflow test` which commands to run for each part of the project.
 
-1. Run `codeflow test setup`. With no options it checks only root-level
+1. Run `codeflow test setup`. With no options it reads only root-level
    `Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml` or `setup.py`
-   markers and writes the detected targets into an absent or empty
-   `.codeflow/test-config.json`. It does not inspect workspaces recursively or
-   guess package boundaries. Each detected target's full mode runs the
-   stack's coverage producer, such as cargo-llvm-cov or coverage.py, and a
-   coverage block with no rules names the artifact it writes; `codeflow
-   doctor` names a producer that still needs installing. Write the
-   project's floor once in `defaults.coverage` to judge every such target
-   ([test-gate reference](test-gate.md#coverage-rules-and-their-defaults)).
+   markers, never nested packages, and writes each detected target with its
+   [coverage producer](test-gate.md#coverage-rules-and-their-defaults) into
+   an absent or empty `.codeflow/test-config.json`.
 2. Or start from a template, or add targets one at a time:
 
    ```sh
