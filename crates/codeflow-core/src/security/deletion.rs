@@ -4494,6 +4494,24 @@ impl Reader<'_> {
         input: Option<&Fed>,
         ambiguous: bool,
     ) {
+        // The guards' closed rule for `parallel` (TSK-326): outside it, what
+        // runs is not proven, so neither is what it deletes.
+        let assigned = st.wild.is_some()
+            || crate::hooks::git_guard::data_operands::PARALLEL_VARIABLES
+                .iter()
+                .any(|name| st.vars.contains_key(*name));
+        if let Some(reason) =
+            crate::hooks::git_guard::data_operands::parallel_refusal(args, assigned)
+        {
+            self.report(
+                Judged::Unproven(Unproven {
+                    reason: format!("`parallel` outside the shape the guard reads: {reason}"),
+                    cwd: false,
+                }),
+                ambiguous,
+            );
+            return;
+        }
         let mut options = input_options(args, true);
         let rest = options.command;
         let split = rest
@@ -4538,17 +4556,6 @@ impl Reader<'_> {
                     .collect()
             };
             self.exec(&line, st, None, item.tree, ambiguous);
-        }
-        if !self.done() && hidden_options_run_remover(args, command) {
-            self.report(
-                Judged::Unproven(Unproven {
-                    reason: "`parallel` options from its environment, a profile or its \
-                             configuration files; pass `--plain`"
-                        .into(),
-                    cwd: false,
-                }),
-                ambiguous,
-            );
         }
     }
 
@@ -6793,7 +6800,12 @@ fn input_options(args: &[String], parallel: bool) -> InputOptions<'_> {
                     explicit_delimiter = true;
                 }
                 "verbose" | "no-run-if-empty" if attached.is_none() => {}
-                "plain" if parallel && attached.is_none() => {}
+                // `--plain` as `parallel` reads it: any unique prefix, any case.
+                plain
+                    if parallel
+                        && attached.is_none()
+                        && plain.len() >= 3
+                        && "plain".starts_with(&plain.to_ascii_lowercase()) => {}
                 "replace" => options.replace = Some(attached.unwrap_or("{}").into()),
                 "delimiter" | "max-procs" | "jobs" | "max-lines" | "max-args" | "max-chars"
                 | "eof" | "arg-file" | "sshlogin" | "joblog" | "colsep" | "results" | "tmpdir"
@@ -6900,23 +6912,6 @@ fn exec_bodies(expression: &[String]) -> Vec<Vec<String>> {
 
 /// Whether a command removes files: a remover, possibly behind launchers,
 /// `xargs`, or a shell whose script runs one.
-/// Whether `parallel` may take options the line does not show (no
-/// `--plain`, or a named profile) while its template runs a remover:
-/// those options can move the replacement string, so the targets read
-/// here are not proven (TSK-326).
-fn hidden_options_run_remover(args: &[String], command: &[String]) -> bool {
-    use crate::hooks::git_guard::parallel_options::ParallelCall;
-    if !ParallelCall::read(args).sources.hidden() {
-        return false;
-    }
-    let mut simples = Vec::new();
-    collect_simples(&Parser::parse(&command.join(" ")), &mut simples);
-    simples.iter().any(|(words, _)| {
-        let simple: Vec<String> = words.iter().map(word_text).collect();
-        runs_remover(&simple, 0)
-    })
-}
-
 fn runs_remover(argv: &[String], depth: usize) -> bool {
     if depth > MAX_DEPTH {
         return false;
@@ -8231,30 +8226,33 @@ mod tests {
         );
         assert_eq!(found.target, "system directory", "{command}: {found:?}");
     }
-    /// TSK-326: `parallel` options from its environment, a profile or its
-    /// configuration files can move the replacement string, so a remover
-    /// template is unproven unless the plain mode is set.
+    /// TSK-326 delta 4: the deletion check gives the guards' answer for
+    /// GNU `parallel`: outside the closed rule what runs is unproven, inside
+    /// it a fixed program is judged as written.
     #[test]
-    fn parallel_remover_with_hidden_option_sources_is_unproven() {
-        for command in [
-            "parallel rm -rf ./% ::: build",
-            "parallel 'rm -rf ./%' ::: build",
-            "parallel --plain -J prof rm -rf ./% ::: build",
-            "parallel sh -c 'rm -rf ./\"$1\"' _ ::: build",
-        ] {
+    fn parallel_outside_the_closed_rule_is_unproven() {
+        use crate::hooks::git_guard::parallel_options::{
+            INSIDE_THE_CLOSED_RULE, OUTSIDE_THE_CLOSED_RULE,
+        };
+        for command in OUTSIDE_THE_CLOSED_RULE {
             let found = super::composed_deletion_in(command, None);
             assert!(
-                found.as_ref().is_some_and(|f| f.unproven.is_some()),
+                found.as_ref().is_some_and(|f| f
+                    .unproven
+                    .as_ref()
+                    .is_some_and(|u| u.reason.contains("outside the shape the guard reads"))),
                 "{command}: {found:?}"
             );
         }
-        for command in [
-            "parallel --plain rm -rf {} ::: ./build",
-            "parallel echo {} ::: a",
-        ] {
+        for command in INSIDE_THE_CLOSED_RULE {
             let found = super::composed_deletion_in(command, None);
             assert!(found.is_none(), "{command}: {found:?}");
         }
+        let found = super::composed_deletion_in("parallel --plain rm -rf {} ::: /", None);
+        assert!(
+            found.as_ref().is_some_and(|f| f.unproven.is_none()),
+            "a fixed remover inside the rule is judged as written: {found:?}"
+        );
     }
 
     #[cfg(unix)]

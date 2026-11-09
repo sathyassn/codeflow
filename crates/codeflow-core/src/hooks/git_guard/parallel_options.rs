@@ -150,22 +150,59 @@ pub(crate) enum Separator {
     Files,
 }
 
-/// The option sources off the command line that `parallel` reads: its
-/// environment, a profile and its configuration files.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct OptionSources {
-    /// Whether `--plain` turns off the environment, profiles and
-    /// configuration files.
-    pub(crate) plain: bool,
-    /// Whether `--profile` (`-J`) names a profile to read options from.
-    pub(crate) named_profile: bool,
-}
+/// The options the guards' closed rule for `parallel` admits, by first
+/// name: how many jobs run and in what order, how the input is read and
+/// split, and how output is shown. Any other option, and a name that is
+/// unknown or ambiguous, puts the call outside the rule (TSK-326).
+const CLOSED_SET: &[&str] = &[
+    "plain",
+    "quote",
+    "keep-order",
+    "no-keep-order",
+    "max-procs",
+    "arg-file",
+    "arg-sep",
+    "arg-file-sep",
+    "I",
+    "replace",
+    "null",
+    "delimiter",
+    "max-args",
+    "max-replace-args",
+    "X",
+    "m",
+    "xargs",
+    "line-buffer",
+    "group",
+    "ungroup",
+    "tag",
+    "dry-run",
+    "verbose",
+    "progress",
+    "eta",
+    "bar",
+    "halt-on-error",
+    "timeout",
+    "retries",
+    "no-run-if-empty",
+    "col-sep",
+    "trim",
+    "will-cite",
+    "link",
+    "nice",
+    "delay",
+    "joblog",
+];
 
-impl OptionSources {
-    /// Whether `parallel` may take options the line does not show.
-    pub(crate) fn hidden(self) -> bool {
-        !self.plain || self.named_profile
-    }
+/// How a `parallel` call stands against the closed rule's options.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Mode {
+    /// Whether `--plain` turns off the options `parallel` reads from its
+    /// environment, profiles and configuration files.
+    pub(crate) plain: bool,
+    /// Whether an option outside [`CLOSED_SET`] is given, or a name that is
+    /// unknown or ambiguous.
+    pub(crate) unlisted: bool,
 }
 
 /// A GNU `parallel` call as `parallel` reads its options.
@@ -185,10 +222,8 @@ pub(crate) struct ParallelCall {
     /// (`--extensionreplace` and its siblings), an `--rpl` shorthand, or the
     /// opening of a `--parens` expression.
     pub(crate) derived: Vec<String>,
-    /// Whether `--plus` or `--rpl` adds replacement strings of any shape.
-    pub(crate) wide: bool,
-    /// Where else `parallel` may read options from.
-    pub(crate) sources: OptionSources,
+    /// Where the call stands against the closed rule's options.
+    pub(crate) mode: Mode,
     arg_sep: String,
     file_sep: String,
 }
@@ -202,8 +237,7 @@ impl ParallelCall {
             from_file: false,
             whole: None,
             derived: Vec::new(),
-            wide: false,
-            sources: OptionSources::default(),
+            mode: Mode::default(),
             arg_sep: ":::".into(),
             file_sep: "::::".into(),
         };
@@ -222,6 +256,7 @@ impl ParallelCall {
                     .split_once('=')
                     .map_or((long, None), |(n, v)| (n, Some(v)));
                 let Some((option, takes)) = long_option(name) else {
+                    call.mode.unlisted = true;
                     continue;
                 };
                 let value = match (takes, attached) {
@@ -235,6 +270,7 @@ impl ParallelCall {
             let cluster = &word[1..];
             for (offset, letter) in cluster.char_indices() {
                 let Some((option, takes)) = short_option(letter) else {
+                    call.mode.unlisted = true;
                     break;
                 };
                 if takes == Takes::Nothing {
@@ -256,6 +292,9 @@ impl ParallelCall {
     }
 
     fn apply(&mut self, option: &str, value: Option<&str>) {
+        if !CLOSED_SET.contains(&option) {
+            self.mode.unlisted = true;
+        }
         let value = value.unwrap_or_default();
         match option {
             "quote" => self.quoted = true,
@@ -274,7 +313,6 @@ impl ParallelCall {
                 self.derived.push(value.to_string());
             }
             "rpl" => {
-                self.wide = true;
                 let shorthand = value.split(perl_space).next().unwrap_or_default();
                 if !shorthand.is_empty() {
                     self.derived.push(shorthand.to_string());
@@ -286,9 +324,7 @@ impl ParallelCall {
                     self.derived.push(half);
                 }
             }
-            "plus" => self.wide = true,
-            "plain" => self.sources.plain = true,
-            "profile" => self.sources.named_profile = true,
+            "plain" => self.mode.plain = true,
             _ => {}
         }
     }
@@ -332,6 +368,82 @@ fn next_value(args: &[String], at: &mut usize, takes: Takes) -> Option<String> {
     })
 }
 
+/// `parallel` calls outside the guards' closed rule (TSK-326), one per
+/// shape; git-guard and exec-guard refuse each, and the deletion check
+/// reports each as unproven.
+#[cfg(test)]
+pub(crate) const OUTSIDE_THE_CLOSED_RULE: &[&str] = &[
+    // A carrier as the template program, with input from data.
+    "parallel --plain flock lockfile git push origin {} :::: refs",
+    "parallel --plain -a refs script -qc 'git push origin {}' /dev/null",
+    "cat refs | parallel --plain watch git push origin {}",
+    "parallel --plain setsid git push origin {} :::: refs",
+    "parallel --plain unbuffer rm -rf {} :::: dirs",
+    "parallel --plain xargs echo ::: a",
+    // No template: the input lines are the commands.
+    "parallel --plain :::: cmds",
+    "parallel --plain -a cmds",
+    "cat cmds | parallel --plain",
+    "parallel --plain --arg-file-sep @@ @@ cmds",
+    "parallel --plain ::: 'git push origin main'",
+    // Other modes in which the input or a file decides what runs.
+    "parallel --plain --pipe sh",
+    "parallel --plain --shebang-wrap cmds",
+    "parallel --plain --nonall rm -rf ./build",
+    "parallel --plain --semaphore rm -rf ./build",
+    "parallel --plain --sqlworker sql:x rm",
+    // Option variables, on the line or through `env` or an export.
+    "PARALLEL='-I %' parallel --plain rm -rf ./% ::: build",
+    "env PARALLEL_HOME=/tmp/p parallel --plain echo {} ::: a",
+    "export PARALLEL_CSH=x; parallel --plain echo {} ::: a",
+    // No `--plain`, an ambiguous abbreviation of it, or an option outside the set.
+    "parallel echo {} ::: a",
+    "parallel --pl echo {} ::: a",
+    "parallel --plain -J prof echo {} ::: a",
+    "parallel --plain --tagstring {=1=} echo {} ::: a",
+    "parallel --plain --ssh rm -S host echo {} ::: a",
+    "parallel --plain --rpl '{x} s/a/b/' echo {x} ::: a",
+    "parallel --plain echo {= system('rm -rf ./build') =} ::: a",
+    // Git, a shell or `eval` as the program, in any spelling.
+    "parallel --plain git push origin {} ::: main",
+    "parallel --plain /usr/bin/git push origin {} ::: main",
+    "parallel --plain ./git push origin {} ::: main",
+    "parallel --plain 'git' push origin {} ::: main",
+    "parallel --plain \"g\"it push origin {} ::: main",
+    "parallel --plain GIT push origin {} ::: main",
+    "parallel --plain git.exe push origin {} ::: main",
+    "parallel --plain -q sh -c 'git push origin $1' _ ::: main",
+    "parallel --plain 'bash -c \"rm -rf {}\"' ::: ./build",
+    "parallel --plain eval rm -rf {} ::: ./build",
+    // A launcher or runner before the program.
+    "parallel --plain env git push origin {} ::: main",
+    "parallel --plain env -S 'git push origin' {} ::: main",
+    "parallel --plain nice git push origin {} ::: main",
+    "parallel --plain timeout 5 git push origin {} ::: main",
+    "parallel --plain command git push origin {} ::: main",
+    "parallel --plain exec git push origin {} ::: main",
+    "parallel --plain sudo git push origin {} ::: main",
+    "parallel --plain nohup git push origin {} ::: main",
+    // A program the input or the line fills in, or a second command.
+    "parallel --plain {} push origin main ::: git",
+    "parallel --plain -I prog prog push origin main ::: git",
+    "parallel --plain $G push origin {} ::: main",
+    "parallel --plain 'echo {}; git push origin main' ::: a",
+    "parallel --plain 'echo {} && git push origin main' ::: a",
+    "parallel --plain echo '$(git push origin main)' ::: a",
+];
+
+/// `parallel` calls inside the closed rule: each runs a fixed program that
+/// is not git, a shell, `eval` or a carrier, so all three readers allow it.
+#[cfg(test)]
+pub(crate) const INSIDE_THE_CLOSED_RULE: &[&str] = &[
+    "parallel --plain echo {} ::: a b",
+    "parallel --PLAIN -j4 gzip {} :::: list",
+    "parallel --pla touch {} ::: a",
+    "cat list | parallel --plain wc -l",
+    "parallel --plain -I % cp % backup/ ::: a.txt",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,11 +482,29 @@ mod tests {
         assert!(read("-a refs sh").from_file);
         assert_eq!(read("--bnr % sh").derived, ["%"]);
         assert_eq!(read("--parens ,,.. sh").derived, [",,"]);
-        assert!(read("--plus sh").wide);
-        assert!(read("--pla -J p sh").sources.plain);
-        assert!(read("-qJ p sh").sources.named_profile);
-        assert!(!read("--plain sh").sources.hidden());
-        assert!(read("sh").sources.hidden());
+        assert!(read("--plus sh").mode.unlisted);
+        for line in [
+            "--plain sh",
+            "--pla sh",
+            "--PLAIN sh",
+            "--plai -qk sh",
+            "-qk --plain sh",
+        ] {
+            assert_eq!(
+                read(line).mode,
+                Mode {
+                    plain: true,
+                    unlisted: false
+                },
+                "{line}"
+            );
+        }
+        // `--pl` names `--plain` and `--plus`, which `parallel` refuses.
+        assert!(!read("--pl sh").mode.plain);
+        assert!(read("--pl sh").mode.unlisted);
+        assert!(read("--plain -J p sh").mode.unlisted);
+        assert!(read("--plain --shebang sh").mode.unlisted);
+        assert!(read("--plain -Z sh").mode.unlisted);
         // `--re` names several options, which `parallel` refuses.
         assert_eq!(read("--re x sh").template, 1);
     }

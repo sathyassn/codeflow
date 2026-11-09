@@ -2444,7 +2444,7 @@ fn each_guard_alone_refuses_parallel_fd_and_launcher_data() {
             );
         }
         for command in [
-            "parallel --plain git push origin ::: feat/x",
+            "parallel --plain echo ::: feat/x",
             "watch git push origin feat/x",
         ] {
             let out = run_with_stdin(
@@ -9692,10 +9692,10 @@ fn guards_read_a_search_pattern_as_text() {
         "rg --files | xargs rg --pre tee ~/.{a,zsh}rc",
         "find . -maxdepth 0 -exec rg --pre tee ~/.*rc {} +",
         "find . -maxdepth 0 -exec rg --pre tee ~/.?shrc {} +",
-        "parallel rg --pre tee ~/.*rc ::: x",
+        "parallel --plain rg --pre tee ~/.*rc ::: x",
         // GNU parallel runs its command through a shell unless `-q`.
-        "parallel rg --pre tee '~/.*rc' ::: x",
-        "parallel rg '~/.*rc' ::: x",
+        "parallel --plain rg --pre tee '~/.*rc' ::: x",
+        "parallel --plain rg '~/.*rc' ::: x",
         // A ripgrep configuration the line sets may supply the pattern.
         "read -r RIPGREP_CONFIG_PATH <<< cfg; export RIPGREP_CONFIG_PATH; rg \"$HOME/.$(printf zshrc)\"",
         "printf -v RIPGREP_CONFIG_PATH cfg; export RIPGREP_CONFIG_PATH; rg \"$HOME/.$(printf zshrc)\"",

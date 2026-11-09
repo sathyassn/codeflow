@@ -515,7 +515,7 @@ const ROUND_15_CONTROLS: &[&str] = &[
     "echo README.md | xargs git add",
     "gtimeout 5 git status",
     "flock /tmp/l git status",
-    "parallel echo ::: hi",
+    "parallel --plain echo ::: hi",
     "tmux -S /tmp/sock new-session -d",
     "git config --global user.name Probe",
     "grep \"$PAT\" ~/.zshrc",

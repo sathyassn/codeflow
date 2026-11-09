@@ -70,7 +70,7 @@ pub const COMPOSED_PAIRS: &[(&str, &str)] = &[
     ("find / -print0 | env xargs -0 rm -rf", "rm -rf /"),
     ("find / -print0 | xargs -0 command rm -rf", "rm -rf /"),
     ("xargs rm -rf <<< /Users/alice", "rm -rf ~"),
-    ("parallel rm -rf ::: /Users/alice", "rm -rf ~"),
+    ("parallel --plain rm -rf ::: /Users/alice", "rm -rf ~"),
     (
         "find / -type d | while read d; do rm -rf \"$d\"; done",
         "rm -rf /",
@@ -242,7 +242,7 @@ pub const REVIEW_PROBES: &[(&str, &str, bool)] = &[
         r"printf '%s\0' /Users/alice | xargs -0 rm -rf",
         true,
     ),
-    ("parallel", "parallel rm -rf ::: /Users/alice", true),
+    ("parallel", "parallel --plain rm -rf ::: /Users/alice", true),
     ("cd-home", "cd ~ && rm -rf *", true),
     ("cd-last", "cd /; cd /tmp; cd -; rm -rf *", true),
     ("pushd-home", "pushd /Users/alice; rm -rf *", true),
@@ -1835,7 +1835,7 @@ pub const HELP_PAIRS: &[(&str, &str)] = &[
 pub const SPACED_INPUT_FORMS: &[&str] = &[
     r"printf '%s\0' '{fixture}/space name/../../../etc' | xargs -0 rm -rf --",
     r#"printf '"{fixture}/space name/../../../etc"' | xargs rm -rf"#,
-    r"printf '{fixture}/space name/../../../etc\n' | parallel rm -rf",
+    r"printf '{fixture}/space name/../../../etc\n' | parallel --plain rm -rf",
 ];
 
 /// Round 19 xargs option and replacement probes, with fixture-backed operands.

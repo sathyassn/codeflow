@@ -1717,32 +1717,25 @@ checked, so a symlink does not remove the target owner's protection.
   unresolved by both shell hooks (TSK-326). A word the shell fills in from
   data the guard cannot read has no text to judge: a variable assigned
   from a command substitution or `read`, an inherited variable, or the
-  input that `xargs`, `parallel` and `fd -x` or `-X` append or put in
-  place of a replacement string, and that `find -exec` puts in place of
-  `{}`. The git command a launcher runs (`watch`, `flock`, `script -c`) is
+  input that `xargs` and `fd -x` or `-X` append or put in place of a
+  replacement string, and that `find -exec` puts in place of `{}`. The git command a launcher runs (`watch`, `flock`, `script -c`) is
   read the same way. When one of those suppliers runs a shell `-c` script
   or `eval`, the script is read as a command line in which the replacement
   strings and the positional parameters (`$1`, `"$@"`, `$0`) are the
   supplied input; input spliced into the script text, and a script the
   guard cannot read (a file, standard input, a variable), refuse as well,
   so pass the input as `sh -c '... "$1"' _ {}` with a literal script.
-  This holds when `parallel` takes its input from `:::` words on the line.
-  The options written on the line are read as `parallel` reads them
-  (abbreviated, bundled or with an attached value), and the template, one
-  word or several, is read as the shell line it builds. A shell or `eval`
-  there takes the input as supplied through the default replacement
-  strings and those the line's options set (`-I`, `--replace`,
-  `--extensionreplace` and its siblings, `--rpl`), with the input
-  separators the line's options set (`--arg-sep`, `--arg-file-sep`).
-  `parallel` can also take options from sources the guard does not read:
-  its environment, a profile and its configuration files. When the
-  template runs a shell, `eval` or git, those hidden option sources refuse
-  unless the plain mode is set: pass `--plain`, name no profile, and assign
-  no `PARALLEL` variable on the line. Exec-guard's recursive-deletion check
-  holds a template that runs a remover to the same rule: without the plain
-  mode its targets are unproven. A template with no shell is judged
-  with the whole input as written; a replacement string for part of the
-  input (`{.}`, `{/}`, `{1}`) counts as supplied. An
+  GNU `parallel` is allowed only in one closed shape: `--plain`; options
+  from a small set the guards read (job count and order, how input is read
+  and split, how output is shown), in any spelling `parallel` accepts; a
+  template written on the line; no option variable assigned on the line;
+  and, in every command of the template, read as the shell line
+  `parallel` builds, a fixed program word, after the prefix launchers, that
+  is not git, a shell, `eval` or a program that runs another command. Any
+  other `parallel` call refuses as unresolved in both hooks, and
+  exec-guard's recursive-deletion check treats it as unproven. In agent
+  sessions `parallel` therefore cannot run git, a shell, `eval` or a
+  command carrier; run those directly. An
   unquoted brace list or sequence (`{feat/x,main}`, `{1..3}`) in a judged
   git word refuses too, since the shell makes it several words; a quoted
   or escaped brace is text. Such a word in the program position (`$V push

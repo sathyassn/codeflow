@@ -3878,7 +3878,7 @@ mod tests {
             assert!(found.remedy.to_string().contains("pass it as a literal"));
         }
         for command in [
-            "parallel --plain git push origin ::: feat/x",
+            "parallel --plain echo {} ::: feat/x",
             "fd -x git log {}",
             "watch git push origin feat/x",
             "flock /tmp/l git push origin feat/x",
@@ -3947,8 +3947,7 @@ mod tests {
             assert_eq!(found.rule, "security.outward_actions", "{command}");
         }
         for command in [
-            "parallel --plain git push origin {} ::: feat/x",
-            "parallel --plain -q sh -c 'git log' ::: a",
+            "parallel --plain echo {} ::: feat/x",
             "parallel --plain 'echo {}' ::: a",
         ] {
             let found = evaluate(command, &SecuritySection::default());
@@ -3978,44 +3977,28 @@ mod tests {
                 "{command}: refused as unresolved: {found:?}"
             );
         }
-        for command in [
-            "parallel --plain -I % git push origin % ::: feat/x",
-            "parallel --plain -q -I % sh -c 'git log' ::: a",
-        ] {
+        for command in ["parallel --plain -I % echo % ::: feat/x"] {
             let found = evaluate(command, &SecuritySection::default());
             assert!(found.is_empty(), "{command}: {found:?}");
         }
     }
 
-    /// TSK-326 delta review 3: a one-word shell template whose input comes
-    /// from data is read as the shell line `parallel` builds, and a shell
-    /// or git template refuses unless `--plain` keeps `parallel`'s hidden
-    /// option sources out.
+    /// TSK-326 delta 4: GNU `parallel` outside the closed rule refuses as
+    /// unresolved; inside it, it passes.
     #[test]
-    fn parallel_data_shell_words_and_hidden_option_sources_refuse() {
-        for command in [
-            "parallel --plain 'sh -c \"git push --no-verify origin {}\"' :::: refs",
-            "parallel --plain -a refs 'sh -c \"git push --no-verify origin {}\"'",
-            "parallel --plain --arg-file-sep @@ 'sh -c \"git push --no-verify origin {}\"' @@ refs",
-            "cat refs | parallel --plain 'sh -c \"git push --no-verify origin {}\"'",
-            "parallel 'sh -c \"git push --no-verify origin %\"' ::: main",
-            "PARALLEL='-I %' parallel --plain 'sh -c \"git push origin %\"' ::: main",
-            "parallel --plain -J prof 'sh -c \"git push origin %\"' ::: main",
-            "parallel flock lockfile git push origin {}:% ::: main",
-        ] {
+    fn parallel_outside_the_closed_rule_refuses() {
+        use crate::hooks::git_guard::parallel_options::{
+            INSIDE_THE_CLOSED_RULE, OUTSIDE_THE_CLOSED_RULE,
+        };
+        for command in OUTSIDE_THE_CLOSED_RULE {
             let found = evaluate(command, &SecuritySection::default());
             assert!(
                 found.iter().any(|v| v.rule == "security.outward_actions"
-                    && v.message.contains("filled in at run time")),
+                    && v.message.contains("in a shape the guard does not judge")),
                 "{command}: refused as unresolved: {found:?}"
             );
         }
-        for command in [
-            "parallel --plain git push origin {} ::: feat/x",
-            "parallel --plain -q sh -c 'git log' ::: a",
-            "parallel 'echo {}' ::: a",
-            "parallel --plain xargs git log ::: a",
-        ] {
+        for command in INSIDE_THE_CLOSED_RULE {
             let found = evaluate(command, &SecuritySection::default());
             assert!(found.is_empty(), "{command}: {found:?}");
         }

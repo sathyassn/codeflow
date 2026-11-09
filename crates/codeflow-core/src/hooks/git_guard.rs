@@ -15933,11 +15933,6 @@ mod tests {
     #[test]
     fn parallel_fd_and_launcher_children_supplied_as_data_refuse() {
         for command in [
-            "parallel --plain git push origin :::: refs",
-            "parallel --plain git push origin < refs",
-            "cat refs | parallel --plain git push origin {}",
-            "parallel --plain -q git push origin HEAD:{} :::: refs",
-            "parallel --plain --arg-file refs git push origin",
             "fd -x git push origin {}",
             "fd --exec git push origin {.}",
             "fd . refs -X git push origin",
@@ -15959,7 +15954,7 @@ mod tests {
         }
         let policy = data_policy();
         for command in [
-            "parallel --plain git push origin ::: feat/x",
+            "parallel --plain echo {} ::: feat/x",
             "fd -x git log {}",
             "watch git push origin feat/x",
             "flock /tmp/l git push origin feat/x",
@@ -16061,14 +16056,13 @@ mod tests {
             &ctx(&p, "feat/x"),
         );
         assert!(
-            found.iter().any(|v| v.rule == "git.push_to_protected"),
+            found.iter().any(|v| v.rule == "git.push_to_protected"
+                || v.message.contains("is filled in at run time")),
             "{found:?}"
         );
         let policy = data_policy();
         for command in [
-            "parallel --plain git push origin {} ::: feat/x",
-            "parallel --plain git push origin ::: feat/x",
-            "parallel --plain -q sh -c 'git log' ::: a",
+            "parallel --plain echo {} ::: feat/x",
             "parallel --plain 'echo {}' ::: a",
         ] {
             let found = evaluate(command, &ctx(&policy, "feat/x"));
@@ -16124,39 +16118,27 @@ mod tests {
             );
         }
         for command in [
-            "parallel --plain -I % git push origin % ::: feat/x",
-            "parallel --plain --arg-sep %% git push origin {} %% feat/x",
-            "parallel --plain -q -I % sh -c 'git log' ::: a",
+            "parallel --plain -I % echo % ::: feat/x",
+            "parallel --plain --arg-sep %% echo {} %% feat/x",
         ] {
             let found = evaluate(command, &ctx(&policy, "feat/x"));
             assert!(found.is_empty(), "{command}: {found:?}");
         }
     }
 
-    /// TSK-326 delta review 3: a one-word shell template whose input comes
-    /// from data is read as the shell line `parallel` builds (F1), and a
-    /// shell or git template refuses unless `--plain` keeps `parallel`'s
-    /// hidden option sources (its environment, profiles and configuration
-    /// files) out (F2).
+    /// TSK-326 delta 4: GNU `parallel` is allowed only inside the closed
+    /// rule (`--plain`, options the guard reads, a template on the line and a
+    /// fixed program that is not git, a shell, `eval` or a program that runs
+    /// another command); each shape outside it refuses as unresolved, and
+    /// each shape inside it runs a fixed program that is not git.
     #[test]
-    fn parallel_data_shell_words_and_hidden_option_sources_refuse() {
-        let refused = [
-            "parallel --plain 'sh -c \"git push --no-verify origin {}\"' :::: refs",
-            "parallel --plain -a refs 'sh -c \"git push --no-verify origin {}\"'",
-            "parallel --plain --arg-file-sep @@ 'sh -c \"git push --no-verify origin {}\"' @@ refs",
-            "cat refs | parallel --plain 'sh -c \"git push --no-verify origin {}\"'",
-            "parallel 'sh -c \"git push --no-verify origin %\"' ::: main",
-            "parallel -q sh -c 'git push --no-verify origin %' ::: main",
-            "PARALLEL='-I %' parallel --plain 'sh -c \"git push origin %\"' ::: main",
-            "env PARALLEL='-I %' parallel --plain -q sh -c 'git push origin %' ::: main",
-            "parallel --plain -J prof 'sh -c \"git push origin %\"' ::: main",
-            "parallel --plain --profile=prof git push origin %% main",
-            "parallel flock lockfile git push origin {}:% ::: main",
-            "parallel git push --no-verify origin %% main",
-        ];
+    fn parallel_outside_the_closed_rule_refuses() {
+        use super::parallel_options::{
+            ParallelCall, INSIDE_THE_CLOSED_RULE, OUTSIDE_THE_CLOSED_RULE,
+        };
         let policy = data_policy();
         let p = default_policy();
-        for command in refused {
+        for command in OUTSIDE_THE_CLOSED_RULE {
             for found in [
                 evaluate(command, &ctx(&policy, "feat/x")),
                 evaluate(command, &ctx(&p, "feat/x")),
@@ -16164,20 +16146,25 @@ mod tests {
                 assert!(
                     found
                         .iter()
-                        .any(|v| v.message.contains("filled in at run time")),
+                        .any(|v| v.message.contains("in a shape the guard does not judge")),
                     "{command}: refused as unresolved: {found:?}"
                 );
             }
         }
-        for command in [
-            "parallel --plain git push origin {} ::: feat/x",
-            "parallel --plain -q sh -c 'git log' ::: a",
-            "parallel 'echo {}' ::: a",
-            "parallel --plain xargs git log ::: a",
-            "parallel --plain git log :::: refs",
-        ] {
+        for command in INSIDE_THE_CLOSED_RULE {
             let found = evaluate(command, &ctx(&policy, "feat/x"));
             assert!(found.is_empty(), "{command}: {found:?}");
+            let words: Vec<String> = shell_tokens(command)
+                .into_iter()
+                .skip_while(|word| word != "parallel")
+                .skip(1)
+                .collect();
+            let call = ParallelCall::read(&words);
+            let program = words[call.template].as_str();
+            assert!(
+                ["echo", "gzip", "touch", "wc", "cp"].contains(&program),
+                "{command}: {program}"
+            );
         }
     }
 
@@ -17670,7 +17657,7 @@ mod tests {
             "script -q /dev/null git status",
             "script -q /dev/null git -c color.ui=never log",
             "watch git status",
-            "parallel echo ::: a b",
+            "parallel --plain echo ::: a b",
             "setsid git config --global user.name Test",
             "find . -name '*.rs' -exec ls {} \\;",
         ] {
