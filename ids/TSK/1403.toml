@@ -1,0 +1,11 @@
+id = "TSK-1403"
+uid = "9aa5fb3c-f540-47bc-88af-8ac7873b42c9"
+kind = "TSK"
+title = "Slow timeout tests prove the same refusals with short injected waits"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-09T08:57:30Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
